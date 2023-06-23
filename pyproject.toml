@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "cryoCAT"
+version = "0.1.0"
+authors = [
+  { name="Beata Turonova", email="beata.turonova@gmail.com" },
+]
+description = "Contextual Analysis Tools for CryoET"
+readme = "README.md"
+requires-python = ">=3.5"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+]
+[tool.setuptools]
+packages = ["cryocat"]
+[project.urls]
+"Homepage" = "https://github.com/turonova/cryoCAT"
+"Bug Tracker" = "https://github.com/turonova/cryoCAT/issues"
