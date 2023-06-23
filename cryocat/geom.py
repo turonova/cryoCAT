@@ -467,3 +467,10 @@ def point_pairwise_dist(coord_1, coord_2):
     pairwise_dist = np.where(isinstance(pairwise_dist, complex), 0.0, pairwise_dist)
 
     return pairwise_dist
+
+# cite https://stackoverflow.com/questions/71346322/numpy-area-of-triangle-and-equation-of-a-plane-on-which-triangle-lies-on
+def area_triangle(coords):
+    # The cross product of two sides is a normal vector
+    triangles = np.cross(coords[:,1] - coords[:,0], coords[:,2] - coords[:,0], axis=1)
+    # The norm of the cross product of two sides is twice the area
+    return np.linalg.norm(triangles, axis=1) / 2
