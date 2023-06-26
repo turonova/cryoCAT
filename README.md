@@ -3,19 +3,23 @@ Contextual Analysis Tools for cryoET and subtomogram averaging
 
 # Install
 
+## Environment
+* OS independent
+* Requires Python 3.5 or higher
+
 ## Current dependencies
-* To take advantage of all the functions within the package following modules should be installed
-    * scipy
-    * numpy
-    * pandas
-    * skimage
-    * starfile
-    * emfile
-    * mrcfile
-    * matplotlib
-    * seaborn
-    * sklearn
-    * einops
+* To take advantage of all the functions within the package following modules should be installed (in brackets tested versions):
+    * scipy (1.9.1)
+    * numpy (1.23.4)
+    * pandas (1.5.3)
+    * skimage (0.20.0)
+    * starfile (0.4.11)
+    * emfile (0.3.0)
+    * mrcfile (1.4.3)
+    * matplotlib (3.6.2)
+    * seaborn (0.12.1)
+    * sklearn (1.0.2)
+    * einops (0.6.0)
 
 ## PIP
 
