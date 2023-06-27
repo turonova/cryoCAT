@@ -12,13 +12,13 @@ setup(
     install_requires=['scipy',
                       'numpy',
                       'pandas',
-                      'skimage',
+                      'scikit-image',
                       'starfile',
                       'emfile',
                       'mrcfile',
                       'matplotlib',
                       'seaborn',
-                      'sklearn',
+                      'scikit-learn',
                       'einops'
                       ],
 

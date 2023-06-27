@@ -11,6 +11,8 @@ def read(map, transpose=True, data_type=None):
     if isinstance(map, str):
         if ".mrc" == map[-4:]:
             data = mrcfile.open(map).data
+        elif ".rec" == map[-4:]:
+            data = mrcfile.open(map).data
         elif ".em" == map[-3:]:
             data = emfile.read(map)[1]
         else:

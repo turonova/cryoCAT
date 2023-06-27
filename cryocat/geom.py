@@ -7,6 +7,28 @@ import matplotlib.pyplot as plt
 ANGLE_DEGREES_TOL = 10e-12
 
 
+def load_angles(input_angles):
+
+    if isinstance(input_angles, str):
+        
+        angles=pd.read_csv(input_angles,header=None)
+        angles.columns=['phi', 'psi', 'theta']
+        angles = angles.loc[:,['phi', 'theta', 'psi']].to_numpy()
+        
+    elif isinstance(input_angles, np.ndarray):
+        angles = input_angles.copy()
+    else:
+        raise ValueError("The input_angles have to be either a valid path to a file or nympy array!!!")
+
+    return angles
+
+def compare_rotations(angles1, angles2, c_symmetry = 1):
+    
+    dist_degrees = angular_distance(angles1,angles2,c_symmetry=c_symmetry)[0]
+    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(angles1,angles2,c_symmetry=c_symmetry)
+
+    return dist_degrees, dist_degrees_normals, dist_degrees_inplane
+
 def change_handedness_coordinates(coordinates, dimensions):
     new_z = dimensions[2] - coordinates["z"]
     coordinates.loc[:, "z"] = new_z
