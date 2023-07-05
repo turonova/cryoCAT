@@ -375,3 +375,57 @@ def relion2emmotl(
         new_motl.write_to_emfile(output_emmotl)
 
     return new_motl
+
+def emmotl2relion(
+    emmotl_path,
+    output_starfile=None,
+    relion_version=4.0,
+    pixel_size=None,
+    binning=1.0,
+    tomo_base_prefix = "TS_",
+    tomo_digits = 3
+):
+
+    motl = Motl(motl_path = emmotl_path)
+    relion_df = pd.DataFrame(data=np.zeros((motl.df.shape[0], 9)))
+    relion_df.columns = [
+        "rlnCoordinateX",
+        "rlnCoordinateY",
+        "rlnCoordinateZ",
+        "rlnAngleRot",
+        "rlnAngleTilt",
+        "rlnAnglePsi",
+        "rlnTomoName",
+        "rlnTomoParticleName",
+        "rlnObjectName"
+    ]
+
+
+    for coord in ("X", "Y", "Z"):
+        relion_df["rlnCoordinate" + coord] = motl.df[coord.lower()] + motl.df["shift_" + coord.lower()]
+    
+    rotations = srot.from_euler("ZXZ",  motl.get_angles(), degrees=True)
+    angles = rotations.as_euler("ZYZ", degrees=True)
+    
+    # save so the rotation describes reference rotation
+    relion_df["rlnAngleRot"] = -angles[:, 0]
+    relion_df["rlnAngleTilt"] = angles[:, 1]
+    relion_df["rlnAnglePsi"] = -angles[:, 2]
+
+    relion_df["rlnObjectName"] = motl.df["object_id"]
+
+    relion_df["rlnTomoName"] = tomo_base_prefix + motl.df["tomo_id"].astype(int).astype(str).str.zfill(tomo_digits)
+    relion_df["rlnTomoParticleName"] = relion_df["rlnTomoName"].astype(str) + "/" + motl.df["subtomo_id"].astype(int).astype(str)
+
+    if binning != 1.0 and relion_version >= 4.0 :
+        for coord in ("X", "Y", "Z"):
+            relion_df["rlnCoordinate" + coord] = relion_df["rlnCoordinate" + coord] * binning
+    
+    if binning != 1.0 and relion_version < 4.0 :
+        for coord in ("X", "Y", "Z"):
+            relion_df["rlnCoordinate" + coord] = relion_df["rlnCoordinate" + coord] / binning
+
+    if output_starfile is not None:
+        starfile.write(relion_df, output_starfile, overwrite=True)
+
+    return relion_df
