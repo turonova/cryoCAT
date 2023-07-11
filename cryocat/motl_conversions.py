@@ -377,7 +377,7 @@ def relion2emmotl(
     return new_motl
 
 def emmotl2relion(
-    emmotl_path,
+    emmotl_file,
     output_starfile=None,
     relion_version=4.0,
     pixel_size=None,
@@ -386,7 +386,11 @@ def emmotl2relion(
     tomo_digits = 3
 ):
 
-    motl = Motl(motl_path = emmotl_path)
+    if isinstance(emmotl_file, str):
+        motl = Motl(motl_path=emmotl_file)
+    else:
+        motl = emmotl_file
+
     relion_df = pd.DataFrame(data=np.zeros((motl.df.shape[0], 9)))
     relion_df.columns = [
         "rlnCoordinateX",
