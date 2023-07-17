@@ -1588,3 +1588,86 @@ class Motl:
         new_motl = Motl(new_motl_df)
         new_motl = new_motl.update_coordinates()
         return new_motl
+
+
+    def subunit_expansion(
+        self, symmetry, xyz_shift, output_name=None
+    ):
+        
+        if isinstance(symmetry, str):
+            nfold = int(re.findall(r'\d+', symmetry)[-1])
+            if symmetry.lower().startswith('c'):
+                s_type = 1  # c symmetry
+            elif symmetry.lower().startswith('d'):
+                s_type = 2  # d symmetry
+            else:
+                ValueError("Unknown symmetry - currently only c and are supported!")
+        elif isinstance(symmetry,(int,float)):
+            s_type = 1 # c symmetry
+            nfold = symmetry
+        else:
+            ValueError("The symmetry has to be specified as a string (starting with c or d) or as a number (float, int)!")
+
+        inplane_step = 360 / nfold
+
+        if s_type == 1:
+            n_subunits = nfold
+            phi_angles = np.arange(0, 360, int(inplane_step))
+            new_angles = np.zeros((n_subunits,3))
+            new_angles[:,0] = phi_angles
+        elif s_type == 2:
+            n_subunits = nfold * 2
+            new_angles = np.zeros((n_subunits,3))
+            new_angles[0::2,0] = np.arange(0, 360, int(inplane_step))
+            new_angles[1::2,0] = np.arange(0, 360, int(inplane_step))
+            new_angles[1::2,1] = 180
+
+            phi_angles = new_angles[:,0].copy()
+
+        phi_angles = phi_angles.reshape(
+            n_subunits,
+        )
+
+        # make up vectors
+        starting_vector = np.array(xyz_shift)
+        rho = np.sqrt(starting_vector[0] ** 2 + starting_vector[1] ** 2)
+        the = np.arctan2(starting_vector[1], starting_vector[0])
+
+        rot_rho = np.full((n_subunits,), rho)
+        rep_the = np.full((n_subunits,), the) + np.deg2rad(phi_angles)
+        rep_z = np.full((n_subunits,), starting_vector[2])
+        
+        if s_type == 2:
+            rep_z[1::2] *= -1
+
+        # https://stackoverflow.com/questions/20924085/python-conversion-between-coordinates
+        # [center_shift(:, 1), center_shift(:, 2), center_shift(:, 3)] = pol2cart([0;0.785398163397448;1.570796326794897;2.356194490192345;3.141592653589793;3.926990816987241;4.712388980384690;5.497787143782138], repmat(10,8,1), repmat(0,8,1));
+        center_shift = np.zeros([rot_rho.shape[0], 3])
+        center_shift[:, 0] = rot_rho * np.cos(rep_the)
+        center_shift[:, 1] = rot_rho * np.sin(rep_the)
+        center_shift[:, 2] = rep_z
+        
+        new_motl_df = pd.concat([self.df] * n_subunits)
+
+        new_motl_df["geom6"] = new_motl_df["subtomo_id"]
+        new_motl_df = new_motl_df.sort_values(by="subtomo_id")
+        new_motl_df["geom2"] = np.tile(
+            np.arange(1, n_subunits + 1).reshape(n_subunits, 1), (len(self.df), 1)
+        )  
+
+        euler_angles = new_motl_df[["phi", "theta", "psi"]]
+        rotations = rot.from_euler(seq="zxz", angles=euler_angles, degrees=True)
+        center_shift = np.tile(center_shift, (len(self.df), 1))
+        new_angles = np.tile(new_angles, (len(self.df), 1))
+        new_motl_df.loc[:, ["shift_x", "shift_y", "shift_z"]] = new_motl_df.loc[
+            :, ["shift_x", "shift_y", "shift_z"]
+        ] + rotations.apply(center_shift)
+
+        new_rotations = rotations * rot.from_euler(seq="zxz", angles=new_angles, degrees=True)
+        new_motl_df.loc[:, ["phi","theta","psi"]] = new_rotations.as_euler(seq="zxz", degrees=True)
+        
+        new_motl_df["subtomo_id"] = np.arange(1, len(new_motl_df) + 1)
+        new_motl = Motl(new_motl_df)
+        new_motl = new_motl.update_coordinates()
+        new_motl.df.reset_index(inplace = True, drop = True)
+        return new_motl

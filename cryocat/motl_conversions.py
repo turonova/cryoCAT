@@ -417,6 +417,7 @@ def emmotl2relion(
     relion_df["rlnAnglePsi"] = -angles[:, 2]
 
     relion_df["rlnObjectName"] = motl.df["object_id"]
+    relion_df["rlnSubunitName"] = motl.df["geom2"]
 
     relion_df["rlnTomoName"] = tomo_base_prefix + motl.df["tomo_id"].astype(int).astype(str).str.zfill(tomo_digits)
     relion_df["rlnTomoParticleName"] = relion_df["rlnTomoName"].astype(str) + "/" + motl.df["subtomo_id"].astype(int).astype(str)
