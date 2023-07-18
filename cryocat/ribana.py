@@ -39,12 +39,18 @@ def get_feature_nn_indices(fm_entry, fm_exit):
         return [], [], []
 
     kdt_entry = sn.KDTree(coord_entry)
+
+    # return 2 NN for each point
     dist, idx = kdt_entry.query(coord_exit, k=2)
+
+    # create id array to check where the NN was the same particle
     ordered_idx = np.arange(0, idx.shape[0], 1)
 
+    # if the first NN was the same particle, return the second one; same for distances
     nn_indices = np.where(ordered_idx == idx[:, 0], idx[:, 1], idx[:, 0])
     nn_distances = np.where(ordered_idx == idx[:, 0], dist[:, 1], dist[:, 0])
 
+    # remove duplicates: first sort in each row, then find the unique idx
     sorted_idx = np.sort(
         np.hstack(
             (ordered_idx.reshape(idx.shape[0], 1), nn_indices.reshape(idx.shape[0], 1))
