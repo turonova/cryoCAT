@@ -10,19 +10,20 @@ import sklearn.neighbors as sn
 import matplotlib.pyplot as plt
 
 
-def get_feature_nn_indices(fm_a, fm_nn):
+def get_feature_nn_indices(fm_a, fm_nn, nn_number = 1):
     
     coord_a = fm_a.get_coordinates()
     coord_nn = fm_nn.get_coordinates()
 
+    nn_count = min(nn_number,coord_nn.shape[0])
     kdt_nn = sn.KDTree(coord_nn)
-    nn_dist, nn_idx = kdt_nn.query(coord_a)
+    nn_dist, nn_idx = kdt_nn.query(coord_a, k = nn_count)
     ordered_idx = np.arange(0, nn_idx.shape[0], 1)
 
-    return ordered_idx, nn_idx.reshape((nn_idx.shape[0],)), nn_dist.reshape((nn_idx.shape[0],))
+    return ordered_idx, nn_idx.reshape((nn_idx.shape[0],nn_count)), nn_dist.reshape((nn_idx.shape[0],nn_count)), nn_count
 
 
-def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id"):
+def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_number=1):
     (
         centered_coord,
         rotated_coord,
@@ -33,11 +34,12 @@ def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id"):
     ) = get_nn_distances(
         motl_a,
         motl_nn,
+        nn_number = nn_number,
         pixel_size=pixel_size,
         feature=feature_id,
     )
 
-    coord_rot, angles = get_nn_rotations(motl_a, motl_nn, feature=feature_id)
+    coord_rot, angles = get_nn_rotations(motl_a, motl_nn, feature=feature_id, nn_number = nn_number)
 
     nn_stats = pd.DataFrame(
         np.hstack(
@@ -81,6 +83,7 @@ def get_nn_distances(
     motl_a,
     motl_nn,
     pixel_size=1.0,
+    nn_number = 1,
     feature="tomo_id",
 ):
     if isinstance(motl_a, str):
@@ -107,39 +110,41 @@ def get_nn_distances(
         fm_a = motl_a.get_feature_subset(f, feature_id=feature)
         fm_nn = motl_nn.get_feature_subset(f, feature_id=feature)
 
-        idx, nn_idx, dist = get_feature_nn_indices(fm_a, fm_nn)
+        idx, nn_idx, dist, nn_count = get_feature_nn_indices(fm_a, fm_nn, nn_number)
 
         if len(idx) == 0:
             continue
 
         coord_nn = fm_nn.get_coordinates() * pixel_size
         coord_a = fm_a.get_coordinates() * pixel_size
-
-        c_coord = coord_nn[nn_idx, :] - coord_a[idx, :]
-        centered_coord.append(c_coord)
-        nn_dist.append(dist * pixel_size)
-
+        
         # get angles
         angles_a = fm_a.get_angles()
         angles_a = angles_a[idx, :]
         angles_nn = fm_nn.get_angles()
-        angles_nn = angles_nn[nn_idx, :]
-
         rotations = srot.from_euler("zxz", angles=angles_a, degrees=True)
-        rotations_nn = srot.from_euler("zxz", angles=angles_nn, degrees=True)
-        angular_distances.append(geom.angular_distance(rotations, rotations_nn)[0])
 
         angles = -fm_a.df[["psi", "theta", "phi"]].values
         angles = angles[idx, :]
         rot = srot.from_euler("zxz", angles=angles, degrees=True)
         
-        rotated_coord.append(rot.apply(c_coord))
-
         subtomos_nn = fm_nn.df["subtomo_id"].to_numpy()
-        subtomo_idx_nn.append(subtomos_nn[nn_idx])
-        
         subtomos_a = fm_a.df["subtomo_id"].to_numpy()
-        subtomo_idx.append(subtomos_a[idx])
+
+        for i in range(nn_count):
+            c_coord = coord_nn[nn_idx[:,i], :] - coord_a[idx, :]
+            centered_coord.append(c_coord)
+            nn_dist.append(dist[:,i] * pixel_size)
+ 
+            angles_nn_sel = angles_nn[nn_idx[:,i], :]
+
+            rotations_nn = srot.from_euler("zxz", angles=angles_nn_sel, degrees=True)
+            angular_distances.append(geom.angular_distance(rotations, rotations_nn)[0])
+  
+            rotated_coord.append(rot.apply(c_coord))
+    
+            subtomo_idx_nn.append(subtomos_nn[nn_idx[:,i]])
+            subtomo_idx.append(subtomos_a[idx])
 
     return (
         np.vstack(centered_coord),
@@ -152,7 +157,7 @@ def get_nn_distances(
 
 
 def get_nn_rotations(
-    motl_a, motl_nn, feature="tomo_id", type_id="geom1"
+    motl_a, motl_nn, nn_number = 1, feature="tomo_id", type_id="geom1"
 ):
     if isinstance(motl_a, str):
         motl_a = cryomotl.Motl(motl_path=motl_a)
@@ -173,20 +178,18 @@ def get_nn_rotations(
         fm_a = motl_a.get_feature_subset(f, feature_id=feature)
         fm_nn = motl_nn.get_feature_subset(f, feature_id=feature)
 
-        idx, idx_nn, _ = get_feature_nn_indices(fm_a, fm_nn)
-
-        #if len(idx) == 0:
-        #    continue
+        idx, idx_nn, _, nn_count = get_feature_nn_indices(fm_a, fm_nn, nn_number)
 
         angles_nn = fm_nn.get_angles()
-        rot_nn = srot.from_euler("zxz", angles=angles_nn[idx_nn, :], degrees=True)
-
         angles_ref_to_zero = -fm_a.get_features(["psi", "theta", "phi"])
         rot_to_zero = srot.from_euler(
-            "zxz", angles=angles_ref_to_zero[idx, :], degrees=True
-        )
-
-        nn_rotations.append(rot_to_zero * rot_nn)
+                "zxz", angles=angles_ref_to_zero[idx, :], degrees=True
+            )
+        
+        for i in range(nn_count):
+            
+            rot_nn = srot.from_euler("zxz", angles=angles_nn[idx_nn[:,i], :], degrees=True)
+            nn_rotations.append(rot_to_zero * rot_nn)
 
     nn_rotations = srot.concatenate(nn_rotations)
     points_on_sphere = geom.visualize_rotations(nn_rotations, plot_rotations=False)
