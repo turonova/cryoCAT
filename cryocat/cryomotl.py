@@ -1617,9 +1617,10 @@ class Motl:
             new_angles[:,0] = phi_angles
         elif s_type == 2:
             n_subunits = nfold * 2
+            in_plane_offset = int(inplane_step/2)
             new_angles = np.zeros((n_subunits,3))
             new_angles[0::2,0] = np.arange(0, 360, int(inplane_step))
-            new_angles[1::2,0] = np.arange(0, 360, int(inplane_step))
+            new_angles[1::2,0] = np.arange(0+in_plane_offset, 360+in_plane_offset, int(inplane_step))
             new_angles[1::2,1] = 180
 
             phi_angles = new_angles[:,0].copy()
