@@ -20,7 +20,8 @@ Contextual Analysis Tools for cryoET and subtomogram averaging
     * seaborn (0.12.1)
     * sklearn (1.0.2)
     * einops (0.6.0)
-
+    * lmfit (1.2.2)
+      
 ## PIP
 
 Clone the repository and run:
