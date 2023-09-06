@@ -10,6 +10,9 @@ from cryocat import visplot
 from cryocat import cryomotl
 from cryocat import cryomask
 
+from lmfit import models
+import skimage
+
 
 def compute_scores_map_threshold_triangle(scores_map):
     
@@ -53,6 +56,205 @@ def compute_scores_map_threshold_triangle(scores_map):
         arg_level = nbins - arg_level - 1
 
     return sp[arg_level]
+
+def create_starting_parameters_1D(input_map, peak_tolerance = 20):
+
+    peak_mask = cryomask.spherical_mask(np.asarray(input_map.shape), radius=peak_tolerance)  
+    masked_map = input_map * peak_mask
+    peak_center = np.unravel_index(np.argmax(masked_map), shape = masked_map.shape)
+    peak_height = np.amax(input_map) 
+
+    x_profile = input_map[:, peak_center[1], peak_center[2]]
+    y_profile = input_map[peak_center[0], :, peak_center[2]]
+    z_profile = input_map[peak_center[0], peak_center[1], :]
+
+    profiles = np.vstack((x_profile,y_profile,z_profile))
+
+    return peak_center, peak_height, profiles.T
+
+def create_starting_parameters_2D(input_map, peak_tolerance = 20, peak_center = None):
+
+    peak_mask = cryomask.spherical_mask(np.asarray(input_map.shape), radius=peak_tolerance)  
+    masked_map = input_map * peak_mask
+    if peak_center is None:
+        peak_center = np.unravel_index(np.argmax(masked_map), shape = masked_map.shape)
+        peak_height = np.amax(input_map)
+    else:
+        peak_height = masked_map[ peak_center[0], peak_center[1],peak_center[2] ]
+
+    xy_plane = input_map[:, :, peak_center[2]]
+    yz_plane = input_map[peak_center[0], :, :]
+    xz_plane = input_map[:, peak_center[1], :]
+
+    slices = np.stack((xy_plane,yz_plane,xz_plane), axis = 2)
+
+    return peak_center, peak_height, slices
+
+def compute_gaussian_threshold(input_map):
+
+    pc, ph, profiles = create_starting_parameters_1D(input_map, peak_tolerance = 20)
+
+    heights = []
+    for i in range(3):
+        
+        rt_line = profiles[:,i]
+        x = np.linspace(0, rt_line.shape[0], rt_line.shape[0])
+        y = rt_line
+        mod = models.GaussianModel()
+
+        #params = mod.make_params(center=24, sigma=0.5)
+        params = mod.guess(rt_line, x)
+
+        # you can place min/max bounds on parameters
+        params['amplitude'].min = 0
+        params['sigma'].min = 0
+        params['center'].min = pc[i]-1
+        params['center'].max = pc[i]+1
+
+        #pars = mod.guess(y, x=x)
+        out = mod.fit(y, params, x=x)
+
+        heights.append(out.params['height'].value)
+    
+    return np.mean(np.asarray(heights))
+
+def get_ellipsoid_label(input_map, peak_coordinates, map_threshold = 0.0):
+    
+    th_map = np.where(input_map == map_threshold, 2.0, 1.0) # shift the thresholding, otherwise only 1 label is found
+    labeled_th_map = measure.label(th_map, connectivity = 1)
+    central_label = labeled_th_map[peak_coordinates[0],peak_coordinates[1],peak_coordinates[2]]
+    th_map = np.where(labeled_th_map == central_label, 1.0, 0.0)
+
+    ellipsoid_verts, _, _, _ = measure.marching_cubes(th_map, level=0.5)
+    idx = np.round(ellipsoid_verts).astype(int)
+    surface_fit = np.zeros(th_map.shape)
+    surface_fit[idx[:,0],idx[:,1],idx[:,2]] = 1.0
+
+    _, radii, radii_dir, ell_params = geom.fit_ellipsoid(ellipsoid_verts)
+
+    #dist = np.zeros(3,)
+    #for i in range(3):
+    #    dist[i] = np.linalg.norm(ellipsoid_verts[ellipsoid_verts[:, i].argsort()][-1,:] - ellipsoid_verts[ellipsoid_verts[:, i].argsort()][0,:], axis=0)
+
+    #sorted_idx = np.argsort(dist)
+    #radii_sorted = radii[sorted_idx]
+
+    sorted_idx = np.argmax(np.abs(radii_dir),axis=0)
+    radii_sorted = radii[sorted_idx] * 2.0
+
+    fitted_label = geom.fill_ellipsoid(th_map.shape,ell_params)
+
+    return fitted_label, radii_sorted, surface_fit, th_map
+
+
+def get_central_plane_labels(input_map, peak_coordinates, map_threshold = 0.0):
+    
+    th_map = np.where(input_map == map_threshold, 2.0, 1.0) # shift the thresholding, otherwise only 1 label is found
+    #labeled_th_map = measure.label(th_map, connectivity = 1)
+    #central_label = labeled_th_map[peak_coordinates[0],peak_coordinates[1],peak_coordinates[2]]
+    #th_map = np.where(labeled_th_map == central_label, 2.0, 1.0)
+
+    planes = np.zeros((input_map.shape[0],input_map.shape[1],3)) # works only for cubic volumes!!!
+    planes[:,:,0] = th_map[:, :, peak_coordinates[2]]
+    planes[:,:,1] = th_map[peak_coordinates[0], :, :]
+    planes[:,:,2] = th_map[:, peak_coordinates[1], :]
+
+    label_mask = np.zeros(input_map.shape)
+    ellipse_masks = np.zeros(planes.shape)
+    size_x, size_y, size_z = (0.0, 0.0, 0.0)
+
+    for i in range(3):
+        plane_label = measure.label(planes[:,:,i], connectivity = 1)
+        plane_props = pd.DataFrame(measure.regionprops_table(plane_label,properties=['label', 'centroid','axis_major_length', 'axis_minor_length', 'orientation']))
+        
+        if i < 2:
+            central_label = plane_label[peak_coordinates[i],peak_coordinates[i+1]]
+        else:
+            central_label = plane_label[peak_coordinates[0],peak_coordinates[i]]
+
+        plane_props = plane_props[plane_props['label']==central_label].reset_index()
+
+
+        ellipse_indices = skimage.draw.ellipse(plane_props.at[0, 'centroid-0'], plane_props.at[0, 'centroid-1'],
+                                  plane_props.at[0, 'axis_major_length']*0.5,  plane_props.at[0, 'axis_minor_length']*0.5, 
+                                  rotation=plane_props.at[0, 'orientation'])
+        ellipse_indices_x = np.clip(ellipse_indices[0],0,input_map.shape[0]-1)
+        ellipse_indices_y = np.clip(ellipse_indices[1],0,input_map.shape[1]-1)
+
+        if plane_props.at[0, 'orientation'] < 0.0 :
+            major_axis = plane_props.at[0, 'axis_major_length']
+            minor_axis = plane_props.at[0, 'axis_minor_length']
+        else:
+            major_axis = plane_props.at[0, 'axis_minor_length']
+            minor_axis = plane_props.at[0, 'axis_major_length']
+
+        ellipse_masks[ellipse_indices_x,ellipse_indices_y,i] = 1.0
+
+        if i == 0:
+            size_x += minor_axis
+            size_y += major_axis
+        elif i == 1:
+            size_y += minor_axis
+            size_z += major_axis
+        else:
+            size_x += minor_axis
+            size_z += major_axis
+
+    label_mask[ :, :, peak_coordinates[2]] += ellipse_masks[:, :, 0]
+    label_mask[ peak_coordinates[0], :, :] += ellipse_masks[:, :, 1]
+    label_mask[ :, peak_coordinates[1], :] += ellipse_masks[:, :, 2]
+
+    return np.clip(label_mask,0.0,1.0), (size_x*0.5,size_y*0.5,size_z*0.5)
+
+def get_central_label(map, peak_coordinates):
+
+    th_map = np.where(map == 0.0, 2.0, 1.0) # shift the thresholding, otherwise only 1 label is found
+    labeled_mask = measure.label(th_map, connectivity = 1)
+    central_label = labeled_mask[peak_coordinates[0],peak_coordinates[1],peak_coordinates[2]]
+    labeled_mask = np.where(labeled_mask == central_label, 1.0, 0.0)
+
+    profile_x = np.nonzero(labeled_mask[:,peak_coordinates[1],peak_coordinates[2]])[0]
+    profile_y = np.nonzero(labeled_mask[peak_coordinates[0],:,peak_coordinates[2]])[0]
+    profile_z = np.nonzero(labeled_mask[peak_coordinates[0],peak_coordinates[1],:])[0]
+    size_x = profile_x[-1] - profile_x[0] + 1
+    size_y = profile_y[-1] - profile_y[0] + 1
+    size_z = profile_z[-1] - profile_z[0] + 1
+
+    return labeled_mask, (size_x, size_y, size_z)
+
+
+def evaluate_scores_map(input_map, label_type = 'plane', threshold_type = 'gauss'):
+    
+    pc, ph, slices = create_starting_parameters_2D(input_map)
+
+    if threshold_type == 'triangle':
+        th = compute_scores_map_threshold_triangle(input_map)
+        th = th + np.std(input_map)
+    elif threshold_type == 'gauss':
+        th = compute_gaussian_threshold(input_map)
+        th = th - np.std(input_map)
+    elif threshold_type == 'hard':
+        th = ph / 2.0
+    else:
+        raise ValueError('Unknown type of threshold!')
+
+    th_map = np.where(input_map>th,1.0,0.0)
+    #th_map_close = binary_closing(th_map)
+    th_map = input_map * th_map
+
+    if label_type == 'ellipsoid':
+        labeled_mask, sizes, surface, th_map = get_ellipsoid_label(th_map,pc)
+        labeled_map = labeled_mask * input_map
+    elif label_type == 'plane':
+        labeled_mask, sizes = get_central_plane_labels(th_map,pc)
+        labeled_map = labeled_mask * input_map
+        surface = []
+    else:
+        labeled_mask, sizes = get_central_label(th_map,pc)
+        labeled_map = labeled_mask * input_map
+        surface = []
+
+    return labeled_map, sizes, ph, th_map, surface
 
 
 def filter_dist_maps(dist_maps, th_mask, min_angles_voxel_count):

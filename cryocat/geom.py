@@ -496,3 +496,19 @@ def area_triangle(coords):
     triangles = np.cross(coords[:,1] - coords[:,0], coords[:,2] - coords[:,0], axis=1)
     # The norm of the cross product of two sides is twice the area
     return np.linalg.norm(triangles, axis=1) / 2
+
+
+def load_angles(input_angles):
+
+    if isinstance(input_angles, str):
+        
+        angles=pd.read_csv(input_angles,header=None)
+        angles.columns=['phi', 'psi', 'theta']
+        angles = angles.loc[:,['phi', 'theta', 'psi']].to_numpy()
+        
+    elif isinstance(input_angles, np.ndarray):
+        angles = input_angles.copy()
+    else:
+        raise ValueError("The input_angles have to be either a valid path to a file or nympy array!!!")
+
+    return angles

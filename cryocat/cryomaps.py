@@ -431,3 +431,88 @@ def trim(input_map, trim_start, trim_end, output_name=None):
         write(output_map, output_name, data_type=np.single)
 
     return output_map
+
+def flip(input_map, axis = 'z',output_name=None):
+    
+    output_map = read(input_map)
+
+    if 'z' in axis.lower():
+        output_map = np.flip(output_map,2)
+    
+    if 'y' in axis.lower():
+        output_map = np.flip(output_map,1)
+
+    if 'x' in axis.lower():
+        output_map = np.flip(output_map,0)
+
+    if output_name is not None:
+        write(output_map, output_name, data_type=np.single)
+
+    return output_map
+
+
+def calculate_conjugates(vol,filter=None):
+    # Fourier transform tile        
+    vol_fft = np.fft.fftn(vol)
+
+    # Apply filter
+    if filter is not None:
+        vol_fft = vol_fft*filter
+
+    # Set 0-frequency peak to zero
+    vol_fft[0,0,0] = 0
+        
+    # Store complex conjugate
+    conj_target = np.conj(vol_fft) 
+    
+    # Filtered volume
+    filtered_volume = np.fft.ifftn(vol_fft).real
+
+    # Store complex conjugate of square
+    conj_target_sq = np.conj(np.fft.fftn(np.power(filtered_volume,2)))
+
+    return conj_target, conj_target_sq
+
+def calculate_flcf(vol1,mask,vol2=None,conj_target=None,conj_target_sq=None,filter=None):
+    
+    # get the size of the box and number of voxels contributing to the calculations
+    box_size = np.array(vol1.shape)
+    n_pix = mask.sum()
+    
+    # Calculate inital Fourier transfroms
+    vol1 = np.fft.fftn(vol1)
+    mask = np.fft.fftn(mask)
+
+    if vol2 is not None:
+
+        conj_target,conj_target_sq = calculate_conjugates(vol2,filter) 
+    
+    elif conj_target is None or conj_target_sq is None:
+        raise ValueError('If the second volume is NOT provided, both conj_target and conj_target_sw have to be passed as parameters.')
+    
+
+    # Calculate numerator of equation
+    numerator = np.fft.ifftn(vol1*conj_target).real
+
+
+    # Calculate denominator in three steps
+    #sigma_a = np.fft.ifftn(mask*conj_target_sq).real/n_pix  # First part of denominator sigma
+    #sigma_b = np.power(np.fft.ifftn(mask*conj_target).real/n_pix,2)   # Second part of denominator sigma
+    A = np.fft.ifftn(mask*conj_target_sq)
+    B = np.fft.ifftn(mask*conj_target)
+    denominator = np.sqrt(n_pix*A-B*B).real
+
+    # Shifted FLCL map
+    cc_map = (numerator/denominator).real
+    
+    # Calculate map and do a much of flips to get orientation correct...
+    # Note on the flips - normally, fftshift should directly work on cc_map, no flipping necessary
+    # but for some reason the fftshift returns "mirrored" values, i.e. for shift of 6,6,6 the peak would be in -6,-6,-6
+    # Following code corresponds to the original one from Matlab and was tested to be working despite looking ugly...
+    # TODO: maybe check (on unflipped data) fftshift, followed by transpose - that could work. fftshift followed by flip
+    # was having an offset of 1 
+    cen = np.floor(box_size / 2).astype(int) + 1
+    cc_map=np.flip(cc_map)
+    cc_map=np.roll(cc_map,cen,(0,1,2))
+
+    return cc_map

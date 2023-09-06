@@ -7,7 +7,7 @@ from skimage import measure
 import pandas as pd
 import decimal
 from skimage import morphology
-
+import numbers
 
 def add_gaussian(input_mask, sigma):
     if sigma == 0:
@@ -88,9 +88,12 @@ def difference(mask_list, output_name=None):
 
 
 def spherical_mask(mask_size, radius=None, center=None, gaussian=0, output_name=None):
+    
     if center is None:
         center = mask_size // 2
-        center = (center, center, center)
+        if isinstance(center,numbers.Number):           
+            center = (center, center, center)
+
 
     if radius is None:
         radius = np.amin(mask_size) // 2
@@ -340,3 +343,18 @@ def fill_hollow_mask(input_mask, output_name=None):
     write_out(filled_mask, output_name)
 
     return filled_mask
+
+
+
+def compute_solidity(input_mask):
+
+    mask_label = measure.label(input_mask)
+    props = pd.DataFrame(measure.regionprops_table(mask_label,properties=['solidity']))
+
+    return props.at[0,'solidity']
+
+def mask_overlap(mask1,mask2,threshold=1.9):
+
+    mask_overlap=np.where((mask1+mask2) <= threshold, 0, 1)
+    
+    return np.sum(mask_overlap)
