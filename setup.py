@@ -19,7 +19,8 @@ setup(
                       'matplotlib',
                       'seaborn',
                       'scikit-learn',
-                      'einops'
+                      'einops',
+                      'lmfit'
                       ],
 
     classifiers=[
