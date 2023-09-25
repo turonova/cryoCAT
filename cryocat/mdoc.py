@@ -1,5 +1,5 @@
 import pandas as pd
-import os
+from os import path
 
 
 class Mdoc:
@@ -28,19 +28,19 @@ class Mdoc:
     mdoc.write('path/to/output/file')
     """
 
-    def __init__(self, file_path=None):
-        self.file_path = file_path
-        self.titles = []
-        self.project_info = {}
-        self.imgs = None
-
-        if os.path.isfile(file_path):
+    def __init__(self, file_path=None, titles=None, project_info=None, imgs=None):
+        if file_path and path.isfile(file_path):
+            self.file_path = file_path
             self.titles, self.project_info, self.imgs = self._read_mdoc(file_path)
+        else:
+            self.titles = titles
+            self.project_info = project_info
+            self.imgs = imgs
 
     def write(self, out_path=None, overwrite=False, removed=False):
         if not out_path:
             out_path = self.file_path
-        if os.path.isfile(out_path) and not overwrite:
+        if path.isfile(out_path) and not overwrite:
             raise FileExistsError('File {} already exists. Set overwrite=True to overwrite.'.format(out_path))
 
         with open(out_path, 'w') as f:
@@ -112,6 +112,10 @@ class Mdoc:
 
     def get_image_features(self, features):
         return self.imgs[features]
+
+    def reorder_images(self, indices):
+        self.imgs = self.imgs.reindex(indices)
+        self.imgs.reset_index(drop=True, inplace=True)
 
     @staticmethod
     def _read_mdoc(file_path):
