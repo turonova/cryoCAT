@@ -3,33 +3,150 @@ import pandas as pd
 from scipy.spatial.transform import Rotation as srot
 from cryocat.exceptions import UserInputError
 import matplotlib.pyplot as plt
+import os
+from scipy.interpolate import InterpolatedUnivariateSpline
 
 ANGLE_DEGREES_TOL = 10e-12
 
 
-def load_angles(input_angles):
+def load_dimensions(dims):
+    """Loads tomogram dimensions from a file or nd.array.
 
+    Args:
+        dims (str, nd.array): Either a path to a file with the dimensions or nd.array. The shape of the input should
+            be 1x3 (x y z) in case of one tomogram or Nx4 for multiple tomograms (tomo_id x y z). In case of file the
+            separator is a space.
+
+    Raises:
+        UserInputError: Wrong size of the input.
+
+    Returns:
+        nd.array : Dimensions of a tomogram in x, y, z (shape 1x3) or tomogram idx and corresponding dimensions
+            (shape Nx4 where N is the number of tomograms)
+    """
+
+    if os.path.isfile(dims):
+        dimensions = pd.read_csv(dims, sep="\s+", header=None, dtype=float)
+    elif isinstance(dims, pd.DataFrame):
+        dimensions = dims
+    else:
+        dimensions = pd.DataFrame(dims)
+
+    if dimensions.shape == (1, 3):
+        dimensions.columns = ["x", "y", "z"]
+    elif dimensions.shape[1] == 4:
+        dimensions.columns = ["tomo_id", "x", "y", "z"]
+    else:
+        raise UserInputError(
+            f"The dimensions should have shape of 1x3 or Nx4, where N is number of tomograms."
+            f" Instead following shape was specified: {dimensions.shape}."
+        )
+
+    return dimensions
+
+
+def load_angles(input_angles):
+    """_summary_
+
+    Args:
+        input_angles (_type_): _description_
+
+    Raises:
+        ValueError: _description_
+
+    Returns:
+        _type_: _description_
+    """
     if isinstance(input_angles, str):
-        
-        angles=pd.read_csv(input_angles,header=None)
-        angles.columns=['phi', 'psi', 'theta']
-        angles = angles.loc[:,['phi', 'theta', 'psi']].to_numpy()
-        
+        angles = pd.read_csv(input_angles, header=None)
+        angles.columns = ["phi", "psi", "theta"]
+        angles = angles.loc[:, ["phi", "theta", "psi"]].to_numpy()
+
     elif isinstance(input_angles, np.ndarray):
         angles = input_angles.copy()
     else:
-        raise ValueError("The input_angles have to be either a valid path to a file or nympy array!!!")
+        raise ValueError("The input_angles have to be either a valid path to a file or numpy array!!!")
 
     return angles
 
-def compare_rotations(angles1, angles2, c_symmetry = 1):
-    
-    dist_degrees = angular_distance(angles1,angles2,c_symmetry=c_symmetry)[0]
-    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(angles1,angles2,c_symmetry=c_symmetry)
+
+def spline_sampling(coords, sampling_distance):
+    # Samples a spline specified by coordinates with a given sampling distance
+    # Input:  coords - coordinates of the spline
+    #         sampling_distance: sampling frequency in pixels
+    # Output: coordinates of points on the spline
+
+    # spline = UnivariateSpline(np.arange(0, len(coords), 1), coords.to_numpy())
+    spline = InterpolatedUnivariateSpline(np.arange(0, len(coords), 1), coords.to_numpy())
+
+    # Keep track of steps across whole tube
+    totalsteps = 0
+
+    for i, row in coords.iterrows():
+        if i == 0:
+            continue
+        # Calculate projected distance between each point
+        dist = Motl.point2point_distance(row, coords.iloc[i - 1])
+
+        # Number of steps between two points; steps are roughly in increments of 1 pixel
+        stepnumber = round(dist / sampling_distance)
+        # Length of each step
+        step = 1 / stepnumber
+        # Array to hold fraction of each step between points
+        t = np.arrange(i - 1, i, step)  # inclusive end in matlab
+
+        # Evaluate piecewise-polynomial, i.e. spline, at steps 't'.
+        # This array contains the Cartesian coordinates of each step
+
+        # Ft(:,totalsteps+1:totalsteps+size(t,2))=ppval(F, t) # TODO
+        # scipy.interpolate.NdPPoly
+        spline_t = spline(t)
+
+        # Increment the step counter
+        totalsteps += len(t)
+
+        return spline_t
+
+
+def compare_rotations(angles1, angles2, c_symmetry=1):
+    """Compare the rotations between two sets of angles.
+
+    Args:
+        angles1 (list): The first set of angles.
+        angles2 (list): The second set of angles.
+        c_symmetry (int, optional): The degree of rotational symmetry. Defaults to 1.
+
+    Returns:
+        tuple: A tuple containing the following distances:
+            - dist_degrees (float): The overall angular distance between the two sets of angles.
+            - dist_degrees_normals (float): The angular distance between the normal vectors of the two sets of angles.
+            - dist_degrees_inplane (float): The angular distance within the plane of rotation between the two sets of angles.
+    """
+
+    dist_degrees = angular_distance(angles1, angles2, c_symmetry=c_symmetry)[0]
+    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(angles1, angles2, c_symmetry=c_symmetry)
 
     return dist_degrees, dist_degrees_normals, dist_degrees_inplane
 
+
 def change_handedness_coordinates(coordinates, dimensions):
+    """
+    The change_handedness_coordinates function takes in a pandas dataframe of coordinates and the dimensions of the
+        coordinate system. It then changes the handedness of those coordinates by subtracting each z-coordinate from
+        dimension[2]. This is done because we want to change our coordinate system so that it has its origin at the top left
+        corner, with positive x going right and positive y going down. The original coordinate system had its origin at
+        bottom left, with positive x going right and positive y going up.
+
+    Args:
+        coordinates: Store the coordinates of the voxels
+        dimensions: Determine the new z value
+
+    Returns:
+        The coordinates with the z axis inverted
+
+    Doc Author:
+        Trelent
+    """
     new_z = dimensions[2] - coordinates["z"]
     coordinates.loc[:, "z"] = new_z
 
@@ -58,13 +175,9 @@ def normals_to_euler_angles(input_normals, output_order="zzx"):
     elif isinstance(input_normals, np.ndarray):
         normals = input_normals
     else:
-        raise UserInputError(
-            "The input_normals have to be either pandas dataFrame or numpy array"
-        )
+        raise UserInputError("The input_normals have to be either pandas dataFrame or numpy array")
 
-    theta = np.degrees(
-        np.arctan2(np.sqrt(normals[:, 0] ** 2 + normals[:, 1] ** 2), normals[:, 2])
-    )
+    theta = np.degrees(np.arctan2(np.sqrt(normals[:, 0] ** 2 + normals[:, 1] ** 2), normals[:, 2]))
 
     psi = 90 + np.degrees(np.arctan2(normals[:, 1], normals[:, 0]))
     b_idx = np.where(np.arctan2(normals[:, 1], normals[:, 0]) == 0)
@@ -135,16 +248,12 @@ def cone_distance(input_rot1, input_rot2):
     vec1 = vec1 / vec1_n[:, np.newaxis]
     vec2_n = np.linalg.norm(vec2, axis=1)
     vec2 = vec2 / vec2_n[:, np.newaxis]
-    cone_angle = np.degrees(
-        np.arccos(np.maximum(np.minimum(np.sum(vec1 * vec2, axis=1), 1.0), -1.0))
-    )
+    cone_angle = np.degrees(np.arccos(np.maximum(np.minimum(np.sum(vec1 * vec2, axis=1), 1.0), -1.0)))
 
     return cone_angle
 
 
-def inplane_distance(
-    input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1
-):
+def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
     phi1 = np.array(input_rot1.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
     phi2 = np.array(input_rot2.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
 
@@ -164,16 +273,12 @@ def inplane_distance(
 
     inplane_angle = np.abs(phi1 - phi2)
 
-    inplane_angle = np.where(
-        inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle
-    )
+    inplane_angle = np.where(inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle)
 
     return inplane_angle
 
 
-def cone_inplane_distance(
-    input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1
-):
+def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
     if isinstance(input_rot1, np.ndarray):
         rot1 = srot.from_euler(convention, input_rot1, degrees=degrees)
     else:
@@ -190,9 +295,7 @@ def cone_inplane_distance(
     return cone_angle, inplane_angle
 
 
-def angular_distance(
-    input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1
-):
+def angular_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
     # Computes angular distance between 2 quaternions or two sets of Euler
     # angles with ZXZ convention. Formula is based on this post
     # https://math.stackexchange.com/questions/90081/quaternion-distance
@@ -255,9 +358,7 @@ def number_of_cone_rotations(cone_angle, cone_sampling):
     return number_of_rotations
 
 
-def sample_cone(
-    cone_angle, cone_sampling, center=np.array([0.0, 0.0, 0.0]), radius=1.0
-):
+def sample_cone(cone_angle, cone_sampling, center=np.array([0.0, 0.0, 0.0]), radius=1.0):
     # Creates "even" distribution on sphere. This is in many regards
     # just an approximation. However, it seems to work for not too extreme cases.
     # Source:
@@ -310,9 +411,7 @@ def generate_angles(
 
     if starting_angles is not None:
         starting_rot = srot.from_euler("zxz", angles=starting_angles, degrees=True)
-        cone_rotations = (
-            starting_rot * cone_rotations
-        )  # swapped order w.r.t. the quat_mult in matlab!
+        cone_rotations = starting_rot * cone_rotations  # swapped order w.r.t. the quat_mult in matlab!
         starting_phi = starting_angles[0]
 
     cone_angles = cone_rotations.as_euler("zxz", degrees=True)
@@ -490,22 +589,21 @@ def point_pairwise_dist(coord_1, coord_2):
 
     return pairwise_dist
 
+
 # cite https://stackoverflow.com/questions/71346322/numpy-area-of-triangle-and-equation-of-a-plane-on-which-triangle-lies-on
 def area_triangle(coords):
     # The cross product of two sides is a normal vector
-    triangles = np.cross(coords[:,1] - coords[:,0], coords[:,2] - coords[:,0], axis=1)
+    triangles = np.cross(coords[:, 1] - coords[:, 0], coords[:, 2] - coords[:, 0], axis=1)
     # The norm of the cross product of two sides is twice the area
     return np.linalg.norm(triangles, axis=1) / 2
 
 
 def load_angles(input_angles):
-
     if isinstance(input_angles, str):
-        
-        angles=pd.read_csv(input_angles,header=None)
-        angles.columns=['phi', 'psi', 'theta']
-        angles = angles.loc[:,['phi', 'theta', 'psi']].to_numpy()
-        
+        angles = pd.read_csv(input_angles, header=None)
+        angles.columns = ["phi", "psi", "theta"]
+        angles = angles.loc[:, ["phi", "theta", "psi"]].to_numpy()
+
     elif isinstance(input_angles, np.ndarray):
         angles = input_angles.copy()
     else:

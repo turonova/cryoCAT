@@ -16,9 +16,7 @@ def read(map, transpose=True, data_type=None):
         elif ".em" == map[-3:]:
             data = emfile.read(map)[1]
         else:
-            raise ValueError(
-                "The input map file name", map, "is neither em or mrc file!"
-            )
+            raise ValueError("The input map file name", map, "is neither em or mrc file!")
 
         if transpose:
             data = data.transpose(2, 1, 0)
@@ -43,9 +41,7 @@ def write(data_to_write, file_name, transpose=True, data_type=None, overwrite=Tr
     elif ".em" == file_name[-3:]:
         emfile.write(file_name, data=data_to_write, overwrite=overwrite)
     else:
-        raise ValueError(
-            "The output file name", file_name, "has to end with .mrc or .em!"
-        )
+        raise ValueError("The output file name", file_name, "has to end with .mrc or .em!")
 
 
 def em2mrc(map_name, invert=False, overwrite=True, output_name=None):
@@ -114,9 +110,7 @@ def rotate(
     final_matrix = T @ rot_matrix @ np.linalg.inv(T)
 
     rot_struct = np.empty(map.shape)
-    affine_transform(
-        input=map, output=rot_struct, matrix=final_matrix, order=spline_order
-    )
+    affine_transform(input=map, output=rot_struct, matrix=final_matrix, order=spline_order)
 
     return rot_struct
 
@@ -132,9 +126,7 @@ def shift(map, delta):
     delta = delta / np.array([dimx, dimy, dimz])
     sh = delta[0] * mx + delta[1] * my + delta[2] * mz
     fmap = np.fft.fftshift(np.fft.fftn(map))
-    shifted_map = np.fft.ifftn(
-        np.fft.ifftshift(fmap * np.exp(-2.0 * np.pi * 1j * sh))
-    ).real
+    shifted_map = np.fft.ifftn(np.fft.ifftshift(fmap * np.exp(-2.0 * np.pi * 1j * sh))).real
 
     return shifted_map
 
@@ -202,9 +194,7 @@ def extract_subvolume(volume, coordinates, subvolume_shape, output_file=None):
 
     subvolume = np.full(subvolume_shape, np.mean(volume))
 
-    subvolume[ss[0] : se[0], ss[1] : se[1], ss[2] : se[2]] = volume[
-        vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]
-    ]
+    subvolume[ss[0] : se[0], ss[1] : se[1], ss[2] : se[2]] = volume[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
 
     if output_file is not None:
         write(subvolume, output_file, data_type=np.single)
@@ -274,9 +264,7 @@ def pad(input_volume, new_size, fill_value=None):
     return padded_volume
 
 
-def place_object(
-    input_object, motl, volume_shape=None, volume=None, feature_to_color="object_id"
-):
+def place_object(input_object, motl, volume_shape=None, volume=None, feature_to_color="object_id"):
     if volume is not None:
         object_container = read(volume)
     elif volume_shape is not None:
@@ -287,14 +275,10 @@ def place_object(
     colors = motl.df[feature_to_color]
 
     for i, coord in enumerate(coordinates):
-        object_map = rotate(
-            input_object, rotation=rotations[i], transpose_rotation=True
-        )
+        object_map = rotate(input_object, rotation=rotations[i], transpose_rotation=True)
         object_map = np.where(object_map > 0.1, 1.0, 0.0)
 
-        ls, le, os, oe = get_start_end_indices(
-            coord, object_container.shape, input_object.shape
-        )
+        ls, le, os, oe = get_start_end_indices(coord, object_container.shape, input_object.shape)
 
         object_shape = object_map[os[0] : oe[0], os[1] : oe[1], os[2] : oe[2]]
         object_container[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2]] = np.where(
@@ -392,13 +376,9 @@ def deconvolve(
     return deconvolved_map
 
 
-def compute_ctf_1d(
-    length, pixel_size, voltage, cs, defocus, amplitude, phaseshift, bfactor
-):
+def compute_ctf_1d(length, pixel_size, voltage, cs, defocus, amplitude, phaseshift, bfactor):
     ny = 1 / pixel_size
-    lambda_factor = (
-        12.2643247 / np.sqrt(voltage * (1.0 + voltage * 0.978466e-6)) * 1e-10
-    )
+    lambda_factor = 12.2643247 / np.sqrt(voltage * (1.0 + voltage * 0.978466e-6)) * 1e-10
     lambda2 = lambda_factor * 2
 
     points = np.arange(length)
@@ -432,18 +412,18 @@ def trim(input_map, trim_start, trim_end, output_name=None):
 
     return output_map
 
-def flip(input_map, axis = 'z',output_name=None):
-    
+
+def flip(input_map, axis="z", output_name=None):
     output_map = read(input_map)
 
-    if 'z' in axis.lower():
-        output_map = np.flip(output_map,2)
-    
-    if 'y' in axis.lower():
-        output_map = np.flip(output_map,1)
+    if "z" in axis.lower():
+        output_map = np.flip(output_map, 2)
 
-    if 'x' in axis.lower():
-        output_map = np.flip(output_map,0)
+    if "y" in axis.lower():
+        output_map = np.flip(output_map, 1)
+
+    if "x" in axis.lower():
+        output_map = np.flip(output_map, 0)
 
     if output_name is not None:
         write(output_map, output_name, data_type=np.single)
@@ -451,68 +431,67 @@ def flip(input_map, axis = 'z',output_name=None):
     return output_map
 
 
-def calculate_conjugates(vol,filter=None):
-    # Fourier transform tile        
+def calculate_conjugates(vol, filter=None):
+    # Fourier transform tile
     vol_fft = np.fft.fftn(vol)
 
     # Apply filter
     if filter is not None:
-        vol_fft = vol_fft*filter
+        vol_fft = vol_fft * filter
 
     # Set 0-frequency peak to zero
-    vol_fft[0,0,0] = 0
-        
+    vol_fft[0, 0, 0] = 0
+
     # Store complex conjugate
-    conj_target = np.conj(vol_fft) 
-    
+    conj_target = np.conj(vol_fft)
+
     # Filtered volume
     filtered_volume = np.fft.ifftn(vol_fft).real
 
     # Store complex conjugate of square
-    conj_target_sq = np.conj(np.fft.fftn(np.power(filtered_volume,2)))
+    conj_target_sq = np.conj(np.fft.fftn(np.power(filtered_volume, 2)))
 
     return conj_target, conj_target_sq
 
-def calculate_flcf(vol1,mask,vol2=None,conj_target=None,conj_target_sq=None,filter=None):
-    
+
+def calculate_flcf(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None, filter=None):
     # get the size of the box and number of voxels contributing to the calculations
     box_size = np.array(vol1.shape)
     n_pix = mask.sum()
-    
+
     # Calculate inital Fourier transfroms
     vol1 = np.fft.fftn(vol1)
     mask = np.fft.fftn(mask)
 
     if vol2 is not None:
+        conj_target, conj_target_sq = calculate_conjugates(vol2, filter)
 
-        conj_target,conj_target_sq = calculate_conjugates(vol2,filter) 
-    
     elif conj_target is None or conj_target_sq is None:
-        raise ValueError('If the second volume is NOT provided, both conj_target and conj_target_sw have to be passed as parameters.')
-    
+        raise ValueError(
+            "If the second volume is NOT provided, both conj_target and conj_target_sw have to be passed as parameters."
+        )
 
     # Calculate numerator of equation
-    numerator = np.fft.ifftn(vol1*conj_target).real
-
+    numerator = np.fft.ifftn(vol1 * conj_target).real
 
     # Calculate denominator in three steps
-    #sigma_a = np.fft.ifftn(mask*conj_target_sq).real/n_pix  # First part of denominator sigma
-    #sigma_b = np.power(np.fft.ifftn(mask*conj_target).real/n_pix,2)   # Second part of denominator sigma
-    A = np.fft.ifftn(mask*conj_target_sq)
-    B = np.fft.ifftn(mask*conj_target)
-    denominator = np.sqrt(n_pix*A-B*B).real
+    # sigma_a = np.fft.ifftn(mask*conj_target_sq).real/n_pix  # First part of denominator sigma
+    # sigma_b = np.power(np.fft.ifftn(mask*conj_target).real/n_pix,2)   # Second part of denominator sigma
+    A = np.fft.ifftn(mask * conj_target_sq)
+    B = np.fft.ifftn(mask * conj_target)
+    denominator = np.sqrt(n_pix * A - B * B).real
 
     # Shifted FLCL map
-    cc_map = (numerator/denominator).real
-    
+    cc_map = (numerator / denominator).real
+
     # Calculate map and do a much of flips to get orientation correct...
     # Note on the flips - normally, fftshift should directly work on cc_map, no flipping necessary
     # but for some reason the fftshift returns "mirrored" values, i.e. for shift of 6,6,6 the peak would be in -6,-6,-6
     # Following code corresponds to the original one from Matlab and was tested to be working despite looking ugly...
     # TODO: maybe check (on unflipped data) fftshift, followed by transpose - that could work. fftshift followed by flip
-    # was having an offset of 1 
+    # was having an offset of 1
     cen = np.floor(box_size / 2).astype(int) + 1
-    cc_map=np.flip(cc_map)
-    cc_map=np.roll(cc_map,cen,(0,1,2))
+    cc_map = np.flip(cc_map)
+    cc_map = np.roll(cc_map, cen, (0, 1, 2))
 
     return cc_map

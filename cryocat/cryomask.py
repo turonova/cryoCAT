@@ -9,6 +9,7 @@ import decimal
 from skimage import morphology
 import numbers
 
+
 def add_gaussian(input_mask, sigma):
     if sigma == 0:
         return input_mask
@@ -87,16 +88,14 @@ def difference(mask_list, output_name=None):
     return final_mask
 
 
-def spherical_mask(mask_size, radius=None, center=None, gaussian=0, output_name=None):
-    
-    if center is None:
-        center = mask_size // 2
-        if isinstance(center,numbers.Number):           
-            center = (center, center, center)
-
+def spherical_mask(mask_size, radius=None, center=None, gaussian=0, output_name=None, gaussian_outwards=True):
+    mask_size = get_correct_format(mask_size)
+    center = get_correct_format(center, reference_size=mask_size)
 
     if radius is None:
         radius = np.amin(mask_size) // 2
+
+    radius = preprocess_params(gaussian, radius, gaussian_outwards)
 
     x, y, z = np.mgrid[0 : mask_size[0] : 1, 0 : mask_size[1] : 1, 0 : mask_size[2] : 1]
     mask = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2 + (z - center[2]) ** 2)
@@ -109,6 +108,67 @@ def spherical_mask(mask_size, radius=None, center=None, gaussian=0, output_name=
     return mask
 
 
+def cylindrical_mask(
+    mask_size,
+    radius=None,
+    height=None,
+    center=None,
+    gaussian=0,
+    angles=np.asarray([0, 0, 0]),
+    output_name=None,
+    gaussian_outwards=True,
+):
+    mask_size = get_correct_format(mask_size)
+    center = get_correct_format(center, reference_size=mask_size)
+
+    if radius is None:
+        radius = np.amin(mask_size[:2]) // 2  # only x, y are relevant
+
+    if height is None:
+        height = mask_size[2]
+
+    height = height // 2
+
+    radius = preprocess_params(gaussian, radius, gaussian_outwards)
+    height = preprocess_params(gaussian, height, gaussian_outwards)
+
+    x, y = np.mgrid[0 : mask_size[0] : 1, 0 : mask_size[1] : 1]
+    mask_xy = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2)
+    mask_xy[mask_xy > radius] = 0
+    mask_xy[mask_xy > 0] = 1
+    mask_xy[center[0], center[1]] = 1
+
+    mask = np.zeros(mask_size)
+    mask[:, :, center[2] - height : center[2] + height + 1] = np.tile(mask_xy[:, :, None], (1, 1, height * 2 + 1))
+
+    mask = postprocess(mask, gaussian, angles, output_name)
+
+    return mask
+
+
+def get_correct_format(input_size, reference_size=None):
+    def format_input(input_value):
+        if isinstance(input_value, (tuple, list, np.ndarray)):
+            if len(input_value) == 3:
+                return np.asarray(input_value).astype(int)
+            elif len(input_value) == 1:
+                return np.full((3,), input_value).astype(int)
+            else:
+                raise ValueError("The size have to be a single number or have to have length of 3!")
+        elif isinstance(input_value, (float, int)):
+            return np.full((3,), input_value).astype(int)
+
+    if input_size is not None:
+        size_correct_format = format_input(input_size)
+    elif reference_size is not None:
+        box_size = format_input(reference_size)
+        size_correct_format = box_size // 2
+    else:
+        raise ValueError("Either input_size or referene_size have to be specified")
+
+    return size_correct_format
+
+
 def ellipsoid_mask(
     mask_size,
     radii=None,
@@ -116,26 +176,13 @@ def ellipsoid_mask(
     gaussian=0,
     output_name=None,
     angles=np.asarray([0, 0, 0]),
+    gaussian_outwards=True,
 ):
-    if isinstance(mask_size, tuple):
-        if len(mask_size) == 3:
-            mask_shape = np.asarray(mask_size)
-        else:
-            raise ValueError(
-                "Mask size have to be a single number or tuple of length 3!"
-            )
-    else:
-        mask_shape = np.full((3,), mask_size).astype(int)
+    mask_shape = get_correct_format(mask_size)
+    center = get_correct_format(center, reference_size=mask_shape)
+    radii = get_correct_format(radii, reference_size=mask_shape)
 
-    if center is None:
-        center = mask_shape // 2
-    else:
-        center = np.asarray(center)
-
-    if radii is None:
-        radii = mask_shape // 2
-    else:
-        radii = np.asarray(radii)
+    radii = preprocess_params(gaussian, radii, gaussian_outwards)
 
     # Build a grid and get its points as a list
     xi = tuple(np.linspace(1, s, s) - np.floor(0.5 * s) for s in mask_shape)
@@ -169,6 +216,17 @@ def ellipsoid_mask(
     return mask
 
 
+def preprocess_params(gaussian, radius, gaussian_outwards):
+    blur_factor = 5.0
+
+    if gaussian != 0.0 and gaussian_outwards:
+        new_radius = np.ceil(radius + gaussian * blur_factor).astype(int)
+    else:
+        new_radius = radius
+
+    return new_radius
+
+
 def molmap_tight_mask(
     input_map,
     threshold=0.0,
@@ -176,8 +234,11 @@ def molmap_tight_mask(
     gaussian=0,
     output_name=None,
     angles=np.asarray([0, 0, 0]),
+    gaussian_outwards=True,
 ):
     model = cryomaps.read(input_map)
+
+    dilation_size = preprocess_params(gaussian, dilation_size, gaussian_outwards)
 
     if dilation_size == 0:
         mask = np.where(model > threshold, 1.0, 0.0)
@@ -197,6 +258,7 @@ def map_tight_mask(
     output_name=None,
     angles=np.asarray([0, 0, 0]),
     n_regions=1,
+    gaussian_outwards=True,
 ):
     mask = cryomaps.read(input_map)
 
@@ -219,13 +281,11 @@ def map_tight_mask(
     ).set_index("label")
     info_table = info_table.reset_index()
 
-    label_ids = (
-        info_table.sort_values(by="area", ascending=False)
-        .head(n_regions)["label"]
-        .values
-    )
+    label_ids = info_table.sort_values(by="area", ascending=False).head(n_regions)["label"].values
     # label_id = info_table.iloc[info_table['area'].idxmax()]['label']
     mask = np.where(np.isin(labeled_mask, [label_ids]), 1.0, 0.0)
+
+    dilation_size = preprocess_params(gaussian, dilation_size, gaussian_outwards)
 
     if dilation_size > 0:
         mask = ndimage.binary_dilation(mask, iterations=dilation_size)
@@ -262,12 +322,7 @@ def get_mass_center(input_mask):
     mask_center = (start_ids + end_ids) / 2
 
     for i in range(3):
-        mask_center[i] = (
-            decimal.Decimal(mask_center[i]).to_integral_value(
-                rounding=decimal.ROUND_HALF_UP
-            )
-            + 1
-        )
+        mask_center[i] = decimal.Decimal(mask_center[i]).to_integral_value(rounding=decimal.ROUND_HALF_UP) + 1
 
     return mask_center.astype(int)
 
@@ -345,16 +400,14 @@ def fill_hollow_mask(input_mask, output_name=None):
     return filled_mask
 
 
-
 def compute_solidity(input_mask):
-
     mask_label = measure.label(input_mask)
-    props = pd.DataFrame(measure.regionprops_table(mask_label,properties=['solidity']))
+    props = pd.DataFrame(measure.regionprops_table(mask_label, properties=["solidity"]))
 
-    return props.at[0,'solidity']
+    return props.at[0, "solidity"]
 
-def mask_overlap(mask1,mask2,threshold=1.9):
 
-    mask_overlap=np.where((mask1+mask2) <= threshold, 0, 1)
-    
+def mask_overlap(mask1, mask2, threshold=1.9):
+    mask_overlap = np.where((mask1 + mask2) <= threshold, 0, 1)
+
     return np.sum(mask_overlap)
