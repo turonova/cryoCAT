@@ -4,7 +4,7 @@ import pandas as pd
 from skimage import measure
 from skimage import morphology
 
-from cryocat import cryomaps
+from cryocat import cryomap
 from cryocat import geom
 from cryocat import visplot
 from cryocat import cryomotl
@@ -284,7 +284,7 @@ def create_angular_distance_maps(angles_map, angles_list, output_file_base=None,
             ValueError("The output_file_base was not specified -> the maps will not be written out!")
             write_out_maps = False
 
-    angles_map = cryomaps.read(angles_map).astype(int)
+    angles_map = cryomap.read(angles_map).astype(int)
 
     map_shape = angles_map.shape
     angles = geom.load_angles(angles_list)
@@ -299,9 +299,9 @@ def create_angular_distance_maps(angles_map, angles_list, output_file_base=None,
     dist_inplane_map = dist_inplane[angles_array].reshape(map_shape)
 
     if write_out_maps:
-        cryomaps.write(ang_dist_map, output_file_base + "_dist_all.em", data_type=np.single)
-        cryomaps.write(dist_normals_map, output_file_base + "_dist_normals.em", data_type=np.single)
-        cryomaps.write(dist_inplane_map, output_file_base + "_dist_inplane.em", data_type=np.single)
+        cryomap.write(ang_dist_map, output_file_base + "_dist_all.em", data_type=np.single)
+        cryomap.write(dist_normals_map, output_file_base + "_dist_normals.em", data_type=np.single)
+        cryomap.write(dist_inplane_map, output_file_base + "_dist_inplane.em", data_type=np.single)
 
     return ang_dist_map, dist_normals_map, dist_inplane_map
 
@@ -326,40 +326,69 @@ def select_peaks(
 ):
     """Automatic peak selection.
 
-    Args:
-        scores_map (ndarray or str): Map with CCC scores (either path to it or loaded as ndarray)
-        angles_map (ndarray or str): Map with angle indices (either path to it or loaded as ndarray)
-        angles_file (ndarray or str): Angle list used in TM (either path to it or loaded as ndarray). If ndarray is provided it has to be in correct order - phi, theta, psi
-        peak_number (int, optional): Number of peaks to return. Defaults to None.
-        create_dist_maps (bool, optional): Whether to create distance maps. They have to be provided for the computation. Defaults to False.
-        dist_maps_list (list, optional): What distance map(s) to use for the analysis. At least one has to be specified. Defaults to all of them: ['_dist_all','_dist_normals','_dist_inplane'].
-        dist_maps_name_base (str, optional): Path and base name of the distance maps. Defaults to None.
-        write_dist_maps (bool, optional): Whether to write the created distance maps or not. Used only if create_dist_maps is True. Defaults to False.
-        min_peak_voxel_count (int, optional): Size of the minimum volume each peak should have (in voxels). Defaults to 7.
-        min_angles_voxel_count (int, optional): Size of the minimum volume each distance map should have around each peak (in voxels). Defaults to 7.
-        template_mask (ndarray or str): Mask for masking out the volume around the seleceted peak (either path to it or loaded as ndarray). Ideally a tight mask with hard edges, that is NOT hollow (even for hollow structures). Defaults to None.
-        template_radius (int, optional): The radius of a sphere to use for masking out the volume around the selected peak. Used only if the template mask is not specified. Defaults to 2.
-        edge_masking (int or ndarray of shape (3,), optional): Dimensions of edges to mask out (). Defaults to None.
-        tomo_mask (ndarray, optional): Mask to exclude regions from the analysis. It has to be the same size as the scores map. Defaults to None.
-        output_motl_name (str, optional): Name of the output motl. Defaults to None which results in no motl to be written out.
-        tomo_number (int, optional): Number of tomogram to be stored in motl. Defaults to None.
+    Parameters
+    ----------
+    scores_map : ndarray or str
+        Map with CCC scores (either path to it or loaded as ndarray)
+    angles_map : ndarray or str
+        Map with angle indices (either path to it or loaded as ndarray)
+    angles_file : ndarray or str
+        Angle list used in TM (either path to it or loaded as ndarray). If ndarray is provided it has to be in correct order - phi, theta, psi
+    peak_number : int
+        Number of peaks to return. Defaults to None.
+    create_dist_maps : bool
+        Whether to create distance maps. They have to be provided for the computation. Defaults to False.
+    dist_maps_list : list
+        What distance map(s) to use for the analysis. At least one has to be specified. Defaults to all of them: ['_dist_all','_dist_normals','_dist_inplane'].
+    dist_maps_name_base : str
+        Path and base name of the distance maps. Defaults to None.
+    write_dist_maps : bool
+        Whether to write the created distance maps or not. Used only if create_dist_maps is True. Defaults to False.
+    min_peak_voxel_count : int
+        Size of the minimum volume each peak should have (in voxels). Defaults to 7.
+    min_angles_voxel_count : int
+        Size of the minimum volume each distance map should have around each peak (in voxels). Defaults to 7.
+    template_mask : ndarray or str
+        Mask for masking out the volume around the seleceted peak (either path to it or loaded as ndarray). Ideally a tight mask with hard edges, that is NOT hollow (even for hollow structures). Defaults to None.
+    template_radius : int
+        The radius of a sphere to use for masking out the volume around the selected peak. Used only if the template mask is not specified. Defaults to 2.
+    edge_masking : int or ndarray of shape (3
+        Dimensions of edges to mask out (). Defaults to None.
+    tomo_mask : ndarray
+        Mask to exclude regions from the analysis. It has to be the same size as the scores map. Defaults to None.
+    output_motl_name : str
+        Name of the output motl. Defaults to None which results in no motl to be written out.
+    tomo_number : int
+        Number of tomogram to be stored in motl. Defaults to None.
+    "_dist_normals" :
 
-    Raises:
-        ValueError: If the edge_masking is not specified as one number nor ndsarray of shape (3,)
-        ValueError: If the dist_maps_list contains unknown dist map specifier
-        ValueError: If the create_dist_maps is False and the dist_maps_name_base is not specified
+    "_dist_inplane"] :
 
-    Returns:
-        output_motl (cryomotl.Motl): Motl with the selected peaks.
-        empty_label (ndarray): Map with the selected peaks (same size as scores map).
+
+    Returns
+    -------
+    output_motl : cryomotl.Motl
+        Motl with the selected peaks.
+    empty_label : ndarray
+        Map with the selected peaks (same size as scores map).
+
+    Raises
+    ------
+    ValueError
+        If the edge_masking is not specified as one number nor ndsarray of shape (3,)
+    ValueError
+        If the dist_maps_list contains unknown dist map specifier
+    ValueError
+        If the create_dist_maps is False and the dist_maps_name_base is not specified
+
     """
 
     # load the angles
     angles = geom.load_angles(angles_file)
-    angles_map = (cryomaps.read(angles_map) - 1).astype(int)
+    angles_map = (cryomap.read(angles_map) - 1).astype(int)
 
     # get threshold and threshold map
-    scores_map = cryomaps.read(scores_map)
+    scores_map = cryomap.read(scores_map)
     th = compute_scores_map_threshold_triangle(scores_map)
     th_map = np.where(scores_map >= th, 1.0, 0.0)
 
@@ -398,7 +427,7 @@ def select_peaks(
         raise ValueError("The dist_maps_name_base was not specified!")
     else:
         for j, d_name in enumerate(dist_maps_list):
-            dist_maps[:, :, :, j] = cryomaps.read(dist_maps_name_base + d_name + ".em")
+            dist_maps[:, :, :, j] = cryomap.read(dist_maps_name_base + d_name + ".em")
 
     th_map_d = th_map
 
@@ -440,7 +469,7 @@ def select_peaks(
     if template_mask is None:
         particle_mask = cryomask.spherical_mask(2 * template_radius + 2, radius=template_radius)
     else:
-        particle_mask = cryomaps.read(template_mask)
+        particle_mask = cryomap.read(template_mask)
 
     if peak_number is None:
         peak_number = remaining_idx.size
@@ -454,11 +483,11 @@ def select_peaks(
 
     while n_selected_peaks < peak_number and remaining_idx.size != 0:
         idx_3d = np.unravel_index(remaining_idx[c_idx], th_map.shape)
-        ls, le, ms, me = cryomaps.get_start_end_indices(idx_3d, empty_label.shape, particle_mask.shape)
+        ls, le, ms, me = cryomap.get_start_end_indices(idx_3d, empty_label.shape, particle_mask.shape)
         cut_coord = c_coord - ms
 
         if template_mask is not None:
-            p_particle = cryomaps.rotate(
+            p_particle = cryomap.rotate(
                 particle_mask, rotation_angles=angles[angles_map[idx_3d[0], idx_3d[1], idx_3d[2]]]
             )
             p_particle = np.where(p_particle >= 0.5, 1.0, 0.0)

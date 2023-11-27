@@ -19,10 +19,18 @@ class Token:
 
     @staticmethod
     def tokenize(text):
-        """
-        This function tokenizes a text into several tokens.
-        :param text: a given text
-        :return: list of tokens
+        """This function tokenizes a text into several tokens.
+
+        Parameters
+        ----------
+        text :
+            a given text
+
+        Returns
+        -------
+        type
+            list of tokens
+
         """
         tokens = list()
 
@@ -76,12 +84,19 @@ class Token:
 
     @staticmethod
     def parse_newline_or_comments(tokens):
-        """
-        This function takes a token queue and dequeues any NEWLINE token and COMMENT token while storing the comments from
+        """This function takes a token queue and dequeues any NEWLINE token and COMMENT token while storing the comments from
         the COMMENT tokens.
 
-        :param tokens: a queue of tokens
-        :return: list of comments retrieves from the dequeued COMMENT tokens
+        Parameters
+        ----------
+        tokens :
+            a queue of tokens
+
+        Returns
+        -------
+        type
+            list of comments retrieves from the dequeued COMMENT tokens
+
         """
         comments = []
         while True:
@@ -94,11 +109,18 @@ class Token:
 
     @staticmethod
     def parse_specifier(tokens):
-        """
-        This function takes a token queue, gets comments, and consumes (matches) a specifier as a LITERAL token.
+        """This function takes a token queue, gets comments, and consumes (matches) a specifier as a LITERAL token.
 
-        :param tokens: a queue of tokens
-        :return: a tuple of comments and the parsed specifier
+        Parameters
+        ----------
+        tokens :
+            a queue of tokens
+
+        Returns
+        -------
+        type
+            a tuple of comments and the parsed specifier
+
         """
         comments = Token.parse_newline_or_comments(tokens)
         specifier = Token.consume(tokens, TokenType.LITERAL)
@@ -106,12 +128,19 @@ class Token:
 
     @staticmethod
     def parse_columns(tokens):
-        """
-        This function takes a token queue, gets comments, consumes (matches) the "loop_" keyword as a LOOP token
+        """This function takes a token queue, gets comments, consumes (matches) the "loop_" keyword as a LOOP token
         following by a NEWLINE token, and parses the column names
 
-        :param tokens: a queue of tokens
-        :return: a tuple of comments and column names
+        Parameters
+        ----------
+        tokens :
+            a queue of tokens
+
+        Returns
+        -------
+        type
+            a tuple of comments and column names
+
         """
         comments = Token.parse_newline_or_comments(tokens)
         columns = []
@@ -124,15 +153,22 @@ class Token:
 
     @staticmethod
     def parse_column(tokens):
-        """
-        This function takes a token queue, consumes a column name token as a PROPERTY token, and tries to consume
+        """This function takes a token queue, consumes a column name token as a PROPERTY token, and tries to consume
         a COMMENT token to retrieve the comment if existed.
 
         The PROPERTY token captures anything starting with "_", therefore the column name be the value of the token
         without the "_".
 
-        :param tokens: a token queue
-        :return: a tuple of comments and the column name
+        Parameters
+        ----------
+        tokens :
+            a token queue
+
+        Returns
+        -------
+        type
+            a tuple of comments and the column name
+
         """
         column = Token.consume(tokens, TokenType.PROPERTY)
         Token.check_then_consume(tokens, TokenType.COMMENT)
@@ -141,13 +177,21 @@ class Token:
 
     @staticmethod
     def parse_rows(tokens, columns):
-        """
-        This function takes a token queue, gets comments, tries to consume LITERAL tokens as a rows which matches
+        """This function takes a token queue, gets comments, tries to consume LITERAL tokens as a rows which matches
         the number of columns before getting a new line, and converts the rows to a Pandas DataFrame.
 
-        :param tokens: a queue of tokens
-        :param columns: a list of column names
-        :return: a tuple of comments and Pandas DataFrames
+        Parameters
+        ----------
+        tokens :
+            a queue of tokens
+        columns :
+            a list of column names
+
+        Returns
+        -------
+        type
+            a tuple of comments and Pandas DataFrames
+
         """
         comments = Token.parse_newline_or_comments(tokens)
         end = False
@@ -168,12 +212,20 @@ class Token:
 
     @staticmethod
     def check(tokens, token_type):
-        """
-        This function checks if the first token from the given token queue matches a given token type.
+        """This function checks if the first token from the given token queue matches a given token type.
 
-        :param tokens: a queue of tokens
-        :param token_type: a token type to be matched
-        :return: a boolean value indicating the match
+        Parameters
+        ----------
+        tokens :
+            a queue of tokens
+        token_type :
+            a token type to be matched
+
+        Returns
+        -------
+        type
+            a boolean value indicating the match
+
         """
 
         if len(tokens) == 0:
@@ -184,13 +236,21 @@ class Token:
 
     @staticmethod
     def consume(tokens, token_type):
-        """
-        This function consumes the first token from the given token queue. If the token type of the first
+        """This function consumes the first token from the given token queue. If the token type of the first
         token does not match the token type to be matched, this function will raise a parsing error.
 
-        :param tokens: a queue of tokens
-        :param token_type: a token type to be matched
-        :return: the first token
+        Parameters
+        ----------
+        tokens :
+            a queue of tokens
+        token_type :
+            a token type to be matched
+
+        Returns
+        -------
+        type
+            the first token
+
         """
         if len(tokens) == 0:
             raise IOError(f"Expected {token_type} but there are enough token.")
@@ -201,13 +261,21 @@ class Token:
 
     @staticmethod
     def check_then_consume(tokens, token_type):
-        """
-        This function checks the first token from the given token queue and consumes it if matched. Otherwise,
+        """This function checks the first token from the given token queue and consumes it if matched. Otherwise,
         it returns a None
 
-        :param tokens: a queue of tokens
-        :param token_type: a token type to be matched
-        :return: the first token or None
+        Parameters
+        ----------
+        tokens :
+            a queue of tokens
+        token_type :
+            a token type to be matched
+
+        Returns
+        -------
+        type
+            the first token or None
+
         """
         if len(tokens) > 0 and tokens[0].token_type == token_type:
             return Token.consume(tokens, token_type)
@@ -215,13 +283,22 @@ class Token:
 
     @staticmethod
     def lookahead(tokens, token_type_target, ignores):
-        """
-        This function looks for a token type while ignoring token types from the ignores list
+        """This function looks for a token type while ignoring token types from the ignores list
 
-        :param tokens: a queue of tokens
-        :param token_type_target: a token type to be found
-        :param ignores: a list of token types to be ignored
-        :return: a boolean value indicating a found token
+        Parameters
+        ----------
+        tokens :
+            a queue of tokens
+        token_type_target :
+            a token type to be found
+        ignores :
+            a list of token types to be ignored
+
+        Returns
+        -------
+        type
+            a boolean value indicating a found token
+
         """
         for i in range(len(tokens)):
             if tokens[i].token_type == token_type_target:
@@ -237,12 +314,20 @@ class Starfile:
     def __init__(self, file_path=None, frames=None, specifiers=None, comments=None):
         """
         This function reads a starfile with a *.star extension into a tuple of a list of Pandas DataFrame, a list of Data
-        Specifier, and a list of comments
+            Specifier, and a list of comments
 
-        It reads the file and extracts the lists from the parsing function.
+            It reads the file and extracts the lists from the parsing function.
 
-        :param path: the path to the starfile to be read
-        :return: a tuples of a list of Pandas DataFrames, list of specifiers, and list of comments
+        Parameters
+        ----------
+        path :
+            the path to the starfile to be read
+
+        Returns
+        -------
+        type
+            a tuples of a list of Pandas DataFrames, list of specifiers, and list of comments
+
         """
 
         if file_path and path.isfile(file_path):
@@ -254,8 +339,7 @@ class Starfile:
 
     @staticmethod
     def read(file_path):
-        """
-        This function parses a starfile into a tuple of a list of Pandas DataFrame, a list of Data Specifier, and a list of
+        """This function parses a starfile into a tuple of a list of Pandas DataFrame, a list of Data Specifier, and a list of
         comments.
 
         It tokenizes the file and if it finds a specifier, it starts parsing in the following order:
@@ -263,8 +347,18 @@ class Starfile:
             2. Columns      (as column names)
             3. Rows         (as a Pandas Dataframe together with the Columns)
 
-        :param raw_starfile: the starfile to be parsed
-        :return: a tuples of a list of Pandas DataFrames, list of specifiers, and list of comments
+        Parameters
+        ----------
+        raw_starfile :
+            the starfile to be parsed
+        file_path :
+
+
+        Returns
+        -------
+        type
+            a tuples of a list of Pandas DataFrames, list of specifiers, and list of comments
+
         """
 
         with open(file_path, mode="r") as file:
@@ -343,7 +437,7 @@ class Starfile:
                     file.write("\n")
                 file.write(f"\n{specifier}\n\n")
                 file.write("loop_\n")
-                for index, column in enumerate(frame.columns):
+                for index, column in enumerate(frame.columns, 1):
                     write_function(column, index)
                 if stopgap:
                     file.write("\n")

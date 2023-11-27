@@ -20,4 +20,24 @@ def otsu_threshold(bin_counts):
 
 
 def get_number_of_digits(input_number):
+    """Return the number of digits in the given input number.
+
+    Parameters
+    ----------
+    input_number : int or float
+        The number for which the number of digits needs to be calculated.
+
+    Returns
+    -------
+    int
+        The number of digits in the input number.
+
+    Examples
+    --------
+    >>> get_number_of_digits(12345)
+    5
+    >>> get_number_of_digits(3.14)
+    4
+    """
+
     return len(str(input_number))

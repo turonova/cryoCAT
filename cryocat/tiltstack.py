@@ -1,4 +1,4 @@
-from cryocat import cryomaps
+from cryocat import cryomap
 import numpy as np
 import pandas as pd
 from cryocat import mdoc
@@ -44,7 +44,7 @@ def dose_filter(mrc_file, pixelsize: float, total_dose, output_file=None, return
     #        total_dose: ndarray or path to the .csv, .txt, or .mdoc file
     #        return_data_order: by default x y z (x,y,n_tilts), for napari compatible view use "zyx"
 
-    stack_data = cryomaps.read(mrc_file)
+    stack_data = cryomap.read(mrc_file)
     total_dose = load_corrected_dose(total_dose)
 
     imgs_x = stack_data.shape[0]
@@ -75,7 +75,7 @@ def dose_filter(mrc_file, pixelsize: float, total_dose, output_file=None, return
         filtered_stack = filtered_stack.transpose(2, 1, 0)
 
     if output_file is not None:
-        cryomaps.write(filtered_stack, output_file)
+        cryomap.write(filtered_stack, output_file)
 
     return filtered_stack
 

@@ -19,7 +19,7 @@ def add_occupancy(
     order_id="geom2",
 ):
     if isinstance(motl, str):
-        motl = cryomotl.Motl(motl_path=motl)
+        motl = cryomotl.Motl.load(motl)
 
     motl.df[occupancy_id] = motl.df.groupby([feature, object_id])[order_id].transform("max")
 
@@ -72,7 +72,6 @@ def get_rotations(df):
     zero_angles = np.tile([0.0, 0.0, 0.0], (angles_nn.shape[0], 1))
     zero_rot = srot.from_euler("zxz", angles=zero_angles, degrees=True)
     ang_dist = geom.angular_distance(final_rot, zero_rot)[0]
-
     rotated_angles = final_rot.as_euler("zxz", degrees=True)
 
     rot_stats = np.hstack((ang_dist.reshape(ang_dist.shape[0], 1), points_on_sphere, rotated_angles))
@@ -108,10 +107,10 @@ def get_chain_distances(df, pixel_size, feature):
 
 def get_polysome_stats(motl_entry, motl_exit, pixel_size=1.0, feature="geom1"):
     if isinstance(motl_entry, str):
-        motl_entry = cryomotl.Motl(motl_path=motl_entry)
+        motl_entry = cryomotl.Motl.load(motl_entry)
 
     if isinstance(motl_exit, str):
-        motl_exit = cryomotl.Motl(motl_path=motl_exit)
+        motl_exit = cryomotl.Motl.load(motl_exit)
 
     poly_entry_df = motl_entry.df[motl_entry.df[feature] > 1].copy()
     poly_exit_df = motl_exit.df[motl_exit.df[feature] > 1].copy()
@@ -195,7 +194,7 @@ def get_monosome_stats(motl_entry, motl_exit, pixel_size=1.0, feature="geom1"):
     return monosome_stats
 
 
-def get_nn_stats(motl_entry, motl_exit, pixel_size=1.0, feature_id="tomo_id"):
+def get_nn_stats(motl_entry, motl_exit, pixel_size=1.0, feature_id="tomo_id", angular_dist_type="full"):
     (
         centered_coord,
         rotated_coord,
@@ -209,6 +208,7 @@ def get_nn_stats(motl_entry, motl_exit, pixel_size=1.0, feature_id="tomo_id"):
         pixel_size=pixel_size,
         feature=feature_id,
         monosomes_only=False,
+        angular_dist_type=angular_dist_type,
     )
     coord_rot, angles = get_nn_rotations(motl_entry, motl_exit, feature=feature_id, monosomes_only=False)
 
@@ -257,12 +257,22 @@ def get_nn_distances(
     feature="tomo_id",
     monosomes_only=False,
     type_id="geom1",
+    angular_dist_type="full",
 ):
     if isinstance(motl_entry, str):
-        motl_entry = cryomotl.Motl(motl_path=motl_entry)
+        motl_entry = cryomotl.Motl.load(motl_entry)
 
     if isinstance(motl_exit, str):
-        motl_exit = cryomotl.Motl(motl_path=motl_exit)
+        motl_exit = cryomotl.Motl.load(motl_exit)
+
+    if angular_dist_type == "full":
+        res_id = 0
+    elif angular_dist_type == "cone":
+        res_id = 1
+    elif angular_dist_type == "inplane":
+        res_id = 2
+    else:
+        raise ValueError(f"Specified angular distance type is not supported: {angular_dist_type}!")
 
     features = np.unique(motl_entry.df.loc[:, feature].values)
     centered_coord = []
@@ -273,12 +283,12 @@ def get_nn_distances(
     subtomo_idx_nn = []
 
     for f in features:
-        fm_entry = motl_entry.get_motl_subset(f, feature_id=feature)
-        fm_exit = motl_exit.get_motl_subset(f, feature_id=feature)
+        fm_entry = motl_entry.get_motl_subset(f, feature_id=feature, reset_index=False)
+        fm_exit = motl_exit.get_motl_subset(f, feature_id=feature, reset_index=False)
 
         if monosomes_only:
-            fm_entry = fm_entry.get_motl_subset(1, type_id)
-            fm_exit = fm_exit.get_motl_subset(1, type_id)
+            fm_entry = fm_entry.get_motl_subset(1, type_id, reset_index=False)
+            fm_exit = fm_exit.get_motl_subset(1, type_id, reset_index=False)
 
         idx, nn_idx, dist = get_feature_nn_indices(fm_entry, fm_exit)
 
@@ -300,7 +310,7 @@ def get_nn_distances(
         angles_nn = all_angles[nn_idx, :]
         rotations = srot.from_euler("zxz", angles=angles, degrees=True)
         rotations_nn = srot.from_euler("zxz", angles=angles_nn, degrees=True)
-        angular_distances.append(geom.angular_distance(rotations, rotations_nn)[0])
+        angular_distances.append(geom.compare_rotations(rotations, rotations_nn)[res_id])
 
         angles = -fm_entry.df[["psi", "theta", "phi"]].values
         angles = angles[idx, :]
@@ -322,22 +332,22 @@ def get_nn_distances(
 
 def get_nn_rotations(motl_entry, motl_exit, feature="tomo_id", monosomes_only=False, type_id="geom1"):
     if isinstance(motl_entry, str):
-        motl_entry = cryomotl.Motl(motl_path=motl_entry)
+        motl_entry = cryomotl.Motl.load(motl_entry)
 
     if isinstance(motl_exit, str):
-        motl_exit = cryomotl.Motl(motl_path=motl_exit)
+        motl_exit = cryomotl.Motl.load(motl_exit)
 
     features = np.unique(motl_entry.df.loc[:, feature].values)
 
     nn_rotations = []
 
     for f in features:
-        fm_entry = motl_entry.get_motl_subset(f, feature_id=feature)
-        fm_exit = motl_exit.get_motl_subset(f, feature_id=feature)
+        fm_entry = motl_entry.get_motl_subset(f, feature_id=feature, reset_index=False)
+        fm_exit = motl_exit.get_motl_subset(f, feature_id=feature, reset_index=False)
 
         if monosomes_only:
-            fm_entry = fm_entry.get_motl_subset(1, type_id)
-            fm_exit = fm_exit.get_motl_subset(1, type_id)
+            fm_entry = fm_entry.get_motl_subset(1, type_id, reset_index=False)
+            fm_exit = fm_exit.get_motl_subset(1, type_id, reset_index=False)
 
         idx, idx_nn, _ = get_feature_nn_indices(fm_entry, fm_exit)
 
@@ -347,7 +357,7 @@ def get_nn_rotations(motl_entry, motl_exit, feature="tomo_id", monosomes_only=Fa
         angles_nn = fm_entry.get_angles()
         rot_nn = srot.from_euler("zxz", angles=angles_nn[idx_nn, :], degrees=True)
 
-        angles_ref_to_zero = -fm_entry.get_features(["psi", "theta", "phi"])
+        angles_ref_to_zero = -fm_entry.get_feature(["psi", "theta", "phi"])
         rot_to_zero = srot.from_euler("zxz", angles=angles_ref_to_zero[idx, :], degrees=True)
 
         nn_rotations.append(rot_to_zero * rot_nn)
@@ -504,7 +514,7 @@ def assign_class(
     unassigned_class=0,
     update_coord=False,
 ):
-    motl = cryomotl.Motl(motl_path=motl_unassigned)
+    motl = cryomotl.Motl.load(motl_unassigned)
 
     motl.df["class"] = unassigned_class
 
@@ -513,15 +523,15 @@ def assign_class(
     cl = starting_class
 
     for m in motl_list:
-        cm = cryomotl.Motl(motl_path=m)
+        cm = cryomotl.Motl.load(m)
         classified_particles += cm.df.shape[0]
         tomos = np.unique(cm.df.loc[:, "tomo_id"].values)
 
         for t in tomos:
             tm_coord = cm.get_coordinates(t)
             all_coord = motl.get_coordinates(t)
-            tm = cm.get_motl_subset(t, return_df=True)
-            tm_all = motl.get_motl_subset(t, return_df=True)
+            tm = cm.get_motl_subset(t, return_df=True, reset_index=False)
+            tm_all = motl.get_motl_subset(t, return_df=True, reset_index=False)
 
             tm_idx = np.arange(0, tm.shape[0], 1)
 
@@ -554,7 +564,7 @@ def assign_class(
                 tm_all.loc[tm_all.index[idx], ["phi", "psi", "theta"]] = tm.loc[
                     tm.index[tm_idx], ["phi", "psi", "theta"]
                 ].values
-                tm_all.loc[tm_all.index[idx], ["geom4", "geom5", "geom6"]] = (
+                tm_all.loc[tm_all.index[idx], ["geom3", "geom4", "geom5"]] = (
                     tm.loc[tm.index[tm_idx], ["x", "y", "z"]].values
                     + tm.loc[tm.index[tm_idx], ["shift_x", "shift_y", "shift_z"]].values
                 )
@@ -570,13 +580,13 @@ def assign_class(
 
     if update_coord:
         motl.df.loc[motl.df["class"] != unassigned_class, ["x", "y", "z"]] = motl.df.loc[
-            motl.df["class"] != unassigned_class, ["geom4", "geom5", "geom6"]
+            motl.df["class"] != unassigned_class, ["geom3", "geom4", "geom5"]
         ].values
         motl.df.loc[motl.df["class"] != unassigned_class, ["shift_x", "shift_y", "shift_z"]] = 0.0
-        motl.df["geom4"] = 0.0
+        motl.df["geom3"] = 0.0
 
-    motl.df["geom5"] = motl.df["geom2"].values
-    motl.df["geom6"] = motl.df["geom1"].values
+    motl.df["geom4"] = motl.df["geom2"].values
+    motl.df["geom5"] = motl.df["geom1"].values
     motl.df[["geom1", "geom2"]] = 0.0
 
     motl.update_coordinates()
@@ -624,10 +634,10 @@ def assign_class(
 
 def add_traced_info(traced_motl, input_motl, output_motl_path=None, sort_by_subtomo=True):
     if isinstance(traced_motl, str):
-        traced_motl = cryomotl.Motl(motl_path=traced_motl)
+        traced_motl = motl = cryomotl.Motl.load(traced_motl)
 
     if isinstance(input_motl, str):
-        input_motl = cryomotl.Motl(motl_path=input_motl)
+        input_motl = motl = cryomotl.Motl.load(input_motl)
 
     if sort_by_subtomo:
         traced_motl.df.sort_values(["subtomo_id"], inplace=True)
@@ -636,13 +646,13 @@ def add_traced_info(traced_motl, input_motl, output_motl_path=None, sort_by_subt
     if not np.array_equal(traced_motl.df["subtomo_id"].values, traced_motl.df["subtomo_id"].values):
         raise ValueError("The input motl has different subtomograms as the traced motl.")
 
-    input_motl.df[["geom1", "geom2", "geom5", "object_id"]] = traced_motl.df[
-        ["geom1", "geom2", "geom5", "object_id"]
+    input_motl.df[["geom1", "geom2", "geom4", "object_id"]] = traced_motl.df[
+        ["geom1", "geom2", "geom4", "object_id"]
     ].values
     input_motl.df.sort_values(["tomo_id", "object_id", "geom2"], inplace=True)
 
     if output_motl_path is not None:
-        input_motl.write_to_emfile(output_motl_path)
+        input_motl.write_out(output_motl_path)
 
     return input_motl
 
@@ -678,7 +688,7 @@ def add_chain_suffix(
     current_dist,
     store_idx1="object_id",
     store_idx2="geom2",
-    store_dist="geom5",
+    store_dist="geom4",
 ):
     particle_id = motl.df.loc[motl.df.index[subtomo_id], "subtomo_id"]
 
@@ -719,7 +729,7 @@ def add_chain_prefix(
     current_dist,
     store_idx1="object_id",
     store_idx2="geom2",
-    store_dist="geom5",
+    store_dist="geom4",
     class_max=None,
 ):
     # finding out class of the chain that should be appended to the current chain
@@ -778,10 +788,10 @@ def trace_chains(
     output_motl=None,
     store_idx1="object_id",
     store_idx2="geom2",
-    store_dist="geom5",
+    store_dist="geom4",
 ):
-    motl_entry = cryomotl.Motl(motl_path=motl_entry)
-    motl_exit = cryomotl.Motl(motl_path=motl_exit)
+    motl_entry = cryomotl.Motl.load(motl_entry)
+    motl_exit = cryomotl.Motl.load(motl_exit)
 
     features1 = np.unique(motl_entry.df.loc[:, feature])
     features2 = np.unique(motl_exit.df.loc[:, feature])
@@ -795,8 +805,8 @@ def trace_chains(
         # for f in np.array([2,274,405,423]):
         # for f in np.array([423]):
         # print(f)
-        fm_entry = motl_entry.get_motl_subset(f, feature)
-        fm_exit = motl_exit.get_motl_subset(f, feature)
+        fm_entry = motl_entry.get_motl_subset(f, feature, reset_index=False)
+        fm_exit = motl_exit.get_motl_subset(f, feature, reset_index=False)
 
         nfm_df = cryomotl.Motl.create_empty_motl_df()
 

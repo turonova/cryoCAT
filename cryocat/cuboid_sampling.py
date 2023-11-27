@@ -109,15 +109,24 @@ def visualize_normals(viewer,points, normals):
 def expand_points(points, normals, distances, tb_distances = 0):
     """move sample points within a distances
 
-    Args:
-        points (ndarray): array of sample coordinates
-        normals (ndarray): array of sample normals
-        distances (int): moving distance in pixels
-        tb_distances (int, optional): moving distance of top and bottom surfaces if needed. Defaults to 0 for no movement.
+    Parameters
+    ----------
+    points : ndarray
+        array of sample coordinates
+    normals : ndarray
+        array of sample normals
+    distances : int
+        moving distance in pixels
+    tb_distances : int
+        moving distance of top and bottom surfaces if needed. Defaults to 0 for no movement.
 
-    Returns:
-        cleaned_points (ndarray): array of expand and cleaned sample coordinates
-        cleaned_normals (ndarray): array of expand and cleaned sample normals
+    Returns
+    -------
+    cleaned_points : ndarray
+        array of expand and cleaned sample coordinates
+    cleaned_normals : ndarray
+        array of expand and cleaned sample normals
+
     """
     moved_points = []
     tb_points = []

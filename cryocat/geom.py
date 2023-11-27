@@ -12,17 +12,24 @@ ANGLE_DEGREES_TOL = 10e-12
 def load_dimensions(dims):
     """Loads tomogram dimensions from a file or nd.array.
 
-    Args:
-        dims (str, nd.array): Either a path to a file with the dimensions or nd.array. The shape of the input should
-            be 1x3 (x y z) in case of one tomogram or Nx4 for multiple tomograms (tomo_id x y z). In case of file the
-            separator is a space.
+    Parameters
+    ----------
+    dims : str
+        Either a path to a file with the dimensions or nd.array. The shape of the input should
+        be 1x3 (x y z) in case of one tomogram or Nx4 for multiple tomograms (tomo_id x y z). In case of file the
+        separator is a space.
 
-    Raises:
-        UserInputError: Wrong size of the input.
+    Returns
+    -------
+    nd.array
+        Dimensions of a tomogram in x, y, z (shape 1x3) or tomogram idx and corresponding dimensions
+        (shape Nx4 where N is the number of tomograms)
 
-    Returns:
-        nd.array : Dimensions of a tomogram in x, y, z (shape 1x3) or tomogram idx and corresponding dimensions
-            (shape Nx4 where N is the number of tomograms)
+    Raises
+    ------
+    UserInputError
+        Wrong size of the input.
+
     """
 
     if os.path.isfile(dims):
@@ -48,14 +55,21 @@ def load_dimensions(dims):
 def load_angles(input_angles):
     """_summary_
 
-    Args:
-        input_angles (_type_): _description_
+    Parameters
+    ----------
+    input_angles : _type_
+        _description_
 
-    Raises:
-        ValueError: _description_
+    Returns
+    -------
+    _type_
+        _description_
 
-    Returns:
-        _type_: _description_
+    Raises
+    ------
+    ValueError
+        _description_
+
     """
     if isinstance(input_angles, str):
         angles = pd.read_csv(input_angles, header=None)
@@ -111,16 +125,23 @@ def spline_sampling(coords, sampling_distance):
 def compare_rotations(angles1, angles2, c_symmetry=1):
     """Compare the rotations between two sets of angles.
 
-    Args:
-        angles1 (list): The first set of angles.
-        angles2 (list): The second set of angles.
-        c_symmetry (int, optional): The degree of rotational symmetry. Defaults to 1.
+    Parameters
+    ----------
+    angles1 : list
+        The first set of angles.
+    angles2 : list
+        The second set of angles.
+    c_symmetry : int
+        The degree of rotational symmetry. Defaults to 1.
 
-    Returns:
-        tuple: A tuple containing the following distances:
-            - dist_degrees (float): The overall angular distance between the two sets of angles.
-            - dist_degrees_normals (float): The angular distance between the normal vectors of the two sets of angles.
-            - dist_degrees_inplane (float): The angular distance within the plane of rotation between the two sets of angles.
+    Returns
+    -------
+    tuple
+        A tuple containing the following distances:
+        - dist_degrees (float): The overall angular distance between the two sets of angles.
+        - dist_degrees_normals (float): The angular distance between the normal vectors of the two sets of angles.
+        - dist_degrees_inplane (float): The angular distance within the plane of rotation between the two sets of angles.
+
     """
 
     dist_degrees = angular_distance(angles1, angles2, c_symmetry=c_symmetry)[0]
@@ -130,22 +151,26 @@ def compare_rotations(angles1, angles2, c_symmetry=1):
 
 
 def change_handedness_coordinates(coordinates, dimensions):
-    """
-    The change_handedness_coordinates function takes in a pandas dataframe of coordinates and the dimensions of the
+    """The change_handedness_coordinates function takes in a pandas dataframe of coordinates and the dimensions of the
         coordinate system. It then changes the handedness of those coordinates by subtracting each z-coordinate from
         dimension[2]. This is done because we want to change our coordinate system so that it has its origin at the top left
         corner, with positive x going right and positive y going down. The original coordinate system had its origin at
         bottom left, with positive x going right and positive y going up.
 
-    Args:
-        coordinates: Store the coordinates of the voxels
-        dimensions: Determine the new z value
+    Parameters
+    ----------
+    coordinates :
+        Store the coordinates of the voxels
+    dimensions :
+        Determine the new z value
 
-    Returns:
+    Returns
+    -------
+
         The coordinates with the z axis inverted
-
-    Doc Author:
+        Doc Author:
         Trelent
+
     """
     new_z = dimensions[2] - coordinates["z"]
     coordinates.loc[:, "z"] = new_z
@@ -610,3 +635,209 @@ def load_angles(input_angles):
         raise ValueError("The input_angles have to be either a valid path to a file or nympy array!!!")
 
     return angles
+
+
+def ray_ray_intersection_3d(starting_points, ending_points):
+    # N lines described as vectors
+    Si = ending_points - starting_points
+
+    # Normalize vectors
+    ni = Si / np.linalg.norm(Si, axis=1)[:, np.newaxis]
+
+    nx, ny, nz = ni[:, 0], ni[:, 1], ni[:, 2]
+
+    # Calculate sums
+    SXX = np.sum(nx**2 - 1)
+    SYY = np.sum(ny**2 - 1)
+    SZZ = np.sum(nz**2 - 1)
+    SXY = np.sum(nx * ny)
+    SXZ = np.sum(nx * nz)
+    SYZ = np.sum(ny * nz)
+
+    # Matrix S
+    S = np.array([[SXX, SXY, SXZ], [SXY, SYY, SYZ], [SXZ, SYZ, SZZ]])
+
+    CX = np.sum(
+        starting_points[:, 0] * (nx**2 - 1) + starting_points[:, 1] * (nx * ny) + starting_points[:, 2] * (nx * nz)
+    )
+    CY = np.sum(
+        starting_points[:, 0] * (nx * ny) + starting_points[:, 1] * (ny**2 - 1) + starting_points[:, 2] * (ny * nz)
+    )
+    CZ = np.sum(
+        starting_points[:, 0] * (nx * nz) + starting_points[:, 1] * (ny * nz) + starting_points[:, 2] * (nz**2 - 1)
+    )
+
+    C = np.array([CX, CY, CZ])
+
+    # Solve the system of linear equations
+    P_intersect = np.linalg.solve(S, C)
+
+    distances = np.zeros(starting_points.shape[0])
+
+    for i in range(starting_points.shape[0]):
+        ui = np.dot(P_intersect - starting_points[i, :], Si[i, :]) / np.dot(Si[i, :], Si[i, :])
+        distances[i] = np.linalg.norm(P_intersect - starting_points[i, :] - ui * Si[i, :])
+
+    return P_intersect, distances
+
+
+def fit_circle_3d_pratt(coord):
+    # Projection of coordinates on 2D plane
+    coord = coord.T
+    U, S, V = np.linalg.svd(coord, full_matrices=False)
+    coord_proj = np.dot(U.T, coord)
+
+    # Pratt method
+    x = coord_proj[0, :]
+    y = coord_proj[1, :]
+    a = np.linalg.lstsq(np.vstack([x, y, np.ones_like(x)]).T, -(x**2 + y**2), rcond=None)[0]
+    xc = -a[0]
+    yc = -a[1]
+
+    center_2d = np.array([xc, yc])
+
+    # 3d center
+    c_si = np.concatenate([center_2d, [0]])
+    circle_center = np.matmul(U, c_si) / 2.0
+
+    # Compute a radius
+    coord = coord.T
+    center_coord = np.tile(circle_center, (coord.shape[0], 1))
+    euc_dist = np.sqrt(np.sum((coord - center_coord) ** 2, axis=0))
+    circle_radius = np.mean(euc_dist)
+
+    # confidence
+    if np.all(center_coord == 0):
+        confidence = -1
+    else:
+        confidence = 1
+
+    return circle_center, circle_radius, confidence
+
+
+def fit_circle_3d_taubin(coord):
+    # Projection of coordinates on 2D plane
+    coord = coord.T
+    U, S, V = np.linalg.svd(coord, full_matrices=False)
+    coord_proj = np.dot(U.T, coord)
+
+    a = np.array([[0, 1], [0, 2], [1, 2]])
+    cs = []
+    cr = []
+
+    for b in range(a.shape[0]):
+        cp = coord_proj[a[b, :], :]
+        center_2d, rr, confidence = fit_circle_2d(cp)
+
+        # Check if the fit was successful
+        if center_2d[0] == np.inf:
+            circle_center = np.inf
+            circle_radius = np.inf
+            confidence = -1
+            return circle_center, circle_radius, confidence
+
+        # Estimated center
+        cc = np.zeros(3)
+        cc[a[b, 0]] = center_2d[0]
+        cc[a[b, 1]] = center_2d[1]
+        circle_center = np.matmul(U, cc)
+
+        cs.append(circle_center)
+        cr.append(rr)
+
+    circle_radius, c_idx = min(zip(cr, range(len(cr))))
+
+    circle_center = cs[c_idx]
+
+    return circle_center, circle_radius, confidence
+
+
+def fit_circle_2d(coord):
+    XY = coord.T  # Transpose to match MATLAB's column-wise data format
+
+    n = XY.shape[0]  # number of data points
+    centroid = np.mean(XY, axis=0)  # the centroid of the data set
+
+    # computing moments (note: all moments will be normed, i.e. divided by n)
+    Mxx = 0
+    Myy = 0
+    Mxy = 0
+    Mxz = 0
+    Myz = 0
+    Mzz = 0
+
+    for i in range(n):
+        Xi = XY[i, 0] - centroid[0]  # centering data
+        Yi = XY[i, 1] - centroid[1]  # centering data
+        Zi = Xi * Xi + Yi * Yi
+        Mxy = Mxy + Xi * Yi
+        Mxx = Mxx + Xi * Xi
+        Myy = Myy + Yi * Yi
+        Mxz = Mxz + Xi * Zi
+        Myz = Myz + Yi * Zi
+        Mzz = Mzz + Zi * Zi
+
+    Mxx = Mxx / n
+    Myy = Myy / n
+    Mxy = Mxy / n
+    Mxz = Mxz / n
+    Myz = Myz / n
+    Mzz = Mzz / n
+
+    # computing the coefficients of the characteristic polynomial
+    Mz = Mxx + Myy
+    Cov_xy = Mxx * Myy - Mxy * Mxy
+    A3 = 4 * Mz
+    A2 = -3 * Mz * Mz - Mzz
+    A1 = Mzz * Mz + 4 * Cov_xy * Mz - Mxz * Mxz - Myz * Myz - Mz * Mz * Mz
+    A0 = Mxz * Mxz * Myy + Myz * Myz * Mxx - Mzz * Cov_xy - 2 * Mxz * Myz * Mxy + Mz * Mz * Cov_xy
+    A22 = A2 + A2
+    A33 = A3 + A3 + A3
+    xnew = 0
+    ynew = 1e20
+    epsilon = 1e-12
+    IterMax = 20
+
+    # set default to 1
+    confidence = 1
+
+    # Newton's method starting at x=0
+    for _ in range(IterMax):
+        yold = ynew
+        ynew = A0 + xnew * (A1 + xnew * (A2 + xnew * A3))
+        if abs(ynew) > abs(yold):
+            xnew = 0
+            confidence = -1
+            break
+        Dy = A1 + xnew * (A22 + xnew * A33)
+        xold = xnew
+        xnew = xold - ynew / Dy
+        if abs((xnew - xold) / xnew) < epsilon:
+            break
+        if _ >= IterMax:
+            xnew = 0
+            confidence = -1
+        if xnew < 0:
+            xnew = 0
+            confidence = -1
+
+    # computing the circle parameters
+    DET = xnew * xnew - xnew * Mz + Cov_xy
+    Center = np.array([(Mxz * (Myy - xnew) - Myz * Mxy), (Myz * (Mxx - xnew) - Mxz * Mxy)]) / DET / 2
+    Par = np.concatenate([Center + centroid, [np.sqrt(np.dot(Center, Center) + Mz)]])
+    circle_center = Par[:2]
+    circle_radius = Par[2]
+
+    return circle_center, circle_radius, confidence
+
+
+def normalize_vector(vector):
+    """Returns the unit vector of the vector."""
+    return vector / np.linalg.norm(vector)
+
+
+def vector_angular_distance(v1, v2):
+    """Returns the angle in degrees between vectors 'v1' and 'v2'::"""
+    v1_u = normalize_vector(v1)
+    v2_u = normalize_vector(v2)
+    return np.degrees(np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)))

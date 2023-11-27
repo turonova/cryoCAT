@@ -8,7 +8,7 @@ import re
 import warnings
 
 from cryocat.exceptions import UserInputError
-from cryocat import cryomaps
+from cryocat import cryomap
 from cryocat import geom
 from cryocat import starfileio
 from cryocat import cryomask
@@ -44,9 +44,9 @@ class Motl:
         "shift_x",
         "shift_y",
         "shift_z",
+        "geom3",
         "geom4",
         "geom5",
-        "geom6",
         "phi",
         "psi",
         "theta",
@@ -63,25 +63,27 @@ class Motl:
             self.df = Motl.create_empty_motl_df()
 
     def adapt_to_trimming(self, trim_coord_start, trim_coord_end):
-        """
-        The adapt_to_trimming function takes in the trim_coord_start and trim_coord_end values, which are the
+        """The adapt_to_trimming function takes in the trim_coord_start and trim_coord_end values, which are the
         coordinates used for trimming the tomogram, and changes particle coordinates to correspond to the trimmed
         tomogram. The particles from the trimmed area are removed.
 
-        Args:
-            trim_coord_start (numpy.ndarray): Set the starting coordinates of the trimming used on the tomogram.
-                Dimensions are (1,3), the order of coordinates is x, y, z.
-            trim_coord_end (numpy.ndarray): Set the ending coordinates of the trimming used on the tomogram
+        Parameters
+        ----------
+        trim_coord_start : numpy.ndarray
+            Starting coordinates of the trimming used on the tomogram. The order of coordinates is x, y, z.
+        trim_coord_end : numpy.ndarray
+            Ending coordinates of the trimming used on the tomogramThe order of coordinates is x, y, z.
 
-        Returns:
-            None
+        Returns
+        -------
+        None
 
-        Note:
-            Currently does not work for multiple trimming values (specified e.g. by tomo_id), only one set of coordinates
-            is supported and applied to all particles.
+        Notes
+        -----
+        Currently does not work for multiple trimming values (specified e.g. by tomo_id), only one set of coordinates
+        is supported and applied to all particles.
 
-        Note:
-            This method modifies the `df` attribute of the object.
+        This method modifies the `df` attribute of the object.
 
         """
 
@@ -99,14 +101,18 @@ class Motl:
     def apply_rotation(self, rotation):
         """The apply_rotation function applies a rotation to the angles in the DataFrame.
 
-        Args:
-            rotation (scipy.spatial.transform._rotation.Rotation): A scipy rotation object representing the rotation.
+        Parameters
+        ----------
+        rotation : `scipy.spatial.transform._rotation.Rotation`
+            A scipy rotation object representing the rotation.
 
-        Returns:
-            None
+        Returns
+        -------
+        None
 
-        Note:
-            This method modifies the `df` attribute of the object.
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
 
         """
 
@@ -122,17 +128,21 @@ class Motl:
         The function then iterates through the dictionary, checking if the paired key is in
         the input_df columns. If it is, it assigns that column to the em_key in self.df.
 
-        Args:
-            input_df (pandas.DataFrame): The input DataFrame containing the columns to be assigned.
-            column_pairs (dict): A dictionary mapping the column names in self.df to the corresponding column names
-                in input_df.
+        Parameters
+        ----------
+        input_df : pandas.DataFrame
+            The input DataFrame containing the columns to be assigned.
+        column_pairs : dict
+            A dictionary mapping the column names in self.df to the corresponding column names in input_df.
 
-        Returns:
-            None
+        Returns
+        -------
+        None
 
+        Examples
+        --------
+        >>> assign_column(input_df, {'tomo_id': 'input_df_key1', 'subtomo_id': 'input_df_key2'})
 
-        Example:
-            assign_column(input_df, {'tomo_id': 'input_df_key1', 'subtomo_id': 'input_df_key2'})
         """
 
         for em_key, paired_key in column_pairs.items():
@@ -140,20 +150,29 @@ class Motl:
                 self.df[em_key] = pd.to_numeric(input_df[paired_key])
 
     def clean_by_distance(self, distnace_in_voxels, feature_id, metric_id="score", score_cut=0):
-        """Cleans the DataFrame by removing entries based on distance criteria.
+        """Cleans `df` by removing particles closer than a given distnace threshold (in voxels).
 
-        Args:
-            distnace_in_voxels (float): The distance cutoff in voxels.
-            feature_id (str): The ID of the feature by which the particles are grouped before cleaning.
-            metric_id (str, optional): The ID of the metric to decide which particles to keep. Defaults to "score".
-            score_cut (float, optional): The cutoff value for the metric. Entries with metric values below this cutoff
-                will be removed. Defaults to 0.
+        Parameters
+        ----------
+        distnace_in_voxels : float
+            The distance cutoff in voxels.
+        feature_id : str
+            The ID of the feature by which the particles are grouped before cleaning.
+        metric_id : str, default='score'
+            The ID of the metric to decide which particles to keep. Defaults to "score". The particle with the greater
+            value is kept.
+        score_cut : float, default=0.0
+            The cutoff value for the metric. Entries with metric values below this cutoff
+            will be removed. Defaults to 0.0.
 
-        Returns:
-            None
+        Returns
+        -------
+        None
 
-        Note:
-            This method modifies the `df` attribute of the object.
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
+
         """
 
         # Distance cutoff (pixels)
@@ -207,20 +226,28 @@ class Motl:
     def clean_by_otsu(self, feature_id, histogram_bin=None):
         """Clean the DataFrame by applying Otsu's thresholding algorithm on the scores.
 
-        Args:
-             feature_id (str): The feature ID to be used to group particles for cleaning.
-             histogram_bin (int, optional): The number of bins for the histogram. If not provided, a default value
-                 will be used based on the feature ID.
+        Parameters
+        ----------
+        feature_id : str
+            The feature ID to be used to group particles for cleaning.
+        histogram_bin : int, optional
+            The number of bins for the histogram. If not provided, a default value will be used based on the feature ID.
+            Defaults to None.
 
-        Returns:
-             None
+        Returns
+        -------
+        None
 
-        Note:
-             This method modifies the `df` attribute of the object.
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
 
-        Raises:
-             UserInputError: If the selected feature ID does not correspond to either "tomo_id" or "object_id",
-                 and histogram_bin is not specified.
+        Raises
+        ------
+        UserInputError
+        If the selected feature ID does not correspond to either "tomo_id" or "object_id",
+        and histogram_bin is not specified.
+
         """
 
         tomos = self.get_unique_values(feature_id)
@@ -257,8 +284,21 @@ class Motl:
     def convert_to_motl(self, input_df):
         """Abstract method implemented only within child classes.
 
-        Raises:
-            UserInputError: The provided input_df should be in correct format, there is no conversion possible.
+        Parameters
+        ----------
+        input_df : pandas.DataFrame
+
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        UserInputError
+        In case this function is called from `Motl` - the provided input_df should be in correct format, there is
+        no conversion possible.
+
         """
 
         raise ValueError("Provided motl does not have correct format.")
@@ -267,8 +307,15 @@ class Motl:
     def create_empty_motl_df():
         """Creates an empty DataFrame with the columns defined in :attr:`cryocat.cryomotl.Motl.motl_columns`.
 
-        Returns:
-            pandas.DataFrame: An empty DataFrame with the columns defined in :attr:`cryocat.cryomotl.Motl.motl_columns`.
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        pandas.DataFrame
+            An empty DataFrame with the columns defined in :attr:`cryocat.cryomotl.Motl.motl_columns`.
+
         """
 
         empty_motl_df = pd.DataFrame(
@@ -281,11 +328,16 @@ class Motl:
     def check_df_correct_format(input_df):
         """Check if the input DataFrame has the correct format.
 
-        Args:
-            input_df (pandas.DataFrame): The DataFrame to be checked.
+        Parameters
+        ----------
+        input_df : pandas.DataFrame
+            The DataFrame to be checked.
 
-        Returns:
-            bool: True if the input DataFrame has the correct format, False otherwise.
+        Returns
+        -------
+        bool
+            True if the input DataFrame has the correct format, False otherwise.
+
         """
 
         if sorted(Motl.motl_columns) == sorted(input_df.columns):
@@ -297,36 +349,47 @@ class Motl:
         """Checks the type of the input dataframe and assigns it to the class attribute 'df' if it is in the
         correct format. If it is not in the correct format it tries to convert it.
 
-        Args:
-            input_motl (pandas.DataFrame): The input dataframe to be checked.
+        Parameters
+        ----------
+        input_motl : pandas.DataFrame
+            The input dataframe to be checked.
 
-        Returns:
-            None
+        Returns
+        -------
+        None
 
-        Note:
-            This function is meant to be called by child classes as the possible conversion is not implemented within
-            this class.
+        Notes
+        -----
+        This function is meant to be called by child classes as the possible conversion is not implemented within
+        this class.
+
         """
 
         if Motl.check_df_correct_format(input_motl):
-            self.df = input_motl
+            self.df = input_motl.copy()
         else:
             self.convert_to_motl(input_motl)
 
     def fill(self, input_dict):
-        """
-        The fill function is used to fill in the values of a column or columns
+        """The fill function is used to fill in the values of a column or columns
         in the starfile. The input_dict argument should be a dictionary with keys
         that are either column names, coord, angles, shifts.
 
-        Args:
-            input_dict (dict): Dictionary with keys from :attr:`cryocat.cryomotl.Motl.motl_columns` and new values to be
-                assigned. Three special keys are allowed: coord (which will assign values to x, y, z columns), angles
-                (which will assign values to phi, theta, psi), and shifts (which will assign values to shift_x, shift_y,
-                shift_z).
+        Parameters
+        ----------
+        input_dict : dict
+            Dictionary with keys from :attr:`cryocat.cryomotl.Motl.motl_columns` and new values to be
+            assigned. Three special keys are allowed: coord (which will assign values to x, y, z columns), angles
+            (which will assign values to phi, theta, psi), and shifts (which will assign values to shift_x, shift_y,
+            shift_z).
 
-        Note:
-             This method modifies the `df` attribute of the object.
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
+
+        Returns
+        -------
+        None
 
         """
         for key, value in input_dict.items():
@@ -342,26 +405,34 @@ class Motl:
     def flip_handedness(self, tomo_dimensions=None):
         """Flip the handedness of the particles in the motl.
 
-        Args:
-            tomo_dimensions (str, numpy.ndarray): Dimensions of tomograms in the motl. If not provided, only the
-                orientation is changed. For specification on tomo_dimensions format see
-                :meth:`cryocat.geom.load_dimensions`.
+        Parameters
+        ----------
+        tomo_dimensions : str or numpy.ndarray, optional
+            Dimensions of tomograms in the motl. If not provided, only the orientation is changed. For specification on
+            tomo_dimensions format see :meth:`cryocat.geom.load_dimensions`. Defaults to None.
 
-        Note:
-            - Orientation is flipped by changing the sign of the theta angle (following ZXZ convention of Euler angles).
-            - The position flip is performed by subtracting the z-coordinate from the maximum z-dimension and adding 1.
+        Notes
+        -----
+        Orientation is flipped by changing the sign of the theta angle (following ZXZ convention of Euler angles).
 
-        Note:
-             This method modifies the `df` attribute of the object.
+        The position flip is performed by subtracting the z-coordinate from the maximum z-dimension and adding 1.
 
-        Example:
-            >>> flip_handedness(tomo_dimensions="dimensions.txt")
+        This method modifies the `df` attribute of the object.
+
+        Returns
+        -------
+        None
+
+        Examples
+        --------
+        >>> flip_handedness(tomo_dimensions="dimensions.txt")
+
         """
         self.df.loc[:, "theta"] = -self.df.loc[:, "theta"]
 
         # Position flip
         if tomo_dimensions is not None:
-            dims = self.load_dimensions(tomo_dimensions)
+            dims = geom.load_dimensions(tomo_dimensions)
             if dims.shape == (1, 3):
                 z_dim = float(dims["z"]) + 1
                 self.df.loc[:, "z"] = z_dim - self.df.loc[:, "z"]
@@ -375,12 +446,16 @@ class Motl:
         """This function takes in a tomo_number and returns the angles of all particles in that
         tomogram. If no tomo_number is given, it will return the angles of all particles.
 
-        Args:
-            tomo_number (int, optional): The tomogram number. If not provided, all angles will be returned. Defaults
-                to None.
+        Parameters
+        ----------
+        tomo_number : int, optional
+            The tomogram number. If not provided, all angles will be returned. Defaults to None.
 
-        Returns:
-            numpy.ndarray: An array of angles in the format [phi, theta, psi].
+        Returns
+        -------
+        numpy.ndarray
+            An array of angles in the format [phi, theta, psi] (corresponds to the zxz Euler convention).
+
         """
 
         if tomo_number is None:
@@ -395,12 +470,15 @@ class Motl:
         tomogram. If no tomo_number is given, it will return the coordinates of all particles. The coordinates are
         computes as x + shift_x, y + shift_y, z + shift_z.
 
-        Args:
-            tomo_number (int, optional): The tomogram number. If not provided, all coordinates will be returned. Defaults
-                to None.
+        Parameters
+        ----------
+        tomo_number : int, optional
+            The tomogram number. If not provided, all coordinates will be returned. Defaults to None.
 
-        Returns:
-            numpy.ndarray: An array of coordinates in the format [x + shift_x, y + shift_y, z + shift_z].
+        Returns
+        -------
+        numpy.ndarray
+            3D array of coordinates in the format [x + shift_x, y + shift_y, z + shift_z].
 
         """
         if tomo_number is None:
@@ -419,12 +497,15 @@ class Motl:
     def get_max_number_digits(self, feature_id="tomo_id"):
         """This function returns the maximum number of digits in the column specified by feature_id.
 
-        Args:
-            feature_id (str, optional): Specify the column name of the feature to get the max digits. Defaults to
-                "tomo_id".
+        Parameters
+        ----------
+        feature_id : str, default="tomo_id"
+            Specify the column name of the feature to get the max digits. Defaults to "tomo_id".
 
-        Returns:
-            int: The maximum number of digits in the column specified by feature_id.
+        Returns
+        -------
+        int
+            The maximum number of digits in the column specified by feature_id.
 
         """
         max_tomo_id = self.df[feature_id].max()
@@ -433,12 +514,15 @@ class Motl:
     def get_rotations(self, tomo_number=None):
         """The get_rotations function returns rotations for all particles.
 
-        Args:
-            tomo_number (int, optional): The tomogram number. If not provided, all rotations will be returned. Defaults
-                to None.
+        Parameters
+        ----------
+        tomo_number : int, optional
+            The tomogram number. If not provided, all rotations will be returned. Defaults to None.
 
-        Returns:
-            list(scipy.spatial.transform._rotation.Rotation): List of rotations for all particles.
+        Returns
+        -------
+        list
+            List of rotations (with type `scipy.spatial.transform._rotation.Rotation`) for all particles.
 
         """
         angles = self.get_angles(tomo_number)
@@ -450,20 +534,27 @@ class Motl:
         """Returns a new Motl object with coordinates corresponding to the barycentric coordinates of the particles
         (speficied by their indices within idx) and their nearest neigbors (specified by their indices within nn_idx).
 
-        Parameters:
-            idx (numpy.ndarray(int), list(int)): Indices of particles to be used for the analysis.
-            nn_idx (numpy.ndarray(int)): Indices of nearest neigbors to be used to compute the barycentric coordinates.
-                The dimensions are (N, x) where N corresponds to the number of particles (same as in idx) and x is the
-                number of nearest neigbors. If x equals 1, the barycentric coordinates are computed between two points
-                (specified by idx and nn_idx), if x equals 2, the barycentric coordinates correspond to the barycentric
-                coordinates of a triangle specified by the 3 points (one from idx, two from nn_idx). In theory, x can be
-                arbitrarily large.
+        Parameters
+        ----------
+        idx : array-like
+            Array (type `int`) with indices of particles to be used for the analysis.
+        nn_idx : array-like
+            Array (type `int`) with indices of nearest neigbors to be used to compute the barycentric coordinates.
+            The dimensions are (N, x) where N corresponds to the number of particles (same as in idx) and x is the
+            number of nearest neigbors. If x equals 1, the barycentric coordinates are computed between two points
+            (specified by idx and nn_idx), if x equals 2, the barycentric coordinates correspond to the barycentric
+            coordinates of a triangle specified by the 3 points (one from idx, two from nn_idx). In theory, x can be
+            arbitrarily large.
 
-        Returns:
-            Motl: A new Motl object with coordinates corresponding to the barycentric centers
+        Returns
+        -------
+        :class:`Motl`
+            A new Motl object with coordinates corresponding to the barycentric centers
 
-        Todo:
-            Move the geometry specific computation to the :mod:`cryocat.geom`.
+        Notes
+        -----
+        TODO: Move the geometry specific computation to the :mod:`cryocat.geom`.
+
         """
 
         coord1 = self.get_coordinates()[idx, :]
@@ -540,11 +631,15 @@ class Motl:
     def get_feature(self, feature_id):
         """Returns the values from the column in self.df specified by feature_id.
 
-        Args:
-            feature_id (str): The column name to get the values for.
+        Parameters
+        ----------
+        feature_id : str
+            The column name to get the values for.
 
-        Returns:
-            numpy.ndarray: Values corresponding to the feature_id.
+        Returns
+        -------
+        numpy.ndarray
+            Values corresponding to the feature_id.
 
         """
         return self.df.loc[:, feature_id].values
@@ -552,18 +647,26 @@ class Motl:
     def get_motl_subset(self, feature_values, feature_id="tomo_id", return_df=False, reset_index=True):
         """Get a subset of the Motl object based on specified feature values.
 
-        Args:
-            feature_values (list or int): The feature values to filter the Motl object by.
-            feature_id (str, optional): The name of the feature column to filter by. Defaults to "tomo_id".
-            return_df (bool, optional): Whether to return the filtered subset as a DataFrame. Defaults to False.
-            reset_index (bool, optional): Whether to reset the index of the filtered subset. Defaults to True.
+        Parameters
+        ----------
+        feature_values : array-like or int
+            The feature values to filter the Motl object by.
+        feature_id : str default= "tomo_id"
+            The name of the feature column to filter by. Defaults to "tomo_id".
+        return_df : bool, default=False
+            Whether to return the filtered subset as a DataFrame. Defaults to False.
+        reset_index : bool, default=True
+            Whether to reset the index of the filtered subset. Defaults to True.
+        Returns
+        -------
+        `pandas.DataFrame` or :class:`Motl`
+            If return_df is True, returns the filtered subset as a DataFrame. Otherwise, returns a new :class:`Motl`
+            object containing the filtered subset.
 
-        Returns:
-            pandas.DataFrame or Motl: If return_df is True, returns the filtered subset as a DataFrame.
-                Otherwise, returns a new Motl object containing the filtered subset.
+        Warnings
+        --------
+        The default value of reset_index was changed from False to True.
 
-        Warning:
-            The default value of reset_index was changed from False to True.
         """
 
         if isinstance(feature_values, list):
@@ -588,13 +691,19 @@ class Motl:
     def get_motl_intersection(cls, motl1, motl2, feature_id="subtomo_id"):
         """Creates motl intersection of two motls based on feature_id.
 
-        Args:
-            motl1 (Motl, str): First motl.
-            motl2 (Motl, str): Second motl.
-            feature_id (str, optional): Feature ID to use for intersection. Defaults to "subtomo_id".
+        Parameters
+        ----------
+        motl1 : :class:`Motl`
+            First motl.
+        motl2 : :class:`Motl`
+            Second motl.
+        feature_id : str, default="subtomo_id"
+            Feature ID to use for intersection. Defaults to "subtomo_id".
 
-        Returns:
-            MotlThe intersection (based on feature_id) of two motls.
+        Returns
+        -------
+        :class:`Motl`
+            The intersection (based on feature_id) of two motls.
 
         """
         m1 = cls.load(motl1.df)
@@ -611,16 +720,23 @@ class Motl:
         """Returns a new Motl object with coordinates corresponding to the center between the particles
         (speficied by their indices within idx) and their nearest neigbors (specified by their indices within nn_idx).
 
-        Parameters:
-            idx (numpy.ndarray(int), list(int)): Indices of particles to be used for the analysis.
-            nn_idx (numpy.ndarray(int)): Indices of nearest neigbors of particles specified in idx.
+        Parameters
+        ----------
+        idx : array-like
+            Indices of particles to be used for the analysis.
+        nn_idx : array-like
+            Indices of nearest neigbors of particles specified in idx.
 
-        Returns:
-            Motl: A new Motl object with coordinates corresponding to the center between the particles and their nearest
-                neighbors.
+        Returns
+        -------
+        :class:`Motl`
+            A new Motl object with coordinates corresponding to the center between the particles and their nearest
+            neighbors.
 
-        Todo:
-            Move the geometry specific computation to the :mod:`cryocat.geom`.
+        Notes
+        -----
+        TODO: Move the geometry specific computation to the :mod:`cryocat.geom`.
+
         """
         coord1 = self.get_coordinates()[idx, :]
         coord2 = self.get_coordinates()[nn_idx, :]
@@ -690,11 +806,16 @@ class Motl:
     def get_unique_values(self, feature_id):
         """Get unique values from a specific feature.
 
-        Args:
-            feature_id (str): The ID of the feature.
+        Parameters
+        ----------
+        feature_id : str
+            The ID of the feature.
 
-        Returns:
-            numpy.ndarray: A numpy.ndarray containing the unique values stored in the column feature_id.
+        Returns
+        -------
+        numpy.ndarray
+            A numpy.ndarray containing the unique values stored in the column feature_id.
+
         """
 
         return self.df.loc[:, feature_id].unique()
@@ -703,17 +824,24 @@ class Motl:
     def load(cls, input_motl, motl_type="emmotl"):
         """This function is a factory function that returns an instance of the appropriate Motl class.
 
-        Args:
-            input_motl (pandas.DataFrame, str): Either path to the motl or pandas.DataFrame in the format corresponding
-                to general motl_df or in the format specific to the motl_type.
-            motl_type:  A string indicating what type of Motl input should be loaded (emmotl, relion, stopgap, dynamo).
-                Defaults to emmotl.
+        Parameters
+        ----------
+        input_motl : pandas.DataFrame
+            Either path to the motl or pandas.DataFrame in the format corresponding
+            to general motl_df or in the format specific to the motl_type.
+        motl_type : str, {'emmotl', 'dynamo', 'relion', 'stopgap'}
+            A string indicating what type of Motl input should be loaded (emmotl, relion, stopgap, dynamo).
+            Defaults to emmotl.
 
-        Returns:
-            A motl object, which is a subclass of the abstract class motl.
+        Returns
+        -------
+        child of :class:`Motl`
+           Subclass of the abstract class :class:`Motl` specified by `motl_type`.
 
-        Raises:
-            UserInputError: In case the motl_type is not supported.
+        Raises
+        ------
+        UserInputError
+            In case the motl_type is not supported.
 
         """
         if motl_type == "emmotl":
@@ -730,12 +858,21 @@ class Motl:
     def remove_feature(self, feature_id, feature_values):
         """The function removes particles based on their feature (i.e. tomo number).
 
-        Args:
-            feature_id (str): Specify the feature based on which the particles will be removed.
-            feature_values (list): Specify which particles should be removed.
+        Parameters
+        ----------
+        feature_id : str
+            Specify the feature based on which the particles will be removed.
+        feature_values : array-like
+            Specify which particles should be removed.
 
-        Note:
-             This method modifies the `df` attribute of the object.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
 
         """
 
@@ -744,16 +881,23 @@ class Motl:
         for value in feature_values:
             self.df = self.df.loc[self.df[feature_id] != value]
 
-    def renumber_particles(self):  # TODO add tests
+    def renumber_particles(self):
         """This function renumbers the particles in a motl. This is useful when you want to reorder the particles in a
         motl, or if you have deleted some of them and need to renumber the remaining ones. The function takes no
-        arguments, and returns nothing.
 
-        Note:
-            The numbering starts with 1.
+        Parameters
+        ----------
+        None
 
-        Note:
-             This method modifies the `df` attribute of the object.
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Numbering starts with 1.
+
+        This method modifies the `df` attribute of the object.
 
         """
         self.df.loc[:, "subtomo_id"] = list(range(1, len(self.df) + 1))
@@ -761,11 +905,18 @@ class Motl:
     def scale_coordinates(self, scaling_factor):
         """Scales coordinates (including shifts) by the scaling factor.
 
-        Args:
-            scaling_factor (float, int): Factor to scale the coordinates.
+        Parameters
+        ----------
+        scaling_factor : float
+            Factor to scale the coordinates.
 
-        Note:
-             This method modifies the `df` attribute of the object.
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
+
+        Returns
+        -------
+        None
 
         """
         for coord in ("x", "y", "z"):
@@ -773,53 +924,67 @@ class Motl:
             shift_column = "shift_" + coord
             self.df[shift_column] = self.df[shift_column] * scaling_factor
 
-    def split_by_feature(self, feature_id, write_out=False, output_prefix=None, feature_desc_id=None):
+    def split_by_feature(self, feature_id, write_out=False, output_prefix=""):
         """Splits motl by the feature_id and writes them out.
 
-        Args:
-            feature_id (str): _description_
-            write_out (bool, optional): _description_. Defaults to False.
-            output_prefix (_type_, optional): _description_. Defaults to None.
-            feature_desc_id (_type_, optional): _description_. Defaults to None.
+        Parameters
+        ----------
+        feature_id : str
+            Specify the feature based on which the motl will be split.
+        write_out : bool, default=False
+            Whether to write out the motls. Defaults to False.
+        output_prefix : bool, default=""
+            Prefix (including the path) of the motls to be written out. Used only if write_out is True. No
+            separation character will be added - it has to be specified as the last character. Defaults to empty `str`.
 
-        Returns:
-            list of Motl objects: list of motls split by given feature
+        Returns
+        -------
+        list
+            List of :class:`Motl` split by given feature_id.
+
+        Warnings
+        --------
+        This method does not preserve a child class - it always returns :class:`Motl`. Correspondingly, the individual
+        motls - if written out - will be in "emmotl" format.
+
+        Notes
+        -----
+        TODO: Make this function to be class specific.
+
         """
-        # Split motl by uniq values of a selected feature
-        # Inputs:   feature_id - column name or index of the feature based on witch the motl will be split
-        #           write: save all the resulting Motl instances into separate files if True
-        #           output_prefix:
-        #           feature_desc_id:  # TODO how should that var look like?
-        # Output: list of Motl instances, each containing only rows with one unique value of the given feature
-
         uniq_values = self.get_unique_values(feature_id)
         motls = list()
 
         for value in uniq_values:
-            submotl = self.__class__(self.df.loc[self.df[feature_id] == value])
+            # submotl = self.__class__(self.df.loc[self.df[feature_id] == value])
+            submotl = Motl(self.df.loc[self.df[feature_id] == value])
             motls.append(submotl)
 
             if write_out:
-                if feature_desc_id:
-                    for d in feature_desc_id:  # FIXME should not iterate here probably
-                        # out_name=[out_name '_' num2str(nm(d,1))];
-                        out_name = f"{output_prefix}_{str(d)}"
-                    out_name = f"{out_name}_.em"
-                else:
-                    out_name = f"{output_prefix}_{str(int(value))}.em"
-                submotl.write_to_emfile(out_name)
+                out_name = f"{output_prefix}{str(int(value))}.em"
+                submotl.write_out(out_name)
 
         return motls
 
     def write_out(self, output_path, motl_type="emmotl"):
         """Writes out a motl file to the specified output path.
 
-        Args:
-            output_path (str): The path to write the motl file to.
-            motl_type (str, optional): The type of motl file to write. Defaults to "emmotl".
+        Parameters
+        ----------
+        output_path : str
+            The path to write the motl file to.
+        motl_type : str, {'emmotl', 'dynamo', 'relion', 'stopgap'}
+            The type of motl file to write. Defaults to "emmotl".
 
-        Raises:
-            UserInputError: If the provided MOTL motl format is not supported.
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        UserInputError
+            If the provided motl format is not supported.
+
         """
 
         if motl_type.lower() == "emmotl":
@@ -838,14 +1003,25 @@ class Motl:
         column are used to created different objects, the countour is always the same. This function requires IMOD's
         point2model function to exist and being in PATH.
 
-        Args:
-            feature_id (str): Name of the feature (column) to split by.
-            output_base (str): The base for the output files. The final name of each mod file will have a form of
-                {output_base}_{feature_id}_{feature_id_value} where the feature_id_value will be pad with zeros.
-            point_size (int): Size of the point that should be used
-            binning (float, optional): Scaling factor to apply to coordinates. Defaults to 1.0.
-            zero_padding (int, optional): Defines the zero padding for the feature_id_value for the output names (see
-                above). In None, the length of the maximum value in feature_id is used. Defaults to None.
+        Parameters
+        ----------
+        feature_id : str
+            Name of the feature (column) to split by.
+        output_base : str
+            The base for the output files. The final name of each mod file will have a form of
+            {output_base}_{feature_id}_{feature_id_value} where the feature_id_value will be pad with zeros.
+        point_size : int
+            Size of the point that should be used
+        binning : float, default=1.0
+            Scaling factor to apply to coordinates. Defaults to 1.0 which corresponds to no binning.
+        zero_padding : int, optional
+            Defines the zero padding for the feature_id_value for the output names (see
+            above). In None, the length of the maximum value in feature_id is used. Defaults to None.
+
+        Returns
+        -------
+        None
+
         """
         uniq_values = self.get_unique_values(feature_id)
         outpath = f"{output_base}_{feature_id}_"
@@ -889,11 +1065,20 @@ class Motl:
         positions in x, y, z and stores the rest into shifts. After the positions are updated, new extraction of
         subtomograms is necessery.
 
-        Note:
-             The rounding follows round-half-up convention, not the banker's rounding which is default in Python.
 
-        Note:
-             This method modifies the `df` attribute of the object.
+        Notes
+        -----
+        The rounding follows round-half-up convention, not the banker's rounding which is default in Python.
+
+        This method modifies the `df` attribute of the object.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
 
         """
 
@@ -917,18 +1102,30 @@ class Motl:
     def remove_out_of_bounds_particles(self, dimensions, boundary_type="center", box_size=None):
         """Removes particles that are out of tomogram bounds.
 
-        Args:
-            dimensions (str, np.ndarray): Filepath or ndarray specifying tomograms' dimensions.
-            boundary_type (str): Specify whether only the center should be part of the tomogram ("center") or the whole
-                box ("whole"). In the latter case, the box_size have to be specified as well. Defaults to "center".
-            box_size (int, optional): Size of the box/subtomogram. Defaults to None.
+        Parameters
+        ----------
+        dimensions : str
+            Filepath or ndarray specifying tomograms' dimensions.
+        boundary_type : str, {"center", "whole"}
+            Specify whether only the center should be part of the tomogram ("center") or the whole
+            box ("whole"). In the latter case, the box_size have to be specified as well. Defaults to "center".
+        box_size : int, optional
+            Size of the box/subtomogram. It has to be specified if boundary_type is "whole". Defaults to None.
 
-        Note:
-             This method modifies the `df` attribute of the object.
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
 
-        Raises:
-            UserInputError: In case the boundary_type is "whole" and the box_size is not specified.
-            UserInputError: In case boundary_type is neither "whole" or "center".
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        UserInputError
+            In case the boundary_type is "whole" and the box_size is not specified.
+        UserInputError
+            In case boundary_type is neither "whole" or "center".
 
         """
         dim = geom.load_dimensions(dimensions)
@@ -965,41 +1162,70 @@ class Motl:
         print(f"Removed {original_size - len(self.df)} particles.")
         print(f"Original size {original_size}, new_size {len(self.df)}")
 
-    def recenter_to_subparticle(self, input_mask, rotation=None):
+    @staticmethod
+    def recenter_to_subparticle(input_motl, input_mask, rotation=None):
         """Computes the center of mass of the provided binary mask and computes the necessary shift between the mask box
         center and the center of mass. This shift is applied to the motl positions. If rotation is specified it applies
         it to the shifted particles as well.
 
-        Args:
-            input_mask (str, np.ndarray): Binary mask specified either as a file path or ndarray. The box size of the mask
-                should correspond to the box size of the reference on which the mask was placed.
-            rotation (scipy.spatial.transform._rotation.Rotation, optional):  Rotation to apply on the new positions. Defaults to None.
+        Parameters
+        ----------
+        input_motl: Motl or str or Pandas.DataFrame
+            Input motl to apply the recentering to (see :meth:`cryocat.cryomotl.Motl.load` for more details on format)
+        input_mask : str
+            Binary mask specified either as a file path or ndarray. The box size of the mask
+            should correspond to the box size of the reference on which the mask was placed.
+        rotation : scipy.spatial.transform._rotation.Rotation
+            Rotation to apply on the new positions. Defaults to None.
 
-        Note:
-             This method modifies the `df` attribute of the object.
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
+
+
+        Returns
+        -------
+        :class:`Motl`
+            Motl with shifted coordinates.
+
         """
-        input_mask = cryomaps.read(input_mask)
+
+        if isinstance(input_motl, Motl):
+            motl = Motl
+        else:
+            motl = Motl.load(input_motl)
+
+        input_mask = cryomap.read(input_mask)
         old_center = np.array(input_mask.shape) / 2
         mask_center = cryomask.get_mass_center(input_mask)  # find center of mask
         shifts = mask_center - old_center  # get shifts
 
         # change shifts in the motl accordingly
-        self.shift_positions(shifts).update_coordinates()
+        motl.shift_positions(shifts)
+        motl.update_coordinates()
 
         if rotation is not None:
-            self.apply_rotation(rotation)
+            motl.apply_rotation(rotation)
+
+        return motl
 
     def shift_positions(self, shift):
         """Shifts the coordinates by the provided shift.
 
-        Args:
-            shift (numpy.ndarray): 3D shift to be applied to the coordinates.
+        Parameters
+        ----------
+        shift : numpy.ndarray
+            3D shift to be applied to the coordinates.
 
-        Note:
-            This method modifies the `df` attribute of the object.
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
 
-        TODO:
-            Check if the row-wise approach cannot be replaced.
+        TODO: Check if the row-wise approach cannot be replaced.
+
+        Returns
+        -------
+        None
 
         """
         # Shifts positions of all subtomgorams in the motl in the direction given by subtomos' rotations
@@ -1019,18 +1245,28 @@ class Motl:
 
         self.df = self.df.apply(shift_coords, axis=1).reset_index(drop=True)
 
-    def split_in_assymetric_subunits(self, symmetry, xyz_shift):
+    def split_in_asymetric_subunits(self, symmetry, xyz_shift):
         """Split the motive list into assymetric subunits.
 
-        Args:
-            symmetry (str, int, float): Symmetry to be used. Currently cyclic and dihedral symmetry are supported. Cx or
-                cx specify the cyclic symmetry of order x, Dx or dx dihedral symmetry of order x. If symmetry is specified
-                as int/float, cyclic symmetry is assumed.
-            xyz_shift (numpy.ndarray): Shift by which the center of current particles should be shifted to be centered at first
-                subunit.
+        Parameters
+        ----------
+        symmetry : str or number
+            Symmetry to be used. Currently cyclic and dihedral symmetry are supported. Cx or
+            cx specify the cyclic symmetry of order x, Dx or dx dihedral symmetry of order x. If symmetry is specified
+            as int/float, cyclic symmetry is assumed.
+        xyz_shift : numpy.ndarray
+            Shift by which the center of current particles should be shifted to be centered at first
+            subunit.
 
-        Returns:
-            Motl : Splitted motl.
+        Returns
+        -------
+        :class:`Motl`
+            Splitted particle list.
+
+        Warnings
+        --------
+        This method does not preserve a child class - it always returns :class:`Motl`.
+
         """
         if isinstance(symmetry, str):
             nfold = int(re.findall(r"\d+", symmetry)[-1])
@@ -1090,7 +1326,7 @@ class Motl:
 
         new_motl_df = pd.concat([self.df] * n_subunits)
 
-        new_motl_df["geom6"] = new_motl_df["subtomo_id"]
+        new_motl_df["geom5"] = new_motl_df["subtomo_id"]
         new_motl_df = new_motl_df.sort_values(by="subtomo_id")
         new_motl_df["geom2"] = np.tile(np.arange(1, n_subunits + 1).reshape(n_subunits, 1), (len(self.df), 1))
 
@@ -1133,28 +1369,44 @@ class EmMotl(Motl):
         and no conversion is provided. If this function is called the format of the input is incorrect and error is
         raised.
 
-        Args:
-            input_df (pandas.DataFrame): DataFrame containing
+        Parameters
+        ----------
+        input_df : pandas.DataFrame
 
-        Raises:
-            UserInputError: The provided input_df should be in correct format, there is no conversion possible.
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        UserInputError
+            The provided input_df should be in correct format
+
         """
 
-        raise ValueError("Provided motl does not have correct format.")
+        raise ValueError("Provided motl does not have the correct format.")
 
     @staticmethod
     def read_in(emfile_path):
         """Reads in an EM file and returns a pandas DataFrame and header.
 
-        Args:
-            emfile_path (str): The path to the EM file.
+        Parameters
+        ----------
+        emfile_path : str
+            The path to the EM file.
 
-        Returns:
-            tuple: A tuple containing the pandas DataFrame and header.
+        Returns
+        -------
+        motl_df : pandas.DataFrame
+           Particle list.
+        header : dict
+            Header from the the parsed EM file.
 
-        Raises:
-            UserInputError: If the provided file does not exist or if it contains a different number of columns
-                than expected.
+        Raises
+        ------
+        UserInputError
+            If the provided file does not exist or if it contains a different number of columns than expected.
+
         """
 
         if not os.path.isfile(emfile_path):
@@ -1173,8 +1425,15 @@ class EmMotl(Motl):
     def write_out(self, output_path):
         """Writes out the dataframe as emfile.
 
-        Args:
-            output_path (str): Name of the file to be written out (including the path).
+        Parameters
+        ----------
+        output_path : str
+            Name of the file to be written out (including the path).
+
+        Returns
+        -------
+        None
+
         """
         filled_df = self.df.fillna(0.0)
         motl_array = filled_df.to_numpy()
@@ -1184,6 +1443,7 @@ class EmMotl(Motl):
 
 
 class RelionMotl(Motl):
+    default_version = 3.1
     columns_v3_0 = [
         "rlnMicrographName",
         "rlnCoordinateX",
@@ -1271,9 +1531,19 @@ class RelionMotl(Motl):
         been set, and if it has not, then it will try to get the pixel size from either the self.relion_df or
         self.optics_data dataframes. If neither of these are available, then it is set to 1.0.
 
-        Note:
-            Pixel size is important to correctly compute shifts for Relion version > 3.1 and also for correctly
-            rescaling cooridantes for Relion version > 4.0.
+        Notes
+        -----
+        Pixel size is important to correctly compute shifts for Relion version > 3.1 and also for correctly
+        rescaling cooridantes for Relion version > 4.0.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+
         """
 
         # pixel size is already set, do not try to get it from the data
@@ -1303,17 +1573,19 @@ class RelionMotl(Motl):
     def get_version_from_file(frames, specifiers):
         """Determines the version of Relion that was used to generate a starfile.
 
-        Args:
-            frames (list(pandas.DataFrame)): List of DataFrames loaded from a starfile. The length corresponds to the
-                length of the specifiers list.
-            specifiers (list(str)): List of data specifiers loaded from a starfile. The length corresponds to the length
-                of the frames list.
+        Parameters
+        ----------
+        frames : list
+            List of DataFrames loaded from a starfile. The length corresponds to the length of the specifiers list.
+        specifiers : list
+            List of data specifiers (`str` type) loaded from a starfile. The length corresponds to the length
+            of the frames list.
 
-        Returns:
-            float: A version number.
+        Returns
+        -------
+        float
+            A version number.
 
-        Note:
-            Static method.
 
         """
         version = None
@@ -1335,10 +1607,17 @@ class RelionMotl(Motl):
         will attempt to determine which Relion version was used by checking for specific column names in the DataFrame.
         If it cannot find any of these columns, it will default to version 3.1.
 
-        Args:
-            input_df (pandas.DataFrame): DataFrame in Relion format that is used for version determination, unless
-                the class attribute was already set or version argument is not none.
-            version (float): Set the version of the data unless it was already set.
+        Parameters
+        ----------
+        input_df : pandas.DataFrame
+            DataFrame in Relion format that is used for version determination, unless the class attribute was already
+            set or version argument is not none.
+        version : float, optional
+            Set the version of the data unless it was already set. Defaults to None.
+
+        Returns
+        -------
+        None
 
         """
 
@@ -1364,17 +1643,22 @@ class RelionMotl(Motl):
         Relion version 3.1 and higher, the particle list is specified by "data_particles", while for lower versions
         the specifier is "data_".
 
-        Args:
-            input_list (list): The list to search for the desired strings.
+        Parameters
+        ----------
+        input_list : list
+            The list to search for the desired strings.
 
-        Returns:
-            int: The index of the first occurrence of either "data_particles" or "data_" in the input list.
+        Returns
+        -------
+        int
+            The index of the first occurrence of either "data_particles" or "data_" in the input list.
 
-        Raises:
-            UserInputError: If neither "data_particles" nor "data_" is found in the input list.
+        Raises
+        ------
+        UserInputError
+            If neither "data_particles" nor "data_" is found in the input list.
 
-        Note:
-            Static method.
+
         """
 
         if "data_particles" in input_list:
@@ -1389,19 +1673,22 @@ class RelionMotl(Motl):
         """Returns the index of the element "data_optics" in the input list. The specifier "data_optics" is used only
         from Relion version 3.1 and higher. The lower version have data optics specified as part of the particle list.
 
-        Args:
-            input_list (list): The list to search for the element.
+        Parameters
+        ----------
+        input_list : list
+            The list to search for the element.
 
-        Returns:
-            int or None: The index of the element 'data_optics' if found, otherwise None.
+        Returns
+        -------
+        int or None
+            The index of the element 'data_optics' if found, otherwise None.
 
-        Note:
-            Currently returns only optics data for Relion version 3.1 and higher.
-
-        Note:
-            Static method.
+        Notes
+        -----
+        Currently returns only optics data for Relion version 3.1 and higher.
 
         TODO: Add support for Relion 3.0 and lower.
+
         """
 
         if "data_optics" in input_list:
@@ -1412,18 +1699,21 @@ class RelionMotl(Motl):
     def read_in(self, input_path):
         """Reads in a starfile and returns the particle list, version of the starfile and optics data if present.
 
-        Args:
-            input_path (str): The path to the starfile.
+        Parameters
+        ----------
+        input_path : str
+            The path to the starfile.
 
-        Returns:
-            tuple: A tuple containing the following elements:
-                - frames (pandas.DataFrame): Pandas.DataFrame containing the particle list in relion format.
-                - version (float): The version extracted from the starfile. See
-                    :meth:`cryocat.cryomotl.RelionMotl.get_version_from_file` for more info.
-                - optics_df (pandas.DataFrame or None): Pandas.DataFrame containing optics if available, otherwise None.
+        Returns
+        -------
+        frames : pandas.DataFrame
+            Pandas.DataFrame containing the particle list in relion format.
+        version : float
+            The version extracted from the starfile. See meth:`cryocat.cryomotl.RelionMotl.get_version_from_file` for
+            more info.
+        optics_df : pandas.DataFrame or None
+            Pandas.DataFrame containing optics if available, otherwise None.
 
-        Note:
-            Static method.
         """
 
         frames, specifiers, _ = starfileio.Starfile.read(input_path)
@@ -1443,15 +1733,26 @@ class RelionMotl(Motl):
         """The function converts angles from the Relion format, which corresponds to ZYZ Euler convention,
         to the zxz Euler convention which is used within cryoCAT.
 
-        Args:
-            relion_df (pandas.DataFrame): The input DataFrame ir Relion format containing the angles in ZYZ convention.
+        Parameters
+        ----------
+        relion_df : pandas.DataFrame
+            The input DataFrame ir Relion format containing the angles in ZYZ convention.
 
-        Raises:
-            Warning: If rotations are not specified in the relion starfile.
-            ValueError: If only some rotations are specified in the relion starfile.
+        Returns
+        -------
+        None
 
-        Note:
-            The function modifies the `phi`, `psi`, and `theta` columns of `self.df` to store the converted angles.
+        Raises
+        ------
+        Warning
+            If no rotations are specified in the relion starfile.
+        ValueError
+            If only some rotations are specified in the relion starfile.
+
+        Notes
+        -----
+        The function modifies the "phi", "psi", and "theta" columns of "self.df" to store the converted angles.
+
         """
 
         # angles list
@@ -1481,14 +1782,20 @@ class RelionMotl(Motl):
     def convert_angles_to_relion(self, relion_df):
         """Converts angles from cryoCAT convention (zxz) to the convention used in Relion (ZYZ).
 
-        Args:
-            relion_df (pandas.DataFrame): The DataFrame containing the angles.
+        Parameters
+        ----------
+        relion_df : pandas.DataFrame
+            The DataFrame containing the angles.
 
-        Returns:
-            pandas.DataFrame: DataFrame in Relion format with converted angles.
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame in Relion format with converted angles.
 
-        TODO:
-            Check why ZXZ is used instead of zxz.
+        Notes
+        -----
+        TODO: Check why ZXZ is used instead of zxz.
+
         """
 
         rotations = rot.from_euler("ZXZ", self.get_angles(), degrees=True)
@@ -1504,16 +1811,25 @@ class RelionMotl(Motl):
     def convert_shifts(self, relion_df):
         """Converts shifts from Relion format to emmotl format and stores them in self.df.
 
-        Args:
-            relion_df (pandas.DataFrame): DataFrame containing shifts in Relion format.
+        Parameters
+        ----------
+        relion_df : pandas.DataFrame
+            DataFrame containing shifts in Relion format.
 
-        Warning:
-            Shifts in Relion 3.1 and higher are stored in Angstroms, not pixels/voxels. Correct pixel size is thus
-            necessary for correct conversion. The pixel size should be set as the class attribute before calling this
-            function.
+        Warnings
+        --------
+        Shifts in Relion 3.1 and higher are stored in Angstroms, not pixels/voxels. Correct pixel size is thus
+        necessary for correct conversion. The pixel size should be set as the class attribute before calling this
+        function.
 
-        Note:
-            Relion stores the shifts of the particle while in cryoCAT the shifts represent shifts of a reference.
+        Notes
+        -----
+        Relion stores the shifts of the particle while in cryoCAT the shifts represent shifts of a reference.
+
+        Returns
+        -------
+        None
+
         """
 
         for motl_column, rln_column in zip(("shift_x", "shift_y", "shift_z"), self.shifts_id_names):
@@ -1532,23 +1848,25 @@ class RelionMotl(Motl):
         particle. If the column is not present it tries to parse the tomo id from the subtomogram path (`rlnImageName`
         for relion 3.1 and lower, `rlnTomoName` for Relion 4.0 and higher).
 
-        Args:
-            relion_df (pandas.DataFrame): The DataFrame in Relion format containing the tilt-series or micrographs
-                names.
+        Parameters
+        ----------
+        relion_df : pandas.DataFrame
+            The DataFrame in Relion format containing the tilt-series or micrographs.
 
-        Note:
-            The function modifies the `tomo_id` column of `self.df` to store the tomogram indices.
+        Warnings
+        --------
+        Due to lack of format in relion starfiles it is possible that this function will fail. Currently, following
+        formats are expected:
 
-        Warning:
-            Due to lack of format in relion starfiles it is possible that this function will fail. Currently, following
-            formats are expected:
-            - Relion 3.1 and lower for `rlnMicrographName`: first number in the last entry (/path/tomoID_pixelSize.mrc)
-            - Relion 3.1 and lower for `rlnImageName`: first number in the last entry (/path/tomoID_subtomoID_pixelSize.mrc)
-            - Relion 4.0 and higher for `rlnTomoName`: first number in the last entry (TS_tomoID)
-            - Relion 4.0 and higher for `rlnTomoParticleName`: first number in the first entry (TS_tomoID/subtomoID)
+        - Relion 3.1 and lower for "rlnMicrographName": first number in the last entry (/path/tomoID_pixelSize.mrc)
+        - Relion 3.1 and lower for "rlnImageName": first number in the last entry (/path/tomoID_subtomoID_pixelSize.mrc)
+        - Relion 4.0 and higher for "rlnTomoName": first number in the last entry (TS_tomoID)
+        - Relion 4.0 and higher for "rlnTomoParticleName": first number in the first entry (TS_tomoID/subtomoID)
 
-        TODO:
-            Add custom format specifier
+        Notes
+        -----
+        TODO: Add custom format specifier.
+
         """
 
         if self.tomo_id_name in relion_df.columns:
@@ -1581,23 +1899,32 @@ class RelionMotl(Motl):
         in a pandas.DataFrame in relion format and looks for the `rlnImageName` (for Relion 3.1 and lower) column
         or for the `rlnTomoParticleName` (for Relion 4.0 and higher) column and tries to parse the subtomogram id for each
         particle. It checks whether the subtomogram indices are unique and if not, it renumbers the `subtomo_id` to a
-        sequence from 1 to length of the particle list and stores the original value in `geom4`.
+        sequence from 1 to length of the particle list and stores the original value in `geom3`.
 
-        Args:
-            relion_df (pandas.DataFrame): The DataFrame in Relion format containing the subtomogram numbers.
+        Parameters
+        ----------
+        relion_df : pandas.DataFrame
+            The DataFrame in Relion format containing the subtomogram numbers.
 
-        Note:
-            The function modifies the `subtomo_id` column of `self.df` to store the subtomogram indices. In case they are
-            not uniqe it also modifies `geom4` columns of `self.df`.
+        Notes
+        -----
+        The function modifies the `subtomo_id` column of `self.df` to store the subtomogram indices. In case they are
+        not uniqe it also modifies `geom3` columns of `self.df`.
 
-        Warning:
-            Due to lack of format in relion starfiles it is possible that this function will fail. Currently, following
-            formats are expected:
-            - Relion 3.1 and lower for `rlnImageName`: second number in the last entry (/path/tomoID_subtomoID_pixelSize.mrc)
-            - Relion 4.0 and higher for `rlnTomoParticleName`: the only number in the last entry (TS_tomoID/subtomoID)
+        TODO: Add custom format specifier.
 
-        TODO:
-            Add custom format specifier.
+        Warnings
+        --------
+        Due to lack of format in relion starfiles it is possible that this function will fail. Currently, following
+        formats are expected:
+
+        - Relion 3.1 and lower for "rlnImageName": second number in the last entry (/path/tomoID_subtomoID_pixelSize.mrc)
+        - Relion 4.0 and higher for "rlnTomoParticleName": the only number in the last entry (TS_tomoID/subtomoID)
+        - Relion 4.0 and higher for "rlnTomoParticleName": the only number in the last entry (TS_tomoID/subtomoID)
+
+        Returns
+        -------
+        None
 
         """
         # parsing out subtomo number
@@ -1612,8 +1939,8 @@ class RelionMotl(Motl):
                 else:
                     subtomo_idx.append(float(re.findall(r"\d+", j)[1]))
 
-        # Check if the subtomo_idx are unique and if not store them at geom4 and renumber particles
-        self.df["geom4"] = subtomo_idx
+        # Check if the subtomo_idx are unique and if not store them at geom3 and renumber particles
+        self.df["geom3"] = subtomo_idx
         self.df["subtomo_id"] = subtomo_idx
 
         if len(np.unique(subtomo_idx)) != len(subtomo_idx):
@@ -1630,16 +1957,25 @@ class RelionMotl(Motl):
 
             self.df["subtomo_id"] = subtomo_id_num
 
-    def convert_to_motl(self, relion_df, version=None, optics_df=[]):
+    def convert_to_motl(self, relion_df, version=None, optics_df=None):
         """The function converts a DataFrame in relion format into a motl DataFrame.
 
-        Args:
-            relion_df (pandas.DataFrame): DataFrame in relion format.
-            version (float, optional): Version of Relion DataFrame.
-            optics_df (pandas.DataFrame, optional): DataFrame with optics data.
+        Parameters
+        ----------
+        relion_df : pandas.DataFrame
+            DataFrame in relion format.
+        version : float, optional
+            Version of Relion DataFrame. Defaults to None.
+        optics_df : pandas.DataFrame, optional
+            DataFrame with optics data. Defaults to None
 
-        Note:
-            The function modifies the entries in `self.df` to store the converted DataFrame.
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
+
+        Returns
+        -------
+        None
 
         """
 
@@ -1677,11 +2013,19 @@ class RelionMotl(Motl):
         relion_df is shortened based on `ccSubtomoID` from self.relion_df and `subtomo_id` from `self.df`. The shifts
         are set to zeros and `ccSubtomoID` is removed.
 
-        Returns:
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        pandas.DataFrame
             The updated version of `self.relion_df`.
 
-        Nore:
-            The size and values of `self.relion_df` are not changed.
+        Notes
+        -----
+        The size and values of `self.relion_df` are not changed.
+
         """
 
         if self.relion_df.empty:
@@ -1709,19 +2053,24 @@ class RelionMotl(Motl):
     def set_version_specific_names(self):
         """Sets version specific names for the current object.
 
+        Notes
+        -----
         This function sets the following attributes of the current object:
-            - `tomo_id_name`:
-                The name of the tomogram ID (`rlnMicrographName` for Relion 3.1 and lower, `rlnTomoName` for
-                Relion 4.0 and higher).
-            - `subtomo_id_name`:
-                The name of the subtomogram ID (`rlnImageName` for Relion 3.1 and lower, `rlnTomoParticleName`
-                for Relion 4.0 and higher).
-            - `shifts_id_names`:
-                The names of the shift IDs (`rlnOriginX` for Relion 3.0 and lower, `rlnOriginXAngst` for
-                Relion 3.1 and higher).
-            - `data_spec`:
-                The particle list specification (`data_` for Relion 3.0 and lower, `data_particles`
-                for Relion 3.1 and higher).
+        - "tomo_id_name": The name of the tomogram ID ("rlnMicrographName" for Relion 3.1 and lower, "rlnTomoName" for
+        Relion 4.0 and higher).
+        - "subtomo_id_name": The name of the subtomogram ID ("rlnImageName" for Relion 3.1 and lower,
+        "rlnTomoParticleName" for Relion 4.0 and higher).
+        - "shifts_id_names": The names of the shift IDs ("rlnOriginX" for Relion 3.0 and lower, "rlnOriginXAngst" for
+        Relion 3.1 and higher).
+        - "data_spec": The particle list specification ("data" for Relion 3.0 and lower, "data_particles" for Relion 3.1 and higher).
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
 
         """
 
@@ -1736,21 +2085,26 @@ class RelionMotl(Motl):
     def get_version_specific_names(version):
         """The function returns the version-specific names of columns in Relion DataFrame.
 
-        Args:
-            version (float): The version number.
+        Parameters
+        ----------
+        version : float
+            The version number.
 
-        Returns:
-            tuple: A tuple containing the version-specific names in the following order:
-                - tomo_id_name (str): The name for the tomogram ID (`rlnMicrographName` for Relion 3.1 and lower,
-                    `rlnTomoName` for Relion 4.0 and higher).
-                - subtomo_id_name (str): The name for the subtomogram ID (`rlnImageName` for Relion 3.1 and lower,
-                    `rlnTomoParticleName` for Relion 4.0 and higher).
-                - shifts_id_names (list(str)): A list of names for the shift coordinates(`rlnOriginX` for Relion 3.0 and lower,
-                    `rlnOriginXAngst` for Relion 3.1 and higher).
-                - data_spec (str): The name for the particle list specification (`data_` for Relion 3.0 and lower,
-                    `data_particles` for Relion 3.1 and higher).
+        Returns
+        -------
+        tomo_id_name : str
+            The name for the tomogram ID ("rlnMicrographName" for Relion 3.1 and lower, "rlnTomoName" for Relion 4.0 and higher).
+        subtomo_id_name : str
+            The name for the subtomogram ID ("rlnImageName" for Relion 3.1 and lower, "rlnTomoParticleName" for Relion 4.0 and higher).
+        shifts_id_names : list
+            A list of names (type `str`) for the shift coordinates("rlnOriginX" for Relion 3.0 and lower, "rlnOriginXAngst"
+            for Relion 3.1 and higher).
+        data_spec : str
+            The name for the particle list specification ("data" for Relion 3.0 and lower, "data_particles" for Relion 3.1 and higher).
 
         """
+        if version is None:
+            version = RelionMotl.default_version
 
         if version <= 3.0:
             tomo_id_name = "rlnMicrographName"
@@ -1773,12 +2127,17 @@ class RelionMotl(Motl):
     def create_particles_data(self, version):
         """Creates an empty DataFrame in Relion version-specific format with the size corresponding to `self.df`.
 
-        Args:
-            version (float): The version of the Relion to be used. Valid values are 3.0, 3.1, and any other value for version
-                4 or higher.
+        Parameters
+        ----------
+        version : float
+            The version of the Relion to be used. Valid values are 3.0, 3.1, and any other value for version
+            4 or higher.
 
-        Returns:
-            pandas.DataFrame: The empty DataFrame with columns corresponding to the specified Relion version.
+        Returns
+        -------
+        pandas.DataFrame
+            The empty DataFrame with columns corresponding to the specified Relion version.
+
         """
 
         if version == 3.0:
@@ -1798,20 +2157,29 @@ class RelionMotl(Motl):
         """The function prepares the optics data for relion DataFrame. It takes in a dictionary or starfile path as an
         argument, and returns a pandas DataFrame containing the optics information in version specific format.
 
-        Args:
-            use_original_entries (bool, optional): Whether to use the `self.optics_df` (True) as source or not.
-                Defaults to True. If set to True, the optics_data as well as version will be ignored.
-            optics_data (str, pandas.DataFrame, optional): The optics data specified either as a path to the starfile (it can
-                also contain the particle list) or as DataFrame. It is used only if `use_original_entries` is set to False.
-            version (float, optional): Relion version to be used for the DataFrame. It is used only if use_original_entries
-                is set to False and the `optics_data` is a path to starfile. If not set, `self.version` will be used instead.
+        Parameters
+        ----------
+        use_original_entries : bool, default=True
+            Whether to use the `self.optics_df` (True) as source or not. If set to True, the optics_data as well as
+            version will be ignored. Defaults to True.
+        optics_data : str, optional
+            The optics data specified either as a path to the starfile (it can also contain the particle list) or as
+            DataFrame. It is used only if "use_original_entries" is set to False. Defaults to None.
+        version : float, optional
+            Relion version to be used for the DataFrame. It is used only if use_original_entries is set to False and
+            the "optics_data" is a path to starfile. If not set, `self.version` will be used instead. Defaults to None.
 
-        Returns:
-            pandas.DataFrame: DataFrame with the optics data.
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with the optics data.
 
-        Raises:
-            UserInputError: if `optics_data` is not str nor pandas.DataFrame
-            Warning: if `optics_data` is not specified and `self.optics_df` is empty.
+        Raises
+        ------
+        UserInputError
+            If `optics_data` is not str nor pandas.DataFrame.
+        Warning
+            If `optics_data` is not specified and `self.optics_df` is empty.
 
         """
 
@@ -1849,74 +2217,81 @@ class RelionMotl(Motl):
         takes in the version of Relion to be used and formats describining how the tomogram/tilt-series and subtomogram
         names should be assembled.
 
-        Args:
-            tomo_format (str, optional): Format specifying the tomogram/tilt-series name by containing sequence of "x"
-                introduced by "$" character. The longest sequence is evaluated as the position of the tomo_id and
-                replaced with corresponding tomo_id. The number of x letters of the longest sequence determines number
-                of digits to pad with zero. For example, for tomo_id 5 will following format "/path/to/tomo/$xxxx.rec"
-                result in "/path/to/tomo/0005.rec". The sequence can be present multiple times, sequences of "x" shorter
-                than the longest one will be kept intact: for tomo_id 5 will "/path/to/tomo/$xxxx/$xxxx_$xx.mrc
-                result in "/path/to/tomo/0005/0005_$xx.mrc". Defaults to empty string, in which case the tomo_id will be
-                used without any zero padding.
-            subtomo_format (str, optional): Format specifying the subtomogram name by containing sequence of "y" introduced by "$" character.
-                The longest sequence is evaluated as the position of the subtomo_id and replaced with corresponding
-                subtomo_id. The number of "y" letters of the longest sequence determines number of digits to pad with zero.
-                For example, for subtomo_id 65 with following format "/path/to/subtomograms/$yyy.mrc" will result
-                in /path/to/subtomograms/065.mrc". The sequence can be present multiple times, sequences of "y" shorter
-                than the longest one will be kept intact: for subtomo_id 65 will "/path/to/subtomograms/$yy_$yyy.mrc"
-                result in "/path/to/subtomograms/$yy_065.mrc". The subtomo_format can also contain sequence of "x" letters
-                introduced by "$" in which case these are replaced by tomo_id in the same way as for tomo_format.
-                For example, for tomo_id 5 and subtomogram_id 65 the following "/path/to/subtomograms/$xxxx/$xxxx_$yyy.mrc"
-                will result in "/path/to/subtomograms/0005/0005_065.mrc". Defaults to empty string, in which case the
-                subtomo_id will be used without any zero padding.
-            version (float, optional): Relion version to be used for the DataFrame. Defaults to None, in which case
-                `self.version` is used.
+        Parameters
+        ----------
+        tomo_format : str, default=""
+            Format specifying the tomogram/tilt-series name by containing sequence of "x"
+            introduced by "$" character. The longest sequence is evaluated as the position of the tomo_id and
+            replaced with corresponding tomo_id. The number of x letters of the longest sequence determines number
+            of digits to pad with zero. For example, for tomo_id 5 will following format "/path/to/tomo/$xxxx.rec"
+            result in "/path/to/tomo/0005.rec". The sequence can be present multiple times, sequences of "x" shorter
+            than the longest one will be kept intact: for tomo_id 5 will "/path/to/tomo/$xxxx/$xxxx_$xx.mrc
+            result in "/path/to/tomo/0005/0005_$xx.mrc". Defaults to empty string, in which case the tomo_id will be
+            used without any zero padding.
+        subtomo_format : str, default=""
+            Format specifying the subtomogram name by containing sequence of "y" introduced by "$" character.
+            The longest sequence is evaluated as the position of the subtomo_id and replaced with corresponding
+            subtomo_id. The number of "y" letters of the longest sequence determines number of digits to pad with zero.
+            For example, for subtomo_id 65 with following format "/path/to/subtomograms/$yyy.mrc" will result
+            in /path/to/subtomograms/065.mrc". The sequence can be present multiple times, sequences of "y" shorter
+            than the longest one will be kept intact: for subtomo_id 65 will "/path/to/subtomograms/$yy_$yyy.mrc"
+            result in "/path/to/subtomograms/$yy_065.mrc". The subtomo_format can also contain sequence of "x" letters
+            introduced by "$" in which case these are replaced by tomo_id in the same way as for tomo_format.
+            For example, for tomo_id 5 and subtomogram_id 65 the following "/path/to/subtomograms/$xxxx/$xxxx_$yyy.mrc"
+            will result in "/path/to/subtomograms/0005/0005_065.mrc". Defaults to empty string, in which case the
+            subtomo_id will be used without any zero padding.
+        version : float, optional
+            Relion version to be used for the DataFrame. Defaults to None, in which case `self.version` is used.
 
-        Returns:
-            pandas.DataFrame: A DataFrame with particle list in Relion format.
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame with particle list in Relion format.
 
-        Raises:
-            UserInputError: In case the format does not contain valid sequence.
+        Raises
+        ------
+        UserInputError
+            In case the format does not contain valid sequence.
 
-        Examples:
-            >>> rln_motl = cryomotl.RelionMotl()
-            >>> rln_motl.fill({"tomo_id": [2], "subtomo_id":[65]})
+        Examples
+        --------
 
+        >>> rln_motl = cryomotl.RelionMotl()
+        >>> rln_motl.fill({"tomo_id": [2], "subtomo_id":[65]})
 
-            >>> rln_df = rln_motl.prepare_particles_data(tomo_format="/path/to/$xxxx.rec",
-            ... subtomo_format="/path/to/$xxxx/$xxxx_$yy_2.6A.mrc", version=3.1)
-            >>> print(rln_df["rlnMicrographName"].values[0])
-            >>> print(rln_df["rlnImageName"].values[0])
-            /path/to/0002.rec
-            /path/to/0002/0002_65_2.6A.mrc
+        >>> rln_df = rln_motl.prepare_particles_data(tomo_format="/path/to/$xxxx.rec",
+        ... subtomo_format="/path/to/$xxxx/$xxxx_$yy_2.6A.mrc", version=3.1)
+        >>> print(rln_df["rlnMicrographName"].values[0])
+        >>> print(rln_df["rlnImageName"].values[0])
+        /path/to/0002.rec
+        /path/to/0002/0002_65_2.6A.mrc
 
-            >>> rln_df = rln_motl.prepare_particles_data(tomo_format="/path/to/$xxxx",
-            ... subtomo_format="/path/to/$xxxx/$xxxx_$yy_2.6A", version=4.0)
-            >>> print(rln_df["rlnTomoName"].values[0])
-            >>> print(rln_df["rlnTomoParticleName"].values[0])
-            /path/to/0002
-            /path/to/0002/0002_65_2.6A
+        >>> rln_df = rln_motl.prepare_particles_data(tomo_format="/path/to/$xxxx",
+        ... subtomo_format="/path/to/$xxxx/$xxxx_$yy_2.6A", version=4.0)
+        >>> print(rln_df["rlnTomoName"].values[0])
+        >>> print(rln_df["rlnTomoParticleName"].values[0])
+        /path/to/0002
+        /path/to/0002/0002_65_2.6A
 
-            >>> rln_df = rln_motl.prepare_particles_data(tomo_format="/path/to/$xx.rec",
-            ... subtomo_format="/path/to/xxxx/xxxx_$yy_2.6A.mrc", version=3.1)
-            >>> print(rln_df["rlnMicrographName"].values[0])
-            >>> print(rln_df["rlnImageName"].values[0])
-            /path/to/02.rec
-            /path/to/xxxx/xxxx_65_2.6A.mrc
+        >>> rln_df = rln_motl.prepare_particles_data(tomo_format="/path/to/$xx.rec",
+        ... subtomo_format="/path/to/xxxx/xxxx_$yy_2.6A.mrc", version=3.1)
+        >>> print(rln_df["rlnMicrographName"].values[0])
+        >>> print(rln_df["rlnImageName"].values[0])
+        /path/to/02.rec
+        /path/to/xxxx/xxxx_65_2.6A.mrc
 
-            >>> rln_df = rln_motl.prepare_particles_data(tomo_format="",
-            ... subtomo_format="/path/to/$xxx/$yy_2.6A.mrc", version=3.1)
-            >>> print(rln_df["rlnMicrographName"].values[0])
-            >>> print(rln_df["rlnImageName"].values[0])
-            2
-            /path/to/002/65_2.6A.mrc
+        >>> rln_df = rln_motl.prepare_particles_data(tomo_format="",
+        ... subtomo_format="/path/to/$xxx/$yy_2.6A.mrc", version=3.1)
+        >>> print(rln_df["rlnMicrographName"].values[0])
+        >>> print(rln_df["rlnImageName"].values[0])
+        2
+        /path/to/002/65_2.6A.mrc
 
-            >>> rln_df = rln_motl.prepare_particles_data(tomo_format="",
-            ... subtomo_format="/path/to/$xxx/yy_2.6A.mrc", version=3.1)
-            >>> print(rln_df["rlnMicrographName"].values[0])
-            >>> print(rln_df["rlnImageName"].values[0])
-            ValueError: The format /path/to/$xxx/yy_2.6A.mrc does not contain any sequence of \$ followed by y.
-
+        >>> rln_df = rln_motl.prepare_particles_data(tomo_format="",
+        ... subtomo_format="/path/to/$xxx/yy_2.6A.mrc", version=3.1)
+        >>> print(rln_df["rlnMicrographName"].values[0])
+        >>> print(rln_df["rlnImageName"].values[0])
+        ValueError: The format /path/to/$xxx/yy_2.6A.mrc does not contain any sequence of \$ followed by y.
         """
 
         def find_longest_sequence(test_string, test_letter, raise_error=True):
@@ -1990,14 +2365,19 @@ class RelionMotl(Motl):
     def create_optics_group_v3_1(self, pixel_size=None, subtomo_size=None):
         """Creates an optics group with default parameters corresponding to Relion v. 3.1.
 
-        Args:
-            pixel_size (float, optional): The pixel size of the data. If not provided, the pixel size of the object
-                instance (`self.pixel_size`) will be used. Defaults to None.
-            subtomo_size (int or str, optional): The size of the subtomograms. If not provided, it will be set to "NaN".
-                Defaults to None.
+        Parameters
+        ----------
+        pixel_size : float, optional
+            The pixel size of the data. If not provided, the pixel size of the object instance (`self.pixel_size`) will
+            be used. Defaults to None.
+        subtomo_size : int, optional
+            The size of the subtomograms. If not provided, it will be set to "NaN". Defaults to None.
 
-        Returns:
-            pandas.DataFrame: A DataFrame containing the default optics parameters.
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the default optics parameters.
+
         """
 
         pixel_size = pixel_size if pixel_size is not None else self.pixel_size
@@ -2024,16 +2404,22 @@ class RelionMotl(Motl):
     def create_optics_group_v4(self, pixel_size=None, subtomo_size=None, binning=None):
         """Creates an optics group with default parameters corresponding to Relion v. 4.x.
 
-        Args:
-            pixel_size (float, optional): The pixel size of the data. If not provided, the pixel size of the object
-                instance (`self.pixel_size`) will be used. Defaults to None.
-            subtomo_size (int or str, optional): The size of the subtomograms. If not provided, it will be set to "NaN".
-                Defaults to None.
-            binning (int, optional): The binning of the subtomograms. If not provided, the binning of the object
-                instance (`self.binning`) will be used. Defaults to None.
+        Parameters
+        ----------
+        pixel_size : float, optional
+            The pixel size of the data. If not provided, the pixel size of the object instance (`self.pixel_size`)
+            will be used. Defaults to None.
+        subtomo_size : int, optional
+            The size of the subtomograms. If not provided, it will be set to "NaN". Defaults to None.
+        binning : int, optional
+            The binning of the subtomograms. If not provided, the binning of the object instance (`self.binning`) will
+            be used. Defaults to None.
 
-        Returns:
-            pandas.DataFrame: A DataFrame containing the default optics parameters.
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the default optics parameters.
+
         """
         pixel_size = pixel_size if pixel_size is not None else self.pixel_size
         binning = binning if binning is not None else self.binning
@@ -2059,17 +2445,30 @@ class RelionMotl(Motl):
     def create_final_output(self, relion_df, optics_df=None):
         """Creates the final output frames and specifiers based on the given input dataframes.
 
-        Args:
-            relion_df (pandas.DataFrame): The dataframe containing the relion data.
-            optics_df (pandas.DataFrame, optional): The dataframe containing the optics data. Defaults to None.
+        Parameters
+        ----------
+        relion_df : pandas.DataFrame
+            The dataframe containing the relion data.
+        optics_df : pandas.DataFrame, optional
+            The dataframe containing the optics data. Defaults to None.
 
-        Returns:
-            tuple: A tuple containing the final output frames and specifiers.
+        Returns
+        -------
+        frames : list
+            List of pandas.DataFrame containing all data (e.g. particle list, optics group)
+        spefifiers : list
+            List of `str` containing the specifiers, i.e., the descriptions for the frames.
 
-        Note:
-            - If optics_df is None, the frames and specifiers will be based on relion_df and self.data_spec.
-            - If optics_df is not None, the frames and specifiers will be based on optics_df, relion_df, "data_optics", and self.data_spec.
-            - If self.version is less than 3.1, the frames and specifiers will be based on the concatenated dataframe of optics_df and relion_df (with duplicates removed) and self.data_spec.
+
+        Notes
+        -----
+        If optics_df is None, the frames and specifiers will be based on relion_df and self.data_spec.
+
+        If optics_df is not None, the frames and specifiers will be based on optics_df, relion_df, "data_optics", and
+        self.data_spec.
+
+        If self.version is less than 3.1, the frames and specifiers will be based on the concatenated dataframe of
+        optics_df and relion_df (with duplicates removed) and self.data_spec.
 
         """
 
@@ -2097,30 +2496,42 @@ class RelionMotl(Motl):
         binning=None,
         adapt_object_attr=False,
     ):
-        """
-        This function creates takes the `self.df` attribute and creates a DataFrame that is Relion format.
+        """This function creates takes the `self.df` attribute and creates a DataFrame that is Relion format.
 
-        Args:
-            tomo_format (str, optional): Format of the tomo name output format. See
-                :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
-            subtomo_format (str, optional): Format of the subtomogram name output format. See
-                :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
-            use_original_entries (bool, optional): Determine whether to use (True) the original entries stored in `self.relion_df`
-                or not (False). Defaults to False.
-            version (float, optional): Specify the version and thereby the format of the DataFrame. If not provided the
-                value from `self.version` will be used. Defaults to None.
-            add_object_id (bool, optional): Whether to add "object_id" from `self.df` to the DataFrame. If True,
-                the column will be named "ccObjectName". Defaults to False.
-            add_subunit_id (bool, optional): Whether to add "subunit_id" from `self.df` to the DataFrame. If True,
-                the column will be named "ccSubunitName". Defaults to False.
-            binning (int, optional): Binning that should be used for conversion in case of Relion v. 4.x. If not provided the
-                value from `self.binning` will be used. Defaults to None.
-            adapt_object_attr (bool, optional): Store the created DataFrame to `self.relion_df` attribute of the object.
-                Defaults to False.
+        Parameters
+        ----------
+        tomo_format : str, default=""
+            Format of the tomo name output format. See
+            :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
+        subtomo_format : str, default=""
+            Format of the subtomogram name output format. See
+            :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
+        use_original_entries : bool, default=False
+            Determine whether to use (True) the original entries stored in `self.relion_df` or not (False). Defaults to False.
+        version : float, optional
+            Specify the version and thereby the format of the DataFrame. If not provided the value from `self.version`
+            will be used. Defaults to None.
+        add_object_id : bool, default=False
+            Whether to add "object_id" from `self.df` to the DataFrame. If True, the column will be named
+            "ccObjectName". Defaults to False.
+        add_subunit_id : bool, default=False
+            Whether to add "subunit_id" from `self.df` to the DataFrame. If True, the column will be named
+            "ccSubunitName". Defaults to False.
+        binning : int, optional
+            Binning that should be used for conversion in case of Relion v. 4.x. If not provided the value from
+            `self.binning` will be used. Defaults to None.
+        adapt_object_attr : bool, default=False
+            Store the created DataFrame to `self.relion_df` attribute of the object. Defaults to False.
 
-        Returns:
-            pandas.DataFrame: A dataframe in Relion format.
+        Returns
+        -------
+        pandas.DataFrame
+            A dataframe in Relion format.
 
+        See Also
+        --------
+        :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data`
+            Provides more info tomo_format and subtomo_format.
         """
 
         if version is None:
@@ -2174,30 +2585,52 @@ class RelionMotl(Motl):
         binning=None,
         optics_data=None,
     ):
-        """
-        This function converts `self.df` DataFrame to a DataFrame in Relion format and writes it out as a starfile.
+        """This function converts `self.df` DataFrame to a DataFrame in Relion format and writes it out as a starfile.
 
-        Args:
-            ouput_path (str): The output path to the starfile to be written out.
-            write_optics (bool, optional): Whether to include optics data in the starfile or not. Defaults to True.
-            tomo_format (str, optional): Format of the tomo name output format. See
-                :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
-            subtomo_format (str, optional): Format of the subtomogram name output format. See
-                :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
-            use_original_entries (bool, optional): Determine whether to use (True) the original entries stored in `self.relion_df`
-                or not (False). Defaults to False.
-            version (float, optional): Specify the version and thereby the format of the DataFrame. If not provided the
-                value from `self.version` will be used. Defaults to None.
-            add_object_id (bool, optional): Whether to add "object_id" from `self.df` to the DataFrame. If True,
-                the column will be named "ccObjectName". Defaults to False.
-            add_subunit_id (bool, optional): Whether to add "subunit_id" from `self.df` to the DataFrame. If True,
-                the column will be named "ccSubunitName". Defaults to False.
-            binning (int, optional): Binning that should be used for conversion in case of Relion v. 4.x. If not provided the
-                value from `self.binning` will be used. Defaults to None.
-            optics_data (str, pandas.DataFrame, optional): A DataFrame containing optics data or a path to the starfile
-                that should be used to fetch the optics from. See :meth:`cryocat.cryomotl.RelionMotl.prepare_optics_data`
-                for more details. Used only if `write_optics` is True. If it is None and `write_optics` is True, then
-                the attribute `self.optics_df` will be used. Defaults to None.
+        Parameters
+        ----------
+        ouput_path : str
+            The output path to the starfile to be written out.
+        write_optics : bool, default=True
+            Whether to include optics data in the starfile or not. Defaults to True.
+        tomo_format : str, default=""
+            Format of the tomo name output format. See
+            :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
+        subtomo_format : str, default=""
+            Format of the subtomogram name output format. See
+            :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
+        use_original_entries : bool, default=False
+            Determine whether to use (True) the original entries stored in `self.relion_df`
+            or not (False). Defaults to False.
+        version : float, optional
+            Specify the version and thereby the format of the DataFrame. If not provided the
+            value from `self.version` will be used. Defaults to None.
+        add_object_id : bool, default=False
+            Whether to add "object_id" from `self.df` to the DataFrame. If True,
+            the column will be named "ccObjectName". Defaults to False.
+        add_subunit_id : bool, default=False
+            Whether to add "subunit_id" from `self.df` to the DataFrame. If True,
+            the column will be named "ccSubunitName". Defaults to False.
+        binning : int, optional
+            Binning that should be used for conversion in case of Relion v. 4.x. If not provided the
+            value from `self.binning` will be used. Defaults to None.
+        optics_data : str, optional
+            A DataFrame containing optics data or a path to the starfile
+            that should be used to fetch the optics from. See :meth:`cryocat.cryomotl.RelionMotl.prepare_optics_data`
+            for more details. Used only if `write_optics` is True. If it is None and `write_optics` is True, then
+            the attribute `self.optics_df` will be used. Defaults to None.
+
+        Returns
+        -------
+        None
+
+        See Also
+        --------
+        :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data`
+            Provides more information tomo_format and subtomo_format.
+        :meth:`cryocat.cryomotl.RelionMotl.prepare_optics_data`
+            Provide more information on optics_data inputs.
+
         """
         relion_df = self.create_relion_df(
             use_original_entries=use_original_entries,
@@ -2276,16 +2709,23 @@ class StopgapMotl(Motl):
     def read_in(input_path):
         """Reads in a starfile in stopgap format and returns the particles as a dataframe in stopgap format.
 
-        Args:
-            input_path (str): The path to the starfile in stopgap format.
+        Parameters
+        ----------
+        input_path : str
+            The path to the starfile in stopgap format.
 
-        Returns:
-            pandas.DataFrame: The dataframe in the stopgap format containing the particles.
+        Returns
+        -------
+        pandas.DataFrame
+            The dataframe in the stopgap format containing the particles.
 
-        Raises:
-            UserInputError: If the starfile does not exist.
-            UserInputError: If the starfile does not contain the 'data_stopgap_motivelist' specifier, i.e., is not
-                a particle list.
+        Raises
+        ------
+        UserInputError
+            If the starfile does not exist.
+        UserInputError
+            If the starfile does not contain the 'data_stopgap_motivelist' specifier, i.e., is not a particle list.
+
         """
 
         frames, specifiers, _ = starfileio.Starfile.read(input_path)
@@ -2301,16 +2741,26 @@ class StopgapMotl(Motl):
     def convert_to_motl(self, stopgap_df):
         """Converts a stopgap DataFrame to a motl DataFrame and stores it in self.df.
 
-        Args:
-            stopgap_df (pandas.DataFrame): The Stopgap DataFrame to be converted.
+        Parameters
+        ----------
+        stopgap_df : pandas.DataFrame
+            The Stopgap DataFrame to be converted.
 
-        Note:
-            This method modifies the `df` attribute of the object.
 
-        Warning:
-            If the particles are split into A and B halfsets the subtomo_id will be assigned based on them and
-            will not correspond to the "subtomo_num" anymore. The "subtomo_num" information will be store in "geom4"
-            column instead. New extraction of subtomograms will be neceesary in such a case.
+        Warnings
+        --------
+        If the particles are split into A and B halfsets the subtomo_id will be assigned based on them and
+        will not correspond to the "subtomo_num" anymore. The "subtomo_num" information will be store in "geom3"
+        column instead. New extraction of subtomograms will be neceesary in such a case.
+
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
+
+        Returns
+        -------
+        None
+
         """
 
         self.sg_df = stopgap_df
@@ -2319,27 +2769,33 @@ class StopgapMotl(Motl):
             self.df[em_key] = stopgap_df[star_key]
 
         if stopgap_df["halfset"].nunique() == 2:
-            self.df["geom4"] = [1.0 if hs.lower() == "a" else 0.0 for hs in stopgap_df["halfset"]]
-            halfset_num = self.df["geom4"].values % 2
+            self.df["geom3"] = [1.0 if hs.lower() == "a" else 0.0 for hs in stopgap_df["halfset"]]
+            halfset_num = self.df["geom3"].values % 2
             subtomo_id_num = []
             c = 0 if halfset_num[0] == 1 else 2
             for i in range(0, self.df.shape[0]):
                 c = np.ceil(c / 2) * 2 + halfset_num[i]
                 subtomo_id_num.append(c)
 
-            self.df["geom4"] = self.df["subtomo_id"]
+            self.df["geom3"] = self.df["subtomo_id"]
             self.df["subtomo_id"] = subtomo_id_num
 
     @staticmethod
     def convert_to_sg_motl(motl_df, reset_index=False):
         """Converts a given motl DataFrame to a Stopgap DataFrame.
 
-        Args:
-            motl_df (pandas.DataFrame): The input DataFrame in motl format.
-            reset_index (bool, optional): Whether to reset the index of the resulting DataFrame. Defaults to False.
+        Parameters
+        ----------
+        motl_df : pandas.DataFrame
+            The input DataFrame in motl format.
+        reset_index : bool, default=False
+            Whether to reset the index of the resulting DataFrame. Defaults to False.
 
-        Returns:
-            pandas.DataFrame: The converted Stopgap DataFrame.
+        Returns
+        -------
+        pandas.DataFrame
+            The converted Stopgap DataFrame.
+
         """
 
         stopgap_df = pd.DataFrame(data=np.zeros((motl_df.shape[0], 16)), columns=StopgapMotl.columns)
@@ -2360,14 +2816,19 @@ class StopgapMotl(Motl):
         """Resets the "motl_idx" of a stopgap DataFrame to sequence from 1 to the length of the particle list if
         reset_index is True.
 
-        Args:
-            stopgap_df (pandas.DataFrame): The DataFrame to set the "motl_idx" of.
-            reset_index (bool, optional): Whether to set the "motl_idx" to a sequence from 1 to the length of the
-                particle list or leave the original values. Defaults to False.
+        Parameters
+        ----------
+        stopgap_df : pandas.DataFrame
+            The DataFrame to set the "motl_idx" of.
+        reset_index : bool, default=False
+            Whether to set the "motl_idx" to a sequence from 1 to the length of the particle list or leave the
+            original values. Defaults to False.
 
-        Returns:
-            pandas.DataFrame: The DataFrame with the "motl_idx" either reset to the sequence from 1 to the
-                length of the particle list or original values.
+        Returns
+        -------
+        pandas.DataFrame
+            The DataFrame with the "motl_idx" either reset to the sequence from 1 to the length of the particle
+            list or original values.
 
         """
 
@@ -2379,15 +2840,28 @@ class StopgapMotl(Motl):
     def write_out(self, output_path, update_coord=False, reset_index=False):
         """Writes the StopgapMotl object to a star file.
 
-        Args:
-            output_path (str): The path to save the star file.
-            update_coord (bool, optional): Whether to update the coordinates before writing. Defaults to False.
-            reset_index (bool, optional): Whether to reset the index of the dataframe before writing. Defaults to False.
-                See :meth:`cryocat.cryomotl.StopgapMotl.sg_df_reset_index` for more details.
+        Parameters
+        ----------
+        output_path : str
+            The path to save the star file.
+        update_coord : bool, default=False
+            Whether to update the coordinates before writing. Defaults to False.
+        reset_index : bool, default=False
+            Whether to reset the index of the dataframe before writing. Defaults to False.
 
-        Example:
-            >>> obj = StopgapMotl()
-            >>> obj.write("output.star", update_coord=True, reset_index=True)
+        Returns
+        -------
+        None
+
+        See Also
+        --------
+        :meth:`cryocat.cryomotl.StopgapMotl.sg_df_reset_index`
+            Provides more details on index reseting.
+
+        Examples
+        --------
+        >>> obj = StopgapMotl()
+        >>> obj.write("output.star", update_coord=True, reset_index=True)
 
         """
 
@@ -2419,17 +2893,25 @@ class DynamoMotl(Motl):
     def read_in(input_path):
         """Reads in a file from the specified input path and returns a pandas DataFrame in dynamo format.
 
-        Args:
-            input_path (str): The path to the input file.
+        Parameters
+        ----------
+        input_path : str
+            The path to the input file.
 
-        Returns:
-            pandas.DataFrame: The DataFrame containing the data read from the file in dynamo format.
+        Returns
+        -------
+        pandas.DataFrame
+            The DataFrame containing the data read from the file in dynamo format.
 
-        Raises:
-            ValueError: If the provided file does not exist.
+        Raises
+        ------
+        ValueError
+            If the provided file does not exist.
 
-        TODO:
-            Test proper functionality.
+        Notes
+        -----
+        TODO: Test proper functionality.
+
         """
 
         if os.path.isfile(input_path):
@@ -2442,11 +2924,19 @@ class DynamoMotl(Motl):
     def convert_to_motl(self, dynamo_df):
         """Converts a dynamo DataFrame to a motl DataFrame format.
 
-        Args:
-            dynamo_df (pandas.DataFrame): The dynamo DataFrame to be converted.
+        Parameters
+        ----------
+        dynamo_df : pandas.DataFrame
+            The dynamo DataFrame to be converted.
 
-        Note:
-            This method modifies the `df` attribute of the object.
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
+
+        Returns
+        -------
+        None
+
         """
 
         self.dynamo_df = dynamo_df

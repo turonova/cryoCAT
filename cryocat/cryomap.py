@@ -1,7 +1,6 @@
 import emfile
 import mrcfile
 import numpy as np
-import cryocat.geom
 from scipy.ndimage import affine_transform
 from scipy.spatial.transform import Rotation as srot
 from scipy.interpolate import interp1d
@@ -156,7 +155,19 @@ def recenter(map, new_center):
 def normalize_under_mask(ref, mask):
     """A function to take a reference volume and a mask, and normalize the area
     under the mask to 0-mean and standard deviation of 1.
-    Based on stopgap code by W.Wan"""
+    Based on stopgap code by W.Wan
+
+    Parameters
+    ----------
+    ref :
+
+    mask :
+
+
+    Returns
+    -------
+
+    """
 
     # Calculate mask parameteres
     m_idx = mask > 0
@@ -301,23 +312,35 @@ def deconvolve(
     phaseshift=0,
     output_name=None,
 ):
-    """
-    Deconvolution adapted from MATLAB script tom_deconv_tomo by D. Tegunov (https://github.com/dtegunov/tom_deconv).
+    """Deconvolution adapted from MATLAB script tom_deconv_tomo by D. Tegunov (https://github.com/dtegunov/tom_deconv).
     Example for usage: deconvolve(my_map, 3.42, 6, 1.1, 1, 0.02, false, 0)
 
-    Args:
-        input_volume (np.array or string): tomogram volume
-        pixel_size_a (float): pixel size in Angstroms
-        defocus (float): defocus in micrometers, positive = underfocus
-        snr_falloff (float): how fast does SNR fall off, i. e. higher values will downweight high frequencies; values like 1.0 or 1.2 seem reasonable
-        deconv_strength (float): how much will the signal be deconvoluted overall, i. e. a global scale for SNR; exponential scale: 1.0 is SNR = 1000 at zero frequency, 0.67 is SNR = 100, and so on
-        highpass_nyquist (float): fraction of Nyquist frequency to be cut off on the lower end (since it will be boosted the most)
-        phase_flipped (bool, optional): whether the data are already phase-flipped. Defaults to False.
-        phaseshift (int, optional): CTF phase shift in degrees (e. g. from a phase plate). Defaults to 0.
-        output_name (str, optional): Name of the output file for the deconvolved tomogram. Defaults to None (tomogram will be not written).
+    Parameters
+    ----------
+    input_volume : np.array or string
+        tomogram volume
+    pixel_size_a : float
+        pixel size in Angstroms
+    defocus : float
+        defocus in micrometers, positive = underfocus
+    snr_falloff : float
+        how fast does SNR fall off, i. e. higher values will downweight high frequencies; values like 1.0 or 1.2 seem reasonable
+    deconv_strength : float
+        how much will the signal be deconvoluted overall, i. e. a global scale for SNR; exponential scale: 1.0 is SNR = 1000 at zero frequency, 0.67 is SNR = 100, and so on
+    highpass_nyquist : float
+        fraction of Nyquist frequency to be cut off on the lower end (since it will be boosted the most)
+    phase_flipped : bool
+        whether the data are already phase-flipped. Defaults to False.
+    phaseshift : int
+        CTF phase shift in degrees (e. g. from a phase plate). Defaults to 0.
+    output_name : str
+        Name of the output file for the deconvolved tomogram. Defaults to None (tomogram will be not written).
 
-    Returns:
-        deconvolved_map (np.array): deconvolved tomogram
+    Returns
+    -------
+    deconvolved_map : np.array
+        deconvolved tomogram
+
     """
     input_map = read(input_volume)
     interp_dim = np.maximum(2048, input_map.shape[0])
@@ -494,4 +517,4 @@ def calculate_flcf(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None,
     cc_map = np.flip(cc_map)
     cc_map = np.roll(cc_map, cen, (0, 1, 2))
 
-    return cc_map
+    return np.clip(cc_map, 0.0, 1.0)
