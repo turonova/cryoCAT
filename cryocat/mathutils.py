@@ -1,5 +1,11 @@
-def otsu_threshold(bin_counts):
+import numpy as np
+
+
+def otsu_threshold(input_values):
     # Taken from: https://www.kdnuggets.com/2018/10/basic-image-analysis-python-p4.html
+
+    stats_bins = np.histogram(input_values, bins=input_values.shape[0])
+    bin_counts = stats_bins[0]
     s_max = (0, 0)
 
     for threshold in range(len(bin_counts)):
@@ -16,7 +22,7 @@ def otsu_threshold(bin_counts):
         if s > s_max[1]:
             s_max = (threshold, s)
 
-    return s_max[0]
+    return stats_bins[1][s_max[0]]
 
 
 def get_number_of_digits(input_number):

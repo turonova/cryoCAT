@@ -367,6 +367,7 @@ class Motl:
 
         if Motl.check_df_correct_format(input_motl):
             self.df = input_motl.copy()
+            self.df.reset_index(inplace=True, drop=True)
         else:
             self.convert_to_motl(input_motl)
 
@@ -1871,11 +1872,15 @@ class RelionMotl(Motl):
 
         if self.tomo_id_name in relion_df.columns:
             micrograph_names = relion_df[self.tomo_id_name].tolist()
-            tomo_names = [i.rsplit("/", 1)[-1] for i in micrograph_names]
-            tomo_idx = []
 
-            for j in tomo_names:
-                tomo_idx.append(float(re.search(r"\d+", j).group()))
+            if all(isinstance(i, (int, float)) for i in micrograph_names):
+                tomo_idx = micrograph_names
+            else:
+                tomo_names = [i.rsplit("/", 1)[-1] for i in micrograph_names]
+                tomo_idx = []
+
+                for j in tomo_names:
+                    tomo_idx.append(float(re.search(r"\d+", j).group()))
 
             self.df["tomo_id"] = tomo_idx
 
@@ -1886,11 +1891,15 @@ class RelionMotl(Motl):
             else:
                 tomo_position = 0
             micrograph_names = relion_df[self.subtomo_id_name].tolist()
-            tomo_names = [i.rsplit("/", 1)[tomo_position] for i in micrograph_names]
-            tomo_idx = []
 
-            for j in tomo_names:
-                tomo_idx.append(float(re.findall(r"\d+", j)[0]))
+            if all(isinstance(i, (int, float)) for i in micrograph_names):
+                tomo_idx = micrograph_names
+            else:
+                tomo_names = [i.rsplit("/", 1)[tomo_position] for i in micrograph_names]
+                tomo_idx = []
+
+                for j in tomo_names:
+                    tomo_idx.append(float(re.findall(r"\d+", j)[0]))
 
             self.df["tomo_id"] = tomo_idx
 
@@ -1930,14 +1939,20 @@ class RelionMotl(Motl):
         # parsing out subtomo number
         if self.subtomo_id_name in relion_df.columns:
             image_names = relion_df[self.subtomo_id_name].tolist()
-            subtomo_names = [i.rsplit("/", 1)[-1] for i in image_names]
-            subtomo_idx = []
 
-            for j in subtomo_names:
-                if self.version >= 4.0:
-                    subtomo_idx.append(float(j))
-                else:
-                    subtomo_idx.append(float(re.findall(r"\d+", j)[1]))
+            # Note: following will fail if the subtomos are named differently for each row - once with string, once with
+            # number
+            if all(isinstance(i, (int, float)) for i in image_names):
+                subtomo_idx = image_names
+            else:
+                subtomo_names = [i.rsplit("/", 1)[-1] for i in image_names]
+                subtomo_idx = []
+
+                for j in subtomo_names:
+                    if self.version >= 4.0:
+                        subtomo_idx.append(float(j))
+                    else:
+                        subtomo_idx.append(float(re.findall(r"\d+", j)[1]))
 
         # Check if the subtomo_idx are unique and if not store them at geom3 and renumber particles
         self.df["geom3"] = subtomo_idx
@@ -1982,7 +1997,8 @@ class RelionMotl(Motl):
         if self.optics_data is None and isinstance(optics_df, pd.DataFrame):
             self.optics_data = optics_df
 
-        self.relion_df = relion_df
+        self.relion_df = relion_df.copy()
+        self.relion_df.reset_index(inplace=True, drop=True)
 
         self.set_version(relion_df, version)
         self.set_pixel_size()
@@ -2212,7 +2228,7 @@ class RelionMotl(Motl):
 
         return optics_df
 
-    def prepare_particles_data(self, tomo_format="", subtomo_format="", version=None):
+    def prepare_particles_data(self, tomo_format="", subtomo_format="", version=None, pixel_size=None):
         """The function creates a DataFrame that contains the information on particles in Relion format. The function
         takes in the version of Relion to be used and formats describining how the tomogram/tilt-series and subtomogram
         names should be assembled.
@@ -2242,6 +2258,9 @@ class RelionMotl(Motl):
             subtomo_id will be used without any zero padding.
         version : float, optional
             Relion version to be used for the DataFrame. Defaults to None, in which case `self.version` is used.
+        pixel_size : float, optional
+            The pixel size of the data. If not provided, the pixel size of the object instance (`self.pixel_size`) will
+            be used. Defaults to None.
 
         Returns
         -------
@@ -2311,6 +2330,9 @@ class RelionMotl(Motl):
         if version is None:
             version = self.version
 
+        if pixel_size is None:
+            pixel_size = self.pixel_size
+
         tomo_name, subtomo_name, shifts_name, _ = RelionMotl.get_version_specific_names(version)
         relion_df = self.create_particles_data(version)
 
@@ -2319,7 +2341,7 @@ class RelionMotl(Motl):
         else:
             tomo_sequence, tomo_digits = find_longest_sequence(tomo_format, "x")
             # add temporarily tomo_id
-            relion_df["tomo_id"] = self.df["tomo_id"]
+            relion_df["tomo_id"] = self.df["tomo_id"].values
 
             relion_df[tomo_name] = tomo_format
             relion_df[tomo_name] = relion_df.apply(
@@ -2330,14 +2352,14 @@ class RelionMotl(Motl):
             relion_df = relion_df.drop(["tomo_id"], axis=1)
 
         if subtomo_format == "":
-            relion_df[subtomo_name] = self.df["subtomo_id"].astype(int)
+            relion_df[subtomo_name] = self.df["subtomo_id"].values.astype(int)
         else:
             subtomo_sequence, subtomo_digits = find_longest_sequence(subtomo_format, "y")
             subtomo_t_sequence, subtomo_t_digits = find_longest_sequence(subtomo_format, "x", raise_error=False)
 
             # add temporarily tomo_id and subtomo_id
-            relion_df["tomo_id"] = self.df["tomo_id"]
-            relion_df["subtomo_id"] = self.df["subtomo_id"]
+            relion_df["tomo_id"] = self.df["tomo_id"].values
+            relion_df["subtomo_id"] = self.df["subtomo_id"].values
 
             relion_df[subtomo_name] = subtomo_format
             relion_df[subtomo_name] = relion_df.apply(
@@ -2359,6 +2381,9 @@ class RelionMotl(Motl):
             relion_df = relion_df.drop(["tomo_id", "subtomo_id"], axis=1)
 
         relion_df.loc[:, shifts_name] = np.zeros((relion_df.shape[0], 3))
+
+        if version < 4.0:
+            relion_df["rlnPixelSize"] = pixel_size
 
         return relion_df
 
@@ -2494,6 +2519,7 @@ class RelionMotl(Motl):
         add_object_id=False,
         add_subunit_id=False,
         binning=None,
+        pixel_size=None,
         adapt_object_attr=False,
     ):
         """This function creates takes the `self.df` attribute and creates a DataFrame that is Relion format.
@@ -2520,6 +2546,9 @@ class RelionMotl(Motl):
         binning : int, optional
             Binning that should be used for conversion in case of Relion v. 4.x. If not provided the value from
             `self.binning` will be used. Defaults to None.
+        pixel_size : float, optional
+            The pixel size of the data. If not provided, the pixel size of the object instance (`self.pixel_size`)
+            will be used. Defaults to None.
         adapt_object_attr : bool, default=False
             Store the created DataFrame to `self.relion_df` attribute of the object. Defaults to False.
 
@@ -2540,11 +2569,14 @@ class RelionMotl(Motl):
         if binning is None:
             binning = self.binning
 
+        if pixel_size is None:
+            pixel_size = self.pixel_size
+
         if use_original_entries:
             relion_df = self.adapt_original_entries()
         else:
             relion_df = self.prepare_particles_data(
-                tomo_format=tomo_format, subtomo_format=subtomo_format, version=version
+                tomo_format=tomo_format, subtomo_format=subtomo_format, version=version, pixel_size=pixel_size
             )
 
         # set coordinates, assumes that subtomograms will be extracted before at exact coordinate with subpixel precision
@@ -2564,8 +2596,8 @@ class RelionMotl(Motl):
             for coord in ("X", "Y", "Z"):
                 relion_df["rlnCoordinate" + coord] = relion_df["rlnCoordinate" + coord] * binning
 
-        relion_df.loc[self.df["subtomo_id"].mod(2).eq(0), "rlnRandomSubset"] = 1
-        relion_df.loc[self.df["subtomo_id"].mod(2).eq(1), "rlnRandomSubset"] = 2
+        relion_df.loc[self.df["subtomo_id"].mod(2).eq(0), "rlnRandomSubset"] = 2
+        relion_df.loc[self.df["subtomo_id"].mod(2).eq(1), "rlnRandomSubset"] = 1
 
         if adapt_object_attr:
             self.relion_df = relion_df
@@ -2583,6 +2615,7 @@ class RelionMotl(Motl):
         add_object_id=False,
         add_subunit_id=False,
         binning=None,
+        pixel_size=None,
         optics_data=None,
     ):
         """This function converts `self.df` DataFrame to a DataFrame in Relion format and writes it out as a starfile.
@@ -2614,6 +2647,9 @@ class RelionMotl(Motl):
         binning : int, optional
             Binning that should be used for conversion in case of Relion v. 4.x. If not provided the
             value from `self.binning` will be used. Defaults to None.
+        pixel_size : float, optional
+            The pixel size of the data. If not provided, the pixel size of the object instance (`self.pixel_size`)
+            will be used. Defaults to None.
         optics_data : str, optional
             A DataFrame containing optics data or a path to the starfile
             that should be used to fetch the optics from. See :meth:`cryocat.cryomotl.RelionMotl.prepare_optics_data`
@@ -2640,6 +2676,7 @@ class RelionMotl(Motl):
             tomo_format=tomo_format,
             subtomo_format=subtomo_format,
             binning=binning,
+            pixel_size=pixel_size,
             adapt_object_attr=False,
         )
 

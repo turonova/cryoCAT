@@ -24,12 +24,12 @@ def add_occupancy(
     motl.df[occupancy_id] = motl.df.groupby([feature, object_id])[order_id].transform("max")
 
     if output_motl is not None:
-        motl.write_to_emfile(output_motl)
+        motl.write_out(output_motl)
 
     return motl
 
 
-def get_feature_nn_indices(fm_entry, fm_exit):
+def get_feature_nn_indices(fm_entry, fm_exit, remove_duplicates=True):
     coord_entry = fm_entry.get_coordinates()
     coord_exit = fm_exit.get_coordinates()
 
@@ -49,13 +49,16 @@ def get_feature_nn_indices(fm_entry, fm_exit):
     nn_distances = np.where(ordered_idx == idx[:, 0], dist[:, 1], dist[:, 0])
 
     # remove duplicates: first sort in each row, then find the unique idx
-    sorted_idx = np.sort(
-        np.hstack((ordered_idx.reshape(idx.shape[0], 1), nn_indices.reshape(idx.shape[0], 1))),
-        axis=1,
-    )
-    unique_idx = np.sort(np.unique(sorted_idx, return_index=True, axis=0)[1])
+    if remove_duplicates:
+        sorted_idx = np.sort(
+            np.hstack((ordered_idx.reshape(idx.shape[0], 1), nn_indices.reshape(idx.shape[0], 1))),
+            axis=1,
+        )
+        unique_idx = np.sort(np.unique(sorted_idx, return_index=True, axis=0)[1])
 
-    return ordered_idx[unique_idx], nn_indices[unique_idx], nn_distances[unique_idx]
+        return ordered_idx[unique_idx], nn_indices[unique_idx], nn_distances[unique_idx]
+    else:
+        return ordered_idx, nn_indices, nn_distances
 
 
 def get_rotations(df):
@@ -194,7 +197,9 @@ def get_monosome_stats(motl_entry, motl_exit, pixel_size=1.0, feature="geom1"):
     return monosome_stats
 
 
-def get_nn_stats(motl_entry, motl_exit, pixel_size=1.0, feature_id="tomo_id", angular_dist_type="full"):
+def get_nn_stats(
+    motl_entry, motl_exit, pixel_size=1.0, feature_id="tomo_id", angular_dist_type="full", remove_duplicates=True
+):
     (
         centered_coord,
         rotated_coord,
@@ -209,8 +214,11 @@ def get_nn_stats(motl_entry, motl_exit, pixel_size=1.0, feature_id="tomo_id", an
         feature=feature_id,
         monosomes_only=False,
         angular_dist_type=angular_dist_type,
+        remove_duplicates=remove_duplicates,
     )
-    coord_rot, angles = get_nn_rotations(motl_entry, motl_exit, feature=feature_id, monosomes_only=False)
+    coord_rot, angles = get_nn_rotations(
+        motl_entry, motl_exit, feature=feature_id, monosomes_only=False, remove_duplicates=remove_duplicates
+    )
 
     nn_stats = pd.DataFrame(
         np.hstack(
@@ -258,6 +266,7 @@ def get_nn_distances(
     monosomes_only=False,
     type_id="geom1",
     angular_dist_type="full",
+    remove_duplicates=True,
 ):
     if isinstance(motl_entry, str):
         motl_entry = cryomotl.Motl.load(motl_entry)
@@ -290,7 +299,7 @@ def get_nn_distances(
             fm_entry = fm_entry.get_motl_subset(1, type_id, reset_index=False)
             fm_exit = fm_exit.get_motl_subset(1, type_id, reset_index=False)
 
-        idx, nn_idx, dist = get_feature_nn_indices(fm_entry, fm_exit)
+        idx, nn_idx, dist = get_feature_nn_indices(fm_entry, fm_exit, remove_duplicates)
 
         if len(idx) == 0:
             continue
@@ -330,7 +339,9 @@ def get_nn_distances(
     )
 
 
-def get_nn_rotations(motl_entry, motl_exit, feature="tomo_id", monosomes_only=False, type_id="geom1"):
+def get_nn_rotations(
+    motl_entry, motl_exit, feature="tomo_id", monosomes_only=False, type_id="geom1", remove_duplicates=True
+):
     if isinstance(motl_entry, str):
         motl_entry = cryomotl.Motl.load(motl_entry)
 
@@ -349,7 +360,7 @@ def get_nn_rotations(motl_entry, motl_exit, feature="tomo_id", monosomes_only=Fa
             fm_entry = fm_entry.get_motl_subset(1, type_id, reset_index=False)
             fm_exit = fm_exit.get_motl_subset(1, type_id, reset_index=False)
 
-        idx, idx_nn, _ = get_feature_nn_indices(fm_entry, fm_exit)
+        idx, idx_nn, _ = get_feature_nn_indices(fm_entry, fm_exit, remove_duplicates)
 
         if len(idx) == 0:
             continue

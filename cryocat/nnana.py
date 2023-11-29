@@ -10,6 +10,29 @@ import sklearn.neighbors as sn
 import matplotlib.pyplot as plt
 
 
+def get_nn_within_distance(feature_motl, radius):
+    coord = feature_motl.get_coordinates()
+    kdt_nn = sn.KDTree(coord)
+    nn_idx = kdt_nn.query_radius(coord, radius)
+
+    # create id array to check where the NN was the same particle
+    ordered_idx = np.arange(0, nn_idx.shape[0], 1)
+
+    # each particle is also part of the results -> keep only those that have more than 1 particle
+    ordered_idx = [i for i, row in zip(ordered_idx, nn_idx) if len(row) > 1]
+    nn_indices = nn_idx[ordered_idx]
+
+    # remove duplicates: first sort in each row, then find the unique idx
+    sorted_idx = [np.sort(row) for row in nn_indices]
+    nn_indices = np.unique([tuple(row) for row in sorted_idx], axis=0)
+
+    center_idx = np.array([row[0] for row in nn_indices])
+    nn_idx = np.array([row[1:] for row in nn_indices])
+    # nn_indices = np.column_stack((first_elements, remaining_elements))
+
+    return center_idx, nn_idx
+
+
 def get_feature_nn_indices(fm_a, fm_nn, nn_number=1):
     coord_a = fm_a.get_coordinates()
     coord_nn = fm_nn.get_coordinates()
