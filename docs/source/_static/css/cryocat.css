@@ -31,7 +31,9 @@ html {
 
 }
 
-
+div.injected {
+    display: none;
+}
 
 /* Syntax highlighting */
 
