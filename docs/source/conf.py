@@ -29,7 +29,7 @@ for f in os.listdir("./generated/"):
 project = "cryoCAT"
 copyright = f'2022-{time.strftime("%Y")}'
 author = "Beata Turonova"
-version = release = "0.2.0"  # cryocat.__version__
+version = release = "0.2.1"  # cryocat.__version__
 
 
 # -- General configuration ---------------------------------------------------
