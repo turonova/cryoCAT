@@ -22,7 +22,7 @@ cryoCAT: Contextual Analysis Tools for cryo electron tomography
 `Issues & Ideas <https://github.com/turonova/cryocat/issues>`__ |
 `PyPI <https://pypi.org/project/cryocat>`__ |
 
-:mod:`cryoCAT` is an open source, XXX-licensed library providing contextual analysis tools for 
+:mod:`cryoCAT` is an open source,  GPL-3.0+ licensed library providing contextual analysis tools for 
 cryo electron tomography and subtomogram averaging.
 programming language.
 

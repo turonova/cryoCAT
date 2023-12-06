@@ -1,5 +1,10 @@
 [
     {
+        "name": "v0.2.0 (dev)",
+        "version": "0.2.0",
+        "url": "https://cryocat.readthedocs.io/en/latest/"
+    },
+    {
         "name": "v0.2.0 (stable)",
         "version": "0.2.0",
         "url": "https://cryocat.readthedocs.io/en/latest/"
