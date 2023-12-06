@@ -1,0 +1,213 @@
+/**** Overriding theme defaults ****/
+
+html[data-theme=light]{
+  --pst-color-primary: rgb(4, 32, 72);
+  --pst-color-secondary: rgb(109, 144, 176);
+  --pst-color-link: rgb(58, 107, 166);
+  --pst-color-inline-code: rgb(58, 107, 166);
+  --pst-color-inline-code-links: rgb(5, 29, 67);
+}
+
+html[data-theme=dark]{
+  --pst-color-primary: rgb(149, 193, 232);
+  --pst-color-secondary: rgb(58, 107, 166);
+  --pst-color-link: rgb(188, 239, 255);
+  --pst-color-inline-code: rgb(113, 210, 255);
+  --pst-color-inline-code-links: rgb(149, 193, 232);
+  --pst-color-on-background: rgb(0,0,0);
+}
+
+html {
+  --pst-font-size-base: 14px;
+}
+
+:root {
+  --pst-font-size-h1: 38px;
+  --pst-font-size-h2: 32px;
+  --pst-font-size-h3: 27px;
+  --pst-font-size-h4: 22px;
+  --pst-font-size-h5: 18px;
+  --pst-font-size-h6: 15px;
+
+}
+
+
+
+/* Syntax highlighting */
+
+/* string literals */
+html[data-theme=light] .highlight .s2 {
+  color: rgb(74, 105, 145);
+  font-weight: normal;
+}
+/* number literals */
+html[data-theme=light] .highlight .mi {
+  color: rgb(136, 97, 153);
+  font-weight: normal;
+}
+html[data-theme=light] .highlight .mf {
+  color: rgb(136, 97, 153);
+  font-weight: normal;
+}
+/* operators */
+html[data-theme=light] .highlight .o {
+  color: rgb(219, 164, 117);
+  font-weight: bold;
+}
+/* builtins */
+html[data-theme=light] .highlight .kc {
+  color: rgb(107, 161, 174);
+  font-weight: bold;
+}
+
+.bd-main .bd-content .bd-article-container {
+  max-width: 100%;  /* default is 60em */
+  flex-grow: 1;
+}
+
+.bd-sidebar-primary {
+  width: 15%;
+}
+
+input.search-icon{
+  border: 1px solid rgb(153, 153, 153);
+  border-bottom: 1px solid rgb(153, 153, 153);
+  outline: none;
+  background-image: url('../cryocat_mglass_only.png');
+  background-size: 20px;
+  background-repeat:no-repeat;
+  background-position: 140px 2px;
+}
+
+input.search-icon:focus{
+  outline: 2px solid rgb(109, 144, 176); 
+}
+
+/* Use full page width without sidebars */
+/* .bd-content {
+  max-width: 100%;
+  flex-grow: 1;
+}*/
+
+/* Function signature customization */
+html[data-theme=light] dt {
+  font-weight: 500;
+  color: var(--pst-color-primary);
+}
+
+html[data-theme=dark] dt {
+  font-weight: 500;
+  color: rgb(109, 144, 176);
+}
+
+html[data-theme=light]span.default_value {
+  color: rgb(124, 141, 138);
+}
+
+/* highlight over function signature after link */
+html[data-theme=light] dt:target, span.highlighted {
+  background-color: rgb(188, 239, 255);
+}
+
+/* highlight over function signature after link */
+html[data-theme=dark] dt:target, span.highlighted {
+  background-color: rgb(50, 50, 50);
+}
+
+a:hover, a:visited, a:link, a:active
+{
+    text-decoration: none;
+}
+/* *********************************************************************** */
+
+/* --- Intro cards --- */
+
+.intro-card {
+  padding: 30px 10px 20px 10px;
+}
+
+.intro-card .sd-card-img-top {
+  height: 52px;
+  width: 52px;
+  margin-left: auto;
+  margin-right: auto;
+  background: none !important;
+}
+
+
+.intro-card .sd-card-title {
+  color: var(--pst-color-primary);
+  font-size: var(--pst-font-size-h5);
+  padding: 1rem 0rem 0.5rem 0rem;
+}
+
+.intro-card .sd-card-footer {
+  border: none !important;
+}
+
+.intro-card .sd-card-footer p.sd-card-text {
+  max-width: 220px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.intro-card .sd-btn-secondary {
+  background-color: #6c757d !important;
+  border-color: #6c757d !important;
+}
+
+.intro-card .sd-btn-secondary:hover {
+  background-color: #5a6268 !important;
+  border-color: #545b62 !important;
+}
+
+.card, .card img {
+  background-color: var(--pst-color-background);
+}
+
+/* *********************************************************************** */
+
+/* --- Badges for categorizing release notes --- */
+
+.label,
+.badge {
+  display: inline-block;
+  padding: 2px 4px;
+  font-size: 11.844px;
+  /* font-weight: bold; */
+  line-height: 13px;
+  color: #ffffff;
+  vertical-align: baseline;
+  white-space: nowrap;
+  /* text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.25); */
+  background-color: #999999;
+}
+.badge {
+  padding-left: 9px;
+  padding-right: 9px;
+  -webkit-border-radius: 9px;
+  -moz-border-radius: 9px;
+  border-radius: 9px;
+  opacity: 70%;
+}
+.badge-api {
+  background-color: #c44e52;
+}
+.badge-defaults {
+  background-color: #dd8452;
+}
+.badge-docs {
+  background-color: #8172b3;
+}
+.badge-feature {
+  background-color: #55a868;
+}
+.badge-enhancement {
+  background-color: #4c72b0;
+}
+.badge-fix {
+    background-color: #ccb974;
+}
+.badge-build {
+    background-color: #937860;
+}

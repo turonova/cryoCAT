@@ -1,0 +1,35 @@
+{% set page_toc = generate_toc_html() %}
+{% set class_toc = get_class_toc() %}
+<div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> {{ _("On this page") }}
+</div>
+{%- if pagename.startswith("generated") %}
+<nav id="bd-toc-nav", style="padding-top: 1rem;">
+    <ul class="visible nav section-nav flex-column">
+        {% for item in class_toc %}
+        <li class="toc-h1 nav-item toc-entry">
+            <a class="reference internal nav-link" href="{{ item.link }}">
+                <code class="docutils literal notranslate">
+                    <span class="pre">{{ item.title }}</span>
+                </code>
+            </a>
+        </li>
+        <ul class="visible nav section-nav flex-column">
+            {% for attr in item.attributes_and_methods %}
+            <li class="toc-h2 nav-item toc-entry">
+                <a class="reference internal nav-link" href="{{ attr.link }}">
+                    <code class="docutils literal notranslate">
+                        <span class="pre">{{ attr.title }}</span>
+                    </code>
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endfor %}
+    </ul>
+</nav>
+{% else %}  
+    <nav class="bd-toc-nav page-toc">
+        {{ page_toc }}
+    </nav>
+{%- endif %}

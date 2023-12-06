@@ -5,7 +5,7 @@ Contextual Analysis Tools for cryoET and subtomogram averaging
 
 ## Environment
 * OS independent
-* Requires Python 3.5 or higher
+* Requires Python 3.9 or higher
 
 ## Current dependencies
 * To take advantage of all the functions within the package following modules should be installed (in brackets tested versions):
@@ -19,12 +19,17 @@ Contextual Analysis Tools for cryoET and subtomogram averaging
     * matplotlib (3.6.2)
     * seaborn (0.12.1)
     * sklearn (1.0.2)
-    * einops (0.6.0)
     * lmfit (1.2.2)
       
 ## PIP
 
-Clone the repository and run:
+You can install cryoCAT directly using pip:
+
+```
+pip install cryocat
+```
+
+or you can clone the repository and run:
 
 ```
 pip install -e /path/to/your/local/copy/of/cryocat/.

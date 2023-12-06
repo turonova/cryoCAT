@@ -1,0 +1,9 @@
+<div id="searchbox" style="display: none" role="search">
+      <div class="searchformwrapper">
+      <form class="search" action="{{ pathto('search') }}" method="get">
+        <input class="search-icon" type="text" placeholder="  Search..." name="q" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+        <input type="submit" hidden />
+      </form>
+      </div>
+  </div>
+  <script>document.getElementById('searchbox').style.display = "block"</script>

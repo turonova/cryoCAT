@@ -3,18 +3,33 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "cryoCAT"
-version = "0.1.0"
+version = "0.2.0"
 authors = [
   { name="Beata Turonova", email="beata.turonova@gmail.com" },
 ]
 description = "Contextual Analysis Tools for CryoET"
 readme = "README.md"
-requires-python = ">=3.5"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "matplotlib>=3.6",
+    "scipy>=1.9.1",
+    "scikit-image>=0.20.0",
+    "starfile>=0.4.11",
+    "emfile>=0.3.0",
+    "mrcfile>=1.4.3",
+    "seaborn>=0.12.1",
+    "scikit-learn>=1.0.2",
+    "lmfit>=1.2.2",
+]
 classifiers = [
+    "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: OS Independent",
 ]
+license = {text = "GPLv3+"}
 [tool.setuptools]
 packages = ["cryocat"]
 [project.urls]

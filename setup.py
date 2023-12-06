@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="cryoCAT",
-    version="0.1.0",
+    version="0.2.0",
     description="Contextual Analysis Tools for CryoET",
     url="https://github.com/turonova/cryoCAT",
     author="Beata Turonova",
@@ -20,7 +20,6 @@ setup(
         "matplotlib",
         "seaborn",
         "scikit-learn",
-        "einops",
         "lmfit",
     ],
     classifiers=[

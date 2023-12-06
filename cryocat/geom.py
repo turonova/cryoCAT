@@ -100,7 +100,8 @@ def spline_sampling(coords, sampling_distance):
         if i == 0:
             continue
         # Calculate projected distance between each point
-        dist = Motl.point2point_distance(row, coords.iloc[i - 1])
+        # TODO: check this issue
+        dist = point_pairwise_dist(row, coords.iloc[i - 1])
 
         # Number of steps between two points; steps are roughly in increments of 1 pixel
         stepnumber = round(dist / sampling_distance)

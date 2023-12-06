@@ -128,7 +128,7 @@ class Token:
 
     @staticmethod
     def parse_columns(tokens):
-        """This function takes a token queue, gets comments, consumes (matches) the "loop_" keyword as a LOOP token
+        """This function takes a token queue, gets comments, consumes (matches) the `loop_` keyword as a LOOP token
         following by a NEWLINE token, and parses the column names
 
         Parameters
