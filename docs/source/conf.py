@@ -14,7 +14,6 @@ import os
 import shutil
 import sys
 import time
-import cryocat
 import subprocess
 from bs4 import BeautifulSoup
 
