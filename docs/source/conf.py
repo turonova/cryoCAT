@@ -168,7 +168,7 @@ html_theme_options = {
     },
     "switcher": {
         "version_match": version,
-        "json_url": "https://numpy.org/doc/_static/versions.json",
+        "json_url": "https://github.com/turonova/cryoCAT/blob/main/docs/source/_static/versions.json",
     },
 }
 
