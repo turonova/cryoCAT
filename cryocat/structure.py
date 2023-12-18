@@ -158,33 +158,35 @@ class NPC:
 
             new_object_motl = NPC.get_centers_as_motl(tm, t)
 
-            center_stats = ribana.get_nn_stats(new_object_motl, new_object_motl)
-            dist_threshold = mathutils.otsu_threshold(center_stats["distance"].values)
+            if new_object_motl.df.shape[0] > 1:
+                center_stats = ribana.get_nn_stats(new_object_motl, new_object_motl)
+                dist_threshold = mathutils.otsu_threshold(center_stats["distance"].values)
 
-            changed_objects = []
-            if dist_threshold <= npc_radius:
-                center_idx, nn_idx = nnana.get_nn_within_distance(new_object_motl, dist_threshold)
-                for i, o in enumerate(center_idx):
-                    o_id1 = new_object_motl.df.loc[new_object_motl.df.index[o], "object_id"]
-                    changed_objects.append(o_id1)
-                    for j in nn_idx[i, :]:
-                        o_id2 = new_object_motl.df.loc[new_object_motl.df.index[j], "object_id"]
-                        tm.df.loc[tm.df["object_id"] == o_id2, "object_id"] = o_id1
+                changed_objects = []
+                if dist_threshold <= npc_radius:
+                    center_idx, nn_idx = nnana.get_nn_within_distance(new_object_motl, dist_threshold)
+                    for i, o in enumerate(center_idx):
+                        o_id1 = new_object_motl.df.loc[new_object_motl.df.index[o], "object_id"]
+                        changed_objects.append(o_id1)
+                        for j in nn_idx[i, :]:
+                            o_id2 = new_object_motl.df.loc[new_object_motl.df.index[j], "object_id"]
+                            tm.df.loc[tm.df["object_id"] == o_id2, "object_id"] = o_id1
 
             tm.df["geom1"] = tm.df.groupby(["object_id"])["object_id"].transform("count")
             single_subunits = tm.df.loc[tm.df["geom1"] == 1, "object_id"].values
 
             if single_subunits.shape[0] != 0:
                 new_object_motl = NPC.get_centers_as_motl(tm, t, include_singles=True)
-                center_stats = ribana.get_nn_stats(new_object_motl, new_object_motl, remove_duplicates=False)
-                for s in single_subunits:
-                    s_id = new_object_motl.df.loc[new_object_motl.df["object_id"] == s, "subtomo_id"].values[0]
-                    npc_id = center_stats.loc[center_stats["subtomo_idx"] == s_id, "subtomo_nn_idx"].values[0]
-                    new_object_id = new_object_motl.df.loc[
-                        new_object_motl.df["subtomo_id"] == npc_id, "object_id"
-                    ].values[0]
-                    tm.df.loc[tm.df["object_id"] == s, "object_id"] = new_object_id
-                    changed_objects.append(new_object_id)
+                if new_object_motl.df.shape[0] > 1:
+                    center_stats = ribana.get_nn_stats(new_object_motl, new_object_motl, remove_duplicates=False)
+                    for s in single_subunits:
+                        s_id = new_object_motl.df.loc[new_object_motl.df["object_id"] == s, "subtomo_id"].values[0]
+                        npc_id = center_stats.loc[center_stats["subtomo_idx"] == s_id, "subtomo_nn_idx"].values[0]
+                        new_object_id = new_object_motl.df.loc[
+                            new_object_motl.df["subtomo_id"] == npc_id, "object_id"
+                        ].values[0]
+                        tm.df.loc[tm.df["object_id"] == s, "object_id"] = new_object_id
+                        changed_objects.append(new_object_id)
 
             for o in changed_objects:
                 om = tm.get_motl_subset(feature_values=o, feature_id="object_id", reset_index=True)

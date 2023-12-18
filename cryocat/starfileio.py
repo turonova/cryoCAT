@@ -338,7 +338,7 @@ class Starfile:
             self.comments = comments
 
     @staticmethod
-    def read(file_path):
+    def read(file_path, data_id=None):
         """This function parses a starfile into a tuple of a list of Pandas DataFrame, a list of Data Specifier, and a list of
         comments.
 
@@ -382,7 +382,10 @@ class Starfile:
         for i, f in enumerate(frames):
             frames[i] = f.apply(pd.to_numeric, errors="ignore")
 
-        return frames, specifiers, comments
+        if data_id is not None:
+            return frames[data_id], specifiers[data_id], comments[data_id]
+        else:
+            return frames, specifiers, comments
 
     @staticmethod
     def get_specifier_id(speficiers, specifier_id):

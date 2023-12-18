@@ -46,13 +46,13 @@ def load_dimensions(dims):
     else:
         raise UserInputError(
             f"The dimensions should have shape of 1x3 or Nx4, where N is number of tomograms."
-            f" Instead following shape was specified: {dimensions.shape}."
+            f"Instead following shape was specified: {dimensions.shape}."
         )
 
     return dimensions
 
 
-def load_angles(input_angles):
+def load_angles(input_angles, angles_order="zxz"):
     """_summary_
 
     Parameters
@@ -73,7 +73,11 @@ def load_angles(input_angles):
     """
     if isinstance(input_angles, str):
         angles = pd.read_csv(input_angles, header=None)
-        angles.columns = ["phi", "psi", "theta"]
+        if angles_order == "zzx":
+            angles.columns = ["phi", "psi", "theta"]
+        else:
+            angles.columns = ["phi", "theta", "psi"]
+
         angles = angles.loc[:, ["phi", "theta", "psi"]].to_numpy()
 
     elif isinstance(input_angles, np.ndarray):
@@ -384,11 +388,14 @@ def number_of_cone_rotations(cone_angle, cone_sampling):
     return number_of_rotations
 
 
-def sample_cone(cone_angle, cone_sampling, center=np.array([0.0, 0.0, 0.0]), radius=1.0):
+def sample_cone(cone_angle, cone_sampling, center=None, radius=1.0):
     # Creates "even" distribution on sphere. This is in many regards
     # just an approximation. However, it seems to work for not too extreme cases.
     # Source:
     # https://stackoverflow.com/questions/9600801/evenly-distributing-n-points-on-a-sphere/26127012#26127012
+
+    if center is None:
+        center = np.array([0.0, 0.0, 0.0])
 
     number_of_points = number_of_cone_rotations(cone_angle, cone_sampling)
 
@@ -424,6 +431,7 @@ def generate_angles(
     inplane_sampling=None,
     starting_angles=None,
     symmetry=1.0,
+    angles_order="zxz",
 ):
     points = sample_cone(cone_angle, cone_sampling)
     angles = normals_to_euler_angles(points, output_order="zxz")
@@ -622,20 +630,6 @@ def area_triangle(coords):
     triangles = np.cross(coords[:, 1] - coords[:, 0], coords[:, 2] - coords[:, 0], axis=1)
     # The norm of the cross product of two sides is twice the area
     return np.linalg.norm(triangles, axis=1) / 2
-
-
-def load_angles(input_angles):
-    if isinstance(input_angles, str):
-        angles = pd.read_csv(input_angles, header=None)
-        angles.columns = ["phi", "psi", "theta"]
-        angles = angles.loc[:, ["phi", "theta", "psi"]].to_numpy()
-
-    elif isinstance(input_angles, np.ndarray):
-        angles = input_angles.copy()
-    else:
-        raise ValueError("The input_angles have to be either a valid path to a file or nympy array!!!")
-
-    return angles
 
 
 def ray_ray_intersection_3d(starting_points, ending_points):

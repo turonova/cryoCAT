@@ -1,5 +1,8 @@
 import numpy as np
 import pandas as pd
+import gc
+import re
+import warnings
 
 from skimage import measure
 from skimage import morphology
@@ -12,6 +15,176 @@ from cryocat import cryomask
 
 from lmfit import models
 import skimage
+from scipy.spatial import KDTree
+from sklearn.cluster import DBSCAN
+
+
+def scores_extract_particles(
+    scores_map,
+    angles_map,
+    angles_list,
+    tomo_id,
+    particle_diameter,
+    object_id=None,
+    sigma_threshold=None,
+    cluster_size=None,
+    n_particles=None,
+    output_path=None,
+    angles_order="zxz",
+    symmetry="c1",
+    angles_numbering=0,
+):
+    if symmetry.lower().startswith("c"):
+        symmetry = int(re.findall(r"\d+", symmetry)[-1])
+    else:
+        warnings.warn(
+            f"Only C symmetry is supported. Provided {symmetry} is currently not supported and will be ignored."
+        )
+        symmetry = 1
+
+    # load the scores map
+    scores_map = cryomap.read(scores_map)
+
+    # load the angles map
+    angles_map = cryomap.read(angles_map)
+
+    # Read angle list.
+    anglist = geom.load_angles(angles_list, angles_order=angles_order)
+
+    if object_id is None:
+        object_id = 1
+
+    if sigma_threshold is None:
+        threshold = compute_scores_map_threshold_triangle(scores_map)
+    else:
+        # Set threshold by sigma value
+        score_mean = scores_map.mean()
+        score_std = scores_map.std(ddof=1)
+        threshold = score_mean + sigma_threshold * score_std
+
+    # Threshold and sort indices/scores
+    t_idx = np.where(scores_map > threshold)
+
+    # original piece - not really working
+    # TODO add back at some point
+    # if n_particles is not None:
+    #     k = min(n_particles, len(t_idx[0]))
+    # else:
+    #     k = len(t_idx[0])
+
+    k = len(t_idx[0])
+
+    # Check for early termination
+    if k == 0:
+        return None
+
+    k = min(k, len(scores_map[t_idx])) - 1
+    s_idx = np.argpartition(-scores_map[t_idx], k)[: k + 1]
+    s_idx = s_idx[np.argsort(-scores_map[t_idx][s_idx])]  # Sort for later
+
+    # Sorted indices. s_ind[0] = x, s_ind[1] = y, s_ind[2] = z
+    s_ind = np.array([t_idx[0][s_idx], t_idx[1][s_idx], t_idx[2][s_idx]])
+    # n_vox = len(s_idx)
+
+    # Create a list of tuples where each tuple is (coord, score) and sort it by score in descending order
+    scored_coords = sorted(zip(s_ind.T, scores_map[s_ind[0], s_ind[1], s_ind[2]]), key=lambda x: x[1], reverse=True)
+
+    # Build a KD-tree with the coordinates
+    tree = KDTree([coord for coord, score in scored_coords])
+
+    # Remove any points that are within the specified particle diameter of a higher score point
+    coord_to_score = {tuple(coord): score for coord, score in scored_coords}
+    remaining_coords = set(coord_to_score.keys())
+    filtered_coords = []
+
+    for coord, score in scored_coords:
+        if tuple(coord) not in remaining_coords:
+            continue
+        filtered_coords.append((coord, score))
+        nearby_coords = tree.query_ball_point(coord, particle_diameter)
+        for nearby_coord in nearby_coords:
+            nearby_coord_tuple = tuple(scored_coords[nearby_coord][0])
+            if nearby_coord_tuple in remaining_coords and coord_to_score[nearby_coord_tuple] <= score:
+                remaining_coords.remove(nearby_coord_tuple)
+
+    # Extract the coordinates from the filtered_coords list
+    filtered_coords, filtered_scores = zip(*filtered_coords)
+    filtered_coords = np.array(filtered_coords)
+    filtered_scores = np.array(filtered_scores)
+
+    # Use DBSCAN to cluster points
+    clusterer = DBSCAN(eps=particle_diameter / 2, min_samples=1)
+    cluster_labels = clusterer.fit_predict(filtered_coords)
+
+    # Keep track of hits in case of number of particles
+    filtered_hit_idx = np.zeros(len(filtered_coords), dtype=bool)
+
+    # Count number of hits
+    c = 0
+    for cluster_id in np.unique(cluster_labels):
+        if cluster_id == -1:
+            continue
+
+        # Check cluster size
+        if cluster_size is not None:
+            c_size = np.sum(cluster_labels == cluster_id)
+            if c_size < cluster_size:
+                continue
+
+        filtered_hit_idx[cluster_labels == cluster_id] = True
+        c += np.sum(cluster_labels == cluster_id)
+
+        # TODO add back at some point
+        # Check for early termination
+        # if n_particles is not None and c >= n_particles:
+        #    break
+
+    # Remaining positions
+    rpos = filtered_coords[filtered_hit_idx]
+    if n_particles is not None:
+        rpos = rpos[0 : min(rpos.shape[0], n_particles), :]
+        filtered_scores = filtered_scores[0 : min(rpos.shape[0], n_particles)]
+
+    # Fill orientation and scores
+    # Parse angle index
+    ang_idx = angles_map[rpos[:, 0], rpos[:, 1], rpos[:, 2]].astype(int) - angles_numbering
+
+    phi = anglist[ang_idx, 0]
+    theta = anglist[ang_idx, 1]
+    psi = anglist[ang_idx, 2]
+
+    if symmetry > 1:
+        add_phi = np.linspace(0, 360, symmetry + 1)
+        add_phi = add_phi[:-1]
+        phi = phi + np.random.choice(add_phi, size=phi.shape[0])
+
+    ##### Generate motivelist #####
+    print("Generating motivelist...")
+
+    motl = cryomotl.Motl()
+    motl.fill(
+        {
+            "x": rpos[:, 0] + 1,
+            "y": rpos[:, 1] + 1,
+            "z": rpos[:, 2] + 1,
+            "score": filtered_scores,
+            "class": 1,
+            "tomo_id": tomo_id,
+            "object_id": object_id,
+            "phi": phi,
+            "theta": theta,
+            "psi": psi,
+            "subtomo_id": np.arange(1, rpos.shape[0] + 1),
+        }
+    )
+
+    del s_ind, scored_coords
+    gc.collect()
+
+    if output_path is not None:
+        motl.write_out(output_path)
+
+    return motl
 
 
 def compute_scores_map_threshold_triangle(scores_map):
@@ -276,7 +449,9 @@ def filter_dist_maps(dist_maps, th_mask, min_angles_voxel_count):
     return dist_maps, th_mask
 
 
-def create_angular_distance_maps(angles_map, angles_list, output_file_base=None, write_out_maps=True, c_symmetry=1):
+def create_angular_distance_maps(
+    angles_map, angles_list, output_file_base=None, write_out_maps=True, c_symmetry=1, angles_order="zxz"
+):
     if output_file_base is None:
         if isinstance(angles_map, str):
             output_file_base = angles_map[:-3]
@@ -287,7 +462,7 @@ def create_angular_distance_maps(angles_map, angles_list, output_file_base=None,
     angles_map = cryomap.read(angles_map).astype(int)
 
     map_shape = angles_map.shape
-    angles = geom.load_angles(angles_list)
+    angles = geom.load_angles(angles_list, angles_order)
 
     zero_rotations = np.tile(angles[0, :], (angles.shape[0], 1))
     dist_all, dist_normals, dist_inplane = geom.compare_rotations(zero_rotations, angles, c_symmetry)
@@ -323,6 +498,7 @@ def select_peaks(
     tomo_mask=None,
     output_motl_name=None,
     tomo_number=None,
+    angles_order="zxz",
 ):
     """Automatic peak selection.
 
@@ -384,7 +560,7 @@ def select_peaks(
     """
 
     # load the angles
-    angles = geom.load_angles(angles_file)
+    angles = geom.load_angles(angles_file, angles_order=angles_order)
     angles_map = (cryomap.read(angles_map) - 1).astype(int)
 
     # get threshold and threshold map

@@ -17,6 +17,14 @@ html[data-theme=dark]{
   --pst-color-on-background: rgb(0,0,0);
 }
 
+html[data-theme=light] a:visited{
+  color: rgb(58, 107, 166);
+}
+
+html[data-theme=dark] a:visited{
+  color: rgb(188, 239, 255);
+}
+
 html {
   --pst-font-size-base: 14px;
 }
@@ -32,7 +40,7 @@ html {
 }
 
 div.injected {
-    display: none;
+  display: none;
 }
 
 /* Syntax highlighting */
@@ -68,7 +76,13 @@ html[data-theme=light] .highlight .kc {
 }
 
 .bd-sidebar-primary {
-  width: 15%;
+  width: 20%;
+}
+
+.bd-header .navbar-header-items {
+  display: flex;
+  flex-grow: 1;
+  padding: 0 0 0 6.0rem;
 }
 
 input.search-icon{
@@ -102,7 +116,7 @@ html[data-theme=dark] dt {
   color: rgb(109, 144, 176);
 }
 
-html[data-theme=light]span.default_value {
+html[data-theme=light] span.default_value {
   color: rgb(124, 141, 138);
 }
 
@@ -114,6 +128,22 @@ html[data-theme=light] dt:target, span.highlighted {
 /* highlight over function signature after link */
 html[data-theme=dark] dt:target, span.highlighted {
   background-color: rgb(50, 50, 50);
+}
+
+html[data-theme=light] a.nav-link:visited  {
+  color: var(--pst-color-text-muted);
+}
+
+html[data-theme=light] a.nav-link:active  {
+  color: var(--pst-color-primary);
+}
+
+html[data-theme=dark] a.nav-link:visited  {
+  color: var(--pst-color-text-muted);
+}
+
+html[data-theme=dark] a.nav-link:active  {
+  color: var(--pst-color-primary);
 }
 
 a:hover, a:visited, a:link, a:active

@@ -15,6 +15,7 @@ import shutil
 import sys
 import time
 import subprocess
+import cryocat
 from bs4 import BeautifulSoup
 
 sys.path.insert(0, os.path.abspath("sphinxext"))
@@ -29,7 +30,7 @@ for f in os.listdir("./generated/"):
 project = "cryoCAT"
 copyright = f'2022-{time.strftime("%Y")}'
 author = "Beata Turonova"
-version = release = "0.2.1"  # cryocat.__version__
+version = release = "0.2.2"  # cryocat.__version__
 
 
 # -- General configuration ---------------------------------------------------
@@ -129,7 +130,7 @@ html_theme = "pydata_sphinx_theme"
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named 'default.css' will overwrite the builtin 'default.css'.
-html_static_path = ["_static"]
+html_static_path = ["_static", "example_thumbs"]
 for path in html_static_path:
     if not os.path.exists(path):
         os.makedirs(path)
@@ -156,9 +157,11 @@ html_theme_options = {
         # },
     ],
     "show_prev_next": False,
+    "navbar_align": "content",
     "navbar_start": ["navbar-logo"],
+    "navbar_center": ["navbar-nav"],
     # "navbar_end": ["version-switcher", "theme-switcher", "navbar-icon-links"],
-    "navbar_end": ["searchbox.html", "version-switcher", "theme-switcher", "navbar-icon-links.html"],
+    "navbar_end": ["searchbox.html", "theme-switcher", "navbar-icon-links.html"],
     "header_links_before_dropdown": 8,
     "navbar_persistent": [],
     "secondary_sidebar_items": ["class-page-toc"],
@@ -167,20 +170,19 @@ html_theme_options = {
         "image_dark": "_static/cryocat_logo_wide_dark_bcg.png",
     },
     "switcher": {
-        "version_match": version,
-        "json_url": "https://github.com/turonova/cryoCAT/blob/main/docs/source/_static/versions.json",
+        "version_match": "2.1",
+        "json_url": "_static/versions.json",
     },
 }
 
-# html_context = {
-#    "default_mode": "light",
-# }
+html_context = {
+    "default_mode": "light",
+}
 
 html_sidebars = {
     "index": [],
     "installing": [],
     "search": [],
-    "examples/index": [],
     "**": ["sidebar_no_caption.html"],
 }
 

@@ -1,6 +1,8 @@
 # cryoCAT
 Contextual Analysis Tools for cryoET and subtomogram averaging
 
+# Documentation
+The documentation including tutorials and basic user guide can be found here: [cryocat.readthedocs.io](https://cryocat.readthedocs.io)
 # Install
 
 ## Environment
@@ -12,13 +14,12 @@ Contextual Analysis Tools for cryoET and subtomogram averaging
     * scipy (1.9.1)
     * numpy (1.23.4)
     * pandas (1.5.3)
-    * skimage (0.20.0)
-    * starfile (0.4.11)
+    * scikit-image (0.20.0)
     * emfile (0.3.0)
     * mrcfile (1.4.3)
     * matplotlib (3.6.2)
     * seaborn (0.12.1)
-    * sklearn (1.0.2)
+    * scikit-learn (1.0.2)
     * lmfit (1.2.2)
       
 ## PIP

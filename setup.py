@@ -14,7 +14,6 @@ setup(
         "numpy",
         "pandas",
         "scikit-image",
-        "starfile",
         "emfile",
         "mrcfile",
         "matplotlib",

@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import starfile
 from cryocat.cryomotl import Motl
 from cryocat import cryomotl
 from scipy.spatial.transform import Rotation as srot

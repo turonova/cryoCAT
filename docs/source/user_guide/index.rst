@@ -12,7 +12,7 @@
 User guide
 ==========
 
-This section explains basic principles behind cryoCAT but is currently under developement.
+This section explains basic principles behind cryoCAT but is currently under developement. More content will come.
 
 |
 

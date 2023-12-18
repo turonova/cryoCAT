@@ -174,7 +174,7 @@ def get_mask_stats(template_list, indices, parent_folder_path):
         temp_df.to_csv(template_list)
 
 
-def compute_sharp_mask_overlap(template_list, indices, angle_list_path, parent_folder_path):
+def compute_sharp_mask_overlap(template_list, indices, angle_list_path, parent_folder_path, angles_order="zxz"):
     temp_df = pd.read_csv(template_list, index_col=0)
 
     for i in indices:
@@ -185,7 +185,7 @@ def compute_sharp_mask_overlap(template_list, indices, angle_list_path, parent_f
         mask_name = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tight mask"])
         mask = cryomap.read(mask_name)
         angle_list = angle_list_path + temp_df.at[i, "Angles"]
-        angles = geom.load_angles(angle_list)
+        angles = geom.load_angles(angle_list, angles_order)
         rotations = srot.from_euler("zxz", angles, degrees=True)
 
         voxel_count = []
@@ -204,7 +204,7 @@ def compute_sharp_mask_overlap(template_list, indices, angle_list_path, parent_f
         info_df.to_csv(csv_name)
 
 
-def check_existing_tight_mask_values(template_list, indices, parent_folder_path, angle_list_path):
+def check_existing_tight_mask_values(template_list, indices, parent_folder_path, angle_list_path, angles_order="zxz"):
     temp_df = pd.read_csv(template_list, index_col=0)
 
     for i in indices:
@@ -242,7 +242,9 @@ def check_existing_tight_mask_values(template_list, indices, parent_folder_path,
 
         if not data_found:
             print(f"Computing sharp mask overlap for index {i}")
-            compute_sharp_mask_overlap(template_list, [i], angle_list_path, parent_folder_path)
+            compute_sharp_mask_overlap(
+                template_list, [i], angle_list_path, parent_folder_path, angles_order=angles_order
+            )
 
 
 def compute_dist_maps_voxels(template_list, indices, parent_folder_path, morph_footprint=(2, 2, 2)):
@@ -361,8 +363,9 @@ def analyze_rotations(
     angular_offset=None,
     starting_angle=None,
     c_symmetry=1,
+    angles_order="zxz",
 ):
-    angles = geom.load_angles(input_angles)
+    angles = geom.load_angles(input_angles, angles_order)
     # angles = angles[0:4,:]
 
     if starting_angle is None:
