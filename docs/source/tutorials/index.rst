@@ -7,6 +7,7 @@
    :hidden:
 
    Peak analysis <peak_analysis/peak_analysis>
+   Surface oversampling <surface_oversampling/surface_oversampling>
 
 =========
 Tutorials

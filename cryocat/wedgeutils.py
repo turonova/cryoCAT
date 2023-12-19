@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from cryocat import io_utils
+from cryocat import ioutils
 from cryocat import tiltstack as ts
 from cryocat import starfileio
 
@@ -33,7 +33,7 @@ def create_wedge_list(
         The ID of the tomogram.
     tomo_dim : str or array-like
         The path to the tomogram dimensions file or dimensions specified as array-like variable. See
-        :meth:`cryocat.io_utils.dimensions_load` for more information on formatting.
+        :meth:`cryocat.ioutils.dimensions_load` for more information on formatting.
     pixel_size : float
         The pixel size of the tomogram/tilt series.
     tlt_file : str
@@ -80,15 +80,15 @@ def create_wedge_list(
         ]
     )
 
-    tilts = io_utils.tlt_load(tlt_file)
+    tilts = ioutils.tlt_load(tlt_file)
 
     wedge_list_df["tilt_angle"] = tilts
 
     if ctf_file is not None:
         if ctf_file_type == "gctf":
-            ctf_df = io_utils.gctf_read(ctf_file)
+            ctf_df = ioutils.gctf_read(ctf_file)
         elif ctf_file_type == "ctffind4":
-            ctf_df = io_utils.ctffind4_read(ctf_file)
+            ctf_df = ioutils.ctffind4_read(ctf_file)
         else:
             raise ValueError(f"Provided ctf_file_type is not valid {ctf_file_type}. It should be gctf or ctffind4")
 
@@ -101,8 +101,8 @@ def create_wedge_list(
         check_data_consistency(dose, tilts, "dose", tlt_file)
         wedge_list_df["exposure"] = dose
 
-    tomo_dimensions = io_utils.dimensions_load(tomo_dim)
-    z_shift = io_utils.z_shift_load(z_shift)
+    tomo_dimensions = ioutils.dimensions_load(tomo_dim)
+    z_shift = ioutils.z_shift_load(z_shift)
 
     wedge_list_df["tomo_num"] = tomo_id
     wedge_list_df["pixelsize"] = pixel_size
@@ -142,11 +142,11 @@ def create_wedge_list_batch(
     ctf_file = None
     dose_file = None
 
-    tomograms = io_utils.tlt_load(tomo_list).astype(int)
+    tomograms = ioutils.tlt_load(tomo_list).astype(int)
 
     if tomo_dim_file_format is None:
         if tomo_dim is not None:
-            tomo_dimensions = io_utils.dimensions_load(tomo_dim)
+            tomo_dimensions = ioutils.dimensions_load(tomo_dim)
             if "tomo_id" not in tomo_dimensions.columns:
                 repeated_values = np.repeat(tomo_dimensions[["x", "y", "z"]].values, len(tomograms), axis=0)
                 tomo_dimensions = pd.DataFrame(repeated_values, columns=["x", "y", "z"])
@@ -155,28 +155,28 @@ def create_wedge_list_batch(
             raise ValueError("Either tomo_dim or tomo_dim_file_format has to be specified!")
 
     if z_shift_file_format is None:
-        z_shift_df = io_utils.z_shift_load(z_shift)
+        z_shift_df = ioutils.z_shift_load(z_shift)
         if "tomo_id" not in z_shift_df.columns:
             repeated_values = np.repeat(z_shift_df["z_shift"].values, len(tomograms), axis=0)
             z_shift_df = pd.DataFrame(repeated_values, columns=["z_shift"])
             z_shift_df["tomo_id"] = tomograms
 
     for t in tomograms:
-        tlt_file = io_utils.fileformat_replace_pattern(tlt_file_format, t, "x", raise_error=False)
+        tlt_file = ioutils.fileformat_replace_pattern(tlt_file_format, t, "x", raise_error=False)
 
         if ctf_file_format is not None:
-            ctf_file = io_utils.fileformat_replace_pattern(ctf_file_format, t, "x", raise_error=False)
+            ctf_file = ioutils.fileformat_replace_pattern(ctf_file_format, t, "x", raise_error=False)
 
         if dose_file_format is not None:
-            dose_file = io_utils.fileformat_replace_pattern(dose_file_format, t, "x", raise_error=False)
+            dose_file = ioutils.fileformat_replace_pattern(dose_file_format, t, "x", raise_error=False)
 
         if tomo_dim_file_format is not None:
-            t_dim = io_utils.fileformat_replace_pattern(tomo_dim_file_format, t, "x", raise_error=False)
+            t_dim = ioutils.fileformat_replace_pattern(tomo_dim_file_format, t, "x", raise_error=False)
         else:
             t_dim = tomo_dimensions.loc[tomo_dimensions["tomo_id"] == t, ["x", "y", "z"]].values[0]
 
         if z_shift_file_format is not None:
-            z_shift_input = io_utils.fileformat_replace_pattern(z_shift_file_format, t, "x", raise_error=False)
+            z_shift_input = ioutils.fileformat_replace_pattern(z_shift_file_format, t, "x", raise_error=False)
         else:
             z_shift_input = z_shift_df.loc[z_shift_df["tomo_id"] == t, "z_shift"].values[0]
 

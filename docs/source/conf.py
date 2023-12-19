@@ -118,7 +118,8 @@ autodoc_typehints_format = "short"
 rst_prolog = """
 .. currentmodule:: cryocat
 """
-
+nbsphinx_execute = "never"
+nbsphinx_allow_errors = True
 
 # -- Options for HTML output -------------------------------------------------
 

@@ -10,6 +10,18 @@ import matplotlib.pyplot as plt
 
 
 def get_nn_within_distance(feature_motl, radius):
+    def remove_duplicates(list_of_arrays):
+        unique_arrays = []
+        seen_tuples = set()
+
+        for la in list_of_arrays:
+            array_tuple = tuple(la)
+            if array_tuple not in seen_tuples:
+                unique_arrays.append(la)
+                seen_tuples.add(array_tuple)
+
+        return unique_arrays
+
     coord = feature_motl.get_coordinates()
     kdt_nn = sn.KDTree(coord)
     nn_idx = kdt_nn.query_radius(coord, radius)
@@ -23,10 +35,11 @@ def get_nn_within_distance(feature_motl, radius):
 
     # remove duplicates: first sort in each row, then find the unique idx
     sorted_idx = [np.sort(row) for row in nn_indices]
-    nn_indices = np.unique([tuple(row) for row in sorted_idx], axis=0)
+    nn_indices = remove_duplicates(sorted_idx)
 
     center_idx = np.array([row[0] for row in nn_indices])
-    nn_idx = np.array([row[1:] for row in nn_indices])
+    nn_idx = [row[1:] for row in nn_indices]
+    # nn_idx.append()
     # nn_indices = np.column_stack((first_elements, remaining_elements))
 
     return center_idx, nn_idx

@@ -29,6 +29,18 @@ def add_occupancy(
     return motl
 
 
+def get_feature_nn(fm_entry, fm_exit, remove_duplicates=True):
+    coord_entry = fm_entry.get_coordinates()
+    coord_exit = fm_exit.get_coordinates()
+
+    kdt_entry = sn.KDTree(coord_entry)
+
+    # return 2 NN for each point
+    dist, idx = kdt_entry.query(coord_exit, k=1)
+
+    return dist, idx
+
+
 def get_feature_nn_indices(fm_entry, fm_exit, remove_duplicates=True):
     coord_entry = fm_entry.get_coordinates()
     coord_exit = fm_exit.get_coordinates()
