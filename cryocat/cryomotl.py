@@ -179,7 +179,7 @@ class Motl:
         d_cut = distnace_in_voxels
 
         # Parse tomograms
-        features = np.unique(self.get_features(feature_id))
+        features = np.unique(self.get_feature(feature_id))
 
         # Initialize clean motl
         cleaned_df = pd.DataFrame()

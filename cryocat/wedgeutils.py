@@ -37,7 +37,7 @@ def create_wedge_list(
     pixel_size : float
         The pixel size of the tomogram/tilt series.
     tlt_file : str
-        The path to the tilt file.
+        The path to the file containing information on tilts (*.tlt, *.mdoc). See :meth:`cryocat.ioutils.dimensions_load`
     z_shift : float, optional
         The z shift value, by default 0.0.
     ctf_file : str, optional
