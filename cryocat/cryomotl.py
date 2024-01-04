@@ -1097,7 +1097,7 @@ class Motl:
             new_row["shift_z"] = shifted_z - new_row["z"]
             return new_row
 
-        self.df.apply(round_and_recenter, axis=1)
+        self.df = self.df.apply(round_and_recenter, axis=1)
         warnings.warn("The coordinates for subtomogram extraction were changed, new extraction is necessary!")
 
     def remove_out_of_bounds_particles(self, dimensions, boundary_type="center", box_size=None):

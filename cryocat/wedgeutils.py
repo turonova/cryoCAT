@@ -25,7 +25,7 @@ def create_wedge_list(
     output_file=None,
     drop_nan_columns=True,
 ):
-    """Create a wedge list dataframe for a single tomogram/tilt series.
+    """Create a wedge list dataframe for a single tomogram/tilt series in STOPGAP format.
 
     Parameters
     ----------
@@ -36,26 +36,30 @@ def create_wedge_list(
         :meth:`cryocat.ioutils.dimensions_load` for more information on formatting.
     pixel_size : float
         The pixel size of the tomogram/tilt series.
-    tlt_file : str
-        The path to the file containing information on tilts (*.tlt, *.mdoc). See :meth:`cryocat.ioutils.dimensions_load`
-    z_shift : float, optional
-        The z shift value, by default 0.0.
+    tlt_file : str or array-like
+        The path to the file containing information on tilts (*.tlt, *.mdoc) or tilt angles specified as array-like
+        variable. See :meth:`cryocat.ioutils.tlt_load` for more information on formatting.
+    z_shift : str or array-like or int or float, default=0.0
+        The path to the file containing information on z-shift (*.txt, *.com) or z-shift specified as array-like, pandas
+        DataFrame, int or float. See :meth:`cryocat.ioutils.z_shift_load` for more information on formatting.
     ctf_file : str, optional
-        The path to the CTF file, by default None.
-    ctf_file_type : str, optional
-        The type of the CTF file, either "gctf" or "ctffind4", by default "gctf".
-    dose_file : str, optional
-        The path to the dose file, by default None.
-    voltage : float, optional
-        The voltage of the microscope, by default 300.0.
-    amp_contrast : float, optional
-        The amplitude contrast, by default 0.07.
-    cs : float, optional
-        The spherical aberration coefficient, by default 2.7000.
+        The path to the file with defocus values - either in gctf or ctffind4 format.
+    ctf_file_type : str, {"gctf", "ctffind4"}
+        The type of the CTF file with defocus values. It can be either "gctf" or "ctffind4", defaults to "gctf".
+    dose_file : str or array-like, optional
+        The path to the file containing information on corrected dose (*.csv, *.mdoc, *.txt) or the corrected
+        dose specified as array-like variable. See :meth:`cryocat.tiltstack.load_corrected_dose` for more information on
+        formatting.
+    voltage : float, default=300.0
+        The voltage of the microscope, defaults to 300.0.
+    amp_contrast : float, default=0.07
+        The amplitude contrast of the microscope, defaults to 0.07.
+    cs : float, default=2.7
+        The spherical aberration coefficient, defaults to 2.7.
     output_file : str, optional
-        The path to the output file, by default None.
-    drop_nan_columns : bool, optional
-        Whether to drop columns with NaN values, by default True.
+        The path to the output file, by default None. If None, the output is not written out.
+    drop_nan_columns : bool, default=True
+        Whether to drop columns with NaN values, defaults to True.
 
     Returns
     -------

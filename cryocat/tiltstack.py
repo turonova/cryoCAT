@@ -5,6 +5,31 @@ from cryocat import mdoc
 
 
 def load_corrected_dose(input_dose):
+    """Load corrected dose for single tilt series.
+
+    Parameters
+    ----------
+    input_dose : str or array-like
+        The input dose. If ndarray, it is returned as is. If str, it can be a path to a .csv, .txt, or .mdoc file.
+        The *.csv and *.txt file should contain one value per line for each tilt image in the tilt series. The
+        values should correspond to the total dose applied to each tilt image (i.e., low values for tilts acquired
+        as first, large values for the tilt images acqured as last). If *.mdoc file is used the total dose is corrected
+        either as PriorRecordDose + ExposureDose for each image, or as ExposureDose * (ZValue + 1) (starting
+        from 1). The latter will work only if the ZValue corresponds to the order of acquisition, i.e, for tilt series
+        that are not sorted from min to max tilt angle.
+
+
+    Returns
+    -------
+    ndarray
+        The corrected dose.
+
+    Raises
+    ------
+    ValueError
+        If the input dose is neither ndarray nor a path to .csv, .mdoc, or .txt file.
+    """
+
     if isinstance(input_dose, np.ndarray):
         return input_dose
     elif isinstance(input_dose, str):
