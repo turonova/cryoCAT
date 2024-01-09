@@ -22,6 +22,7 @@ Modules
 
     cryomap
     cryomask
+    ioutils
     mathutils
     mdoc
     nnana
@@ -32,3 +33,4 @@ Modules
     tiltstack
     tmana
     visplot
+    wedgeutils

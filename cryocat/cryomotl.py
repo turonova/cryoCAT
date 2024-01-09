@@ -1100,6 +1100,53 @@ class Motl:
         self.df = self.df.apply(round_and_recenter, axis=1)
         warnings.warn("The coordinates for subtomogram extraction were changed, new extraction is necessary!")
 
+    @classmethod
+    def merge_and_renumber(cls, motl_list):
+        """Merge a list of Motl instances or paths to motl files to a single motl. It renumbers its particles and objects
+         to ensure uniqueness.
+
+        Parameters
+        ----------
+        motl_list : list
+            A list of Motl instances or paths.
+
+        Returns
+        -------
+        Motl instance
+            The merged Motl instance (or instance of the input class) with renumbered objects and particles.
+
+        Raises
+        ------
+        UserInputError
+            If motl_list is not a list or is empty.
+
+        """
+
+        merged_df = cls.create_empty_motl_df()
+        feature_add = 0
+
+        if not isinstance(motl_list, list) or len(motl_list) == 0:
+            raise UserInputError(
+                f"You must provide a list of em file paths, or Motl instances. "
+                f"Instead, an instance of {type(motl_list).__name__} was given."
+            )
+
+        for m in motl_list:
+            motl = cls.load(m)
+            feature_min = min(motl.df.loc[:, "object_id"])
+
+            if feature_min <= feature_add:
+                motl.df.loc[:, "object_id"] = motl.df.loc[:, "object_id"] + (feature_add - feature_min + 1)
+
+            merged_df = pd.concat([merged_df, motl.df])
+            feature_add = max(motl.df.loc[:, "object_id"])
+
+        merged_motl = cls(merged_df)
+        merged_motl.renumber_particles()
+        merged_motl.df.reset_index(inplace=True, drop=True)
+
+        return merged_motl
+
     def remove_out_of_bounds_particles(self, dimensions, boundary_type="center", box_size=None):
         """Removes particles that are out of tomogram bounds.
 

@@ -2,65 +2,7 @@ from cryocat import cryomap
 import numpy as np
 import pandas as pd
 from cryocat import mdoc
-
-
-def load_corrected_dose(input_dose):
-    """Load corrected dose for single tilt series.
-
-    Parameters
-    ----------
-    input_dose : str or array-like
-        The input dose. If ndarray, it is returned as is. If str, it can be a path to a .csv, .txt, or .mdoc file.
-        The *.csv and *.txt file should contain one value per line for each tilt image in the tilt series. The
-        values should correspond to the total dose applied to each tilt image (i.e., low values for tilts acquired
-        as first, large values for the tilt images acqured as last). If *.mdoc file is used the total dose is corrected
-        either as PriorRecordDose + ExposureDose for each image, or as ExposureDose * (ZValue + 1) (starting
-        from 1). The latter will work only if the ZValue corresponds to the order of acquisition, i.e, for tilt series
-        that are not sorted from min to max tilt angle.
-
-
-    Returns
-    -------
-    ndarray
-        The corrected dose.
-
-    Raises
-    ------
-    ValueError
-        If the input dose is neither ndarray nor a path to .csv, .mdoc, or .txt file.
-    """
-
-    if isinstance(input_dose, np.ndarray):
-        return input_dose
-    elif isinstance(input_dose, str):
-        if input_dose.endswith(".csv"):
-            # load as panda frames
-            return pd.read_csv(input_dose, usecols=["Corrected_dose"], squeeze=True).values
-        elif input_dose.endswith(".mdoc"):
-            # load as mdoc
-            mdoc_file = mdoc.Mdoc(input_dose)
-            # should always exist
-            image_dose = mdoc_file.get_image_feature("ExposureDose").values
-
-            # if PriorDose exists - it should be used
-            if "PriorRecordDose" in mdoc_file.imgs:
-                prior_dose = mdoc_file.get_image_feature("PriorRecordDose").values
-                total_dose = image_dose + prior_dose
-            else:
-                z_values = (
-                    mdoc_file.get_image_feature("ZValue").values.astype(int) + 1
-                )  # This assumes that z value corresponds to the order of acquisition; correct?
-                total_dose = image_dose * z_values
-
-            return total_dose
-
-        elif input_dose.endswith(".txt"):
-            # load as txt file
-            with open(input_dose) as f:
-                total_dose = map(float, f)
-            return total_dose
-    else:
-        ValueError("Error: the dose has to be either ndarray or path to .csv, .mdoc, or .txt file!")
+from cryocat import ioutils
 
 
 def dose_filter(mrc_file, pixelsize: float, total_dose, output_file=None, return_data_order="xyz"):
@@ -70,7 +12,7 @@ def dose_filter(mrc_file, pixelsize: float, total_dose, output_file=None, return
     #        return_data_order: by default x y z (x,y,n_tilts), for napari compatible view use "zyx"
 
     stack_data = cryomap.read(mrc_file)
-    total_dose = load_corrected_dose(total_dose)
+    total_dose = ioutils.total_dose_load(total_dose)
 
     imgs_x = stack_data.shape[0]
     imgs_y = stack_data.shape[1]
