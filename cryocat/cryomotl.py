@@ -1391,7 +1391,7 @@ class Motl:
 
         new_motl_df["subtomo_id"] = np.arange(1, len(new_motl_df) + 1)
         new_motl = Motl(new_motl_df)
-        new_motl = new_motl.update_coordinates()
+        new_motl.update_coordinates()
         new_motl.df.reset_index(inplace=True, drop=True)
         return new_motl
 
@@ -2011,10 +2011,14 @@ class RelionMotl(Motl):
         # If there is information about half-sets renumber the subtomo_idx accordintly
         if "rlnRandomSubset" in relion_df.columns and relion_df["rlnRandomSubset"].nunique() == 2:
             halfset_num = relion_df["rlnRandomSubset"].values % 2
-            subtomo_id_num = []
-            c = 0 if halfset_num[0] == 1 else 2
-            for i in range(0, self.df.shape[0]):
-                c = np.ceil(c / 2) * 2 + halfset_num[i]
+            c = 1 if halfset_num[0] == 1 else 2
+            subtomo_id_num = [c]
+            for i in range(1, self.df.shape[0]):
+                if (c % 2 == 1 and halfset_num[i] == 1) or (c % 2 == 0 and halfset_num[i] == 0):
+                    c += 2
+                else:
+                    c += 1
+                # c = np.ceil(c / 2) * 2 + halfset_num[i]
                 subtomo_id_num.append(c)
 
             self.df["subtomo_id"] = subtomo_id_num

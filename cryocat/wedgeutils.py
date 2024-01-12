@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from cryocat import ioutils
-from cryocat import tiltstack as ts
 from cryocat import starfileio
 import emfile
 
@@ -126,7 +125,7 @@ def create_wedge_list_sg(
         wedge_list_df["defocus"] = defocus
 
     if dose_file is not None:
-        dose = ts.load_corrected_dose(dose_file)
+        dose = ioutils.total_dose_load(dose_file)
         check_data_consistency(dose, tilts, "dose", tlt_file)
         wedge_list_df["exposure"] = dose
 
