@@ -163,6 +163,10 @@ class Mdoc:
         # prepare flag for removed images
         imgs["removed"] = False
 
+        # convert ZValues to int
+        temp_column = imgs.astype({"ZValue": int})
+        imgs["ZValue"] = temp_column["ZValue"]
+
         return imgs
 
     @staticmethod

@@ -127,7 +127,7 @@ def spline_sampling(coords, sampling_distance):
         return spline_t
 
 
-def compare_rotations(angles1, angles2, c_symmetry=1):
+def compare_rotations(angles1, angles2, c_symmetry=1, rotation_type="all"):
     """Compare the rotations between two sets of angles.
 
     Parameters
@@ -152,7 +152,16 @@ def compare_rotations(angles1, angles2, c_symmetry=1):
     dist_degrees = angular_distance(angles1, angles2, c_symmetry=c_symmetry)[0]
     dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(angles1, angles2, c_symmetry=c_symmetry)
 
-    return dist_degrees, dist_degrees_normals, dist_degrees_inplane
+    if rotation_type == "all":
+        return dist_degrees, dist_degrees_normals, dist_degrees_inplane
+    elif rotation_type == "angular_distance":
+        return dist_degrees
+    elif rotation_type == "cone_distance":
+        return dist_degrees_normals
+    elif rotation_type == "in_plane_distance":
+        return dist_degrees_inplane
+    else:
+        raise UserInputError(f"The rotation type {rotation_type} is not supported.")
 
 
 def change_handedness_coordinates(coordinates, dimensions):
@@ -521,6 +530,55 @@ def visualize_rotations(
         ax.set_zlim3d(-radius, radius)
 
     return new_points
+
+
+def angle_between_vectors(vectors1, vectors2):
+    dot_products = np.einsum("ij,ij->i", vectors1, vectors2)
+    norms1 = np.linalg.norm(vectors1, axis=1)
+    norms2 = np.linalg.norm(vectors2, axis=1)
+
+    cosines = dot_products / (norms1 * norms2)
+    radians = np.arccos(np.clip(cosines, -1.0, 1.0))
+    degrees = np.degrees(radians)
+
+    return degrees
+
+
+def compute_pairwise_angles(angles1, angles2, coord1, coord2, axis="z"):
+    angles1 = np.atleast_2d(angles1)
+    angles2 = np.atleast_2d(angles2)
+    rot_angles1 = srot.from_euler("zxz", angles=angles1, degrees=True)
+
+    angles_ref_to_zero = -angles1[:, [2, 1, 0]]  # swap psi and theta -> ["psi", "theta", "phi"]
+    rot_to_zero = srot.from_euler("zxz", angles=angles_ref_to_zero, degrees=True)
+
+    angles2_as_rotations = srot.from_euler("zxz", angles=angles2, degrees=True)
+    # rot_angles2 = rot_to_zero * angles2_as_rotations
+    rot_angles2 = rot_to_zero
+
+    coord_vector = coord2 - coord1
+
+    if axis.endswith("x"):
+        vector = [1, 0, 0]
+    elif axis.endswith("y"):
+        vector = [0, 1, 0]
+    elif axis.endswith("z"):
+        vector = [0, 0, 1]
+    else:
+        raise UserInputError(f"Invalid axis epcification: {axis}. Allowed inputs are x, -x, y, -y, z, -z!")
+
+    if axis.startswith("-"):
+        vector = vector * -1
+
+    rot_vectors1 = rot_angles1.apply(vector)
+    rot_vectors2 = rot_angles2.apply(coord_vector)
+
+    angles = angle_between_vectors(rot_vectors1, rot_vectors2)
+    ##nn_rotations = srot.concatenate(nn_rotations)
+    ##points_on_sphere = geom.visualize_rotations(nn_rotations, plot_rotations=False)
+    ##angles = nn_rotations.as_euler("zxz", degrees=True)
+
+    return angles
 
 
 def visualize_angles(angles, plot_rotations=True, color_map=None):

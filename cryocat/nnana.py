@@ -62,7 +62,7 @@ def get_feature_nn_indices(fm_a, fm_nn, nn_number=1):
     )
 
 
-def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_number=1):
+def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_number=1, rotation_type="angular_distance"):
     (
         centered_coord,
         rotated_coord,
@@ -71,11 +71,7 @@ def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_numbe
         subtomo_idx,
         subtomo_idx_nn,
     ) = get_nn_distances(
-        motl_a,
-        motl_nn,
-        nn_number=nn_number,
-        pixel_size=pixel_size,
-        feature=feature_id,
+        motl_a, motl_nn, nn_number=nn_number, pixel_size=pixel_size, feature=feature_id, rotation_type=rotation_type
     )
 
     coord_rot, angles = get_nn_rotations(motl_a, motl_nn, feature=feature_id, nn_number=nn_number)
@@ -118,13 +114,7 @@ def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_numbe
     return nn_stats
 
 
-def get_nn_distances(
-    motl_a,
-    motl_nn,
-    pixel_size=1.0,
-    nn_number=1,
-    feature="tomo_id",
-):
+def get_nn_distances(motl_a, motl_nn, pixel_size=1.0, nn_number=1, feature="tomo_id", rotation_type="angular_distance"):
     if isinstance(motl_a, str):
         motl_a = cryomotl.Motl(motl_path=motl_a)
 
@@ -178,7 +168,7 @@ def get_nn_distances(
             angles_nn_sel = angles_nn[nn_idx[:, i], :]
 
             rotations_nn = srot.from_euler("zxz", angles=angles_nn_sel, degrees=True)
-            angular_distances.append(geom.angular_distance(rotations, rotations_nn)[0])
+            angular_distances.append(geom.compare_rotations(rotations, rotations_nn, rotation_type=rotation_type))
 
             rotated_coord.append(rot.apply(c_coord))
 
@@ -218,7 +208,7 @@ def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id", type_id="g
         idx, idx_nn, _, nn_count = get_feature_nn_indices(fm_a, fm_nn, nn_number)
 
         angles_nn = fm_nn.get_angles()
-        angles_ref_to_zero = -fm_a.get_features(["psi", "theta", "phi"])
+        angles_ref_to_zero = -fm_a.get_feature(["psi", "theta", "phi"])
         rot_to_zero = srot.from_euler("zxz", angles=angles_ref_to_zero[idx, :], degrees=True)
 
         for i in range(nn_count):

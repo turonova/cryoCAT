@@ -6,21 +6,63 @@ from scipy.spatial.transform import Rotation as srot
 from scipy.interpolate import interp1d
 
 
-def read(map, transpose=True, data_type=None):
-    if isinstance(map, str):
-        if ".mrc" == map[-4:]:
-            data = mrcfile.open(map).data
-        elif ".rec" == map[-4:]:
-            data = mrcfile.open(map).data
-        elif ".em" == map[-3:]:
-            data = emfile.read(map)[1]
+def read(input_map, transpose=True, data_type=None):
+    """Reads a map file (from the file or numpy array) and returns the data as a numpy array.
+
+    Parameters
+    ----------
+    input_map : str or numpy.ndarray
+        The input map file name or a numpy array containing the map data. The accepted formats are MRC and EM.
+    transpose : bool, optional
+        Whether to transpose the data. Default is True.
+    data_type : numpy.dtype, optional
+        The desired data type of the returned array. If None, the data type is not modified.
+
+    Returns
+    -------
+    numpy.ndarray
+        The map data as a numpy array.
+
+    Raises
+    ------
+    ValueError
+        If the input map file name does not have a valid extension.
+
+    Notes
+    -----
+    This function supports reading map files with the following extensions: .mrc, .rec, .st, .ali, .em.
+
+    If the input_map is a string, the function will attempt to open the file and read the data.
+    If the input_map is a numpy array, it will be directly used as the map data.
+
+    If transpose is True, the data will be transposed using the transpose(2, 1, 0) method.
+
+    If data_type is not None, the data will be cast to the specified data type using the astype method.
+
+    Examples
+    --------
+    >>> data = read("map.mrc")
+    >>> data = read("map.em", transpose=False, data_type=np.float32)
+    >>> data = read(np.random.rand(10, 10, 10))
+    """
+
+    if isinstance(input_map, str):
+        if (
+            input_map.endswith(".mrc")
+            or input_map.endswith(".rec")
+            or input_map.endswith(".st")
+            or input_map.endswith(".ali")
+        ):
+            data = mrcfile.open(input_map).data
+        elif input_map.endswith(".em"):
+            data = emfile.read(input_map)[1]
         else:
-            raise ValueError("The input map file name", map, "is neither em or mrc file!")
+            raise ValueError("The input map file name", input_map, "is neither em or mrc file!")
 
         if transpose:
             data = data.transpose(2, 1, 0)
     else:
-        data = np.array(map)
+        data = np.array(input_map)
 
     if data_type is not None:
         data = data.astype(data_type)
@@ -35,12 +77,15 @@ def write(data_to_write, file_name, transpose=True, data_type=None, overwrite=Tr
     if transpose:
         data_to_write = data_to_write.transpose(2, 1, 0)
 
-    if ".mrc" == file_name[-4:]:
+    if data_to_write.dtype == np.float64:
+        data_to_write = data_to_write.astype(np.float32)
+
+    if file_name.endswith(".mrc") or file_name.endswith(".rec"):
         mrcfile.write(name=file_name, data=data_to_write, overwrite=overwrite)
-    elif ".em" == file_name[-3:]:
+    elif file_name.endswith(".em"):
         emfile.write(file_name, data=data_to_write, overwrite=overwrite)
     else:
-        raise ValueError("The output file name", file_name, "has to end with .mrc or .em!")
+        raise ValueError("The output file name", file_name, "has to end with .mrc, .rec or .em!")
 
 
 def em2mrc(map_name, invert=False, overwrite=True, output_name=None):
