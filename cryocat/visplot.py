@@ -201,28 +201,36 @@ def plot_orientational_distribution(
         max_radius = np.amax(np.hstack((theta_r_pos[:, 1], theta_r_neg[:, 1])))
 
     radius_bins = np.linspace(0, max_radius, radius_bin)
-    theta_bins_pos = np.linspace(np.amin(theta_r_pos[:, 0]), np.amin(theta_r_pos[:, 0]) + 2 * np.pi, theta_bin)
-    theta_bins_neg = np.linspace(np.amin(theta_r_neg[:, 0]), np.amin(theta_r_neg[:, 0]) + 2 * np.pi, theta_bin)
 
-    # hist_pos = np.histogram2d(theta_r_pos[:,0]+2*np.pi, theta_r_pos[:,1], bins=(theta_bins, radius_bins))
-    hist_pos = np.histogram2d(theta_r_pos[:, 0], theta_r_pos[:, 1], bins=(theta_bins_pos, radius_bins))
-    hist_neg = np.histogram2d(theta_r_neg[:, 0], theta_r_neg[:, 1], bins=(theta_bins_neg, radius_bins))
+    if theta_r_pos.shape[0] > 0:
+        theta_bins_pos = np.linspace(np.amin(theta_r_pos[:, 0]), np.amin(theta_r_pos[:, 0]) + 2 * np.pi, theta_bin)
+        hist_pos = np.histogram2d(theta_r_pos[:, 0], theta_r_pos[:, 1], bins=(theta_bins_pos, radius_bins))
+        max_pos = np.amax(hist_pos[0])
+    else:
+        max_pos = 0
 
-    # hist_pos = np.histogram2d(theta_r_pos[:,0]+2*np.pi, theta_r_pos[:,1], bins=(theta_bins, radius_bins))
-    # hist_neg = np.histogram2d(theta_r_neg[:,0]+2*np.pi, theta_r_neg[:,1], bins=(theta_bins, radius_bins))
+    if theta_r_neg.shape[0] > 0:
+        theta_bins_neg = np.linspace(np.amin(theta_r_neg[:, 0]), np.amin(theta_r_neg[:, 0]) + 2 * np.pi, theta_bin)
+        hist_neg = np.histogram2d(theta_r_neg[:, 0], theta_r_neg[:, 1], bins=(theta_bins_neg, radius_bins))
+        max_neg = np.amax(hist_neg[0])
+    else:
+        max_neg = 0
 
-    hist_max = np.amax(np.vstack((hist_pos[0], hist_neg[0])))
+    hist_max = max(max_pos, max_neg)
+    # hist_max = np.amax(np.vstack((hist_pos[0], hist_neg[0])))
 
     fig = plt.figure(figsize=(13, 5))
     gs = gridspec.GridSpec(1, 3, width_ratios=[12, 12, 1])
     ax1 = plt.subplot(gs[0], projection="polar")
     ax1.set_yticklabels([])
-    create_smooth_polar_histogram(ax1, hist_pos, hist_norm_value=hist_max)
+    if theta_r_pos.shape[0] > 0:
+        create_smooth_polar_histogram(ax1, hist_pos, hist_norm_value=hist_max)
     ax1.set_xlabel("Northern hemisphere")
 
     ax2 = plt.subplot(gs[1], projection="polar")
     ax2.set_yticklabels([])
-    create_smooth_polar_histogram(ax2, hist_neg, hist_norm_value=hist_max)
+    if theta_r_neg.shape[0] > 0:
+        create_smooth_polar_histogram(ax2, hist_neg, hist_norm_value=hist_max)
     ax2.set_xlabel("Southern hemisphere")
 
     ax3 = plt.subplot(gs[2])

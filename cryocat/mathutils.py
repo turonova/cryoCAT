@@ -1,6 +1,14 @@
 import numpy as np
 
 
+def get_all_pairs(input_numbers):
+    pairs = []
+    for i in range(len(input_numbers)):
+        for j in range(i + 1, len(input_numbers)):
+            pairs.append((input_numbers[i], input_numbers[j]))
+    return pairs
+
+
 def otsu_threshold(input_values):
     # Taken from: https://www.kdnuggets.com/2018/10/basic-image-analysis-python-p4.html
 

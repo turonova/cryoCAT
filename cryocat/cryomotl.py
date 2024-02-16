@@ -464,7 +464,7 @@ class Motl:
         else:
             angles = self.df.loc[self.df.loc[:, "tomo_id"] == tomo_number, ["phi", "theta", "psi"]].values
 
-        return angles
+        return np.atleast_2d(angles)
 
     def get_coordinates(self, tomo_number=None):
         """This function takes in a tomo_number and returns the coordinates of all particles in that
@@ -530,6 +530,12 @@ class Motl:
         rotations = rot.from_euler("zxz", angles, degrees=True)
 
         return rotations
+
+    def make_angles_canonical(self):
+        angles = self.get_angles()
+        rotations = rot.from_euler("zxz", angles, degrees=True)
+        converted_angles = rotations.as_euler("zxz", degrees=True)
+        self.df[["phi", "theta", "psi"]] = converted_angles
 
     def get_barycentric_motl(self, idx, nn_idx):
         """Returns a new Motl object with coordinates corresponding to the barycentric coordinates of the particles
@@ -642,8 +648,30 @@ class Motl:
         numpy.ndarray
             Values corresponding to the feature_id.
 
+        Raises
+        ------
+        UserInputError
+            In case the feature_id is not existing column in self.df dataframe.
+
         """
-        return self.df.loc[:, feature_id].values
+
+        if isinstance(feature_id, str):
+            feature_id = [feature_id]
+
+        missing_columns = set(feature_id) - set(self.df.columns)
+
+        if missing_columns:
+            raise UserInputError(f"The class Motl does not contain column with name {feature_id}")
+
+        return self.df[feature_id].values  # self.df.loc[:, feature_id].values
+        # if isinstance(feature_id, str) and feature_id in self.df.columns:
+        #    return self.df.loc[:, feature_id].values
+        # elif isinstance(feature_id,list):
+
+    #     missing_columns = set(feature_id) - set(self.df.columns)
+
+    # else:
+    #     raise UserInputError(f"The class Motl does not contain column with name {feature_id}")
 
     def get_motl_subset(self, feature_values, feature_id="tomo_id", return_df=False, reset_index=True):
         """Get a subset of the Motl object based on specified feature values.
@@ -716,6 +744,38 @@ class Motl:
             warnings.warn("The intersection of the two motls is empty.")
 
         return cls(s1.reset_index(drop=True))
+
+    def renumber_objects_sequentially(self, starting_number=1):
+        """Renumber objects sequentially, starting with 1 or provided number.
+
+        Parameters
+        ----------
+        starting_number: int, default=1
+            The starting number for renumbering objects. The default is 1.
+
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
+
+        Returns
+        -------
+        None
+
+        """
+        start_number = starting_number
+
+        def assign_new_object_id(group):
+            # If there are duplicate 'object_id' values within the group, keep the first occurrence
+            nonlocal start_number
+            group["object_id"] = group["object_id"].factorize()[0] + start_number
+            start_number = group["object_id"].max()+1
+            return group
+
+        # Resetting the index before applying the function
+        df_reset = self.df.reset_index(drop=True)
+
+        # Apply the custom function to each group
+        self.df = df_reset.groupby("tomo_id", group_keys=False).apply(assign_new_object_id)
 
     def get_relative_position(self, idx, nn_idx):
         """Returns a new Motl object with coordinates corresponding to the center between the particles
@@ -1239,7 +1299,7 @@ class Motl:
         """
 
         if isinstance(input_motl, Motl):
-            motl = Motl
+            motl = input_motl
         else:
             motl = Motl.load(input_motl)
 
@@ -1269,16 +1329,11 @@ class Motl:
         -----
         This method modifies the `df` attribute of the object.
 
-        TODO: Check if the row-wise approach cannot be replaced.
-
         Returns
         -------
         None
 
         """
-        # Shifts positions of all subtomgorams in the motl in the direction given by subtomos' rotations
-        # Input: shift - 3D vector - e.g. [1, 1, 1]. A vector in 3D is then rotated around the origin = [0 0 0].
-        #               Note that the coordinates are with respect to the origin!
 
         def shift_coords(row):
             v = np.array(shift)

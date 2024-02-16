@@ -2,7 +2,9 @@ import numpy as np
 import pandas as pd
 import warnings
 import decimal
+import os
 from cryocat import cryomotl
+from cryocat import cryomask
 from cryocat import geom
 from cryocat import mathutils
 from cryocat import ribana
@@ -12,94 +14,81 @@ from scipy.spatial.transform import Rotation as srot
 
 class NPC:
     @staticmethod
-    def unify_nn_orientations(input_motl, recenter_mask, dist_threshold=10):
-        if isinstance(input_motl, (str, pd.DataFrame)):
-            original_motl = cryomotl.Motl.load(input_motl)
-        else:
-            original_motl = input_motl
+    def unify_nn_orientations(input_motl, dist_threshold=10000):
+        traced_motl = ribana.trace_chains(
+            input_motl.df,
+            input_motl.df,
+            dist_threshold,
+            min_distance=0,
+            feature="tomo_id",
+            output_motl=None,
+            store_idx1="object_id",
+            store_idx2="geom2",
+            store_dist="geom4",
+        )
 
-        for t in original_motl.get_unique_values("tomo_id"):
-            tm = original_motl.get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
+        rot_180 = srot.from_euler("zxz", angles=[0, 180, 0], degrees=True)
 
-            number_of_rotations = None
-            rot = srot.from_euler("zxz", angles=[0, 180, 0], degrees=True)
+        for t in traced_motl.get_unique_values("tomo_id"):
+            tm = traced_motl.get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
+            rotations = tm.get_rotations()
+            for i in np.arange(1, tm.df["geom2"].max(), dtype=int):
+                cone_angle = geom.cone_distance(rotations[i - 1], rotations[i])
+                if cone_angle > 90.0:
+                    rotations[i] = rotations[i] * rot_180
 
-            flipped_ids = []
-            while number_of_rotations is None or number_of_rotations > 0:
+            angles = rotations.as_euler("zxz", degrees=True)
+            tm.fill({"angles": angles})
+            traced_motl.df.loc[traced_motl.df["tomo_id"] == t, :] = tm.df.values
 
-                def get_updated_stats(motl_name):
-                    new_m = cryomotl.Motl.recenter_to_subparticle(motl_name, recenter_mask)
-                    stats = ribana.get_nn_stats(
-                        new_m, new_m, pixel_size=1.0, feature_id="tomo_id", angular_dist_type="cone"
-                    )
+        return cryomotl.Motl(traced_motl.df.sort_values(by="subtomo_id"))
 
-                    if stats["distance"].min() > dist_threshold:
-                        return 0, np.array([]), np.zeros((3,))
+    def cluster_subunits_to_rings(
+        input_motl_path,
+        mask_size,
+        entry_mask_coord,
+        exit_mask_coord,
+        npc_radius,
+        max_trace_distance,
+        min_trace_distance=0,
+    ):
+        working_dir, _ = os.path.split(input_motl_path)
+        entry_mask = working_dir + "entry_mask.em"
+        exit_mask = working_dir + "exit_mask.em"
+        _ = cryomask.spherical_mask(mask_size, 3, center=entry_mask_coord, output_name=entry_mask)
+        _ = cryomask.spherical_mask(mask_size, 3, center=exit_mask_coord, output_name=exit_mask)
 
-                    # bin_threshold = mathutils.otsu_threshold(stats["distance"].values)
-                    bin_threshold = dist_threshold
-                    flip_candidates = stats.loc[
-                        stats["distance"] <= bin_threshold, ["subtomo_idx", "subtomo_nn_idx"]
-                    ].values
+        motl = cryomotl.Motl.load(input_motl_path)
+        motl.renumber_particles()
 
-                    angle_stats = np.asarray(
-                        [
-                            stats["angular_distance"].mean(),
-                            stats["angular_distance"].var(),
-                            stats["angular_distance"].std(),
-                        ]
-                    )
-                    return flip_candidates.shape[0], flip_candidates, angle_stats
+        motl_entry = cryomotl.Motl.recenter_to_subparticle(motl, entry_mask)
+        motl_exit = cryomotl.Motl.recenter_to_subparticle(motl, exit_mask)
 
-                flip_n, flip_id, _ = get_updated_stats(tm.df)
+        # tracing
+        traced_motl = ribana.trace_chains(
+            motl_entry.df, motl_exit.df, max_distance=max_trace_distance, min_distance=min_trace_distance
+        )
+        traced_motl.df.sort_values(["tomo_id", "object_id", "geom2"], inplace=True)
+        ribana.add_occupancy(traced_motl)
+        ribana.add_traced_info(traced_motl, motl)
 
-                for i in np.arange(flip_id.shape[0]):
+        new_traced_motl = NPC.merge_subunits(motl, npc_radius=npc_radius)
 
-                    def rotate_single_subtomo(id_j):
-                        m = cryomotl.Motl.load(tm.df)
-                        m_sub = m.get_motl_subset(flip_id[i, id_j], feature_id="subtomo_id")
-                        m_sub.apply_rotation(rot)
-                        m.df.loc[m.df["subtomo_id"] == flip_id[i, id_j], ["phi", "theta", "psi"]] = m_sub.df[
-                            ["phi", "theta", "psi"]
-                        ].values
-                        return m
+        os.remove(entry_mask)
+        os.remove(exit_mask)
 
-                    if flip_id[i, 0] in flipped_ids and flip_id[i, 1] in flipped_ids:
-                        index1 = flipped_ids.index(flip_id[i, 0])
-                        index2 = flipped_ids.index(flip_id[i, 1])
+        return new_traced_motl
 
-                        if index1 < index2:
-                            flipped_ids.remove(flip_id[i, 0])
-                        else:
-                            flipped_ids.remove(flip_id[i, 1])
+    @staticmethod
+    def get_center_with_radius(object_motl, radius):
+        vector_x = np.asarray([-radius, 0, 0])
+        shifted_motl = cryomotl.Motl(object_motl.df)
+        shifted_motl.shift_positions(vector_x)
 
-                    elif flip_id[i, 0] in flipped_ids:
-                        m2 = rotate_single_subtomo(1)
-                        tm.df = m2.df.copy()
-                        flipped_ids.append(flip_id[i, 1])
-                    elif flip_id[i, 1] in flipped_ids:
-                        m1 = rotate_single_subtomo(0)
-                        tm.df = m1.df.copy()
-                        flipped_ids.append(flip_id[i, 0])
-                    else:
-                        m1 = rotate_single_subtomo(0)
-                        m2 = rotate_single_subtomo(1)
-                        _, _, new_stats1 = get_updated_stats(m1.df)
-                        _, _, new_stats2 = get_updated_stats(m2.df)
+        center_coordinates = shifted_motl.get_coordinates()
+        centroid = np.mean(center_coordinates, axis=0)
 
-                        eval_stats = new_stats1 < new_stats2
-                        if sum(eval_stats) >= 2:
-                            tm.df = m1.df.copy()
-                            flipped_ids.append(flip_id[i, 0])
-                        else:
-                            tm.df = m2.df.copy()
-                            flipped_ids.append(flip_id[i, 1])
-
-                number_of_rotations = flip_n
-
-            original_motl.df.loc[original_motl.df["tomo_id"] == t, :] = tm.df.values
-
-        return original_motl
+        return centroid
 
     @staticmethod
     def get_center_and_radius(object_motl, include_singles=False):
@@ -129,25 +118,19 @@ class NPC:
         return circle_center, circle_radius
 
     @staticmethod
-    def get_centers_as_motl(tomo_motl, tomo_id, include_singles=False):
+    def get_centers_as_motl(tomo_motl, tomo_id, radius):
         central_points = []
         object_idx = []
         for o in tomo_motl.get_unique_values("object_id"):
             om = tomo_motl.get_motl_subset(feature_values=[o], feature_id="object_id", reset_index=True)
 
-            circle_center, _ = NPC.get_center_and_radius(om, include_singles)
-
-            if include_singles:
-                central_points.append(circle_center)
-                object_idx.append(o)
-            elif not all(circle_center == 0.0):
-                central_points.append(circle_center)
-                object_idx.append(o)
+            cetroid = NPC.get_center_with_radius(om, radius)
+            central_points.append(cetroid)
+            object_idx.append(o)
 
         new_object_motl = cryomotl.Motl()
         if len(central_points) > 0:
             central_points = np.vstack(central_points)
-
             new_object_motl.fill(
                 {
                     "x": central_points[:, 0],
@@ -163,8 +146,8 @@ class NPC:
         return new_object_motl
 
     @staticmethod
-    def get_new_subunit_idx(object_motl, symmetry=8):
-        npc_center, _ = NPC.get_center_and_radius(object_motl)
+    def get_new_subunit_idx(object_motl, npc_radius, symmetry=8):
+        npc_center = NPC.get_center_with_radius(object_motl, npc_radius)
         su_coord = object_motl.get_coordinates()
         vectors = su_coord - np.tile(npc_center, (su_coord.shape[0], 1))
 
@@ -177,52 +160,46 @@ class NPC:
         return s_idx
 
     @staticmethod
-    def merge_subunits(input_motl, npc_diameter=60):
+    def merge_subunits(input_motl, npc_radius=55):
         if isinstance(input_motl, (str, pd.DataFrame)):
             input_motl = cryomotl.Motl.load(input_motl)
 
         for t in input_motl.get_unique_values("tomo_id"):
             tm = input_motl.get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
 
-            new_object_motl = NPC.get_centers_as_motl(tm, t)
+            # get centers of motls - the motl has to have object_id assigned
+            new_object_motl = NPC.get_centers_as_motl(tm, t, radius=npc_radius)
 
             changed_objects = []
             if new_object_motl.df.shape[0] > 1:
+                # get NN stats for centers
                 center_stats = ribana.get_nn_stats(new_object_motl, new_object_motl)
-                # dist_threshold = mathutils.otsu_threshold(center_stats["distance"].values)
-                if any(center_stats["distance"] <= npc_diameter):
-                    # if dist_threshold <= npc_radius:
-                    center_idx, nn_idx = nnana.get_nn_within_distance(new_object_motl, npc_diameter)
+
+                if any(center_stats["distance"] <= npc_radius):
+                    # get all centers within npc_radius distance for merging
+                    center_idx, nn_idx = nnana.get_nn_within_distance(new_object_motl, npc_radius)
                     for i, o in enumerate(center_idx):
+                        # get object_id of the first object
                         o_id1 = new_object_motl.df.loc[new_object_motl.df.index[o], "object_id"]
+                        # add it to the list of changed objects
                         changed_objects.append(o_id1)
                         for j in nn_idx[i]:
+                            # change object_id of the other object to the one of the first object
                             o_id2 = new_object_motl.df.loc[new_object_motl.df.index[j], "object_id"]
                             tm.df.loc[tm.df["object_id"] == o_id2, "object_id"] = o_id1
 
             tm.df["geom1"] = tm.df.groupby(["object_id"])["object_id"].transform("count")
-            single_subunits = tm.df.loc[tm.df["geom1"] == 1, "object_id"].values
 
-            if single_subunits.shape[0] != 0:
-                new_object_motl = NPC.get_centers_as_motl(tm, t, include_singles=True)
-                if new_object_motl.df.shape[0] > 1:
-                    center_stats = ribana.get_nn_stats(new_object_motl, new_object_motl, remove_duplicates=False)
-                    for s in single_subunits:
-                        s_id = new_object_motl.df.loc[new_object_motl.df["object_id"] == s, "subtomo_id"].values[0]
-                        npc_id = center_stats.loc[center_stats["subtomo_idx"] == s_id, "subtomo_nn_idx"].values[0]
-                        new_object_id = new_object_motl.df.loc[
-                            new_object_motl.df["subtomo_id"] == npc_id, "object_id"
-                        ].values[0]
-                        tm.df.loc[tm.df["object_id"] == s, "object_id"] = new_object_id
-                        changed_objects.append(new_object_id)
-
+            # for all objects that changed renumber subunits
             for o in changed_objects:
                 om = tm.get_motl_subset(feature_values=o, feature_id="object_id", reset_index=True)
-                s_idx = NPC.get_new_subunit_idx(om)
+                s_idx = NPC.get_new_subunit_idx(om, npc_radius)
                 tm.df.loc[tm.df["object_id"] == o, "geom2"] = s_idx
 
+            # squeeze the object_idx to be in sequence
             tm.df["object_id"] = tm.df["object_id"].rank(method="dense").astype(int)
 
+            # assign the results back to the original motl
             input_motl.df.loc[input_motl.df["tomo_id"] == t, ["object_id", "geom1", "geom2"]] = tm.df[
                 ["object_id", "geom1", "geom2"]
             ].values
@@ -234,72 +211,54 @@ class NPC:
         return input_motl
 
     @staticmethod
-    def merge_rings(input_motl1, input_motl2, distance_threshold=40):
-        if isinstance(input_motl1, (str, pd.DataFrame)):
-            input_motl1 = cryomotl.Motl.load(input_motl1)
+    def merge_rings(input_motls, npc_radius, distance_threshold=40):
+        # def find_closest_ring():
 
-        if isinstance(input_motl2, (str, pd.DataFrame)):
-            input_motl2 = cryomotl.Motl.load(input_motl2)
-
-        last_object_id = 0
-        for t in input_motl1.get_unique_values("tomo_id"):
-            tm1 = input_motl1.get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
-            tm2 = input_motl2.get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
-
-            input_motl1.df.loc[input_motl1.df["tomo_id"] == t, "object_id"] = (
-                input_motl1.df.loc[input_motl1.df["tomo_id"] == t, "object_id"] + last_object_id
+        if not isinstance(input_motls, list) or len(input_motls) <= 1:
+            raise UserWarning(
+                f"The input has to be list of valid motl specifications and has to contain more than one element!"
             )
-            last_object_id = input_motl1.df.loc[input_motl1.df["tomo_id"] == t, "object_id"].max()
 
-            if tm2.df.shape[0] == 0:
-                input_motl2.df.loc[input_motl2.df["tomo_id"] == t, "object_id"] = (
-                    input_motl2.df.loc[input_motl2.df["tomo_id"] == t, "object_id"] + last_object_id
-                )
-                last_object_id = input_motl2.df.loc[input_motl2.df["tomo_id"] == t, "object_id"].max()
+        ring_motls = []
+        for m in input_motls:
+            if isinstance(m, (str, pd.DataFrame)):
+                ring_motls.append(cryomotl.Motl.load(m))
             else:
-                input_motl1.df.loc[input_motl1.df["tomo_id"] == t, "object_id"] = (
-                    input_motl1.df.loc[input_motl1.df["tomo_id"] == t, "object_id"] + last_object_id
-                )
-                centers1 = NPC.get_centers_as_motl(tm1, t)
-                centers2 = NPC.get_centers_as_motl(tm2, t)
-                distances, obj2_idx = ribana.get_feature_nn(centers1, centers2)
-                close_idx = distances < distance_threshold
-                close_idx = close_idx.reshape((close_idx.shape[0],))
-                obj1_idx = np.arange(centers1.df.shape[0])
-                obj1_idx = obj1_idx[close_idx]
-                obj2_idx = obj2_idx[close_idx].reshape(close_idx.shape)
-                for o1, o2 in zip(obj1_idx, obj2_idx):
-                    obj1_id = centers1.df.loc[centers1.df.index[o1], "object_id"]
-                    obj2_id = centers2.df.loc[centers1.df.index[o2], "object_id"]
-                    input_motl2.df.loc[
-                        (input_motl2.df["tomo_id"] == t) & (input_motl2.df["object_id"] == obj2_id), "object_id"
-                    ] = obj1_id
+                ring_motls.append(m)
 
-                distances, obj1_idx = ribana.get_feature_nn(centers2, centers1)
-                far_idx = distances >= distance_threshold
-                far_idx = far_idx.reshape((far_idx.shape[0],))
-                obj2_idx = np.arange(centers2.df.shape[0])
-                obj2_idx = obj2_idx[far_idx]
-                for o2 in obj2_idx:
-                    obj2_id = centers2.df.loc[centers2.df.index[o2], "object_id"]
-                    input_motl2.df.loc[
-                        (input_motl2.df["tomo_id"] == t) & (input_motl2.df["object_id"] == obj2_id)
-                    ] = last_object_id
-                    last_object_id += 1
+        # renumber the objects sequentially, each next motl starting from the last max object_id + 1
+        starting_number = 1
+        for r in ring_motls:
+            r.renumber_objects_sequentially(starting_number=starting_number)
+            starting_number = r.df["object_id"].max() + 1
 
-            # changed_objects = []
-            # if new_object_motl.df.shape[0] > 1:
-            #     center_stats = ribana.get_nn_stats(new_object_motl, new_object_motl)
-            #     # dist_threshold = mathutils.otsu_threshold(center_stats["distance"].values)
-            #     if any(center_stats["distance"] <= npc_diameter):
-            #         # if dist_threshold <= npc_radius:
-            #         center_idx, nn_idx = nnana.get_nn_within_distance(new_object_motl, npc_diameter)
-            #         for i, o in enumerate(center_idx):
-            #             o_id1 = new_object_motl.df.loc[new_object_motl.df.index[o], "object_id"]
-            #             changed_objects.append(o_id1)
-            #             for j in nn_idx[i]:
-            #                 o_id2 = new_object_motl.df.loc[new_object_motl.df.index[j], "object_id"]
-            #                 tm.df.loc[tm.df["object_id"] == o_id2, "object_id"] = o_id1
+        ring_pairs = mathutils.get_all_pairs(np.arange(len(ring_motls)))
 
-            # tm.df["geom1"] = tm.df.groupby(["object_id"])["object_id"].transform("count")
-            # single_subunits = tm.df.loc[tm.df["geom1"] == 1, "object_id"].values
+        for i in ring_pairs:
+            for t in ring_motls[i[0]].get_unique_values("tomo_id"):
+                tm1 = ring_motls[i[0]].get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
+                tm2 = ring_motls[i[1]].get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
+                # print(t)
+                if tm2.df.shape[0] > 0:
+                    centers1 = NPC.get_centers_as_motl(tm1, t, radius=npc_radius)
+                    centers2 = NPC.get_centers_as_motl(tm2, t, radius=npc_radius)
+                    distances, obj1_idx = ribana.get_feature_nn(centers1, centers2)
+                    obj1_idx = obj1_idx.reshape((obj1_idx.shape[0],))
+                    # centers1_nn = centers1.df.iloc[obj1_idx.reshape((obj1_idx.shape[0],))]
+
+                    close_idx = distances < distance_threshold
+                    close_idx = close_idx.reshape((close_idx.shape[0],))
+                    if np.all(~close_idx):
+                        continue
+                    obj1_idx = obj1_idx[close_idx]
+                    obj2_idx = np.arange(centers2.df.shape[0])
+                    obj2_idx = obj2_idx[close_idx]
+                    for o1, o2 in zip(obj1_idx, obj2_idx):
+                        obj1_id = centers1.df.loc[centers1.df.index[o1], "object_id"]
+                        obj2_id = centers2.df.loc[centers2.df.index[o2], "object_id"]
+                        ring_motls[i[1]].df.loc[
+                            (ring_motls[i[1]].df["tomo_id"] == t) & (ring_motls[i[1]].df["object_id"] == obj2_id),
+                            "object_id",
+                        ] = obj1_id
+
+        return ring_motls
