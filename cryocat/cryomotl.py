@@ -2821,7 +2821,7 @@ class StopgapMotl(Motl):
         if "data_stopgap_motivelist" not in specifiers:
             raise UserInputError(f"Provided starfile does not contain particle list: {input_path}.")
         else:
-            sg_id = starfileio.Starfile.get_specifier_id("data_stopgap_motivelist")
+            sg_id = starfileio.Starfile.get_specifier_id(specifiers, "data_stopgap_motivelist")
             stopgap_df = frames[sg_id]
 
         return stopgap_df
