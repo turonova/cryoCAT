@@ -321,6 +321,8 @@ def pad(input_volume, new_size, fill_value=None):
 
 
 def place_object(input_object, motl, volume_shape=None, volume=None, feature_to_color="object_id"):
+    # TODO add input_object_load
+
     if volume is not None:
         object_container = read(volume)
     elif volume_shape is not None:

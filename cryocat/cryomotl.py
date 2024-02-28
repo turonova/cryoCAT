@@ -1270,6 +1270,50 @@ class Motl:
         print(f"Removed {original_size - len(self.df)} particles.")
         print(f"Original size {original_size}, new_size {len(self.df)}")
 
+    def drop_duplicates(self, duplicates_column="subtomo_id", decision_column="score", decision_sort_ascending = False):
+        """Drop duplicates based on a specified column and keep the first occurrence with the highest/lowest score.
+        
+        Parameters
+        ----------
+        duplicates_column: str, default="subtomo_id" 
+            The column based on which duplicates will be dropped. Defaults to subtomo_id.
+        decision_column: str, default="score" 
+            The column used to decide which duplicate to keep. Defaults to score.
+        decision_sort_ascending: bool, default=False
+            Whether to sort the decision column in ascending order. Defaults to False (i.e., it will sort in
+            descending order.)
+            
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
+
+        Returns
+        -------
+        None
+
+        Examples
+        --------
+
+        >>> m=cryomotl.Motl.load("example_motl.em")
+        >>> # remove entries with duplicated subtomo_idx values, keeping the ones with larger score
+        >>> m.drop_duplicates() 
+        >>> # remove entries with duplicated subtomo_idx values, keeping the ones with lower score
+        >>> m.drop_duplicates(decision_sort_ascending=True) 
+        >>> # remove entries with duplicated subtomo_idx values, keeping the ones with lower geom1 value
+        >>> m.drop_duplicates(decision_column="geom1", decision_sort_ascending=True) 
+        >>> # remove entries with duplicated object_id values, keeping the ones with lower geom1 value
+        >>> m.drop_duplicates(duplicates_column="object_id", decision_column="geom1", decision_sort_ascending=True)
+        """
+        
+        # Sort the DataFrame by "score" in descending order
+        self.df = self.df.sort_values(by=[duplicates_column,decision_column], ascending=[True, decision_sort_ascending])
+
+        # Drop duplicates based on "subtomo_id" keeping the first occurrence (highest score)
+        self.df = self.df.drop_duplicates(subset=duplicates_column)
+        self.df.reset_index(inplace=True, drop=True)
+
+
+
     @staticmethod
     def recenter_to_subparticle(input_motl, input_mask, rotation=None):
         """Computes the center of mass of the provided binary mask and computes the necessary shift between the mask box

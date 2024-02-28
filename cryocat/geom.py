@@ -216,6 +216,8 @@ def normals_to_euler_angles(input_normals, output_order="zzx"):
     else:
         raise UserInputError("The input_normals have to be either pandas dataFrame or numpy array")
 
+    # normalize vectors
+    normals = normals / np.linalg.norm(normals, axis=1)[:, np.newaxis]
     theta = np.degrees(np.arctan2(np.sqrt(normals[:, 0] ** 2 + normals[:, 1] ** 2), normals[:, 2]))
 
     psi = 90 + np.degrees(np.arctan2(normals[:, 1], normals[:, 0]))

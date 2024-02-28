@@ -120,7 +120,7 @@ def create_projection(coord, projection_type="stereo", split_into_hemispheres=Tr
 
 
 def plot_polar_nn_distances(
-    coordinates, distances, max_radius=None, marker_size=3, colormap="viridis_r", graph_title=None
+    coordinates, distances, max_radius=None, marker_size=3, colormap="viridis_r", graph_title=None, output_file=None
 ):
     coord_sorted = coordinates[coordinates[:, 2].argsort()]
     dist_sorted = distances[coordinates[:, 2].argsort()]
@@ -154,6 +154,9 @@ def plot_polar_nn_distances(
     if graph_title is not None:
         fig.suptitle(graph_title)
     plt.show()
+
+    if output_file is not None:
+        fig.savefig(output_file, dpi=fig.dpi)
 
 
 def fill_wedge(r1, r2, theta1, theta2, theta_step, **kargs):
@@ -194,6 +197,7 @@ def plot_orientational_distribution(
     radius_bin=33,
     max_radius=None,
     colormap="viridis_r",
+    output_file=None,
 ):
     theta_r_pos, _, theta_r_neg, _ = create_projection(coordinates, projection_type=projection)
 
@@ -243,3 +247,6 @@ def plot_orientational_distribution(
         fig.suptitle(graph_title)
 
     plt.show()
+
+    if output_file is not None:
+        fig.savefig(output_file, dpi=fig.dpi)
