@@ -378,6 +378,7 @@ def total_dose_load(input_dose):
             return total_dose
         elif input_dose.endswith(".xml"):
             total_dose = get_data_from_warp_xml(input_dose, "Dose", node_level=1)
+            return total_dose
         else:
             total_dose = one_value_per_line_read(input_dose)
             return total_dose
