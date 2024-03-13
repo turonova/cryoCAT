@@ -768,7 +768,7 @@ class Motl:
             # If there are duplicate 'object_id' values within the group, keep the first occurrence
             nonlocal start_number
             group["object_id"] = group["object_id"].factorize()[0] + start_number
-            start_number = group["object_id"].max()+1
+            start_number = group["object_id"].max() + 1
             return group
 
         # Resetting the index before applying the function
@@ -1270,19 +1270,19 @@ class Motl:
         print(f"Removed {original_size - len(self.df)} particles.")
         print(f"Original size {original_size}, new_size {len(self.df)}")
 
-    def drop_duplicates(self, duplicates_column="subtomo_id", decision_column="score", decision_sort_ascending = False):
+    def drop_duplicates(self, duplicates_column="subtomo_id", decision_column="score", decision_sort_ascending=False):
         """Drop duplicates based on a specified column and keep the first occurrence with the highest/lowest score.
-        
+
         Parameters
         ----------
-        duplicates_column: str, default="subtomo_id" 
+        duplicates_column: str, default="subtomo_id"
             The column based on which duplicates will be dropped. Defaults to subtomo_id.
-        decision_column: str, default="score" 
+        decision_column: str, default="score"
             The column used to decide which duplicate to keep. Defaults to score.
         decision_sort_ascending: bool, default=False
             Whether to sort the decision column in ascending order. Defaults to False (i.e., it will sort in
             descending order.)
-            
+
         Notes
         -----
         This method modifies the `df` attribute of the object.
@@ -1296,23 +1296,23 @@ class Motl:
 
         >>> m=cryomotl.Motl.load("example_motl.em")
         >>> # remove entries with duplicated subtomo_idx values, keeping the ones with larger score
-        >>> m.drop_duplicates() 
+        >>> m.drop_duplicates()
         >>> # remove entries with duplicated subtomo_idx values, keeping the ones with lower score
-        >>> m.drop_duplicates(decision_sort_ascending=True) 
+        >>> m.drop_duplicates(decision_sort_ascending=True)
         >>> # remove entries with duplicated subtomo_idx values, keeping the ones with lower geom1 value
-        >>> m.drop_duplicates(decision_column="geom1", decision_sort_ascending=True) 
+        >>> m.drop_duplicates(decision_column="geom1", decision_sort_ascending=True)
         >>> # remove entries with duplicated object_id values, keeping the ones with lower geom1 value
         >>> m.drop_duplicates(duplicates_column="object_id", decision_column="geom1", decision_sort_ascending=True)
         """
-        
+
         # Sort the DataFrame by "score" in descending order
-        self.df = self.df.sort_values(by=[duplicates_column,decision_column], ascending=[True, decision_sort_ascending])
+        self.df = self.df.sort_values(
+            by=[duplicates_column, decision_column], ascending=[True, decision_sort_ascending]
+        )
 
         # Drop duplicates based on "subtomo_id" keeping the first occurrence (highest score)
         self.df = self.df.drop_duplicates(subset=duplicates_column)
         self.df.reset_index(inplace=True, drop=True)
-
-
 
     @staticmethod
     def recenter_to_subparticle(input_motl, input_mask, rotation=None):
@@ -1987,6 +1987,8 @@ class RelionMotl(Motl):
 
             if self.version >= 3.1:
                 self.df[motl_column] = self.df[motl_column].values / self.pixel_size
+
+            self.df[motl_column].fillna(0, inplace=True)
 
     def parse_tomo_id(self, relion_df):
         """The function parses the tomogram id from a Relion starfile. The function takes
@@ -2665,6 +2667,7 @@ class RelionMotl(Motl):
         tomo_format="",
         subtomo_format="",
         use_original_entries=False,
+        keep_all_entries=False,
         version=None,
         add_object_id=False,
         add_subunit_id=False,
@@ -2683,7 +2686,13 @@ class RelionMotl(Motl):
             Format of the subtomogram name output format. See
             :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
         use_original_entries : bool, default=False
-            Determine whether to use (True) the original entries stored in `self.relion_df` or not (False). Defaults to False.
+            Determine whether to use (True) the original entries stored in `self.relion_df` or not (False). If True, all
+            relion entries that are not used in motl (e.g. rlnCtfImage) are fetched from the original relion dataframe.
+            Coordinates, rotations, classes etc. will be updated. Defaults to False.
+        keep_all_entries: bool, default=False
+            Used only if use_original_entries is True. If True, it will keep all the entries as they were loaded including
+            coordinates, rotations and classes. Essentially, it should be set to True only if some selection on particles
+            was done and nothing changed. Defaults to False.
         version : float, optional
             Specify the version and thereby the format of the DataFrame. If not provided the value from `self.version`
             will be used. Defaults to None.
@@ -2724,33 +2733,41 @@ class RelionMotl(Motl):
 
         if use_original_entries:
             relion_df = self.adapt_original_entries()
+            if keep_all_entries:
+                if adapt_object_attr:
+                    self.relion_df = relion_df
+
+                relion_df = relion_df.drop(columns=["subtomo_id"])
+                return relion_df
         else:
             relion_df = self.prepare_particles_data(
                 tomo_format=tomo_format, subtomo_format=subtomo_format, version=version, pixel_size=pixel_size
             )
+            if "rlnRandomSubset" in relion_df.columns:
+                relion_df.loc[self.df["subtomo_id"].mod(2).eq(0).to_numpy(), "rlnRandomSubset"] = 2
+                relion_df.loc[self.df["subtomo_id"].mod(2).eq(1).to_numpy(), "rlnRandomSubset"] = 1
 
         # set coordinates, assumes that subtomograms will be extracted before at exact coordinate with subpixel precision
         relion_df.loc[:, ["rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ"]] = self.get_coordinates()
 
         relion_df = self.convert_angles_to_relion(relion_df)
 
-        relion_df["rlnClassNumber"] = self.df["class"]
+        relion_df["rlnClassNumber"] = self.df["class"].to_numpy()
 
         if add_object_id:
-            relion_df["ccObjectName"] = self.df["object_id"]
+            relion_df["ccObjectName"] = self.df["object_id"].to_numpy()
 
         if add_subunit_id:
-            relion_df["ccSubunitName"] = self.df["geom2"]
+            relion_df["ccSubunitName"] = self.df["geom2"].to_numpy()
 
         if binning != 1.0 and version >= 4.0:
             for coord in ("X", "Y", "Z"):
                 relion_df["rlnCoordinate" + coord] = relion_df["rlnCoordinate" + coord] * binning
 
-        relion_df.loc[self.df["subtomo_id"].mod(2).eq(0), "rlnRandomSubset"] = 2
-        relion_df.loc[self.df["subtomo_id"].mod(2).eq(1), "rlnRandomSubset"] = 1
-
         if adapt_object_attr:
             self.relion_df = relion_df
+
+        relion_df = relion_df.drop(columns=["subtomo_id"])
 
         return relion_df
 
@@ -2761,6 +2778,7 @@ class RelionMotl(Motl):
         tomo_format="",
         subtomo_format="",
         use_original_entries=False,
+        keep_all_entries=False,
         version=None,
         add_object_id=False,
         add_subunit_id=False,
@@ -2783,8 +2801,13 @@ class RelionMotl(Motl):
             Format of the subtomogram name output format. See
             :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
         use_original_entries : bool, default=False
-            Determine whether to use (True) the original entries stored in `self.relion_df`
-            or not (False). Defaults to False.
+            Determine whether to use (True) the original entries stored in `self.relion_df` or not (False). If True, all
+            relion entries that are not used in motl (e.g. rlnCtfImage) are fetched from the original relion dataframe.
+            Coordinates, rotations, classes etc. will be updated. Defaults to False.
+        keep_all_entries: bool, default=False
+            Used only if use_original_entries is True. If True, it will keep all the entries as they were loaded including
+            coordinates, rotations and classes. Essentially, it should be set to True only if some selection on particles
+            was done and nothing changed. Defaults to False.
         version : float, optional
             Specify the version and thereby the format of the DataFrame. If not provided the
             value from `self.version` will be used. Defaults to None.
@@ -2820,6 +2843,7 @@ class RelionMotl(Motl):
         """
         relion_df = self.create_relion_df(
             use_original_entries=use_original_entries,
+            keep_all_entries=keep_all_entries,
             version=version,
             add_object_id=add_object_id,
             add_subunit_id=add_subunit_id,

@@ -1,4 +1,5 @@
 import numpy as np
+import math
 
 
 def get_all_pairs(input_numbers):
@@ -55,3 +56,27 @@ def get_number_of_digits(input_number):
     """
 
     return len(str(input_number))
+
+
+def get_similar_size_factors(number):
+    """Return two factors of a number that are closest in size.
+
+    Parameters
+    ----------
+    number: int
+        The number for which to find factors.
+
+    Returns
+    -------
+    tuple:
+        A tuple containing two factors of the number that are closest in size.
+        If no factors are found, returns the number itself and 1.
+    """
+
+    sqrt_num = int(math.sqrt(number))
+    for i in range(sqrt_num, 1, -1):
+        if number % i == 0:
+            # If the number is divisible by i, return i and number // i
+            return i, number // i
+    # If no factors are found, return the number itself and 1
+    return number, 1

@@ -1122,7 +1122,7 @@ def correct_bbox(template_list, indices):
         temp_df.to_csv(template_list)
 
 
-def recompute_dist_maps(template_list, indices, parent_folder_path):
+def recompute_dist_maps(template_list, indices, parent_folder_path, angle_list_path):
     temp_df = pd.read_csv(template_list, index_col=0)
 
     for i in indices:
