@@ -5,6 +5,21 @@ from cryocat import mdoc
 from cryocat import ioutils
 
 
+def calculate_total_dose_batch(tomo_list, prior_dose_file_format, dose_per_image, output_file_format):
+    for t in tomo_list:
+        file_name = ioutils.fileformat_replace_pattern(prior_dose_file_format, t, "x", raise_error=False)
+        total_dose = calculate_total_dose(file_name, dose_per_image)
+        output_file = ioutils.fileformat_replace_pattern(output_file_format, t, "x", raise_error=False)
+        np.savetxt(output_file, total_dose, fmt="%.6f")
+
+
+def calculate_total_dose(prior_dose, dose_per_image):
+    prior_dose = ioutils.total_dose_load(prior_dose)
+    total_dose = prior_dose + dose_per_image
+
+    return total_dose
+
+
 def dose_filter(mrc_file, pixelsize: float, total_dose, output_file=None, return_data_order="xyz"):
     # Input: mrc_file or path to it
     #        pixelsize: float, in Angstroms
