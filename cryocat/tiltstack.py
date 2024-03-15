@@ -6,7 +6,9 @@ from cryocat import ioutils
 
 
 def calculate_total_dose_batch(tomo_list, prior_dose_file_format, dose_per_image, output_file_format):
-    for t in tomo_list:
+    tomograms = ioutils.tlt_load(tomo_list).astype(int)
+
+    for t in tomograms:
         file_name = ioutils.fileformat_replace_pattern(prior_dose_file_format, t, "x", raise_error=False)
         total_dose = calculate_total_dose(file_name, dose_per_image)
         output_file = ioutils.fileformat_replace_pattern(output_file_format, t, "x", raise_error=False)
