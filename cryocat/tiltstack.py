@@ -3,6 +3,54 @@ import numpy as np
 import pandas as pd
 from cryocat import mdoc
 from cryocat import ioutils
+from skimage.transform import downscale_local_mean
+from skimage import exposure
+import warnings
+from functools import wraps
+
+
+def suppress_warnings(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore")
+            result = func(*args, **kwargs)
+        return result
+
+    return wrapper
+
+
+def bin(tilt_stack, binning_factor):
+
+    # binned_stack = np.zeros((tilt_stack.shape[0],tilt_stack.shape[1],tilt_stack.shape[0]
+
+    # for z in range(tilt_stack.shape[0]):
+
+    #    binned_stack[z, :, :] = downscale_local_mean(tilt_stack[z, :, :], (1, binning_factor, binning_factor))
+
+    binned_stack = downscale_local_mean(tilt_stack, (1, binning_factor, binning_factor))
+    print(tilt_stack.dtype)
+    return binned_stack.astype(tilt_stack.dtype)
+
+
+def equalize_histogram(tilt_stack, eh_method="contrast_stretching"):
+
+    equalized_titls = np.zeros(tilt_stack.shape)
+
+    for z in range(tilt_stack.shape[0]):
+        if eh_method == "contrast_stretching":
+            p2, p98 = np.percentile(tilt_stack[z, :, :], (2, 98))
+            equalized_titls[z, :, :] = exposure.rescale_intensity(tilt_stack[z, :, :], in_range=(p2, p98))
+        elif eh_method == "equalization":
+            # Equalization
+            equalized_titls[z, :, :] = exposure.equalize_hist(tilt_stack[z, :, :])
+        elif eh_method == "adaptive_eq":
+            # Adaptive Equalization
+            equalized_titls[z, :, :] = exposure.equalize_adapthist(tilt_stack[z, :, :], clip_limit=0.03)
+        else:
+            raise ValueError(f"The {eh_method} is not known!")
+
+    return equalized_titls.astype(tilt_stack.dtype)
 
 
 def calculate_total_dose_batch(tomo_list, prior_dose_file_format, dose_per_image, output_file_format):
@@ -64,6 +112,7 @@ def dose_filter(mrc_file, pixelsize: float, total_dose, output_file=None, return
     return filtered_stack
 
 
+@suppress_warnings
 def dose_filter_single_image(image, dose, freq_array):
     # Hard-coded resolution-dependent critical exposures
     # These parameters come from the fitted numbers in the Grant and Grigorieff paper.

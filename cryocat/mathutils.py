@@ -58,25 +58,33 @@ def get_number_of_digits(input_number):
     return len(str(input_number))
 
 
-def get_similar_size_factors(number):
-    """Return two factors of a number that are closest in size.
+def get_similar_size_factors(number, order="ascending"):
+    """Return two factors of a number that are closest in size - either in ascending or descending order.
 
     Parameters
     ----------
     number: int
         The number for which to find factors.
+    order: str, default="ascending"
+        Order in which the numbers should be returned.
 
     Returns
     -------
     tuple:
-        A tuple containing two factors of the number that are closest in size.
-        If no factors are found, returns the number itself and 1.
+        A tuple containing two factors of the number that are closest in size sorted by specified order.
+        If no factors are found, returns the number itself and 1 (also sorted based on the specified order).
     """
+
+    def sort(a, b):
+        if order == "ascending":
+            return min(a, b), max(a, b)
+        else:
+            return max(a, b), min(a, b)
 
     sqrt_num = int(math.sqrt(number))
     for i in range(sqrt_num, 1, -1):
         if number % i == 0:
             # If the number is divisible by i, return i and number // i
-            return i, number // i
+            return sort(i, number // i)
     # If no factors are found, return the number itself and 1
-    return number, 1
+    return sort(number, 1)

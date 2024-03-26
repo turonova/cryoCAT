@@ -221,11 +221,11 @@ def defocus_load(input_data, file_type="gctf"):
     if isinstance(input_data, pd.DataFrame):
         defocus_df = input_data
     elif isinstance(input_data, str):
-        if file_type == "gctf":
+        if file_type.lower() == "gctf":
             defocus_df = gctf_read(input_data)
-        elif file_type == "ctffind4":
+        elif file_type.lower() == "ctffind4":
             defocus_df = ctffind4_read(input_data)
-        elif file_type == "warp":
+        elif file_type.lower() == "warp":
             defocus_df = warp_ctf_read(input_data)
         else:
             raise ValueError(f"The file type {file_type} is not supported.")

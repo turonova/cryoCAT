@@ -66,8 +66,9 @@ def create_wedge_list_sg(
     z_shift : str or array-like or int or float, default=0.0
         The path to the file containing information on z-shift (txt, com) or z-shift specified as array-like, pandas
         DataFrame, int or float. See :meth:`cryocat.ioutils.z_shift_load` for more information on formatting.
-    ctf_file : str, optional
-        The path to the file with defocus values - either in gctf (star), ctffind4 (txt) or warp (xml) format. See
+    ctf_file : str or pandas.DataFrame or array-like, optional
+        Either the path to the file with defocus values - either in gctf (star), ctffind4 (txt) or warp (xml) format or
+        array like structure of size Nx5 (N is number of tilts), or pandas.DataFrame. See
         :meth:`cryocat.ioutils.defocus_load` for more information on formatting.
     ctf_file_type : str, {"gctf", "ctffind4", "warp"}
         The type of the CTF file with defocus values. It can be either "gctf", "ctffind4", "warp", defaults to "gctf".
