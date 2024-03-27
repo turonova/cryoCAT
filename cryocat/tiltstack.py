@@ -70,11 +70,14 @@ def calculate_total_dose(prior_dose, dose_per_image):
     return total_dose
 
 
-def dose_filter(mrc_file, pixelsize: float, total_dose, output_file=None, return_data_order="xyz"):
+def dose_filter(mrc_file, pixel_size, total_dose, output_file=None, return_data_order="xyz"):
     # Input: mrc_file or path to it
     #        pixelsize: float, in Angstroms
     #        total_dose: ndarray or path to the .csv, .txt, or .mdoc file
     #        return_data_order: by default x y z (x,y,n_tilts), for napari compatible view use "zyx"
+
+    # temporarily here until this function exist as an entry point on command line
+    pixel_size = float(pixel_size)
 
     stack_data = cryomap.read(mrc_file)
     total_dose = ioutils.total_dose_load(total_dose)
@@ -88,8 +91,8 @@ def dose_filter(mrc_file, pixelsize: float, total_dose, output_file=None, return
     cen_x = imgs_x // 2  # Center for array is half the image size
     cen_y = imgs_y // 2  # Center for array is half the image size
 
-    rstep_x = 1 / (imgs_x * pixelsize)  # reciprocal pixel size
-    rstep_y = 1 / (imgs_y * pixelsize)
+    rstep_x = 1 / (imgs_x * pixel_size)  # reciprocal pixel size
+    rstep_y = 1 / (imgs_y * pixel_size)
 
     # Loop to fill array with frequency values
     for x in range(imgs_x):

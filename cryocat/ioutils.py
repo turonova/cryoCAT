@@ -358,7 +358,11 @@ def total_dose_load(input_dose):
     elif isinstance(input_dose, str):
         if input_dose.endswith(".csv"):
             # load as panda frames
-            return pd.read_csv(input_dose, usecols=["Corrected_dose"], squeeze=True).values
+            df = pd.read_csv(input_dose, index_col=0)
+            if "CorrectedDose" in df.columns:
+                return df["CorrectedDose"].astype(np.single).to_numpy()
+            else:
+                ValueError(f"The file {input_dose} does not contain column with name CorrectedDose")
         elif input_dose.endswith(".mdoc"):
             # load as mdoc
             mdoc_file = mdoc.Mdoc(input_dose)
@@ -584,3 +588,74 @@ def imod_com_read(filename):
             result_dict[key] = values
 
     return result_dict
+
+
+def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start=0, output_file=None):
+    """Reads a file, removes specified lines while skipping those that start with given strings and returns/writes out
+    the rest.
+
+    Parameters
+    ----------
+    filename : str
+        The name of the file to remove the lines from.
+    lines_to_remove: int or array-like
+        Array/list (or single int) with numbers of lines to be removed. If start_str_to_skip is empty, the indices
+        corresponds to the line numbers.
+    start_str_to_skip: str or array-like
+        Array/list of strings (or single string). The lines starting with any of those strings will be ignored. The indices
+        from lines_to_remove will be applied to filter only the remaining lines. Dafaults to None.
+    number_start: int. default=0
+        Whether the line numbers provied start counting at 0 or 1. Defaults to 0.
+    output_file: str
+        Path to a file to write out the content into. Defaults to None (no file will be written out).
+
+    Returns
+    -------
+    list
+        A list of lines that were kept.
+
+    """
+
+    filtered_lines = []
+
+    if start_str_to_skip is None:
+        start_str_to_skip = []
+    elif not isinstance(start_str_to_skip, list):
+        start_str_to_skip = [start_str_to_skip]
+
+    kept_counter = number_start
+    with open(filename, "r") as file:
+        for line in file:
+            if any(line.startswith(s) for s in start_str_to_skip):
+                filtered_lines.append(line)
+            else:
+                if kept_counter not in lines_to_remove:
+                    filtered_lines.append(line)
+
+                kept_counter += 1
+
+    if output_file is not None:
+        with open(output_file, "w") as of:
+            of.writelines(filtered_lines)
+
+    return filtered_lines
+
+    """ lines_to_write = []
+
+    if start_str_to_skip is None:
+        start_str_to_skip = []
+    elif not isinstance(start_str_to_skip, list):
+        start_str_to_skip = [start_str_to_skip]
+
+    with open(filename, "r") as file:
+        for line in file:
+            if not any(line.startswith(s) for s in start_str_to_skip):
+                lines_to_write.append(line)
+
+    filtered_lines = [line for i, line in enumerate(lines_to_write) if i not in lines_to_remove]
+
+    if output_file is not None:
+        with open(output_file, "w") as of:
+            of.writelines(filtered_lines)
+
+    return filtered_lines """

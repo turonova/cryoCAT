@@ -1,6 +1,7 @@
 from enum import Enum
 import pandas as pd
 from os import path
+import warnings
 
 
 class TokenType(Enum):
@@ -336,6 +337,29 @@ class Starfile:
             self.frames = frames
             self.specifiers = specifiers
             self.comments = comments
+
+    @staticmethod
+    def remove_lines(file_path, lines_to_remove, output_file=None, data_specifier=None, number_columns=True):
+
+        frames, specifiers, comments = Starfile.read(file_path)
+
+        if data_specifier is None:
+            spec_id = 0
+        else:
+            spec_id = Starfile.get_specifier_id(specifiers, data_specifier)
+            if spec_id is None:
+                warnings.warn(f"The data specifier {data_specifier} was not found in the file. No lines were removed.")
+                return
+
+        # Convert row numbers to index labels
+        rows_to_remove_labels = frames[spec_id].index[lines_to_remove]
+        frames[spec_id] = frames[spec_id].drop(rows_to_remove_labels)
+        frames[spec_id].reset_index(drop=True, inplace=True)
+
+        if output_file is not None:
+            Starfile.write(frames, output_file, specifiers=specifiers, comments=comments, number_columns=number_columns)
+        else:
+            return frames, specifiers, comments
 
     @staticmethod
     def read(file_path, data_id=None):
