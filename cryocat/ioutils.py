@@ -151,7 +151,7 @@ def get_data_from_warp_xml(xml_file_path, node_name, node_level=1):
                 node_elements = elements[0].findall(".//Node")
 
                 # Extract values from each Node element
-                data = [node.get("Value") for node in node_elements]
+                data = [float(node.get("Value")) for node in node_elements]
             else:
                 # Default behavior: extract text content from the elements
                 data_text = elements[0].text.strip()
