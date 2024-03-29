@@ -13,6 +13,49 @@ from scipy.spatial.transform import Rotation as srot
 
 
 class NPC:
+
+    @staticmethod
+    def compute_diameter(input_motl, pixel_size=1.0, su_id="geom2"):
+        motl_ri = cryomotl.Motl.load(input_motl)
+        motl_ri.df.reset_index(inplace=True, drop=True)
+
+        # Define the pairs
+        pairs = [(1, 5), (2, 6), (3, 7), (4, 8)]
+
+        # Function to check if both elements of a pair are present in a group and return the indices
+        def get_pairs_indices(group):
+            indices = []
+            for pair in pairs:
+                if pair[0] in group[su_id].values and pair[1] in group[su_id].values:
+                    indices.append(
+                        [
+                            group.loc[group[su_id] == pair[0]].index.tolist()[0],
+                            group.loc[group[su_id] == pair[1]].index.tolist()[0],
+                        ]
+                    )
+            return indices
+
+        # Group by t_id and o_id, and apply the function to get pairs indices
+        result = (
+            motl_ri.df.groupby(["tomo_id", "object_id"]).apply(get_pairs_indices).reset_index(name="su_pairs_indices")
+        )
+        # Filter out empty lists
+        pairs_only = result.loc[result["su_pairs_indices"].apply(bool), "su_pairs_indices"].to_list()
+        motl_idx = np.array([item for sublist in pairs_only for item in sublist])
+
+        coord = motl_ri.get_coordinates()
+
+        distances = geom.point_pairwise_dist(coord[motl_idx[:, 0], :], coord[motl_idx[:, 1], :])
+
+        # Create an array of NaNs with the same length as the dataframe
+        df_values = np.full(len(motl_ri.df), np.nan)
+        df_values[motl_idx[:, 0]] = distances * pixel_size
+        motl_ri.df["su_distance"] = df_values
+
+        npc_diameters_df = motl_ri.df.groupby(["tomo_id", "object_id"])["su_distance"].mean().dropna()
+
+        return npc_diameters_df.values
+
     @staticmethod
     def unify_nn_orientations(input_motl, dist_threshold=10000):
         traced_motl = ribana.trace_chains(
