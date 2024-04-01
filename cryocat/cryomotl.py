@@ -2767,7 +2767,8 @@ class RelionMotl(Motl):
         if adapt_object_attr:
             self.relion_df = relion_df
 
-        relion_df = relion_df.drop(columns=["subtomo_id"])
+        if "subtomo_id" in relion_df.columns:
+            relion_df = relion_df.drop(columns=["subtomo_id"])
 
         return relion_df
 
