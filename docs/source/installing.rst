@@ -52,6 +52,8 @@ Mandatory dependencies
 
 - `lmfit <https://lmfit.github.io/lmfit-py>`__
 
+- `h5py <https://www.h5py.org/>`__
+
 
 Getting help
 ~~~~~~~~~~~~
