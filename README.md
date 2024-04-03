@@ -21,6 +21,7 @@ The documentation including tutorials and basic user guide can be found here: [c
     * seaborn (0.12.1)
     * scikit-learn (1.0.2)
     * lmfit (1.2.2)
+    * h5py (3.10.0)
       
 ## PIP
 
