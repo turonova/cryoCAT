@@ -1,3 +1,4 @@
+import h5
 import emfile
 import mrcfile
 import numpy as np
