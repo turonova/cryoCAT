@@ -1,4 +1,4 @@
-import h5
+import h5py
 import emfile
 import mrcfile
 import numpy as np
@@ -112,6 +112,39 @@ def mrc2em(map_name, invert=False, overwrite=True, output_name=None):
 
     write(data_to_write, output_name, overwrite=overwrite)
 
+
+def write_hdf5(map_name, labels=None, weight=None, output_name=None): 
+    
+    data_to_write = read(map_name)        
+
+    if output_name is None:
+        output_name = map_name[:-3] + "hdf5"
+
+    f = h5py.File(output_name, 'w')
+
+    f.create_dataset("raw", data=data_to_write)
+
+    if labels is not None:
+        labels_to_write = read(labels)
+        f.create_dataset("label", data=labels_to_write)
+    if weight is not None:
+        weight_to_write = read(weight)
+        f.create_dataset("weight", data=weight_to_write)
+
+    f.close()
+
+
+def read_hdf5(hdf5_name, dataset_name='predictions', print_datasets=False): 
+    f = h5py.File(hdf5_name, 'r')
+
+    if print_datasets:
+        print(f"Available datasets: {f.keys()}")
+
+    data = np.array(f[dataset_name][:])
+    f.close()
+
+    return data
+    
 
 def normalize(map):
     norm_map = read(map)
