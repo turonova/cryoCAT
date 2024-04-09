@@ -13,6 +13,7 @@ from cryocat import geom
 from cryocat import starfileio
 from cryocat import cryomask
 from cryocat import mathutils
+from cryocat import ioutils
 
 from math import ceil
 from matplotlib import pyplot as plt
@@ -408,9 +409,9 @@ class Motl:
 
         Parameters
         ----------
-        tomo_dimensions : str or numpy.ndarray, optional
+        tomo_dimensions : str or pandas.DataFrame or array-like, optional
             Dimensions of tomograms in the motl. If not provided, only the orientation is changed. For specification on
-            tomo_dimensions format see :meth:`cryocat.geom.load_dimensions`. Defaults to None.
+            tomo_dimensions format see :meth:`cryocat.ioutils.dimensions_load`. Defaults to None.
 
         Notes
         -----
@@ -433,7 +434,7 @@ class Motl:
 
         # Position flip
         if tomo_dimensions is not None:
-            dims = geom.load_dimensions(tomo_dimensions)
+            dims = ioutils.dimensions_load(tomo_dimensions)
             if dims.shape == (1, 3):
                 z_dim = float(dims["z"]) + 1
                 self.df.loc[:, "z"] = z_dim - self.df.loc[:, "z"]

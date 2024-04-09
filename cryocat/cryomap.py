@@ -131,7 +131,7 @@ def rotate(
     degrees=True,
     spline_order=3,
 ):
-    # create transaltion to the center of the box
+    # create translation to the center of the box
     T = np.eye(4)
     structure_center = np.asarray(map.shape) // 2
     T[:3, -1] = structure_center

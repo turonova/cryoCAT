@@ -1,7 +1,5 @@
-# import emfile
-# import mrcfile
 import numpy as np
-# from typing import Optional
+import re
 import sys
 from matplotlib import pyplot as plt
 import cryocat
@@ -37,7 +35,7 @@ def load_for_fsc(refA_name,
 
     refA = cryocat.cryomap.read(refA_name)
     refB = cryocat.cryomap.read(refB_name)
-    # mask the volumes; in case no mask was provided create an empty mask the size of the input box
+    ### mask the volumes; in case no mask was provided create an empty mask the size of the input box
     if len(refA[0]) == len(refB[0]):            
         if fsc_mask_name is not None:
             fsc_mask=cryocat.cryomap.read(fsc_mask_name)
@@ -50,9 +48,40 @@ def load_for_fsc(refA_name,
         raise UserInputError('Sizes of volumes to compare do not match!')
     mrefA=np.multiply(refA, fsc_mask)
     mrefB=np.multiply(refB, fsc_mask)
-## TODO APPLY symmetry
+
     return refA, refB, fsc_mask, mrefA, mrefB, symmetry
-  
+
+def symmterize_volume(vol, symmetry): 
+
+## TODO apply symmetry: based on cryomotl.split_in_asymetric_subunits
+## nice example: https://stackoverflow.com/questions/28467446/problems-with-using-re-findall-in-python
+    if isinstance(symmetry, str):
+        nfold = int(re.findall(r"\d+", symmetry)[-1])
+        # if symmetry.lower().startswith("c"):
+        #     s_type = 1  # c symmetry
+        # elif symmetry.lower().startswith("d"):
+        #     s_type = 2  # d symmetry
+        # else:
+        #         ValueError("Unknown symmetry - currently only c and are supported!")
+    elif isinstance(symmetry, (int, float)):
+            # s_type = 1  # c symmetry
+            nfold = symmetry
+    else:
+        ValueError("The symmetry has to be specified as a string (starting with C or D) or as a number (float, int)!")
+    ## assuming the particle axes correspond to the coordinate system of the box, 
+    ## i.e. cyclic rotation is established along the "z" = 3rd dimension of the box
+    inplane_step = 360 / nfold
+    ## for rotations that are multiplications of 90 degrees
+    if symmetry.lower().startswith("c") and nfold == 2:
+        symmetrized_vol = np.divide(np.add(vol, np.rot90(vol, k=2, axes=(0, 1))), nfold*np.ones(np.shape(np.asarray(vol))))
+    elif symmetry.lower().startswith("c") and nfold == 4:
+        symmetrized_vol = np.divide((vol + np.rot90(vol, k=1, axes=(0,1)) + np.rot90(vol, k=2, axes=(0, 1)) + np.rot90(vol, k=3, axes=(0, 1))), nfold*np.ones(np.shape(np.asarray(vol)))) # for i in range(1, nfold))
+### TODO will probably crash as the vol will be a seen as tuple
+
+### cryomap rotate - call only with theta 0,0,smth; initate box with 0 and keep adding
+
+
+    return symmetrized_vol
 
 def calculate_fsc(mrefA, mrefB):
     ### apply FFT to the whole box with no padding over every axis (TODO introduce cutoff); shift 0 to the middle of the box TODO check that it is indeed the case
@@ -75,17 +104,17 @@ def calculate_fsc(mrefA, mrefB):
 
     max_n_shell = math.floor(len(mrefA[0]) / 2)
 
-    # Precalculate shell masks
+    ### Precalculate shell masks
     shell_mask = []
     for r in range(0, max_n_shell + 1):
-        # Shells are set to one pixel size
+        ### Shells are set to one pixel size
         shell_start = r - 1
         shell_end = r
 
-        # Generate shell mask
+        ### Generate shell mask
         temp_mask = (distance_v >= shell_start) & (distance_v < shell_end)
         
-        # Write out linearized shell mask
+        ### Write out linearized shell mask
         shell_mask.append(temp_mask.astype(int))
 
     AB_cc_array = []    # Complex conjugate of A and B
@@ -94,16 +123,7 @@ def calculate_fsc(mrefA, mrefB):
 
     full_fsc = [] 
 
-    # np.set_printoptions(threshold=sys.maxsize) ###????
     for r in range(len(shell_mask)):
-        
-        # print("r", r, "mask",  shell_mask[r][16][16])#, np.where(np.multiply(shell_mask[r],fsc_denominator)))
-       
-        # print("previous 893869. 893547. 894000. 894962. 893869. 891337.")
-        # print(np.multiply(shell_mask[r][16][16], fsc_denominator[16][16]))
-        # print(np.where(shell_mask[r][16][16]*fsc_denominator[16][16]))
-        # print(np.real(np.sum(shell_mask[r][16][16]*fsc_denominator[16][16])))
-
         AB_cc_array.append(np.sum(shell_mask[r] * fsc_denominator))
         # print(np.sum(shell_mask[r] * fsc_denominator))
         intA_array.append(np.sum(shell_mask[r] * fsc_A))
@@ -124,12 +144,23 @@ def calculate_fsc(mrefA, mrefB):
     return full_fsc
 
 def phase_randomised_reference(mft,
-                            fourier_cutoff=5):
+                            fourier_cutoff=None):
     amp, phase = np.absolute(mft), np.angle(mft)
     pr_phase = phase.copy()
-    
-   # ## TODO so far gives error:
-   # ## distance_v = cryocat.mathutils.distance_array(mft)
+    ### calculate fourier_cutoff based on box size
+    if fourier_cutoff is None:
+        edge = len(mft[0])
+        if edge < 75:
+            fourier_cutoff = math.floor(edge/5)
+        elif edge < 150: 
+            fourier_cutoff = math.floor(edge/10)
+        else:
+            fourier_cutoff = 15
+    ### TODO test for fsc len that's close or equal to fourier cutoff
+
+
+    ### TODO so far gives error:
+    ### distance_v = cryocat.mathutils.distance_array(mft)
     shell_grid = np.arange(math.floor(-len(mft[0]) / 2), math.ceil(len(mft[0]) / 2), 1)
     xv, yv, zv = shell_grid, shell_grid, shell_grid
     shell_space = np.meshgrid(xv, yv, zv, indexing="xy")  ## 'ij' denominates matrix indexing, 'xy' cartesian
@@ -141,13 +172,13 @@ def phase_randomised_reference(mft,
     randomised_phases_list= rng.permuted((R_fourier_mask * pr_phase).flatten())
     masked_indices = np.where(R_fourier_mask)
 
-    # Randomize the phases for the masked indices
+    ### Randomize the phases for the masked indices
     pr_phase[masked_indices] = randomised_phases_list[:len(masked_indices[0])]
 
-    # Compute the randomized phases
+    ### Compute the randomized phases
     phase_rand = amp * np.exp(1j * pr_phase)
 
-    ## generate phase-randomised real space maps:
+    ### Generate phase-randomised real space maps:
     pr_ref = np.fft.ifftn(np.fft.ifftshift(phase_rand))
     
     return pr_ref
