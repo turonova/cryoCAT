@@ -20,6 +20,7 @@ setup(
         "seaborn",
         "scikit-learn",
         "lmfit",
+        "h5py",
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
