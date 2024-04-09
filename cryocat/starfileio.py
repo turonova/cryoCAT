@@ -81,7 +81,7 @@ class Token:
             # Add a NEWLINE token
             tokens.append(Token(TokenType.NEWLINE, None, (line_number, 0)))
 
-        return tokens
+        return tokens[::-1]
 
     @staticmethod
     def parse_newline_or_comments(tokens):
@@ -231,7 +231,7 @@ class Token:
 
         if len(tokens) == 0:
             raise IOError(f"Expected {token_type} but there are not enough token.")
-        if tokens[0].token_type == token_type:
+        if tokens[-1].token_type == token_type:
             return True
         return False
 
@@ -255,8 +255,8 @@ class Token:
         """
         if len(tokens) == 0:
             raise IOError(f"Expected {token_type} but there are enough token.")
-        if tokens[0].token_type == token_type:
-            return tokens.pop(0)
+        if tokens[-1].token_type == token_type:
+            return tokens.pop()
         else:
             raise IOError(f"Expected {token_type} but got {tokens[0].token_type} at {tokens[0].location}.")
 
@@ -278,7 +278,7 @@ class Token:
             the first token or None
 
         """
-        if len(tokens) > 0 and tokens[0].token_type == token_type:
+        if len(tokens) > 0 and tokens[-1].token_type == token_type:
             return Token.consume(tokens, token_type)
         return None
 
@@ -301,7 +301,8 @@ class Token:
             a boolean value indicating a found token
 
         """
-        for i in range(len(tokens)):
+        ignores = set(ignores)
+        for i in range(len(tokens) - 1, -1, -1):
             if tokens[i].token_type == token_type_target:
                 return True
             elif tokens[i].token_type in ignores:
