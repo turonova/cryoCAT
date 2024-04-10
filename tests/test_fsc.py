@@ -10,7 +10,7 @@ from cryocat import cryomap
 from cryocat import cryomask
 from cryocat import sg_calculate_fsc as fsc
 
-### For sh. and giggles
+### trying out parametrization for practice
 @pytest.mark.parametrize('refA_name',[('./tests/test_data/npc_ref_A_px_1_inv.em')])
 @pytest.mark.parametrize('refB_name', [('./tests/test_data/npc_ref_B_px_1_inv.em')])
 @pytest.mark.parametrize('fsc_mask_name', [('./tests/test_data/sphere_r10_g2_bx32.em')])
