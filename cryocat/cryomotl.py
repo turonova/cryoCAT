@@ -6,6 +6,7 @@ import pandas as pd
 import subprocess
 import re
 import warnings
+import copy
 
 from cryocat.exceptions import UserInputError
 from cryocat import cryomap
@@ -403,6 +404,46 @@ class Motl:
                 self.df[["phi", "theta", "psi"]] = value
             elif key == "shifts":
                 self.df[["shift_x", "shift_y", "shift_z"]] = value
+
+    def get_random_subset(self, number_of_particles):
+        """Generate a random subset of particles from the motl.
+
+        Parameters
+        ----------
+        number_of_particles: int
+            Number of particles to select randomly.
+
+        Returns
+        -------
+        Motl object
+            A new motl containing the randomly selected subset of particles.
+        """
+
+        new_motl = copy.copy(self)
+        r_indices = np.random.choice(range(self.df.shape[0]), number_of_particles, replace=False)
+        new_motl.df = self.df.iloc[r_indices, :].copy()
+
+        return new_motl
+
+    def assign_random_classes(self, number_of_classes):
+        """Assign a random class to each point in the motl.
+
+        Parameters
+        ----------
+        number_of_classes: int
+            The total number of classes to choose from.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
+        """
+
+        r_classes = np.random.randint(1, number_of_classes + 1, size=self.df.shape[0])
+        self.df["class"] = r_classes
 
     def flip_handedness(self, tomo_dimensions=None):
         """Flip the handedness of the particles in the motl.
@@ -906,6 +947,10 @@ class Motl:
             In case the motl_type is not supported.
 
         """
+
+        if isinstance(input_motl, Motl):
+            return copy.deepcopy(input_motl)
+
         if motl_type == "emmotl":
             return EmMotl(input_motl)
         elif motl_type == "relion":
@@ -1362,13 +1407,66 @@ class Motl:
 
         return motl
 
-    def shift_positions(self, shift):
+    def apply_tomo_rotation(self, rotation_angles, tomo_id, tomo_dim):
+        """Apply tomogram rotation to the corresponding particles in the motl. The rotation angles can come e.g. from
+        trimvol command or from slicer in etomo. Currently works only for one t
+
+        Parameters
+        ----------
+        rotation_angles : array-like
+            Rotation angles in degrees corresponding to rotation around x, y, and z axis.
+        tomo_id : int
+            Tomo ID of the particles that should be rotated and shifted.
+        tomo_dim : array-like
+            Dimensions of the tomogram in x, y, z.
+
+        Returns
+        -------
+        feature_motl : Motl
+            A new motl with rotated and shifted particles.
+        """
+
+        def rotate_points(points, rot, tomo_dim):
+            dim = np.asarray(tomo_dim)
+            points = points - dim / 2
+            points = rot.apply(points) + dim / 2
+            return points
+
+        feature_motl = self.get_motl_subset(tomo_id, feature_id="tomo_id")
+        coord_rot = rot.from_euler(
+            "zyx", angles=[rotation_angles[2], rotation_angles[1], rotation_angles[0]], degrees=True
+        )
+        coord = feature_motl.get_coordinates()
+        coord = rotate_points(coord, coord_rot, tomo_dim)
+
+        shift_x_coord = feature_motl.shift_positions([1, 0, 0], inplace=False).get_coordinates()
+        shift_y_coord = feature_motl.shift_positions([0, 1, 0], inplace=False).get_coordinates()
+        shift_z_coord = feature_motl.shift_positions([0, 0, 1], inplace=False).get_coordinates()
+
+        x_vector = rotate_points(shift_x_coord, coord_rot, tomo_dim) - coord
+        y_vector = rotate_points(shift_y_coord, coord_rot, tomo_dim) - coord
+        phi_angle = geom.angle_between_vectors(x_vector, y_vector)
+        rot_angles = geom.normals_to_euler_angles(
+            rotate_points(shift_z_coord, coord_rot, tomo_dim) - coord, output_order="zxz"
+        )
+        rot_angles[:, 0] = phi_angle
+
+        print(x_vector[0], y_vector[0])
+        feature_motl.fill({"angles": rot_angles})
+        feature_motl.fill({"coord": coord})
+
+        return feature_motl
+
+    def shift_positions(self, shift, inplace=True):
         """Shifts the coordinates by the provided shift.
 
         Parameters
         ----------
         shift : numpy.ndarray
             3D shift to be applied to the coordinates.
+        inplace : boolean, default=True
+            Whether to return a new instance of the motl with shifted coordinates (False) or perform the shift on `df`
+            directly (True). Defaults to True.
 
         Notes
         -----
@@ -1376,8 +1474,8 @@ class Motl:
 
         Returns
         -------
-        None
-
+        new_motl : Motl
+            A new instance of motl with shifted coordinate (only if inplace is set to False).
         """
 
         def shift_coords(row):
@@ -1391,9 +1489,14 @@ class Motl:
             row["shift_z"] = row["shift_z"] + rshifts[0][2]
             return row
 
-        self.df = self.df.apply(shift_coords, axis=1).reset_index(drop=True)
+        if inplace:
+            self.df = self.df.apply(shift_coords, axis=1).reset_index(drop=True)
+        else:
+            new_motl = copy.deepcopy(self)
+            new_motl.df = new_motl.df.apply(shift_coords, axis=1).reset_index(drop=True)
+            return new_motl
 
-    def split_in_asymetric_subunits(self, symmetry, xyz_shift):
+    def split_in_asymmetric_subunits(self, symmetry, xyz_shift):
         """Split the motive list into assymetric subunits.
 
         Parameters
@@ -1499,7 +1602,9 @@ class Motl:
 class EmMotl(Motl):
     def __init__(self, input_motl=None, header=None):
         if input_motl is not None:
-            if isinstance(input_motl, pd.DataFrame):
+            if isinstance(input_motl, EmMotl):
+                self = copy.deepcopy(input_motl)
+            elif isinstance(input_motl, pd.DataFrame):
                 self.check_df_type(input_motl)
             elif isinstance(input_motl, str):
                 self.df, self.header = self.read_in(input_motl)
@@ -1659,7 +1764,9 @@ class RelionMotl(Motl):
         self.data_spec = ""
 
         if input_motl is not None:
-            if isinstance(input_motl, pd.DataFrame):
+            if isinstance(input_motl, RelionMotl):
+                self = copy.deepcopy(input_motl)
+            elif isinstance(input_motl, pd.DataFrame):
                 self.check_df_type(input_motl)
             elif isinstance(input_motl, str):
                 relion_df, data_version, optics_df = self.read_in(input_motl)
@@ -2908,7 +3015,9 @@ class StopgapMotl(Motl):
         self.sg_df = pd.DataFrame()
 
         if input_motl is not None:
-            if isinstance(input_motl, pd.DataFrame):
+            if isinstance(input_motl, StopgapMotl):
+                self = copy.deepcopy(input_motl)
+            elif isinstance(input_motl, pd.DataFrame):
                 self.check_df_type(input_motl)
             elif isinstance(input_motl, str):
                 sg_df = self.read_in(input_motl)
@@ -3092,7 +3201,9 @@ class DynamoMotl(Motl):
         self.dynamo_df = pd.DataFrame()
 
         if input_motl is not None:
-            if isinstance(input_motl, pd.DataFrame):
+            if isinstance(input_motl, DynamoMotl):
+                self = copy.deepcopy(input_motl)
+            elif isinstance(input_motl, pd.DataFrame):
                 self.convert_to_motl(input_motl)
             elif isinstance(input_motl, str):
                 sg_df = self.read_in(input_motl)

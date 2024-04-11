@@ -28,6 +28,7 @@ Modules
     nnana
     pana
     ribana
+    sta
     starfileio
     structure
     tiltstack

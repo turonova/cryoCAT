@@ -36,6 +36,31 @@ def is_float(value):
         return False
 
 
+def get_filename_from_path(input_path, with_extension=True):
+    """Get the filename from the given input path.
+
+    Parameters
+    ----------
+    input_path: str
+        The input path from which the filename is to be extracted.
+    with_extension: bool, default=True
+        Flag to indicate whether to include the file extension in the filename. Default is True.
+
+    Returns:
+        str
+            The extracted filename from the input path.
+    """
+
+    # Get the filename without the path
+    filename = os.path.basename(input_path)
+
+    if not with_extension:
+        # Remove the extension from the filename
+        filename = os.path.splitext(filename)[0]
+
+    return filename
+
+
 def fileformat_replace_pattern(filename_format, input_number, test_letter, raise_error=True):
     """Replace a pattern in a filename format string with a given number. If the pattern is longer than number
     of digits in the input number the pattern is pad with zeros.
