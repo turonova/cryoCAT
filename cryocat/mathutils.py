@@ -1,6 +1,19 @@
 import numpy as np
 
 
+def compute_rmse(array1, array2):
+    # Compute squared differences along each column
+    squared_diff = (array1 - array2) ** 2
+
+    # Calculate mean of squared differences along each column
+    mean_squared_diff = np.mean(squared_diff, axis=0)
+
+    # Take square root to obtain RMSE for each column
+    rmse = np.sqrt(mean_squared_diff)
+
+    return rmse
+
+
 def get_all_pairs(input_numbers):
     pairs = []
     for i in range(len(input_numbers)):

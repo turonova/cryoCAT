@@ -250,3 +250,41 @@ def plot_orientational_distribution(
 
     if output_file is not None:
         fig.savefig(output_file, dpi=fig.dpi)
+
+
+def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stability", output_file=None):
+
+    x_axis = np.arange(input_dfs[0].shape[0])
+
+    n_rows = 3
+    n_cols = 4
+
+    # Set labels
+    if labels is None:
+        labels = input_dfs[0].columns
+        show_legend = False
+    else:
+        show_legend = True
+
+    # Create subplots
+    fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(20, 10))
+
+    for i in range(n_rows):  # number of rows
+        for j in range(n_cols):  # number of columns
+            current_ax = axes[i, j]
+            df_idx = i * n_cols + j
+            if df_idx >= input_dfs[0].shape[1]:
+                continue
+            for dfi, df in enumerate(input_dfs):
+                current_ax.plot(x_axis, df.iloc[:, df_idx], label=f"{labels[dfi]}")
+                current_ax.set_xlabel("Iteration")
+                current_ax.set_ylabel(input_dfs[0].columns[df_idx])
+                if show_legend:
+                    current_ax.legend()
+
+    # Show the plot
+    fig.suptitle(graph_title)
+    plt.show()
+
+    if output_file is not None:
+        fig.savefig(output_file, dpi=fig.dpi)
