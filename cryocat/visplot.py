@@ -5,6 +5,27 @@ from matplotlib import gridspec
 from matplotlib import cm
 
 
+def get_colors_from_palette(num_colors, pallete_name="tab10"):
+
+    # Generate a colormap with the desired number of distinct colors
+    cmap = plt.cm.get_cmap(pallete_name, num_colors)
+
+    # Convert RGBA colors to hex format
+    color_classes_hex = [colors.rgb2hex(cmap(i)) for i in range(num_colors)]
+
+    return color_classes_hex
+
+
+def convert_color_scheme(num_colors, color_scheme=None):
+
+    if color_scheme is None:
+        return get_colors_from_palette(num_colors)
+    elif isinstance(color_scheme, "str"):
+        return get_colors_from_palette(num_colors, pallete_name=color_scheme)
+    elif isinstance(color_scheme, list):
+        return color_scheme[:num_colors]
+
+
 def convert_to_radial(coordinates, replace_nan=True):
     r = np.linalg.norm(coordinates, axis=1)
     phi = np.arctan2(coordinates[:, 1], coordinates[:, 0])
@@ -245,6 +266,91 @@ def plot_orientational_distribution(
 
     if graph_title is not None:
         fig.suptitle(graph_title)
+
+    plt.show()
+
+    if output_file is not None:
+        fig.savefig(output_file, dpi=fig.dpi)
+
+
+def plot_class_occupancy(
+    occupancy_dic, color_scheme=None, ax=None, show_legend=True, graph_title=None, output_file=None
+):
+
+    ax_provided = True
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+        ax_provided = False
+
+    color_classes = convert_color_scheme(num_colors=len(occupancy_dic), color_scheme=color_scheme)
+
+    for i, c in enumerate(sorted(occupancy_dic)):
+        ax.plot(range(1, len(occupancy_dic[c]) + 1), occupancy_dic[c], label="Class " + str(c), color=color_classes[i])
+
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Number of particles")
+    if graph_title is None:
+        ax.set_title("Class occupancy progress")
+    else:
+        ax.set_title(graph_title)
+    if show_legend:
+        ax.legend(loc="upper left")
+
+    if not ax_provided:
+        plt.tight_layout()
+        plt.show()
+
+    if output_file is not None and not ax_provided:
+        fig.savefig(output_file, dpi=fig.dpi)
+
+
+def plot_class_stability(
+    subtomo_changes, color_scheme=None, ax=None, show_legend=True, graph_title=None, output_file=None
+):
+
+    ax_provided = True
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+        ax_provided = False
+
+    color_classes = convert_color_scheme(num_colors=len(subtomo_changes), color_scheme=color_scheme)
+
+    for cls, values in sorted(subtomo_changes.items()):
+        ax.plot(range(1, len(values) + 1), values, label="Class " + str(cls), color=color_classes[cls - 1])
+
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Particles changing their class")
+    if graph_title is None:
+        ax.set_title("Stability of classes")
+    else:
+        ax.set_title(graph_title)
+    if show_legend:
+        ax.legend(ncol=2)
+
+    if not ax_provided:
+        plt.tight_layout()
+        plt.show()
+
+    if output_file is not None and not ax_provided:
+        fig.savefig(output_file, dpi=fig.dpi)
+
+
+def plot_classification_convergence(
+    occupancy_dic, subtomo_changes_dic, color_scheme=None, graph_title=None, output_file=None
+):
+
+    # Create subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+    plot_class_occupancy(occupancy_dic, color_scheme=color_scheme, ax=ax1, show_legend=False)
+    plot_class_stability(subtomo_changes_dic, color_scheme=color_scheme, ax=ax2, show_legend=True)
+
+    # Adjust layout
+    plt.tight_layout()
+
+    # Show the plot
+    if graph_title is not None:
+        fig.suptitle(graph_title, y=1.02)
 
     plt.show()
 
