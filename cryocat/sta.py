@@ -153,6 +153,35 @@ def evaluate_alignment(
     return stats_dfs
 
 
+def get_motl_extension(motl_type):
+    """Return the file extension for a given motl type.
+
+    Parameters
+    ----------
+    motl_type : str (emmotl|relion|stopgap)
+        The type of motl file.
+
+    Returns
+    -------
+    str
+        The file extension corresponding to the motl type.
+
+    Raises
+    ------
+    ValueError
+        If the motl type is not supported.
+    """
+
+    if motl_type == "stopgap" or motl_type == "relion":
+        motl_ext = ".star"
+    elif motl_type == "emmotl":
+        motl_ext = ".em"
+    else:
+        raise ValueError(f"The motl type {motl_type} is not cyrrently supported.")
+
+    return motl_ext
+
+
 def compute_alignment_statistics(
     motl_base_name,
     start_it,
@@ -209,10 +238,7 @@ def compute_alignment_statistics(
     ... )
     """
 
-    if motl_type == "stopgap":
-        motl_ext = ".star"
-    elif motl_type == "emmotl":
-        motl_ext = ".em"
+    motl_ext = get_motl_extension(motl_type)
 
     stats_df = pd.DataFrame(
         columns=[
@@ -269,18 +295,25 @@ def compute_alignment_statistics(
 
 
 def write_out_motl(input_motl, output_file_base, output_motl_type):
-    """Write out a given MOTL file to a specified output format.
+    """Writes out a given motl file to a specified output format.
 
-    Parameters:
-        input_motl (MOTL): Input MOTL file to be written out.
-        output_file_base (str): Base name for the output file.
-        output_motl_type (str): Type of the output MOTL file. Supported types are "stopgap", "relion", and "emfile".
+    Parameters
+    ----------
+    input_motl : motl
+        Input motl file to be written out.
+    output_file_base : str
+        Base name for the output file.
+    output_motl_type : str (emfile|relion|stopgap)
+        Type of the output motl file.
 
-    Raises:
-        ValueError: If the output_motl_type is not one of the supported types.
+    Raises
+    ------
+    ValueError
+        If the output_motl_type is not one of the supported types.
 
-    Returns:
-        None
+    Returns
+    -------
+    None
     """
 
     if output_motl_type == "stopgap":
@@ -397,6 +430,8 @@ def create_denovo_multiref_run(
     -------
     None
 
+    Examples
+    --------
     >>> # Will create two motls in stopgap format with names stopgap_dn_ref_mr1_4.star and stopgap_dn_ref_mr2_4.star for
     >>> # reference averaging and one alignment motl stopgap_dn_4.star. In each motl, the particles will have 8 classes.
     >>> # The alignment motl will have same number of particles as the input_motl, the reference motls will have
@@ -434,3 +469,232 @@ def create_denovo_multiref_run(
     write_out_motl(
         motl, output_file_base=output_motl_base + "_" + str(iteration_number), output_motl_type=output_motl_type
     )
+
+
+def evaluate_multirun_stability(input_motls, input_motl_type="stopgap"):
+    """Evaluate how many particles ended up within the same class among all the classification runs. It is meant to be
+    used for multiruns with existing references (i.e. not de novo ones) where all runs uses the same references in the
+    same order.
+
+    Parameters
+    ----------
+    input_motls: list
+        List of input motl files. At least two are required.
+    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+        Type of the input motl. Defaults to "stopgap".
+
+    Returns
+    -------
+    common_occupancies : dict
+        A dictionary containing common subtomo_ids for each class of particles.
+    """
+
+    dfs = []
+    for i in input_motls:
+        motl = cryomotl.Motl.load(i, motl_type=input_motl_type)
+        dfs.append(motl.df)
+
+    if len(dfs) < 2:
+        raise ValueError("At least 2 motls are required.")
+
+    unique_classes = dfs[0]["class"].unique()  # Identify unique classes from the first frame
+
+    common_occupancies = {}
+
+    for class_val in sorted(unique_classes):
+        class_dfs = [df.loc[df["class"] == class_val, "subtomo_id"] for df in dfs]
+        common_ids = set.intersection(*map(set, class_dfs))  # Find common subtomo_ids
+
+        percentage = []
+        for df in class_dfs:
+            percentage.append(len(common_ids) / len(df) * 100)
+
+        print(
+            f"Class {class_val} has {len(common_ids)} stable particles which corresponds to {[f'{perc:.2f}' for perc in percentage]}% of provided motls."
+        )
+
+        common_occupancies[class_val] = sorted(common_ids)
+
+    return common_occupancies
+
+
+def get_subtomos_class_stability(motl_base_name, start_it, end_it, motl_type="stopgap"):
+    """Calculate the class stability of subtomograms over iterations.
+
+    Parameters
+    ----------
+    motl_base_name : str
+        Base name for a motl to perform the evaluation on. Base name means without the
+        iteration number and extension. For example for name motl_shift_3.em the base name is motl\_shift\_.
+    start_it : int
+        Starting iteration number.
+    end_it : int
+        Ending iteration number.
+    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+        Type of the input motl. Defaults to "stopgap".
+
+    Returns
+    -------
+    different_sids : dict
+        A dictionary containing the number of different subtomogram IDs for each class over iterations.
+
+    Notes
+    -----
+    Loading of many motls can take some time. If you also want to compute occupancy of classes it is recommended to
+    use :meth:`cryocat.sta.evaluate_classification` which gives both occupancy and stability and reads in all the motls
+    only once.
+    """
+
+    motl_ext = get_motl_extension(motl_type)
+
+    dfs = []
+    for i in np.arange(start_it, end_it + 1):
+        m = cryomotl.Motl.load(motl_base_name + str(i) + motl_ext, motl_type=motl_type)
+        dfs.append(m.df)
+
+    # Concatenate the list of DataFrames into a single DataFrame
+    changing_subtomos = {cls: [] for cls in dfs[0]["class"].unique()}
+    for i in range(1, len(dfs)):
+        previous_df = dfs[i - 1]
+        current_df = dfs[i]
+        for cls in changing_subtomos.keys():
+            previous_sids = set(previous_df.loc[previous_df["class"] == cls, "subtomo_id"])
+            current_sids = set(current_df.loc[current_df["class"] == cls, "subtomo_id"])
+            num_different_sids = len(current_sids.difference(previous_sids))
+            changing_subtomos[cls].append(num_different_sids)
+
+    return changing_subtomos
+
+
+def evaluate_classification(
+    motl_base_name,
+    start_it,
+    end_it,
+    motl_type="stopgap",
+    output_file_stats=None,
+    plot_results=False,
+    output_file_graphs=None,
+):
+    """Get the occupancy of each class over the iterations and the class stability of subtomograms over iterations.
+
+    Parameters
+    ----------
+    motl_base_name : str
+        Base name for a motl to perform the evaluation on. Base name means without the
+        iteration number and extension. For example for name motl_shift_3.em the base name is motl\_shift\_.
+    start_it : int
+        Starting iteration number.
+    end_it : int
+        Ending iteration number.
+    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+        Type of the input motl. Defaults to "stopgap".
+    output_file_stats : str, optional
+        Name of the file into which the results will be written out. If None, no results will be written out. Defaults
+        to None.
+    plot_results: bool, default=False
+        Whether to plot the results. Defaults to False.
+    output_file_graphs: str, optional
+        Name of the file into which the plotted graphs will be written out. If None, the graphs will not be written out.
+        If plot_results is False, this parameter is unused. Defaults to None.
+
+    Returns
+    -------
+    occupancy : dict
+        A dictionary containing the occupancy of each class over the iterations.
+    changing_subtomos : dict
+        A dictionary containing the number of different subtomogram IDs for each class over iterations.
+    """
+
+    motl_ext = get_motl_extension(motl_type)
+
+    dfs = []
+    for i in np.arange(start_it, end_it + 1):
+        m = cryomotl.Motl.load(motl_base_name + str(i) + motl_ext, motl_type=motl_type)
+        dfs.append(m.df)
+
+    # Create a dictionary to store the occupancy of each class per dataframe
+    occupancy = {}
+    for i, df in enumerate(dfs):
+        for c in df["class"].unique():
+            if c not in occupancy:
+                occupancy[c] = [0] * len(dfs)
+            occupancy[c][i] = len(df[df["class"] == c])
+
+    changing_subtomos = {cls: [] for cls in dfs[0]["class"].unique()}
+    for i in range(1, len(dfs)):
+        previous_df = dfs[i - 1]
+        current_df = dfs[i]
+        for cls in changing_subtomos.keys():
+            previous_sids = set(previous_df.loc[previous_df["class"] == cls, "subtomo_id"])
+            current_sids = set(current_df.loc[current_df["class"] == cls, "subtomo_id"])
+            num_different_sids = len(current_sids.difference(previous_sids))
+            changing_subtomos[cls].append(num_different_sids)
+
+    # sort the dictionaries
+    occupancy = dict(sorted(occupancy.items()))
+    changing_subtomos = dict(sorted(changing_subtomos.items()))
+
+    if plot_results:
+        visplot.plot_classification_convergence(
+            occupancy, changing_subtomos, graph_title="Classification progress", output_file=output_file_graphs
+        )
+
+    if output_file_stats is not None:
+        occupancy_df = pd.DataFrame(occupancy)
+        subtomos_df = pd.DataFrame(changing_subtomos)
+        # Add a row of NaNs for the changes as at iteration one the numbers are no available
+        nan_row = pd.Series([np.nan] * len(subtomos_df.columns), index=subtomos_df.columns)
+        subtomos_df = pd.concat([pd.DataFrame([nan_row]), subtomos_df], ignore_index=True)
+
+        it = pd.DataFrame({"#": range(1, occupancy_df.shape[0] + 1)})
+        merged = pd.concat(
+            [it, occupancy_df, subtomos_df], axis=1, keys=["Iteration", "Class occupancy", "Class changes"]
+        )
+        merged.to_csv(output_file_stats, index=False)
+
+    return occupancy, changing_subtomos
+
+
+def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap"):
+    """Get the occupancy of each class over the iterations.
+
+    Parameters
+    ----------
+    motl_base_name : str
+        Base name for a motl to perform the evaluation on. Base name means without the
+        iteration number and extension. For example for name motl_shift_3.em the base name is motl\_shift\_.
+    start_it : int
+        Starting iteration number.
+    end_it : int
+        Ending iteration number.
+    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+        Type of the input motl. Defaults to "stopgap".
+
+    Returns
+    -------
+    occupancy : dict
+        A dictionary containing the occupancy of each class over the iterations.
+
+    Notes
+    -----
+    Loading of many motls can take some time. If you also want to compute stability of classes it is recommended to
+    use :meth:`cryocat.sta.evaluate_classification` which gives both occupancy and stability and reads in all the motls
+    only once.
+    """
+
+    motl_ext = get_motl_extension(motl_type)
+
+    dfs = []
+    for i in np.arange(start_it, end_it + 1):
+        m = cryomotl.Motl.load(motl_base_name + str(i) + motl_ext, motl_type=motl_type)
+        dfs.append(m.df)
+
+    # Create a dictionary to store the occupancy of each class per dataframe
+    occupancy = {}
+    for i, df in enumerate(dfs):
+        for c in df["class"].unique():
+            if c not in occupancy:
+                occupancy[c] = [0] * len(dfs)
+            occupancy[c][i] = len(df[df["class"] == c])
+
+    return occupancy
