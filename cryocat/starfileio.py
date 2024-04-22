@@ -456,7 +456,11 @@ class Starfile:
             def write_without_number(name, _):
                 file.write(f"_{name}\n")
 
+            def format_value(value):
+                return "{:<10}".format(str(value))
+
             for frame, specifier, comment in zip(frames, specifiers, comments):
+                frame = frame.applymap(format_value)
                 stopgap = "stopgap" in specifier
                 write_function = write_without_number if not number_columns or stopgap else write_with_number
                 if comment is not None:
@@ -469,6 +473,9 @@ class Starfile:
                     write_function(column, index)
                 if stopgap:
                     file.write("\n")
+
                 for row in frame.itertuples(index=False):
                     file.write("\t".join(map(str, row)) + "\n")
+                # formatted_row = "\t".join("{:<10}".format(str(value)) for value in row)
+                # file.write(formatted_row + "\n")
                 file.write("\n")
