@@ -318,7 +318,7 @@ def write_out_motl(input_motl, output_file_base, output_motl_type):
 
     if output_motl_type == "stopgap":
         final_motl = cryomotl.StopgapMotl(input_motl.df)
-        final_motl.write_out(output_file_base + ".star")
+        final_motl.write_out(output_file_base + ".star", reset_index=True)
     elif output_motl_type == "relion":
         final_motl = cryomotl.RelionMotl(input_motl.df)
         final_motl.write_out(output_file_base + ".star")

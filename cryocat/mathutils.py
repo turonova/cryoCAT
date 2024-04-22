@@ -3,6 +3,34 @@ import math
 
 
 def compute_rmse(array1, array2):
+    """Compute the Root Mean Square Error (RMSE) between two arrays along each column.
+
+    Parameters
+    ----------
+    array1 : ndarray
+        First input array.
+    array2 : ndarray
+        Second input array, must have the same shape as array1.
+
+    Returns
+    -------
+    rmse : ndarray
+        An array containing the RMSE computed for each column of the input arrays.
+
+    Notes
+    -----
+    This function computes the RMSE by first calculating the squared differences between corresponding elements of the
+    input arrays, then taking the mean of these squared differences along each column, and finally taking the square
+    root of these means.
+
+    Examples
+    --------
+    >>> array1 = np.array([[1, 2], [3, 4]])
+    >>> array2 = np.array([[1, 1], [1, 1]])
+    >>> compute_rmse(array1, array2)
+    array([1.41421356, 2.12132034])
+    """
+
     # Compute squared differences along each column
     squared_diff = (array1 - array2) ** 2
 
@@ -16,6 +44,24 @@ def compute_rmse(array1, array2):
 
 
 def get_all_pairs(input_numbers):
+    """Generate all possible unique pairs from a list of numbers.
+
+    Parameters
+    ----------
+    input_numbers : list
+        List of integers or floats from which pairs are to be generated.
+
+    Returns
+    -------
+    list
+        A list of tuples, each containing a pair of numbers from the input list.
+
+    Examples
+    --------
+    >>> get_all_pairs([1, 2, 3])
+    [(1, 2), (1, 3), (2, 3)]
+    """
+
     pairs = []
     for i in range(len(input_numbers)):
         for j in range(i + 1, len(input_numbers)):
@@ -24,6 +70,37 @@ def get_all_pairs(input_numbers):
 
 
 def otsu_threshold(input_values):
+    """Calculate the Otsu threshold for binarization based on the histogram of input values.
+
+    Parameters
+    ----------
+    input_values : ndarray
+        An array of input values for which the histogram and threshold need to be computed.
+
+    Returns
+    -------
+    float
+        The computed threshold value according to Otsu's method.
+
+    Notes
+    -----
+    Otsu's method is used to automatically perform histogram shape-based image thresholding.
+    The algorithm assumes that the data contains two classes of values following a bimodal
+    histogram, it then calculates the optimum threshold separating the two classes so that their combined spread
+    (intra-class variance) is minimal.
+
+    References
+    ----------
+    Taken from: https://www.kdnuggets.com/2018/10/basic-image-analysis-python-p4.html
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> input_values = np.random.randint(0, 256, 1000)
+    >>> threshold = otsu_threshold(input_values)
+    >>> print("Otsu's threshold:", threshold)
+    """
+
     # Taken from: https://www.kdnuggets.com/2018/10/basic-image-analysis-python-p4.html
 
     stats_bins = np.histogram(input_values, bins=input_values.shape[0])
@@ -65,10 +142,14 @@ def get_number_of_digits(input_number):
     >>> get_number_of_digits(12345)
     5
     >>> get_number_of_digits(3.14)
-    4
+    3
     """
+    digit_length = len(str(input_number))
 
-    return len(str(input_number))
+    if "." in str(input_number):
+        digit_length -= 1
+
+    return digit_length
 
 
 def get_similar_size_factors(number, order="ascending"):

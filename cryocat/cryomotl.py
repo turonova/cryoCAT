@@ -420,7 +420,7 @@ class Motl:
         """
 
         new_motl = copy.copy(self)
-        r_indices = np.random.choice(range(self.df.shape[0]), number_of_particles, replace=False)
+        r_indices = np.random.choice(range(self.df.shape[0]), int(number_of_particles), replace=False)
         new_motl.df = self.df.iloc[r_indices, :].copy()
 
         return new_motl
