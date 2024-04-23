@@ -16,6 +16,29 @@ class NPC:
 
     @staticmethod
     def compute_diameter(input_motl, pixel_size=1.0, su_id="geom2"):
+        """Compute the average diameter of specific subunit pairs within NPCs.
+
+        Parameters
+        ----------
+        input_motl : str
+            Path to the input motl file containing molecular data.
+        pixel_size : float, optional
+            The size of each pixel in the data, used to scale the computed distances. Default is 1.0.
+        su_id : str, optional
+            The identifier used to select subunits within the data. Default is 'geom2'.
+
+        Returns
+        -------
+        numpy.ndarray
+            An array of average diameters for each unique (tomo_id, object_id) group in the data.
+
+        Notes
+        -----
+        The function loads molecular data from a specified file, identifies specific subunit pairs,
+        computes the pairwise distances between these pairs, and then calculates the average diameter
+        for each group identified by 'tomo_id' and 'object_id'. Distances are scaled by the pixel size.
+        """
+
         motl_ri = cryomotl.Motl.load(input_motl)
         motl_ri.df.reset_index(inplace=True, drop=True)
 

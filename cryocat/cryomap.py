@@ -2,9 +2,309 @@ import h5py
 import emfile
 import mrcfile
 import numpy as np
+from numpy import fft
 from scipy.ndimage import affine_transform
 from scipy.spatial.transform import Rotation as srot
 from scipy.interpolate import interp1d
+from cryocat import cryomask
+
+
+def pixels2resolution(fourier_pixels, edge_size, pixel_size, print_out=True):
+    """Calculate the resolution in Angstroms based on Fourier pixel count, edge size, and pixel size.
+
+    Parameters
+    ----------
+    fourier_pixels : int
+        Number of pixels in the Fourier space.
+    edge_size : float
+        Size of the edge of the image in pixels/voxels.
+    pixel_size : float
+        Size of one pixel/voxel in Angstroms.
+    print_out : bool, default=True
+        Flag to determine whether to print the resolution. Defaults to True.
+
+    Returns
+    -------
+    float
+        The calculated resolution in Angstroms.
+
+    Examples
+    --------
+    >>> pixels2resolution(100, 200, 1.5)
+    The target resolution is 3.0 Angstroms.
+    3.0
+    """
+
+    res = edge_size * pixel_size / fourier_pixels
+
+    if print_out:
+        print(f"The target resolution is {res} Angstroms.")
+
+    return res
+
+
+def resolution2pixels(resolution, edge_size, pixel_size, print_out=True):
+    """Calculate the number of Fourier pixels/voxels corresponding to a given resolution for a specific edge size and
+    pixel size.
+
+    Parameters
+    ----------
+    resolution : float
+        The target resolution to convert to Fourier pixels/voxels.
+    edge_size : float
+        The size of the edge in pixels/voxels.
+    pixel_size : float
+        The size of one pixel/voxel in Angstroms.
+    print_out : bool, default=True
+        Flag to determine whether to print the resolution. Defaults to True.
+
+    Returns
+    -------
+    int
+        The number of pixels/voxels corresponding to the given resolution.
+
+    Notes
+    -----
+    This is the value one should use for low-pass and high-pass filters in STOPGAP, GAPSTOP(TM), and novaSTA.
+    """
+
+    pixels = round(edge_size * pixel_size / resolution)
+
+    if print_out:
+        print(f"The target resolution corresponds to {pixels} pixels.")
+
+    return pixels
+
+
+def get_filter_radius(edge_size, fourier_pixels, target_resolution, pixel_size):
+    """Calculate the filter radius based on either direct Fourier pixel/voxel specification or target resolution.
+
+    Parameters
+    ----------
+    edge_size : float
+        Size of the edge of the image/map in pixels/voxels.
+    fourier_pixels : int, optional
+        Number of pixels in the Fourier space. Defaults to None.
+    target_resolution : float, optional
+        Desired resolution to achieve. Defaults to None.
+    pixel_size : float, optional
+        Size of a pixel/voxel in the image/map. Defaults to None.
+
+    Returns
+    -------
+    int
+        Calculated radius in pixels/voxels for the filter.
+
+    Raises
+    ------
+    ValueError
+        If neither `fourier_pixels` nor both `target_resolution` and `pixel_size` are specified.
+
+    Notes
+    -----
+    The function requires either a direct specification of the Fourier pixels or both the target resolution and pixel
+    size to compute the filter radius.
+    """
+
+    if fourier_pixels is not None:
+        radius = fourier_pixels
+        if pixel_size is not None:
+            _ = pixels2resolution(fourier_pixels=fourier_pixels, edge_size=edge_size, pixel_size=pixel_size)
+    elif target_resolution is not None and pixel_size is not None:
+        radius = resolution2pixels(target_resolution, edge_size=edge_size, pixel_size=pixel_size)
+    else:
+        raise ValueError(
+            "Either target_voxels or target_resolution in combination with pixel_size have to be specified!"
+        )
+
+    return radius
+
+
+def bandpass(
+    input_map,
+    lp_fourier_pixels=None,
+    lp_target_resolution=None,
+    hp_fourier_pixels=None,
+    hp_target_resolution=None,
+    pixel_size=None,
+    lp_gaussian=3,
+    hp_gaussian=2,
+    output_name=None,
+):
+    """Apply a bandpass filter to an input map using specified low-pass and high-pass filter parameters.
+
+    Parameters
+    ----------
+    input_map : str or array_like
+        The input map to be filtered, either as a filename or as an array.
+    lp_fourier_pixels : int, optional
+        Number of pixels/voxels in Fourier space for the low-pass filter. Defaults to None.
+    lp_target_resolution : float, optional
+        Target resolution in Angstroms for the low-pass filter. Defaults to None.
+    hp_fourier_pixels : int, optional
+        Number of pixels/voxels in Fourier space for the high-pass filter. Defaults to None.
+    hp_target_resolution : float, optional
+        Target resolution in Angstroms for the high-pass filter. Defaults to None.
+    pixel_size : float, optional
+        Pixel/voxel size in Angstroms. Defaults to None.
+    lp_gaussian : int, default=3
+        Width of the Gaussian falloff for the low-pass filter. Defaults to 3.
+    hp_gaussian : int, default=2
+        Width of the Gaussian falloff for the high-pass filter. Defaults to 2.
+    output_name : str, optional
+        Filename to save the filtered output. If not provided, the filtered map is not saved. Defaults to None.
+
+    Returns
+    -------
+    bandpass_filtered : ndarray
+        The bandpass-filtered map.
+
+    Notes
+    -----
+    The function reads an input map, applies a bandpass filter by creating a mask in Fourier space that combines
+    a low-pass and a high-pass filter, and then applies this mask to the Fourier transform of the input map.
+    The result is transformed back to real space. If an output filename is provided, the result is saved.
+    """
+
+    input_map = read(input_map)
+    lp_radius = get_filter_radius(
+        input_map.shape[0],
+        fourier_pixels=lp_fourier_pixels,
+        target_resolution=lp_target_resolution,
+        pixel_size=pixel_size,
+    )
+
+    hp_radius = get_filter_radius(
+        input_map.shape[0],
+        fourier_pixels=hp_fourier_pixels,
+        target_resolution=hp_target_resolution,
+        pixel_size=pixel_size,
+    )
+    outer_mask = cryomask.spherical_mask(input_map.shape, lp_radius, gaussian=lp_gaussian, gaussian_outwards=False)
+    inner_mask = cryomask.spherical_mask(input_map.shape, hp_radius, gaussian=hp_gaussian, gaussian_outwards=False)
+    band_mask = fft.ifftshift(outer_mask - inner_mask)
+    write(outer_mask - inner_mask, "band.em", data_type=np.single)
+    bandpass_filtered = np.real(fft.ifftn(fft.fftn(input_map) * band_mask))
+
+    # lowpass_filtered = lowpass(
+    #     input_map=input_map,
+    #     fourier_pixels=lp_fourier_pixels,
+    #     target_resolution=lp_target_resolution,
+    #     pixel_size=pixel_size,
+    #     gaussian=lp_gaussian,
+    # )
+
+    # bandpass_filtered = highpass(
+    #     input_map=lowpass_filtered,
+    #     fourier_pixels=hp_fourier_pixels,
+    #     target_resolution=hp_target_resolution,
+    #     pixel_size=pixel_size,
+    #     gaussian=hp_gaussian,
+    # )
+
+    if output_name is not None:
+        write(bandpass_filtered, output_name, data_type=np.single)
+
+    return bandpass_filtered
+
+
+def lowpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=None, gaussian=3, output_name=None):
+    """Apply a lowpass filter to a given input map using Fourier transform methods.
+
+    Parameters
+    ----------
+    input_map : str or array_like
+        The input map to be filtered, either as a file path or as an array.
+    fourier_pixels : int, optional
+        Number of pixels/voxels in the Fourier space representation. Defaults to None.
+    target_resolution : float, optional
+        The target resolution in Angstroms for the filtering process. Defaults to None.
+    pixel_size : float, optional
+        The size of each pixel/voxel in the input map in Angstroms.
+    gaussian : int, default=3
+        Width of the Gaussian falloff for the low-pass filter. Defaults to 3.
+    output_name : str, optional
+        The file name to save the filtered map. If not provided, the map is not saved. Defaults to None.
+
+    Returns
+    -------
+    filtered_map : ndarray
+        The filtered map as a numpy array.
+
+    Examples
+    --------
+    >>> # For input map with box size 100 and pixel size 7.89
+    >>> filtered = lowpass('input_map.mrc', target_resolution=20, pixel_size=7.89)
+    The target resolution corresponds to 39 pixels.
+
+    >>> # For input map with box size 100 and pixel size 7.89
+    >>> filtered = lowpass('input_map.mrc', fourier_pixels=39, pixel_size=7.89)
+    The target resolution is 20.23 Angstroms.
+    """
+
+    input_map = read(input_map)
+    radius = get_filter_radius(
+        input_map.shape[0], fourier_pixels=fourier_pixels, target_resolution=target_resolution, pixel_size=pixel_size
+    )
+
+    lowpass_filter = fft.ifftshift(
+        cryomask.spherical_mask(input_map.shape, radius, gaussian=gaussian, gaussian_outwards=False)
+    )
+    # Apply filter
+    filtered_map = np.real(fft.ifftn(fft.fftn(input_map) * lowpass_filter))
+
+    if output_name is not None:
+        write(filtered_map, output_name, data_type=np.single)
+
+    return filtered_map
+
+
+def highpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=None, gaussian=2, output_name=None):
+    """Apply a highpass filter to a given input map using Fourier transform methods.
+
+    Parameters
+    ----------
+    input_map : str or array_like
+        The input map filename or its numpy array.
+    fourier_pixels : int, optional
+        Number of pixels/voxels to use in the Fourier space. Defaults to None.
+    target_resolution : float, optional
+        The target resolution in Angstroms for the highpass filter. Defaults to None.
+    pixel_size : float, optional
+        The size of each pixel/voxel in the input map in Angstroms. Defaults to None.
+    gaussian : int, default=2
+        The width of the Gaussian fall-off in pixels/voxels. Defaults to 2.
+    output_name : str, optional
+        The filename to save the filtered output. If None, the filtered map is not saved. Defaults to None.
+
+    Returns
+    -------
+    filtered_map : ndarray
+        The highpass filtered map as a numpy array.
+
+    Notes
+    -----
+    The function reads an input map, calculates the necessary filter radius based on the provided parameters,
+    applies a spherical highpass filter in Fourier space, and optionally saves the result to a file.
+    """
+
+    input_map = read(input_map)
+    radius = get_filter_radius(
+        input_map.shape[0], fourier_pixels=fourier_pixels, target_resolution=target_resolution, pixel_size=pixel_size
+    )
+
+    highpass_filter = fft.ifftshift(
+        np.ones(input_map.shape)
+        - cryomask.spherical_mask(input_map.shape, radius, gaussian=gaussian, gaussian_outwards=False)
+    )
+
+    # Apply filter
+    filtered_map = np.real(fft.ifftn(fft.fftn(input_map) * highpass_filter))
+
+    if output_name is not None:
+        write(filtered_map, output_name, data_type=np.single)
+
+    return filtered_map
 
 
 def read(input_map, transpose=True, data_type=None):
@@ -113,14 +413,14 @@ def mrc2em(map_name, invert=False, overwrite=True, output_name=None):
     write(data_to_write, output_name, overwrite=overwrite)
 
 
-def write_hdf5(map_name, labels=None, weight=None, output_name=None): 
-    
-    data_to_write = read(map_name)        
+def write_hdf5(map_name, labels=None, weight=None, output_name=None):
+
+    data_to_write = read(map_name)
 
     if output_name is None:
         output_name = map_name[:-3] + "hdf5"
 
-    f = h5py.File(output_name, 'w')
+    f = h5py.File(output_name, "w")
 
     f.create_dataset("raw", data=data_to_write)
 
@@ -134,8 +434,8 @@ def write_hdf5(map_name, labels=None, weight=None, output_name=None):
     f.close()
 
 
-def read_hdf5(hdf5_name, dataset_name='predictions', print_datasets=False): 
-    f = h5py.File(hdf5_name, 'r')
+def read_hdf5(hdf5_name, dataset_name="predictions", print_datasets=False):
+    f = h5py.File(hdf5_name, "r")
 
     if print_datasets:
         print(f"Available datasets: {f.keys()}")
@@ -144,7 +444,7 @@ def read_hdf5(hdf5_name, dataset_name='predictions', print_datasets=False):
     f.close()
 
     return data
-    
+
 
 def normalize(map):
     norm_map = read(map)
