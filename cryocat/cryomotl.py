@@ -116,6 +116,32 @@ class Motl:
         -----
         This method modifies the `df` attribute of the object.
 
+        Examples
+        --------
+        >>> # If you have a reference and you want the average coming from your motl to be aligned with that reference
+        >>> # you can use ChimeraX fit function to fit the average to the reference. In the log file you will get output
+        >>> # that looks like this:
+        >>> #
+        >>> # Matrix rotation and translation
+        >>> # 0.50840235 0.86106603 -0.00960989 -17.20630613
+        >>> # -0.86111334 0.50832424 -0.00950164 65.37276832
+        >>> # -0.00329660 0.01310586 0.99990868 -0.66904104
+        >>> # Axis 0.01312604 -0.00366553 -0.99990713
+        >>> # Axis point 48.64783020 47.75956206 0.00000000
+        >>> # Rotation angle (degrees) 59.44816674
+        >>> # Shift along axis 0.20350209
+        >>> #
+        >>> # To apply this rotation on the motl that corresponds to the fitted average you run:
+        >>> from scipy.spatial.transform import Rotation as R
+        >>> motl = Motl.load("/path/to/the/motl.em")
+        >>> # Create the matrix from the ChimeraX output by leaving out the last column
+        >>> rot_matrix=np.array([ [0.50840235, 0.86106603, -0.00960989 ],
+        ... [ -0.86111334, 0.50832424, -0.00950164 ],
+        ... [ -0.00329660, 0.01310586, 0.99990868] ])
+        >>> rot=R.from_matrix(rot_matrix.T) # note that the matrix is transposed here
+        >>> motl.apply_rotation(rot)
+        >>> motl.write_out("rotated_motl.em")
+
         """
 
         angles = self.df.loc[:, ["phi", "theta", "psi"]].to_numpy()
@@ -1409,7 +1435,7 @@ class Motl:
 
     def apply_tomo_rotation(self, rotation_angles, tomo_id, tomo_dim):
         """Apply tomogram rotation to the corresponding particles in the motl. The rotation angles can come e.g. from
-        trimvol command or from slicer in etomo. Currently works only for one t
+        trimvol command or from slicer in etomo. Currently works only for one tomogram.
 
         Parameters
         ----------

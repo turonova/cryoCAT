@@ -9,6 +9,59 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 ANGLE_DEGREES_TOL = 10e-12
 
 
+def project_points_on_plane_with_preserved_distance(starting_point, normal, nn_points):
+
+    # Compute the projection of each neighbor point onto the plane defined by the starting point and normal vector
+    projection_lengths = np.dot(nn_points - starting_point, normal) / np.linalg.norm(normal)
+    projected_points = nn_points - np.outer(projection_lengths, normal)
+
+    # Compute the distances between the neighbor points and the starting point
+    distances_to_starting_point = np.linalg.norm(nn_points - starting_point, axis=1)
+
+    # Compute the distances between the projected points and the starting point
+    distances_to_projected_point = np.linalg.norm(projected_points - starting_point, axis=1)
+
+    # Compute the adjustment vectors
+    adjustment_vectors = projected_points - starting_point
+
+    # Compute the shifted points
+    shifted_points = (
+        starting_point
+        + adjustment_vectors * (distances_to_starting_point / distances_to_projected_point)[:, np.newaxis]
+    )
+
+    # distances_to_projected_point = np.linalg.norm(shifted_points - starting_point, axis=1)
+
+    return shifted_points
+
+
+def align_points_to_xy_plane(points_on_plane, plane_normal=None):
+
+    if plane_normal is None:
+        if points_on_plane.shape[0] >= 3:
+            # Calculate the normal vector of the plane
+            v1 = points_on_plane[1] - points_on_plane[0]
+            v2 = points_on_plane[2] - points_on_plane[0]
+            normal = np.cross(v1, v2)
+        else:
+            raise ValueError(
+                f"The plane has to be specified either by plane normal or at least three points lying on the plane!"
+            )
+    else:
+        normal = plane_normal
+
+    # Find the rotation matrix to align normal with z-axis
+    z_axis = np.array([0, 0, 1])
+    axis = np.cross(normal, z_axis)
+    angle = np.arccos(np.dot(normal, z_axis) / (np.linalg.norm(normal) * np.linalg.norm(z_axis)))
+    rotation_matrix = srot.from_rotvec(angle * axis).as_matrix()  # Construct rotation matrix
+
+    # Apply rotation matrix to all points
+    rotated_points = np.dot(rotation_matrix, plane_normal.T).T
+
+    return rotated_points, rotation_matrix
+
+
 def load_dimensions(dims):
     """Loads tomogram dimensions from a file or nd.array.
 
@@ -676,6 +729,8 @@ def point_pairwise_dist(coord_1, coord_2):
     if coord_1.shape[0] == 1 and coord_2.shape[0] != 1:
         coord_1 = np.tile(coord_1, (coord_2.shape[0], 1))
 
+    coord_1 = np.atleast_2d(coord_1)
+    coord_2 = np.atleast_2d(coord_2)
     # Squares of the distances
     pairwise_dist = np.linalg.norm(coord_1 - coord_2, axis=1)
 
