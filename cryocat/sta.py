@@ -7,6 +7,58 @@ from cryocat import visplot
 from cryocat import ioutils
 
 
+def get_stable_particles(motl_base_name, start_it, end_it, motl_type="emmotl"):
+    """Load and analyze particle data across multiple iterations to identify stable particles, i.e. particles that do
+    not change their class.
+
+    Parameters
+    ----------
+    motl_base_name : str
+        Base name for a motl to perform the evaluation on. Base name means without the
+        iteration number and extension. For example for name motl_shift_3.em the base name is motl\_shift\_.
+    start_it : int
+        Starting iteration number.
+    end_it : int
+        Ending iteration number.
+    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+        Type of the input motl. Defaults to "stopgap".
+
+    Returns
+    -------
+    list
+        List of subtomo_ids that have the same class across the specified iterations.
+
+    Notes
+    -----
+    This function loads motive list files from specified iterations, merges them, and identifies
+    subtomo_ids (subtomogram identifiers) that have a consistent class across all iterations.
+    The percentage of stable particles relative to the total number of particles in the first
+    iteration is printed.
+    """
+
+    motl_ext = get_motl_extension(motl_type)
+
+    dfs = []
+    for i in np.arange(start_it, end_it + 1):
+        m = cryomotl.Motl.load(motl_base_name + str(i) + motl_ext, motl_type=motl_type)
+        dfs.append(m.df)
+
+    # Merge the dataframes on 's_id' column
+    merged_df = pd.concat(dfs, axis=0, ignore_index=True)
+
+    # Check if the 'class' column is the same for all frames
+    same_class_mask = merged_df.groupby("subtomo_id")["class"].nunique() == 1
+
+    # Get the s_ids where the class is the same for all frames
+    common_subtomo_ids = same_class_mask[same_class_mask].index.tolist()
+
+    # Get percentage
+    print(
+        f"The number of stable particles is {len(common_subtomo_ids)} which corresponds to {len(common_subtomo_ids)/dfs[0].shape[0]*100:.2f}%"
+    )
+    return common_subtomo_ids
+
+
 def evaluate_alignment(
     motl_base_names,
     start_it,
