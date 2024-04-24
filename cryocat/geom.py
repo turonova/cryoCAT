@@ -59,7 +59,7 @@ def align_points_to_xy_plane(points_on_plane, plane_normal=None):
     # Apply rotation matrix to all points
     rotated_points = np.dot(rotation_matrix, plane_normal.T).T
 
-    return rotated_points, rotation_matrix
+    return rotated_points[:, 0:2], rotation_matrix
 
 
 def load_dimensions(dims):
