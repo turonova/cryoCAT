@@ -171,13 +171,17 @@ def calculate_full_fsc(refA_name,
                 symmetry)
     
     ## check input px size
-    try:
-        pixelsize = float(pixelsize_ang)
-        print(f'Pixel size provided as {pixelsize}. Plotting FSC as the function of resolution.')
-    except ValueError:
-        print('Pixel size not provided. Plotting FSC as the function of shell radius.')
-        pixelsize = 0
-    except TypeError:
+    if pixelsize_ang != 0:
+        try:
+            pixelsize = float(pixelsize_ang)
+            print(f'Pixel size provided as {pixelsize}. Plotting FSC as the function of resolution.')
+        except ValueError:
+            print('Pixel size not provided. Plotting FSC as the function of shell radius.')
+            pixelsize = 0
+        except TypeError:
+            print('Pixel size not provided. Plotting FSC as the function of shell radius.') 
+            pixelsize = 0
+    else:
         print('Pixel size not provided. Plotting FSC as the function of shell radius.') 
         pixelsize = 0
 
@@ -211,7 +215,7 @@ def calculate_full_fsc(refA_name,
 
     ######
     ## conditional calculation of phase-separated maps and FSC correction
-    if n_repeats == 0:
+    if n_repeats == 0 or n_repeats == None:
         print('No number of repeats provided - no randomisation will be executed.') 
     else:
         edge = len(refA[0])
@@ -304,7 +308,7 @@ def calculate_full_fsc(refA_name,
                 idx_y_val = np.min(np.where(np.isclose(y_interpolated, y_value, atol=1e-2)))
                 print(f'FSC at {y_value} is', round(len(mrefA)*pixelsize/x_range[idx_y_val], 2))
             finally:
-                if not pixelsize:
+                if not pixelsize: ## FIXME for pixelsize = 0 and none in _ang
                     print(f'FSC at {y_value} is {x_range[idx_y_val]}.')
         return None
     
