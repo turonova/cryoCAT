@@ -35,3 +35,6 @@ packages = ["cryocat"]
 [project.urls]
 "Homepage" = "https://github.com/turonova/cryoCAT"
 "Bug Tracker" = "https://github.com/turonova/cryoCAT/issues"
+[project.scripts]
+wedge_list = "cryocat.cli:wedge_list"
+tm_ana = "cryocat.cli:tm_ana"

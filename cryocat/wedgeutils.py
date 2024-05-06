@@ -184,16 +184,17 @@ def create_wedge_list_sg_batch(
     tomo_dim : array-like, optional
         Tomogram dimensions specified as array-like variable. See :meth:`cryocat.ioutils.dimensions_load` for more
         information on formatting. Defaults to None but either tomo_dim or tomo_dim_file_format has to be specified.
-    tomo_dim_file_format: str, optional
+    tomo_dim_file_format : str, optional
         The format describing name of the input files (including the path) with tomogram dimensions. See `Notes` below
         for more information. See :meth:`cryocat.ioutils.dimensions_load` for more information on allowed input files
         (txt, com). Defaults to None but either tomo_dim or tomo_dim_file_format has to be specified.
     z_shift : array-like or dataframe or int or float, default=0.0
         Z-shift specified as array-like, pandas DataFrame, int or float. See :meth:`cryocat.ioutils.z_shift_load`
         for more information on input types. Defaults to 0.0.
-    z_shift_file_format: str, optional
+    z_shift_file_format : str, optional
         The format describing name of the input files (including the path) with z-shift. See `Notes` below for more
         information. See :meth:`cryocat.ioutils.z_shift_load` for more information on allowed input files (com, txt).
+        Defaults to None.
     ctf_file_format : str, optional
         The format describing name of the input files (including the path) with defocus values. See `Notes` below for more
         information. Supported formats are gctf (star file), ctffind4 (txt file) and warp (xml file). Defaults to None.
@@ -203,7 +204,7 @@ def create_wedge_list_sg_batch(
     dose_file_format : str or array-like, optional
         The format describing name of the input files (including the path) with corrected dose. See `Notes` below for more
         information. See :meth:`cryocat.ioutils.total_dose_load` for more information on allowed input files
-        (txt, mdoc, xml).
+        (txt, mdoc, xml). Defaults to None.
     voltage : float, default=300.0
         The voltage of the microscope, defaults to 300.0.
     amp_contrast : float, default=0.07
@@ -211,7 +212,7 @@ def create_wedge_list_sg_batch(
     cs : float, default=2.7
         The spherical aberration coefficient, defaults to 2.7.
     output_file : str, optional
-        The path to the output file, by default None. If None, the output is not written out.
+        The path to the output file, by default None. If None, the output is not written out. Defaults to None.
 
     Returns
     -------
