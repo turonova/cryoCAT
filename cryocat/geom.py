@@ -50,16 +50,21 @@ def align_points_to_xy_plane(points_on_plane, plane_normal=None):
     else:
         normal = plane_normal
 
+    normal = normal / np.linalg.norm(normal)
+
     # Find the rotation matrix to align normal with z-axis
     z_axis = np.array([0, 0, 1])
     axis = np.cross(normal, z_axis)
-    angle = np.arccos(np.dot(normal, z_axis) / (np.linalg.norm(normal) * np.linalg.norm(z_axis)))
+    axis = axis / np.linalg.norm(axis)
+    angle = np.arccos(np.dot(normal, z_axis))
     rotation_matrix = srot.from_rotvec(angle * axis).as_matrix()  # Construct rotation matrix
 
     # Apply rotation matrix to all points
-    rotated_points = np.dot(rotation_matrix, plane_normal.T).T
+    rotated_points = np.dot(rotation_matrix, points_on_plane.T).T
+    # rotated_points = np.dot(rotation_matrix, plane_normal.T).T
 
-    return rotated_points[:, 0:2], rotation_matrix
+    # return rotated_points[:, 0:2], rotation_matrix
+    return rotated_points, rotation_matrix
 
 
 def load_dimensions(dims):
