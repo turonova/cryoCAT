@@ -7,6 +7,30 @@ from cryocat import mdoc
 import xml.etree.ElementTree as ET
 
 
+def get_number_of_lines_with_character(filename, character):
+    """Count the number of lines in a file that start with a specified character.
+
+    Parameters
+    ----------
+    filename : str
+        The path to the file to be read.
+    character : str
+        The character to check at the start of each line.
+
+    Returns
+    -------
+    int
+        The number of lines starting with the specified character.
+    """
+
+    # Open the file for reading
+    with open(filename, "r") as file:
+        # Count the number of lines starting with specified character
+        count = sum(1 for line in file if line.startswith(character))
+
+    return count
+
+
 def is_float(value):
     """Check if a value can be converted to a float.
 
@@ -321,8 +345,8 @@ def ctffind4_read(file_path):
         are in micrometers.
 
     """
-
-    ctf = pd.read_csv(file_path, skiprows=5, header=None, dtype=np.float64, delim_whitespace=True)
+    rows_to_skip = get_number_of_lines_with_character(file_path, "#")
+    ctf = pd.read_csv(file_path, skiprows=rows_to_skip, header=None, dtype=np.float32, delim_whitespace=True)
     converted_ctf = ctf.iloc[:, 1:5].copy()
     converted_ctf.loc[:, converted_ctf.columns[0:2]] *= 10e-5
     converted_ctf.columns = ["defocus1", "defocus2", "astigmatism", "phase_shift"]
@@ -352,7 +376,7 @@ def one_value_per_line_read(file_path, data_type=np.float32):
     return data_df.iloc[:, 0].values
 
 
-def total_dose_load(input_dose):
+def total_dose_load(input_dose, sort_mdoc=True):
     """Load total dose for single tilt series that should be used for dose-filtering/weighting.
 
     Parameters
@@ -364,8 +388,11 @@ def total_dose_load(input_dose):
         as first, large values for the tilt images acqured as last). If mdoc file is used the total dose is corrected
         either as PriorRecordDose + ExposureDose for each image, or as ExposureDose * (ZValue + 1) (starting
         from 1). The latter will work only if the ZValue corresponds to the order of acquisition, i.e, for tilt series
-        that are not sorted from min to max tilt angle.
-
+        that are not sorted from min to max tilt angle or are sorted with their ZValue unchanged.
+    sort_mdoc : bool, default=True
+        Whether the mdoc should be sorted by the tilt angles. This parameter is relevant only if the provided input
+        is mdof file. If True mdoc will be sorted from min to max tilt angle however the ZValue will be kept as it was
+        so the dose can still be computed correctly. Defaults to True.
 
     Returns
     -------
@@ -391,6 +418,11 @@ def total_dose_load(input_dose):
         elif input_dose.endswith(".mdoc"):
             # load as mdoc
             mdoc_file = mdoc.Mdoc(input_dose)
+
+            # sort mdoc
+            if sort_mdoc:
+                mdoc_file.sort_by_tilt(reset_z_value=False)
+
             # should always exist
             image_dose = mdoc_file.get_image_feature("ExposureDose").values
 
@@ -415,27 +447,24 @@ def total_dose_load(input_dose):
         ValueError("Error: the dose has to be either ndarray or str with valid path!")
 
 
-def tlt_load(input_tlt):
+def tlt_load(input_tlt, sort_angles=True):
     """This function loads in tilt angles in degrees and returns them as ndarray. The input can be either a path to the
     file or an ndarray of tilts. The function will check if the input is already an array, and if not it will read in
     the data from the specified file type.
 
     Parameters
     ----------
-    input_tlt: str or array-like
+    input_tlt : str or array-like
         The input tilt data. If it is a numpy array, it will be returned as is. If it is a string, it can be a path to
         a mdoc file, a xml file (warp) or any file where the angles are stored one per line (e.g. tlt, rawtlt,
         csv, .txt file).
+    sort_angles : bool, default=True
+        Whether the tilts should be sorted from min to max tilt angle. Defaults to True.
 
     Returns
     -------
     ndarray
         The tilt angles (in degrees) in the form of a numpy array.
-
-    Notes
-    -----
-    In case of mdoc file, the entries are expected to be sorted from min to max tilt angle. No sorting is done within
-    this function.
 
     Raises
     ------
@@ -454,6 +483,9 @@ def tlt_load(input_tlt):
             tilts = get_data_from_warp_xml(input_tlt, "Angles", node_level=1)
         else:
             tilts = one_value_per_line_read(input_tlt)
+
+        if sort_angles:
+            tilts = np.sort(tilts)
 
         return tilts
     else:
