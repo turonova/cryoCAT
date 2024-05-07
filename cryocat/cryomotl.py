@@ -3217,6 +3217,7 @@ class StopgapMotl(Motl):
             self.update_coordinates()
 
         stopgap_df = StopgapMotl.convert_to_sg_motl(self.df, reset_index)
+        stopgap_df.fillna(0, inplace=True)
 
         starfileio.Starfile.write([stopgap_df], output_path, specifiers=["data_stopgap_motivelist"])
 

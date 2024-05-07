@@ -24,7 +24,6 @@ cryoCAT: Contextual Analysis Tools for cryo electron tomography
 
 :mod:`cryoCAT` is an open source,  GPL-3.0+ licensed library providing contextual analysis tools for 
 cryo electron tomography and subtomogram averaging.
-programming language.
 
 .. grid:: 1 2 2 2
     :gutter: 4
@@ -54,8 +53,7 @@ programming language.
         :class-card: intro-card
         :shadow: md
 
-        The user guide provides in-depth information on the
-        key concepts of cryoCAT with useful background information and explanation.
+        The installation guide provides information on how to isntall cryoCAT.
 
         +++
 
@@ -91,9 +89,7 @@ programming language.
         :class-card: intro-card
         :shadow: md
 
-        Saw a typo in the documentation? Want to improve
-        existing functionalities? The contributing guidelines will guide
-        you through the process of improving cryoCAT.
+        The tutorials show how to run certain workflows for tomogram analysis.
 
         +++
 

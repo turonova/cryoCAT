@@ -27,4 +27,5 @@ setup(
         "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
         "Operating System :: OS Independent",
     ],
+    entry_points={"console_scripts": ["wedge_list = cryocat.cli:wedge_list", "tm_ana = cryocat.cli:tm_ana"]},
 )

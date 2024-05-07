@@ -38,6 +38,11 @@ class Mdoc:
                             f.write("{} = {}\n".format(column, row[column]))
                     f.write("\n")
 
+    def sort_by_tilt(self, reset_z_value=False):
+        self.imgs = self.imgs.sort_values(by="TiltAngle")
+        if reset_z_value:
+            self.imgs["ZValue"] = range(self.imgs.shape[0])
+
     def remove_image(self, index, kept_only=True):
         if kept_only:
             kept_indices = self.kept_images().index
@@ -166,6 +171,9 @@ class Mdoc:
         # convert ZValues to int
         temp_column = imgs.astype({"ZValue": int})
         imgs["ZValue"] = temp_column["ZValue"]
+
+        # convert TiltAngle to float
+        imgs["TiltAngle"] = imgs["TiltAngle"].astype(float)
 
         return imgs
 
