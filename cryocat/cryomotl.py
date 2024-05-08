@@ -3119,10 +3119,13 @@ class StopgapMotl(Motl):
         if stopgap_df["halfset"].nunique() == 2:
             self.df["geom3"] = [1.0 if hs.lower() == "a" else 0.0 for hs in stopgap_df["halfset"]]
             halfset_num = self.df["geom3"].values % 2
-            subtomo_id_num = []
-            c = 0 if halfset_num[0] == 1 else 2
-            for i in range(0, self.df.shape[0]):
-                c = np.ceil(c / 2) * 2 + halfset_num[i]
+            c = 1 if halfset_num[0] == 1 else 2
+            subtomo_id_num = [c]
+            for i in range(1, self.df.shape[0]):
+                if (c % 2 == 1 and halfset_num[i] == 1) or (c % 2 == 0 and halfset_num[i] == 0):
+                    c += 2
+                else:
+                    c += 1
                 subtomo_id_num.append(c)
 
             self.df["geom3"] = self.df["subtomo_id"]
