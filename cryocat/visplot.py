@@ -288,6 +288,7 @@ def plot_class_occupancy(
         ax.plot(range(1, len(occupancy_dic[c]) + 1), occupancy_dic[c], label="Class " + str(c), color=color_classes[i])
 
     ax.set_xlabel("Iteration")
+    ax.set_xlim(1, len(occupancy_dic[c]))
     ax.set_ylabel("Number of particles")
     if graph_title is None:
         ax.set_title("Class occupancy progress")
@@ -319,6 +320,7 @@ def plot_class_stability(
         ax.plot(range(1, len(values) + 1), values, label="Class " + str(cls), color=color_classes[cls - 1])
 
     ax.set_xlabel("Iteration")
+    ax.set_xlim(1, len(values))
     ax.set_ylabel("Particles changing their class")
     if graph_title is None:
         ax.set_title("Stability of classes")
