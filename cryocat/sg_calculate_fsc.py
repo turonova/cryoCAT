@@ -203,6 +203,7 @@ def calculate_full_fsc(refA_name,
         ax.set_xticks([len(refA)*pixelsize/i for i in res_label], res_label)
         ax.set_xlabel('Resolution [1/A]') 
     else:
+        res_label = list(range(1, len(full_fsc)+1))
         ax.set_xticks(range(len(refA)+1))
         ax.set_xlabel('Shell radius [px]') 
     ax.set_xlim(0, len(full_fsc)-1)
@@ -228,9 +229,12 @@ def calculate_full_fsc(refA_name,
             else:
                 fourier_cutoff = 15
             print('Based on the box size, taking', fourier_cutoff, 'as Fourier cutoff value.')
+        elif type(init_fourier_cutoff) == int:
+                fourier_cutoff = init_fourier_cutoff
+                print(f'Fourier cutoff provided and equal {init_fourier_cutoff}')
         else:
-            fourier_cutoff = init_fourier_cutoff
-            print(f'Fourier cutoff provided and equal {init_fourier_cutoff}')
+            raise TypeError('The value of Fourier cutoff is neither integer nor None - provide correct input.')
+            # TODO should the function still work treating it as the condition with None?
 
     ## calculate FSC corrected by phase-randomisation normalised in n_repeats
         n_pr_fsc = np.zeros((n_repeats, len(full_fsc)))
@@ -247,11 +251,11 @@ def calculate_full_fsc(refA_name,
             pr_mref_A = pr_ref_A * fsc_mask
             pr_mref_B = pr_ref_B * fsc_mask
 
-            ## calculate phase-randomised fsc n_repeat times
+            ## calculate phase-randomised FSC n_repeat times
             rp_fsc_values = calculate_fsc(pr_mref_A, pr_mref_B) ## phase randomised fsc
             mean_pr_fsc.append(rp_fsc_values) # for plotting phase
 
-            ## phase-normalised fsc per iteration
+            ## phase-normalised FSC per iteration
             n_pr_fsc[n,:] = np.divide(np.subtract(full_fsc, rp_fsc_values), np.subtract(1, rp_fsc_values)) ### HERE SIZE [n,:] IS IMPORTANT
 
         indiv_phases = np.asarray(mean_pr_fsc)
@@ -303,13 +307,15 @@ def calculate_full_fsc(refA_name,
         else:
             try:
                 idx_y_val = np.min(np.where(np.isclose(y_interpolated, y_value, atol=1e-3)))
-                print(f'FSC at {y_value} is', round(len(mrefA)*pixelsize/x_range[idx_y_val], 3))
+                if pixelsize:
+                    print(f'FSC at {y_value} is', round(len(mrefA)*pixelsize/x_range[idx_y_val], 3))
             except ValueError:
                 idx_y_val = np.min(np.where(np.isclose(y_interpolated, y_value, atol=1e-2)))
-                print(f'FSC at {y_value} is', round(len(mrefA)*pixelsize/x_range[idx_y_val], 2))
+                if pixelsize:
+                    print(f'FSC at {y_value} is', round(len(mrefA)*pixelsize/x_range[idx_y_val], 2))
             finally:
-                if not pixelsize: ## FIXME for pixelsize = 0 and none in _ang
-                    print(f'FSC at {y_value} is {x_range[idx_y_val]}.')
+                if not pixelsize:
+                    print(f'FSC at {y_value} is {round(x_range[idx_y_val], 3)}.')
         return None
     
     ## get values for 0.5, 0.143
@@ -344,7 +350,7 @@ def calculate_full_fsc(refA_name,
 
     if output_table is not None:
         if output_table.endswith('.csv'):
-            output_df.to_csv('raw'+output_table, index=False)
+            output_df.to_csv(output_table, index=False)
         elif output_table.endswith('.xlm'):
             if n_repeats and pixelsize:
                 write_xml(output_table, x_values=[len(refA)*pixelsize/i for i in res_label],
@@ -352,7 +358,7 @@ def calculate_full_fsc(refA_name,
                           title="CryoCAT phase-corrected FSC",
                           xaxis="Resolution (1/A)")
             elif n_repeats and pixelsize == 0:
-                write_xml(output_table, x_values=range(edge[0]+1),
+                write_xml(output_table, x_values=res_label,
                           y_values=corr_fsc,
                           title="CryoCAT phase-corrected FSC",
                           xaxis="Shell radius [px]")
@@ -362,7 +368,7 @@ def calculate_full_fsc(refA_name,
                           title="CryoCAT raw FSC",
                           xaxis="Resolution (1/A)")
             else: # n_repeats == 0 and pixelsize == 0
-                write_xml(output_table, x_values=range(edge[0]+1),
+                write_xml(output_table, x_values=res_label,
                           y_values=full_fsc,
                           title="CryoCAT raw FSC",
                           xaxis="Shell radius [px]")

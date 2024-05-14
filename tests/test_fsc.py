@@ -102,4 +102,7 @@ def test_xaxislabel_when_no_px_size(refA_name, refB_name, fsc_mask_name):
 
 # def test_diff_edges_for_fourier_cutoff:
 
+# def test_neg_or_nan:
+# substitute_neg_or_nan(list)
+
 # pass
