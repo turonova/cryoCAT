@@ -33,10 +33,10 @@ def load_for_fsc(refA_name,
     refA = cryocat.cryomap.read(refA_name)
     refB = cryocat.cryomap.read(refB_name)
     ## mask the volumes; in case no mask was provided create an empty mask the size of the input box
-    if len(refA[0]) == len(refB[0]):            
+    if refA.shape == refB.shape:          
         if fsc_mask_name is not None:
             fsc_mask=cryocat.cryomap.read(fsc_mask_name)
-            if len(refA[0]) != len(fsc_mask[0]):
+            if refA.shape != fsc_mask.shape:
                 raise UserInputError('Provided mask does not match the size of the map.')
         else:
             print("No FSC mask provided. Creating an empty mask...")
@@ -154,6 +154,11 @@ def phase_randomised_reference(mft, fourier_cutoff):
     
     return pr_ref
 
+def substitute_neg_or_nan(fsc_list):
+    fsc_list = [1 if math.isnan(x) else x for x in fsc_list]
+    fsc_list = [-x if x<0 else x for x in fsc_list]
+    return fsc_list
+    
 def calculate_full_fsc(refA_name,
                 refB_name,
                 pixelsize_ang=None,
@@ -184,11 +189,6 @@ def calculate_full_fsc(refA_name,
     else:
         print('Pixel size not provided. Plotting FSC as the function of shell radius.') 
         pixelsize = 0
-
-    def substitute_neg_or_nan(fsc_list):
-        fsc_list = [1 if math.isnan(x) else x for x in fsc_list]
-        fsc_list = [-x if x<0 else x for x in fsc_list]
-        return fsc_list
     
     ## calculate FSC
     full_fsc = substitute_neg_or_nan(calculate_fsc(mrefA, mrefB))

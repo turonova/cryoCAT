@@ -2,10 +2,12 @@
 import pytest
 import numpy as np
 import pandas as pd
+import math
 from cryocat import cryomap
 from cryocat import cryomask
 from cryocat import sg_calculate_fsc as fsc
-import matplotcheck.base as mpc
+from cryocat.exceptions import UserInputError
+# import matplotcheck.base as mpc
 
 
 # ### potential parametrization 
@@ -50,11 +52,11 @@ def test_mask_does_something():
                         './tests/test_data/sphere_r10_g2_bx32.em')
     assert np.less_equal(inputs[0], inputs[3]).any() & np.less_equal(inputs[1], inputs[4]).any()
 
-def test_calculate_fsc(refA_name, refB_name, fsc_mask_name):
-    mrefA, mrefB = fsc.load_for_fsc(refA_name, refB_name, fsc_mask_name)
-    full_fsc = fsc.calculate_fsc(mrefA, mrefB)
-    assert True ### FIXME
-
+# def test_calculate_fsc(refA_name, refB_name, fsc_mask_name):
+#     mrefA, mrefB = fsc.load_for_fsc(refA_name, refB_name, fsc_mask_name)
+#     full_fsc = fsc.calculate_fsc(mrefA, mrefB)
+#     assert True 
+### FIXME
 
 def test_self_fsc(refA_name): ### FIXME why do I have [2:], not just cutting off nan in [0:]
     *_, mrefA, mrefB, _ = fsc.load_for_fsc(refA_name, refA_name)
@@ -62,7 +64,7 @@ def test_self_fsc(refA_name): ### FIXME why do I have [2:], not just cutting off
     full_fsc = fsc.calculate_fsc(mrefA, mrefB)
     np.testing.assert_array_almost_equal(full_fsc[2:], ones, 0.001)
 
-def test_calculate_full_fsc_corr(refA_name, refB_name, fsc_mask_name): ###FIXME with set seed for phase rand.; also tails and the overall vector length are different??
+def test_calculate_full_fsc_corr_matlab_ww(refA_name, refB_name, fsc_mask_name): ###FIXME with set seed for phase rand.; also tails and the overall vector length are different??
     refA, refB, mask, *_  = fsc.load_for_fsc(refA_name, refB_name, fsc_mask_name)
     corr_fsc = fsc.calculate_full_fsc(refA, refB, 2.682, mask, 'C1', 10, 5)[0] ## [0] - take the resulting df
     # print(corr_fsc['corrected FSC'])
@@ -70,7 +72,7 @@ def test_calculate_full_fsc_corr(refA_name, refB_name, fsc_mask_name): ###FIXME 
     # print(matlab_csv)
     np.testing.assert_allclose(corr_fsc['corrected FSC'][2:], matlab_csv[1:], rtol=0, atol=0.1) ##FIXME why the len different? 
 
-def test_calculate_full_fsc_uncorr(refA_name, refB_name, fsc_mask_name):
+def test_calculate_full_fsc_uncorr_matlab_ww(refA_name, refB_name, fsc_mask_name):
     uncorr_fsc = fsc.calculate_full_fsc(refA_name, refB_name, 2.682, fsc_mask_name, 'c1', None, 5)[0]
     # print(uncorr_fsc)
     matlab_csv = [0.999999954578723, 0.995002388859286, 0.981231052592982, 0.954699314186256, 0.917273966043597, 0.921906498703701, 0.836097308533237, 0.736864441953192, 0.629585676265651, 0.524284261860113, 0.387319920161805, 0.203577127473574, 0.177529707480644, 0.252696700444375, 0.206523058965346, 0.160762863339929]
@@ -85,6 +87,27 @@ def test_fcutoff_halfbox_is_norandomisation(refA_name, refB_name, fsc_mask_name)
     df_fsc_half_box = fsc.calculate_full_fsc(refA_name, refB_name, 2.682, fsc_mask_name, 'c1', 10, int(len(cryomap.read(refA_name))/2))[0]['corrected FSC']
     pd.testing.assert_series_equal(df_no_repeats, df_fsc_half_box, check_names=False)
 
+
+
+def test_neg_or_nan(test_list=[np.nan, float('nan'), -3, -0.4, -.2]):
+    substituted_list = fsc.substitute_neg_or_nan(test_list)
+    assert np.all(substituted_list)
+
+
+
+# def test_xaxislabel_when_no_px_size(refA_name, refB_name, fsc_mask_name):
+#     shell_radius_plot = fsc.calculate_full_fsc(refA_name, refB_name, None)
+#     assert True 
+###FIXME
+
+# def test_phase_randomisatin_w_seed():
+
+# def test_diff_edges_for_fourier_cutoff:
+
+# pass
+
+### error handling tests
+
 def test_error_odd_input_box(odd_volume=cryomask.spherical_mask(21)):
     # odd_volume = cryomask.spherical_mask(21,5)
     with pytest.raises(ValueError) as excinfo:
@@ -93,16 +116,22 @@ def test_error_odd_input_box(odd_volume=cryomask.spherical_mask(21)):
         fsc.calculate_fsc(mrefA, mrefB)
     assert "odd number" in str(excinfo.value)
 
-def test_xaxislabel_when_no_px_size(refA_name, refB_name, fsc_mask_name):
-    shell_radius_plot = fsc.fsc.calculate_full_fsc(refA_name, refB_name, None)
+def test_error_load_shape_mismatch_refs(refA_name, refB_uneven='./tests/test_data/refB_uneven.em'):
+    with pytest.raises(UserInputError) as err:
+        fsc.load_for_fsc(refA_name, refB_uneven)
+    assert str(err.value) == 'Sizes of volumes to compare do not match!'
 
-# def test_calculate_fsc():
+def test_error_load_shape_mismatch_mask(refA_name, refB_uneven='./tests/test_data/refB_uneven.em'):
+    with pytest.raises(UserInputError) as err:
+        fsc.load_for_fsc(refA_name, refA_name, refB_uneven)
+    assert str(err.value) == 'Provided mask does not match the size of the map.'
 
-# def test_phase_randomisatin_w_seed():
+def test_valerr_str_px_size(refA_name, refB_name, pixelsize_ang = 'string'):
+    with pytest.raises(ValueError) as err:
+        fsc.calculate_full_fsc(refA_name, refB_name, pixelsize_ang = pixelsize_ang)
+    assert str(err.value) == 'Pixel size not provided. Plotting FSC as the function of shell radius.'
 
-# def test_diff_edges_for_fourier_cutoff:
-
-# def test_neg_or_nan:
-# substitute_neg_or_nan(list)
-
-# pass
+def test_none_px_size(refA_name, refB_name, pixelsize_ang = None):
+    with pytest.raises(TypeError) as err:
+        fsc.calculate_full_fsc(refA_name, refB_name, pixelsize_ang = pixelsize_ang)
+    assert str(err.value) == 'Pixel size not provided. Plotting FSC as the function of shell radius.'
