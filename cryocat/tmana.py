@@ -26,6 +26,7 @@ def scores_extract_particles(
     tomo_id,
     particle_diameter,
     object_id=None,
+    scores_threshold=None,
     sigma_threshold=None,
     cluster_size=None,
     n_particles=None,
@@ -51,10 +52,14 @@ def scores_extract_particles(
         Diameter of the particle to be used for extraction and clustering.
     object_id : int, optional
         Identifier for the object within the tomogram. Defaults to None.
+    scores_threshold : float, optional
+        "Direct" threshold for the scores map. If set, all values below this threshold will be removed from the scores
+        map. This parameter is useful if one knows exact threshold for the scores map. Defaults to None.
     sigma_threshold : float, optional
-        Number of standard deviations above the mean to consider as threshold for particle extraction. If None, the
-        threshold is computed using :meth:`cryocat.tmana.compute_scores_map_threshold_triangle` function. Defaults to
-        None.
+        Number of standard deviations above the mean to consider as threshold for particle extraction. This parameter
+        is prefered over the scores threshold for "batch" processing since the exact scores threshold might differ
+        between different scores maps, while the sigma confidence is relatively stable. If None, the threshold is
+        computed using :meth:`cryocat.tmana.compute_scores_map_threshold_triangle` function. Defaults to None.
     cluster_size : int, optional
         Minimum number of particles required to form a cluster. Defaults to None.
     n_particles : int, optional
@@ -110,7 +115,9 @@ def scores_extract_particles(
     if object_id is None:
         object_id = 1
 
-    if sigma_threshold is None:
+    if scores_threshold is not None:
+        threshold = scores_threshold
+    elif sigma_threshold is None:
         threshold = compute_scores_map_threshold_triangle(scores_map)
     else:
         # Set threshold by sigma value
@@ -122,10 +129,10 @@ def scores_extract_particles(
     t_idx = np.where(scores_map > threshold)
 
     # original piece - not clear whether this is really working
-    if n_particles is not None:
-        k = min(n_particles, len(t_idx[0]))
-    else:
-        k = len(t_idx[0])
+    # if n_particles is not None:
+    #    k = min(n_particles, len(t_idx[0]))
+    # else:
+    k = len(t_idx[0])
 
     # Check for early termination
     if k == 0:
@@ -188,8 +195,8 @@ def scores_extract_particles(
         c += np.sum(cluster_labels == cluster_id)
 
         # Check for early termination
-        if n_particles is not None and c >= n_particles:
-            break
+        # if n_particles is not None and c >= n_particles:
+        #    break
 
     # Remaining positions
     rpos = filtered_coords[filtered_hit_idx]
