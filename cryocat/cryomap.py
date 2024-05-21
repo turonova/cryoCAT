@@ -7,6 +7,27 @@ from scipy.ndimage import affine_transform
 from scipy.spatial.transform import Rotation as srot
 from scipy.interpolate import interp1d
 from cryocat import cryomask
+from skimage import transform
+
+
+def scale(input_map, scaling_factor, output_name=None):
+
+    input_map = read(input_map)
+
+    if scaling_factor > 1:
+        anti_alias = False
+    else:
+        anti_alias = True
+
+    scaled_map = transform.rescale(input_map, scaling_factor, order=3, mode="reflect", anti_aliasing=anti_alias)
+
+    if scaled_map.dtype == np.float64:
+        scaled_map = scaled_map.astype(np.float32)
+
+    if output_name is not None:
+        write(scaled_map, output_name)
+
+    return scaled_map
 
 
 def pixels2resolution(fourier_pixels, edge_size, pixel_size, print_out=True):
