@@ -350,6 +350,9 @@ class Motl:
             columns=Motl.motl_columns,
             dtype=float,
         )
+
+        empty_motl_df = empty_motl_df.fillna(0.0)
+
         return empty_motl_df
 
     @staticmethod
@@ -396,6 +399,7 @@ class Motl:
         if Motl.check_df_correct_format(input_motl):
             self.df = input_motl.copy()
             self.df.reset_index(inplace=True, drop=True)
+            self.df = self.df.fillna(0.0)
         else:
             self.convert_to_motl(input_motl)
 
@@ -2485,7 +2489,9 @@ class RelionMotl(Motl):
 
         """
 
-        optics_df = []
+
+        if not use_original_entries and version is None:
+            version = self.version
 
         if use_original_entries:
             if self.optics_data is not None:
@@ -2496,9 +2502,6 @@ class RelionMotl(Motl):
                 )
         elif optics_data is not None:
             if isinstance(optics_data, str):
-                if version is None:
-                    version = self.version
-
                 if version >= 3.1:
                     optics_df, _ = starfileio.get_frame_and_comments(optics_data, "data_optics")
                 else:
@@ -2508,9 +2511,15 @@ class RelionMotl(Motl):
             else:
                 raise UserInputError("Optics has to be specified as a dictionary or as a path to the starfile.")
         else:
-            raise Warning(
-                f"There is no information on optics available - use optics_data argument to provide this information."
-            )
+            # TODO add support for 3.0
+            if version == 3.1:
+                optics_df = self.create_optics_group_v3_1()
+            elif version > 3.1:
+                optics_df = self.create_optics_group_v4()
+            else:
+                raise Warning(
+                    f"There is no information on optics available - use optics_data argument to provide this information."
+                )
 
         return optics_df
 
@@ -2706,11 +2715,13 @@ class RelionMotl(Motl):
 
         if pixel_size is not None:
             optics_default["rlnImagePixelSize"] = pixel_size
+        else:
+            optics_default["rlnImagePixelSize"] = "NaN"
 
         if subtomo_size is not None:
             optics_default["rlnImageSize"] = subtomo_size
 
-        return pd.DataFrame(optics_default)
+        return pd.DataFrame(optics_default, index=[0])
 
     def create_optics_group_v4(self, pixel_size=None, subtomo_size=None, binning=None):
         """Creates an optics group with default parameters corresponding to Relion v. 4.x.
@@ -2857,6 +2868,9 @@ class RelionMotl(Motl):
         """
 
         if version is None:
+            if self.version is None:
+                self.version = 3.1
+
             version = self.version
 
         if binning is None:
