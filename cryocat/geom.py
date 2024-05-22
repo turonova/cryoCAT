@@ -297,9 +297,9 @@ def quaternion_mult(qs1, qs2):
     for q, q1 in enumerate(qs1):
         q2 = qs2[q, :]
         w = q1[3] * q2[3] - q1[0] * q2[0] - q1[1] * q2[1] - q1[2] * q2[2]
-        i = q1[3] * q2[0] + q1[0] * q2[3] - q1[1] * q2[2] + q1[2] * q2[1]
-        j = q1[3] * q2[1] + q1[0] * q2[2] + q1[1] * q2[3] - q1[2] * q2[0]
-        k = q1[3] * q2[2] - q1[0] * q2[1] + q1[1] * q2[0] + q1[2] * q2[3]
+        i = q1[3] * q2[0] + q1[0] * q2[3] + q1[1] * q2[2] - q1[2] * q2[1]
+        j = q1[3] * q2[1] - q1[0] * q2[2] + q1[1] * q2[3] + q1[2] * q2[0]
+        k = q1[3] * q2[2] + q1[0] * q2[1] - q1[1] * q2[0] + q1[2] * q2[3]
         mutliplied.append(np.array([i, j, k, w]))
 
     return np.vstack(mutliplied)
@@ -747,9 +747,9 @@ def point_pairwise_dist(coord_1, coord_2):
 # cite https://stackoverflow.com/questions/71346322/numpy-area-of-triangle-and-equation-of-a-plane-on-which-triangle-lies-on
 def area_triangle(coords):
     # The cross product of two sides is a normal vector
-    triangles = np.cross(coords[:, 1] - coords[:, 0], coords[:, 2] - coords[:, 0], axis=1)
+    triangles = np.cross(coords[:, 1] - coords[:, 0], coords[:, 2] - coords[:, 0])
     # The norm of the cross product of two sides is twice the area
-    return np.linalg.norm(triangles, axis=1) / 2
+    return np.linalg.norm(triangles) / 2
 
 
 def ray_ray_intersection_3d(starting_points, ending_points):
