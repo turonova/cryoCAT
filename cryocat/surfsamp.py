@@ -281,28 +281,30 @@ def rm_points(points, normals, rm_surface):
 # replace the normal with the closest postion from convexHull
 # Substitute the normal in one motl with the adjacent normal from oversampling points.
 # samp_dist : int Distance between sample points in pixels.
-def reset_normals(samp_dist, shift_dist, tb_move, shapes_data, motl, bin_factor):
-    """Replaces the normal of the motl with the adjacent normal from oversampling points.
+def reset_normals(
+    shapes_data, motl, samp_dist=1, shift_dist=None, tb_dist=0, bin_factor=None
+):
+    """Replaces the angle of the motl with the angle from adjacent oversampling points.
 
     Parameters
     ----------
+    shapes_data : list
+        A list containing point cloud coordinates ordered by z, y, x, with points sharing the same z-value organized into arrays.
+    motl : object
+        The motl for resetting angles.
     samp_dist : int
-        Distance between sample points in pixels.
+        Distance between sample points in pixels for resetting angles. Defaults to 1.
     shift_dist : int
-        Description of shift_dist.
-    tb_move : type
-        Description of tb_move.
-    shapes_data : type
-        Description of shapes_data.
-    motl : type
-        Description of motl.
-    bin_factor : type
-        Description of bin_factor.
+        Shifting distance for resetting angles. Defaults to None for no shifting.
+    tb_dist : int
+        Shifting distance for moving the points at top and bottom surface. Defaults to 0 for no top and bottom movement.
+    bin_factor : int
+        Bin_factor for shape_data. Defaults to None for no binning differents between shape and motl.
 
     Returns
     -------
-    type
-        Description of return value.
+    motl : pddataframe
+        dataframe of motl list with replaced euler angles
 
     Notes
     -----
@@ -311,29 +313,42 @@ def reset_normals(samp_dist, shift_dist, tb_move, shapes_data, motl, bin_factor)
     # get the oversampling
     tri_points, tri_normals = surfsamp.get_oversampling(shapes_data, samp_dist)
     # shifting points to the normal direction
-    tri_points, tri_normals = surfsamp.expand_points(
-        tri_points, tri_normals, shift_dist, tb_move
-    )  # negative for shifting in opposite direction
+    if shift_dist != None:
+        tri_points, tri_normals = surfsamp.expand_points(
+            tri_points, tri_normals, shift_dist, tb_dist
+        )  # negative for shifting in opposite direction
 
     # reorganize x,y,z into z,y,x to match with tri_points
-    motl_points = np.flip(motl.values[:, 7:10], axis=1)
-    sample_points = tri_points * bin_factor  # add binning to tri_points
+    # flip here rather than oversampling because oversampling will be show in napari which needed to be order in z, y, x
+    motl_points = np.flip(motl.get_coordinates(), axis=1)
+    if bin_factor != None:
+        sample_points = tri_points * bin_factor  # add binning to tri_points
+    else:
+        sample_points = tri_points
     # searching for the closest point to motl_points
     kdtree = KDTree(sample_points)
-    dist, points = kdtree.query(motl_points, 1)
+    _, points = kdtree.query(motl_points, 1)
 
-    ## replacing normals in motlist to new normals
+    ## replacing eular angles in motlist to new angles
     n_normals = tri_normals[points]
     # create panda frames from normals
     pd_normals = pd.DataFrame(
         {"x": n_normals[:, 2], "y": n_normals[:, 1], "z": n_normals[:, 0]}
     )
-    # get Euler angles from coordinates
+    # get Euler angles from normals
     phi, psi, theta = tg.normals_to_euler_angles(pd_normals)
-    # create pandas from angles
-    pd_angles = pd.DataFrame({"phi": phi, "psi": psi, "theta": theta})
-    # replace angles
-    motl[["phi", "psi", "theta"]] = pd_angles.values
+    # replace angles in motl
+    motl.fill(
+        {
+            "angles": pd.DataFrame(
+                {
+                    "phi": phi,
+                    "psi": psi,
+                    "theta": theta,
+                }
+            )
+        }
+    )
 
     return motl
 
@@ -480,6 +495,21 @@ def angles_clean(motl, vertices, normals, angle_threshold=90, normal_vector=[0, 
 
 
 def mask_clean(motl, mask):
+    """This function cleans the given motl by applying a mask to it. If a coordinate is in the mask, it is kept in the output clean_motl, otherwise it is removed.
+
+    Parameters
+    ----------
+    motl : object
+        The motl object to be cleaned.
+    mask : ndarray
+        A 3D numpy array representing the mask to be applied. It should have the same dimensions as the motl object.
+
+    Returns
+    -------
+    clean_motl : object
+        The cleaned motl object. It has the same type as the input motl object, but only contains the coordinates that are in the mask.
+
+    """
     clean_motl = motl
     coords = motl.get_coordinates()
     clean_array = np.zeros(len(coords))
@@ -491,7 +521,7 @@ def mask_clean(motl, mask):
             clean_array[i] = False
     clean_boolmask = pd.array(clean_array, dtype="boolean")
     clean_motl.df = motl.df[clean_boolmask]
-    
+
     return clean_motl
 
 
