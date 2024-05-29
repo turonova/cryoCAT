@@ -451,7 +451,9 @@ def get_surface_area_from_hull(mask_points, rm_faces=0):
     return updated_area
 
 
-def angles_clean(motl, vertices, normals, angle_threshold=90, normal_vector=[0, 0, 1]):
+def angles_clean(
+    motl, vertices, normals, angle_threshold=90, normal_vector=[0, 0, 1], keep_top=None
+):
     """This function cleans the given list of motl based on the angle threshold and normal vector. It calculates the difference in angles between the motl's z vector and the surface's z vector. It keeps the particles with an angle difference smaller than the threshold or with a tm score in the top 10.
 
     Parameters
@@ -466,6 +468,8 @@ def angles_clean(motl, vertices, normals, angle_threshold=90, normal_vector=[0, 
         The threshold for the angle difference, by default 90.
     normal_vector : list, optional
         The normal vector to be applied to the rotation, by default [0,0,1].
+    keep_top : int, optional
+        The number of top-scoring particles to retain, regardless of their angles. Default is None.
 
     Returns
     -------
@@ -485,11 +489,14 @@ def angles_clean(motl, vertices, normals, angle_threshold=90, normal_vector=[0, 
     diff_angles = (
         np.arccos(np.sum(motl_z_vector * surface_z_vector, axis=1)) * 180 / np.pi
     )
-    top_score = motl.df.score >= np.sort(motl.df.score)[-10]
-    # keep particles with a angle different smaller than the threshold or with a tm score in top 10
-    clean_motl_list.df = motl.df[
-        np.logical_or(diff_angles <= angle_threshold, top_score)
-    ]
+    if keep_top != None:
+        top_score = motl.df.score >= np.sort(motl.df.score)[-keep_top]
+        # keep particles with a angle different smaller than the threshold or with a tm score in top 10
+        clean_motl_list.df = motl.df[
+            np.logical_or(diff_angles <= angle_threshold, top_score)
+        ]
+    else:
+        clean_motl_list.df = motl.df[diff_angles <= angle_threshold]
 
     return clean_motl_list
 
@@ -605,7 +612,7 @@ def process_mask(mask, radius, mode):
     if mode == "erosion":
         pro_mask = skimage.morphology.isotropic_erosion(mask_pad, radius=radius)
     pro_mask = pro_mask[radius:-radius, radius:-radius, radius:-radius]
-    return pro_mask
+    return pro_mask.astype(float)
 
 
 def marker_from_fill_mask(fill_mask, ero_radius=60, clos_radius=20, mode="None"):
