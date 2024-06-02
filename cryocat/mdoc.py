@@ -1,18 +1,21 @@
 import pandas as pd
 from os import path
+import warnings
+from cryocat import ioutils
 
 
 class Mdoc:
     """Class for reading, writing, and manipulating Mdoc files."""
 
-    def __init__(self, file_path=None, titles=None, project_info=None, imgs=None):
+    def __init__(self, file_path=None, titles=None, project_info=None, imgs=None, section_id="ZValue"):
         if file_path and path.isfile(file_path):
             self.file_path = file_path
-            self.titles, self.project_info, self.imgs = self._read_mdoc(file_path)
+            self.titles, self.project_info, self.imgs, self.section_id = self._read_mdoc(file_path)
         else:
             self.titles = titles
             self.project_info = project_info
             self.imgs = imgs
+            self.section_id = section_id
 
     def write(self, out_path=None, overwrite=False, removed=False):
         if not out_path:
@@ -32,9 +35,9 @@ class Mdoc:
             # write images
             for index, row in self.imgs.iterrows():
                 if removed or (not removed and not row["removed"]):
-                    f.write("[ZValue = {}]\n".format(row["ZValue"]))
+                    f.write("[{} = {}]\n".format(self.section_id, row[self.section_id]))
                     for column in self.imgs.columns:
-                        if (column != "ZValue") and (column != "removed"):
+                        if (column != self.section_id) and (column != "removed"):
                             f.write("{} = {}\n".format(column, row[column]))
                     f.write("\n")
 
@@ -99,6 +102,67 @@ class Mdoc:
         self.imgs = self.imgs.reindex(indices)
         self.imgs.reset_index(drop=True, inplace=True)
 
+    def change_frame_path(self, new_path=None):
+
+        def add_new_path(file_name):
+            return path.join(new_path, file_name)
+
+        self.imgs["SubFramePath"] = self.imgs["SubFramePath"].apply(path.basename)
+
+        if new_path is not None and new_path != "":
+            self.imgs["SubFramePath"] = self.imgs["SubFramePath"].apply(add_new_path)
+
+    def update_pixel_size(self, new_pixel_size):
+        self.project_info["PixelSpacing"] = new_pixel_size
+        self.imgs["PixelSpacing"] = new_pixel_size
+
+    def convert_section_type(self, new_section_id="FrameSet"):
+
+        if self.section_id == new_section_id:
+            warnings.warn("The new section id is the same as the existing one - no changes were made.")
+            return
+
+        self.imgs.rename(columns={self.section_id: new_section_id}, inplace=True)
+
+        if new_section_id == "ZValue":
+
+            _, img_path = path.split(self.imgs["SubFramePath"].values[0])
+            img_file = img_path.split("_")[0] + "_" + img_path.split("_")[1] + ".mrc"
+
+            new_project_info = {
+                "PixelSpacing": self.imgs["PixelSpacing"].values[0],
+                "Voltage": self.project_info["Voltage"],
+                # "Version": project_info["T"],
+                "ImageFile": img_file,
+                "ImageSize": self.imgs["UncroppedSize"].values[0].replace("-", ""),
+                "DataMode": 1,
+            }
+            new_titles = ["T = " + self.project_info["T"]]
+            second_title = (
+                "T = Tilt axis angle = "
+                + str(self.imgs["RotationAngle"].values[0] - 90)
+                + ", binning = "
+                + str(self.imgs["Binning"].values[0])
+                + " spot = "
+                + str(self.imgs["SpotSize"].values[0])
+                + " camera = "
+                + str(self.imgs["CameraIndex"].values[0])
+            )
+            new_titles.append(second_title)
+        elif new_section_id == "FrameSet":
+            t_entry = self.titles[0].split(" ")
+            new_project_info = {
+                "T": " ".join(t_entry[2:]),
+                "Voltage": self.project_info["Voltage"],
+            }
+            new_titles = []
+        else:
+            raise ValueError("Currently onlyt conversion between ZValue and FrameSet is supported.")
+
+        self.section_id = new_section_id
+        self.titles = new_titles
+        self.project_info = new_project_info
+
     @staticmethod
     def _read_mdoc(file_path):
         with open(file_path, "r") as f:
@@ -108,6 +172,10 @@ class Mdoc:
             header = []  # list of header lines
             for line in lines:
                 if line.startswith("[ZValue"):
+                    section_id = "ZValue"
+                    break
+                elif line.startswith("[FrameSet"):
+                    section_id = "FrameSet"
                     break
                 # append only non-empty lines
                 if line.strip():
@@ -117,9 +185,9 @@ class Mdoc:
 
             # continue after header
             data = lines[lines.index(line) :]
-            imgs = Mdoc._parse_images(data)
+            imgs = Mdoc._parse_images(data, section_id)
 
-            return titles, project_info, imgs
+            return titles, project_info, imgs, section_id
 
     @staticmethod
     def _parse_header(header):
@@ -137,12 +205,12 @@ class Mdoc:
         return titles, project_info
 
     @staticmethod
-    def _parse_images(data):
+    def _parse_images(data, section_id):
         # split the lines into sections, each starting with line starting with "[ZValue"
         sections = []
         section = []
         for line in data:
-            if line.startswith("[ZValue") and section:
+            if line.startswith("[" + section_id) and section:
                 sections.append(section)
                 section = []
             if line.strip():
@@ -150,7 +218,7 @@ class Mdoc:
         sections.append(section)
 
         # determine dataframe columns from the first section
-        columns = ["ZValue"]
+        columns = [section_id]
         columns.extend([line.split("=")[0].strip() for line in sections[0][1:]])
 
         imgs = pd.DataFrame(columns=columns)
@@ -159,7 +227,7 @@ class Mdoc:
             img = {}
             for line in section:
                 if line.startswith("["):
-                    img["ZValue"] = line.split("=")[1].strip().strip("]").strip()
+                    img[section_id] = line.split("=")[1].strip().strip("]").strip()
                 else:
                     key, value = line.split("=")
                     img[key.strip()] = Mdoc._format_value(value)
@@ -169,8 +237,8 @@ class Mdoc:
         imgs["removed"] = False
 
         # convert ZValues to int
-        temp_column = imgs.astype({"ZValue": int})
-        imgs["ZValue"] = temp_column["ZValue"]
+        temp_column = imgs.astype({section_id: int})
+        imgs[section_id] = temp_column[section_id]
 
         # convert TiltAngle to float
         imgs["TiltAngle"] = imgs["TiltAngle"].astype(float)
@@ -186,3 +254,34 @@ class Mdoc:
         else:
             formatted = value.strip()
         return formatted
+
+
+def merge_mdoc_files(mdoc_path, new_id=None, reorder=True, stripFramePath=False, output_file=None):
+
+    dir_only, prefix = path.split(mdoc_path)
+    list_of_mdocs = ioutils.get_files_prefix_suffix(dir_path=dir_only, prefix=prefix, suffix=".mdoc")
+
+    all_imgs = pd.DataFrame()
+    for i, m in enumerate(list_of_mdocs):
+        if i == 0:
+            titles, project_info, imgs, section_id = Mdoc._read_mdoc(dir_only + "/" + m)
+        else:
+            _, _, imgs, _ = Mdoc._read_mdoc(dir_only + "/" + m)
+        imgs[section_id] = i
+        all_imgs = pd.concat([all_imgs, imgs])
+
+    merged_mdoc = Mdoc(titles=titles, project_info=project_info, imgs=all_imgs, section_id=section_id)
+
+    if new_id is not None:
+        merged_mdoc.convert_section_type(new_section_id=new_id)
+
+    if stripFramePath:
+        merged_mdoc.change_frame_path()
+
+    if reorder:
+        merged_mdoc.sort_by_tilt(reset_z_value=True)
+
+    if output_file is not None:
+        merged_mdoc.write(out_path=output_file, overwrite=True)
+
+    return merged_mdoc

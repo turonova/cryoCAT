@@ -2489,7 +2489,6 @@ class RelionMotl(Motl):
 
         """
 
-
         if not use_original_entries and version is None:
             version = self.version
 
@@ -3100,7 +3099,7 @@ class StopgapMotl(Motl):
 
         return stopgap_df
 
-    def convert_to_motl(self, stopgap_df):
+    def convert_to_motl(self, stopgap_df, keep_halfsets=False):
         """Converts a stopgap DataFrame to a motl DataFrame and stores it in self.df.
 
         Parameters
@@ -3130,20 +3129,21 @@ class StopgapMotl(Motl):
         for em_key, star_key in StopgapMotl.pairs.items():
             self.df[em_key] = stopgap_df[star_key]
 
-        if stopgap_df["halfset"].nunique() == 2:
-            self.df["geom3"] = [1.0 if hs.lower() == "a" else 0.0 for hs in stopgap_df["halfset"]]
-            halfset_num = self.df["geom3"].values % 2
-            c = 1 if halfset_num[0] == 1 else 2
-            subtomo_id_num = [c]
-            for i in range(1, self.df.shape[0]):
-                if (c % 2 == 1 and halfset_num[i] == 1) or (c % 2 == 0 and halfset_num[i] == 0):
-                    c += 2
-                else:
-                    c += 1
-                subtomo_id_num.append(c)
+        if keep_halfsets:
+            if stopgap_df["halfset"].nunique() == 2:
+                self.df["geom3"] = [1.0 if hs.lower() == "a" else 0.0 for hs in stopgap_df["halfset"]]
+                halfset_num = self.df["geom3"].values % 2
+                c = 1 if halfset_num[0] == 1 else 2
+                subtomo_id_num = [c]
+                for i in range(1, self.df.shape[0]):
+                    if (c % 2 == 1 and halfset_num[i] == 1) or (c % 2 == 0 and halfset_num[i] == 0):
+                        c += 2
+                    else:
+                        c += 1
+                    subtomo_id_num.append(c)
 
-            self.df["geom3"] = self.df["subtomo_id"]
-            self.df["subtomo_id"] = subtomo_id_num
+                self.df["geom3"] = self.df["subtomo_id"]
+                self.df["subtomo_id"] = subtomo_id_num
 
     @staticmethod
     def convert_to_sg_motl(motl_df, reset_index=False):
@@ -3203,12 +3203,13 @@ class StopgapMotl(Motl):
         return stopgap_df
 
     def write_out(self, output_path, update_coord=False, reset_index=False):
-        """Writes the StopgapMotl object to a star file.
+        """Writes the StopgapMotl object to a star file unless the extesions of the file is .em in which case it writes
+        out the emfile type.
 
         Parameters
         ----------
         output_path : str
-            The path to save the star file.
+            The path to save the star or em file.
         update_coord : bool, default=False
             Whether to update the coordinates before writing. Defaults to False.
         reset_index : bool, default=False
@@ -3233,10 +3234,12 @@ class StopgapMotl(Motl):
         if update_coord:
             self.update_coordinates()
 
-        stopgap_df = StopgapMotl.convert_to_sg_motl(self.df, reset_index)
-        stopgap_df.fillna(0, inplace=True)
-
-        starfileio.Starfile.write([stopgap_df], output_path, specifiers=["data_stopgap_motivelist"])
+        if output_path.endswith(".star"):
+            stopgap_df = StopgapMotl.convert_to_sg_motl(self.df, reset_index)
+            stopgap_df.fillna(0, inplace=True)
+            starfileio.Starfile.write([stopgap_df], output_path, specifiers=["data_stopgap_motivelist"])
+        elif output_path.endswith(".em"):
+            super().write_out(output_path=output_path, motl_type="emmotl")
 
 
 class DynamoMotl(Motl):
