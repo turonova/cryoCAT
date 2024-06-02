@@ -37,7 +37,7 @@ def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
         if filename.startswith(prefix) and filename.endswith(suffix):
             matching_files.append(filename)
 
-    return matching_files
+    return sorted(matching_files)
 
 
 def get_number_of_lines_with_character(filename, character):
