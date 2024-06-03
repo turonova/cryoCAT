@@ -7,6 +7,39 @@ from cryocat import mdoc
 import xml.etree.ElementTree as ET
 
 
+def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
+    """Retrieve files from a specified directory that start with a given prefix and end with a given suffix.
+
+    Parameters
+    ----------
+    dir_path : str
+        The path to the directory from which to retrieve files.
+    prefix : str, default=""
+        The prefix that the files should start with. If ommited, no filtering based on prefix will be done. Defaults
+        to an empty string.
+    suffix : str, default=""
+        The suffix that the files should end with. If ommited, no filtering based on suffix will be done. Defaults
+        to an empty string.
+
+    Returns
+    -------
+    list
+        A list of filenames that match the given prefix and suffix criteria.
+
+    Examples
+    --------
+    >>> get_files_prefix_suffix('/path/to/dir', prefix='test', suffix='.txt')
+    ['test_file1.txt', 'test_file2.txt']
+    """
+
+    matching_files = []
+    for filename in os.listdir(dir_path):
+        if filename.startswith(prefix) and filename.endswith(suffix):
+            matching_files.append(filename)
+
+    return sorted(matching_files)
+
+
 def get_number_of_lines_with_character(filename, character):
     """Count the number of lines in a file that start with a specified character.
 
@@ -412,7 +445,10 @@ def total_dose_load(input_dose, sort_mdoc=True):
             # load as panda frames
             df = pd.read_csv(input_dose, index_col=0)
             if "CorrectedDose" in df.columns:
-                return df["CorrectedDose"].astype(np.single).to_numpy()
+                if "Removed" in df.columns:
+                    return df.loc[df["Removed"] == False, "CorrectedDose"].astype(np.single).to_numpy()
+                else:
+                    return df["CorrectedDose"].astype(np.single).to_numpy()
             else:
                 ValueError(f"The file {input_dose} does not contain column with name CorrectedDose")
         elif input_dose.endswith(".mdoc"):

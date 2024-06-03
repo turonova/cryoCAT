@@ -410,6 +410,22 @@ def write(data_to_write, file_name, transpose=True, data_type=None, overwrite=Tr
         raise ValueError("The output file name", file_name, "has to end with .mrc, .rec or .em!")
 
 
+def invert_contrast(input_map, output_name=None):
+
+    input_map = read(input_map)
+    inverted_map = input_map * (-1)
+
+    if output_name is not None:
+        if inverted_map.dtype == np.float64:
+            data_type = np.single
+        else:
+            data_type = inverted_map.dtype
+
+        write(inverted_map, output_name, data_type=data_type)
+
+    return inverted_map
+
+
 def em2mrc(map_name, invert=False, overwrite=True, output_name=None):
     data_to_write = read(map_name)
 
@@ -478,17 +494,19 @@ def normalize(map):
 
 
 def rotate(
-    map,
+    input_map,
     rotation=None,
     rotation_angles=None,
     coord_space="zxz",
     transpose_rotation=False,
     degrees=True,
     spline_order=3,
+    output_name=None,
 ):
+    input_map = read(input_map)
     # create transaltion to the center of the box
     T = np.eye(4)
-    structure_center = np.asarray(map.shape) // 2
+    structure_center = np.asarray(input_map.shape) // 2
     T[:3, -1] = structure_center
 
     rot_matrix = np.eye(4)
@@ -508,8 +526,11 @@ def rotate(
 
     final_matrix = T @ rot_matrix @ np.linalg.inv(T)
 
-    rot_struct = np.empty(map.shape)
-    affine_transform(input=map, output=rot_struct, matrix=final_matrix, order=spline_order)
+    rot_struct = np.empty(input_map.shape)
+    affine_transform(input=input_map, output=rot_struct, matrix=final_matrix, order=spline_order)
+
+    if output_name is not None:
+        write(rot_struct, output_name, data_type=np.single)
 
     return rot_struct
 
@@ -530,12 +551,18 @@ def shift(map, delta):
     return shifted_map
 
 
-def shift2(map, delta):
-    T = np.eye(4)
-    T[:3, -1] = -delta
+def shift2(input_map, delta, output_name=None):
 
-    shifted_map = np.empty(map.shape)
-    affine_transform(input=map, output=shifted_map, matrix=T, mode="grid-wrap")
+    input_map = read(input_map)
+
+    T = np.eye(4)
+    T[:3, -1] = -np.asarray(delta)
+
+    shifted_map = np.empty(input_map.shape)
+    affine_transform(input=input_map, output=shifted_map, matrix=T, mode="grid-wrap")
+
+    if output_name is not None:
+        write(shifted_map, output_name, data_type=np.single)
 
     return shifted_map
 
