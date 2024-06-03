@@ -182,7 +182,7 @@ def visualize_normals(viewer, points, normals):
     viewer.add_vectors(vectors, edge_width=1, length=10)
 
 
-def expand_points(points, normals, distances, tb_distances=0):
+def expand_points(points, normals, distances, tb_distances=True):
     """Moves sample points within a specified distance in its normal direction.
 
     Parameters
@@ -193,8 +193,8 @@ def expand_points(points, normals, distances, tb_distances=0):
         Array of sample normals.
     distances : int
         Moving distance in pixels.
-    tb_distances : int, optional
-        Moving distance of top and bottom surfaces if needed. Defaults to 0 for no movement.
+    tb_distances : boolean, optional
+        either to move the top and bottom surfaces together with others. Defaults to True for moving together.
 
     Returns
     -------
@@ -212,11 +212,11 @@ def expand_points(points, normals, distances, tb_distances=0):
             moved_points.append(i)
 
     post_points = points.copy()
-    if tb_distances == 0:  # 0 for nonmove top and bottom
+    if tb_distances == False:  # 0 for nonmove top and bottom
         post_points[moved_points] = (
             post_points[moved_points] + distances * normals[moved_points]
         )
-    elif tb_distances != 0:  # other value for move top and bottom specific distance
+    elif tb_distances == True:  # other value for move top and bottom specific distance
         post_points[moved_points] = (
             post_points[moved_points] + distances * normals[moved_points]
         )
@@ -224,17 +224,19 @@ def expand_points(points, normals, distances, tb_distances=0):
             post_points[tb_points] + tb_distances * normals[tb_points]
         )
 
-    # removing the distinct points after shifting
-    drop_lim = [max(post_points[tb_points][:, 0]), min(post_points[tb_points][:, 0])]
-    drop_list = [
-        i
-        for i in range(len(post_points))
-        if post_points[i, 0] > drop_lim[0] or post_points[i, 0] < drop_lim[1]
-    ]
-    cleaned_points = np.delete(post_points, drop_list, axis=0)
-    cleaned_normals = np.delete(normals, drop_list, axis=0)
-
-    return cleaned_points, cleaned_normals
+    if tb_distances == False:
+        # removing the distinct points after shifting
+        drop_lim = [max(post_points[tb_points][:, 0]), min(post_points[tb_points][:, 0])]
+        drop_list = [
+            i
+            for i in range(len(post_points))
+            if post_points[i, 0] > drop_lim[0] or post_points[i, 0] < drop_lim[1]
+        ]
+        cleaned_points = np.delete(post_points, drop_list, axis=0)
+        cleaned_normals = np.delete(normals, drop_list, axis=0)
+        return cleaned_points, cleaned_normals
+    else:
+        return post_points, normals
 
 
 # remove sample points with specific normals value
