@@ -201,3 +201,19 @@ def test_process_mask(r, mode):
     sperical_mask = cryomask.spherical_mask(20, radius=5)
     processed_mask = process_mask(sperical_mask, r, mode)
     check_mask(sperical_mask, processed_mask)
+
+
+# test with all particles were inside and outside mask area
+def test_mask_clean_all_in(motl, r=15):
+    df = motl.df.copy(deep=True)
+    sperical_mask = cryomask.spherical_mask(11, radius=r)
+    clean_motl = mask_clean(motl, sperical_mask)
+    check = clean_motl.df == df
+    assert check.all(axis=0).all() == True
+
+
+def test_mask_clean_all_out(motl, r=2):
+    df = motl.df.copy(deep=True)
+    sperical_mask = cryomask.spherical_mask(11, radius=r)
+    clean_motl = mask_clean(motl, sperical_mask)
+    assert clean_motl.df.empty
