@@ -214,6 +214,7 @@ def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id", type_id="g
         for i in range(nn_count):
             rot_nn = srot.from_euler("zxz", angles=angles_nn[idx_nn[:, i], :], degrees=True)
             nn_rotations.append(rot_to_zero * rot_nn)
+            
 
     nn_rotations = srot.concatenate(nn_rotations)
     points_on_sphere = geom.visualize_rotations(nn_rotations, plot_rotations=False)
@@ -221,6 +222,109 @@ def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id", type_id="g
 
     return points_on_sphere, angles
 
+def get_nn_stats_within_radius(
+    input_motl,
+    nn_radius,
+    feature="tomo_id",
+):
+    input_motl = cryomotl.Motl.load(input_motl)
+
+    # Get unique feature idx
+    features = np.unique(input_motl.df.loc[:, feature].values)
+    
+    query_points = []
+    nn_rotations = []
+    centered_coord = []
+    rotated_coord = []
+    angular_distances = []
+    cone_distances = []
+    inplane_distances = [] 
+    nn_points = []
+
+    for f in features:
+        fm = input_motl.get_motl_subset(f, feature_id=feature)
+
+        coord = fm.get_coordinates()
+        center_idx, nn_idx = get_nn_within_distance(fm, nn_radius)
+        
+        angles_nn = fm.get_angles()
+        angles_ref_to_zero = -fm.get_feature(["psi", "theta", "phi"])
+        
+        rotations = fm.get_rotations()
+        
+
+        subtomos_idx = fm.df["subtomo_id"].to_numpy()
+
+        for i, c in enumerate(center_idx):
+            rot_to_zero = srot.from_euler("zxz", angles=angles_ref_to_zero[c, :], degrees=True)
+
+            for n in nn_idx[i]:
+                rot_nn = srot.from_euler("zxz", angles=angles_nn[n, :], degrees=True)
+                nn_rotations.append(rot_to_zero * rot_nn)
+
+                c_coord = coord[n, :] - coord[c, :]
+                centered_coord.append(c_coord)
+
+                rotated_coord.append(rot_to_zero.apply(c_coord))
+        
+                rotations_nn = srot.from_euler("zxz", angles=angles_nn[n,:], degrees=True)
+                ang_dist, cone_dist, inplane_dist = geom.compare_rotations(rotations[c], rotations_nn, rotation_type="all") 
+                angular_distances.append(ang_dist)
+                cone_distances.append(cone_dist)
+                inplane_distances.append(inplane_dist)
+                query_points.append(subtomos_idx[c])
+                nn_points.append(subtomos_idx[n])
+
+    nn_rotations = srot.concatenate(nn_rotations)
+    points_on_sphere = geom.visualize_rotations(nn_rotations, plot_rotations=False)
+    angles = nn_rotations.as_euler("zxz", degrees=True)
+
+    centered_coord = np.vstack(centered_coord)
+    rotated_coord =  np.vstack(rotated_coord)
+    angular_distances = np.atleast_2d(np.concatenate(angular_distances)).T
+    cone_distances = np.atleast_2d(np.concatenate(cone_distances)).T
+    inplane_distances = np.atleast_2d(np.concatenate(inplane_distances)).T
+    query_points = [np.atleast_1d(arr) for arr in query_points]
+    query_points = np.atleast_2d(np.concatenate(query_points)).T
+    nn_points = [np.atleast_1d(arr) for arr in nn_points]
+    nn_points = np.atleast_2d(np.concatenate(nn_points)).T
+    
+    nn_stats = pd.DataFrame(
+        np.hstack(
+            (
+                query_points,
+                nn_points,
+                centered_coord,
+                rotated_coord,
+                angular_distances,
+                cone_distances,
+                inplane_distances,
+                points_on_sphere,
+                angles
+            )
+        ),
+        columns=[
+            "qp_subtomo_id",
+            "nn_subtomo_id",
+            "coord_x",
+            "coord_y",
+            "coord_z",
+            "coord_rx",
+            "coord_ry",
+            "coord_rz",
+            "angular_distance",
+            "cone_distance",
+            "inplane_distance",
+            "rot_x",
+            "rot_y",
+            "rot_z",
+            "phi",
+            "theta",
+            "psi",
+        ],
+    )
+
+    return nn_stats
 
 def get_nn_within_radius(
     motl_a,
