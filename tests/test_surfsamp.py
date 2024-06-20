@@ -4,6 +4,7 @@ import pandas as pd
 from cryocat.surfsamp import *
 from cryocat import cryomotl
 from cryocat import cryomask
+from cryocat import cryomap
 from scipy.spatial.distance import cdist
 from scipy.spatial.transform import Rotation as R
 
@@ -194,6 +195,7 @@ def check_mask(mask1, mask2):
     assert mask1.shape == mask2.shape
 
 
+# only check the output dimension of volume, using skimage.morphology for all operation, no need for testing.
 @pytest.mark.parametrize(
     "r, mode", [(2, "closing"), (2, "opening"), (2, "dilation"), (2, "erosion")]
 )
@@ -217,3 +219,13 @@ def test_mask_clean_all_out(motl, r=2):
     sperical_mask = cryomask.spherical_mask(11, radius=r)
     clean_motl = mask_clean(motl, sperical_mask)
     assert clean_motl.df.empty
+
+
+def test_marker_from_centroid(box=10, sper_rad=2, cent_size=1):
+    sperical_mask = cryomask.spherical_mask(box, radius=sper_rad)
+    mask = marker_from_centroid(sperical_mask, centroid_mark_size=cent_size)
+    ground_truth = cryomap.read(
+        "./tests/test_data/point_clouds/sphere_centroid_marker_10x10.mrc"
+    )
+    liken = mask == ground_truth
+    assert liken.all()
