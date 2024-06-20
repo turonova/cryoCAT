@@ -540,7 +540,28 @@ def mask_clean(motl, mask):
 
 
 # only test for capsule mask
-def surface_closing(mask, overlad_level=1, thickness_iter=15):
+def slice_cvhull_closing(mask, overlad_level=1, thickness_iter=15):
+    """This function performs surface closing operation on a given mask. It iterates through and applies the convex hull to each slice of the mask in three axis.
+    The function returns the mask after applying the surface closing operation, the convex hull mask, and the capsule mask.
+
+    Parameters
+    ----------
+    mask : ndarray
+        The input mask on which the surface closing operation is to be performed.
+    overlad_level : int, optional
+        The threshold level for the overlap of the convex hull masks in different axis, by default 1 which keeps all pixels from three axis.
+    thickness_iter : int, optional
+        The number of iterations for the binary erosion operation used to generate the capsule mask, by default 15.
+
+    Returns
+    -------
+    capmask_frame_cvhull : ndarray
+        The capsule mask after applying the closing operation.
+    mask_cvhull : ndarray
+        The sum convex hull mask from three axis.
+    mask_fill_cvhull : ndarray
+        The mask with filled center.
+    """
     mask_cvhullz = mask.copy()
     mask_cvhullz_fill = mask.copy()
     for i in range(mask.shape[2]):
@@ -581,9 +602,9 @@ def surface_closing(mask, overlad_level=1, thickness_iter=15):
             mask_cvhully_fill[:, i, :] = frame_cvhull
 
     mask_cvhull = mask_cvhullz + mask_cvhullx + mask_cvhully
-    mask_frame_cvhull = mask_cvhullz + mask_cvhullx + mask_cvhully > overlad_level
+    capmask_slice_cvhull = mask_cvhullz + mask_cvhullx + mask_cvhully > overlad_level
     mask_fill_cvhull = mask_cvhullz_fill + mask_cvhullx_fill + mask_cvhully_fill > 0
-    return mask_frame_cvhull, mask_cvhull, mask_fill_cvhull
+    return capmask_slice_cvhull, mask_cvhull, mask_fill_cvhull
 
 
 def process_mask(mask, radius, mode):
@@ -640,7 +661,7 @@ def marker_from_fill_mask(fill_mask, ero_radius=60, clos_radius=20, mode="None")
     Returns
     -------
     core_mark : ndarray
-        The mark for mask_fill_gap.
+        The marker for mask_fill_gap.
     """
     core_mark = process_mask(fill_mask, ero_radius, mode="erosion")
     core_mark = process_mask(core_mark, clos_radius, mode="closing") * 2
@@ -654,8 +675,61 @@ def marker_from_fill_mask(fill_mask, ero_radius=60, clos_radius=20, mode="None")
     return core_mark
 
 
+def marker_from_centroid(mask, centroid_mark_size=2):
+    """This function generates a marker from the centroid of a given mask.
+
+    Parameters
+    ----------
+    mask : ndarray
+        The input mask from which the centroid is calculated.
+    centroid_mark_size : int, optional
+        The size of the centroid marker, by default 2.
+
+    Returns
+    -------
+    cent_mark : ndarray
+        The generated marker from the centroid of the mask. The marker is a 3D array with the same shape as the input mask. The centroid is marked with 2, and the edges of the array are marked with 1.
+
+    Notes
+    -----
+    The centroid is calculated using the centroid() function. The centroid marker is a cube with sides of length 2*centroid_mark_size centered at the centroid. The edges of the array are also marked.
+    """
+    centroid = skimage.measure.centroid(mask)
+    cent_mark = np.zeros(mask.shape)
+    cent_mark[
+        int(centroid[0]) - centroid_mark_size : int(centroid[0]) + centroid_mark_size,
+        int(centroid[1]) - centroid_mark_size : int(centroid[1]) + centroid_mark_size,
+        int(centroid[2]) - centroid_mark_size : int(centroid[2] + centroid_mark_size),
+    ] = 2
+    cent_mark[0:, 0:, 0] = 1
+    cent_mark[0, 0:, 0:] = 1
+    cent_mark[0:, 0, 0:] = 1
+    cent_mark[0:, -1, 0:] = 1
+    cent_mark[-1, 0:, 0:] = 1
+    cent_mark[0:, 0:, -1] = 1
+    return cent_mark
+
+
 def mask_fill_gap(mask, marker_ero=10):
-    chull_mask, sum_mask, fill_mask = surface_closing(mask)
+    """This function is used to fill gaps in a capsule mask using watershed flooding from the marker and the edge of volume.
+
+    Parameters
+    ----------
+    mask : ndarray
+        Binary image mask to be processed.
+    marker_ero : int, optional
+        Radius for the erosion operation used to generate the capsule mask, by default 10.
+
+    Returns
+    -------
+    tuple
+        Returns a tuple containing the capsule mask and the processed core mask.
+
+    Notes
+    -----
+    The function performs a series of morphological operations on the input mask, including closing, dilation, erosion, and opening. It uses the watershed algorithm to segment the mask into different regions. The function then generates a capsule mask by performing a logical XOR operation on the dilated and eroded core mask.
+    """
+    _, _, fill_mask = slice_cvhull_closing(mask)
     core_mark = marker_from_fill_mask(fill_mask, ero_radius=marker_ero)
     chull_mask_close = process_mask(mask, 60, mode="closing")
     chull_mask_dila = process_mask(chull_mask_close, 20, mode="dilation")
