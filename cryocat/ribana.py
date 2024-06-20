@@ -788,7 +788,7 @@ def add_chain_prefix(
                 traced_df.loc[
                     (traced_df[store_idx1] == class_to_change) & (traced_df[store_idx2] < order_id),
                     store_idx1,
-                ] = class_max[1]
+                ] = -1 # class_max[1]
 
     if class_max is None:
         chain_df[store_idx1] = class_to_change
@@ -798,6 +798,7 @@ def add_chain_prefix(
         temp_cl_id = chain_df[store_idx1][0]
         traced_df.loc[traced_df[store_idx1] == class_to_change, [store_idx2]] += class_max[0] - cut_off_size
         traced_df.loc[traced_df[store_idx1] == class_to_change, [store_idx1]] = temp_cl_id
+        traced_df.loc[traced_df[store_idx1] == -1, [store_idx1]] = class_to_change
 
     chain_df.loc[chain_df.index[-1], store_dist] = current_dist
 

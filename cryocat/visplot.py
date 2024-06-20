@@ -6,7 +6,28 @@ from matplotlib import cm
 
 
 def get_colors_from_palette(num_colors, pallete_name="tab10"):
-
+    """Generate a list of color codes in hexadecimal format from a specified color palette.
+    
+    Parameters
+    ----------
+    num_colors : int
+        The number of distinct colors to generate.
+    pallete_name : str, optional
+        The name of the color palette to use (default is "tab10").
+    
+    Returns
+    -------
+    list of str
+        A list containing the hexadecimal color codes.
+    
+    Examples
+    --------
+    >>> get_colors_from_palette(3)
+    ['#1f77b4', '#ff7f0e', '#2ca02c']
+    >>> get_colors_from_palette(5, pallete_name="viridis")
+    ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725']
+    """
+    
     # Generate a colormap with the desired number of distinct colors
     cmap = plt.cm.get_cmap(pallete_name, num_colors)
 
