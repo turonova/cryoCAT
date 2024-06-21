@@ -9,7 +9,7 @@ import sklearn.neighbors as sn
 import matplotlib.pyplot as plt
 
 
-def get_nn_within_distance(feature_motl, radius):
+def get_nn_within_distance(feature_motl, radius, unique_only=True):
     def remove_duplicates(list_of_arrays):
         unique_arrays = []
         seen_tuples = set()
@@ -33,14 +33,15 @@ def get_nn_within_distance(feature_motl, radius):
     ordered_idx = [i for i, row in zip(ordered_idx, nn_idx) if len(row) > 1]
     nn_indices = nn_idx[ordered_idx]
 
-    # remove duplicates: first sort in each row, then find the unique idx
-    sorted_idx = [np.sort(row) for row in nn_indices]
-    nn_indices = remove_duplicates(sorted_idx)
-
-    center_idx = np.array([row[0] for row in nn_indices])
-    nn_idx = [row[1:] for row in nn_indices]
-    # nn_idx.append()
-    # nn_indices = np.column_stack((first_elements, remaining_elements))
+    if unique_only:
+        # remove duplicates: first sort in each row, then find the unique idx
+        sorted_idx = [np.sort(row) for row in nn_indices]
+        nn_indices = remove_duplicates(sorted_idx)
+        center_idx = np.array([row[0] for row in nn_indices])
+        nn_idx = [row[1:] for row in nn_indices]
+    else:
+        center_idx = ordered_idx
+        nn_idx = [[elem for elem in row if elem != center_idx[i]] for i, row in enumerate(nn_indices)]
 
     return center_idx, nn_idx
 
@@ -214,13 +215,13 @@ def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id", type_id="g
         for i in range(nn_count):
             rot_nn = srot.from_euler("zxz", angles=angles_nn[idx_nn[:, i], :], degrees=True)
             nn_rotations.append(rot_to_zero * rot_nn)
-            
 
     nn_rotations = srot.concatenate(nn_rotations)
     points_on_sphere = geom.visualize_rotations(nn_rotations, plot_rotations=False)
     angles = nn_rotations.as_euler("zxz", degrees=True)
 
     return points_on_sphere, angles
+
 
 def get_nn_stats_within_radius(
     input_motl,
@@ -231,27 +232,26 @@ def get_nn_stats_within_radius(
 
     # Get unique feature idx
     features = np.unique(input_motl.df.loc[:, feature].values)
-    
+
     query_points = []
     nn_rotations = []
     centered_coord = []
     rotated_coord = []
     angular_distances = []
     cone_distances = []
-    inplane_distances = [] 
+    inplane_distances = []
     nn_points = []
 
     for f in features:
         fm = input_motl.get_motl_subset(f, feature_id=feature)
 
         coord = fm.get_coordinates()
-        center_idx, nn_idx = get_nn_within_distance(fm, nn_radius)
-        
+        center_idx, nn_idx = get_nn_within_distance(fm, nn_radius, unique_only=False)
+
         angles_nn = fm.get_angles()
         angles_ref_to_zero = -fm.get_feature(["psi", "theta", "phi"])
-        
+
         rotations = fm.get_rotations()
-        
 
         subtomos_idx = fm.df["subtomo_id"].to_numpy()
 
@@ -266,9 +266,11 @@ def get_nn_stats_within_radius(
                 centered_coord.append(c_coord)
 
                 rotated_coord.append(rot_to_zero.apply(c_coord))
-        
-                rotations_nn = srot.from_euler("zxz", angles=angles_nn[n,:], degrees=True)
-                ang_dist, cone_dist, inplane_dist = geom.compare_rotations(rotations[c], rotations_nn, rotation_type="all") 
+
+                rotations_nn = srot.from_euler("zxz", angles=angles_nn[n, :], degrees=True)
+                ang_dist, cone_dist, inplane_dist = geom.compare_rotations(
+                    rotations[c], rotations_nn, rotation_type="all"
+                )
                 angular_distances.append(ang_dist)
                 cone_distances.append(cone_dist)
                 inplane_distances.append(inplane_dist)
@@ -280,7 +282,7 @@ def get_nn_stats_within_radius(
     angles = nn_rotations.as_euler("zxz", degrees=True)
 
     centered_coord = np.vstack(centered_coord)
-    rotated_coord =  np.vstack(rotated_coord)
+    rotated_coord = np.vstack(rotated_coord)
     angular_distances = np.atleast_2d(np.concatenate(angular_distances)).T
     cone_distances = np.atleast_2d(np.concatenate(cone_distances)).T
     inplane_distances = np.atleast_2d(np.concatenate(inplane_distances)).T
@@ -288,7 +290,7 @@ def get_nn_stats_within_radius(
     query_points = np.atleast_2d(np.concatenate(query_points)).T
     nn_points = [np.atleast_1d(arr) for arr in nn_points]
     nn_points = np.atleast_2d(np.concatenate(nn_points)).T
-    
+
     nn_stats = pd.DataFrame(
         np.hstack(
             (
@@ -300,7 +302,7 @@ def get_nn_stats_within_radius(
                 cone_distances,
                 inplane_distances,
                 points_on_sphere,
-                angles
+                angles,
             )
         ),
         columns=[
@@ -325,6 +327,7 @@ def get_nn_stats_within_radius(
     )
 
     return nn_stats
+
 
 def get_nn_within_radius(
     motl_a,
