@@ -1,5 +1,6 @@
 # Defining the exact version will make sure things don't break
 sphinx==7.2.6
+numpy>=1.23.4,<2.0
 numpydoc==1.6.0
 sphinx_copybutton==0.5.2
 sphinx_issues==3.0.1
