@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib import colors
 from matplotlib import gridspec
 from matplotlib import cm
+import matplotlib.ticker as mticker
 
 
 def get_colors_from_palette(num_colors, pallete_name="tab10"):
@@ -302,14 +303,16 @@ def plot_class_occupancy(
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(6, 4))
         ax_provided = False
-
     color_classes = convert_color_scheme(num_colors=len(occupancy_dic), color_scheme=color_scheme)
 
     for i, c in enumerate(sorted(occupancy_dic)):
         ax.plot(range(1, len(occupancy_dic[c]) + 1), occupancy_dic[c], label="Class " + str(c), color=color_classes[i])
 
-    ax.set_xlabel("Iteration")
+    ax.set_xlabel("Iteration")  
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    ax.set_xlim(1, len(occupancy_dic[c]))
     ax.set_ylabel("Number of particles")
+    ax.set_ylim(0,)
     if graph_title is None:
         ax.set_title("Class occupancy progress")
     else:
@@ -340,7 +343,10 @@ def plot_class_stability(
         ax.plot(range(1, len(values) + 1), values, label="Class " + str(cls), color=color_classes[cls - 1])
 
     ax.set_xlabel("Iteration")
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    ax.set_xlim(1, len(values))
     ax.set_ylabel("Particles changing their class")
+    ax.set_ylim(0,)
     if graph_title is None:
         ax.set_title("Stability of classes")
     else:
@@ -405,6 +411,7 @@ def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stab
             for dfi, df in enumerate(input_dfs):
                 current_ax.plot(x_axis, df.iloc[:, df_idx], label=f"{labels[dfi]}")
                 current_ax.set_xlabel("Iteration")
+                current_ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
                 current_ax.set_ylabel(input_dfs[0].columns[df_idx])
                 if show_legend:
                     current_ax.legend()

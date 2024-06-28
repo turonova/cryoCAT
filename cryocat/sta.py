@@ -320,7 +320,7 @@ def compute_alignment_statistics(
             m.df = m.df[m.df[filter_column].isin(filter_rows)]
         motls.append(m)
 
-    for i in np.arange(start_it, end_it):
+    for i in np.arange(0, end_it-start_it): ## FIXME this fixes 'index out of range' when start_it=!0, but does not account for the correct plot labels in such case (when called by evaluate_alignment)
         current_rot = motls[i].get_rotations()
         next_rot = motls[i + 1].get_rotations()
 
