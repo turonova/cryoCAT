@@ -349,6 +349,7 @@ class MAK:
             motl_object_id.df.loc[lambda df: df["object_id"]==i, ["x"]] = ctr_coordx
             motl_object_id.df.loc[lambda df: df["object_id"]==i, ["y"]] = ctr_coordy
             motl_object_id.df.loc[lambda df: df["object_id"]==i, ["z"]] = ctr_coordz
+        motl_object_i.update_coordinates()
         if output_path is not None:
             cryomotl.Motl.write_out(motl_object_id, output_path)
         
