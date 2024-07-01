@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from cryocat import cryomotl
+from cryocat import cryomap
 from scipy.spatial.transform import Rotation as srot
 from cryocat import geom
 import seaborn as sns
@@ -223,17 +224,60 @@ def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id", type_id="g
     return points_on_sphere, angles
 
 
-def get_nn_stats_within_radius(
-    input_motl,
-    nn_radius,
-    feature="tomo_id",
-):
+def filter_nn_radial_stats(input_stats, binary_mask):
+
+    def filter_group(group, dx, dy, dz, boolean_mask):
+        # Cast x, y, z columns to integers and adjust coordinates
+        group["x_int"] = (group["coord_rx"] + dx).astype(int)
+        group["y_int"] = (group["coord_ry"] + dy).astype(int)
+        group["z_int"] = (group["coord_rz"] + dz).astype(int)
+
+        # Ensure the coordinates are within the range of the boolean mask
+        group = group[
+            (group["x_int"] >= 0)
+            & (group["x_int"] < 2 * dx)
+            & (group["y_int"] >= 0)
+            & (group["y_int"] < 2 * dy)
+            & (group["z_int"] >= 0)
+            & (group["z_int"] < 2 * dz)
+        ]
+
+        # Apply the boolean mask to filter rows
+        mask_values = boolean_mask[group["x_int"], group["y_int"], group["z_int"]]
+        final_group = group[mask_values]
+
+        # Drop the temporary integer columns
+        final_group = final_group.drop(columns=["x_int", "y_int", "z_int"])
+
+        return final_group
+
+    # Prepare the mask
+    boolean_mask = cryomap.read(binary_mask)
+    boolean_mask = np.where(boolean_mask < 0.5, False, True)
+    dx, dy, dz = np.asarray(boolean_mask.shape) // 2
+
+    # Get copy of the stats
+    nn_stats = input_stats.copy()
+
+    # Apply the filter_group function to each group
+    result_df = (
+        nn_stats.groupby("qp_subtomo_id")
+        .apply(lambda group: filter_group(group, dx, dy, dz, boolean_mask))
+        .reset_index(drop=True)
+    )
+
+    return result_df
+
+
+def get_nn_stats_within_radius(input_motl, nn_radius, feature="tomo_id", index_by_feature=True):
     input_motl = cryomotl.Motl.load(input_motl)
 
     # Get unique feature idx
     features = np.unique(input_motl.df.loc[:, feature].values)
 
     query_points = []
+    query_motl_idx = []
+    nn_motl_idx = []
     nn_rotations = []
     centered_coord = []
     rotated_coord = []
@@ -255,6 +299,11 @@ def get_nn_stats_within_radius(
 
         subtomos_idx = fm.df["subtomo_id"].to_numpy()
 
+        if index_by_feature:
+            motl_idx = fm.df.index.to_numpy()
+        else:
+            motl_idx = input_motl.df.index[input_motl.df[feature] == f].to_numpy()
+
         for i, c in enumerate(center_idx):
             rot_to_zero = srot.from_euler("zxz", angles=angles_ref_to_zero[c, :], degrees=True)
 
@@ -275,7 +324,9 @@ def get_nn_stats_within_radius(
                 cone_distances.append(cone_dist)
                 inplane_distances.append(inplane_dist)
                 query_points.append(subtomos_idx[c])
+                query_motl_idx.append(motl_idx[c])
                 nn_points.append(subtomos_idx[n])
+                nn_motl_idx.append(motl_idx[n])
 
     nn_rotations = srot.concatenate(nn_rotations)
     points_on_sphere = geom.visualize_rotations(nn_rotations, plot_rotations=False)
@@ -288,8 +339,12 @@ def get_nn_stats_within_radius(
     inplane_distances = np.atleast_2d(np.concatenate(inplane_distances)).T
     query_points = [np.atleast_1d(arr) for arr in query_points]
     query_points = np.atleast_2d(np.concatenate(query_points)).T
+    query_motl_idx = [np.atleast_1d(arr) for arr in query_motl_idx]
+    query_motl_idx = np.atleast_2d(np.concatenate(query_motl_idx)).T
     nn_points = [np.atleast_1d(arr) for arr in nn_points]
     nn_points = np.atleast_2d(np.concatenate(nn_points)).T
+    nn_motl_idx = [np.atleast_1d(arr) for arr in nn_motl_idx]
+    nn_motl_idx = np.atleast_2d(np.concatenate(nn_motl_idx)).T
 
     nn_stats = pd.DataFrame(
         np.hstack(
@@ -303,6 +358,8 @@ def get_nn_stats_within_radius(
                 inplane_distances,
                 points_on_sphere,
                 angles,
+                query_motl_idx,
+                nn_motl_idx,
             )
         ),
         columns=[
@@ -323,6 +380,8 @@ def get_nn_stats_within_radius(
             "phi",
             "theta",
             "psi",
+            "qp_motl_id",
+            "nn_motl_idx",
         ],
     )
 

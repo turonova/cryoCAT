@@ -15,6 +15,7 @@ from cryocat import starfileio
 from cryocat import cryomask
 from cryocat import mathutils
 from cryocat import ioutils
+from cryocat import nnana
 
 from math import ceil
 from matplotlib import pyplot as plt
@@ -177,7 +178,7 @@ class Motl:
             if paired_key in input_df.columns:
                 self.df[em_key] = pd.to_numeric(input_df[paired_key])
 
-    def clean_by_distance(self, distnace_in_voxels, feature_id, metric_id="score", score_cut=0):
+    def clean_by_distance(self, distnace_in_voxels, feature_id, metric_id="score", score_cut=0, dist_mask=None):
         """Cleans `df` by removing particles closer than a given distnace threshold (in voxels).
 
         Parameters
@@ -192,6 +193,10 @@ class Motl:
         score_cut : float, default=0.0
             The cutoff value for the metric. Entries with metric values below this cutoff
             will be removed. Defaults to 0.0.
+        dist_mask : str or ndarray
+            Binary mask/map (or path to it) for directional cleaning. If provided the distance_in_voxels is used to
+            find all points within this radius and then those points in the region where the mask is 1
+            will be cleaned. Defaults to None.
 
         Returns
         -------
@@ -206,6 +211,11 @@ class Motl:
         # Distance cutoff (pixels)
         d_cut = distnace_in_voxels
 
+        # Load mask if provided
+        if dist_mask is not None:
+            nn_stats = nnana.get_nn_stats_within_radius(self, nn_radius=d_cut, feature=feature_id)
+            nn_stats_filtered = nnana.filter_nn_radial_stats(nn_stats, dist_mask)
+
         # Parse tomograms
         features = np.unique(self.get_feature(feature_id))
 
@@ -215,7 +225,7 @@ class Motl:
         # Loop through and clean
         for f in features:
             # Parse tomogram
-            feature_m = self.get_motl_subset(f, feature_id=feature_id, reset_index=False)
+            feature_m = self.get_motl_subset(f, feature_id=feature_id, reset_index=True)
             n_temp_motl = feature_m.df.shape[0]
 
             # Parse positions
@@ -234,14 +244,23 @@ class Motl:
             # Loop through in order of score
             for j in sort_idx:
                 if temp_keep[j]:
-                    # Calculate distances
-                    dist = geom.point_pairwise_dist(pos[j, :], pos)
 
-                    # Find cutoff
-                    d_cut_idx = dist < d_cut
+                    # classic radius-based cleaning
+                    if dist_mask is None:
+                        # Calculate distances
+                        dist = geom.point_pairwise_dist(pos[j, :], pos)
+                        # Find cutoff
+                        d_cut_idx = dist < d_cut
 
-                    # Keep current entry
-                    d_cut_idx[j] = False
+                        # Keep current entry
+                        d_cut_idx[j] = False
+                    else:
+                        d_cut_idx = np.arange(feature_m.df.shape[0])
+                        subtomo_id = feature_m.df.loc[j, "subtomo_id"]
+                        filtered_idx = nn_stats_filtered.loc[
+                            nn_stats_filtered["qp_subtomo_id"] == subtomo_id, "nn_motl_idx"
+                        ].values
+                        d_cut_idx = np.isin(d_cut_idx, filtered_idx)
 
                     # Remove other entries
                     temp_keep[d_cut_idx] = False
