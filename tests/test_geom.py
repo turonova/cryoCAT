@@ -239,6 +239,17 @@ def test_ray_ray_intersection_3d_intersection(starting_points, end_points, dista
     _, distances = ray_ray_intersection_3d(starting_points, end_points)
 
     assert np.allclose(distances, distance_result)
+
+
+# TODO: change_handedness_coordinates, change_handedness_orientation, euler_angles_to_normals, normals_to_euler_angles, ...
+def test_change_handedness_coordinates():
+    pass
+
+def test_change_handedness_orientation():
+    random_orientation = srot.random().as_matrix()
+    changed_handedness = change_handedness_orientation(random_orientation)
+    changed_mat = changed_handedness.as_mat()
+    pass
     
 
  

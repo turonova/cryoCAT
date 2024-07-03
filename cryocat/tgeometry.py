@@ -113,8 +113,7 @@ def point_inside_triangle(point,triangle):
         return True
     else:
         return False
-    
-    return mesh_points
+
 
 def normals_to_euler_angles(normals,convention='ZXZ'):
     theta = np.degrees(np.arctan2(np.sqrt(normals['x'].values**2+normals['y'].values**2),normals['z'].values))
