@@ -249,15 +249,6 @@ def change_handedness_coordinates(coordinates, dimensions):
 
     return coordinates
 
-
-def change_handedness_orientation(orientation, convention="ZXZ"):
-    # is actually dependent on the convention and what should be flipped
-    # the method from cryomotl should be used instead...
-    quats = orientation.as_quat()
-    quats[:, 0:3] = -quats[:, 0:3]
-    return srot.from_quat(quats)
-
-
 def euler_angles_to_normals(angles):
     points = visualize_angles(angles, plot_rotations=False)
     n_length = np.linalg.norm(points)
