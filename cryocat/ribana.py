@@ -798,7 +798,8 @@ def add_chain_prefix(
         temp_cl_id = chain_df[store_idx1][0]
         traced_df.loc[traced_df[store_idx1] == class_to_change, [store_idx2]] += class_max[0] - cut_off_size
         traced_df.loc[traced_df[store_idx1] == class_to_change, [store_idx1]] = temp_cl_id
-        traced_df.loc[traced_df[store_idx1] == -1, [store_idx1]] = class_max[1]  # class_to_change
+        if order_id != 1:
+            traced_df.loc[traced_df[store_idx1] == -1, [store_idx1]] = class_max[1]  # class_to_change
 
     chain_df.loc[chain_df.index[-1], store_dist] = current_dist
 
@@ -855,6 +856,7 @@ def trace_chains(
                 trace_chain = True
                 p_idx = i
                 used_idx = []
+                # print(i)
                 while trace_chain:
                     # take the particle from the exit list
                     # part_process = fm_exit.df.iloc[p_idx]
@@ -930,6 +932,16 @@ def trace_chains(
                                     nm_idx = -1  # add only suffix
                                 else:
                                     first_idx = -1  # add only prefix
+                            elif first_idx != -1 and nm_idx != -1:
+                                part1 = fm_exit.df.loc[fm_exit.df.index[first_idx], "subtomo_id"]
+                                part2 = fm_entry.df.loc[fm_entry.df.index[nm_idx], "subtomo_id"]
+                                cl1 = nfm_df.loc[nfm_df["subtomo_id"] == part1, store_idx1].values[0]
+                                cl2 = nfm_df.loc[nfm_df["subtomo_id"] == part2, store_idx1].values[0]
+                                if cl1 == cl2:
+                                    if first_dist <= nm_dist:
+                                        nm_idx = -1  # add only suffix
+                                    else:
+                                        first_idx = -1  # add only prefix
 
                             ch_changed = False  # default is no chain change
 
