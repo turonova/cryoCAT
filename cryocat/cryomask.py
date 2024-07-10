@@ -1,11 +1,115 @@
 import numpy as np
+import re
+import math
 from cryocat import cryomap
+from cryocat import cryomotl
+from cryocat import ioutils
 from skimage import filters
 from scipy import ndimage
 from skimage import measure
 import pandas as pd
 import decimal
 from skimage import morphology
+
+
+def parse_shape_string(shape_string):
+    """Parses a string describing a geometric shape and its dimensions.
+
+    Parameters
+    ----------
+    shape_string : str
+        A string describing the shape and its dimensions. The format should match one of the following patterns:
+        - "sphere_r{radius}"
+        - "cylinder_r{radius}_h{height}"
+        - "s_shell_r{radius}_s{thickness}"
+        - "ellipsoid_rx{radius_x}_ry{radius_y}_rz{radius_z}"
+        - "e_shell_rx{radius_x}_ry{radius_y}_rz{radius_z}_s{thickness}"
+
+    Returns
+    -------
+    tuple
+        A tuple containing the shape type as a string and a list of integers representing the dimensions.
+
+    Raises
+    ------
+    ValueError
+        If the input string does not match any of the known patterns.
+
+    Examples
+    --------
+    >>> parse_shape_string("sphere_r10")
+    ('sphere', [10])
+    >>> parse_shape_string("cylinder_r5_h20")
+    ('cylinder', [5, 20])
+    """
+
+    # Define regular expressions for each shape type
+    patterns = {
+        "sphere": r"^sphere_r(\d+)$",
+        "cylinder": r"^cylinder_r(\d+)_h(\d+)$",
+        "s_shell": r"^s_shell_r(\d+)_s(\d+)$",
+        "ellipsoid": r"^ellipsoid_rx(\d+)_ry(\d+)_rz(\d+)$",
+        "e_shell": r"^e_shell_rx(\d+)_ry(\d+)_rz(\d+)_s(\d+)$",
+    }
+
+    for shape_type, pattern in patterns.items():
+        match = re.match(pattern, shape_string)
+        if match:
+            numbers = [int(num) for num in match.groups()]
+            return shape_type, numbers
+
+    raise ValueError(f"String '{shape_string}' does not match any known shape pattern.")
+
+
+def generate_mask(mask_shape, mask_size=None, mask_expansion=4):
+    """Generates a mask array based on the specified geometric shape and dimensions.
+
+    Parameters
+    ----------
+    mask_shape : str
+        A string that specifies the shape and dimensions of the mask. See :meth:`cryocat.cryomask.parse_shape_string`
+        for more information on correct formatting.
+    mask_size : int, optional
+        The size of the mask array. If None, it is automatically determined based on the maximum dimension in `specs`
+        plus an expansion factor. Defaults to None.
+    mask_expansion: int, default=4
+        If mask_size is not specified, the maximum dimension plus this expansion is used to define the mask size.
+        Defaults to 4.
+
+    Returns
+    -------
+    mask : ndarray
+        An array where the mask has been applied, with dimensions specified by `mask_size`. The shape of the mask
+        is determined by `mask_shape`.
+
+    Examples
+    --------
+    >>> generate_mask("sphere_r5")
+    array([...])  # returns a spherical mask with radius 5
+
+    >>> generate_mask("cylinder_r3_h7", mask_size=10)
+    array([...])  # returns a cylindrical mask with radius 3, height 7, and mask size 10
+    """
+
+    shape, specs = parse_shape_string(mask_shape)
+
+    if mask_size is None:
+        mask_size = 2 * np.max(specs) + mask_expansion
+        mask_size = math.ceil(mask_size / 2) * 2
+
+    if shape == "sphere":
+        mask = spherical_mask(mask_size=mask_size, radius=specs[0])
+    elif shape == "cylinder":
+        mask = cylindrical_mask(mask_size=mask_size, radius=specs[0], height=specs[1])
+    elif shape == "s_shell":
+        mask_size = math.ceil((mask_size + specs[1]) / 2) * 2
+        mask = spherical_shell_mask(mask_size=mask_size, shell_thickness=specs[1], radius=specs[0])
+    elif shape == "ellipsoid":
+        mask = ellipsoid_mask(mask_size=mask_size, radii=specs)
+    elif shape == "e_shell":
+        mask = ellipsoid_shell_mask(mask_size=mask_size, shell_thickness=specs[3], radii=specs[0:3])
+
+    return mask
 
 
 def add_gaussian(input_mask, sigma):
@@ -233,14 +337,60 @@ def difference(mask_list, output_name=None):
     return final_mask
 
 
+def spherical_shell_mask(mask_size, shell_thickness, radius=None, center=None, gaussian=0.0, output_name=None):
+    """Generate a spherical shell mask within a 3D volume.
+
+    Parameters
+    ----------
+    mask_size : int or array_like
+        Size of the mask in three dimensions (height, width, depth). If single number is provided, the mask will be cubic.
+    shell_thickness : int
+        Thickness of the spherical shell.
+    radius : int, optional
+        Radius of the spherical shell. If None, it defaults to half of the minimum dimension of mask_size.
+    center : array_like, optional
+        Center of the sphere in the mask. If None, it defaults to the center of the mask_size.
+    gaussian : float, default=0.0
+        Standard deviation for Gaussian smoothing to be applied to the shell mask. Defaults to 0.0 (no smoothing).
+    output_name : str, optional
+        Name of the output file to save the mask. If None, the mask is not saved.
+
+    Returns
+    -------
+    shell_mask : ndarray
+        A 3D numpy array of the spherical shell mask.
+
+    Notes
+    -----
+    The function creates a spherical shell by subtracting a smaller sphere from a larger sphere, both centered at the same point.
+    """
+
+    mask_size = get_correct_format(mask_size)
+    center = get_correct_format(center, reference_size=mask_size)
+
+    if radius is None:
+        radius = np.amin(mask_size) // 2
+
+    shell_thickness = shell_thickness / 2
+
+    sp1 = spherical_mask(mask_size, radius=radius + shell_thickness, center=center)
+    sp2 = spherical_mask(mask_size, radius=radius - shell_thickness, center=center)
+
+    shell_mask = sp1 - sp2
+
+    shell_mask = postprocess(shell_mask, gaussian, np.asarray([0, 0, 0]), output_name)
+
+    return shell_mask
+
+
 def spherical_mask(mask_size, radius=None, center=None, gaussian=0.0, gaussian_outwards=True, output_name=None):
     """Creates a spherical mask with the specified radius, center and box size. The values range from 0.0 to 1.0.
     Additionally, the mask can be blurred by applying Gaussian specified by its sigma value.
 
     Parameters
     ----------
-    mask_size : array-like
-        Specifies the dimensions of the box for the mask. Type is `int`.
+    mask_size : int or array-like
+        Specifies the dimensions of the box for the mask. If single number is provided, the mask will be cubic.
     radius : int, optional
         Defines the radius of the sphere in voxels. If not specified half of the smallest
         dimensions is used as the radius. Defaults to None.
@@ -383,7 +533,7 @@ def get_correct_format(input_value, reference_size=None):
 
     Parameters
     ----------
-    input_value : int
+    input_value : int or array-like
         Specify the value either by one number, tuple, list or numpy.ndarray.
         In case of one number, it is assumed that the output should be the same for all three dimensions.
     reference_size : int, optional
@@ -430,6 +580,56 @@ def get_correct_format(input_value, reference_size=None):
         raise ValueError("Either input_size or referene_size have to be specified")
 
     return size_correct_format
+
+
+def ellipsoid_shell_mask(mask_size, shell_thickness, radii, center=None, gaussian=0.0, angles=None, output_name=None):
+    """Generates a binary mask of an ellipsoid shell within a given mask size.
+
+    Parameters
+    ----------
+    mask_size : array_like
+        Size of the mask in each dimension (e.g., [x, y, z]).
+    shell_thickness : float
+        Thickness of the ellipsoid shell.
+    radii : array_like
+        Radii of the ellipsoid in each dimension.
+    center : array_like, optional
+        Center of the ellipsoid. If None, the ellipsoid is centered in the mask. Defaults to None.
+    gaussian : float, default=0.0
+        Standard deviation of the Gaussian blur to apply to the shell mask. Defaults to 0.0 (no blur).
+    angles : array_like, optional
+        Angles for rotating the ellipsoid around each axis (in degrees). Defaults to None.
+    output_name : str, optional
+        If provided, the function will save the mask to a file with this name. Defaults to None.
+
+    Returns
+    -------
+    ndarray
+        A mask array of the same shape as `mask_size`, with a binary representation
+        of an ellipsoid shell.
+
+    Notes
+    -----
+    The function internally adjusts the radii for the inner and outer surfaces of the shell
+    by adding and subtracting half the shell thickness, respectively. It then creates two
+    ellipsoid masks and subtracts the inner mask from the outer mask to create the shell.
+    Optional Gaussian blurring and rotation can be applied to the shell mask before returning.
+    """
+
+    mask_size = get_correct_format(mask_size)
+    center = get_correct_format(center, reference_size=mask_size)
+    radii = get_correct_format(radii, reference_size=mask_size)
+
+    shell_thickness = shell_thickness / 2
+
+    e1 = ellipsoid_mask(mask_size, radii == radii + shell_thickness, center=center)
+    e2 = ellipsoid_mask(mask_size, radius=radii - shell_thickness, center=center)
+
+    shell_mask = e1 - e2
+
+    shell_mask = postprocess(shell_mask, gaussian, angles, output_name)
+
+    return shell_mask
 
 
 def ellipsoid_mask(
@@ -940,3 +1140,66 @@ def mask_overlap(mask1, mask2, threshold=1.9):
     mask_overlap = np.where((mask1 + mask2) <= threshold, 0, 1)
 
     return np.sum(mask_overlap)
+
+
+def tomogram_shell_mask(
+    input_motl,
+    tomo_dim,
+    shell_size,
+    radius_offset=0.0,
+    motl_radius_id="geom5",
+    output_prefix="",
+    output_suffix=".mrc",
+    tomo_digits=None,
+):
+    """Generate a mask for each tomogram based on the specified shell parameters.
+
+    Parameters
+    ----------
+    input_motl : str or cryomotl.Motl
+        Path to the input motive list file or existing motive list.
+    tomo_dim : str or array-like
+        Path to the file specifying dimension for the tomograms or array with dimensions in case they are identical
+        for all tomograms. See :meth:`cryocat.ioutils.dimensions_load` for more information on formatting.
+    shell_size : int
+        Size of the shell to be applied in the mask.
+    radius_offset : float, default=0.0
+        Offset to be added to the radius from the motive list. Defaults to 0.0.
+    motl_radius_id : str, default="geom5"
+        Column name in the motive list that contains the radius information. Defaults to "geom5".
+    output_prefix : str, default=""
+        Prefix (including the path) for the output file names. Defaults to "".
+    output_suffix : str, default=".mrc"
+        Suffix for the output file names, typically the file extension. Defaults to ".mrc".
+    tomo_digits : int, optional
+        Number of digits to use for zero-padding the tomogram ID in the filename. Defaults to None.
+
+    Returns
+    -------
+    None
+        This function does not return any value but writes output files for each tomogram with the generated masks.
+    """
+
+    input_motl = cryomotl.Motl.load(input_motl)
+    tomos = input_motl.get_unique_values("tomo_id")
+    tomo_dim = ioutils.dimensions_load(tomo_dim, tomos)
+    shell_size = str(int(shell_size))
+
+    if tomo_digits is None:
+        tomo_digits = input_motl.get_max_number_digits()
+
+    for t in tomos:
+
+        t_dim = tomo_dim.loc[tomo_dim["tomo_id"] == t, ["x", "y", "z"]].values[0]
+        tm = input_motl.get_motl_subset(t)
+        tm.df["class"] = 1
+        radii = (tm.df[motl_radius_id].values + radius_offset).astype(int).astype(str)
+
+        features = []
+        for i in range(tm.df.shape[0]):
+            shape_mask = generate_mask("s_shell_r" + radii[i] + "_s" + shell_size)
+            features.append(shape_mask)
+
+        tomo_mask = cryomap.place_object(features, tm, volume_shape=t_dim, feature_to_color="class")
+
+        cryomap.write(tomo_mask, output_prefix + str(int(t)).zfill(tomo_digits) + output_suffix, data_type=np.int8)

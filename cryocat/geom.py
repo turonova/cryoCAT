@@ -249,6 +249,7 @@ def change_handedness_coordinates(coordinates, dimensions):
 
     return coordinates
 
+
 def euler_angles_to_normals(angles):
     points = visualize_angles(angles, plot_rotations=False)
     n_length = np.linalg.norm(points)
@@ -463,7 +464,10 @@ def sample_cone(cone_angle, cone_sampling, center=None, radius=1.0):
     phi = np.pi * (3 - np.sqrt(5))
     cone_size = cone_angle / 180.0
 
-    sampled_points = [[0.0, 0.0, 1.0]]
+    north_pole = [0.0, 0.0, radius]
+    if center is not None:
+        north_pole = north_pole + center
+    sampled_points = [north_pole]
     for i in np.arange(1, number_of_points, 1):
         # z goes from 1 to -1 for 360 degrees (i.e., a full sphere), is less
         z = 1 - (i / (number_of_points - 1)) * cone_size
