@@ -35,6 +35,7 @@ def scores_extract_particles(
     angles_order="zxz",
     symmetry="c1",
     angles_numbering=0,
+    tomo_mask=None,
 ):
     """Extracts particles from scores maps produced by template matching with GAPSTOP(TM) or STOPGAP.
 
@@ -79,6 +80,9 @@ def scores_extract_particles(
         Adjusts the indexing of angles from the angles map. Angle maps from STOPGAP start numbering from 1 and thus
         angles_numbering should be set to 1 to fetch correct angles from the angle lists. GAPSTOP(TM) numbers from 0.
         Defaults to 0.
+    tomo_mask: str or array-like, optional
+        Path to a binary tomogram mask file or an array containing the mask. If provided the scores maps are multiplied
+        with the mask prior any further processing.
 
     Returns
     -------
@@ -111,6 +115,11 @@ def scores_extract_particles(
 
     # Read angle list.
     anglist = geom.load_angles(angles_list, angles_order=angles_order)
+
+    # load and apply a tomogram mask if any:
+    if tomo_mask is not None:
+        tomo_mask = cryomap.read(tomo_mask)
+        scores_map = scores_map * tomo_mask
 
     if object_id is None:
         object_id = 1

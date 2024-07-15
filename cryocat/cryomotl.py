@@ -16,6 +16,7 @@ from cryocat import cryomask
 from cryocat import mathutils
 from cryocat import ioutils
 from cryocat import nnana
+from cryocat import imod
 
 from math import ceil
 from matplotlib import pyplot as plt
@@ -3355,16 +3356,131 @@ class DynamoMotl(Motl):
 
 
 class ModMotl(Motl):
-    def __init__(self, input_path):
+    def __init__(self, input_motl=None, mod_prefix="", mod_suffix=".mod"):
         super().__init__()
-        if input_path is not None:
-            self.df = self.read_in(input_path)
+        self.mod_df = pd.DataFrame()
+
+        if input_motl is not None:
+            if isinstance(input_motl, ModMotl):
+                self = copy.deepcopy(input_motl)
+            elif isinstance(input_motl, pd.DataFrame):
+                self.check_df_type(input_motl)
+            elif isinstance(input_motl, str):
+                mod_df = self.read_in(input_motl, mod_prefix=mod_prefix, mod_suffix=mod_suffix)
+                self.convert_to_motl(mod_df)
+            else:
+                raise UserInputError(
+                    f"Provided input_motl is neither DataFrame nor path to the mod file: {input_motl}."
+                )
 
     @staticmethod
-    def read_in(input_path):
-        # TODO finish - read from folder
-        if os.path.isfile(input_path):
-            motl_df = pd.read_table(input_path, sep=" ", header=None)
+    def read_in(input_path, mod_prefix="", mod_suffix=".mod"):
+        """Reads in IMOD model file(s) from a file or specified directory. In case a path to the directory is
+        specified, prefix and/or suffix can be passed as well to narrow down which files should be loaded. If none of
+        them are passed all files with the extension *.mod in that directory will be loaded.
+
+        Parameters
+        ----------
+        input_path : str
+            The path to a IMOD modl file or to the directory containing the model files.
+        mod_prefix : str, default=""
+            The prefix to add to each file name before reading. Defaults to an empty string.
+        mod_suffix : str, default=".mod"
+            The suffix to add to each file name before reading. Defaults to '.mod'.
+
+        Returns
+        -------
+        DataFrame
+            A pandas DataFrame with read in coordinates, rotations (if possible), object idx and tomo idx.
+
+        Examples
+        --------
+        >>> models = read_in('/path/to/models', mod_prefix='prefix_', mod_suffix='.txt')
+        """
+
+        return imod.read_mod_files(input_path, file_prefix=mod_prefix, file_suffix=mod_suffix)
+
+    def convert_to_motl(self, mod_df):
+        """Converts a DataFrame containing model data into a format suitable for motl file generation.
+
+        Parameters
+        ----------
+        mod_df : DataFrame
+            A DataFrame containing columns for 'object_id', 'x', 'y', 'z', 'mod_id', 'contour_id', and optionally
+            'object_radius'. This DataFrame should represent objects and their contours with coordinates.
+
+        Raises
+        ------
+        ValueError
+            If any object does not have exactly correct number of points/contours.
+
+        Notes
+        -----
+        The function processes the input DataFrame to calculate angles and coordinates for each object based on the
+        provided contours and their points.
+        It supports different scenarios based on the uniformity of contours per object and points per contour:
+        1. All objects have the same number of contours.
+        2. Each contour across objects has the same number of points.
+
+        Examples
+        --------
+        >>> mod_df = pd.DataFrame({
+        ...     'object_id': [1, 1, 2, 2],
+        ...     'x': [1, 2, 1, 2],
+        ...     'y': [1, 2, 1, 2],
+        ...     'z': [1, 2, 1, 2],
+        ...     'mod_id': [1, 1, 2, 2],
+        ...     'contour_id': [1, 1, 2, 2],
+        ...     'object_radius': [0.5, 0.5, 0.5, 0.5]
+        ... })
+        >>> convert_instance = ConvertToMOTLClass()
+        >>> convert_instance.convert_to_motl(mod_df)
+        """
+
+        def subtract_rows(group):
+            if len(group) != 2:
+                raise ValueError(f"object_id {group.iloc[0]['object_id']} does not have exactly 2 points.")
+
+            first_row = group.iloc[0]
+            second_row = group.iloc[1]
+
+            normals = second_row[["x", "y", "z"]].values - first_row[["x", "y", "z"]].values
+            angles = geom.normals_to_euler_angles(normals, output_order="zxz")
+            coord = first_row[["x", "y", "z"]].values
+
+            result = {
+                "angles": angles,
+                "coord": coord,
+                "object_id": first_row["object_id"].values,
+                "tomo_id": first_row["mod_id"].astype(int),
+                "geom2": first_row["contour_id"].values,
+            }
+
+            return result
+
+        self.mod_df = mod_df
+
+        contours_per_object = mod_df["object_id"].value_counts(sort=False)
+        points_per_contour = mod_df.groupby(["object_id", "contour_id"])["contour_id"].value_counts(sort=False)
+        if len(set(contours_per_object)) == 1:  # each object has the same number of contours
+            if (contours_per_object == 1).all():
+                points = {
+                    "coord": mod_df[["x", "y", "z"]].values,
+                    "object_id": mod_df["object_id"].values,
+                    "tomo_id": mod_df["mod_id"].astype(int).values,
+                    "geom2": mod_df["contour_id"].values,
+                    "geom5": mod_df["object_radius"].values,
+                }
+            if (contours_per_object == 2).all():
+                points = mod_df.groupby("object_id").apply(subtract_rows).reset_index(drop=True)
+        elif len(set(points_per_contour)) == 1:  # each contour has the same number of points
+            if (points_per_contour == 2).all():
+                points = mod_df.groupby(["object_id", "contour_id"]).apply(subtract_rows).reset_index(drop=True)
+
+        self.fill(points)
+        self.df["subtomo_id"] = np.arange(1, self.df.shape[0] + 1)
+        self.df = self.df.fillna(0)
+        self.update_coordinates()
 
 
 def emmotl2relion(

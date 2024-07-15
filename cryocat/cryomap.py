@@ -703,7 +703,9 @@ def pad(input_volume, new_size, fill_value=None):
 
 
 def place_object(input_object, motl, volume_shape=None, volume=None, feature_to_color="object_id"):
-    # TODO add input_object_load
+
+    if not isinstance(input_object, list):
+        input_object = read(input_object)
 
     if volume is not None:
         object_container = read(volume)
@@ -715,10 +717,15 @@ def place_object(input_object, motl, volume_shape=None, volume=None, feature_to_
     colors = motl.df[feature_to_color]
 
     for i, coord in enumerate(coordinates):
-        object_map = rotate(input_object, rotation=rotations[i], transpose_rotation=True)
+
+        if isinstance(input_object, list):
+            object_map = rotate(input_object[i], rotation=rotations[i], transpose_rotation=True)
+        else:
+            object_map = rotate(input_object, rotation=rotations[i], transpose_rotation=True)
+
         object_map = np.where(object_map > 0.1, 1.0, 0.0)
 
-        ls, le, os, oe = get_start_end_indices(coord, object_container.shape, input_object.shape)
+        ls, le, os, oe = get_start_end_indices(coord, object_container.shape, object_map.shape)
 
         object_shape = object_map[os[0] : oe[0], os[1] : oe[1], os[2] : oe[2]]
         object_container[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2]] = np.where(

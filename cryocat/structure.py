@@ -328,3 +328,64 @@ class NPC:
                         ] = obj1_id
 
         return ring_motls
+
+
+class PleomorphicSurface:
+
+    @staticmethod
+    def create_spherical_oversampling(
+        input_motl, motl_radius_id, sampling_distance, sampling_angle=360, output_path=None
+    ):
+        motl = cryomotl.Motl.load(input_motl)
+        new_motl_df = pd.DataFrame()
+        for tomo in motl.get_unique_values("tomo_id"):
+            tm = motl.get_motl_subset(tomo)
+            coord = tm.get_coordinates()
+            radii = tm.df[motl_radius_id].values
+            objects = tm.df["object_id"].values
+            for i, r in enumerate(radii):
+                points = geom.sample_cone(sampling_angle, sampling_distance, center=coord[i, :], radius=r)
+                normals = points - np.tile(coord[i, :], (points.shape[0], 1))
+                angles = geom.normals_to_euler_angles(normals, output_order="zxz")
+                em = cryomotl.Motl.create_empty_motl_df()
+                em[["x", "y", "z"]] = points
+                em[["phi", "theta", "psi"]] = angles
+                em["object_id"] = objects[i]
+                em["tomo_id"] = tomo
+                new_motl_df = pd.concat((new_motl_df, em))
+
+        new_motl_df.fillna(0, inplace=True)
+        motl = cryomotl.Motl(new_motl_df)
+        motl.update_coordinates()
+
+        if output_path is not None:
+            motl.write_out(output_path)
+
+        return motl
+
+
+class MAK:
+    def get_centre_from_mean_subunit_location(subunit_motl, output_path):
+        ## does not distinguish between full and partial complexes, just takes geometric centre
+        subunit_motl.update_coordinates()
+        unique_obj_id = cryomotl.Motl.get_unique_values(subunit_motl, "object_id")
+        id_list = [i for i in unique_obj_id]
+        motl_object_id = cryomotl.Motl.get_motl_subset(subunit_motl, 1, "geom2", False, False)
+        # display(motl_object_id.df)
+        for i in id_list:
+            motl_object_i = cryomotl.Motl.get_motl_subset(subunit_motl, i, "object_id", False, False)
+            coordx = motl_object_i.df.loc[:, ["x"]].values + motl_object_i.df.loc[:, ["shift_x"]].values
+            ctr_coordx = np.mean(coordx, 0)
+            coordy = motl_object_i.df.loc[:, ["y"]].values + motl_object_i.df.loc[:, ["shift_y"]].values
+            ctr_coordy = np.mean(coordy, 0)
+            coordz = motl_object_i.df.loc[:, ["z"]].values + motl_object_i.df.loc[:, ["shift_z"]].values
+            ctr_coordz = np.mean(coordz, 0)
+
+            motl_object_id.df.loc[lambda df: df["object_id"] == i, ["x"]] = ctr_coordx
+            motl_object_id.df.loc[lambda df: df["object_id"] == i, ["y"]] = ctr_coordy
+            motl_object_id.df.loc[lambda df: df["object_id"] == i, ["z"]] = ctr_coordz
+        motl_object_i.update_coordinates()
+        if output_path is not None:
+            cryomotl.Motl.write_out(motl_object_id, output_path)
+
+        return motl_object_id

@@ -722,7 +722,7 @@ def add_chain_suffix(
 
     if chain_max_order != order_id:  # the closest particle is not the last one
         if previous_dist <= current_dist:  # the original chain holds, do nothing
-            return
+            return False
         else:  # the new chain is better, cut of the tail of the existing one
             current_class = chain_df[store_idx1].values[0]
             traced_df.loc[
@@ -735,13 +735,13 @@ def add_chain_suffix(
                 traced_df.loc[traced_df[store_idx1] == temp_cl_id, [store_idx2]].values
             )  # max changed in the meantime so has to be fetched again
 
-    traced_df.loc[
-        traced_df["subtomo_id"] == particle_id, store_dist
-    ] = current_dist  # add distance to the last traced element from the chain (should be 0 before)
+    traced_df.loc[traced_df["subtomo_id"] == particle_id, store_dist] = (
+        current_dist  # add distance to the last traced element from the chain (should be 0 before)
+    )
     chain_df[store_idx1] = temp_cl_id
     chain_df[store_idx2] += chain_max_order
 
-    return temp_cl_id
+    return True  # chain was changed
 
 
 def add_chain_prefix(
@@ -772,7 +772,7 @@ def add_chain_prefix(
         ].values[0]
 
         if previous_dist <= current_dist:  # original particle closer -> do not append
-            return
+            return -1
         else:  # the new particle is closer - change the class/object_id to the one from the current particle
             cut_off_size = traced_df.loc[
                 (traced_df[store_idx1] == class_to_change) & (traced_df[store_idx2] < order_id)
@@ -788,7 +788,7 @@ def add_chain_prefix(
                 traced_df.loc[
                     (traced_df[store_idx1] == class_to_change) & (traced_df[store_idx2] < order_id),
                     store_idx1,
-                ] = -1 # class_max[1]
+                ] = -1  # class_max[1]
 
     if class_max is None:
         chain_df[store_idx1] = class_to_change
@@ -798,7 +798,8 @@ def add_chain_prefix(
         temp_cl_id = chain_df[store_idx1][0]
         traced_df.loc[traced_df[store_idx1] == class_to_change, [store_idx2]] += class_max[0] - cut_off_size
         traced_df.loc[traced_df[store_idx1] == class_to_change, [store_idx1]] = temp_cl_id
-        traced_df.loc[traced_df[store_idx1] == -1, [store_idx1]] = class_to_change
+        if order_id != 1:
+            traced_df.loc[traced_df[store_idx1] == -1, [store_idx1]] = class_max[1]  # class_to_change
 
     chain_df.loc[chain_df.index[-1], store_dist] = current_dist
 
@@ -855,6 +856,7 @@ def trace_chains(
                 trace_chain = True
                 p_idx = i
                 used_idx = []
+                # print(i)
                 while trace_chain:
                     # take the particle from the exit list
                     # part_process = fm_exit.df.iloc[p_idx]
@@ -924,11 +926,27 @@ def trace_chains(
                             remain_entry[used_idx] = False
                             remain_exit[used_idx] = False
 
-                            if nm_idx != -1 and first_idx != -1:  # they connect from both sides
-                                current_class = class_c - 1
+                            # rather rare case where a single particle wants to connect to the same particle in a chain
+                            if first_idx == nm_idx and first_idx != -1 and ch_m.shape[0] == 1:
+                                if first_dist <= nm_dist:
+                                    nm_idx = -1  # add only suffix
+                                else:
+                                    first_idx = -1  # add only prefix
+                            elif first_idx != -1 and nm_idx != -1:
+                                part1 = fm_exit.df.loc[fm_exit.df.index[first_idx], "subtomo_id"]
+                                part2 = fm_entry.df.loc[fm_entry.df.index[nm_idx], "subtomo_id"]
+                                cl1 = nfm_df.loc[nfm_df["subtomo_id"] == part1, store_idx1].values[0]
+                                cl2 = nfm_df.loc[nfm_df["subtomo_id"] == part2, store_idx1].values[0]
+                                if cl1 == cl2:
+                                    if first_dist <= nm_dist:
+                                        nm_idx = -1  # add only suffix
+                                    else:
+                                        first_idx = -1  # add only prefix
 
-                                # appending the chain after an existing one
-                                add_chain_suffix(
+                            ch_changed = False  # default is no chain change
+
+                            if first_idx != -1:  # appneding the chain after an existing one
+                                ch_changed = add_chain_suffix(
                                     ch_m,
                                     fm_exit,
                                     nfm_df,
@@ -938,11 +956,17 @@ def trace_chains(
                                     store_idx2,
                                 )
 
-                                cl_max = np.max(ch_m[store_idx2].values)
-                                if cl_max == 1:
-                                    class_max = None
-                                else:
-                                    class_max = (cl_max, current_class)
+                            if nm_idx != -1:  # connecting the chain before an existing one
+
+                                class_max = None
+
+                                # they connect from both sides
+                                if ch_changed:
+                                    current_class = class_c - 1
+                                    cl_max = np.max(ch_m[store_idx2].values)
+                                    if cl_max > 1:
+                                        class_max = (cl_max, current_class)
+
                                 add_chain_prefix(
                                     ch_m,
                                     fm_entry,
@@ -953,32 +977,6 @@ def trace_chains(
                                     store_idx2,
                                     class_max=class_max,
                                 )
-
-                            elif nm_idx != -1:  # connecting the chain before an existing one
-                                add_chain_prefix(
-                                    ch_m,
-                                    fm_entry,
-                                    nfm_df,
-                                    nm_idx,
-                                    nm_dist,
-                                    store_idx1,
-                                    store_idx2,
-                                )
-
-                            elif first_idx != -1:  # appneding the chain after an existing one
-                                add_chain_suffix(
-                                    ch_m,
-                                    fm_exit,
-                                    nfm_df,
-                                    first_idx,
-                                    first_dist,
-                                    store_idx1,
-                                    store_idx2,
-                                )
-
-                            # else: # no existing chain  ( nm_d > max_distance and first_d > max_distance) or ( nm_d <= min_distance and first_d <= min_distance):
-                            #    ch_m.loc[:,store_idx1] = class_c
-                            #    class_c += 1
 
                         nfm_df = pd.concat([nfm_df, ch_m])
                         trace_chain = False

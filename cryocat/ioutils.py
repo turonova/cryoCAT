@@ -7,6 +7,42 @@ from cryocat import mdoc
 import xml.etree.ElementTree as ET
 
 
+def get_file_encoding(file_path):
+    """Detects the encoding of a file by trying a list of common encodings.
+
+    Parameters
+    ----------
+    file_path : str
+        The path to the file for which the encoding needs to be determined.
+
+    Returns
+    -------
+    str
+        The name of the encoding if the file is successfully read.
+
+    Raises
+    ------
+    UnicodeEncodeError
+        If the file cannot be read with any of the tried encodings.
+
+    Examples
+    --------
+    >>> get_file_encoding("example.txt")
+    'utf-8'
+    """
+
+    encodings = ["utf-8", "iso-8859-1", "windows-1252"]
+    for encoding in encodings:
+        try:
+            with open(file_path, "r", encoding=encoding) as file:
+                _ = file.read()
+            return encoding
+        except UnicodeDecodeError:
+            pass
+    else:
+        raise UnicodeEncodeError(f"Failed to read file {file_path} with any of the tried encodings.")
+
+
 def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
     """Retrieve files from a specified directory that start with a given prefix and end with a given suffix.
 
@@ -528,28 +564,40 @@ def tlt_load(input_tlt, sort_angles=True):
         ValueError("Error: the dose has to be either ndarray or path to csv, mdoc, or tlt file!")
 
 
-def dimensions_load(input_dims):
-    """Loads tomogram dimensions from a file or numpy.ndarray.
+def dimensions_load(input_dims, tomo_idx=None):
+    """Load and process tomogram dimensions from various input formats.
 
     Parameters
     ----------
-    input_dims : str or pandas.DataFrame or array-like
+    input_dims : pd.DataFrame, str, list, or np.ndarray
         Either a path to a file with the dimensions, array-like input or pandas.DataFrame. The shape of the input should
         be 1x3 (x y z) in case of one tomogram or Nx4 for multiple tomograms (tomo_id x y z). In case of file, the
         dimensions can be fetched from .com file (typically tilt.com file) from parameters FULLIMAGE (x,y) and
         THICKNESS (z) or from general file with either 1x3 values on a single line or Nx4 values on N lines (separator
         is a space(s)).
+    tomo_idx : str or array-like, optional
+        Path to a file containing tomogram indices or an 1D array with the indices. It is used only if the input_dims
+        do not contain 4 columns (i.e., do not have tomo_id). If provided, the function will replicate the 1x3
+        dimensions to the length of tomo_idx array and will add "tomo_id" column. Defaults to None.
 
     Returns
     -------
-    pandas.DataFrame
-        Dimensions of a tomogram in x, y, z (shape 1x3, columns "x","y","z") or tomogram idx and corresponding dimensions
-        (shape Nx4 where N is the number of tomograms, columns "tomo_id", "x", "y", "z").
+    pd.DataFrame
+        A DataFrame containing the dimensions with columns adjusted based on the input shape.
+        Columns will be named as ["x", "y", "z"] or ["tomo_id", "x", "y", "z"].
 
     Raises
     ------
     ValueError
-        Wrong size of the input.
+        If the dimensions do not conform to the expected shapes of 1x3 or Nx4.
+
+    Notes
+    -----
+    - If `input_dims` is a string ending with ".com", it is assumed to be a path to a .com file
+      and will be processed accordingly.
+    - If `input_dims` is a string not ending with ".com", it is treated as a path to a CSV file.
+    - The function can handle reshaping of input dimensions if they are provided as a list or a
+      one-dimensional numpy array.
     """
 
     if isinstance(input_dims, pd.DataFrame):
@@ -581,6 +629,13 @@ def dimensions_load(input_dims):
             f"The dimensions should have shape of 1x3 or Nx4, where N is number of tomograms."
             f"Instead following shape was extracted from the prvoided files: {dimensions.shape}."
         )
+
+    if tomo_idx is not None:
+        tomos = tlt_load(tomo_idx).astype(int)
+        if "tomo_id" not in dimensions.columns:
+            repeated_values = np.repeat(dimensions[["x", "y", "z"]].values, len(tomos), axis=0)
+            dimensions = pd.DataFrame(repeated_values, columns=["x", "y", "z"])
+            dimensions["tomo_id"] = tomos
 
     return dimensions
 
