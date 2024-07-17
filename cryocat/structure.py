@@ -60,22 +60,30 @@ class NPC:
 
         # Group by t_id and o_id, and apply the function to get pairs indices
         result = (
-            motl_ri.df.groupby(["tomo_id", "object_id"]).apply(get_pairs_indices).reset_index(name="su_pairs_indices")
+            motl_ri.df.groupby(["tomo_id", "object_id"])
+            .apply(get_pairs_indices)
+            .reset_index(name="su_pairs_indices")
         )
         # Filter out empty lists
-        pairs_only = result.loc[result["su_pairs_indices"].apply(bool), "su_pairs_indices"].to_list()
+        pairs_only = result.loc[
+            result["su_pairs_indices"].apply(bool), "su_pairs_indices"
+        ].to_list()
         motl_idx = np.array([item for sublist in pairs_only for item in sublist])
 
         coord = motl_ri.get_coordinates()
 
-        distances = geom.point_pairwise_dist(coord[motl_idx[:, 0], :], coord[motl_idx[:, 1], :])
+        distances = geom.point_pairwise_dist(
+            coord[motl_idx[:, 0], :], coord[motl_idx[:, 1], :]
+        )
 
         # Create an array of NaNs with the same length as the dataframe
         df_values = np.full(len(motl_ri.df), np.nan)
         df_values[motl_idx[:, 0]] = distances * pixel_size
         motl_ri.df["su_distance"] = df_values
 
-        npc_diameters_df = motl_ri.df.groupby(["tomo_id", "object_id"])["su_distance"].mean().dropna()
+        npc_diameters_df = (
+            motl_ri.df.groupby(["tomo_id", "object_id"])["su_distance"].mean().dropna()
+        )
 
         return npc_diameters_df.values
 
@@ -96,7 +104,9 @@ class NPC:
         rot_180 = srot.from_euler("zxz", angles=[0, 180, 0], degrees=True)
 
         for t in traced_motl.get_unique_values("tomo_id"):
-            tm = traced_motl.get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
+            tm = traced_motl.get_motl_subset(
+                feature_values=[t], feature_id="tomo_id", reset_index=True
+            )
             rotations = tm.get_rotations()
             for i in np.arange(1, tm.df["geom2"].max(), dtype=int):
                 cone_angle = geom.cone_distance(rotations[i - 1], rotations[i])
@@ -121,8 +131,12 @@ class NPC:
         working_dir, _ = os.path.split(input_motl_path)
         entry_mask = working_dir + "entry_mask.em"
         exit_mask = working_dir + "exit_mask.em"
-        _ = cryomask.spherical_mask(mask_size, 3, center=entry_mask_coord, output_name=entry_mask)
-        _ = cryomask.spherical_mask(mask_size, 3, center=exit_mask_coord, output_name=exit_mask)
+        _ = cryomask.spherical_mask(
+            mask_size, 3, center=entry_mask_coord, output_name=entry_mask
+        )
+        _ = cryomask.spherical_mask(
+            mask_size, 3, center=exit_mask_coord, output_name=exit_mask
+        )
 
         motl = cryomotl.Motl.load(input_motl_path)
         motl.renumber_particles()
@@ -132,7 +146,10 @@ class NPC:
 
         # tracing
         traced_motl = ribana.trace_chains(
-            motl_entry.df, motl_exit.df, max_distance=max_trace_distance, min_distance=min_trace_distance
+            motl_entry.df,
+            motl_exit.df,
+            max_distance=max_trace_distance,
+            min_distance=min_trace_distance,
         )
         traced_motl.df.sort_values(["tomo_id", "object_id", "geom2"], inplace=True)
         ribana.add_occupancy(traced_motl)
@@ -175,10 +192,14 @@ class NPC:
             rot_vec = rot.apply(vector_x)
             end_coord = start_coord + rot_vec
 
-            circle_center, _ = geom.ray_ray_intersection_3d(starting_points=start_coord, ending_points=end_coord)
+            circle_center, _ = geom.ray_ray_intersection_3d(
+                starting_points=start_coord, ending_points=end_coord
+            )
             circle_radius = 0.0  # TODO compute properly
         else:
-            circle_center, circle_radius, confidence = geom.fit_circle_3d_pratt(start_coord)
+            circle_center, circle_radius, confidence = geom.fit_circle_3d_pratt(
+                start_coord
+            )
             # circle_center, circle_radius, confidence = geom.fit_circle_3d_taubin(start_coord)
 
         return circle_center, circle_radius
@@ -188,7 +209,9 @@ class NPC:
         central_points = []
         object_idx = []
         for o in tomo_motl.get_unique_values("object_id"):
-            om = tomo_motl.get_motl_subset(feature_values=[o], feature_id="object_id", reset_index=True)
+            om = tomo_motl.get_motl_subset(
+                feature_values=[o], feature_id="object_id", reset_index=True
+            )
 
             cetroid = NPC.get_center_with_radius(om, radius)
             central_points.append(cetroid)
@@ -221,17 +244,47 @@ class NPC:
         s_idx = [1]
         for vec in vectors[1:]:
             angle = geom.vector_angular_distance(vectors[0], vec) / div_angle
-            s_idx.append(int(decimal.Decimal(angle).to_integral_value(rounding=decimal.ROUND_HALF_UP)) + 1)
+            s_idx.append(
+                int(
+                    decimal.Decimal(angle).to_integral_value(
+                        rounding=decimal.ROUND_HALF_UP
+                    )
+                )
+                + 1
+            )
 
         return s_idx
 
     @staticmethod
     def merge_subunits(input_motl, npc_radius=55):
+        """Merge subunits within a given radius in input_motl.
+
+        Parameters
+        ----------
+        input_motl : str or pd.DataFrame
+            If a string is provided, it is assumed to be a path to the motl file.
+            If a DataFrame is provided, it is used directly.
+        npc_radius : int, optional
+            The radius within which to search for subunits to merge. Default is 55 pixels.
+
+        Returns
+        -------
+        input_motl : pd.DataFrame
+            The input motl data with merged subunits. The dataframe is modified in-place.
+
+        Notes
+        -----
+        The function calculates the centers of each objects in the motl and merges objects with a center that's closer than the npc_radius.
+        All subunits were renumbered and assign back to the input_motl. The number of subunits per object was kept under geom1 in updated motl.
+        """
+
         if isinstance(input_motl, (str, pd.DataFrame)):
             input_motl = cryomotl.Motl.load(input_motl)
 
         for t in input_motl.get_unique_values("tomo_id"):
-            tm = input_motl.get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
+            tm = input_motl.get_motl_subset(
+                feature_values=[t], feature_id="tomo_id", reset_index=True
+            )
 
             # get centers of motls - the motl has to have object_id assigned
             new_object_motl = NPC.get_centers_as_motl(tm, t, radius=npc_radius)
@@ -243,22 +296,32 @@ class NPC:
 
                 if any(center_stats["distance"] <= npc_radius):
                     # get all centers within npc_radius distance for merging
-                    center_idx, nn_idx = nnana.get_nn_within_distance(new_object_motl, npc_radius)
+                    center_idx, nn_idx = nnana.get_nn_within_distance(
+                        new_object_motl, npc_radius
+                    )
                     for i, o in enumerate(center_idx):
                         # get object_id of the first object
-                        o_id1 = new_object_motl.df.loc[new_object_motl.df.index[o], "object_id"]
+                        o_id1 = new_object_motl.df.loc[
+                            new_object_motl.df.index[o], "object_id"
+                        ]
                         # add it to the list of changed objects
                         changed_objects.append(o_id1)
                         for j in nn_idx[i]:
                             # change object_id of the other object to the one of the first object
-                            o_id2 = new_object_motl.df.loc[new_object_motl.df.index[j], "object_id"]
+                            o_id2 = new_object_motl.df.loc[
+                                new_object_motl.df.index[j], "object_id"
+                            ]
                             tm.df.loc[tm.df["object_id"] == o_id2, "object_id"] = o_id1
 
-            tm.df["geom1"] = tm.df.groupby(["object_id"])["object_id"].transform("count")
+            tm.df["geom1"] = tm.df.groupby(["object_id"])["object_id"].transform(
+                "count"
+            )
 
             # for all objects that changed renumber subunits
             for o in changed_objects:
-                om = tm.get_motl_subset(feature_values=o, feature_id="object_id", reset_index=True)
+                om = tm.get_motl_subset(
+                    feature_values=o, feature_id="object_id", reset_index=True
+                )
                 s_idx = NPC.get_new_subunit_idx(om, npc_radius)
                 tm.df.loc[tm.df["object_id"] == o, "geom2"] = s_idx
 
@@ -266,13 +329,17 @@ class NPC:
             tm.df["object_id"] = tm.df["object_id"].rank(method="dense").astype(int)
 
             # assign the results back to the original motl
-            input_motl.df.loc[input_motl.df["tomo_id"] == t, ["object_id", "geom1", "geom2"]] = tm.df[
-                ["object_id", "geom1", "geom2"]
-            ].values
+            input_motl.df.loc[
+                input_motl.df["tomo_id"] == t, ["object_id", "geom1", "geom2"]
+            ] = tm.df[["object_id", "geom1", "geom2"]].values
 
         input_motl.df.reset_index(inplace=True, drop=True)
-        input_motl.df["geom1"] = input_motl.df.groupby(["tomo_id", "object_id"])["object_id"].transform("count")
-        input_motl.df["object_id"] = input_motl.df["object_id"].rank(method="dense").astype(int)
+        input_motl.df["geom1"] = input_motl.df.groupby(["tomo_id", "object_id"])[
+            "object_id"
+        ].transform("count")
+        input_motl.df["object_id"] = (
+            input_motl.df["object_id"].rank(method="dense").astype(int)
+        )
 
         return input_motl
 
@@ -302,8 +369,12 @@ class NPC:
 
         for i in ring_pairs:
             for t in ring_motls[i[0]].get_unique_values("tomo_id"):
-                tm1 = ring_motls[i[0]].get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
-                tm2 = ring_motls[i[1]].get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
+                tm1 = ring_motls[i[0]].get_motl_subset(
+                    feature_values=[t], feature_id="tomo_id", reset_index=True
+                )
+                tm2 = ring_motls[i[1]].get_motl_subset(
+                    feature_values=[t], feature_id="tomo_id", reset_index=True
+                )
                 # print(t)
                 if tm2.df.shape[0] > 0:
                     centers1 = NPC.get_centers_as_motl(tm1, t, radius=npc_radius)
@@ -323,7 +394,8 @@ class NPC:
                         obj1_id = centers1.df.loc[centers1.df.index[o1], "object_id"]
                         obj2_id = centers2.df.loc[centers2.df.index[o2], "object_id"]
                         ring_motls[i[1]].df.loc[
-                            (ring_motls[i[1]].df["tomo_id"] == t) & (ring_motls[i[1]].df["object_id"] == obj2_id),
+                            (ring_motls[i[1]].df["tomo_id"] == t)
+                            & (ring_motls[i[1]].df["object_id"] == obj2_id),
                             "object_id",
                         ] = obj1_id
 
@@ -334,7 +406,11 @@ class PleomorphicSurface:
 
     @staticmethod
     def create_spherical_oversampling(
-        input_motl, motl_radius_id, sampling_distance, sampling_angle=360, output_path=None
+        input_motl,
+        motl_radius_id,
+        sampling_distance,
+        sampling_angle=360,
+        output_path=None,
     ):
         motl = cryomotl.Motl.load(input_motl)
         new_motl_df = pd.DataFrame()
@@ -344,7 +420,9 @@ class PleomorphicSurface:
             radii = tm.df[motl_radius_id].values
             objects = tm.df["object_id"].values
             for i, r in enumerate(radii):
-                points = geom.sample_cone(sampling_angle, sampling_distance, center=coord[i, :], radius=r)
+                points = geom.sample_cone(
+                    sampling_angle, sampling_distance, center=coord[i, :], radius=r
+                )
                 normals = points - np.tile(coord[i, :], (points.shape[0], 1))
                 angles = geom.normals_to_euler_angles(normals, output_order="zxz")
                 em = cryomotl.Motl.create_empty_motl_df()
@@ -370,15 +448,28 @@ class MAK:
         subunit_motl.update_coordinates()
         unique_obj_id = cryomotl.Motl.get_unique_values(subunit_motl, "object_id")
         id_list = [i for i in unique_obj_id]
-        motl_object_id = cryomotl.Motl.get_motl_subset(subunit_motl, 1, "geom2", False, False)
+        motl_object_id = cryomotl.Motl.get_motl_subset(
+            subunit_motl, 1, "geom2", False, False
+        )
         # display(motl_object_id.df)
         for i in id_list:
-            motl_object_i = cryomotl.Motl.get_motl_subset(subunit_motl, i, "object_id", False, False)
-            coordx = motl_object_i.df.loc[:, ["x"]].values + motl_object_i.df.loc[:, ["shift_x"]].values
+            motl_object_i = cryomotl.Motl.get_motl_subset(
+                subunit_motl, i, "object_id", False, False
+            )
+            coordx = (
+                motl_object_i.df.loc[:, ["x"]].values
+                + motl_object_i.df.loc[:, ["shift_x"]].values
+            )
             ctr_coordx = np.mean(coordx, 0)
-            coordy = motl_object_i.df.loc[:, ["y"]].values + motl_object_i.df.loc[:, ["shift_y"]].values
+            coordy = (
+                motl_object_i.df.loc[:, ["y"]].values
+                + motl_object_i.df.loc[:, ["shift_y"]].values
+            )
             ctr_coordy = np.mean(coordy, 0)
-            coordz = motl_object_i.df.loc[:, ["z"]].values + motl_object_i.df.loc[:, ["shift_z"]].values
+            coordz = (
+                motl_object_i.df.loc[:, ["z"]].values
+                + motl_object_i.df.loc[:, ["shift_z"]].values
+            )
             ctr_coordz = np.mean(coordz, 0)
 
             motl_object_id.df.loc[lambda df: df["object_id"] == i, ["x"]] = ctr_coordx
