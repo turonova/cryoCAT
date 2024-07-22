@@ -1,4 +1,5 @@
 import pandas as pd
+from copy import deepcopy
 from os import path
 import warnings
 from cryocat import ioutils
@@ -40,6 +41,9 @@ class Mdoc:
                         if (column != self.section_id) and (column != "removed"):
                             f.write("{} = {}\n".format(column, row[column]))
                     f.write("\n")
+
+    def add_field(self, field_name, field_value):
+        self.imgs[field_name] = field_value
 
     def sort_by_tilt(self, reset_z_value=False):
         self.imgs = self.imgs.sort_values(by="TiltAngle")
@@ -254,6 +258,37 @@ class Mdoc:
         else:
             formatted = value.strip()
         return formatted
+
+
+def split_mdoc_file(input_mdoc, new_id=None, output_folder=None):
+
+    if isinstance(input_mdoc, str):
+        full_mdoc = Mdoc(input_mdoc)
+    elif isinstance(input_mdoc, Mdoc):
+        full_mdoc = deepcopy(input_mdoc)
+    else:
+        raise ValueError("The specified input mdoc has to be of type str or Mdoc")
+
+    if new_id is not None:
+        full_mdoc.convert_section_type()
+        if new_id == "FrameSet":
+            full_mdoc.imgs["FrameSet"] = 0
+
+    mdocs_all = []
+    for e in range(full_mdoc.imgs.shape[0]):
+        new_mdoc = Mdoc(
+            titles=full_mdoc.titles,
+            project_info=full_mdoc.project_info,
+            imgs=pd.DataFrame(full_mdoc.imgs.iloc[e : e + 1]),
+            section_id=full_mdoc.section_id,
+        )
+        if output_folder is not None:
+            frames_file = path.split(new_mdoc.imgs["SubFramePath"].values[0])[-1]
+            new_mdoc.write(output_folder + frames_file + ".mdoc", overwrite=True)
+
+        mdocs_all.append(new_mdoc)
+
+    return mdocs_all
 
 
 def merge_mdoc_files(mdoc_path, new_id=None, reorder=True, stripFramePath=False, output_file=None):
