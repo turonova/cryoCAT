@@ -65,6 +65,25 @@ def get_feature_nn_indices(fm_a, fm_nn, nn_number=1):
 
 
 def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_number=1, rotation_type="angular_distance"):
+    
+    """For each particle in motl_a, this function computes nn_number nearest neighbors in motl_nn and returns the 
+        associated data: distance of neighbor to query point, coordinates of nearest neighbors, coordinates of nearest neighbors
+        after being rotated with respect to the coordinate frame of the query point, angular distance between query point and 
+        nearest neighbor, representations of associated rotation via rotated unit vector + Euler angles, subtomogram-id of query point 
+        of its associated nearest neighbors.
+
+    Args:
+        motl_a (cryocat.cryomotl.Motl): Inpt particle list of query points
+        motl_nn (cryocat.cryomotl.Motl): Input particle list of with nearest neighbors of interest
+        pixel_size (float, optional): Pixel size. Defaults to 1.0.
+        feature_id (str, optional): Particle list feature to distinguish between subsets of input motls. Defaults to "tomo_id".
+        nn_number (int, optional): Number of requested nearest neighbors in motl_nn for each particle in motl_a. Defaults to 1.
+        rotation_type (str, optional): For comparison of rotations. Choice between "all", "angular_distance", 
+            "cone_distance", and "in_plane_distance". Defaults to "angular_distance".
+
+    Returns:
+        pandas data frame: Contains statistics of nearest neighbors analysis between input particle lists
+    """
     (
         centered_coord,
         rotated_coord,
