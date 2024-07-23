@@ -12,14 +12,18 @@ ANGLE_DEGREES_TOL = 10e-12
 def project_points_on_plane_with_preserved_distance(starting_point, normal, nn_points):
 
     # Compute the projection of each neighbor point onto the plane defined by the starting point and normal vector
-    projection_lengths = np.dot(nn_points - starting_point, normal) / np.linalg.norm(normal)
+    projection_lengths = np.dot(nn_points - starting_point, normal) / np.linalg.norm(
+        normal
+    )
     projected_points = nn_points - np.outer(projection_lengths, normal)
 
     # Compute the distances between the neighbor points and the starting point
     distances_to_starting_point = np.linalg.norm(nn_points - starting_point, axis=1)
 
     # Compute the distances between the projected points and the starting point
-    distances_to_projected_point = np.linalg.norm(projected_points - starting_point, axis=1)
+    distances_to_projected_point = np.linalg.norm(
+        projected_points - starting_point, axis=1
+    )
 
     # Compute the adjustment vectors
     adjustment_vectors = projected_points - starting_point
@@ -27,7 +31,8 @@ def project_points_on_plane_with_preserved_distance(starting_point, normal, nn_p
     # Compute the shifted points
     shifted_points = (
         starting_point
-        + adjustment_vectors * (distances_to_starting_point / distances_to_projected_point)[:, np.newaxis]
+        + adjustment_vectors
+        * (distances_to_starting_point / distances_to_projected_point)[:, np.newaxis]
     )
 
     # distances_to_projected_point = np.linalg.norm(shifted_points - starting_point, axis=1)
@@ -57,7 +62,9 @@ def align_points_to_xy_plane(points_on_plane, plane_normal=None):
     axis = np.cross(normal, z_axis)
     axis = axis / np.linalg.norm(axis)
     angle = np.arccos(np.dot(normal, z_axis))
-    rotation_matrix = srot.from_rotvec(angle * axis).as_matrix()  # Construct rotation matrix
+    rotation_matrix = srot.from_rotvec(
+        angle * axis
+    ).as_matrix()  # Construct rotation matrix
 
     # Apply rotation matrix to all points
     rotated_points = np.dot(rotation_matrix, points_on_plane.T).T
@@ -141,7 +148,9 @@ def load_angles(input_angles, angles_order="zxz"):
     elif isinstance(input_angles, np.ndarray):
         angles = input_angles.copy()
     else:
-        raise ValueError("The input_angles have to be either a valid path to a file or numpy array!!!")
+        raise ValueError(
+            "The input_angles have to be either a valid path to a file or numpy array!!!"
+        )
 
     return angles
 
@@ -153,7 +162,9 @@ def spline_sampling(coords, sampling_distance):
     # Output: coordinates of points on the spline
 
     # spline = UnivariateSpline(np.arange(0, len(coords), 1), coords.to_numpy())
-    spline = InterpolatedUnivariateSpline(np.arange(0, len(coords), 1), coords.to_numpy())
+    spline = InterpolatedUnivariateSpline(
+        np.arange(0, len(coords), 1), coords.to_numpy()
+    )
 
     # Keep track of steps across whole tube
     totalsteps = 0
@@ -208,7 +219,9 @@ def compare_rotations(angles1, angles2, c_symmetry=1, rotation_type="all"):
     """
 
     dist_degrees = angular_distance(angles1, angles2, c_symmetry=c_symmetry)[0]
-    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(angles1, angles2, c_symmetry=c_symmetry)
+    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(
+        angles1, angles2, c_symmetry=c_symmetry
+    )
 
     if rotation_type == "all":
         return dist_degrees, dist_degrees_normals, dist_degrees_inplane
@@ -260,15 +273,19 @@ def euler_angles_to_normals(angles):
 
 def normals_to_euler_angles(input_normals, output_order="zzx"):
     if isinstance(input_normals, pd.DataFrame):
-        normals = input_normals.loc[:, ["x", "y", "z"]]
+        normals = input_normals.loc[:, ["x", "y", "z"]].values
     elif isinstance(input_normals, np.ndarray):
         normals = input_normals
     else:
-        raise UserInputError("The input_normals have to be either pandas dataFrame or numpy array")
+        raise UserInputError(
+            "The input_normals have to be either pandas dataFrame or numpy array"
+        )
 
     # normalize vectors
     normals = normals / np.linalg.norm(normals, axis=1)[:, np.newaxis]
-    theta = np.degrees(np.arctan2(np.sqrt(normals[:, 0] ** 2 + normals[:, 1] ** 2), normals[:, 2]))
+    theta = np.degrees(
+        np.arctan2(np.sqrt(normals[:, 0] ** 2 + normals[:, 1] ** 2), normals[:, 2])
+    )
 
     psi = 90 + np.degrees(np.arctan2(normals[:, 1], normals[:, 0]))
     b_idx = np.where(np.arctan2(normals[:, 1], normals[:, 0]) == 0)
@@ -339,12 +356,16 @@ def cone_distance(input_rot1, input_rot2):
     vec1 = vec1 / vec1_n[:, np.newaxis]
     vec2_n = np.linalg.norm(vec2, axis=1)
     vec2 = vec2 / vec2_n[:, np.newaxis]
-    cone_angle = np.degrees(np.arccos(np.maximum(np.minimum(np.sum(vec1 * vec2, axis=1), 1.0), -1.0)))
+    cone_angle = np.degrees(
+        np.arccos(np.maximum(np.minimum(np.sum(vec1 * vec2, axis=1), 1.0), -1.0))
+    )
 
     return cone_angle
 
 
-def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
+def inplane_distance(
+    input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1
+):
     phi1 = np.array(input_rot1.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
     phi2 = np.array(input_rot2.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
 
@@ -364,12 +385,16 @@ def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_s
 
     inplane_angle = np.abs(phi1 - phi2)
 
-    inplane_angle = np.where(inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle)
+    inplane_angle = np.where(
+        inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle
+    )
 
     return inplane_angle
 
 
-def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
+def cone_inplane_distance(
+    input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1
+):
     if isinstance(input_rot1, np.ndarray):
         rot1 = srot.from_euler(convention, input_rot1, degrees=degrees)
     else:
@@ -386,7 +411,9 @@ def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True
     return cone_angle, inplane_angle
 
 
-def angular_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
+def angular_distance(
+    input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1
+):
     # Computes angular distance between 2 quaternions or two sets of Euler
     # angles with ZXZ convention. Formula is based on this post
     # https://math.stackexchange.com/questions/90081/quaternion-distance
@@ -509,7 +536,9 @@ def generate_angles(
 
     if starting_angles is not None:
         starting_rot = srot.from_euler("zxz", angles=starting_angles, degrees=True)
-        cone_rotations = starting_rot * cone_rotations  # swapped order w.r.t. the quat_mult in matlab!
+        cone_rotations = (
+            starting_rot * cone_rotations
+        )  # swapped order w.r.t. the quat_mult in matlab!
         starting_phi = starting_angles[0]
 
     cone_angles = cone_rotations.as_euler("zxz", degrees=True)
@@ -604,7 +633,9 @@ def compute_pairwise_angles(angles1, angles2, coord1, coord2, axis="z"):
     angles2 = np.atleast_2d(angles2)
     rot_angles1 = srot.from_euler("zxz", angles=angles1, degrees=True)
 
-    angles_ref_to_zero = -angles1[:, [2, 1, 0]]  # swap psi and theta -> ["psi", "theta", "phi"]
+    angles_ref_to_zero = -angles1[
+        :, [2, 1, 0]
+    ]  # swap psi and theta -> ["psi", "theta", "phi"]
     rot_to_zero = srot.from_euler("zxz", angles=angles_ref_to_zero, degrees=True)
 
     angles2_as_rotations = srot.from_euler("zxz", angles=angles2, degrees=True)
@@ -620,7 +651,9 @@ def compute_pairwise_angles(angles1, angles2, coord1, coord2, axis="z"):
     elif axis.endswith("z"):
         vector = [0, 0, 1]
     else:
-        raise UserInputError(f"Invalid axis epcification: {axis}. Allowed inputs are x, -x, y, -y, z, -z!")
+        raise UserInputError(
+            f"Invalid axis epcification: {axis}. Allowed inputs are x, -x, y, -y, z, -z!"
+        )
 
     if axis.startswith("-"):
         vector = vector * -1
@@ -768,13 +801,19 @@ def ray_ray_intersection_3d(starting_points, ending_points):
     S = np.array([[SXX, SXY, SXZ], [SXY, SYY, SYZ], [SXZ, SYZ, SZZ]])
 
     CX = np.sum(
-        starting_points[:, 0] * (nx**2 - 1) + starting_points[:, 1] * (nx * ny) + starting_points[:, 2] * (nx * nz)
+        starting_points[:, 0] * (nx**2 - 1)
+        + starting_points[:, 1] * (nx * ny)
+        + starting_points[:, 2] * (nx * nz)
     )
     CY = np.sum(
-        starting_points[:, 0] * (nx * ny) + starting_points[:, 1] * (ny**2 - 1) + starting_points[:, 2] * (ny * nz)
+        starting_points[:, 0] * (nx * ny)
+        + starting_points[:, 1] * (ny**2 - 1)
+        + starting_points[:, 2] * (ny * nz)
     )
     CZ = np.sum(
-        starting_points[:, 0] * (nx * nz) + starting_points[:, 1] * (ny * nz) + starting_points[:, 2] * (nz**2 - 1)
+        starting_points[:, 0] * (nx * nz)
+        + starting_points[:, 1] * (ny * nz)
+        + starting_points[:, 2] * (nz**2 - 1)
     )
 
     C = np.array([CX, CY, CZ])
@@ -785,8 +824,12 @@ def ray_ray_intersection_3d(starting_points, ending_points):
     distances = np.zeros(starting_points.shape[0])
 
     for i in range(starting_points.shape[0]):
-        ui = np.dot(P_intersect - starting_points[i, :], Si[i, :]) / np.dot(Si[i, :], Si[i, :])
-        distances[i] = np.linalg.norm(P_intersect - starting_points[i, :] - ui * Si[i, :])
+        ui = np.dot(P_intersect - starting_points[i, :], Si[i, :]) / np.dot(
+            Si[i, :], Si[i, :]
+        )
+        distances[i] = np.linalg.norm(
+            P_intersect - starting_points[i, :] - ui * Si[i, :]
+        )
 
     return P_intersect, distances
 
@@ -800,7 +843,9 @@ def fit_circle_3d_pratt(coord):
     # Pratt method
     x = coord_proj[0, :]
     y = coord_proj[1, :]
-    a = np.linalg.lstsq(np.vstack([x, y, np.ones_like(x)]).T, -(x**2 + y**2), rcond=None)[0]
+    a = np.linalg.lstsq(
+        np.vstack([x, y, np.ones_like(x)]).T, -(x**2 + y**2), rcond=None
+    )[0]
     xc = -a[0]
     yc = -a[1]
 
@@ -900,7 +945,13 @@ def fit_circle_2d(coord):
     A3 = 4 * Mz
     A2 = -3 * Mz * Mz - Mzz
     A1 = Mzz * Mz + 4 * Cov_xy * Mz - Mxz * Mxz - Myz * Myz - Mz * Mz * Mz
-    A0 = Mxz * Mxz * Myy + Myz * Myz * Mxx - Mzz * Cov_xy - 2 * Mxz * Myz * Mxy + Mz * Mz * Cov_xy
+    A0 = (
+        Mxz * Mxz * Myy
+        + Myz * Myz * Mxx
+        - Mzz * Cov_xy
+        - 2 * Mxz * Myz * Mxy
+        + Mz * Mz * Cov_xy
+    )
     A22 = A2 + A2
     A33 = A3 + A3 + A3
     xnew = 0
@@ -933,7 +984,11 @@ def fit_circle_2d(coord):
 
     # computing the circle parameters
     DET = xnew * xnew - xnew * Mz + Cov_xy
-    Center = np.array([(Mxz * (Myy - xnew) - Myz * Mxy), (Myz * (Mxx - xnew) - Mxz * Mxy)]) / DET / 2
+    Center = (
+        np.array([(Mxz * (Myy - xnew) - Myz * Mxy), (Myz * (Mxx - xnew) - Mxz * Mxy)])
+        / DET
+        / 2
+    )
     Par = np.concatenate([Center + centroid, [np.sqrt(np.dot(Center, Center) + Mz)]])
     circle_center = Par[:2]
     circle_radius = Par[2]
