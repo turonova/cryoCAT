@@ -539,6 +539,8 @@ class Motl:
             elif key == "shifts":
                 self.df[["shift_x", "shift_y", "shift_z"]] = value
 
+        self.df = self.df.fillna(0.0)
+
     def get_random_subset(self, number_of_particles):
         """Generate a random subset of particles from the motl.
 
