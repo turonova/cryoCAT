@@ -547,6 +547,8 @@ def tlt_load(input_tlt, sort_angles=True):
 
     if isinstance(input_tlt, np.ndarray):
         return input_tlt
+    elif isinstance(input_tlt, list):
+        return np.asarray(input_tlt)
     elif isinstance(input_tlt, str):
         if input_tlt.endswith(".mdoc"):
             tilt_data = mdoc.Mdoc(input_tlt)

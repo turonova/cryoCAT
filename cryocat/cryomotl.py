@@ -271,6 +271,90 @@ class Motl:
 
         self.df = cleaned_df
 
+    def clean_by_tomo_mask(self, tomo_list, tomo_masks, inplace=True, output_file=None):
+        """Removes particles from the motive list based on provided tomomgram masks.
+
+        Parameters
+        ----------
+        tomo_list : str, array-like, or int
+            Tomogram indices specifying the masks provided. See :meth:`cryocat.ioutils.tlt_load` for more information
+            on formatting.
+        tomo_masks : list, array-like or str
+            List of paths to tomogram masks list of np.ndarrays with the masks loaded. If a single path/np.ndarray is
+            specified (instead of the list) the same mask will be used for all tomograms specified in the tomo_list.
+        inplace : bool, default=True
+            If true, the original instance of the motl is changed. If False, the instance of Motl is created and returned,
+            the original motive list remains unchanged. Defaults to True.
+        output_file : str, optional
+            Path to save the cleaned motive list. If not provided, the motive list is not saved. Defaults to None.
+
+        Returns
+        -------
+        cleaned_motl : Motl
+            The motive list after removing particles based on the mask. Only if inplace is set to False.
+
+        Raises
+        ------
+        ValueError
+            If the number of tomograms does not match the number of provided masks when `tomo_masks` is a list.
+
+        Notes
+        -----
+        The function loads tomograms and their corresponding masks, binarizes the masks, and then filters out particles
+        in the motive list that fall into masked-out (zero-valued) areas of the tomograms. If `output_file` is provided,
+        the cleaned motive list is saved to this file.
+
+        The function creates a new instance of a Motl and does not alter the original one.
+        """
+
+        tomos = ioutils.tlt_load(tomo_list)
+
+        requries_loading = True
+
+        if isinstance(tomo_masks, list):
+            if len(tomos) != len(tomo_masks):
+                raise ValueError(f"The list of tomograms has different length than lists of tomogram masks")
+        else:
+            tomo_mask = cryomap.binarize(tomo_masks)
+            requries_loading = False
+
+        cleaned_motl = Motl.load(self)
+
+        for i, t in enumerate(tomos):
+            tm = self.get_motl_subset(t, reset_index=True)
+            coords = tm.get_coordinates().astype(int)
+            if requries_loading:
+                tomo_mask = cryomap.binarize(tomo_masks[i])
+
+            # Ensure coordinates are within the bounds of the mask array
+            within_bounds = (
+                (coords[:, 0] < tomo_mask.shape[0])
+                & (coords[:, 1] < tomo_mask.shape[1])
+                & (coords[:, 2] < tomo_mask.shape[2])
+            )
+            coords = coords[within_bounds]
+
+            # Filter out coordinates where the mask value is 0
+            mask_values = tomo_mask[coords[:, 0], coords[:, 1], coords[:, 2]]
+
+            # Get the indices of the filtered coordinates
+            idx_to_remove = np.where(mask_values == 0)[0]
+            subtomo_idx = tm.df.loc[idx_to_remove, "subtomo_id"].values
+
+            cleaned_motl.remove_feature("subtomo_id", subtomo_idx)
+
+            print(f"Removed {str(idx_to_remove.shape[0])} particles from tomogram #{str(t)}")
+
+        cleaned_motl.df.reset_index(inplace=True, drop=True)
+
+        if output_file is not None:
+            cleaned_motl.write(output_file)
+
+        if inplace:
+            self.df = cleaned_motl.df
+        else:
+            return cleaned_motl
+
     def clean_by_otsu(self, feature_id, histogram_bin=None):
         """Clean the DataFrame by applying Otsu's thresholding algorithm on the scores.
 
@@ -979,7 +1063,7 @@ class Motl:
 
         Parameters
         ----------
-        input_motl : pandas.DataFrame
+        input_motl : pandas.DataFrame or Motl
             Either path to the motl or pandas.DataFrame in the format corresponding
             to general motl_df or in the format specific to the motl_type.
         motl_type : str, {'emmotl', 'dynamo', 'relion', 'stopgap'}
@@ -1033,7 +1117,7 @@ class Motl:
 
         """
 
-        if not isinstance(feature_values, list):
+        if not isinstance(feature_values, (list, np.ndarray)):
             feature_values = [feature_values]
         for value in feature_values:
             self.df = self.df.loc[self.df[feature_id] != value]

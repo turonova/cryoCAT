@@ -97,6 +97,36 @@ def resolution2pixels(resolution, edge_size, pixel_size, print_out=True):
     return pixels
 
 
+def binarize(input_map, threshold=0.5):
+    """Converts a given input map to a binary map based on a specified threshold.
+
+    Parameters
+    ----------
+    input_map : array_like or str
+        The input map to binarize. Can be an array or a path to a file containing the map data.
+    threshold : float, default=0.5
+        The threshold value used for binarization. Values greater than this threshold will be set to 1,
+        and values less than or equal to the threshold will be set to 0. Defaults to 0.5.
+
+    Returns
+    -------
+    binary_map : ndarray
+        The binarized map as a numpy array of integers (0s and 1s).
+
+    Examples
+    --------
+    >>> input_map = np.array([0.2, 0.6, 0.4, 0.8])
+    >>> binarize(input_map)
+    array([0, 1, 0, 1])
+    """
+
+    input_map = read(input_map)
+
+    binary_map = (input_map > threshold).astype(int)
+
+    return binary_map
+
+
 def get_filter_radius(edge_size, fourier_pixels, target_resolution, pixel_size):
     """Calculate the filter radius based on either direct Fourier pixel/voxel specification or target resolution.
 
