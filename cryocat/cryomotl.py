@@ -348,7 +348,7 @@ class Motl:
         cleaned_motl.df.reset_index(inplace=True, drop=True)
 
         if output_file is not None:
-            cleaned_motl.write(output_file)
+            cleaned_motl.write_out(output_file)
 
         if inplace:
             self.df = cleaned_motl.df
