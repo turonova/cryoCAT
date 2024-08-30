@@ -1525,9 +1525,9 @@ class Motl:
         """
 
         if isinstance(input_motl, Motl):
-            motl = input_motl
+            motl_orig = input_motl
         else:
-            motl = Motl.load(input_motl)
+            motl_orig = Motl.load(input_motl)
 
         input_mask = cryomap.read(input_mask)
         old_center = np.array(input_mask.shape) / 2
@@ -1535,7 +1535,7 @@ class Motl:
         shifts = mask_center - old_center  # get shifts
 
         # change shifts in the motl accordingly
-        motl.shift_positions(shifts)
+        motl = motl_orig.shift_positions(shifts, inplace=False)
         motl.update_coordinates()
 
         if rotation is not None:
