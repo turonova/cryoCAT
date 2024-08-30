@@ -978,7 +978,7 @@ def get_mass_center(input_mask):
     mask_center = (start_ids + end_ids) / 2
 
     for i in range(3):
-        mask_center[i] = decimal.Decimal(mask_center[i]).to_integral_value(rounding=decimal.ROUND_HALF_UP) + 1
+        mask_center[i] = decimal.Decimal(mask_center[i]).to_integral_value(rounding=decimal.ROUND_HALF_UP)
 
     return mask_center.astype(int)
 
