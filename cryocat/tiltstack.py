@@ -133,3 +133,113 @@ def dose_filter_single_image(image, dose, freq_array):
     filtered_image = np.fft.ifft2(np.fft.ifftshift(ft * q))
 
     return filtered_image.real
+
+
+def deconvolve(
+    tilt_stack,
+    pixel_size_a,
+    defocus,
+    defocus_file_type="gctf",
+    snr_falloff=1.2,
+    deconv_strength=1.0,
+    highpass_nyquist=0.02,
+    phase_flipped=False,
+    phaseshift=0,
+    output_name=None,
+):
+    """Deconvolution adapted from MATLAB script tom_deconv_tomo by D. Tegunov (https://github.com/dtegunov/tom_deconv)
+    and adapted for the tilt series.
+    Example for usage: deconvolve(my_map, 3.42, 6, 1.1, 1, 0.02, false, 0)
+
+    Parameters
+    ----------
+    tilt_stack : np.array or string
+        tilt stack
+    pixel_size_a : float
+        pixel size in Angstroms
+    defocus : float, int, str or array-like
+        defocus in micrometers, positive = underfocus, or file from CTF estimation
+    defocus_file_type : str, default=gctf
+        in case the defocus is specified as a file, the type of the file has to be specified (ctffind4, gctf, warp)
+    snr_falloff : float
+        how fast does SNR fall off, i. e. higher values will downweight high frequencies; values like 1.0 or 1.2 seem reasonable
+    deconv_strength : float
+        how much will the signal be deconvoluted overall, i. e. a global scale for SNR; exponential scale: 1.0 is SNR = 1000 at zero frequency, 0.67 is SNR = 100, and so on
+    highpass_nyquist : float
+        fraction of Nyquist frequency to be cut off on the lower end (since it will be boosted the most)
+    phase_flipped : bool
+        whether the data are already phase-flipped. Defaults to False.
+    phaseshift : int
+        CTF phase shift in degrees (e. g. from a phase plate). Defaults to 0.
+    output_name : str
+        Name of the output file for the deconvolved stack. Defaults to None (tilt stack will be not written).
+
+    Returns
+    -------
+    deconvolved_stack : np.array
+        deconvolved tilt stack
+
+    """
+    input_stack = cryomap.read(tilt_stack, transpose=False)
+    deconvolved_stack = np.zeros(input_stack.shape)
+
+    if not isinstance(defocus, (int, float)):
+        defocus = ioutils.defocus_load(defocus, defocus_file_type)
+        defocus = defocus["defocus_mean"].values
+    else:
+        defocus = np.full((input_stack.shape[0],), defocus)
+
+    for ts in range(input_stack.shape[0]):
+        tilt = input_stack[ts, :, :]
+        interp_dim = np.maximum(2048, tilt.shape[0])
+
+        # Generate highpass filter
+        highpass = np.arange(0, 1, 1 / interp_dim)
+        highpass = np.minimum(1, highpass / highpass_nyquist) * np.pi
+        highpass = 1 - np.cos(highpass)
+
+        # Calculate SNR and Wiener filter
+        snr = (
+            np.exp(np.arange(0, -1, -1 / interp_dim) * snr_falloff * 100 / pixel_size_a)
+            * (10 ** (3 * deconv_strength))
+            * highpass
+        )
+        ctf = cryomap.compute_ctf_1d(
+            interp_dim,
+            pixel_size_a * 1e-10,
+            300e3,
+            2.7e-3,
+            -defocus[ts] * 1e-6,
+            0.07,
+            phaseshift / 180 * np.pi,
+            0,
+        )
+        if phase_flipped:
+            ctf = np.abs(ctf)
+        wiener = ctf / (ctf * ctf + 1 / snr)
+
+        # Generate ramp filter
+        s = tilt.shape
+        x, y = np.meshgrid(
+            np.arange(-s[0] / 2, s[0] / 2),
+            np.arange(-s[1] / 2, s[1] / 2),
+            indexing="ij",
+        )
+
+        x /= abs(s[0] / 2)
+        y /= abs(s[1] / 2)
+        r = np.sqrt(x * x + y * y)
+        r = np.minimum(1, r)
+        r = np.fft.ifftshift(r)
+
+        x = np.arange(0, 1, 1 / interp_dim)
+        ramp_interp = cryomap.interp1d(x, wiener, fill_value="extrapolate")
+
+        ramp = ramp_interp(r.flatten()).reshape(r.shape)
+        # Perform deconvolution
+        deconvolved_stack[ts, :, :] = np.real(np.fft.ifftn(np.fft.fftn(tilt) * ramp))
+
+    if output_name is not None:
+        cryomap.write(deconvolved_stack, output_name, data_type=np.single, transpose=False)
+
+    return deconvolved_stack

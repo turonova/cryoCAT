@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+import json
+from copy import deepcopy
 import re
 import os
 from cryocat import starfileio as sf
@@ -809,3 +811,70 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
             of.writelines(filtered_lines)
 
     return filtered_lines """
+
+
+def dict_write(dict_data, file_name):
+    """Write the given dictionary to a file in JSON format.
+
+    Parameters
+    ----------
+    dict_data : dict
+        Dictionary containing the data to write to the file.
+    file_name : str
+        The name of the file where the dictionary will be written.
+
+    Returns
+    -------
+    None
+    """
+
+    with open(file_name, "w") as json_file:
+        json.dump(dict_data, json_file, indent=4)
+
+
+def dict_load(input_data):
+    """Load a dictionary from a JSON string or copy an existing dictionary.
+
+    Parameters
+    ----------
+    input_data : str or dict
+        The input data to load. This can be a JSON string or an existing dictionary.
+
+    Returns
+    -------
+    dict
+        A dictionary loaded from the JSON string or a deep copy of the provided dictionary.
+
+    Raises
+    ------
+    ValueError
+        If `input_data` is neither a string nor a dictionary.
+
+    Notes
+    -----
+    If `input_data` is a JSON string and cannot be decoded, an empty dictionary is returned and an error message is printed.
+
+    Examples
+    --------
+    >>> json_str = '{"key": "value"}'
+    >>> dict_load(json_str)
+    {'key': 'value'}
+
+    >>> original_dict = {'key': 'value'}
+    >>> new_dict = dict_load(original_dict)
+    >>> new_dict is original_dict
+    False
+    """
+
+    if isinstance(input_data, str):
+        try:
+            dict_data = json.loads(input_data)
+        except json.JSONDecodeError:
+            print("Invalid JSON string.")
+            dict_data = {}
+    elif isinstance(input_data, dict):
+        dict_data = deepcopy(input_data)
+    else:
+        raise ValueError("The supported formats are dict or file in JSON format.")
+
+    return dict_data
