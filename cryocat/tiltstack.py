@@ -243,3 +243,23 @@ def deconvolve(
         cryomap.write(deconvolved_stack, output_name, data_type=np.single, transpose=False)
 
     return deconvolved_stack
+
+
+def split_stack_even_odd(tilt_stack):
+    even_stack = []
+    odd_stack = []
+
+    # For each tilt image in the stack
+    for i in range(0, tilt_stack.shape[2]):
+
+        # Split to even and odd by using modulo 2
+        if i % 2 == 0:
+            even_stack.append(tilt_stack[:,:,i])
+        else:
+            odd_stack.append(tilt_stack[:,:,i])
+
+    # Stack separated tilts together into one volume
+    even_stack = np.stack(even_stack, axis=2)
+    odd_stack = np.stack(odd_stack, axis=2)
+
+    return even_stack, odd_stack
