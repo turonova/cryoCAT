@@ -3463,7 +3463,7 @@ class ModMotl(Motl):
     def read_in(input_path, mod_prefix="", mod_suffix=".mod"):
         """Reads in IMOD model file(s) from a file or specified directory. In case a path to the directory is
         specified, prefix and/or suffix can be passed as well to narrow down which files should be loaded. If none of
-        them are passed all files with the extension *.mod in that directory will be loaded.
+        them are passed all files with the extension .mod in that directory will be loaded.
 
         Parameters
         ----------

@@ -65,25 +65,36 @@ def get_feature_nn_indices(fm_a, fm_nn, nn_number=1):
 
 
 def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_number=1, rotation_type="angular_distance"):
-    
-    """For each particle in motl_a, this function computes nn_number nearest neighbors in motl_nn and returns the 
-        associated data: distance of neighbor to query point, coordinates of nearest neighbors, coordinates of nearest neighbors
-        after being rotated with respect to the coordinate frame of the query point, angular distance between query point and 
-        nearest neighbor, representations of associated rotation via rotated unit vector + Euler angles, subtomogram-id of query point 
-        of its associated nearest neighbors.
+    """Calculate nearest neighbor statistics between two sets of motive lists.
 
-    Args:
-        motl_a (cryocat.cryomotl.Motl): Inpt particle list of query points
-        motl_nn (cryocat.cryomotl.Motl): Input particle list of with nearest neighbors of interest
-        pixel_size (float, optional): Pixel size. Defaults to 1.0.
-        feature_id (str, optional): Particle list feature to distinguish between subsets of input motls. Defaults to "tomo_id".
-        nn_number (int, optional): Number of requested nearest neighbors in motl_nn for each particle in motl_a. Defaults to 1.
-        rotation_type (str, optional): For comparison of rotations. Choice between "all", "angular_distance", 
-            "cone_distance", and "in_plane_distance". Defaults to "angular_distance".
+    Parameters
+    ----------
+    motl_a : array_like
+        Array containing the coordinates and features of the primary motl.
+    motl_nn : array_like
+        Array containing the coordinates and features of the nearest neighbor motl.
+    pixel_size : float, optional
+        The size of each pixel, used to scale the coordinates. Default is 1.0.
+    feature_id : str, optional
+        The identifier for the feature used to match motls between `motl_a` and `motl_nn`. Default is "tomo_id".
+    nn_number : int, optional
+        The number of nearest neighbors to consider. Default is 1.
+    rotation_type : str, optional
+        The type of rotation calculation to perform. Options include "angular_distance". Default is "angular_distance".
 
-    Returns:
-        pandas data frame: Contains statistics of nearest neighbors analysis between input particle lists
+    Returns
+    -------
+    nn_stats : DataFrame
+        A pandas DataFrame containing the nearest neighbor statistics, including distances, coordinates, angular
+        distances, rotations, and indices.
+
+    Notes
+    -----
+    The function internally calls `get_nn_distances` to compute distances and angular distances between motls, and
+    `get_nn_rotations` to calculate rotations. The results are combined into a DataFrame with detailed nearest neighbor
+    statistics.
     """
+
     (
         centered_coord,
         rotated_coord,
