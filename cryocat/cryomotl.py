@@ -1418,7 +1418,7 @@ class Motl:
             In case boundary_type is neither "whole" or "center".
 
         """
-        dim = geom.load_dimensions(dimensions)
+        dim = ioutils.dimensions_load(dimensions)
         original_size = len(self.df)
 
         # Get type of bounds

@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 import seaborn as sns
 from cryocat import cryomap
 from cryocat import geom
-from cryocat import visplot
+from cryocat import ioutils
 from cryocat import cryomotl
 from cryocat import tmana
 from scipy.spatial.transform import Rotation as srot
@@ -185,7 +185,7 @@ def compute_sharp_mask_overlap(template_list, indices, angle_list_path, parent_f
         mask_name = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tight mask"])
         mask = cryomap.read(mask_name)
         angle_list = angle_list_path + temp_df.at[i, "Angles"]
-        angles = geom.load_angles(angle_list, angles_order)
+        angles = ioutils.rot_angles_load(angle_list, angles_order)
         rotations = srot.from_euler("zxz", angles, degrees=True)
 
         voxel_count = []
@@ -365,7 +365,7 @@ def analyze_rotations(
     c_symmetry=1,
     angles_order="zxz",
 ):
-    angles = geom.load_angles(input_angles, angles_order)
+    angles = ioutils.rot_angles_load(input_angles, angles_order)
     # angles = angles[0:4,:]
 
     if starting_angle is None:

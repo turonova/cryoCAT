@@ -521,6 +521,58 @@ def total_dose_load(input_dose, sort_mdoc=True):
         ValueError("Error: the dose has to be either ndarray or str with valid path!")
 
 
+def rot_angles_load(input_angles, angles_order="zxz"):
+    """Load rotation angles from a file or numpy array and arrange them in a specified order.
+
+    Parameters
+    ----------
+    input_angles : str or numpy.ndarray
+        If a string, it should be the path to a CSV file containing the angles (three per line). If a numpy array, it
+        should directly contain the angles.
+    angles_order : str, default="zxz"
+        The order of the angles in the output array. Default is "zxz" (phi, theta, psi). If "zzx", the order will be
+        adjusted to phi, psi, theta.
+
+    Returns
+    -------
+    angles : numpy.ndarray
+        A numpy array of shape (N, 3) where n is the number of angle sets. Each row contains the angles phi, theta,
+          and psi in the specified order.
+
+    Raises
+    ------
+    ValueError
+        If `input_angles` is neither a string path to a CSV file nor a numpy array.
+
+    Examples
+    --------
+    >>> rot_angles_load("path/to/angles.csv")
+    array([[phi1, theta1, psi1],
+           [phi2, theta2, psi2],
+           ...])
+
+    >>> rot_angles_load(numpy.array([[0, 45, 90], [90, 45, 0]]), "zzx")
+    array([[0, 90, 45],
+           [90, 0, 45]])
+    """
+
+    if isinstance(input_angles, str):
+        angles = pd.read_csv(input_angles, header=None)
+        if angles_order == "zzx":
+            angles.columns = ["phi", "psi", "theta"]
+        else:
+            angles.columns = ["phi", "theta", "psi"]
+
+        angles = angles.loc[:, ["phi", "theta", "psi"]].to_numpy()
+
+    elif isinstance(input_angles, np.ndarray):
+        angles = input_angles.copy()
+    else:
+        raise ValueError("The input_angles have to be either a valid path to a file or numpy array!!!")
+
+    return angles
+
+
 def tlt_load(input_tlt, sort_angles=True):
     """This function loads in tilt angles in degrees and returns them as ndarray. The input can be either a path to the
     file or an ndarray of tilts. The function will check if the input is already an array, and if not it will read in
