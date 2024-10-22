@@ -625,7 +625,7 @@ def ellipsoid_shell_mask(mask_size, shell_thickness, radii, center=None, gaussia
     e1 = ellipsoid_mask(mask_size, radii = radii + shell_thickness, center=center)
     e2 = ellipsoid_mask(mask_size, radii = radii - shell_thickness, center=center)
 
-    shell_mask = e1 - e2
+    shell_mask = e1 & ~e2
 
     shell_mask = postprocess(shell_mask, gaussian, angles, output_name)
 
