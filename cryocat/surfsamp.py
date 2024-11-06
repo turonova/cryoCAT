@@ -76,7 +76,7 @@ class SamplePoints:
             )
         elif self.shape_mask is not None:
             self.vertices, self.faces, self.normals, _ = skimage.measure.marching_cubes(
-                self.shape_mask, step_size=2
+                self.shape_mask, step_size=sampling_distance
             )
             self.area = skimage.measure.mesh_surface_area(self.vertices, self.faces)
         elif self.shape_list is not None:
@@ -721,8 +721,10 @@ class SamplePoints:
         core_mark : ndarray
             The marker for mask_fill_gap.
         """
-        core_mark = process_mask(fill_mask, ero_radius, mode="erosion")
-        core_mark = process_mask(core_mark, clos_radius, mode="closing") * 2
+        core_mark = SamplePoints.process_mask(fill_mask, ero_radius, mode="erosion")
+        core_mark = (
+            SamplePoints.process_mask(core_mark, clos_radius, mode="closing") * 2
+        )
         core_mark[0:, 0:, 0] = 1
         core_mark[0, 0:, 0:] = 1
         core_mark[0:, 0, 0:] = 1
@@ -792,17 +794,19 @@ class SamplePoints:
         -----
         The function performs a series of morphological operations on the input mask, including closing, dilation, erosion, and opening. It uses the watershed algorithm to segment the mask into different regions. The function then generates a capsule mask by performing a logical XOR operation on the dilated and eroded core mask.
         """
-        _, _, fill_mask = slice_cvhull_closing(mask)
-        core_mark = marker_from_fill_mask(fill_mask, ero_radius=marker_ero)
-        chull_mask_close = process_mask(mask, 60, mode="closing")
-        chull_mask_dila = process_mask(chull_mask_close, 20, mode="dilation")
+        _, _, fill_mask = SamplePoints.slice_cvhull_closing(mask)
+        core_mark = SamplePoints.marker_from_fill_mask(fill_mask, ero_radius=marker_ero)
+        chull_mask_close = SamplePoints.process_mask(mask, 60, mode="closing")
+        chull_mask_dila = SamplePoints.process_mask(
+            chull_mask_close, 20, mode="dilation"
+        )
         core_mask = watershed(chull_mask_dila, core_mark)
         core_mask[core_mask == 1] = 0
         core_mask[core_mask == 2] = 1
 
         # dilating and erosing core mask to generate capsule mask
-        core_mask_op = process_mask(core_mask, 50, mode="opening")
-        core_mask_dila = process_mask(core_mask_op, 10, mode="dilation")
-        core_mask_eros = process_mask(core_mask_op, 30, mode="erosion")
+        core_mask_op = SamplePoints.process_mask(core_mask, 50, mode="opening")
+        core_mask_dila = SamplePoints.process_mask(core_mask_op, 10, mode="dilation")
+        core_mask_eros = SamplePoints.process_mask(core_mask_op, 30, mode="erosion")
         capsule_mask = np.logical_xor(core_mask_dila, core_mask_eros)
         return capsule_mask, core_mask_op
