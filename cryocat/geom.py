@@ -284,6 +284,7 @@ def get_axis_from_rotation(input_rotation, axis="z"):
 
 def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
 
+    """
     y_axis1 = get_axis_from_rotation(input_rot1, axis="y")
     y_axis2 = get_axis_from_rotation(input_rot2, axis="y")
 
@@ -313,7 +314,7 @@ def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_s
     inplane_angle = np.where(inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle)
 
     return inplane_angle
-    """
+    
 
 
 def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
