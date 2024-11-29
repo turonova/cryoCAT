@@ -1348,7 +1348,7 @@ class Motl:
             zero_padding = self.get_max_number_digits(feature_id)
 
         for value in uniq_values:
-            fm = self.get_motl_subset(self, value, feature_id=feature_id, reset_index=True)
+            fm = self.get_motl_subset(value, feature_id=feature_id, reset_index=True)
             feature_str = str(value).zfill(zero_padding)
 
             output_txt = f"{outpath}{feature_str}_model.txt"
@@ -1359,7 +1359,12 @@ class Motl:
             class_v = fm.df.loc[:, "class"].astype(
                 int
             )  # TODO add possibility to create object based on other feature_id
-            dummy = pd.Series(np.repeat(1, len(fm)))
+            if np.any(class_v == 0):
+                class_v = class_v + 1 # increase class ID by 1, this prevents the function later to crash in case no classification has been run yet. Mind to revert class ID if necessary
+                #obj = pd.Series(np.arange(1,len(fm.df)+1,1))
+            #else:
+                #obj = class_v
+            dummy = pd.Series(np.repeat(1, len(fm.df)))
 
             pos_df = pd.concat([class_v, dummy, coord_df], axis=1)
             # pos_df = pos_df.astype(float)
