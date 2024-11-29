@@ -565,6 +565,27 @@ def rotate(
     return rot_struct
 
 
+def crop(input_map, new_size, output_file=None, crop_coord=None):
+
+    input_map = read(input_map)
+
+    new_size = cryomask.get_correct_format(new_size)
+
+    if crop_coord is None:
+        crop_coord = cryomask.get_correct_format(input_map.shape) // 2
+    else:
+        crop_coord = cryomask.get_correct_format(crop_coord)
+
+    vs, ve, _, _ = get_start_end_indices(crop_coord, input_map.shape, new_size)
+
+    cropped_volume = input_map[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
+
+    if output_file is not None:
+        write(cropped_volume, output_file, data_type=np.single)
+
+    return cropped_volume
+
+
 def shift(map, delta):
     dimx, dimy, dimz = map.shape
 

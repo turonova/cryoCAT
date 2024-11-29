@@ -5,6 +5,7 @@ from cryocat.exceptions import UserInputError
 import matplotlib.pyplot as plt
 import os
 from scipy.interpolate import InterpolatedUnivariateSpline
+from scipy.interpolate import splprep, splev
 
 ANGLE_DEGREES_TOL = 10e-12
 
@@ -265,13 +266,37 @@ def cone_distance(input_rot1, input_rot2):
     return cone_angle
 
 
+def get_axis_from_rotation(input_rotation, axis="z"):
+
+    matrix_rep = input_rotation.as_matrix()
+
+    axes_dict = {"x": 0, "y": 1, "z": 2}
+
+    if matrix_rep.shape == (3, 3):  # Single (3, 3) matrix
+        ret_axis = matrix_rep[:, axes_dict[axis]]  # Extract column 1 for a single matrix
+    elif matrix_rep.shape[1:] == (3, 3):  # Multiple (N, 3, 3) matrices
+        ret_axis = matrix_rep[:, :, axes_dict[axis]]  # Extract column 1 for each (N, 3, 3) matrix
+    else:
+        raise ValueError("Input must be valid scipy rotation object.")
+
+    return ret_axis
+
+
 def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
+
+    y_axis1 = get_axis_from_rotation(input_rot1, axis="y")
+    y_axis2 = get_axis_from_rotation(input_rot2, axis="y")
+
+    inplane_angle = angle_between_n_vectors(y_axis1, y_axis2)
+
+    return inplane_angle
+    """
     phi1 = np.array(input_rot1.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
     phi2 = np.array(input_rot2.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
 
     # Remove flot precision errors during conversion
-    phi1 = np.where(phi1 < ANGLE_DEGREES_TOL, 0.0, phi1)
-    phi2 = np.where(phi2 < ANGLE_DEGREES_TOL, 0.0, phi2)
+    phi1 = np.where(abs(phi1) < ANGLE_DEGREES_TOL, 0.0, phi1)
+    phi2 = np.where(abs(phi2) < ANGLE_DEGREES_TOL, 0.0, phi2)
 
     # From Scipy the phi is from [-180,180] -> change to [0.0,360]
     phi1 += 180.0
@@ -288,6 +313,7 @@ def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_s
     inplane_angle = np.where(inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle)
 
     return inplane_angle
+    """
 
 
 def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
@@ -773,6 +799,71 @@ def area_triangle(coords):
     triangles = np.cross(coords[:, 1] - coords[:, 0], coords[:, 2] - coords[:, 0])
     # The norm of the cross product of two sides is twice the area
     return np.linalg.norm(triangles) / 2
+
+
+def ray_ellipsoid_intersection_3d(point, normal, ellipsoid_params):
+
+    # Extract line parameters
+    x, y, z = point[0], point[1], point[2]
+    n1, n2, n3 = normal[0], normal[1], normal[2]
+
+    # Extract ellipsoid parameters
+    a, b, c, d, e, f, g, h, i, j = ellipsoid_params
+
+    # Calculate coefficients A, B, C for the quadratic equation
+    A = a * n1**2 + b * n2**2 + c * n3**2 + 2 * d * n1 * n2 + 2 * e * n1 * n3 + 2 * f * n3 * n2
+    B = 2 * (
+        a * x * n1
+        + b * y * n2
+        + c * z * n3
+        + d * x * n2
+        + d * y * n1
+        + e * x * n3
+        + e * z * n1
+        + f * z * n2
+        + f * y * n3
+        + g * n1
+        + h * n2
+        + i * n3
+    )
+    C = j + a * x**2 + b * y**2 + c * z**2 + 2 * (i * z + h * y + g * x + d * x * y + e * x * z + f * z * y)
+
+    # Discriminant
+    D = B**2 - 4 * A * C
+
+    # Initialize results
+    p1, p2 = None, None
+    is_inside = False
+
+    if D < 0:  # No intersection
+        p1, p2 = np.nan, np.nan
+        d1, d2 = np.nan, np.nan
+    elif D == 0:  # One intersection point
+        t1 = -B / (2 * A)
+        p1 = point + t1 * normal
+        d1 = np.linalg.norm(p1 - point, axis=1)
+        p2 = np.nan
+        d2 = np.nan
+    else:  # Two intersection points
+        t1 = (-B + np.sqrt(D)) / (2 * A)
+        t2 = (-B - np.sqrt(D)) / (2 * A)
+
+        p1 = point + t1 * normal
+        p2 = point + t2 * normal
+
+        ps = np.column_stack((p1, p2))
+        distances = np.linalg.norm(ps.T - point, axis=1)
+        pi = np.argmin(distances)
+
+        p1 = ps[:, pi]
+        p2 = ps[:, 1 - pi]
+        d1 = distances[pi]
+        d2 = distances[1 - pi]
+
+        if np.sign(t1) != np.sign(t2):
+            is_inside = True
+
+    return p1, p2, d1, d2, is_inside
 
 
 def ray_ray_intersection_3d(starting_points, ending_points):
@@ -1325,6 +1416,25 @@ def normalize_vector(vector):
     return vector / np.linalg.norm(vector)
 
 
+def normalize_vectors(v):
+    # Normalize each vector, handling both single vectors and arrays of vectors
+    norm = np.linalg.norm(v, axis=-1, keepdims=True)
+    return v / norm
+
+
+def angle_between_n_vectors(v1, v2):
+    # Ensure both vectors are normalized
+    v1_u = normalize_vectors(v1)
+    v2_u = normalize_vectors(v2)
+
+    # Compute dot product element-wise, handling both (3,) and (N, 3) shapes
+    dot_product = np.einsum("ij,ij->i", v1_u, v2_u) if v1.ndim > 1 else np.dot(v1_u, v2_u)
+
+    # Clip values to avoid numerical errors outside the valid range for arccos
+    angle = np.degrees(np.arccos(np.clip(dot_product, -1.0, 1.0)))
+    return angle
+
+
 def vector_angular_distance(v1, v2):
     """Calculate the angular distance between two vectors in degrees.
 
@@ -1404,3 +1514,33 @@ def vector_angular_distance_signed(u, v, n=None):
         return np.arctan2(np.linalg.norm(np.cross(u, v)), np.dot(u, v))
     else:
         return np.arctan2(np.dot(n, np.cross(u, v)), np.dot(u, v))
+
+
+def oversample_spline(coords, target_spacing):
+    """
+    Fit a spline through 3D coordinates and oversample so that the distance between points is approximately `target_spacing`.
+
+    Parameters:
+        coords (np.ndarray): Array of shape (n, 3) representing the input points.
+        target_spacing (float): Desired distance between points on the spline.
+
+    Returns:
+        np.ndarray: Oversampled coordinates along the spline.
+    """
+    # Fit a parametric spline to the data
+    tck, u = splprep(coords.T, s=0)  # `s=0` ensures an exact fit to the input points
+
+    # Compute cumulative arc length
+    distances = np.sqrt(np.sum(np.diff(coords, axis=0) ** 2, axis=1))
+    total_length = np.sum(distances)
+
+    # Determine number of samples based on target spacing
+    num_samples = int(total_length / target_spacing) + 1
+
+    # Generate evenly spaced parameter values along the spline
+    u_fine = np.linspace(0, 1, num_samples)
+
+    # Evaluate the spline to get oversampled points
+    oversampled_points = np.array(splev(u_fine, tck)).T
+
+    return oversampled_points

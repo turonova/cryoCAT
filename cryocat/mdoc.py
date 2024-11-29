@@ -260,6 +260,27 @@ class Mdoc:
         return formatted
 
 
+def get_tilt_angles(input_mdoc, output_file=None):
+
+    mdoc = Mdoc(input_mdoc)
+
+    if output_file:
+        mdoc.imgs["TiltAngle"].to_csv(output_file, index=False, header=False)
+
+    return mdoc.imgs["TiltAngle"].values
+
+
+def sort_mdoc_by_tilt_angles(input_mdoc, reset_z_value=False, output_file=None):
+
+    mdoc = Mdoc(input_mdoc)
+    mdoc.sort_by_tilt(reset_z_value=reset_z_value)
+
+    if output_file:
+        mdoc.write(output_file, overwrite=True)
+
+    return mdoc
+
+
 def split_mdoc_file(input_mdoc, new_id=None, output_folder=None):
 
     if isinstance(input_mdoc, str):

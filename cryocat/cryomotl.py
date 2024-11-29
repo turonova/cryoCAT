@@ -22,6 +22,7 @@ from math import ceil
 from matplotlib import pyplot as plt
 
 from scipy.spatial import KDTree
+from sklearn.neighbors import KDTree as snKDTree
 from scipy.spatial.transform import Rotation as rot
 
 
@@ -270,6 +271,80 @@ class Motl:
             cleaned_df = pd.concat((cleaned_df, feature_m.df.iloc[temp_keep, :]), ignore_index=True)
 
         self.df = cleaned_df
+
+    def clean_by_distance_to_points(
+        self, points, radius_in_voxels, feature_id="tomo_id", inplace=True, output_file=None
+    ):
+        """Cleans the motl by removing points that are within a specified radius of any point in a the provided dataframe
+        with points.
+        
+        Parameters
+        ----------
+        points : DataFrame
+            DataFrame containing the coordinates of points to check against. It has to contain column specified by the
+            param feature_id and also columns x,y,z.
+        radius_in_voxels : float
+            The radius within which points will be considered for removal, in voxel units.
+        feature_id : str, default="tomo_id"
+            The column name that identifies how the particles in motl should be grouped. Defaults to 'tomo_id'.
+        inplace : bool, default=True
+            If True, modifies the motl in place. If False, returns a new Motl object. Defaults to True.
+        output_file : str or None, optional
+            If specified, the cleaned Motl object will be written to this file. Defaults to None.
+        
+        Returns
+        -------
+        Motl or None
+            If inplace is False, returns a new Motl object containing the cleaned DataFrame. Otherwise, returns None.
+        
+        Notes
+        -----
+        The function uses a KDTree for efficient spatial queries, which can significantly speed up the process of finding
+        nearby points. The function assumes that the input motl and the points DataFrame have columns 'x', 'y', and 'z'
+        that represent coordinates and also columns specified by feature_id.
+        """
+        
+        # Parse tomograms
+        features = self.get_unique_values(feature_id)
+
+        # Initialize clean motl
+        cleaned_df = pd.DataFrame()
+
+        # Loop through and clean
+        for f in features:
+            # Parse tomogram
+            feature_m = self.get_motl_subset(f, feature_id=feature_id, reset_index=True)
+
+            # Parse positions
+            coord1 = feature_m.get_coordinates()
+            coord2 = points.loc[points[feature_id] == f, ["x", "y", "z"]].values
+
+            # Create a KDTree from coord1
+            tree = KDTree(coord1)
+
+            # Query points from coord2 within the radius
+            indices_to_remove = set()  # Use a set to store unique indices
+            for point in coord2:
+                indices = tree.query_ball_point(point, r=radius_in_voxels)  # Returns indices as array
+                indices_to_remove.update(indices)  # Add indices to the set
+
+            # Convert to a sorted list for consistent ordering
+            indices_to_remove = sorted(indices_to_remove)
+            cfm = feature_m.df.drop(index=indices_to_remove)
+            cleaned_df = pd.concat([cleaned_df, cfm], ignore_index=True)
+
+        cleaned_df.reset_index(drop=True, inplace=True)
+        cleaned_motl = Motl(cleaned_df)
+
+        if output_file:
+            cleaned_motl.write_out(output_file)
+
+        print(f"{self.df.shape[0]-cleaned_motl.df.shape[0]} particles were removed.")
+
+        if inplace:
+            self.df = cleaned_df
+        else:
+            return cleaned_motl
 
     def clean_by_tomo_mask(self, tomo_list, tomo_masks, inplace=True, output_file=None):
         """Removes particles from the motive list based on provided tomomgram masks.
@@ -1533,7 +1608,7 @@ class Motl:
         old_center = np.array(input_mask.shape) / 2
         mask_center = cryomask.get_mass_center(input_mask)  # find center of mask
         shifts = mask_center - old_center  # get shifts
-
+        print(shifts)
         # change shifts in the motl accordingly
         motl = motl_orig.shift_positions(shifts, inplace=False)
         motl.update_coordinates()
@@ -3544,6 +3619,19 @@ class ModMotl(Motl):
 
             return result
 
+        def check_tomo_id_type(df):
+            if df["mod_id"].apply(lambda x: isinstance(x, str)).all():
+                # If all values are strings, extract digits and convert to integers
+                df["mod_id"] = df["mod_id"].str.extract("(\d+)")[0].astype(int)
+            elif df["mod_id"].apply(lambda x: isinstance(x, int)).all():
+                # If all values are integers, do nothing or keep as is
+                pass
+            else:
+                raise ValueError("Column contains mixed types or unexpected data.")
+
+            return df
+
+        mod_df = check_tomo_id_type(mod_df)
         self.mod_df = mod_df
 
         contours_per_object = mod_df["object_id"].value_counts(sort=False)
@@ -3562,6 +3650,14 @@ class ModMotl(Motl):
         elif len(set(points_per_contour)) == 1:  # each contour has the same number of points
             if (points_per_contour == 2).all():
                 points = mod_df.groupby(["object_id", "contour_id"]).apply(subtract_rows).reset_index(drop=True)
+        else:
+            points = {
+                "coord": mod_df[["x", "y", "z"]].values,
+                "object_id": mod_df["object_id"].values,
+                "tomo_id": mod_df["mod_id"].astype(int).values,
+                "geom2": mod_df["contour_id"].values,
+                "geom5": mod_df["object_radius"].values,
+            }
 
         self.fill(points)
         self.df["subtomo_id"] = np.arange(1, self.df.shape[0] + 1)

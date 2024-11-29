@@ -505,12 +505,14 @@ def total_dose_load(input_dose, sort_mdoc=True):
                 prior_dose = mdoc_file.get_image_feature("PriorRecordDose").values
                 total_dose = image_dose + prior_dose
             else:
-                z_values = (
-                    mdoc_file.get_image_feature("ZValue").values.astype(int) + 1
-                )  # This assumes that z value corresponds to the order of acquisition; correct?
-                total_dose = image_dose * z_values
+                mdoc_file.imgs["original_order"] = range(len(mdoc_file.imgs))
+                mdoc_file.imgs["DateTime"] = pd.to_datetime(mdoc_file.imgs["DateTime"])  # Convert to datetime
+                sorted_df = mdoc_file.imgs.sort_values("DateTime")
+                sorted_df.reset_index(drop=True, inplace=True)
+                sorted_df["total_dose"] = sorted_df["ExposureDose"] * (sorted_df.index + 1)
+                result_df = sorted_df.sort_values("original_order").drop(columns=["original_order"])
 
-            return total_dose
+            return result_df["total_dose"].values
         elif input_dose.endswith(".xml"):
             total_dose = get_data_from_warp_xml(input_dose, "Dose", node_level=1)
             return total_dose

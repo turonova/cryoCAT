@@ -9,48 +9,128 @@ import warnings
 from functools import wraps
 
 
-def suppress_warnings(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore")
-            result = func(*args, **kwargs)
-        return result
+class TiltStack:
 
-    return wrapper
+    def __init__(self, tilt_stack, input_order="xyz", output_order="xyz"):
+
+        if not isinstance(tilt_stack, np.ndarray):  # if loading necessary, load in zyx
+            self.data = cryomap.read(tilt_stack, transpose=False)
+        else:
+            self.data = tilt_stack.copy()
+            if input_order == "xyz":
+                self.data = self.data.transpose(2, 1, 0)
+
+        self.data_type = self.data.dtype
+
+        self.input_order = input_order
+        self.current_order = "zyx"
+        self.output_order = output_order
+
+        self.n_tilts, self.height, self.width = self.data.shape
+
+    def write_out(self, output_file, new_data=None):
+
+        if output_file:
+            cryomap.write(new_data or self.data, output_file, data_type=self.data_type, transpose=False)
+
+    def correct_order(self, new_data=None):
+
+        return_data = new_data or self.data
+
+        if return_data.dtype != self.data_type:
+            return_data = return_data.astype(self.data_type)
+
+        if self.current_order != self.output_order:
+            return return_data.transpose(2, 1, 0)
+        else:
+            return return_data
 
 
-def bin(tilt_stack, binning_factor):
+def crop(tilt_stack, new_width=None, new_height=None, output_file=None, input_order="xyz", output_order="xyz"):
 
-    # binned_stack = np.zeros((tilt_stack.shape[0],tilt_stack.shape[1],tilt_stack.shape[0]
+    ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
-    # for z in range(tilt_stack.shape[0]):
+    new_width = new_width or ts.width
+    new_height = new_height or ts.height
 
-    #    binned_stack[z, :, :] = downscale_local_mean(tilt_stack[z, :, :], (1, binning_factor, binning_factor))
+    # Calculate the center of the original array
+    center_w, center_h = ts.width // 2, ts.height // 2
 
-    binned_stack = downscale_local_mean(tilt_stack, (1, binning_factor, binning_factor))
-    print(tilt_stack.dtype)
-    return binned_stack.astype(tilt_stack.dtype)
+    # Calculate the cropping indices
+    start_w = int(center_w - int(new_width) // 2)
+    end_w = int(start_w + int(new_width))
+
+    start_h = int(center_h - int(new_height) // 2)
+    end_h = int(start_h + int(new_height))
+
+    # crop the actual images
+    ts.data = ts.data[:, start_h:end_h, start_w:end_w]
+
+    ts.write_out(output_file)
+
+    return ts.correct_order()
 
 
-def equalize_histogram(tilt_stack, eh_method="contrast_stretching"):
+def sort_tilts_by_angle(tilt_stack, input_tilts, output_file=None, input_order="xyz", output_order="xyz"):
 
-    equalized_titls = np.zeros(tilt_stack.shape)
+    ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
-    for z in range(tilt_stack.shape[0]):
+    tilt_angles = ioutils.tlt_load(input_tilts, sort_angles=False)
+    sorted_indices = np.argsort(tilt_angles)
+
+    ts.data = ts.data[sorted_indices, :, :]
+    ts.write_out(output_file)
+
+    return ts.correct_order()
+
+
+def remove_tilts(
+    tilt_stack, idx_to_remove, numbered_from_1=True, output_file=None, input_order="xyz", output_order="xyz"
+):
+
+    ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
+
+    idx_to_remove = np.asarray(idx_to_remove)
+    if numbered_from_1:
+        idx_to_remove = idx_to_remove - 1
+
+    ts.data = np.delete(ts.data, idx_to_remove, axis=0)
+    ts.write_out(output_file)
+
+    return ts.correct_order()
+
+
+def bin(tilt_stack, binning_factor, output_file=None, input_order="xyz", output_order="xyz"):
+
+    ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
+    ts.data = downscale_local_mean(ts.data, (1, binning_factor, binning_factor))
+    ts.write_out(output_file)
+
+    return ts.correct_order()
+
+
+def equalize_histogram(
+    tilt_stack, eh_method="contrast_stretching", output_file=None, input_order="xyz", output_order="xyz"
+):
+
+    ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
+
+    for z in ts.n_tilts:
         if eh_method == "contrast_stretching":
-            p2, p98 = np.percentile(tilt_stack[z, :, :], (2, 98))
-            equalized_titls[z, :, :] = exposure.rescale_intensity(tilt_stack[z, :, :], in_range=(p2, p98))
+            p2, p98 = np.percentile(ts.data[z, :, :], (2, 98))
+            ts.data[z, :, :] = exposure.rescale_intensity(ts.data[z, :, :], in_range=(p2, p98))
         elif eh_method == "equalization":
             # Equalization
-            equalized_titls[z, :, :] = exposure.equalize_hist(tilt_stack[z, :, :])
+            ts.data[z, :, :] = exposure.equalize_hist(ts.data[z, :, :])
         elif eh_method == "adaptive_eq":
             # Adaptive Equalization
-            equalized_titls[z, :, :] = exposure.equalize_adapthist(tilt_stack[z, :, :], clip_limit=0.03)
+            ts.data[z, :, :] = exposure.equalize_adapthist(ts.data[z, :, :], clip_limit=0.03)
         else:
             raise ValueError(f"The {eh_method} is not known!")
 
-    return equalized_titls.astype(tilt_stack.dtype)
+    ts.write_out(output_file)
+
+    return ts.correct_order()
 
 
 def calculate_total_dose_batch(tomo_list, prior_dose_file_format, dose_per_image, output_file_format):
@@ -70,52 +150,42 @@ def calculate_total_dose(prior_dose, dose_per_image):
     return total_dose
 
 
-def dose_filter(mrc_file, pixel_size, total_dose, output_file=None, return_data_order="xyz"):
+def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_order="xyz", output_order="xyz"):
     # Input: mrc_file or path to it
     #        pixelsize: float, in Angstroms
     #        total_dose: ndarray or path to the .csv, .txt, or .mdoc file
     #        return_data_order: by default x y z (x,y,n_tilts), for napari compatible view use "zyx"
 
     # temporarily here until this function exist as an entry point on command line
-    pixel_size = float(pixel_size)
 
-    stack_data = cryomap.read(mrc_file)
+    ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
+    pixel_size = float(pixel_size)
     total_dose = ioutils.total_dose_load(total_dose)
 
-    imgs_x = stack_data.shape[0]
-    imgs_y = stack_data.shape[1]
-    n_tilt_imgs = stack_data.shape[2]
-
     # Precalculate frequency array
-    frequency_array = np.zeros((imgs_x, imgs_y))
-    cen_x = imgs_x // 2  # Center for array is half the image size
-    cen_y = imgs_y // 2  # Center for array is half the image size
+    frequency_array = np.zeros((ts.height, ts.width))
+    cen_x = ts.width // 2  # Center for array is half the image size
+    cen_y = ts.height // 2  # Center for array is half the image size
 
-    rstep_x = 1 / (imgs_x * pixel_size)  # reciprocal pixel size
-    rstep_y = 1 / (imgs_y * pixel_size)
+    rstep_x = 1 / (ts.width * pixel_size)  # reciprocal pixel size
+    rstep_y = 1 / (ts.height * pixel_size)
 
     # Loop to fill array with frequency values
-    for x in range(imgs_x):
-        for y in range(imgs_y):
+    for x in range(ts.width):
+        for y in range(ts.height):
             d = np.sqrt(((x - cen_x) ** 2 * rstep_x**2) + ((y - cen_y) ** 2 * rstep_y**2))
-            frequency_array[x, y] = d
+            frequency_array[y, x] = d
 
     # Generate filtered stack
-    filtered_stack = np.zeros((imgs_x, imgs_y, n_tilt_imgs), dtype=np.single)
-    for i in range(n_tilt_imgs):
-        image = stack_data[:, :, i]
-        filtered_stack[:, :, i] = dose_filter_single_image(image, total_dose[i], frequency_array)
+    for z in range(ts.n_tilts):
+        image = ts.data[z, :, :]
+        ts.data[z, :, :] = dose_filter_single_image(image, total_dose[z], frequency_array)
 
-    if return_data_order == "zyx":
-        filtered_stack = filtered_stack.transpose(2, 1, 0)
+    ts.write_out(output_file)
 
-    if output_file is not None:
-        cryomap.write(filtered_stack, output_file)
-
-    return filtered_stack
+    return ts.correct_order()
 
 
-@suppress_warnings
 def dose_filter_single_image(image, dose, freq_array):
     # Hard-coded resolution-dependent critical exposures
     # These parameters come from the fitted numbers in the Grant and Grigorieff paper.
@@ -145,7 +215,9 @@ def deconvolve(
     highpass_nyquist=0.02,
     phase_flipped=False,
     phaseshift=0,
-    output_name=None,
+    output_file=None,
+    input_order="xyz",
+    output_order="xyz",
 ):
     """Deconvolution adapted from MATLAB script tom_deconv_tomo by D. Tegunov (https://github.com/dtegunov/tom_deconv)
     and adapted for the tilt series.
@@ -171,8 +243,12 @@ def deconvolve(
         whether the data are already phase-flipped. Defaults to False.
     phaseshift : int
         CTF phase shift in degrees (e. g. from a phase plate). Defaults to 0.
-    output_name : str
+    output_file : str
         Name of the output file for the deconvolved stack. Defaults to None (tilt stack will be not written).
+    input_order : str, default='xyz'
+        The order of axes in the input tilt stack. Defaults to xyz.
+    output_order : str, default='xyz'
+        The desired order of axes for the output tilt stacks. Defaults to xyz.
 
     Returns
     -------
@@ -180,17 +256,16 @@ def deconvolve(
         deconvolved tilt stack
 
     """
-    input_stack = cryomap.read(tilt_stack, transpose=False)
-    deconvolved_stack = np.zeros(input_stack.shape)
+    ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
     if not isinstance(defocus, (int, float)):
         defocus = ioutils.defocus_load(defocus, defocus_file_type)
         defocus = defocus["defocus_mean"].values
     else:
-        defocus = np.full((input_stack.shape[0],), defocus)
+        defocus = np.full((ts.data.n_tilts,), defocus)
 
-    for ts in range(input_stack.shape[0]):
-        tilt = input_stack[ts, :, :]
+    for ts in range(ts.n_tilts):
+        tilt = ts.data[ts, :, :]
         interp_dim = np.maximum(2048, tilt.shape[0])
 
         # Generate highpass filter
@@ -237,29 +312,55 @@ def deconvolve(
 
         ramp = ramp_interp(r.flatten()).reshape(r.shape)
         # Perform deconvolution
-        deconvolved_stack[ts, :, :] = np.real(np.fft.ifftn(np.fft.fftn(tilt) * ramp))
+        ts.data[ts, :, :] = np.real(np.fft.ifftn(np.fft.fftn(tilt) * ramp))
 
-    if output_name is not None:
-        cryomap.write(deconvolved_stack, output_name, data_type=np.single, transpose=False)
+    ts.write_out(output_file)
 
-    return deconvolved_stack
+    return ts.correct_order()
 
 
-def split_stack_even_odd(tilt_stack):
+def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz", output_order="xyz"):
+    """Splits a given tilt stack into even and odd stacks.
+
+    Parameters
+    ----------
+    tilt_stack : str or array_like
+        The input stack of tilt images specified by its filename (including the path) or as 3d numpy array.
+    output_file_prefix : str, optional
+        The prefix for the output filenames. If provided, the function will save the even and odd stacks as files with
+        this prefix followed by '_even.mrc' and '_odd.mrc', respectively.
+    input_order : str, default='xyz'
+        The order of axes in the input tilt stack. Defaults to xyz.
+    output_order : str, default='xyz'
+        The desired order of axes for the output tilt stacks. Defaults to xyz.
+
+    Returns
+    -------
+    tuple of ndarray
+        A tuple containing two arrays: the first array contains the even indexed tilts, and the second array contains
+        the odd indexed tilts, both reordered according to `output_order`.
+
+    """
+
+    ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
+
     even_stack = []
     odd_stack = []
 
     # For each tilt image in the stack
-    for i in range(0, tilt_stack.shape[2]):
+    for i in range(ts.n_tilts):
 
         # Split to even and odd by using modulo 2
         if i % 2 == 0:
-            even_stack.append(tilt_stack[:,:,i])
+            even_stack.append(ts.data[i, :, :])
         else:
-            odd_stack.append(tilt_stack[:,:,i])
+            odd_stack.append(ts.data[i, :, :])
 
-    # Stack separated tilts together into one volume
-    even_stack = np.stack(even_stack, axis=2)
-    odd_stack = np.stack(odd_stack, axis=2)
+    even_stack = np.stack(even_stack, axis=0)
+    odd_stack = np.stack(odd_stack, axis=0)
 
-    return even_stack, odd_stack
+    if output_file_prefix:
+        ts.write_out(output_file_prefix + "_even.mrc", new_data=even_stack)
+        ts.write_out(output_file_prefix + "_odd.mrc", new_data=odd_stack)
+
+    return ts.correct_order(even_stack), ts.correct_order(odd_stack)
