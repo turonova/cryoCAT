@@ -115,7 +115,7 @@ def equalize_histogram(
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
-    for z in ts.n_tilts:
+    for z in range(ts.n_tilts):
         if eh_method == "contrast_stretching":
             p2, p98 = np.percentile(ts.data[z, :, :], (2, 98))
             ts.data[z, :, :] = exposure.rescale_intensity(ts.data[z, :, :], in_range=(p2, p98))

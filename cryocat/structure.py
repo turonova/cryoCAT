@@ -568,7 +568,7 @@ class PleomorphicSurface:
                         continue
 
                     # Consider both intersection points (p1, p2) if they are not NaN
-                    distances = [p for p in [d1, d2] if not np.isnan(p)]
+                    distances = [p for p in [d1, d2] if not np.isnan(p) and p > 0]
 
                     for d in distances:
                         # Check if this distance is closer than the current closest

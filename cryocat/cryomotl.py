@@ -67,6 +67,19 @@ class Motl:
         else:
             self.df = Motl.create_empty_motl_df()
 
+    def __str__(self):
+
+        if self.df is not None:
+            descr = (
+                f"Number of particles: {self.df.shape[0]}\n"
+                + f"Number of tomograms: {self.df['tomo_id'].nunique()}\n"
+                + f"Number of objects: {self.df['object_id'].nunique()}\n"
+                + f"Number of classes: {self.df['class'].nunique()}"
+            )
+            return descr
+        else:
+            return "Motive list is empty."
+
     def adapt_to_trimming(self, trim_coord_start, trim_coord_end):
         """The adapt_to_trimming function takes in the trim_coord_start and trim_coord_end values, which are the
         coordinates used for trimming the tomogram, and changes particle coordinates to correspond to the trimmed
@@ -277,7 +290,7 @@ class Motl:
     ):
         """Cleans the motl by removing points that are within a specified radius of any point in a the provided dataframe
         with points.
-        
+
         Parameters
         ----------
         points : DataFrame
@@ -291,19 +304,19 @@ class Motl:
             If True, modifies the motl in place. If False, returns a new Motl object. Defaults to True.
         output_file : str or None, optional
             If specified, the cleaned Motl object will be written to this file. Defaults to None.
-        
+
         Returns
         -------
         Motl or None
             If inplace is False, returns a new Motl object containing the cleaned DataFrame. Otherwise, returns None.
-        
+
         Notes
         -----
         The function uses a KDTree for efficient spatial queries, which can significantly speed up the process of finding
         nearby points. The function assumes that the input motl and the points DataFrame have columns 'x', 'y', and 'z'
         that represent coordinates and also columns specified by feature_id.
         """
-        
+
         # Parse tomograms
         features = self.get_unique_values(feature_id)
 
@@ -1360,10 +1373,12 @@ class Motl:
                 int
             )  # TODO add possibility to create object based on other feature_id
             if np.any(class_v == 0):
-                class_v = class_v + 1 # increase class ID by 1, this prevents the function later to crash in case no classification has been run yet. Mind to revert class ID if necessary
-                #obj = pd.Series(np.arange(1,len(fm.df)+1,1))
-            #else:
-                #obj = class_v
+                class_v = (
+                    class_v + 1
+                )  # increase class ID by 1, this prevents the function later to crash in case no classification has been run yet. Mind to revert class ID if necessary
+                # obj = pd.Series(np.arange(1,len(fm.df)+1,1))
+            # else:
+            # obj = class_v
             dummy = pd.Series(np.repeat(1, len(fm.df)))
 
             pos_df = pd.concat([class_v, dummy, coord_df], axis=1)
