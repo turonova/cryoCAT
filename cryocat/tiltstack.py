@@ -100,7 +100,7 @@ def remove_tilts(
     return ts.correct_order()
 
 
-def bin(tilt_stack, binning_factor, output_file=None, input_order="xyz", output_order="xyz"):
+def bin(tilt_stack, binning_factor, output_file=None, input_order="zyx", output_order="zyx"):
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
     ts.data = downscale_local_mean(ts.data, (1, binning_factor, binning_factor))
