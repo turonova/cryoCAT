@@ -110,7 +110,7 @@ def bin(tilt_stack, binning_factor, output_file=None, input_order="xyz", output_
 
 
 def equalize_histogram(
-    tilt_stack, eh_method="contrast_stretching", output_file=None, input_order="xyz", output_order="xyz"
+    tilt_stack, eh_method="contrast_stretching", output_file=None, input_order="zyx", output_order="zyx"
 ):
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
