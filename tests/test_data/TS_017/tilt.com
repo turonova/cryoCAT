@@ -1,0 +1,19 @@
+$tilt -StandardInput
+InputProjections 017.ali
+OutputFile 017.rec
+IMAGEBINNED 1
+TILTFILE 017.tlt
+THICKNESS 1500
+RADIAL 0.35 0.035
+FalloffIsTrueSigma 1
+XAXISTILT 0.0
+LOG 0.0
+SCALE 0.0 250.0
+PERPENDICULAR
+Mode 2
+FULLIMAGE 4096 4096
+SUBSETSTART 0 0
+AdjustOrigin
+OFFSET 0.0
+SHIFT 0.0 0.0
+$if (-e ./savework) ./savework
