@@ -12,6 +12,7 @@ from cryocat import surfsamp
 from cryocat import geom
 from cryocat import cryomap
 from cryocat import cryomotl
+from cryocat import cryomask
 
 
 class SamplePoints:
@@ -659,7 +660,7 @@ class SamplePoints:
 
         mask_cvhull = mask_cvhullz + mask_cvhullx + mask_cvhully
         capmask_slice_cvhull = (
-            mask_cvhullz + mask_cvhullx + mask_cvhully > overlad_level
+            mask_cvhullz + mask_cvhullx + mask_cvhully + mask > overlad_level
         )
         mask_fill_cvhull = mask_cvhullz_fill + mask_cvhullx_fill + mask_cvhully_fill > 0
         return capmask_slice_cvhull, mask_cvhull, mask_fill_cvhull
@@ -701,7 +702,9 @@ class SamplePoints:
         return pro_mask.astype(float)
 
     @staticmethod
-    def marker_from_fill_mask(fill_mask, ero_radius=60, clos_radius=20, mode="None"):
+    def marker_from_fill_mask(
+        fill_mask, ero_radius=30, clos_radius=20, boundary_thickness=5
+    ):
         # TODO: including create marker from centroid
         """This function generates a marker for mask_fill_gap by performing erosion and closing operations on the mask.
 
@@ -710,11 +713,12 @@ class SamplePoints:
         fill_mask : ndarray
             The fill mask to process.
         ero_radius : int, optional
-            The radius for the erosion operation, by default 60.
+            The radius for the erosion operation, by default 30.
         clos_radius : int, optional
             The radius for the closing operation, by default 20.
-        mode : str, optional
-            The mode for the mask processing, by default 'None'.
+        boundary_thickness : int, optional
+            The thickness of boundary marker, by default 5 
+
 
         Returns
         -------
@@ -725,17 +729,16 @@ class SamplePoints:
         core_mark = (
             SamplePoints.process_mask(core_mark, clos_radius, mode="closing") * 2
         )
-        core_mark[0:, 0:, 0] = 1
-        core_mark[0, 0:, 0:] = 1
-        core_mark[0:, 0, 0:] = 1
-        core_mark[0:, -1, 0:] = 1
-        core_mark[-1, 0:, 0:] = 1
-        core_mark[0:, 0:, -1] = 1
-
+        core_mark[:boundary_thickness, :, :] = 1
+        core_mark[-boundary_thickness:, :, :] = 1
+        core_mark[:, :boundary_thickness, :] = 1
+        core_mark[:, -boundary_thickness:, :] = 1
+        core_mark[:, :, :boundary_thickness] = 1
+        core_mark[:, :, -boundary_thickness:] = 1
         return core_mark
 
     @staticmethod
-    def marker_from_centroid(mask, centroid_mark_size=2):
+    def marker_from_centroid(mask, centroid_mark_size=5, boundary_thickness=5):
         """This function generates a marker from the centroid of a given mask.
 
         Parameters
@@ -743,35 +746,33 @@ class SamplePoints:
         mask : ndarray
             The input mask from which the centroid is calculated.
         centroid_mark_size : int, optional
-            The size of the centroid marker, by default 2.
+            The radius of the sphere centroid marker, by default 5.
+        boundary_thickness : int, optional
+            The thickness of boundary marker, by default 5 
 
         Returns
         -------
         cent_mark : ndarray
-            The generated marker from the centroid of the mask. The marker is a 3D array with the same shape as the input mask. The centroid is marked with 2, and the edges of the array are marked with 1.
+            The generated marker from the centroid of the mask. The marker is a 3D array with the same shape as the input mask. The centroid is marked with a sphere with defined radius, and the edges of the array are marked with 1.
 
         Notes
         -----
-        The centroid is calculated using the centroid() function. The centroid marker is a cube with sides of length 2*centroid_mark_size centered at the centroid. The edges of the array are also marked.
+        The centroid is calculated using the centroid() function. The centroid marker is a sphere with radius of centroid_mark_size centered at the centroid. The edges of the array are also marked.
         """
         centroid = skimage.measure.centroid(mask)
         cent_mark = np.zeros(mask.shape)
-        cent_mark[
-            int(centroid[0])
-            - centroid_mark_size : int(centroid[0])
-            + centroid_mark_size,
-            int(centroid[1])
-            - centroid_mark_size : int(centroid[1])
-            + centroid_mark_size,
-            int(centroid[2])
-            - centroid_mark_size : int(centroid[2] + centroid_mark_size),
-        ] = 2
-        cent_mark[0:, 0:, 0] = 1
-        cent_mark[0, 0:, 0:] = 1
-        cent_mark[0:, 0, 0:] = 1
-        cent_mark[0:, -1, 0:] = 1
-        cent_mark[-1, 0:, 0:] = 1
-        cent_mark[0:, 0:, -1] = 1
+        cent_mark = (
+            cryomask.spherical_mask(
+                mask.shape, radius=centroid_mark_size, center=centroid
+            )
+            * 2
+        )
+        cent_mark[:boundary_thickness, :, :] = 1
+        cent_mark[-boundary_thickness:, :, :] = 1
+        cent_mark[:, :boundary_thickness, :] = 1
+        cent_mark[:, -boundary_thickness:, :] = 1
+        cent_mark[:, :, :boundary_thickness] = 1
+        cent_mark[:, :, -boundary_thickness:] = 1
         return cent_mark
 
     @staticmethod
@@ -794,19 +795,17 @@ class SamplePoints:
         -----
         The function performs a series of morphological operations on the input mask, including closing, dilation, erosion, and opening. It uses the watershed algorithm to segment the mask into different regions. The function then generates a capsule mask by performing a logical XOR operation on the dilated and eroded core mask.
         """
-        _, _, fill_mask = SamplePoints.slice_cvhull_closing(mask)
-        core_mark = SamplePoints.marker_from_fill_mask(fill_mask, ero_radius=marker_ero)
-        chull_mask_close = SamplePoints.process_mask(mask, 60, mode="closing")
-        chull_mask_dila = SamplePoints.process_mask(
-            chull_mask_close, 20, mode="dilation"
+        cap_mask, _, fill_mask = SamplePoints.slice_cvhull_closing(
+            mask, overlad_level=2, thickness_iter=15
         )
-        core_mask = watershed(chull_mask_dila, core_mark)
+        core_mark = SamplePoints.marker_from_fill_mask(fill_mask, ero_radius=marker_ero)
+        chull_mask_close = SamplePoints.process_mask(cap_mask, 20, mode="closing")
+        core_mask = watershed(chull_mask_close.astype(int), core_mark.astype(int))
         core_mask[core_mask == 1] = 0
         core_mask[core_mask == 2] = 1
 
         # dilating and erosing core mask to generate capsule mask
-        core_mask_op = SamplePoints.process_mask(core_mask, 50, mode="opening")
-        core_mask_dila = SamplePoints.process_mask(core_mask_op, 10, mode="dilation")
-        core_mask_eros = SamplePoints.process_mask(core_mask_op, 30, mode="erosion")
+        core_mask_dila = SamplePoints.process_mask(core_mask, 10, mode="dilation")
+        core_mask_eros = SamplePoints.process_mask(core_mask, 10, mode="erosion")
         capsule_mask = np.logical_xor(core_mask_dila, core_mask_eros)
-        return capsule_mask, core_mask_op
+        return capsule_mask, core_mask
