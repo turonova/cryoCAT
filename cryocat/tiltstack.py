@@ -85,16 +85,19 @@ def sort_tilts_by_angle(tilt_stack, input_tilts, output_file=None, input_order="
 
 
 def remove_tilts(
-    tilt_stack, idx_to_remove, numbered_from_1=True, output_file=None, input_order="xyz", output_order="xyz"
+    tilt_stack,
+    idx_to_remove,
+    numbered_from_1=True,
+    output_file=None,
+    input_order="xyz",
+    output_order="xyz",
 ):
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
-    idx_to_remove = np.asarray(idx_to_remove)
-    if numbered_from_1:
-        idx_to_remove = idx_to_remove - 1
+    idx_to_remove_final = ioutils.indices_load(idx_to_remove, numbered_from_1=numbered_from_1)
 
-    ts.data = np.delete(ts.data, idx_to_remove, axis=0)
+    ts.data = np.delete(ts.data, idx_to_remove_final, axis=0)
     ts.write_out(output_file)
 
     return ts.correct_order()

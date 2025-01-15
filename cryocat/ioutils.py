@@ -932,3 +932,121 @@ def dict_load(input_data):
         raise ValueError("The supported formats are dict or file in JSON format.")
 
     return dict_data
+
+
+def indices_load(input_data, numbered_from_1=True):
+    """Load indices from a specified input source.
+
+    Parameters
+    ----------
+    input_data : str, list, or numpy.ndarray
+        The input data can be a file path to a CSV file, a text file containing indices (one per line), or a list/array
+        of indices. If a CSV file is provided, it is expected to have a column named "ToBeRemoved".
+    numbered_from_1 : bool, default=True
+        If True, the returned indices will be adjusted to be zero-based (i.e., subtracting 1 from each index).
+        Defaults to True.
+
+    Returns
+    -------
+    numpy.ndarray
+        An array of indices, adjusted based on the input data and the numbered_from_1 flag.
+    """
+
+    if isinstance(input_data, str):
+        if input_data.endswith(".csv"):
+            df = pd.read_csv(input_data)
+            if "Removed" in df.columns:
+                df = df[~df["Removed"]]
+            indices = df.index[df["ToBeRemoved"]].to_numpy(dtype=int)
+            numbered_from_1 = False  # Always from 0
+        else:
+            indices = np.loadtxt(input_data, dtype=int)
+
+    else:
+        indices = np.asarray(input_data)
+
+    if numbered_from_1:
+        indices = indices - 1
+
+    return indices
+
+
+def indices_reset(input_data):
+    """Reset the indices of a CSV file by modifying specific columns.
+
+    Parameters
+    ----------
+    input_data : str
+        The path to the CSV file that needs to be processed.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    This function reads a CSV file into a DataFrame, checks for the presence of a "Removed" column,
+    and updates it based on the "ToBeRemoved" column. It then resets the "ToBeRemoved" column to
+    False and saves the modified DataFrame back to the original CSV file.
+    """
+
+    df = pd.read_csv(input_data)
+
+    if "Removed" in df.columns:
+        df.loc[df["ToBeRemoved"], "Removed"] = True
+
+    df["ToBeRemoved"] = False
+    df.to_csv(input_data, index=False)
+
+
+def defocus_remove_file_entries(
+    input_file, entries_to_remove, file_type="gctf", numbered_from_1=True, output_file=None
+):
+    """Remove specified entries from a file and optionally update a specification file.
+
+    Parameters
+    ----------
+    input_file : str
+        The path to the input file from which entries will be removed.
+    entries_to_remove : str, list, or numpy.ndarray
+        The entries to remove can be specified as a file path to a CSV file, a text file containing indices
+        (one per line), or a list/array of indices. If a CSV file is provided, it is expected to have a column
+        named "ToBeRemoved".
+    file_type : str, default="gctf"
+        The type of the input file. Can be "gctf" or "ctffind4". Defaults to "gctf".
+    numbered_from_1 : bool=True
+        Indicates whether the entries in `entries_to_remove` are numbered from 1. Defaults to True.
+    output_file : str, optional
+        The path to the output file where the modified content will be saved. If None, the input_file will be overwritten.
+        Defaults to None.
+
+    Returns
+    -------
+    None
+        The function modifies the input file and/or creates an output file as specified.
+
+    Notes
+    -----
+    - The function handles two file types: "gctf" and "ctffind4", applying different methods for removing lines based
+    on the file type.
+    - The `indices_load` and `indices_reset` functions are used to manage the indices of entries to be removed and to
+    reset them if necessary.
+    """
+
+    lines_to_remove = indices_load(entries_to_remove, numbered_from_1=numbered_from_1)
+
+    if output_file is None:
+        output_file = input_file
+
+    if file_type.lower() == "gctf":
+        sf.Starfile.remove_lines(
+            input_file,
+            lines_to_remove,
+            output_file=output_file,
+            data_specifier="data_",
+            number_columns=True,
+        )
+    elif file_type.lower() == "ctffind4":
+        _ = remove_lines(input_file, lines_to_remove, start_str_to_skip=["#"], output_file=output_file)
+    else:
+        print(f"The defocus filetype {file_type} is not supported and thus will not be cleaned.")
