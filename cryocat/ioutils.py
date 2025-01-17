@@ -64,11 +64,18 @@ def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
     list
         A list of filenames that match the given prefix and suffix criteria.
 
+    Raises
+    -------
+    ValueError
+        If file does not exist or if specified from file_path is not readable
+
     Examples
     --------
     >>> get_files_prefix_suffix('/path/to/dir', prefix='test', suffix='.txt')
     ['test_file1.txt', 'test_file2.txt']
     """
+    if not os.path.exists(dir_path):
+        raise ValueError(f"the directory '{dir_path}' does not exist.")
 
     matching_files = []
     for filename in os.listdir(dir_path):
@@ -123,11 +130,13 @@ def is_float(value):
     >>> is_float("hello")
     False
     """
+    if isinstance(value, bool): #float(True) == 1.0, but we don't accept bool as valid
+        return False
 
     try:
         float(value)
         return True
-    except ValueError:
+    except (TypeError, ValueError):
         return False
 
 
@@ -249,12 +258,14 @@ def get_data_from_warp_xml(xml_file_path, node_name, node_level=1):
     ------
     Exception
         If there is an error reading the XML file.
-
+    Value Error
+        If node_level isn't 1 or 2
     Examples
     --------
     >>> data = get_data_from_warp_xml('path/to/xml/file.xml', 'GridCTF', node_level=2)
     """
-
+    if node_level not in [1, 2]:
+        raise ValueError(f"node_level can't be {node_level}, must be 1 or 2.")
     try:
         # Parse the XML file
         tree = ET.parse(xml_file_path)
@@ -441,9 +452,22 @@ def one_value_per_line_read(file_path, data_type=np.float32):
     -------
     numpy.ndarray
         A ndarray with values of the type data_type.
-    """
 
-    data_df = pd.read_csv(file_path, header=None, dtype=data_type, delim_whitespace=True)
+    Raises
+    -------
+    ValueError
+        If file does not exist or if specified from file_path is not readable
+    """
+    if not os.path.isfile(file_path):
+        raise ValueError("The input file does not exist")
+
+    try:
+        data_df = pd.read_csv(file_path, header=None, dtype=data_type, delim_whitespace=True)
+        if data_df.empty:
+            raise ValueError("The input file is empty or contains no valid data.")
+    except pd.errors.EmptyDataError:
+        raise ValueError("The input file is empty or contains no valid data.")
+
     return data_df.iloc[:, 0].values
 
 
@@ -488,7 +512,7 @@ def total_dose_load(input_dose, sort_mdoc=True):
                 else:
                     return df["CorrectedDose"].astype(np.single).to_numpy()
             else:
-                ValueError(f"The file {input_dose} does not contain column with name CorrectedDose")
+                raise ValueError(f"The file {input_dose} does not contain column with name CorrectedDose")
         elif input_dose.endswith(".mdoc"):
             # load as mdoc
             mdoc_file = mdoc.Mdoc(input_dose)
@@ -559,7 +583,15 @@ def rot_angles_load(input_angles, angles_order="zxz"):
     """
 
     if isinstance(input_angles, str):
+        # Not all strings are valid: file can not exist
+        if not os.path.exists(input_angles):
+            raise ValueError(f"File '{input_angles}' does not exist.")
+
         angles = pd.read_csv(input_angles, header=None)
+        # Check valid data
+        if len(angles.columns) != 3:
+            raise ValueError(f"File '{input_angles}' does not contain valid data.")
+
         if angles_order == "zzx":
             angles.columns = ["phi", "psi", "theta"]
         else:
@@ -619,7 +651,7 @@ def tlt_load(input_tlt, sort_angles=True):
 
         return tilts
     else:
-        ValueError("Error: the dose has to be either ndarray or path to csv, mdoc, or tlt file!")
+        raise ValueError("Error: the dose has to be either ndarray or path to csv, mdoc, or tlt file!")
 
 
 def dimensions_load(input_dims, tomo_idx=None):
@@ -647,7 +679,7 @@ def dimensions_load(input_dims, tomo_idx=None):
     Raises
     ------
     ValueError
-        If the dimensions do not conform to the expected shapes of 1x3 or Nx4.
+        If the dimensions do not conform to the expected shapes of 1x3 or Nx4 or if file does not exist.
 
     Notes
     -----
@@ -670,6 +702,8 @@ def dimensions_load(input_dims, tomo_idx=None):
         else:
             if os.path.isfile(input_dims):
                 dimensions = pd.read_csv(input_dims, sep="\s+", header=None, dtype=float)
+            else:
+                raise ValueError(f"The file at the path {input_dims} does not exist.")
     elif isinstance(input_dims, list):
         dimensions = pd.DataFrame(np.reshape(np.asarray(input_dims), (1, len(input_dims))))
     else:  # isinstance(input_dims, np.ndarray):
@@ -720,10 +754,12 @@ def z_shift_load(input_shift):
     Raises
     ------
     ValueError
-        Wrong size of the input.
+        Wrong size of the input, unsupported input type, or not existing filepath.
 
     """
-
+    if not isinstance(input_shift, (str, pd.DataFrame, float, int, list, np.ndarray)):
+        raise ValueError(
+            f"Unsupported input type: {type(input_shift)}. Expected str, DataFrame, float, int, list, or np.ndarray.")
     if isinstance(input_shift, pd.DataFrame):
         z_shift = input_shift
     elif isinstance(input_shift, str):
@@ -733,6 +769,8 @@ def z_shift_load(input_shift):
         else:
             if os.path.isfile(input_shift):
                 z_shift = pd.read_csv(input_shift, sep="\s+", header=None, dtype=float)
+            else:
+                raise ValueError(f"File {input_shift} does not exist.")
     elif isinstance(input_shift, (float, int)):
         z_shift = pd.DataFrame([input_shift])
     else:
@@ -823,7 +861,8 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
     """
 
     filtered_lines = []
-
+    if isinstance(lines_to_remove, int):
+        lines_to_remove = [lines_to_remove]
     if start_str_to_skip is None:
         start_str_to_skip = []
     elif not isinstance(start_str_to_skip, list):
