@@ -1,5 +1,7 @@
-from cryocat import cryomap
+import os
+import re
 import numpy as np
+from cryocat import cryomap
 from cryocat import ioutils
 from skimage.transform import downscale_local_mean
 from skimage import exposure
@@ -11,8 +13,18 @@ class TiltStack:
 
         if not isinstance(tilt_stack, np.ndarray):  # if loading necessary, load in zyx
             self.data = cryomap.read(tilt_stack, transpose=False)
+            if self.data.shape == 2:
+                self.data = np.expand_dims(
+                    self.data, axis=0
+                )  # ensure that it will always have three dimensions, for z=1 mrc returns 2d array
         else:
             self.data = tilt_stack.copy()
+            if self.data.shape == 2:
+                if input_order == "xyz":
+                    self.data = np.expand_dims(self.data, axis=2)  # ensure that it will always have three dimensions
+                else:
+                    self.data = np.expand_dims(self.data, axis=0)  # ensure that it will always have three dimensions
+
             if input_order == "xyz":
                 self.data = self.data.transpose(2, 1, 0)
 
@@ -56,9 +68,10 @@ def crop(tilt_stack, new_width=None, new_height=None, output_file=None, input_or
     output_file : str, optional
         The file path where the cropped tilt stack will be saved. If None, the output is not saved. Defaults to None.
     input_order : str, default='xyz'
-        The order of the input data dimensions. Defaults to 'xyz'.
+        The order of the input data dimensions. Relevant only if tilt_stack in numpy.ndarray. Defaults to 'xyz'.
     output_order : str, default='xyz'
-        The order of the output data dimensions. Defaults to 'xyz'.
+        The order of the output data dimensions. It does not influence order for writing the stack out, just of the
+        returned array. Defaults to 'xyz'.
 
     Returns
     -------
@@ -106,9 +119,10 @@ def sort_tilts_by_angle(tilt_stack, input_tilts, output_file=None, input_order="
     output_file : str, optional
         The file path where the sorted tilt data will be saved. If None, the data will not be saved. Defaults to None.
     input_order : str, default='xyz'
-        The order of the input data dimensions. Defaults to 'xyz'.
+        The order of the input data dimensions. Relevant only if tilt_stack in numpy.ndarray. Defaults to 'xyz'.
     output_order : str, default='xyz'
-        The order of the output data dimensions. Defaults to 'xyz'.
+        The order of the output data dimensions. It does not influence order for writing the stack out, just of the
+        returned array. Defaults to 'xyz'.
 
     Returns
     -------
@@ -154,9 +168,10 @@ def remove_tilts(
     output_file : str, optional
         The file path where the modified tilt stack will be saved. If None, the result is not saved.  Defaults to None.
     input_order : str, default='xyz'
-        The order of the input data dimensions. Defaults to 'xyz'.
+        The order of the input data dimensions. Relevant only if tilt_stack in numpy.ndarray. Defaults to 'xyz'.
     output_order : str, default='xyz'
-        The order of the output data dimensions. Defaults to 'xyz'.
+        The order of the output data dimensions. It does not influence order for writing the stack out, just of the
+        returned array. Defaults to 'xyz'.
 
     Returns
     -------
@@ -190,9 +205,10 @@ def bin(tilt_stack, binning_factor, output_file=None, input_order="xyz", output_
     output_file : str, optional
         The file path to save the binned tilt stack. If None, the output will not be saved. Defaults to None.
     input_order : str, default='xyz'
-        The order of the input data dimensions. Defaults to 'xyz'.
+        The order of the input data dimensions. Relevant only if tilt_stack in numpy.ndarray. Defaults to 'xyz'.
     output_order : str, default='xyz'
-        The order of the output data dimensions. Defaults to 'xyz'.
+        The order of the output data dimensions. It does not influence order for writing the stack out, just of the
+        returned array. Defaults to 'xyz'.
 
     Returns
     -------
@@ -231,9 +247,10 @@ def equalize_histogram(
     output_file : str, optional
         The file path where the output data will be saved. If None, the data will not be saved. Defaults to None.
     input_order : str, default='xyz'
-        The order of the input data dimensions. Defaults to 'xyz'.
+        The order of the input data dimensions. Relevant only if tilt_stack in numpy.ndarray. Defaults to 'xyz'.
     output_order : str, default='xyz'
-        The order of the output data dimensions. Defaults to 'xyz'.
+        The order of the output data dimensions. It does not influence order for writing the stack out, just of the
+        returned array. Defaults to 'xyz'.
 
     Returns
     -------
@@ -340,9 +357,10 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_orde
     output_file : str, optional
         The file path to save the filtered tilt stack. If None, the output will not be saved. Defaults to None.
     input_order : str, default='xyz'
-        The order of the input data dimensions. Defaults to 'xyz'.
+        The order of the input data dimensions. Relevant only if tilt_stack in numpy.ndarray. Defaults to 'xyz'.
     output_order : str, default='xyz'
-        The order of the output data dimensions. Defaults to 'xyz'.
+        The order of the output data dimensions. It does not influence order for writing the stack out, just of the
+        returned array. Defaults to 'xyz'.
 
     Returns
     -------
@@ -468,14 +486,15 @@ def deconvolve(
         Name of the output file for the deconvolved stack. Defaults to None (tilt stack will be not written).  Defaults
         to None.
     input_order : str, default='xyz'
-        The order of the input data dimensions. Defaults to 'xyz'.
+        The order of the input data dimensions. Relevant only if tilt_stack in numpy.ndarray. Defaults to 'xyz'.
     output_order : str, default='xyz'
-        The order of the output data dimensions. Defaults to 'xyz'.
+        The order of the output data dimensions. It does not influence order for writing the stack out, just of the
+        returned array. Defaults to 'xyz'.
 
     Returns
     -------
     deconvolved_stack : numpy.ndarray
-        deconvolved tilt stack
+        Deconvolved tilt stack data.
 
     """
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
@@ -486,8 +505,8 @@ def deconvolve(
     else:
         defocus = np.full((ts.data.n_tilts,), defocus)
 
-    for ts in range(ts.n_tilts):
-        tilt = ts.data[ts, :, :]
+    for z in range(ts.n_tilts):
+        tilt = ts.data[z, :, :]
         interp_dim = np.maximum(2048, tilt.shape[0])
 
         # Generate highpass filter
@@ -506,7 +525,7 @@ def deconvolve(
             pixel_size_a * 1e-10,
             300e3,
             2.7e-3,
-            -defocus[ts] * 1e-6,
+            -defocus[z] * 1e-6,
             0.07,
             phaseshift / 180 * np.pi,
             0,
@@ -534,7 +553,7 @@ def deconvolve(
 
         ramp = ramp_interp(r.flatten()).reshape(r.shape)
         # Perform deconvolution
-        ts.data[ts, :, :] = np.real(np.fft.ifftn(np.fft.fftn(tilt) * ramp))
+        ts.data[z, :, :] = np.real(np.fft.ifftn(np.fft.fftn(tilt) * ramp))
 
     ts.write_out(output_file)
 
@@ -552,9 +571,10 @@ def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz",
         The prefix for the output filenames. If provided, the function will save the even and odd stacks as files with
         this prefix followed by '_even.mrc' and '_odd.mrc', respectively. Defaults to None.
     input_order : str, default='xyz'
-        The order of the input data dimensions. Defaults to 'xyz'.
+        The order of the input data dimensions. Relevant only if tilt_stack in numpy.ndarray. Defaults to 'xyz'.
     output_order : str, default='xyz'
-        The order of the output data dimensions. Defaults to 'xyz'.
+        The order of the output data dimensions. It does not influence order for writing the stack out, just of the
+        returned array. Defaults to 'xyz'.
 
     Returns
     -------
@@ -586,3 +606,107 @@ def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz",
         ts.write_out(output_file_prefix + "_odd.mrc", new_data=odd_stack)
 
     return ts.correct_order(even_stack), ts.correct_order(odd_stack)
+
+
+def merge(file_path_pattern, output_file=None, output_order="xyz"):
+    """Merge multiple files matching a given pattern into a single stack.
+
+    Parameters
+    ----------
+    file_path_pattern : str
+        A pattern for file paths to match files that will be merged. This can include wildcards, i.e. tilt.mrc* will
+        load all files from given folder that start with tilt.mrc followed by numbering such as tilt.mrc001, tilt.mrc2
+        etc.
+    output_file : str, optional
+        The path to the output file where the merged stack will be saved. If None, the stack will not be saved to a file.
+        Defaults to None.
+    output_order : str, default='xyz'
+        The order of the output data dimensions. It does not influence order for writing the stack out, just of the
+        returned array. Defaults to 'xyz'.
+
+    Returns
+    -------
+    TiltStack
+        A TiltStack object containing the merged data in the specified output order.
+
+    Notes
+    -----
+    This function retrieves all files matching the specified pattern, sorts them, and then merges their contents into a
+    single stack. The resulting stack is saved to the specified output file if provided. Since the data are always
+    loaded first (having always 'zyx' order), the input_order is irrelevant and thus not required.
+
+    Examples
+    --------
+    >>> merged_stack = merge("data/*.mrc", output_file="merged_output.mrc", output_order="xyz")
+    """
+
+    files, wildcards = ioutils.get_all_files_matching_pattern(file_path_pattern)
+    sorted_files = ioutils.sort_files_by_idx(files, wildcards, order="ascending")
+
+    all_stacks = []
+
+    for sf in sorted_files:
+        ts = TiltStack(sf, input_order="zyx", output_order=output_order)
+        all_stacks.append(ts.data)
+
+    final_stack = np.concatenate(all_stacks, axis=0)
+    final_ts = TiltStack(final_stack, input_order="zyx", output_order=output_order)
+
+    final_ts.write_out(output_file)
+
+    return final_ts.correct_order()
+
+
+def flip_along_axes(tilt_stack, axes, output_file=None, input_order="xyz", output_order="xyz"):
+    """Flip the tilt stack along specified axes and optionally save the result to a file.
+
+    Parameters
+    ----------
+    tilt_stack : str or array-like
+        The input tilt stack data to be flipped along one or more axes.
+    axes : list of str
+        The axes along which to flip the tilt stack. Acceptable values are 'x', 'y', and 'z'.
+    output_file : str, optional
+        The file path to save the flipped tilt stack. If None, the result is not saved. Defaults to None.
+    input_order : str, default='xyz'
+        The order of the input data dimensions. Relevant only if tilt_stack in numpy.ndarray. Defaults to 'xyz'.
+    output_order : str, default='xyz'
+        The order of the output data dimensions. It does not influence order for writing the stack out, just of the
+        returned array. Defaults to 'xyz'.
+
+    Returns
+    -------
+    numpy.ndarray
+        The flipped tilt stack data in the specified output order.
+
+    Raises
+    ------
+    ValueError
+        If the axes contains different values than 'x','y','z'.
+
+    Notes
+    -----
+    The flipping correspond to IMOD's 'clip' function with options flipx, flipy, flipz. If multiple axes are specified
+    it correspond to concatenation of those IMOD operations. For example, axes=['x','y'] will correspond to calling
+    clip flipx input.mrc output_x.mrc and subsequently clip flipy ouput_x.mrc output_y.mrc. This is not equivalent to
+    the result of calling clip flipxy input.mrc output.mrc!
+    """
+
+    ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
+
+    if not isinstance(axes, list):
+        axes = [axes]
+
+    for a in axes:
+        if a == "x":
+            ts.data = ts.data[:, ::-1, :]
+        elif a == "y":
+            ts.data = ts.data[:, :, ::-1]
+        elif a == "z":
+            ts.data = ts.data[::-1, :, :]
+        else:
+            raise ValueError(f"The axes can be 'x', 'y', or 'z'. Provided axis {a} not supported.")
+
+    ts.write_out(output_file)
+
+    return ts.correct_order()

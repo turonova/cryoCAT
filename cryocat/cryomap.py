@@ -1,6 +1,7 @@
 import h5py
 import emfile
 import mrcfile
+import re
 import numpy as np
 from numpy import fft
 from scipy.ndimage import affine_transform
@@ -399,12 +400,12 @@ def read(input_map, transpose=True, data_type=None):
     """
 
     if isinstance(input_map, str):
-        if (
-            input_map.endswith(".mrc")
-            or input_map.endswith(".rec")
-            or input_map.endswith(".st")
-            or input_map.endswith(".ali")
-        ):
+
+        def valid_mrc(filename):
+            pattern = r"\.(mrc|ali|rec|st)(\.\d+)?$"
+            return bool(re.search(pattern, filename))
+
+        if valid_mrc(input_map):
             data = mrcfile.open(input_map).data
         elif input_map.endswith(".em"):
             data = emfile.read(input_map)[1]

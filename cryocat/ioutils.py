@@ -45,6 +45,115 @@ def get_file_encoding(file_path):
         raise UnicodeEncodeError(f"Failed to read file {file_path} with any of the tried encodings.")
 
 
+def get_all_files_matching_pattern(filename_pattern, numeric_wildcards_only=False, return_wildcards=True):
+    """Get all files in a directory that match a specified filename pattern.
+
+    Parameters
+    ----------
+    filename_pattern : str
+        The pattern to match filenames against, which can include wildcards.
+    numeric_wildcards_only : bool, default=False
+        If True, only files with numeric wildcard parts will be included. Defaults to False.
+    return_wildcards : bool, default=True
+        If True, the function returns a tuple of (file_names, wildcards). If False, only file_names are returned.
+        Defaults to True.
+
+    Returns
+    -------
+    list
+        A list of file paths that match the given pattern. If return_wildcards is True,
+        a tuple of (file_names, wildcards) is returned, where wildcards are the parts of the filenames that
+        matched the wildcard in the pattern.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the specified directory does not exist.
+
+    Notes
+    -----
+    The function uses regular expressions to match the filenames against the provided pattern. The '*' character
+    in the pattern is treated as a wildcard that can match any sequence of characters.
+    """
+
+    # Split the pattern into directory and base name
+    dir_name, base_pattern = os.path.split(filename_pattern)
+    dir_name = dir_name or "."  # Use current directory if none provided
+
+    # Escape the base pattern and replace '*' with a regex group
+    pattern_regex = re.escape(base_pattern).replace(r"\*", r"(.*)")
+
+    # List all files in the directory
+    try:
+        files_in_dir = os.listdir(dir_name)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Directory '{dir_name}' does not exist.")
+
+    # Match files against the pattern regex
+    wildcards = []
+    file_names = []
+
+    for file_name in files_in_dir:
+        full_path = os.path.join(dir_name, file_name)
+        if os.path.isfile(full_path):
+            match = re.match(pattern_regex, file_name)
+            if match:
+                wildcard_part = match.group(1)  # Extract the wildcard portion
+                if numeric_wildcards_only:
+                    try:
+                        _ = int(wildcard_part)  # Try to convert the wildcard part to a number
+                        file_names.append(full_path)
+                        wildcards.append(wildcard_part)
+                    except ValueError:
+                        print(f"File {file_name} does not have numeric id and will be skipped.")
+                else:
+                    wildcards.append(wildcard_part)
+                    file_names.append(full_path)
+
+    if return_wildcards:
+        return file_names, wildcards
+    else:
+        return file_names
+
+
+def sort_files_by_idx(file_list, idx_list, order="ascending"):
+    """Sorts a list of files based on corresponding indices.
+
+    Parameters
+    ----------
+    file_list : list of str
+        A list of file names to be sorted.
+    idx_list : list of str
+        A list of indices as strings corresponding to the file names.
+    order : str, default='ascending'
+        The order in which to sort the files. Can be 'ascending' or 'descending'.
+        Defaults to 'ascending'.
+
+    Returns
+    -------
+    numpy.ndarray
+        An array of file names sorted according to the specified order of indices.
+
+    Examples
+    --------
+    >>> sort_files_by_idx(['file1.txt', 'file2.txt', 'file3.txt'], ['2', '1', '3'])
+    array(['file2.txt', 'file1.txt', 'file3.txt'])
+
+    >>> sort_files_by_idx(['file1.txt', 'file2.txt', 'file3.txt'], ['2', '1', '3'], order='descending')
+    array(['file3.txt', 'file1.txt', 'file2.txt'])
+    """
+
+    int_array = np.array([int(s) for s in idx_list])
+    sorted_indices = np.argsort(int_array)
+
+    if order == "descending":
+        sorted_indices = sorted_indices[::-1]
+
+    file_array = np.array(file_list)
+
+    return file_array[sorted_indices]
+
+
 def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
     """Retrieve files from a specified directory that start with a given prefix and end with a given suffix.
 
@@ -130,7 +239,7 @@ def is_float(value):
     >>> is_float("hello")
     False
     """
-    if isinstance(value, bool): #float(True) == 1.0, but we don't accept bool as valid
+    if isinstance(value, bool):  # float(True) == 1.0, but we don't accept bool as valid
         return False
 
     try:
@@ -640,7 +749,7 @@ def tlt_load(input_tlt, sort_angles=True):
         else:
             return input_tlt
     elif isinstance(input_tlt, list):
-        if len(input_tlt)==0:
+        if len(input_tlt) == 0:
             raise ValueError(f"The input tilt data is empty")
         else:
             return np.asarray(input_tlt)
@@ -766,7 +875,8 @@ def z_shift_load(input_shift):
     """
     if not isinstance(input_shift, (str, pd.DataFrame, float, int, list, np.ndarray)):
         raise ValueError(
-            f"Unsupported input type: {type(input_shift)}. Expected str, DataFrame, float, int, list, or np.ndarray.")
+            f"Unsupported input type: {type(input_shift)}. Expected str, DataFrame, float, int, list, or np.ndarray."
+        )
     if isinstance(input_shift, pd.DataFrame):
         z_shift = input_shift
     elif isinstance(input_shift, str):
