@@ -1933,6 +1933,12 @@ def test_tlt_load():
     with pytest.raises(ValueError):
         tlt_load(32) #invalid input format
 
+    #passing an empty nparray should raise an exception
+    with pytest.raises(ValueError):
+        tlt_load(np.asarray([]))
+    with pytest.raises(ValueError):
+        tlt_load([])
+
 def test_dict_write():
     current_dir = Path(__file__).parent / "test_data" / "TS_018"
     file_path = current_dir / "dict_test.json"

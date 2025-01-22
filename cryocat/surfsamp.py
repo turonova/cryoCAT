@@ -24,6 +24,7 @@ class SamplePoints:
         self.area = None
         self.shape_list = None
         self.shape_mask = None
+        self.sample_distance = None
 
     @classmethod
     def load(cls, shape_input):
@@ -80,10 +81,12 @@ class SamplePoints:
                 self.shape_mask, step_size=sampling_distance
             )
             self.area = skimage.measure.mesh_surface_area(self.vertices, self.faces)
+            self.sample_distance = sampling_distance
         elif self.shape_list is not None:
             self.vertices, self.normals, self.faces, self.area = (
                 SamplePoints.get_oversampling(self.shape_list, sampling_distance)
             )
+            self.sample_distance = sampling_distance
 
     def write(self, path):
         """Writes the vertices and normals to a motl_list.
@@ -339,8 +342,10 @@ class SamplePoints:
         """
         clean_motl_list = motl
         coord = motl.get_coordinates()
+        # angles = motl.get_angles()
         rotation = motl.get_rotations()
         # transfer from euler angle to normal vector
+        # motl_z_vector = geom.euler_angles_to_normals(angles)
         motl_z_vector = rotation.apply(normal_vector)
         # searching for the closest point to motl_points
         kdtree = KDTree(self.vertices)
@@ -400,7 +405,7 @@ class SamplePoints:
             distances = np.sqrt((cross_vec * cross_vec).sum(axis=1)) / np.sqrt(
                 line_vec.dot(line_vec)
             )
-            is_dist_small = distances <= 2
+            is_dist_small = distances <= self.sample_distance * 2
             # figure if the intersect of point to line is within the line segment
             in_prod = np.inner(vertices - coord, line_vec)
             # calculate distance of crossing starting from coord
@@ -717,7 +722,7 @@ class SamplePoints:
         clos_radius : int, optional
             The radius for the closing operation, by default 20.
         boundary_thickness : int, optional
-            The thickness of boundary marker, by default 5 
+            The thickness of boundary marker, by default 5
 
 
         Returns
@@ -748,7 +753,7 @@ class SamplePoints:
         centroid_mark_size : int, optional
             The radius of the sphere centroid marker, by default 5.
         boundary_thickness : int, optional
-            The thickness of boundary marker, by default 5 
+            The thickness of boundary marker, by default 5
 
         Returns
         -------

@@ -21,6 +21,8 @@ def check_data_consistency(data1, data2, data_type1, data_type2):
 
     Raises
     ------
+    TypeError
+        If data1 or data2 isn't numpy.ndarray type.
     ValueError
         If the number of entries in data1 is different from the number of entries in data2.
 
@@ -29,8 +31,13 @@ def check_data_consistency(data1, data2, data_type1, data_type2):
     None
         This function does not return anything.
     """
+    if not isinstance(data1, np.ndarray):
+        raise TypeError(f"Expected np.ndarray but got {type(data1)} for {data_type1} file.")
+    if not isinstance(data2, np.ndarray):
+        raise TypeError(f"Expected np.ndarray but got {type(data2)} for {data_type2} file.")
 
-    if data1.shape[0] != data2.shape[0]:
+    #Check entire shape of both nparrays: could have same number of rows but different number of other dimensions
+    if data1.shape != data2.shape:
         raise ValueError(f"The {data_type1} file has different number of entries than the {data_type2} file!")
 
 
