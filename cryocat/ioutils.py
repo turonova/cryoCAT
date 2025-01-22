@@ -1012,8 +1012,8 @@ def defocus_remove_file_entries(
         The entries to remove can be specified as a file path to a CSV file, a text file containing indices
         (one per line), or a list/array of indices. If a CSV file is provided, it is expected to have a column
         named "ToBeRemoved".
-    file_type : str, default="gctf"
-        The type of the input file. Can be "gctf" or "ctffind4". Defaults to "gctf".
+    file_type : str, default='gctf'
+        The type of the input file. Can be 'gctf' or "ctffind4'. Defaults to 'gctf'.
     numbered_from_1 : bool=True
         Indicates whether the entries in `entries_to_remove` are numbered from 1. Defaults to True.
     output_file : str, optional
@@ -1027,10 +1027,9 @@ def defocus_remove_file_entries(
 
     Notes
     -----
-    - The function handles two file types: "gctf" and "ctffind4", applying different methods for removing lines based
-    on the file type.
-    - The `indices_load` and `indices_reset` functions are used to manage the indices of entries to be removed and to
-    reset them if necessary.
+    The function handles two file types: 'gctf' and 'ctffind4', applying different methods for removing lines based
+    on the file type. The `indices_load` and `indices_reset` functions are used to manage the indices of entries to be
+    removed and to reset them if necessary.
     """
 
     lines_to_remove = indices_load(entries_to_remove, numbered_from_1=numbered_from_1)

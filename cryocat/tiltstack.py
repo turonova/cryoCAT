@@ -1,12 +1,8 @@
 from cryocat import cryomap
 import numpy as np
-import pandas as pd
-from cryocat import mdoc
 from cryocat import ioutils
 from skimage.transform import downscale_local_mean
 from skimage import exposure
-import warnings
-from functools import wraps
 
 
 class TiltStack:
@@ -47,6 +43,33 @@ class TiltStack:
 
 
 def crop(tilt_stack, new_width=None, new_height=None, output_file=None, input_order="xyz", output_order="xyz"):
+    """Crop a tilt stack to a specified width and height, and optionally save the result to a file.
+
+    Parameters
+    ----------
+    tilt_stack : str or array-like
+        The input tilt stack data to be cropped specified either as a path or array-like data.
+    new_width : int, optional
+        The desired width of the cropped output. If None, the original width is used. Defaults to None.
+    new_height : int, optional
+        The desired height of the cropped output. If None, the original height is used. Defaults to None.
+    output_file : str, optional
+        The file path where the cropped tilt stack will be saved. If None, the output is not saved. Defaults to None.
+    input_order : str, default='xyz'
+        The order of the input data dimensions. Defaults to 'xyz'.
+    output_order : str, default='xyz'
+        The order of the output data dimensions. Defaults to 'xyz'.
+
+    Returns
+    -------
+    numpy.ndarray
+        Numpy 3D array with tilt stack data in the desired order.
+
+    Notes
+    -----
+    The cropping is performed around the center of the original tilt stack. The function modifies the tilt stack in
+    place and saves the cropped data if an output file is specified.
+    """
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
@@ -72,6 +95,32 @@ def crop(tilt_stack, new_width=None, new_height=None, output_file=None, input_or
 
 
 def sort_tilts_by_angle(tilt_stack, input_tilts, output_file=None, input_order="xyz", output_order="xyz"):
+    """Sorts a stack of tilts by their angles and optionally writes the sorted data to a file.
+
+    Parameters
+    ----------
+    tilt_stack : str or array-like
+        The input tilt stack data to be sorted specified either as a path or array-like data.
+    input_tilts : str or array-like
+        The file path to the input tilt angles. See `ioutils.tlt_load` function for more info.
+    output_file : str, optional
+        The file path where the sorted tilt data will be saved. If None, the data will not be saved. Defaults to None.
+    input_order : str, default='xyz'
+        The order of the input data dimensions. Defaults to 'xyz'.
+    output_order : str, default='xyz'
+        The order of the output data dimensions. Defaults to 'xyz'.
+
+    Returns
+    -------
+    numpy.ndarray
+        Numpy 3D array with tilt stack data in the desired order.
+
+    Notes
+    -----
+    The function loads tilt angles from the specified input file, sorts the tilt stack based on these angles,
+    and writes the sorted data to the specified output file if provided. The input and output orders can be
+    specified to accommodate different needs.
+    """
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
@@ -92,6 +141,32 @@ def remove_tilts(
     input_order="xyz",
     output_order="xyz",
 ):
+    """Remove specified tilts from a tilt stack and optionally save the result to a file.
+
+    Parameters
+    ----------
+    tilt_stack : str or array-like
+        The input tilt stack data from which tilts will be removed.
+    idx_to_remove : array-like
+        Indices of the tilts to remove. If `numbered_from_1` is True, the indices are 1-based.
+    numbered_from_1 : bool, defaults=True
+        If True, the indices in `idx_to_remove` are considered to be 1-based. Defaults to True.
+    output_file : str, optional
+        The file path where the modified tilt stack will be saved. If None, the result is not saved.  Defaults to None.
+    input_order : str, default='xyz'
+        The order of the input data dimensions. Defaults to 'xyz'.
+    output_order : str, default='xyz'
+        The order of the output data dimensions. Defaults to 'xyz'.
+
+    Returns
+    -------
+    numpy.ndarray
+        Numpy 3D array with tilt stack data with the specified tilts removed.
+
+    Notes
+    -----
+    This function modifies the tilt stack in place and can save the result to a specified output file.
+    """
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
@@ -103,7 +178,33 @@ def remove_tilts(
     return ts.correct_order()
 
 
-def bin(tilt_stack, binning_factor, output_file=None, input_order="zyx", output_order="zyx"):
+def bin(tilt_stack, binning_factor, output_file=None, input_order="xyz", output_order="xyz"):
+    """Binning of a tilt stack using local mean downscaling.
+
+    Parameters
+    ----------
+    tilt_stack : str or array-like
+        The input tilt stack data to be binned.
+    binning_factor : int
+        The factor by which to downscale the tilt stack.
+    output_file : str, optional
+        The file path to save the binned tilt stack. If None, the output will not be saved. Defaults to None.
+    input_order : str, default='xyz'
+        The order of the input data dimensions. Defaults to 'xyz'.
+    output_order : str, default='xyz'
+        The order of the output data dimensions. Defaults to 'xyz'.
+
+    Returns
+    -------
+    numpy.ndarray
+        Numpy 3D array with tilt stack binned data in the specified output order.
+
+    Notes
+    -----
+    This function utilizes local mean downscaling to reduce the size of the tilt stack
+    by the specified binning factor. The output can be saved to a file if an output
+    file path is provided.
+    """
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
     ts.data = downscale_local_mean(ts.data, (1, binning_factor, binning_factor))
@@ -113,8 +214,37 @@ def bin(tilt_stack, binning_factor, output_file=None, input_order="zyx", output_
 
 
 def equalize_histogram(
-    tilt_stack, eh_method="contrast_stretching", output_file=None, input_order="zyx", output_order="zyx"
+    tilt_stack, eh_method="contrast_stretching", output_file=None, input_order="xyz", output_order="xyz"
 ):
+    """Equalizes the histogram of a tilt stack using specified methods.
+
+    Parameters
+    ----------
+    tilt_stack : str or array-like
+        The input tilt stack data to be processed.
+    eh_method : str, default='contrast_stretching'
+        The method used for histogram equalization. Options are:
+        - 'contrast_stretching': Applies contrast stretching.
+        - 'equalization': Applies standard histogram equalization.
+        - 'adaptive_eq': Applies adaptive histogram equalization.
+        Defaults to 'contrast_stretching'.
+    output_file : str, optional
+        The file path where the output data will be saved. If None, the data will not be saved. Defaults to None.
+    input_order : str, default='xyz'
+        The order of the input data dimensions. Defaults to 'xyz'.
+    output_order : str, default='xyz'
+        The order of the output data dimensions. Defaults to 'xyz'.
+
+    Returns
+    -------
+    numpy.ndarray
+        Numpy 3D array with tilt stack data with equalized histograms.
+
+    Raises
+    ------
+    ValueError
+        If an unknown histogram equalization method is specified.
+    """
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
@@ -137,6 +267,30 @@ def equalize_histogram(
 
 
 def calculate_total_dose_batch(tomo_list, prior_dose_file_format, dose_per_image, output_file_format):
+    """Calculate the total dose for a batch of tilt series and save the results to output files.
+
+    Parameters
+    ----------
+    tomo_list : str or array-like
+        A list of tilt series to be processed.
+    prior_dose_file_format : str
+        The file format string for the prior dose files, which should include a placeholder for the tilt series identifier.
+    dose_per_image : float
+        The dose value to be applied per image in the tilt series.
+    output_file_format : str
+        The file format string for the output files, which should include a placeholder for the tilt series identifier.
+
+    Returns
+    -------
+    None
+        The function saves the total dose results to files specified by the output_file_format.
+
+    Notes
+    -----
+    The function uses the `ioutils` module to load the tilt series list and replace patterns in file names.
+    The total dose is calculated using the `calculate_total_dose` function and results are saved using `numpy.savetxt`.
+    """
+
     tomograms = ioutils.tlt_load(tomo_list).astype(int)
 
     for t in tomograms:
@@ -147,6 +301,25 @@ def calculate_total_dose_batch(tomo_list, prior_dose_file_format, dose_per_image
 
 
 def calculate_total_dose(prior_dose, dose_per_image):
+    """Calculate the total dose by adding a prior dose to a dose per image.
+
+    Parameters
+    ----------
+    prior_dose : float
+        The prior dose value to be loaded.
+    dose_per_image : float
+        The dose value to be added per image.
+
+    Returns
+    -------
+    float
+        The total dose calculated as the sum of the prior dose and the dose per image.
+
+    Notes
+    -----
+    This function utilizes the `ioutils.total_dose_load` method to process the prior dose before calculation.
+    """
+
     prior_dose = ioutils.total_dose_load(prior_dose)
     total_dose = prior_dose + dose_per_image
 
@@ -154,12 +327,33 @@ def calculate_total_dose(prior_dose, dose_per_image):
 
 
 def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_order="xyz", output_order="xyz"):
-    # Input: mrc_file or path to it
-    #        pixelsize: float, in Angstroms
-    #        total_dose: ndarray or path to the .csv, .txt, or .mdoc file
-    #        return_data_order: by default x y z (x,y,n_tilts), for napari compatible view use "zyx"
+    """Apply a dose filter to a tilt stack of images.
 
-    # temporarily here until this function exist as an entry point on command line
+    Parameters
+    ----------
+    tilt_stack : str or array-like
+        The input tilt stack data containing the images to be filtered.
+    pixel_size : float
+        The size of a pixel in the same units as the tilt stack.
+    total_dose : str or array_like
+        The total dose for each tilt image in the stack specified either by a file path or directly as an array.
+    output_file : str, optional
+        The file path to save the filtered tilt stack. If None, the output will not be saved. Defaults to None.
+    input_order : str, default='xyz'
+        The order of the input data dimensions. Defaults to 'xyz'.
+    output_order : str, default='xyz'
+        The order of the output data dimensions. Defaults to 'xyz'.
+
+    Returns
+    -------
+    numpy.ndarray
+        Numpy 3D array with tilt stack data with the dose filter applied.
+
+    Notes
+    -----
+    This function calculates a frequency array based on the pixel size and applies a dose filter to each image in the
+    tilt stack. The filtered images are then saved to the specified output file if provided.
+    """
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
     pixel_size = float(pixel_size)
@@ -190,6 +384,28 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_orde
 
 
 def dose_filter_single_image(image, dose, freq_array):
+    """Filter a single image based on dose and frequency array using Fourier transform.
+
+    Parameters
+    ----------
+    image : ndarray
+        The input image to be filtered, represented as a 2D array.
+    dose : float
+        The dose value used to calculate the exposure-dependent amplitude attenuator.
+    freq_array : ndarray
+        The frequency array corresponding to the image, used in the calculation of the attenuator.
+
+    Returns
+    -------
+    numpy.ndarray
+        The filtered image, represented as a 2D array, with the same shape as the input image.
+
+    Notes
+    -----
+    This function applies a frequency-dependent attenuation based on the dose, using parameters derived from
+    the Grant and Grigorieff paper. The Fourier transform is utilized to perform the filtering in the frequency domain.
+    """
+
     # Hard-coded resolution-dependent critical exposures
     # These parameters come from the fitted numbers in the Grant and Grigorieff paper.
     a = 0.245
@@ -217,7 +433,7 @@ def deconvolve(
     deconv_strength=1.0,
     highpass_nyquist=0.02,
     phase_flipped=False,
-    phaseshift=0,
+    phaseshift=0.0,
     output_file=None,
     input_order="xyz",
     output_order="xyz",
@@ -228,34 +444,37 @@ def deconvolve(
 
     Parameters
     ----------
-    tilt_stack : np.array or string
-        tilt stack
+    tilt_stack : str or array-like
+        The input tilt stack data to be deconvolved.
     pixel_size_a : float
-        pixel size in Angstroms
+        Pixel size in Angstroms.
     defocus : float, int, str or array-like
-        defocus in micrometers, positive = underfocus, or file from CTF estimation
-    defocus_file_type : str, default=gctf
-        in case the defocus is specified as a file, the type of the file has to be specified (ctffind4, gctf, warp)
-    snr_falloff : float
-        how fast does SNR fall off, i. e. higher values will downweight high frequencies; values like 1.0 or 1.2 seem reasonable
-    deconv_strength : float
-        how much will the signal be deconvoluted overall, i. e. a global scale for SNR; exponential scale: 1.0 is SNR = 1000 at zero frequency, 0.67 is SNR = 100, and so on
-    highpass_nyquist : float
-        fraction of Nyquist frequency to be cut off on the lower end (since it will be boosted the most)
-    phase_flipped : bool
-        whether the data are already phase-flipped. Defaults to False.
-    phaseshift : int
+        Defocus in micrometers, positive = underfocus, or file from CTF estimation.
+    defocus_file_type : str, default='gctf'
+        In case the defocus is specified as a file, the type of the file has to be specified (ctffind4, gctf, warp).
+    snr_falloff : float, default=1.2
+        How fast does SNR fall off, i. e. higher values will downweight high frequencies; values like 1.0 or 1.2 seem
+        reasonable. Defaults to 1.2.
+    deconv_strength : float, default=1.0
+        How much will the signal be deconvoluted overall, i. e. a global scale for SNR; exponential scale: 1.0 is
+        SNR = 1000 at zero frequency, 0.67 is SNR = 100, and so on. Defaults to 1.0.
+    highpass_nyquist : float, default=0.02
+        Fraction of Nyquist frequency to be cut off on the lower end (since it will be boosted the most). Defaults to 0.02.
+    phase_flipped : bool, default=False
+        Whether the data are already phase-flipped. Defaults to False.
+    phaseshift : float, default=0
         CTF phase shift in degrees (e. g. from a phase plate). Defaults to 0.
-    output_file : str
-        Name of the output file for the deconvolved stack. Defaults to None (tilt stack will be not written).
+    output_file : str, optional
+        Name of the output file for the deconvolved stack. Defaults to None (tilt stack will be not written).  Defaults
+        to None.
     input_order : str, default='xyz'
-        The order of axes in the input tilt stack. Defaults to xyz.
+        The order of the input data dimensions. Defaults to 'xyz'.
     output_order : str, default='xyz'
-        The desired order of axes for the output tilt stacks. Defaults to xyz.
+        The order of the output data dimensions. Defaults to 'xyz'.
 
     Returns
     -------
-    deconvolved_stack : np.array
+    deconvolved_stack : numpy.ndarray
         deconvolved tilt stack
 
     """
@@ -327,19 +546,19 @@ def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz",
 
     Parameters
     ----------
-    tilt_stack : str or array_like
-        The input stack of tilt images specified by its filename (including the path) or as 3d numpy array.
+    tilt_stack : str or array-like
+        The input tilt stack data specified by its filename (including the path) or as 3d numpy array.
     output_file_prefix : str, optional
         The prefix for the output filenames. If provided, the function will save the even and odd stacks as files with
-        this prefix followed by '_even.mrc' and '_odd.mrc', respectively.
+        this prefix followed by '_even.mrc' and '_odd.mrc', respectively. Defaults to None.
     input_order : str, default='xyz'
-        The order of axes in the input tilt stack. Defaults to xyz.
+        The order of the input data dimensions. Defaults to 'xyz'.
     output_order : str, default='xyz'
-        The desired order of axes for the output tilt stacks. Defaults to xyz.
+        The order of the output data dimensions. Defaults to 'xyz'.
 
     Returns
     -------
-    tuple of ndarray
+    tuple of numpy.ndarray
         A tuple containing two arrays: the first array contains the even indexed tilts, and the second array contains
         the odd indexed tilts, both reordered according to `output_order`.
 
