@@ -630,13 +630,20 @@ def tlt_load(input_tlt, sort_angles=True):
     ------
     ValueError
         If the input_tlt is neither a numpy array nor a valid file path.
+        If the input_tlt is an empty numpy array or an empty list.
 
     """
 
     if isinstance(input_tlt, np.ndarray):
-        return input_tlt
+        if input_tlt.size == 0:
+            raise ValueError(f"The input tilt data is empty!")
+        else:
+            return input_tlt
     elif isinstance(input_tlt, list):
-        return np.asarray(input_tlt)
+        if len(input_tlt)==0:
+            raise ValueError(f"The input tilt data is empty")
+        else:
+            return np.asarray(input_tlt)
     elif isinstance(input_tlt, str):
         if input_tlt.endswith(".mdoc"):
             tilt_data = mdoc.Mdoc(input_tlt)
