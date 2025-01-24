@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import os
 import math
 from scipy.interpolate import InterpolatedUnivariateSpline
+from scipy.interpolate import splprep, splev
 
 ANGLE_DEGREES_TOL = 10e-12
 
@@ -13,18 +14,14 @@ ANGLE_DEGREES_TOL = 10e-12
 def project_points_on_plane_with_preserved_distance(starting_point, normal, nn_points):
 
     # Compute the projection of each neighbor point onto the plane defined by the starting point and normal vector
-    projection_lengths = np.dot(nn_points - starting_point, normal) / np.linalg.norm(
-        normal
-    )
+    projection_lengths = np.dot(nn_points - starting_point, normal) / np.linalg.norm(normal)
     projected_points = nn_points - np.outer(projection_lengths, normal)
 
     # Compute the distances between the neighbor points and the starting point
     distances_to_starting_point = np.linalg.norm(nn_points - starting_point, axis=1)
 
     # Compute the distances between the projected points and the starting point
-    distances_to_projected_point = np.linalg.norm(
-        projected_points - starting_point, axis=1
-    )
+    distances_to_projected_point = np.linalg.norm(projected_points - starting_point, axis=1)
 
     # Compute the adjustment vectors
     adjustment_vectors = projected_points - starting_point
@@ -32,8 +29,7 @@ def project_points_on_plane_with_preserved_distance(starting_point, normal, nn_p
     # Compute the shifted points
     shifted_points = (
         starting_point
-        + adjustment_vectors
-        * (distances_to_starting_point / distances_to_projected_point)[:, np.newaxis]
+        + adjustment_vectors * (distances_to_starting_point / distances_to_projected_point)[:, np.newaxis]
     )
 
     # distances_to_projected_point = np.linalg.norm(shifted_points - starting_point, axis=1)
@@ -63,9 +59,7 @@ def align_points_to_xy_plane(points_on_plane, plane_normal=None):
     axis = np.cross(normal, z_axis)
     axis = axis / np.linalg.norm(axis)
     angle = np.arccos(np.dot(normal, z_axis))
-    rotation_matrix = srot.from_rotvec(
-        angle * axis
-    ).as_matrix()  # Construct rotation matrix
+    rotation_matrix = srot.from_rotvec(angle * axis).as_matrix()  # Construct rotation matrix
 
     # Apply rotation matrix to all points
     rotated_points = np.dot(rotation_matrix, points_on_plane.T).T
@@ -75,87 +69,6 @@ def align_points_to_xy_plane(points_on_plane, plane_normal=None):
     return rotated_points, rotation_matrix
 
 
-def load_dimensions(dims):
-    """Loads tomogram dimensions from a file or nd.array.
-
-    Parameters
-    ----------
-    dims : str
-        Either a path to a file with the dimensions or nd.array. The shape of the input should
-        be 1x3 (x y z) in case of one tomogram or Nx4 for multiple tomograms (tomo_id x y z). In case of file the
-        separator is a space.
-
-    Returns
-    -------
-    nd.array
-        Dimensions of a tomogram in x, y, z (shape 1x3) or tomogram idx and corresponding dimensions
-        (shape Nx4 where N is the number of tomograms)
-
-    Raises
-    ------
-    UserInputError
-        Wrong size of the input.
-
-    """
-
-    # if os.path.isfile(dims):
-    #     dimensions = pd.read_csv(dims, sep="\s+", header=None, dtype=float)
-    if isinstance(dims, pd.DataFrame):
-        dimensions = dims
-    else:
-        dimensions = pd.DataFrame(dims)
-
-    if dimensions.shape == (1,3):
-        dimensions.columns = ["x", "y", "z"]
-    elif dimensions.shape[1] == 4:
-        dimensions.columns = ["tomo_id", "x", "y", "z"]
-    else:
-        raise UserInputError(
-            f"The dimensions should have shape of 1x3 or Nx4, where N is number of tomograms."
-            f"Instead following shape was specified: {dimensions.shape}."
-        )
-
-    return dimensions
-
-
-def load_angles(input_angles, angles_order="zxz"):
-    """_summary_
-
-    Parameters
-    ----------
-    input_angles : _type_
-        _description_
-
-    Returns
-    -------
-    _type_
-        _description_
-
-    Raises
-    ------
-    ValueError
-        _description_
-
-    """
-    if isinstance(input_angles, str):
-        angles = pd.read_csv(input_angles, header=None)
-        if angles_order == "zzx":
-            angles.columns = ["phi", "psi", "theta"]
-        else:
-            angles.columns = ["phi", "theta", "psi"]
-
-        angles = angles.loc[:, ["phi", "theta", "psi"]].to_numpy()
-
-    elif isinstance(input_angles, np.ndarray):
-        angles = input_angles.copy()
-    else:
-        raise ValueError(
-            "The input_angles have to be either a valid path to a file or numpy array!!!"
-        )
-
-    return angles
-
-
 def spline_sampling(coords, sampling_distance):
     # Samples a spline specified by coordinates with a given sampling distance
     # Input:  coords - coordinates of the spline
@@ -163,9 +76,7 @@ def spline_sampling(coords, sampling_distance):
     # Output: coordinates of points on the spline
 
     # spline = UnivariateSpline(np.arange(0, len(coords), 1), coords.to_numpy())
-    spline = InterpolatedUnivariateSpline(
-        np.arange(0, len(coords), 1), coords.to_numpy()
-    )
+    spline = InterpolatedUnivariateSpline(np.arange(0, len(coords), 1), coords.to_numpy())
 
     # Keep track of steps across whole tube
     totalsteps = 0
@@ -220,9 +131,7 @@ def compare_rotations(angles1, angles2, c_symmetry=1, rotation_type="all"):
     """
 
     dist_degrees = angular_distance(angles1, angles2, c_symmetry=c_symmetry)[0]
-    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(
-        angles1, angles2, c_symmetry=c_symmetry
-    )
+    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(angles1, angles2, c_symmetry=c_symmetry)
 
     if rotation_type == "all":
         return dist_degrees, dist_degrees_normals, dist_degrees_inplane
@@ -278,15 +187,11 @@ def normals_to_euler_angles(input_normals, output_order="zzx"):
     elif isinstance(input_normals, np.ndarray):
         normals = input_normals
     else:
-        raise UserInputError(
-            "The input_normals have to be either pandas dataFrame or numpy array"
-        )
+        raise UserInputError("The input_normals have to be either pandas dataFrame or numpy array")
 
     # normalize vectors
     normals = normals / np.linalg.norm(normals, axis=1)[:, np.newaxis]
-    theta = np.degrees(
-        np.arctan2(np.sqrt(normals[:, 0] ** 2 + normals[:, 1] ** 2), normals[:, 2])
-    )
+    theta = np.degrees(np.arctan2(np.sqrt(normals[:, 0] ** 2 + normals[:, 1] ** 2), normals[:, 2]))
 
     psi = 90 + np.degrees(np.arctan2(normals[:, 1], normals[:, 0]))
     b_idx = np.where(np.arctan2(normals[:, 1], normals[:, 0]) == 0)
@@ -357,22 +262,43 @@ def cone_distance(input_rot1, input_rot2):
     vec1 = vec1 / vec1_n[:, np.newaxis]
     vec2_n = np.linalg.norm(vec2, axis=1)
     vec2 = vec2 / vec2_n[:, np.newaxis]
-    cone_angle = np.degrees(
-        np.arccos(np.maximum(np.minimum(np.sum(vec1 * vec2, axis=1), 1.0), -1.0))
-    )
+    cone_angle = np.degrees(np.arccos(np.maximum(np.minimum(np.sum(vec1 * vec2, axis=1), 1.0), -1.0)))
 
     return cone_angle
 
 
-def inplane_distance(
-    input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1
-):
+def get_axis_from_rotation(input_rotation, axis="z"):
+
+    matrix_rep = input_rotation.as_matrix()
+
+    axes_dict = {"x": 0, "y": 1, "z": 2}
+
+    if matrix_rep.shape == (3, 3):  # Single (3, 3) matrix
+        ret_axis = matrix_rep[:, axes_dict[axis]]  # Extract column 1 for a single matrix
+    elif matrix_rep.shape[1:] == (3, 3):  # Multiple (N, 3, 3) matrices
+        ret_axis = matrix_rep[:, :, axes_dict[axis]]  # Extract column 1 for each (N, 3, 3) matrix
+    else:
+        raise ValueError("Input must be valid scipy rotation object.")
+
+    return ret_axis
+
+
+def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
+
+    """
+    y_axis1 = get_axis_from_rotation(input_rot1, axis="y")
+    y_axis2 = get_axis_from_rotation(input_rot2, axis="y")
+
+    inplane_angle = angle_between_n_vectors(y_axis1, y_axis2)
+
+    return inplane_angle
+    """
     phi1 = np.array(input_rot1.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
     phi2 = np.array(input_rot2.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
 
     # Remove flot precision errors during conversion
-    phi1 = np.where(phi1 < ANGLE_DEGREES_TOL, 0.0, phi1)
-    phi2 = np.where(phi2 < ANGLE_DEGREES_TOL, 0.0, phi2)
+    phi1 = np.where(abs(phi1) < ANGLE_DEGREES_TOL, 0.0, phi1)
+    phi2 = np.where(abs(phi2) < ANGLE_DEGREES_TOL, 0.0, phi2)
 
     # From Scipy the phi is from [-180,180] -> change to [0.0,360]
     phi1 += 180.0
@@ -386,16 +312,13 @@ def inplane_distance(
 
     inplane_angle = np.abs(phi1 - phi2)
 
-    inplane_angle = np.where(
-        inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle
-    )
+    inplane_angle = np.where(inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle)
 
     return inplane_angle
+    
 
 
-def cone_inplane_distance(
-    input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1
-):
+def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
     if isinstance(input_rot1, np.ndarray):
         rot1 = srot.from_euler(convention, input_rot1, degrees=degrees)
     else:
@@ -412,9 +335,7 @@ def cone_inplane_distance(
     return cone_angle, inplane_angle
 
 
-def angular_distance(
-    input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1
-):
+def angular_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
     # Computes angular distance between 2 quaternions or two sets of Euler
     # angles with ZXZ convention. Formula is based on this post
     # https://math.stackexchange.com/questions/90081/quaternion-distance
@@ -537,9 +458,7 @@ def generate_angles(
 
     if starting_angles is not None:
         starting_rot = srot.from_euler("zxz", angles=starting_angles, degrees=True)
-        cone_rotations = (
-            starting_rot * cone_rotations
-        )  # swapped order w.r.t. the quat_mult in matlab!
+        cone_rotations = starting_rot * cone_rotations  # swapped order w.r.t. the quat_mult in matlab!
         starting_phi = starting_angles[0]
 
     cone_angles = cone_rotations.as_euler("zxz", degrees=True)
@@ -634,9 +553,7 @@ def compute_pairwise_angles(angles1, angles2, coord1, coord2, axis="z"):
     angles2 = np.atleast_2d(angles2)
     rot_angles1 = srot.from_euler("zxz", angles=angles1, degrees=True)
 
-    angles_ref_to_zero = -angles1[
-        :, [2, 1, 0]
-    ]  # swap psi and theta -> ["psi", "theta", "phi"]
+    angles_ref_to_zero = -angles1[:, [2, 1, 0]]  # swap psi and theta -> ["psi", "theta", "phi"]
     rot_to_zero = srot.from_euler("zxz", angles=angles_ref_to_zero, degrees=True)
 
     angles2_as_rotations = srot.from_euler("zxz", angles=angles2, degrees=True)
@@ -652,9 +569,7 @@ def compute_pairwise_angles(angles1, angles2, coord1, coord2, axis="z"):
     elif axis.endswith("z"):
         vector = [0, 0, 1]
     else:
-        raise UserInputError(
-            f"Invalid axis epcification: {axis}. Allowed inputs are x, -x, y, -y, z, -z!"
-        )
+        raise UserInputError(f"Invalid axis epcification: {axis}. Allowed inputs are x, -x, y, -y, z, -z!")
 
     if axis.startswith("-"):
         vector = vector * -1
@@ -671,6 +586,7 @@ def compute_pairwise_angles(angles1, angles2, coord1, coord2, axis="z"):
 
 
 def visualize_angles(angles, plot_rotations=True, color_map=None):
+
     rotations = srot.from_euler("zxz", angles=angles, degrees=True)
     new_points = visualize_rotations(rotations, plot_rotations, color_map)
 
@@ -678,6 +594,34 @@ def visualize_angles(angles, plot_rotations=True, color_map=None):
 
 
 def fill_ellipsoid(box_size, ellipsoid_parameters):
+    """Fills a 3D space defined by `box_size` with a boolean mask where an ellipsoid defined by `ellipsoid_parameters`
+    is located.
+
+    Parameters
+    ----------
+    box_size : int or array_like
+        Size of the box in which the ellipsoid will be placed. If an integer is provided, it is
+        interpreted as the size for all three dimensions. If a tuple or list is provided, it should contain
+        three integers defining the dimensions of the box.
+    ellipsoid_parameters : array_like
+        Coefficients for the general ellipsoid equation:
+        Ax^2 + By^2 + Cz^2 + 2Dxy + 2Exz + 2Fyz + 2Gx + 2Hy + 2Iz + J = 0
+        Should contain ten elements corresponding to A, B, C, D, E, F, G, H, I, J respectively.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 3D boolean array where True values represent the points inside or on the surface of the ellipsoid.
+
+    Examples
+    --------
+    >>> box_size = 10
+    >>> ellipsoid_parameters = (1, 1, 1, 0, 0, 0, 0, 0, 0, -100)
+    >>> mask = fill_ellipsoid(box_size, ellipsoid_parameters)
+    >>> mask.shape
+    (10, 10, 10)
+    """
+
     # Ax^2 + By^2 + Cz^2 + 2Dxy + 2Exz + 2Fyz + 2Gx + 2Hy + 2Iz + J = 0
 
     if isinstance(box_size, int):
@@ -709,9 +653,45 @@ def fill_ellipsoid(box_size, ellipsoid_parameters):
     return mask
 
 
-# http://www.mathworks.com/matlabcentral/fileexchange/24693-ellipsoid-fit
-# for arbitrary axes
 def fit_ellipsoid(coord):
+    """Fit an ellipsoid to a set of 3D coordinates. It is based on
+    http://www.mathworks.com/matlabcentral/fileexchange/24693-ellipsoid-fit
+
+    Parameters
+    ----------
+    coord : ndarray
+        An array of shape (N, 3) where each row represents the x, y, z coordinates.
+
+    Returns
+    -------
+    center : ndarray
+        The center of the ellipsoid (x, y, z coordinates).
+    radii : ndarray
+        Radii of the ellipsoid along the principal axes.
+    evecs : ndarray
+        The eigenvectors corresponding to the principal axes of the ellipsoid.
+    v : ndarray
+        The 1D array of the ellipsoid parameters used to form the quadratic form.
+
+    Notes
+    -----
+    This function fits an ellipsoid to a set of points by solving a linear least squares problem to estimate the
+    parameters of the ellipsoid's equation in its algebraic form.
+
+    Examples
+    --------
+    >>> points = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    >>> center, radii, evecs, _ = fit_ellipsoid(points)
+    >>> center
+    array([x_center, y_center, z_center])
+    >>> radii
+    array([radius_x, radius_y, radius_z])
+    >>> evecs
+    array([[evec1_x, evec1_y, evec1_z],
+           [evec2_x, evec2_y, evec2_z],
+           [evec3_x, evec3_y, evec3_z]])
+    """
+
     x = coord[:, 0]
     y = coord[:, 1]
     z = coord[:, 2]
@@ -760,6 +740,28 @@ def fit_ellipsoid(coord):
 
 
 def point_pairwise_dist(coord_1, coord_2):
+    """Calculate the pairwise Euclidean distance between two sets of coordinates.
+
+    Parameters
+    ----------
+    coord_1 : ndarray
+        An array of shape (N, D) where N is the number of points and D is the dimensionality of each point.
+        If N=1, the single point is broadcasted to match the number of points in coord_2.
+    coord_2 : ndarray
+        An array of shape (M, D) where M is the number of points and D is the dimensionality of each point. If coord_1
+        has N>1, then M has to be equal to N.
+
+    Returns
+    -------
+    pairwise_dist : ndarray
+        An array of shape (max(N, M),) containing the Euclidean distances between each pair of points from coord_1
+        and coord_2.
+
+    Notes
+    -----
+    If the input arrays have complex numbers, the distance calculation defaults to 0.0 for those pairs.
+    """
+
     if coord_1.shape[0] == 1 and coord_2.shape[0] != 1:
         coord_1 = np.tile(coord_1, (coord_2.shape[0], 1))
 
@@ -773,15 +775,123 @@ def point_pairwise_dist(coord_1, coord_2):
     return pairwise_dist
 
 
-# cite https://stackoverflow.com/questions/71346322/numpy-area-of-triangle-and-equation-of-a-plane-on-which-triangle-lies-on
 def area_triangle(coords):
+    """Calculate the area of a triangle given its vertex coordinates. See
+    https://stackoverflow.com/questions/71346322/numpy-area-of-triangle-and-equation-of-a-plane-on-which-triangle-lies-on
+
+    Parameters
+    ----------
+    coords : ndarray
+        An array of shape (3, 3) where each row represents a vertex of the triangle, and each vertex is given by three
+        coordinates (x, y, z).
+
+    Returns
+    -------
+    float
+        The area of the triangle.
+
+    Examples
+    --------
+    >>> coords = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    >>> area_triangle(coords)
+    0.5
+    """
+
     # The cross product of two sides is a normal vector
     triangles = np.cross(coords[:, 1] - coords[:, 0], coords[:, 2] - coords[:, 0])
     # The norm of the cross product of two sides is twice the area
     return np.linalg.norm(triangles) / 2
 
 
+def ray_ellipsoid_intersection_3d(point, normal, ellipsoid_params):
+
+    # Extract line parameters
+    x, y, z = point[0], point[1], point[2]
+    n1, n2, n3 = normal[0], normal[1], normal[2]
+
+    # Extract ellipsoid parameters
+    a, b, c, d, e, f, g, h, i, j = ellipsoid_params
+
+    # Calculate coefficients A, B, C for the quadratic equation
+    A = a * n1**2 + b * n2**2 + c * n3**2 + 2 * d * n1 * n2 + 2 * e * n1 * n3 + 2 * f * n3 * n2
+    B = 2 * (
+        a * x * n1
+        + b * y * n2
+        + c * z * n3
+        + d * x * n2
+        + d * y * n1
+        + e * x * n3
+        + e * z * n1
+        + f * z * n2
+        + f * y * n3
+        + g * n1
+        + h * n2
+        + i * n3
+    )
+    C = j + a * x**2 + b * y**2 + c * z**2 + 2 * (i * z + h * y + g * x + d * x * y + e * x * z + f * z * y)
+
+    # Discriminant
+    D = B**2 - 4 * A * C
+
+    # Initialize results
+    p1, p2 = None, None
+    is_inside = False
+
+    if D < 0:  # No intersection
+        p1, p2 = np.nan, np.nan
+        d1, d2 = np.nan, np.nan
+    elif D == 0:  # One intersection point
+        t1 = -B / (2 * A)
+        p1 = point + t1 * normal
+        d1 = np.linalg.norm(p1 - point, axis=1)
+        p2 = np.nan
+        d2 = np.nan
+    else:  # Two intersection points
+        t1 = (-B + np.sqrt(D)) / (2 * A)
+        t2 = (-B - np.sqrt(D)) / (2 * A)
+
+        p1 = point + t1 * normal
+        p2 = point + t2 * normal
+
+        ps = np.column_stack((p1, p2))
+        distances = np.linalg.norm(ps.T - point, axis=1)
+        pi = np.argmin(distances)
+
+        p1 = ps[:, pi]
+        p2 = ps[:, 1 - pi]
+        d1 = distances[pi]
+        d2 = distances[1 - pi]
+
+        if np.sign(t1) != np.sign(t2):
+            is_inside = True
+
+    return p1, p2, d1, d2, is_inside
+
+
 def ray_ray_intersection_3d(starting_points, ending_points):
+    """Calculate the intersection point and distances from the intersection to each line for a set of 3D rays.
+
+    Parameters
+    ----------
+    starting_points : ndarray
+        An array of shape (N, 3) representing the starting points of N lines in 3D space.
+    ending_points : ndarray
+        An array of shape (N, 3) representing the ending points of N lines in 3D space.
+
+    Returns
+    -------
+    P_intersect : ndarray
+        A 1D array of shape (3,) containing the coordinates of the intersection point.
+    distances : ndarray
+        A 1D array of shape (N,) containing the distances from the intersection point to each line.
+
+    Notes
+    -----
+    This function assumes that all lines are somewhat close to intersecting at a common point and uses a least squares
+    approach to find the best intersection point. The function may not be suitable for parallel lines or lines that
+    do not converge.
+    """
+
     # N lines described as vectors
     Si = ending_points - starting_points
 
@@ -802,19 +912,13 @@ def ray_ray_intersection_3d(starting_points, ending_points):
     S = np.array([[SXX, SXY, SXZ], [SXY, SYY, SYZ], [SXZ, SYZ, SZZ]])
 
     CX = np.sum(
-        starting_points[:, 0] * (nx**2 - 1)
-        + starting_points[:, 1] * (nx * ny)
-        + starting_points[:, 2] * (nx * nz)
+        starting_points[:, 0] * (nx**2 - 1) + starting_points[:, 1] * (nx * ny) + starting_points[:, 2] * (nx * nz)
     )
     CY = np.sum(
-        starting_points[:, 0] * (nx * ny)
-        + starting_points[:, 1] * (ny**2 - 1)
-        + starting_points[:, 2] * (ny * nz)
+        starting_points[:, 0] * (nx * ny) + starting_points[:, 1] * (ny**2 - 1) + starting_points[:, 2] * (ny * nz)
     )
     CZ = np.sum(
-        starting_points[:, 0] * (nx * nz)
-        + starting_points[:, 1] * (ny * nz)
-        + starting_points[:, 2] * (nz**2 - 1)
+        starting_points[:, 0] * (nx * nz) + starting_points[:, 1] * (ny * nz) + starting_points[:, 2] * (nz**2 - 1)
     )
 
     C = np.array([CX, CY, CZ])
@@ -825,28 +929,275 @@ def ray_ray_intersection_3d(starting_points, ending_points):
     distances = np.zeros(starting_points.shape[0])
 
     for i in range(starting_points.shape[0]):
-        ui = np.dot(P_intersect - starting_points[i, :], Si[i, :]) / np.dot(
-            Si[i, :], Si[i, :]
-        )
-        distances[i] = np.linalg.norm(
-            P_intersect - starting_points[i, :] - ui * Si[i, :]
-        )
+        ui = np.dot(P_intersect - starting_points[i, :], Si[i, :]) / np.dot(Si[i, :], Si[i, :])
+        distances[i] = np.linalg.norm(P_intersect - starting_points[i, :] - ui * Si[i, :])
 
     return P_intersect, distances
 
 
-def fit_circle_3d_pratt(coord):
-    # Projection of coordinates on 2D plane
+def rotate_points_rodrigues(P, n0, n1):
+    """Rotates points by the rotation defined by two vectors.
+
+    Parameters
+    ----------
+    P : ndarray
+        Array containing point(s) to be rotated. Can be a 1D array for a single point or a 2D array for multiple points.
+    n0 : ndarray
+        Initial vector, before rotation. Must be a 1D array of 3 elements.
+    n1 : ndarray
+        Final vector, after rotation. Must be a 1D array of 3 elements.
+
+    Returns
+    -------
+    P_rot : ndarray
+        Array of rotated points. Same shape as input array P.
+
+    Notes
+    -----
+    This function computes the rotation matrix that rotates vector n0 to align with vector n1 and applies this rotation
+    to point(s) P. The rotation is performed using the Rodrigues' rotation formula, facilitated by scipy's spatial
+    transformations.
+
+    Examples
+    --------
+    >>> P = np.array([1, 0, 0])
+    >>> n0 = np.array([1, 0, 0])
+    >>> n1 = np.array([0, 1, 0])
+    >>> rotate_points_rodrigues(P, n0, n1)
+    array([[0., 1., 0.]])
+    """
+
+    # If P is only 1d array (coords of single point), fix it to be matrix
+    if P.ndim == 1:
+        P = P[np.newaxis, :]
+
+    # Normalize vectors n0 and n1
+    n0 = n0 / np.linalg.norm(n0)
+    n1 = n1 / np.linalg.norm(n1)
+
+    # Calculate the axis of rotation (k) and angle (theta)
+    k = np.cross(n0, n1)
+    k = k / np.linalg.norm(k)
+    theta = np.arccos(np.clip(np.dot(n0, n1), -1.0, 1.0))  # clip to avoid floating point errors
+
+    # Create the scipy rotation object
+    r = srot.from_rotvec(theta * k)
+
+    # Apply rotation to each point in P
+    P_rot = r.apply(P)
+
+    return P_rot
+
+
+def project_3d_points_on_2d_plane_normal_aligned(coord, target_direction=None):
+    """Projects 3D points onto a 2D plane that is aligned with a specified normal direction.
+
+    Parameters
+    ----------
+    coord : ndarray
+        An array of shape (N, 3) containing N points in 3D space.
+    target_direction : array_like, optional
+        A 3-element array specifying the direction to which the normal of the 2D plane should be aligned.
+        If None, defaults to [0, 0, 1], aligning the plane with the z-axis. Defaults to None.
+
+    Returns
+    -------
+    coord_proj : ndarray
+        An array of shape (N, 2) containing the 2D coordinates of the projected points.
+    coord_mean : ndarray
+        A 1D array of length 3 representing the mean of the original coordinates.
+    normal : ndarray
+        A 1D array of length 3 representing the normal vector of the plane onto which the points are projected.
+
+    Notes
+    -----
+    The function first centers the points by subtracting their mean. It then uses Singular Value Decomposition (SVD)
+    to find the principal components of the points. The smallest singular vector (normal to the plane of best fit)
+    is used. The points are then rotated to align this normal with
+    the target direction, effectively projecting them onto a new 2D plane.
+    """
+
+    coord_mean = coord.mean(axis=0)
+    coord_centered = coord - coord_mean
+    _, _, V = np.linalg.svd(coord_centered)
+    normal = V[2, :]
+
+    if target_direction is None:
+        target_direction = [0, 0, 1]
+    coord_proj = rotate_points_rodrigues(coord_centered, normal, target_direction)
+
+    return coord_proj, coord_mean, normal
+
+
+def project_3d_points_on_2d_plane_variance_based(coord):
+    """Projects 3D points onto a 2D plane using variance-based method via Singular Value Decomposition (SVD).
+
+    Parameters
+    ----------
+    coord : ndarray
+        An array of shape (N, 3) where n is the number of 3D points.
+
+    Returns
+    -------
+    coord_proj : ndarray
+        The projected coordinates of the points onto the 2D plane, of shape (N, 2).
+    U : ndarray
+        The matrix containing the left singular vectors of the decomposition, used to project the points.
+
+    Notes
+    -----
+    The function performs dimensionality reduction by projecting the original 3D points onto the 2D plane that captures
+    the most variance in the data. This is achieved using SVD, which decomposes the input matrix into its singular
+    vectors and singular values.
+
+    Examples
+    --------
+    >>> points = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    >>> projected_points, _ = project_3d_points_on_2d_plane_variance_based(points)
+    >>> print(projected_points)
+    """
+
     coord = coord.T
-    U, S, V = np.linalg.svd(coord, full_matrices=False)
+    U, _, _ = np.linalg.svd(coord, full_matrices=False)
     coord_proj = np.dot(U.T, coord)
+
+    return coord_proj, U
+
+
+def fit_circle_3d_lsq(coord):
+    """Fit a circle to 3D points using least squares optimization.
+
+    Parameters
+    ----------
+    coord : ndarray
+        An array of shape (N, 3) containing the 3D coordinates of the points.
+
+    Returns
+    -------
+    circle_center : ndarray
+        A 1D array of length 3 containing the x, y, z coordinates of the fitted circle's center.
+    circle_radius : float
+        The radius of the fitted circle.
+    residual_error : float
+        Sum of the squared residuals of the fit.
+
+    Notes
+    -----
+    This function projects 3D points onto a 2D plane that is normal to their average normal vector. It then fits a
+    circle in 2D and transforms the center back to the 3D space.
+    """
+
+    coord_xy, coord_mean, normal = project_3d_points_on_2d_plane_normal_aligned(coord)
+    xc, yc, circle_radius, residual_error = fit_circle_2d_lsq(coord_xy[:, 0], coord_xy[:, 1])
+
+    circle_center = rotate_points_rodrigues(np.array([xc, yc, 0]), [0, 0, 1], normal) + coord_mean
+    circle_center = circle_center.flatten()
+
+    return circle_center, circle_radius, residual_error
+
+
+def fit_circle_2d_lsq(x, y, w=None):
+    """Fit a circle to 2D points using the least squares method. The method was taken from
+    https://meshlogic.github.io/posts/jupyter/curve-fitting/fitting-a-circle-to-cluster-of-3d-points/
+
+    Parameters
+    ----------
+    x : array_like
+        X-coordinates of the points.
+    y : array_like
+        Y-coordinates of the points.
+    w : array_like, optional
+        Weights for each point. If provided, must be the same length as `x` and `y`. Defaults to None.
+
+    Returns
+    -------
+    xc : float
+        X-coordinate of the fitted circle's center.
+    yc : float
+        Y-coordinate of the fitted circle's center.
+    r : float
+        Radius of the fitted circle.
+    error : float
+        Sum of the squared residuals of the fit.
+
+    Notes
+    -----
+    This function fits a circle in 2D to a set of points (x, y) by solving the
+    weighted least squares problem if weights `w` are provided. If no weights are
+    provided, it solves the ordinary least squares problem.
+
+    Examples
+    --------
+    >>> x = np.array([1, 2, 3])
+    >>> y = np.array([4, 5, 6])
+    >>> xc, yc, r, error = fit_circle_2d_lsq(x, y)
+    """
+
+    if w is None:
+        w = []
+
+    A = np.array([x, y, np.ones(len(x))]).T
+    b = x**2 + y**2
+
+    # Modify A,b for weighted least squares
+    if len(w) == len(x):
+        W = np.diag(w)
+        A = np.dot(W, A)
+        b = np.dot(W, b)
+
+    # Solve by method of least squares
+    # c = np.linalg.lstsq(A,b,rcond=None)[0]
+    c, residuals, _, _ = np.linalg.lstsq(A, b, rcond=None)
+
+    # Get circle parameters from solution c
+    xc = c[0] / 2
+    yc = c[1] / 2
+    r = np.sqrt(c[2] + xc**2 + yc**2)
+
+    # Calculate least squares error (sum of squared residuals)
+    error = np.sum(residuals)
+
+    return xc, yc, r, error
+
+
+def fit_circle_3d_pratt(coord):
+    """Fit a circle to a set of 3D points using Pratt's method after projecting them onto a 2D plane.
+
+    Parameters
+    ----------
+    coord : ndarray
+        An array of shape (N, 3) containing N points in 3D space.
+
+    Returns
+    -------
+    circle_center : ndarray
+        A 1D array of length 3 representing the center of the circle in 3D space.
+    circle_radius : float
+        The radius of the fitted circle.
+    confidence : int
+        Confidence indicator, returns 1 if the center is not at the origin, otherwise -1.
+
+    Notes
+    -----
+    The function first projects the 3D points onto a 2D plane using a variance-based method. It then applies
+    Pratt's method to these 2D points to fit a circle. The center of the circle is then transformed back to
+    3D space. The radius is calculated as the mean Euclidean distance from the 3D points to the estimated
+    center. The confidence is a simple check on the location of the center.
+
+    Examples
+    --------
+    >>> points = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    >>> center, radius, conf = fit_circle_3d_pratt(points)
+    >>> print(center, radius, conf)
+    """
+
+    # Projection of coordinates on 2D plane
+    coord_proj, U = project_3d_points_on_2d_plane_variance_based(coord)
 
     # Pratt method
     x = coord_proj[0, :]
     y = coord_proj[1, :]
-    a = np.linalg.lstsq(
-        np.vstack([x, y, np.ones_like(x)]).T, -(x**2 + y**2), rcond=None
-    )[0]
+    a = np.linalg.lstsq(np.vstack([x, y, np.ones_like(x)]).T, -(x**2 + y**2), rcond=None)[0]
     xc = -a[0]
     yc = -a[1]
 
@@ -872,10 +1223,37 @@ def fit_circle_3d_pratt(coord):
 
 
 def fit_circle_3d_taubin(coord):
+    """Fit a circle to 3D points using Taubin's method projected onto a 2D plane.
+
+    Parameters
+    ----------
+    coord : ndarray
+        An array of shape (N, 3) representing the coordinates of the 3D points.
+
+    Returns
+    -------
+    circle_center : ndarray
+        A 1D array of length 3 representing the center of the fitted circle in 3D space.
+    circle_radius : float
+        The radius of the fitted circle.
+    confidence : float
+        A confidence measure for the circle fitting. Returns -1 if the fitting fails.
+
+    Notes
+    -----
+    The function projects 3D points onto a 2D plane using a variance-based method,
+    then fits a circle in 2D using Newton's method. The best fitting circle is selected
+    based on the minimum radius criterion among possible circle fits.
+
+    Examples
+    --------
+    >>> coord = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    >>> center, radius, conf = fit_circle_3d_taubin(coord)
+    >>> print(center, radius, conf)
+    """
+
     # Projection of coordinates on 2D plane
-    coord = coord.T
-    U, S, V = np.linalg.svd(coord, full_matrices=False)
-    coord_proj = np.dot(U.T, coord)
+    coord_proj, U = project_3d_points_on_2d_plane_variance_based(coord)
 
     a = np.array([[0, 1], [0, 2], [1, 2]])
     cs = []
@@ -883,7 +1261,7 @@ def fit_circle_3d_taubin(coord):
 
     for b in range(a.shape[0]):
         cp = coord_proj[a[b, :], :]
-        center_2d, rr, confidence = fit_circle_2d(cp)
+        center_2d, rr, confidence = fit_circle_2d_newton(cp)
 
         # Check if the fit was successful
         if center_2d[0] == np.inf:
@@ -908,7 +1286,36 @@ def fit_circle_3d_taubin(coord):
     return circle_center, circle_radius, confidence
 
 
-def fit_circle_2d(coord):
+def fit_circle_2d_newton(coord):
+    """Fit a circle to 2D data using Newton's method.
+
+    Parameters
+    ----------
+    coord : ndarray
+        An array of shape (N, 2) containing the x and y coordinates of the data points.
+
+    Returns
+    -------
+    circle_center : ndarray
+        A 1D array containing the x and y coordinates of the circle's center.
+    circle_radius : float
+        The radius of the fitted circle.
+    confidence : int
+        Confidence level of the fit, 1 if successful, -1 if the fit failed.
+
+    Notes
+    -----
+    The function implements a numerical method to fit a circle to a set of 2D points by minimizing the algebraic
+    distance to the circle. The method used is based on the algebraic form of a circle and Newton's optimization
+    method to find the circle parameters that best fit the data.
+
+    Examples
+    --------
+    >>> points = np.array([[1, 2], [3, 4], [5, 6]])
+    >>> center, radius, conf = fit_circle_2d_newton(points)
+    >>> print(center, radius, conf)
+    """
+
     XY = coord.T  # Transpose to match MATLAB's column-wise data format
 
     n = XY.shape[0]  # number of data points
@@ -946,13 +1353,7 @@ def fit_circle_2d(coord):
     A3 = 4 * Mz
     A2 = -3 * Mz * Mz - Mzz
     A1 = Mzz * Mz + 4 * Cov_xy * Mz - Mxz * Mxz - Myz * Myz - Mz * Mz * Mz
-    A0 = (
-        Mxz * Mxz * Myy
-        + Myz * Myz * Mxx
-        - Mzz * Cov_xy
-        - 2 * Mxz * Myz * Mxy
-        + Mz * Mz * Cov_xy
-    )
+    A0 = Mxz * Mxz * Myy + Myz * Myz * Mxx - Mzz * Cov_xy - 2 * Mxz * Myz * Mxy + Mz * Mz * Cov_xy
     A22 = A2 + A2
     A33 = A3 + A3 + A3
     xnew = 0
@@ -985,11 +1386,7 @@ def fit_circle_2d(coord):
 
     # computing the circle parameters
     DET = xnew * xnew - xnew * Mz + Cov_xy
-    Center = (
-        np.array([(Mxz * (Myy - xnew) - Myz * Mxy), (Myz * (Mxx - xnew) - Mxz * Mxy)])
-        / DET
-        / 2
-    )
+    Center = np.array([(Mxz * (Myy - xnew) - Myz * Mxy), (Myz * (Mxx - xnew) - Mxz * Mxy)]) / DET / 2
     Par = np.concatenate([Center + centroid, [np.sqrt(np.dot(Center, Center) + Mz)]])
     circle_center = Par[:2]
     circle_radius = Par[2]
@@ -998,15 +1395,157 @@ def fit_circle_2d(coord):
 
 
 def normalize_vector(vector):
-    """Returns the unit vector of the vector."""
+    """Normalize a vector.
+
+    Parameters
+    ----------
+    vector : array_like
+        Input vector to be normalized.
+
+    Returns
+    -------
+    ndarray
+        Normalized vector with the same direction but with a norm of 1.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> v = np.array([2, 3, 6])
+    >>> normalize_vector(v)
+    array([0.26726124, 0.40089186, 0.80278373])
+    """
+
     return vector / np.linalg.norm(vector)
 
 
+def normalize_vectors(v):
+    # Normalize each vector, handling both single vectors and arrays of vectors
+    norm = np.linalg.norm(v, axis=-1, keepdims=True)
+    return v / norm
+
+
+def angle_between_n_vectors(v1, v2):
+    # Ensure both vectors are normalized
+    v1_u = normalize_vectors(v1)
+    v2_u = normalize_vectors(v2)
+
+    # Compute dot product element-wise, handling both (3,) and (N, 3) shapes
+    dot_product = np.einsum("ij,ij->i", v1_u, v2_u) if v1.ndim > 1 else np.dot(v1_u, v2_u)
+
+    # Clip values to avoid numerical errors outside the valid range for arccos
+    angle = np.degrees(np.arccos(np.clip(dot_product, -1.0, 1.0)))
+    return angle
+
+
 def vector_angular_distance(v1, v2):
-    """Returns the angle in degrees between vectors 'v1' and 'v2'::"""
+    """Calculate the angular distance between two vectors in degrees.
+
+    Parameters
+    ----------
+    v1 : array_like
+        First input vector.
+    v2 : array_like
+        Second input vector.
+
+    Returns
+    -------
+    float
+        The angular distance between `v1` and `v2` in degrees.
+
+    Notes
+    -----
+    The function normalizes both vectors `v1` and `v2` using `normalize_vector` function,
+    and computes the cosine of the angle between them. The angle is then converted from radians to degrees.
+
+    Examples
+    --------
+    >>> v1 = [1, 0, 0]
+    >>> v2 = [0, 1, 0]
+    >>> vector_angular_distance(v1, v2)
+    90.0
+    """
+
     v1_u = normalize_vector(v1)
     v2_u = normalize_vector(v2)
     return np.degrees(np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)))
+
+
+def vector_angular_distance_signed(u, v, n=None):
+    """Compute the signed angular distance between two vectors.
+
+    Parameters
+    ----------
+    u : array_like
+        First input vector.
+    v : array_like
+        Second input vector.
+    n : array_like, optional
+        Normal vector to the plane containing `u` and `v`. If not provided, the function
+        computes the unsigned angular distance.
+
+    Returns
+    -------
+    float
+        The signed angular distance between vectors `u` and `v`. This is the angle in radians
+        between the two vectors, signed according to the direction given by `n`. If `n` is not
+        provided, the result is the unsigned angle.
+
+    Notes
+    -----
+    The signed angle is computed based on the right-hand rule. If `n` is provided, the sign
+    of the angle is determined by the direction of `n` relative to the cross product of `u` and `v`.
+    If `n` is not provided, the function returns the magnitude of the angle only.
+
+    Examples
+    --------
+    >>> u = np.array([1, 0, 0])
+    >>> v = np.array([0, 1, 0])
+    >>> vector_angular_distance_signed(u, v)
+    1.5707963267948966  # 90 degrees in radians
+
+    >>> n = np.array([0, 0, 1])
+    >>> vector_angular_distance_signed(u, v, n)
+    1.5707963267948966  # 90 degrees in radians, positive as per right-hand rule with `n` as z-axis
+
+    >>> n = np.array([0, 0, -1])
+    >>> vector_angular_distance_signed(u, v, n)
+    -1.5707963267948966  # 90 degrees in radians, negative as per right-hand rule with `n` as -z-axis
+    """
+
+    if n is None:
+        return np.arctan2(np.linalg.norm(np.cross(u, v)), np.dot(u, v))
+    else:
+        return np.arctan2(np.dot(n, np.cross(u, v)), np.dot(u, v))
+
+
+def oversample_spline(coords, target_spacing):
+    """
+    Fit a spline through 3D coordinates and oversample so that the distance between points is approximately `target_spacing`.
+
+    Parameters:
+        coords (np.ndarray): Array of shape (n, 3) representing the input points.
+        target_spacing (float): Desired distance between points on the spline.
+
+    Returns:
+        np.ndarray: Oversampled coordinates along the spline.
+    """
+    # Fit a parametric spline to the data
+    tck, u = splprep(coords.T, s=0)  # `s=0` ensures an exact fit to the input points
+
+    # Compute cumulative arc length
+    distances = np.sqrt(np.sum(np.diff(coords, axis=0) ** 2, axis=1))
+    total_length = np.sum(distances)
+
+    # Determine number of samples based on target spacing
+    num_samples = int(total_length / target_spacing) + 1
+
+    # Generate evenly spaced parameter values along the spline
+    u_fine = np.linspace(0, 1, num_samples)
+
+    # Evaluate the spline to get oversampled points
+    oversampled_points = np.array(splev(u_fine, tck)).T
+
+    return oversampled_points
 
 def distance_array(vol):
     shell_grid = np.arange(math.floor(-len(vol[0]) / 2), math.ceil(len(vol[0]) / 2), 1)

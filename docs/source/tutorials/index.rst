@@ -9,6 +9,7 @@
    Peak analysis <peak_analysis/peak_analysis>
    Surface oversampling <surface_oversampling/surface_oversampling>
    Lamellae analysis <lamellae_analysis/lamellae_analysis>
+   Nearest neighbor analysis <nearest_neighbor_analysis/nearest_neighbor_analysis>
 
 =========
 Tutorials

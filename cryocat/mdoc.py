@@ -35,10 +35,10 @@ class Mdoc:
 
             # write images
             for index, row in self.imgs.iterrows():
-                if removed or (not removed and not row["removed"]):
+                if removed or (not removed and not row["Removed"]):
                     f.write("[{} = {}]\n".format(self.section_id, row[self.section_id]))
                     for column in self.imgs.columns:
-                        if (column != self.section_id) and (column != "removed"):
+                        if (column != self.section_id) and (column != "Removed"):
                             f.write("{} = {}\n".format(column, row[column]))
                     f.write("\n")
 
@@ -54,23 +54,23 @@ class Mdoc:
         if kept_only:
             kept_indices = self.kept_images().index
             index = kept_indices[index]
-        self.imgs.loc[index, "removed"] = True
+        self.imgs.loc[index, "Removed"] = True
 
     def remove_images(self, indices, kept_only=True):
         for index in indices:
             self.remove_image(index, kept_only)
 
     def removed_images(self):
-        return self.imgs[self.imgs["removed"] == True]
+        return self.imgs[self.imgs["Removed"] == True]
 
     def kept_images(self):
-        return self.imgs[self.imgs["removed"] == False]
+        return self.imgs[self.imgs["Removed"] == False]
 
     def keep_images(self, indices):
-        self.imgs.loc[indices, "removed"] = False
+        self.imgs.loc[indices, "Removed"] = False
 
     def reset_images(self):
-        self.imgs["removed"] = False
+        self.imgs["Removed"] = False
 
     def keep_image(self, index):
         self.keep_images([index])
@@ -238,7 +238,7 @@ class Mdoc:
             imgs = pd.concat([imgs, pd.DataFrame(img, index=[0])], ignore_index=True)
 
         # prepare flag for removed images
-        imgs["removed"] = False
+        imgs["Removed"] = False
 
         # convert ZValues to int
         temp_column = imgs.astype({section_id: int})
@@ -258,6 +258,39 @@ class Mdoc:
         else:
             formatted = value.strip()
         return formatted
+
+
+def remove_images(input_mdoc, idx_to_remove, numbered_from_1=True, output_file=None):
+
+    mdoc = Mdoc(input_mdoc)
+    idx_to_remove_final = ioutils.indices_load(idx_to_remove, numbered_from_1=numbered_from_1)
+    mdoc.remove_images(idx_to_remove_final)
+
+    if output_file:
+        mdoc.write(output_file, overwrite=True)
+
+    return mdoc
+
+
+def get_tilt_angles(input_mdoc, output_file=None):
+
+    mdoc = Mdoc(input_mdoc)
+
+    if output_file:
+        mdoc.imgs["TiltAngle"].to_csv(output_file, index=False, header=False)
+
+    return mdoc.imgs["TiltAngle"].values
+
+
+def sort_mdoc_by_tilt_angles(input_mdoc, reset_z_value=False, output_file=None):
+
+    mdoc = Mdoc(input_mdoc)
+    mdoc.sort_by_tilt(reset_z_value=reset_z_value)
+
+    if output_file:
+        mdoc.write(output_file, overwrite=True)
+
+    return mdoc
 
 
 def split_mdoc_file(input_mdoc, new_id=None, output_folder=None):

@@ -9,7 +9,7 @@ from skimage import morphology
 
 from cryocat import cryomap
 from cryocat import geom
-from cryocat import visplot
+from cryocat import ioutils
 from cryocat import cryomotl
 from cryocat import cryomask
 
@@ -114,7 +114,7 @@ def scores_extract_particles(
     angles_map = cryomap.read(angles_map)
 
     # Read angle list.
-    anglist = geom.load_angles(angles_list, angles_order=angles_order)
+    anglist = ioutils.rot_angles_load(angles_list, angles_order=angles_order)
 
     # load and apply a tomogram mask if any:
     if tomo_mask is not None:
@@ -539,7 +539,7 @@ def create_angular_distance_maps(
     angles_map = cryomap.read(angles_map).astype(int)
 
     map_shape = angles_map.shape
-    angles = geom.load_angles(angles_list, angles_order)
+    angles = ioutils.rot_angles_load(angles_list, angles_order)
 
     zero_rotations = np.tile(angles[0, :], (angles.shape[0], 1))
     dist_all, dist_normals, dist_inplane = geom.compare_rotations(zero_rotations, angles, c_symmetry)
@@ -637,7 +637,7 @@ def select_peaks(
     """
 
     # load the angles
-    angles = geom.load_angles(angles_file, angles_order=angles_order)
+    angles = ioutils.rot_angles_load(angles_file, angles_order=angles_order)
     angles_map = (cryomap.read(angles_map) - 1).astype(int)
 
     # get threshold and threshold map

@@ -1,6 +1,7 @@
 import h5py
 import emfile
 import mrcfile
+import re
 import numpy as np
 from numpy import fft
 from scipy.ndimage import affine_transform
@@ -400,12 +401,12 @@ def read(input_map, transpose=True, data_type=None):
     """
 
     if isinstance(input_map, str):
-        if (
-            input_map.endswith(".mrc")
-            or input_map.endswith(".rec")
-            or input_map.endswith(".st")
-            or input_map.endswith(".ali")
-        ):
+
+        def valid_mrc(filename):
+            pattern = r"\.(mrc|ali|rec|st)(\.\d+)?$"
+            return bool(re.search(pattern, filename))
+
+        if valid_mrc(input_map):
             data = mrcfile.open(input_map).data
         elif input_map.endswith(".em"):
             data = emfile.read(input_map)[1]
@@ -564,6 +565,27 @@ def rotate(
         write(rot_struct, output_name, data_type=np.single)
 
     return rot_struct
+
+
+def crop(input_map, new_size, output_file=None, crop_coord=None):
+
+    input_map = read(input_map)
+
+    new_size = cryomask.get_correct_format(new_size)
+
+    if crop_coord is None:
+        crop_coord = cryomask.get_correct_format(input_map.shape) // 2
+    else:
+        crop_coord = cryomask.get_correct_format(crop_coord)
+
+    vs, ve, _, _ = get_start_end_indices(crop_coord, input_map.shape, new_size)
+
+    cropped_volume = input_map[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
+
+    if output_file is not None:
+        write(cropped_volume, output_file, data_type=np.single)
+
+    return cropped_volume
 
 
 def shift(map, delta):

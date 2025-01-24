@@ -45,6 +45,115 @@ def get_file_encoding(file_path):
         raise UnicodeEncodeError(f"Failed to read file {file_path} with any of the tried encodings.")
 
 
+def get_all_files_matching_pattern(filename_pattern, numeric_wildcards_only=False, return_wildcards=True):
+    """Get all files in a directory that match a specified filename pattern.
+
+    Parameters
+    ----------
+    filename_pattern : str
+        The pattern to match filenames against, which can include wildcards.
+    numeric_wildcards_only : bool, default=False
+        If True, only files with numeric wildcard parts will be included. Defaults to False.
+    return_wildcards : bool, default=True
+        If True, the function returns a tuple of (file_names, wildcards). If False, only file_names are returned.
+        Defaults to True.
+
+    Returns
+    -------
+    list
+        A list of file paths that match the given pattern. If return_wildcards is True,
+        a tuple of (file_names, wildcards) is returned, where wildcards are the parts of the filenames that
+        matched the wildcard in the pattern.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the specified directory does not exist.
+
+    Notes
+    -----
+    The function uses regular expressions to match the filenames against the provided pattern. The '*' character
+    in the pattern is treated as a wildcard that can match any sequence of characters.
+    """
+
+    # Split the pattern into directory and base name
+    dir_name, base_pattern = os.path.split(filename_pattern)
+    dir_name = dir_name or "."  # Use current directory if none provided
+
+    # Escape the base pattern and replace '*' with a regex group
+    pattern_regex = re.escape(base_pattern).replace(r"\*", r"(.*)")
+
+    # List all files in the directory
+    try:
+        files_in_dir = os.listdir(dir_name)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Directory '{dir_name}' does not exist.")
+
+    # Match files against the pattern regex
+    wildcards = []
+    file_names = []
+
+    for file_name in files_in_dir:
+        full_path = os.path.join(dir_name, file_name)
+        if os.path.isfile(full_path):
+            match = re.match(pattern_regex, file_name)
+            if match:
+                wildcard_part = match.group(1)  # Extract the wildcard portion
+                if numeric_wildcards_only:
+                    try:
+                        _ = int(wildcard_part)  # Try to convert the wildcard part to a number
+                        file_names.append(full_path)
+                        wildcards.append(wildcard_part)
+                    except ValueError:
+                        print(f"File {file_name} does not have numeric id and will be skipped.")
+                else:
+                    wildcards.append(wildcard_part)
+                    file_names.append(full_path)
+
+    if return_wildcards:
+        return file_names, wildcards
+    else:
+        return file_names
+
+
+def sort_files_by_idx(file_list, idx_list, order="ascending"):
+    """Sorts a list of files based on corresponding indices.
+
+    Parameters
+    ----------
+    file_list : list of str
+        A list of file names to be sorted.
+    idx_list : list of str
+        A list of indices as strings corresponding to the file names.
+    order : str, default='ascending'
+        The order in which to sort the files. Can be 'ascending' or 'descending'.
+        Defaults to 'ascending'.
+
+    Returns
+    -------
+    numpy.ndarray
+        An array of file names sorted according to the specified order of indices.
+
+    Examples
+    --------
+    >>> sort_files_by_idx(['file1.txt', 'file2.txt', 'file3.txt'], ['2', '1', '3'])
+    array(['file2.txt', 'file1.txt', 'file3.txt'])
+
+    >>> sort_files_by_idx(['file1.txt', 'file2.txt', 'file3.txt'], ['2', '1', '3'], order='descending')
+    array(['file3.txt', 'file1.txt', 'file2.txt'])
+    """
+
+    int_array = np.array([int(s) for s in idx_list])
+    sorted_indices = np.argsort(int_array)
+
+    if order == "descending":
+        sorted_indices = sorted_indices[::-1]
+
+    file_array = np.array(file_list)
+
+    return file_array[sorted_indices]
+
+
 def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
     """Retrieve files from a specified directory that start with a given prefix and end with a given suffix.
 
@@ -64,11 +173,18 @@ def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
     list
         A list of filenames that match the given prefix and suffix criteria.
 
+    Raises
+    -------
+    ValueError
+        If file does not exist or if specified from file_path is not readable
+
     Examples
     --------
     >>> get_files_prefix_suffix('/path/to/dir', prefix='test', suffix='.txt')
     ['test_file1.txt', 'test_file2.txt']
     """
+    if not os.path.exists(dir_path):
+        raise ValueError(f"the directory '{dir_path}' does not exist.")
 
     matching_files = []
     for filename in os.listdir(dir_path):
@@ -123,11 +239,13 @@ def is_float(value):
     >>> is_float("hello")
     False
     """
+    if isinstance(value, bool):  # float(True) == 1.0, but we don't accept bool as valid
+        return False
 
     try:
         float(value)
         return True
-    except ValueError:
+    except (TypeError, ValueError):
         return False
 
 
@@ -249,12 +367,14 @@ def get_data_from_warp_xml(xml_file_path, node_name, node_level=1):
     ------
     Exception
         If there is an error reading the XML file.
-
+    Value Error
+        If node_level isn't 1 or 2
     Examples
     --------
     >>> data = get_data_from_warp_xml('path/to/xml/file.xml', 'GridCTF', node_level=2)
     """
-
+    if node_level not in [1, 2]:
+        raise ValueError(f"node_level can't be {node_level}, must be 1 or 2.")
     try:
         # Parse the XML file
         tree = ET.parse(xml_file_path)
@@ -441,9 +561,22 @@ def one_value_per_line_read(file_path, data_type=np.float32):
     -------
     numpy.ndarray
         A ndarray with values of the type data_type.
-    """
 
-    data_df = pd.read_csv(file_path, header=None, dtype=data_type, delim_whitespace=True)
+    Raises
+    -------
+    ValueError
+        If file does not exist or if specified from file_path is not readable
+    """
+    if not os.path.isfile(file_path):
+        raise ValueError("The input file does not exist")
+
+    try:
+        data_df = pd.read_csv(file_path, header=None, dtype=data_type, delim_whitespace=True)
+        if data_df.empty:
+            raise ValueError("The input file is empty or contains no valid data.")
+    except pd.errors.EmptyDataError:
+        raise ValueError("The input file is empty or contains no valid data.")
+
     return data_df.iloc[:, 0].values
 
 
@@ -488,7 +621,7 @@ def total_dose_load(input_dose, sort_mdoc=True):
                 else:
                     return df["CorrectedDose"].astype(np.single).to_numpy()
             else:
-                ValueError(f"The file {input_dose} does not contain column with name CorrectedDose")
+                raise ValueError(f"The file {input_dose} does not contain column with name CorrectedDose")
         elif input_dose.endswith(".mdoc"):
             # load as mdoc
             mdoc_file = mdoc.Mdoc(input_dose)
@@ -505,12 +638,14 @@ def total_dose_load(input_dose, sort_mdoc=True):
                 prior_dose = mdoc_file.get_image_feature("PriorRecordDose").values
                 total_dose = image_dose + prior_dose
             else:
-                z_values = (
-                    mdoc_file.get_image_feature("ZValue").values.astype(int) + 1
-                )  # This assumes that z value corresponds to the order of acquisition; correct?
-                total_dose = image_dose * z_values
+                mdoc_file.imgs["original_order"] = range(len(mdoc_file.imgs))
+                mdoc_file.imgs["DateTime"] = pd.to_datetime(mdoc_file.imgs["DateTime"])  # Convert to datetime
+                sorted_df = mdoc_file.imgs.sort_values("DateTime")
+                sorted_df.reset_index(drop=True, inplace=True)
+                sorted_df["total_dose"] = sorted_df["ExposureDose"] * (sorted_df.index + 1)
+                result_df = sorted_df.sort_values("original_order").drop(columns=["original_order"])
 
-            return total_dose
+            return result_df["total_dose"].values
         elif input_dose.endswith(".xml"):
             total_dose = get_data_from_warp_xml(input_dose, "Dose", node_level=1)
             return total_dose
@@ -519,6 +654,66 @@ def total_dose_load(input_dose, sort_mdoc=True):
             return total_dose
     else:
         ValueError("Error: the dose has to be either ndarray or str with valid path!")
+
+
+def rot_angles_load(input_angles, angles_order="zxz"):
+    """Load rotation angles from a file or numpy array and arrange them in a specified order.
+
+    Parameters
+    ----------
+    input_angles : str or numpy.ndarray
+        If a string, it should be the path to a CSV file containing the angles (three per line). If a numpy array, it
+        should directly contain the angles.
+    angles_order : str, default="zxz"
+        The order of the angles in the output array. Default is "zxz" (phi, theta, psi). If "zzx", the order will be
+        adjusted to phi, psi, theta.
+
+    Returns
+    -------
+    angles : numpy.ndarray
+        A numpy array of shape (N, 3) where n is the number of angle sets. Each row contains the angles phi, theta,
+          and psi in the specified order.
+
+    Raises
+    ------
+    ValueError
+        If `input_angles` is neither a string path to a CSV file nor a numpy array.
+
+    Examples
+    --------
+    >>> rot_angles_load("path/to/angles.csv")
+    array([[phi1, theta1, psi1],
+           [phi2, theta2, psi2],
+           ...])
+
+    >>> rot_angles_load(numpy.array([[0, 45, 90], [90, 45, 0]]), "zzx")
+    array([[0, 90, 45],
+           [90, 0, 45]])
+    """
+
+    if isinstance(input_angles, str):
+        # Not all strings are valid: file can not exist
+        if not os.path.exists(input_angles):
+            raise ValueError(f"File '{input_angles}' does not exist.")
+
+        angles = pd.read_csv(input_angles, header=None)
+        # Check valid data
+        if len(angles.columns) != 3:
+            raise ValueError(f"File '{input_angles}' does not contain valid data.")
+
+        if angles_order == "zzx":
+            angles.columns = ["phi", "psi", "theta"]
+        else:
+            angles.columns = ["phi", "theta", "psi"]
+
+        angles = angles.loc[:, ["phi", "theta", "psi"]].to_numpy()
+
+    elif isinstance(input_angles, np.ndarray):
+        angles = input_angles.copy()
+    else:
+        raise ValueError("The input_angles have to be either a valid path to a file or numpy array!!!")
+
+    return angles
 
 
 def tlt_load(input_tlt, sort_angles=True):
@@ -544,13 +739,20 @@ def tlt_load(input_tlt, sort_angles=True):
     ------
     ValueError
         If the input_tlt is neither a numpy array nor a valid file path.
+        If the input_tlt is an empty numpy array or an empty list.
 
     """
 
     if isinstance(input_tlt, np.ndarray):
-        return input_tlt
+        if input_tlt.size == 0:
+            raise ValueError(f"The input tilt data is empty!")
+        else:
+            return input_tlt
     elif isinstance(input_tlt, list):
-        return np.asarray(input_tlt)
+        if len(input_tlt) == 0:
+            raise ValueError(f"The input tilt data is empty")
+        else:
+            return np.asarray(input_tlt)
     elif isinstance(input_tlt, str):
         if input_tlt.endswith(".mdoc"):
             tilt_data = mdoc.Mdoc(input_tlt)
@@ -565,7 +767,7 @@ def tlt_load(input_tlt, sort_angles=True):
 
         return tilts
     else:
-        ValueError("Error: the dose has to be either ndarray or path to csv, mdoc, or tlt file!")
+        raise ValueError("Error: the dose has to be either ndarray or path to csv, mdoc, or tlt file!")
 
 
 def dimensions_load(input_dims, tomo_idx=None):
@@ -593,7 +795,7 @@ def dimensions_load(input_dims, tomo_idx=None):
     Raises
     ------
     ValueError
-        If the dimensions do not conform to the expected shapes of 1x3 or Nx4.
+        If the dimensions do not conform to the expected shapes of 1x3 or Nx4 or if file does not exist.
 
     Notes
     -----
@@ -616,6 +818,8 @@ def dimensions_load(input_dims, tomo_idx=None):
         else:
             if os.path.isfile(input_dims):
                 dimensions = pd.read_csv(input_dims, sep="\s+", header=None, dtype=float)
+            else:
+                raise ValueError(f"The file at the path {input_dims} does not exist.")
     elif isinstance(input_dims, list):
         dimensions = pd.DataFrame(np.reshape(np.asarray(input_dims), (1, len(input_dims))))
     else:  # isinstance(input_dims, np.ndarray):
@@ -666,10 +870,13 @@ def z_shift_load(input_shift):
     Raises
     ------
     ValueError
-        Wrong size of the input.
+        Wrong size of the input, unsupported input type, or not existing filepath.
 
     """
-
+    if not isinstance(input_shift, (str, pd.DataFrame, float, int, list, np.ndarray)):
+        raise ValueError(
+            f"Unsupported input type: {type(input_shift)}. Expected str, DataFrame, float, int, list, or np.ndarray."
+        )
     if isinstance(input_shift, pd.DataFrame):
         z_shift = input_shift
     elif isinstance(input_shift, str):
@@ -679,6 +886,8 @@ def z_shift_load(input_shift):
         else:
             if os.path.isfile(input_shift):
                 z_shift = pd.read_csv(input_shift, sep="\s+", header=None, dtype=float)
+            else:
+                raise ValueError(f"File {input_shift} does not exist.")
     elif isinstance(input_shift, (float, int)):
         z_shift = pd.DataFrame([input_shift])
     else:
@@ -769,7 +978,8 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
     """
 
     filtered_lines = []
-
+    if isinstance(lines_to_remove, int):
+        lines_to_remove = [lines_to_remove]
     if start_str_to_skip is None:
         start_str_to_skip = []
     elif not isinstance(start_str_to_skip, list):
@@ -878,3 +1088,120 @@ def dict_load(input_data):
         raise ValueError("The supported formats are dict or file in JSON format.")
 
     return dict_data
+
+
+def indices_load(input_data, numbered_from_1=True):
+    """Load indices from a specified input source.
+
+    Parameters
+    ----------
+    input_data : str, list, or numpy.ndarray
+        The input data can be a file path to a CSV file, a text file containing indices (one per line), or a list/array
+        of indices. If a CSV file is provided, it is expected to have a column named "ToBeRemoved".
+    numbered_from_1 : bool, default=True
+        If True, the returned indices will be adjusted to be zero-based (i.e., subtracting 1 from each index).
+        Defaults to True.
+
+    Returns
+    -------
+    numpy.ndarray
+        An array of indices, adjusted based on the input data and the numbered_from_1 flag.
+    """
+
+    if isinstance(input_data, str):
+        if input_data.endswith(".csv"):
+            df = pd.read_csv(input_data)
+            if "Removed" in df.columns:
+                df = df[~df["Removed"]]
+            indices = df.index[df["ToBeRemoved"]].to_numpy(dtype=int)
+            numbered_from_1 = False  # Always from 0
+        else:
+            indices = np.loadtxt(input_data, dtype=int)
+
+    else:
+        indices = np.asarray(input_data)
+
+    if numbered_from_1:
+        indices = indices - 1
+
+    return indices
+
+
+def indices_reset(input_data):
+    """Reset the indices of a CSV file by modifying specific columns.
+
+    Parameters
+    ----------
+    input_data : str
+        The path to the CSV file that needs to be processed.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    This function reads a CSV file into a DataFrame, checks for the presence of a "Removed" column,
+    and updates it based on the "ToBeRemoved" column. It then resets the "ToBeRemoved" column to
+    False and saves the modified DataFrame back to the original CSV file.
+    """
+
+    df = pd.read_csv(input_data)
+
+    if "Removed" in df.columns:
+        df.loc[df["ToBeRemoved"], "Removed"] = True
+
+    df["ToBeRemoved"] = False
+    df.to_csv(input_data, index=False)
+
+
+def defocus_remove_file_entries(
+    input_file, entries_to_remove, file_type="gctf", numbered_from_1=True, output_file=None
+):
+    """Remove specified entries from a file and optionally update a specification file.
+
+    Parameters
+    ----------
+    input_file : str
+        The path to the input file from which entries will be removed.
+    entries_to_remove : str, list, or numpy.ndarray
+        The entries to remove can be specified as a file path to a CSV file, a text file containing indices
+        (one per line), or a list/array of indices. If a CSV file is provided, it is expected to have a column
+        named "ToBeRemoved".
+    file_type : str, default='gctf'
+        The type of the input file. Can be 'gctf' or "ctffind4'. Defaults to 'gctf'.
+    numbered_from_1 : bool=True
+        Indicates whether the entries in `entries_to_remove` are numbered from 1. Defaults to True.
+    output_file : str, optional
+        The path to the output file where the modified content will be saved. If None, the input_file will be overwritten.
+        Defaults to None.
+
+    Returns
+    -------
+    None
+        The function modifies the input file and/or creates an output file as specified.
+
+    Notes
+    -----
+    The function handles two file types: 'gctf' and 'ctffind4', applying different methods for removing lines based
+    on the file type. The `indices_load` and `indices_reset` functions are used to manage the indices of entries to be
+    removed and to reset them if necessary.
+    """
+
+    lines_to_remove = indices_load(entries_to_remove, numbered_from_1=numbered_from_1)
+
+    if output_file is None:
+        output_file = input_file
+
+    if file_type.lower() == "gctf":
+        sf.Starfile.remove_lines(
+            input_file,
+            lines_to_remove,
+            output_file=output_file,
+            data_specifier="data_",
+            number_columns=True,
+        )
+    elif file_type.lower() == "ctffind4":
+        _ = remove_lines(input_file, lines_to_remove, start_str_to_skip=["#"], output_file=output_file)
+    else:
+        print(f"The defocus filetype {file_type} is not supported and thus will not be cleaned.")

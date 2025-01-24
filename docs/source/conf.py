@@ -18,6 +18,9 @@ import subprocess
 import cryocat
 from bs4 import BeautifulSoup
 
+sys.path.insert(0, os.path.abspath("../../cryocat/"))
+print(sys.path)  # Temporarily add this for debugging
+
 sys.path.insert(0, os.path.abspath("sphinxext"))
 
 

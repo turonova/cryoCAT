@@ -32,9 +32,12 @@ classifiers = [
 license = {text = "GPLv3+"}
 [tool.setuptools]
 packages = ["cryocat"]
+# include-package-data = true
 [project.urls]
 "Homepage" = "https://github.com/turonova/cryoCAT"
 "Bug Tracker" = "https://github.com/turonova/cryoCAT/issues"
 [project.scripts]
 wedge_list = "cryocat.cli:wedge_list"
 tm_ana = "cryocat.cli:tm_ana"
+[tool.setuptools.package-data]
+"cryocat" = ["example_files/*.tlt"]

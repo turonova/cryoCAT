@@ -17,6 +17,10 @@ def compute_rmse(array1, array2):
     rmse : ndarray
         An array containing the RMSE computed for each column of the input arrays.
 
+    Raises
+    -------
+    ValueError
+        If input arrays are not nparray type or if they don't contain numbers.
     Notes
     -----
     This function computes the RMSE by first calculating the squared differences between corresponding elements of the
@@ -30,6 +34,18 @@ def compute_rmse(array1, array2):
     >>> compute_rmse(array1, array2)
     array([1.41421356, 2.12132034])
     """
+    # Input must be np.arrays
+    if not (isinstance(array1, np.ndarray) and isinstance(array2, np.ndarray)):
+        raise ValueError("Input arrays must be numpy arrays")
+
+    # Check if all values are numeric (either integers or floats)
+    if not (np.issubdtype(array1.dtype, np.number) and np.issubdtype(array2.dtype, np.number)):
+        raise ValueError("Both input arrays must contain only numeric values (integers or floats)")
+
+    # Ensure the arrays have the same shape
+    if array1.shape != array2.shape:
+        raise ValueError("Input arrays must have the same shape")
+
 
     # Compute squared differences along each column
     squared_diff = (array1 - array2) ** 2
@@ -56,11 +72,17 @@ def get_all_pairs(input_numbers):
     list
         A list of tuples, each containing a pair of numbers from the input list.
 
+    Raises
+    -------
+    ValueError
+        If input isn't a list or the list doesn't contain only integers and floats
     Examples
     --------
     >>> get_all_pairs([1, 2, 3])
     [(1, 2), (1, 3), (2, 3)]
     """
+    if not isinstance(input_numbers, list) or not all(isinstance(x, (int, float)) for x in input_numbers):
+        raise ValueError("input_numbers must be a list of integers or floats")
 
     pairs = []
     for i in range(len(input_numbers)):
@@ -144,7 +166,9 @@ def get_number_of_digits(input_number):
     >>> get_number_of_digits(3.14)
     3
     """
-    digit_length = len(str(input_number))
+    if not isinstance(input_number, (int, float)):
+        raise ValueError(f"Input file is not a number")
+    digit_length = len(str(abs(input_number)))
 
     if "." in str(input_number):
         digit_length -= 1
@@ -167,7 +191,16 @@ def get_similar_size_factors(number, order="ascending"):
     tuple:
         A tuple containing two factors of the number that are closest in size sorted by specified order.
         If no factors are found, returns the number itself and 1 (also sorted based on the specified order).
+
+    Raises
+    -------
+    ValueError
+        If input number is not an integer.
     """
+    if not isinstance(number, int):
+        raise ValueError(f"Input number is not an integer")
+    if not isinstance(order,str) or not (order=="ascending" or order=="descending"):
+        raise ValueError("Order must be either ascending or descending")
 
     def sort(a, b):
         if order == "ascending":
@@ -182,3 +215,4 @@ def get_similar_size_factors(number, order="ascending"):
             return sort(i, number // i)
     # If no factors are found, return the number itself and 1
     return sort(number, 1)
+
