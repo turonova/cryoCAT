@@ -781,7 +781,7 @@ class SamplePoints:
         return cent_mark
 
     @staticmethod
-    def mask_fill_gap(mask, marker_ero=10):
+    def mask_fill_gap(mask, marker_ero=10, level=1):
         """This function is used to fill gaps in a capsule mask using watershed flooding from the marker and the edge of volume.
 
         Parameters
@@ -790,6 +790,8 @@ class SamplePoints:
             Binary image mask to be processed.
         marker_ero : int, optional
             Radius for the erosion operation used to generate the capsule mask, by default 10.
+        level : int, optional
+            overcross threshold for the convex hull masks in different axis, by default 1.
 
         Returns
         -------
@@ -801,7 +803,7 @@ class SamplePoints:
         The function performs a series of morphological operations on the input mask, including closing, dilation, erosion, and opening. It uses the watershed algorithm to segment the mask into different regions. The function then generates a capsule mask by performing a logical XOR operation on the dilated and eroded core mask.
         """
         cap_mask, _, fill_mask = SamplePoints.slice_cvhull_closing(
-            mask, overlad_level=2, thickness_iter=15
+            mask, overlad_level=level, thickness_iter=15
         )
         core_mark = SamplePoints.marker_from_fill_mask(fill_mask, ero_radius=marker_ero)
         chull_mask_close = SamplePoints.process_mask(cap_mask, 20, mode="closing")
