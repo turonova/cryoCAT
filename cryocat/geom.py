@@ -4,6 +4,7 @@ from scipy.spatial.transform import Rotation as srot
 from cryocat.exceptions import UserInputError
 import matplotlib.pyplot as plt
 import os
+import math
 from scipy.interpolate import InterpolatedUnivariateSpline
 
 ANGLE_DEGREES_TOL = 10e-12
@@ -97,14 +98,14 @@ def load_dimensions(dims):
 
     """
 
-    if os.path.isfile(dims):
-        dimensions = pd.read_csv(dims, sep="\s+", header=None, dtype=float)
-    elif isinstance(dims, pd.DataFrame):
+    # if os.path.isfile(dims):
+    #     dimensions = pd.read_csv(dims, sep="\s+", header=None, dtype=float)
+    if isinstance(dims, pd.DataFrame):
         dimensions = dims
     else:
         dimensions = pd.DataFrame(dims)
 
-    if dimensions.shape == (1, 3):
+    if dimensions.shape == (1,3):
         dimensions.columns = ["x", "y", "z"]
     elif dimensions.shape[1] == 4:
         dimensions.columns = ["tomo_id", "x", "y", "z"]
@@ -1006,3 +1007,11 @@ def vector_angular_distance(v1, v2):
     v1_u = normalize_vector(v1)
     v2_u = normalize_vector(v2)
     return np.degrees(np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)))
+
+def distance_array(vol):
+    shell_grid = np.arange(math.floor(-len(vol[0]) / 2), math.ceil(len(vol[0]) / 2), 1)
+    xv, yv, zv = shell_grid, shell_grid, shell_grid
+    shell_space = np.meshgrid(xv, yv, zv, indexing="xy")  ## 'ij' denominates matrix indexing, 'xy' cartesian
+    distance_v = np.sqrt(shell_space[0] ** 2 + shell_space[1] ** 2 + shell_space[2] ** 2)
+
+    return distance_v

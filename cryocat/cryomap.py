@@ -6,6 +6,7 @@ from numpy import fft
 from scipy.ndimage import affine_transform
 from scipy.spatial.transform import Rotation as srot
 from scipy.interpolate import interp1d
+import re
 from cryocat import cryomask
 from skimage import transform
 
@@ -984,3 +985,37 @@ def calculate_flcf(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None,
     cc_map = np.roll(cc_map, cen, (0, 1, 2))
 
     return np.clip(cc_map, 0.0, 1.0)
+
+def symmterize_volume(vol, symmetry): 
+    """
+    Symmetrize the input volume based on the specified symmetry.
+
+    Parameters:
+    vol (ndarray): The input volume to be symmetrized.
+    symmetry (str or int or float): The symmetry of the volume. If a string, it should start with 'C' followed by a number indicating the rotational symmetry. If an integer or float, it directly specifies the rotational symmetry.
+
+    Returns:
+    ndarray: The symmetrized volume.
+
+    Raises:
+    ValueError: If the symmetry is not specified correctly.
+
+    """
+    if isinstance(symmetry, str):
+        nfold = int(re.findall(r"\d+", symmetry)[-1])
+    elif isinstance(symmetry, (int, float)):
+        nfold = symmetry
+    else:
+        raise ValueError("The symmetry has to be specified as a string (starting with C) or as a number (only for C)!")
+
+    inplane_step = 360 / nfold
+    rotated_sum = np.empty(vol.shape)
+
+    for inplane in range(1, nfold+1):
+        # print('inplane',inplane, inplane*inplane_step)
+        rotated_volume = rotate(vol, rotation_angles=[0, 0, 360%(inplane*inplane_step)])
+        # print('rot vol',rotated_volume[0][0][0:10])
+        rotated_sum = np.add(rotated_sum, rotated_volume)
+    sym_vol = np.divide(rotated_sum, nfold)
+
+    return sym_vol
