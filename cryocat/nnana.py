@@ -73,7 +73,7 @@ def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_numbe
         of its associated nearest neighbors.
 
     Args:
-        motl_a (cryocat.cryomotl.Motl): Inpt particle list of query points
+        motl_a (cryocat.cryomotl.Motl): Input particle list of query points
         motl_nn (cryocat.cryomotl.Motl): Input particle list of with nearest neighbors of interest
         pixel_size (float, optional): Pixel size. Defaults to 1.0.
         feature_id (str, optional): Particle list feature to distinguish between subsets of input motls. Defaults to "tomo_id".
