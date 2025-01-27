@@ -2,7 +2,10 @@ import numpy as np
 import pandas as pd
 from cryocat import ioutils
 from cryocat import starfileio
+from cryocat import cryomask
+from cryocat import cryomap
 import emfile
+import math
 
 
 def check_data_consistency(data1, data2, data_type1, data_type2):
@@ -385,3 +388,45 @@ def create_wedge_list_em_batch(
         emfile.write(output_file, wedge_array, {}, overwrite=True)
 
     return wedge_list_df
+
+def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape='wedge', output_path=None):
+
+    for value in tomo_list:
+        sub_wg = wg_list_star_df.loc[wg_list_star_df['tomo_num'] == value].copy()
+        angles = [i for i in sub_wg.loc[:, 'tilt_angle']]
+        
+        box_size = cryomask.get_correct_format(box_size)
+        mask = np.empty(box_size)
+
+        if shape == 'wedge' or shape == 'sph_wedge':
+            x = range(-box_size[0]//2, box_size[0]//2, 1)
+            y = range(-box_size[1]//2, box_size[1]//2, 1)
+            z = range(-box_size[2]//2, box_size[2]//2, 1)
+            xx, yy, zz = np.mgrid[ x, y, z]
+
+            mask_xz1 = xx > (math.tan(np.deg2rad(min(angles))) * zz) 
+            mask_xz2 = xx < (math.tan(np.deg2rad(max(angles))) * zz)
+
+            mask = ~np.logical_xor(mask_xz1, mask_xz2)
+            mask[box_size[0]//2, box_size[1]//2, box_size[2]//2] = 1
+
+        mask = mask.transpose(2, 1, 0)
+
+        if output_path is not None:
+            cryomap.write(mask, output_path, transpose=True, data_type=np.single)
+     
+    return mask
+
+def apply_wedge_mask(wedge_mask, in_map, rotation_zxz=None, output_path=None):
+    
+    rot_map = cryomask.rotate(cryomap.read(in_map), rotation_zxz)
+
+    ft_map = np.fft.fftshift(np.fft.fftn((rot_map)))
+    ft_map = ft_map * cryomap.read(wedge_mask)
+    out_map = np.fft.ifftn(np.fft.ifftshift(ft_map))
+
+    if output_path is not None:
+        cryomask.write(out_map, output_path)
+
+    return out_map
+
