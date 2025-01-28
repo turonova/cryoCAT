@@ -6,6 +6,7 @@ from skimage.segmentation import watershed
 from skimage.morphology import convex_hull_image
 from scipy.spatial import ConvexHull
 from scipy.spatial import KDTree
+import warnings
 
 from cryocat import tgeometry as tg
 from cryocat import surfsamp
@@ -51,6 +52,9 @@ class SamplePoints:
             samp.vertices = shape_input.get_coordinates()
             angles = shape_input.get_angles()
             samp.normals = geom.euler_angles_to_normals(angles)
+            # convert to unit vectors
+            magnitudes = np.linalg.norm(samp.normals, axis=1, keepdims=True)
+            samp.normals = samp.normals / magnitudes
         else:
             raise ValueError(
                 "The input is neither string, shape list, 3d volume or motl file!"
@@ -80,28 +84,31 @@ class SamplePoints:
             self.vertices, self.faces, self.normals, _ = skimage.measure.marching_cubes(
                 self.shape_mask, step_size=sampling_distance
             )
+            # make sure the normal vectors are unit vectors
+            magnitudes = np.linalg.norm(self.normals, axis=1, keepdims=True)
+            self.normals = self.normals / magnitudes
+            # calculate area
             self.area = skimage.measure.mesh_surface_area(self.vertices, self.faces)
             self.sample_distance = sampling_distance
         elif self.shape_list is not None:
             self.vertices, self.normals, self.faces, self.area = (
                 SamplePoints.get_oversampling(self.shape_list, sampling_distance)
             )
+            # make sure the normal vectors are unit vectors
+            magnitudes = np.linalg.norm(self.normals, axis=1, keepdims=True)
+            self.normals = self.normals / magnitudes
             self.sample_distance = sampling_distance
 
-    def write(self, path):
-        """Writes the vertices and normals to a motl_list.
+    def write(self, path, input_dict=None):
+        """Writes the vertices and normals to a `motl_list`.
 
         Parameters
         ----------
         path : str
-            The path where the file will be written.
-
-        Attributes
-        ----------
-        vertices : ndarray
-            The vertices of the object.
-        normals : ndarray
-            The normals of the object.
+            The destination path for the output file.
+        input_dict : dict, optional
+            A dictionary with keys from :attr:`cryocat.cryomotl.Motl.motl_columns` and new values to be assigned.
+            Coordinates and angles are derived from the class. Subtomograms are sequentially ordered starting from 1, and the class is set to 1 by default. All other fields will assign 0 if not specified in this dictionay
 
         Returns
         -------
@@ -109,8 +116,8 @@ class SamplePoints:
 
         Notes
         -----
-        This method creates pandas dataframes from the vertices and normals of the object,
-        converts the normals to Euler angles, and writes the resulting data to a file at the specified path.
+        This method creates pandas DataFrames from the object's vertices and normals, converts the normals to Euler angles,
+        and writes the resulting data to a file at the specified path.
         """
         # create panda frames from vertices
         pd_points = pd.DataFrame(
@@ -135,88 +142,74 @@ class SamplePoints:
         motl = cryomotl.Motl()
         motl.fill(pd_points)
         motl.fill(pd_angles)
+        motl.df["class"] = float(1)
+        motl.fill({"subtomo_id": np.arange(1, motl.df.shape[0] + 1, dtype="float")})
+
+        # fill other fields base on the input_dict
+        if input_dict is not None:
+            if any(
+                key == "x"
+                or key == "y"
+                or key == "z"
+                or key == "coord"
+                or key == "phi"
+                or key == "psi"
+                or key == "theta"
+                or key == "angles"
+                for key in input_dict.keys()
+            ):
+                raise ValueError(
+                    "Coordinates and angles are filled from the class. Please assign values only to motl_columns unrelated to them."
+                )
+            else:
+                motl.fill(input_dict)
+
         motl.write_out(path)
 
     def shift_points(self, distances):
-        """Shifts the points by a certain distance along the normal direction.
+        """Shift the vertices of a geometric object along their normal vectors.
 
         Parameters
         ----------
-        distances : array_like
-            Distances to shift the points. The shape should be the same as the shape of the vertices.
+        distances : int
+            Moving distances value in pixels to shift each vertex.
 
         Notes
         -----
-        The vertices are shifted in-place.
+        This function modifies the vertices of the object in place by moving each
+        vertex along its corresponding normal vector. The normal vectors are first converted
+        to unit normal vectors before applying the shift.
         """
+
         self.vertices = self.vertices + distances * self.normals
 
-    # TODO shifting on normal groups
-    def expand_points_in_groups(self, distances, tb_distances=None):
-        """Moves sample points within a specified distance in its normal direction.
+    def shift_points_in_groups(self, shift_dict):
+        """Shift points in groups based on a dictionary of shift values.
 
         Parameters
         ----------
-        points : ndarray
-            Array of sample coordinates.
-        normals : ndarray
-            Array of sample normals.
-        distances : int
-            Moving distance in pixels.
-        tb_distances : int, optional
-            Moving distance of top and bottom surfaces if needed. Defaults to None for similar movements as the other surfaces.
+        shift_dict : dict
+            A dictionary where keys are tuples representing normal vectors and values are the shift magnitudes in pixels to be applied to the vertices corresponding to those normal vectors.
 
-        Returns
-        -------
-        ndarray
-            Array of moved sample coordinates.
-        ndarray
-            Array of moved sample normals.
+        Raises
+        ------
+        UserWarning
+            If a key in `shift_dict` does not match any normal vectors in the point cloud, a warning is issued indicating that only matching vectors have been moved.
+
+        Notes
+        -----
+        This function modifies the `vertices` attribute of the object by shifting the points in the direction of their normal vectors, scaled by the corresponding value in `shift_dict`.
         """
-        moved_points = []
-        tb_points = []
-        if tb_distances == None:
-            tb_distances = distances
-        for i in range(len(self.normals)):
-            if (
-                abs(self.normals[i, 0]) == 1
-                and self.normals[i, 1] == 0
-                and self.normals[i, 2] == 0
-            ):
-                tb_points.append(i)
+        for key, value in shift_dict.items():
+            match = (self.normals == list(key)).all(axis=1)
+            if match.any():
+                self.vertices[match] = (
+                    self.vertices[match] + value * self.normals[match]
+                )
             else:
-                moved_points.append(i)
-
-        post_points = self.vertices.copy()
-        if tb_distances == 0:  # 0 for nonmove top and bottom
-            post_points[moved_points] = (
-                post_points[moved_points] + distances * self.normals[moved_points]
-            )
-        elif tb_distances != 0:  # other value for move top and bottom specific distance
-            post_points[moved_points] = (
-                post_points[moved_points] + distances * self.normals[moved_points]
-            )
-            post_points[tb_points] = (
-                post_points[tb_points] + tb_distances * self.normals[tb_points]
-            )
-
-        if tb_points == []:
-            self.vertices = post_points
-        else:
-            # removing the distinct points after shifting
-            drop_lim = [
-                max(post_points[tb_points][:, 0]),
-                min(post_points[tb_points][:, 0]),
-            ]
-            drop_list = [
-                i
-                for i in range(len(post_points))
-                if post_points[i, 0] > drop_lim[0] or post_points[i, 0] < drop_lim[1]
-            ]
-            cleaned_points = np.delete(post_points, drop_list, axis=0)
-            cleaned_normals = np.delete(self.normals, drop_list, axis=0)
-            self.vertices = cleaned_points
-            self.normals = cleaned_normals
+                warnings.warn(
+                    f"Vectors '{key}' were not matched to any normal vectors in the point cloud. Only the matching vectors have been moved."
+                )
 
     # remove sample points with specific normals value
     # TODO more precise removing method, removing point base on normal values/eular angles
