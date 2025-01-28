@@ -104,8 +104,8 @@ def get_soft_mask_stats(input_mask):
 
 def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
     tomo = cryomap.read(tomogram)
-    m = cryomotl.Motl(motl_path=motl_path)
-    m = m.update_coordinates()
+    m = cryomotl.Motl.load(motl_path=motl_path)
+    m.update_coordinates()
 
     max_idx = m.df["score"].idxmax()
 
