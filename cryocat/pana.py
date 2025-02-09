@@ -7,6 +7,8 @@ from cryocat import geom
 from cryocat import ioutils
 from cryocat import cryomotl
 from cryocat import tmana
+from cryocat import mathutils
+from cryocat import wedgeutils
 from scipy.spatial.transform import Rotation as srot
 import re
 from pathlib import Path
@@ -15,10 +17,235 @@ import os
 from skimage import measure
 from skimage import morphology
 import matplotlib.gridspec as gridspec
+from scipy.interpolate import RegularGridInterpolator
+from skimage.transform import rotate as skimage_rotate
 
 import warnings
 
 warnings.filterwarnings("ignore")
+
+
+def rotate_image(image, alpha, fill_mode="constant", fill_value=0.0):
+    return skimage_rotate(image, alpha, resize=False, mode=fill_mode, cval=fill_value)
+
+
+def _ctf(defocus, pshift, famp, cs, evk, f):
+    """Original 'docstring':
+    %% sg_ctf
+    % Calculate a CTF curve.
+    %
+    % WW 07-2018
+    """
+
+    defocus = defocus * 1.0e4
+    cs = cs * 1.0e7
+    pshift = pshift * np.pi / 180
+
+    h = 6.62606957e-34
+    c = 299792458
+    erest = 511000
+    v = evk * 1000
+    e = 1.602e-19
+
+    lam = (c * h) / np.sqrt(((2 * erest * v) + (v**2)) * (e**2)) * (10**10)
+    w = (1 - (famp**2)) ** 0.5
+
+    v = (np.pi * lam * (f**2)) * (defocus - 0.5 * (lam**2) * (f**2) * cs)
+    v += pshift
+    ctf = (w * np.sin(v)) + (famp * np.cos(v))
+
+    return ctf
+
+
+def generate_ctf(wl, slice_idx, slice_weight, binning):
+    """Generate ctf filter."""
+
+    tmpl_size = slice_weight.shape[0]
+    full_size = int(max(wl["tomo_x"].values[0], wl["tomo_y"].values[0], wl["tomo_z"].values[0]))
+    pixelsize = wl["pixelsize"].values[0] * binning
+
+    freqs_full = mathutils.compute_frequency_array((full_size,), pixelsize)
+    freqs_crop = mathutils.compute_frequency_array((tmpl_size,), pixelsize)[tmpl_size // 2 :]
+
+    f_idx = np.zeros(full_size, dtype="bool")
+    f_idx[:tmpl_size] = 1
+    f_idx = np.roll(f_idx, -tmpl_size // 2)
+    f_idx = np.nonzero(f_idx)[0]
+
+    defocus = np.array(wl["defocus"])
+    pshift = wl.get("pshift", np.zeros_like(defocus))
+
+    # microscope parameters
+    famp = wl["amp_contrast"].values[0]
+    cs = wl["cs"].values[0]
+    evk = wl["voltage"].values[0]
+
+    full_ctf = np.abs(_ctf(defocus[:, None], pshift[:, None], famp, cs, evk, freqs_full))
+    ft_ctf = np.fft.fft(full_ctf, axis=1)
+    ft_ctf = ft_ctf[:, f_idx] * tmpl_size / full_size
+    crop_ctf = np.real(np.fft.ifft(ft_ctf, axis=1))
+    crop_ctf = crop_ctf[:, tmpl_size // 2 :]
+
+    ctf_filt = np.zeros_like(slice_weight)
+    x = np.fft.ifftshift(mathutils.compute_frequency_array(slice_weight.shape, pixelsize))
+    for ictf, sidx in zip(crop_ctf, slice_idx):
+        ip = RegularGridInterpolator(
+            (freqs_crop,),  # Grid points
+            ictf,  # Values on the grid
+            method="linear",  # Interpolation method ('linear', 'nearest')
+            bounds_error=False,  # Do not raise error for out-of-bound points
+            fill_value=0,  # Fill with 0 for out-of-bound points
+        )
+        ctf_filt[sidx] += ip(x[sidx])
+
+    # ? np.nan_to_num(ctf_filt)
+    ctf_filt *= slice_weight
+
+    return ctf_filt
+
+
+def generate_exposure(wedgelist, slice_idx, slice_weight, binning):
+    """Generate exposure filter."""
+
+    expo = wedgelist["exposure"].values
+    a, b, c = (0.245, -1.665, 2.81)
+    pixelsize = wedgelist["pixelsize"].values[0] * binning
+
+    freq_array = np.fft.ifftshift(mathutils.compute_frequency_array(slice_weight.shape, pixelsize))
+
+    exp_filt = np.zeros_like(slice_weight)
+    for expi, idx in zip(expo, slice_idx):
+        freqs = freq_array[idx]
+        exp_filt[idx] += np.exp(-expi / (2 * ((a * freqs**b) + c)))
+
+    exp_filt *= slice_weight
+
+    return exp_filt
+
+
+def generate_wedgemask_slices_template(wedgelist, template_filter):
+    """Generate wedgemask slices for template"""
+
+    template_size = np.array(template_filter.shape)
+
+    # original codes uses matlab axes 1 and 3 which correspond to x and z
+    # according to the original gsg_mrcread; so with mrcfile this is 2 and 0
+    mx = np.max(template_size[[2, 0]])
+    img = np.zeros((mx, mx))
+    img[:, mx // 2] = 1.0
+
+    bpf_idx = template_filter > 0
+
+    # tmpl filter stuff
+    active_slices_idx = []
+    wedge_slices_weights = np.zeros_like(template_filter)
+    weight = np.zeros_like(template_filter)
+
+    for alpha in wedgelist["tilt_angle"]:
+
+        r_img = rotate_image(img, alpha)
+
+        # template filter
+        crop_r_img = r_img > np.exp(-2)
+
+        slice_vol = np.fft.ifftshift(np.transpose(np.tile(crop_r_img, (mx, 1, 1)), (2, 0, 1)))
+
+        slice_idx = slice_vol & bpf_idx
+        weight += slice_idx
+        active_slices_idx.append(np.nonzero(slice_idx))
+
+    # invert values for filter
+    w_idx = np.nonzero(weight)
+    wedge_slices_weights[w_idx] = 1.0 / weight[w_idx]
+
+    wedge_slices = np.zeros_like(weight)
+    wedge_slices[w_idx] = 1.0
+
+    return active_slices_idx, wedge_slices_weights, wedge_slices
+
+
+def generate_wedgemask_slices_tile(wedgelist, tile_filter):
+    """Generate wedgemask slices for tiles/subtomograms"""
+
+    tile_size = np.array(tile_filter.shape)
+
+    # original codes uses matlab axes 1 and 3 which correspond to x and z
+    # according to the original gsg_mrcread; so with mrcfile this is 2 and 0
+    mx = np.max(tile_size[[2, 0]])
+    img = np.zeros((mx, mx))
+    img[:, mx // 2] = 1.0
+
+    # tile filter stuff
+    tile_bin_slice = np.zeros(tile_size[[2, 0]], dtype="float32")
+
+    for alpha in wedgelist["tilt_angle"]:
+
+        r_img = rotate_image(img, alpha)
+        # tile filter
+        r_img = np.fft.fftshift(np.fft.fft2(r_img))
+        new_img = np.real(np.fft.ifft2(np.fft.ifftshift(r_img)))
+        new_img /= np.max(new_img)
+        tile_bin_slice += new_img > np.exp(-2)
+
+    # generate tile binary wedge filter
+    tile_bin_slice = (tile_bin_slice > 0).astype("float32")
+    wedge_slices = np.fft.ifftshift(np.transpose(np.tile(tile_bin_slice, (tile_size[1], 1, 1)), (2, 0, 1)))
+
+    return wedge_slices
+
+
+def generate_wedge_masks(
+    template_size,
+    tile_size,
+    wedgelist,
+    tomo_number,
+    binning=1,
+    low_pass_filter=None,
+    high_pass_filter=None,
+    ctf_weighting=False,
+    exposure_weighting=False,
+    output_template=None,
+    output_tile=None,
+):
+
+    filter_template = np.ones(cryomask.get_correct_format(template_size))
+    filter_tile = np.ones(cryomask.get_correct_format(tile_size))
+
+    # get relevant subset of the wedgelist
+    wedgelist = wedgeutils.load_wedge_list_sg(wedgelist)
+    wedgelist = wedgelist.loc[wedgelist["tomo_num"] == tomo_number]
+
+    if low_pass_filter:
+        filter_template = cryomap.lowpass(filter_template, fourier_pixels=low_pass_filter)
+        filter_tile = cryomap.lowpass(filter_tile, fourier_pixels=low_pass_filter)
+
+    if high_pass_filter:
+        filter_template = cryomap.highpass(filter_template, fourier_pixels=low_pass_filter)
+        filter_tile = cryomap.highpass(filter_tile, fourier_pixels=low_pass_filter)
+
+    active_slices_idx, wedge_slices_weights, wedge_slices_template = generate_wedgemask_slices_template(
+        wedgelist, filter_template
+    )
+    wedge_slices_template_tile = generate_wedgemask_slices_tile(wedgelist, filter_tile)
+
+    # init filters
+    filter_template = wedge_slices_template * filter_template
+    filter_tile = wedge_slices_template_tile * filter_tile
+
+    # update template filter
+    if exposure_weighting:
+        filter_template *= generate_exposure(wedgelist, active_slices_idx, wedge_slices_weights, binning)
+
+    if ctf_weighting:
+        filter_template *= generate_ctf(wedgelist, active_slices_idx, wedge_slices_weights, binning)
+
+    if output_template:
+        cryomap.write(filter_template, output_template, transpose=False, data_type=np.single)
+
+    if output_tile:
+        cryomap.write(filter_tile, output_tile, transpose=False, data_type=np.single)
+
+    return filter_template.transpose(2, 1, 0), filter_tile.transpose(2, 1, 0)
 
 
 def create_structure_path(folder_path, structure_name):
@@ -104,8 +331,8 @@ def get_soft_mask_stats(input_mask):
 
 def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
     tomo = cryomap.read(tomogram)
-    m = cryomotl.Motl(motl_path=motl_path)
-    m = m.update_coordinates()
+    m = cryomotl.Motl.load(motl_path)
+    m.update_coordinates()
 
     max_idx = m.df["score"].idxmax()
 

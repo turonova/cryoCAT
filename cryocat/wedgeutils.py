@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from cryocat import ioutils
 from cryocat import starfileio
+from cryocat import cryomap
 import emfile
 
 
@@ -36,7 +37,7 @@ def check_data_consistency(data1, data2, data_type1, data_type2):
     if not isinstance(data2, np.ndarray):
         raise TypeError(f"Expected np.ndarray but got {type(data2)} for {data_type2} file.")
 
-    #Check entire shape of both nparrays: could have same number of rows but different number of other dimensions
+    # Check entire shape of both nparrays: could have same number of rows but different number of other dimensions
     if data1.shape != data2.shape:
         raise ValueError(f"The {data_type1} file has different number of entries than the {data_type2} file!")
 
@@ -383,5 +384,46 @@ def create_wedge_list_em_batch(
         wedge_array = wedge_list_df.to_numpy()
         wedge_array = wedge_array.reshape((1, wedge_array.shape[0], wedge_array.shape[1])).astype(np.single)
         emfile.write(output_file, wedge_array, {}, overwrite=True)
+
+    return wedge_list_df
+
+
+def load_wedge_list_sg(input_data):
+
+    if isinstance(input_data, str):
+        wedge_list_df, _, _ = starfileio.Starfile.read(input_data)
+        wedge_list_df = wedge_list_df[0]
+    elif isinstance(input_data, pd.DataFrame):
+        wedge_list_df = input_data
+    else:
+        raise ValueError("Inavlid input - only strings (file names) or pandas data frames are supported.")
+
+    return wedge_list_df
+
+
+def load_wedge_list_em(input_data):
+
+    df_columns = ["tomo_id", "min_tilt_angle", "max_tilt_angle"]
+
+    if isinstance(input_data, str):
+        wedge_list_df = pd.DataFrame(columns=df_columns, data=np.squeeze(cryomap.read(input_data)).T)
+    elif isinstance(input_data, np.ndarray):
+        if input_data.dim == 2 and input_data.shape[1] == 3:
+            wedge_list_df = pd.DataFrame(columns=df_columns, data=input_data)
+        else:
+            raise ValueError(
+                "Provided array does not have the correct shape - it has to be 2D with second dim of size 3!"
+            )
+    elif isinstance(input_data, pd.DataFrame):
+        wedge_list_df = input_data
+        if all(col in input_data.columns for col in df_columns):
+            pass
+        else:
+            if len(input_data.columns) == len(df_columns):
+                wedge_list_df.columns = df_columns
+            else:
+                raise ValueError("Provided data frame does not have the correct shape!")
+    else:
+        raise ValueError("Inavlid input - only strings (file names), np.ndarrays or pandas data frames are supported.")
 
     return wedge_list_df
