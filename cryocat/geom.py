@@ -350,6 +350,19 @@ def cone_distance(input_rot1, input_rot2):
 
 
 def get_axis_from_rotation(input_rotation, axis="z"):
+    """Given an input rotation, compute the desired unit normal vector
+    from the coordinate frame associated to the rotation.
+
+    Args:
+        input_rotation (scipy.spatial.transform.Rotation object): Rotation object describing orientation of particle
+        axis (str, optional): Desired coordinate direction. Defaults to "z".
+
+    Raises:
+        ValueError: Input must be valid scipy rotation object.
+
+    Returns:
+        ndarray: unit vector
+    """
 
     matrix_rep = input_rotation.as_matrix()
 
@@ -366,14 +379,17 @@ def get_axis_from_rotation(input_rotation, axis="z"):
 
 
 def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
+    """_summary_
 
-    """
-    y_axis1 = get_axis_from_rotation(input_rot1, axis="y")
-    y_axis2 = get_axis_from_rotation(input_rot2, axis="y")
+    Args:
+        input_rot1 (_type_): _description_
+        input_rot2 (_type_): _description_
+        convention (str, optional): _description_. Defaults to "zxz".
+        degrees (bool, optional): _description_. Defaults to True.
+        c_symmetry (int, optional): _description_. Defaults to 1.
 
-    inplane_angle = angle_between_n_vectors(y_axis1, y_axis2)
-
-    return inplane_angle
+    Returns:
+        _type_: _description_
     """
     phi1 = np.array(input_rot1.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
     phi2 = np.array(input_rot2.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
