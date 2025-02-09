@@ -4,11 +4,13 @@ import warnings
 import decimal
 import os
 from cryocat import cryomotl
+from cryocat import cryomap
 from cryocat import cryomask
 from cryocat import geom
 from cryocat import mathutils
 from cryocat import ribana
 from cryocat import nnana
+from cryocat import ioutils
 from scipy.spatial.transform import Rotation as srot
 
 
@@ -132,7 +134,10 @@ class NPC:
 
         # tracing
         traced_motl = ribana.trace_chains(
-            motl_entry.df, motl_exit.df, max_distance=max_trace_distance, min_distance=min_trace_distance
+            motl_entry.df,
+            motl_exit.df,
+            max_distance=max_trace_distance,
+            min_distance=min_trace_distance,
         )
         traced_motl.df.sort_values(["tomo_id", "object_id", "geom2"], inplace=True)
         ribana.add_occupancy(traced_motl)
@@ -227,6 +232,27 @@ class NPC:
 
     @staticmethod
     def merge_subunits(input_motl, npc_radius=55):
+        """Merge subunits within a given radius in input_motl.
+
+        Parameters
+        ----------
+        input_motl : str or pd.DataFrame
+            If a string is provided, it is assumed to be a path to the motl file.
+            If a DataFrame is provided, it is used directly.
+        npc_radius : int, optional
+            The radius within which to search for subunits to merge. Default is 55 pixels.
+
+        Returns
+        -------
+        input_motl : pd.DataFrame
+            The input motl data with merged subunits. The dataframe is modified in-place.
+
+        Notes
+        -----
+        The function calculates the centers of each objects in the motl and merges objects with a center that's closer than the npc_radius.
+        All subunits were renumbered and assign back to the input_motl. The number of subunits per object was kept under geom1 in updated motl.
+        """
+
         if isinstance(input_motl, (str, pd.DataFrame)):
             input_motl = cryomotl.Motl.load(input_motl)
 
@@ -333,8 +359,348 @@ class NPC:
 class PleomorphicSurface:
 
     @staticmethod
+    def get_parametric_description(input_motl, feature_id="object_id", output_file=None):
+
+        in_motl = cryomotl.Motl.load(input_motl)
+        features = in_motl.get_unique_values(feature_id=feature_id)
+        el_params_all = pd.DataFrame()
+
+        for f in features:
+            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id)
+            coord = fm.get_coordinates()
+            el_params = PleomorphicSurface.load_parametric_surface(feature_id=feature_id)
+            center, radii, evecs, v = geom.fit_ellipsoid(coord)
+            el_params["tomo_id"] = [fm.df.iloc[0]["tomo_id"]]  # assuming that each object has unified tomo_id
+            el_params[feature_id] = [f]
+            el_params[["cx", "cy", "cz"]] = [center]
+            el_params[["rx", "ry", "rz"]] = [radii]
+            el_params[["ev1x", "ev1y", "ev1z"]] = [evecs[0, :]]
+            el_params[["ev2x", "ev2y", "ev2z"]] = [evecs[1, :]]
+            el_params[["ev3x", "ev3y", "ev3z"]] = [evecs[2, :]]
+            el_params[["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]] = [v]
+            el_params_all = pd.concat([el_params_all, el_params])
+
+        el_params_all.reset_index(drop=True, inplace=True)
+
+        if output_file is not None:
+            el_params_all.to_csv(output_file, index=False)  # `index=False` excludes the row index
+
+        return el_params_all
+
+    @staticmethod
+    def load_parametric_surface(parametric_surface=None, feature_id="object_id"):
+
+        columns = [
+            "tomo_id",
+            feature_id,
+            "cx",
+            "cy",
+            "cz",
+            "rx",
+            "ry",
+            "rz",
+            "ev1x",
+            "ev1y",
+            "ev1z",
+            "ev2x",
+            "ev2y",
+            "ev2z",
+            "ev3x",
+            "ev3y",
+            "ev3z",
+            "p1",
+            "p2",
+            "p3",
+            "p4",
+            "p5",
+            "p6",
+            "p7",
+            "p8",
+            "p9",
+            "p10",
+        ]
+
+        if isinstance(parametric_surface, cryomotl.Motl):
+            el_params = PleomorphicSurface.get_parametric_description(parametric_surface, feature_id=feature_id)
+        elif isinstance(parametric_surface, str):
+            el_params = pd.read_csv("parametric_surface")
+        elif isinstance(parametric_surface, np.ndarray):
+            el_params = pd.DataFrame(data=parametric_surface, columns=columns)
+        elif not parametric_surface:
+            el_params = pd.DataFrame(columns=columns)
+        else:
+            raise ValueError("Invalid type of parametric surface")
+
+        return el_params
+
+    @staticmethod
+    def assign_affiliation_mask_based(
+        input_motl,
+        object_motl,
+        tomo_dim,
+        shell_size,
+        feature_id="object_id",
+        output_file=None,
+        radius_offset=0.0,
+        motl_radius_id="geom5",
+    ):
+
+        in_motl = cryomotl.Motl.load(input_motl)
+        object_motl = cryomotl.Motl.load(object_motl)
+
+        tomo_dim = ioutils.dimensions_load(tomo_dim)
+        tomos = in_motl.get_unique_values(feature_id="tomo_id")
+
+        assigned_motl_df = pd.DataFrame()
+
+        for t in tomos:
+            tm = in_motl.get_motl_subset(feature_values=t, feature_id="tomo_id", reset_index=True)
+            tm_dim = tomo_dim.loc[tomo_dim["tomo_id"] == t, ["x", "y", "z"]].values[0]
+            coords = tm.get_coordinates().astype(int)
+            print(t)
+            tom = object_motl.get_motl_subset(feature_values=t, feature_id="tomo_id")
+            for o in tom.get_unique_values(feature_id=feature_id):
+                om = tom.get_motl_subset(feature_values=o, feature_id=feature_id)
+                om.df["class"] = 1
+                to_radius = tom.df.iloc[0][motl_radius_id] + radius_offset
+                object_mask = cryomask.generate_mask("s_shell_r" + str(int(to_radius)) + "_s" + str(int(shell_size)))
+                tomo_mask = cryomap.place_object(object_mask, om, volume_shape=tm_dim, feature_to_color="class")
+                mask_values = tomo_mask[coords[:, 0], coords[:, 1], coords[:, 2]]
+
+                # Get the indices of the filtered coordinates
+                idx_to_keep = np.where(mask_values == 1)[0]
+                tm.df[feature_id] = o
+                assigned_motl_df = pd.concat([assigned_motl_df, tm.df.iloc[idx_to_keep]])
+
+        assigned_motl_df.reset_index(drop=True, inplace=True)
+        assigned_motl = cryomotl.Motl(assigned_motl_df)
+
+        if output_file is not None:
+            assigned_motl.write_out(output_file)
+
+        return assigned_motl
+
+    @staticmethod
+    def assign_affiliation_distance_based(
+        input_motl, parametric_surface, feature_id="object_id", output_file=None, unassigned_value=None
+    ):
+
+        in_motl = cryomotl.Motl.load(input_motl)
+
+        # if assignment was already done and should be considered only the unassigned values are checked
+        if unassigned_value:
+            assigned_motl = cryomotl.Motl(in_motl.df)  # copy the motl
+            in_motl.df = in_motl.df[in_motl.df[feature_id] == unassigned_value]
+            in_motl.df.reset_index(drop=True, inplace=True)
+
+        el_params = PleomorphicSurface.load_parametric_surface(
+            parametric_surface=parametric_surface, feature_id=feature_id
+        )
+        tomos = in_motl.get_unique_values(feature_id="tomo_id")
+
+        assigned_motl_df = pd.DataFrame()
+
+        for t in tomos:
+            tm = in_motl.get_motl_subset(feature_values=t, feature_id="tomo_id", reset_index=True)
+            coord = tm.get_coordinates()
+            fm_ep = el_params.loc[el_params["tomo_id"] == t, [feature_id, "cx", "cy", "cz"]].values
+
+            num_points = coord.shape[0]
+            closest_ids = np.full(num_points, -1)  # -1 indicates no intersection found
+            closest_distances = np.full(num_points, np.inf)  # Start with infinity for closest distance
+
+            for i in range(num_points):
+                for e in range(fm_ep.shape[0]):
+                    distance = np.linalg.norm(coord[i, :] - fm_ep[e, 1:])
+                    if distance < closest_distances[i]:  # Closest absolute distance
+                        closest_distances[i] = distance
+                        closest_ids[i] = fm_ep[e, 0]  # Store ellipsoid ID
+
+            tm.df[feature_id] = closest_ids
+            assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
+
+        if unassigned_value:
+            assigned_motl.df.loc[assigned_motl.df[feature_id] == unassigned_value, :] = assigned_motl_df.values
+        else:
+            assigned_motl = cryomotl.Motl(assigned_motl_df)
+
+        assigned_motl.df.reset_index(drop=True, inplace=True)
+
+        if output_file is not None:
+            assigned_motl.write_out(output_file)
+
+        return assigned_motl
+
+    @staticmethod
+    def assign_affiliation_intersection_based(
+        input_motl, parametric_surface, feature_id="object_id", output_file=None, keep_unassigned=True
+    ):
+
+        in_motl = cryomotl.Motl.load(input_motl)
+        el_params = PleomorphicSurface.load_parametric_surface(
+            parametric_surface=parametric_surface, feature_id=feature_id
+        )
+        tomos = in_motl.get_unique_values(feature_id="tomo_id")
+
+        assigned_motl_df = pd.DataFrame()
+
+        for t in tomos:
+            tm = in_motl.get_motl_subset(feature_values=t, feature_id="tomo_id")
+            coord = tm.get_coordinates()
+            normal_vectors = -geom.euler_angles_to_normals(tm.get_angles())
+            fm_ep = el_params.loc[
+                el_params["tomo_id"] == t, [feature_id, "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]
+            ].values
+
+            num_points = coord.shape[0]
+            closest_ids = np.full(num_points, -1)  # -1 indicates no intersection found
+            closest_distances = np.full(num_points, np.inf)  # Start with infinity for closest distance
+
+            for i in range(num_points):
+                for e in range(fm_ep.shape[0]):
+                    _, _, d1, d2, is_inside = geom.ray_ellipsoid_intersection_3d(
+                        coord[i, :], normal_vectors[i, :], fm_ep[e, 1:]
+                    )
+
+                    if is_inside:
+                        closest_distances[i] = np.inf
+                        closest_ids[i] = -1
+                        continue
+
+                    # Consider both intersection points (p1, p2) if they are not NaN
+                    distances = [p for p in [d1, d2] if not np.isnan(p) and p > 0]
+
+                    for d in distances:
+                        # Check if this distance is closer than the current closest
+                        if abs(d) < abs(closest_distances[i]):  # Closest absolute distance
+                            closest_distances[i] = d
+                            closest_ids[i] = fm_ep[e, 0]  # Store ellipsoid ID
+
+            tm.df[feature_id] = closest_ids
+            assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
+
+        unassigned = assigned_motl_df[assigned_motl_df[feature_id] == -1].shape[0]
+
+        if not keep_unassigned:
+            assigned_motl_df = assigned_motl_df[assigned_motl_df[feature_id] != -1]
+
+        assigned_motl_df.reset_index(drop=True, inplace=True)
+        assigned_motl = cryomotl.Motl(assigned_motl_df)
+
+        print(f"{unassigned} particles did not have any intersection or were inside.")
+
+        if output_file is not None:
+            assigned_motl.write_out(output_file)
+
+        return assigned_motl
+
+    @staticmethod
+    def compute_intersection(input_motl, parametric_surface, feature_id="object_id"):
+
+        in_motl = cryomotl.Motl.load(input_motl)
+        el_params = PleomorphicSurface.load_parametric_surface(
+            parametric_surface=parametric_surface, feature_id=feature_id
+        )
+        features = in_motl.get_unique_values(feature_id=feature_id)
+        intersection_points = pd.DataFrame(columns=["subtomo_id", "feature_id", "d1", "d2"])
+
+        for f in features:
+            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
+            coord = fm.get_coordinates()
+            normal_vectors = geom.euler_angles_to_normals(fm.get_angles())
+            fm_ep = el_params.loc[
+                el_params[feature_id] == f, ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]
+            ].values[0]
+            for i in np.arange(0, coord.shape[0]):
+                _, _, d1, d2, _ = geom.ray_ellipsoid_intersection_3d(coord[i, :], normal_vectors[i, :], fm_ep)
+                new_row = pd.Series({"subtomo_id": fm.df.iloc[i]["subtomo_id"], "feature_id": f, "d1": d1, "d2": d2})
+                intersection_points = pd.concat([intersection_points, new_row.to_frame().T], ignore_index=True)
+
+        return intersection_points
+
+    @staticmethod
+    def clean_by_normals(input_motl, feature_id="object_id", threshold=None, output_file=None):
+
+        in_motl = cryomotl.Motl.load(input_motl)
+        features = in_motl.get_unique_values(feature_id=feature_id)
+        el_params = PleomorphicSurface.get_parametric_description(in_motl, feature_id=feature_id)
+
+        cleaned_motl_df = pd.DataFrame()
+
+        for f in features:
+            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
+            coord = fm.get_coordinates()
+            normals = geom.euler_angles_to_normals(fm.get_angles())
+            center = el_params.loc[el_params[feature_id] == f, ["cx", "cy", "cz"]].values
+            normals_t = coord - np.tile(center, (coord.shape[0], 1))
+            diff_angles = geom.angle_between_n_vectors(normals, normals_t)
+            if not threshold:
+                to_remove = np.where(np.abs(diff_angles) > np.std(diff_angles))
+            else:
+                to_remove = np.where(np.abs(diff_angles) > threshold)
+            fm.df = fm.df.drop(index=to_remove[0])
+            cleaned_motl_df = pd.concat([cleaned_motl_df, fm.df])
+
+        cleaned_motl_df.reset_index(drop=True, inplace=True)
+
+        cleaned_motl = cryomotl.Motl(cleaned_motl_df)
+
+        print(
+            f"{in_motl.df.shape[0]-cleaned_motl.df.shape[0]} particles "
+            f"({((in_motl.df.shape[0]-cleaned_motl.df.shape[0])/in_motl.df.shape[0]*100):.2f}%) were removed from the list."
+        )
+
+        if output_file is not None:
+            cleaned_motl.write_out(output_file)
+
+        return cleaned_motl
+
+    @staticmethod
+    def clean_by_radius(input_motl, feature_id="object_id", threshold=None, output_file=None):
+
+        in_motl = cryomotl.Motl.load(input_motl)
+        features = in_motl.get_unique_values(feature_id=feature_id)
+        el_params = PleomorphicSurface.get_parametric_description(in_motl, feature_id=feature_id)
+
+        cleaned_motl_df = pd.DataFrame()
+
+        for f in features:
+            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
+            coord = fm.get_coordinates()
+            center = el_params.loc[el_params[feature_id] == f, ["cx", "cy", "cz"]].values
+            radius = np.mean(el_params.loc[el_params[feature_id] == f, ["rx", "ry", "rz"]].values)
+            distances = np.linalg.norm(coord - center, axis=1)
+            if not threshold:
+                to_remove = np.where(
+                    (distances < radius - np.std(distances)) | (distances > radius + np.std(distances))
+                )  # maybe diff from radius?
+            else:
+                to_remove = np.where((distances < radius - threshold) | (distances > radius + threshold))
+
+            fm.df = fm.df.drop(index=to_remove[0])
+            cleaned_motl_df = pd.concat([cleaned_motl_df, fm.df])
+
+        cleaned_motl_df.reset_index(drop=True, inplace=True)
+
+        cleaned_motl = cryomotl.Motl(cleaned_motl_df)
+
+        print(
+            f"{in_motl.df.shape[0]-cleaned_motl.df.shape[0]} particles "
+            f"({((in_motl.df.shape[0]-cleaned_motl.df.shape[0])/in_motl.df.shape[0]*100):.2f}%) were removed from the list."
+        )
+
+        if output_file is not None:
+            cleaned_motl.write_out(output_file)
+
+        return cleaned_motl
+
+    @staticmethod
     def create_spherical_oversampling(
-        input_motl, motl_radius_id, sampling_distance, sampling_angle=360, output_path=None
+        input_motl,
+        motl_radius_id,
+        sampling_distance,
+        sampling_angle=360,
+        output_path=None,
     ):
         motl = cryomotl.Motl.load(input_motl)
         new_motl_df = pd.DataFrame()

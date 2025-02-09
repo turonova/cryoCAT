@@ -1,6 +1,7 @@
 import h5py
 import emfile
 import mrcfile
+import re
 import numpy as np
 from numpy import fft
 from scipy.ndimage import affine_transform
@@ -95,6 +96,36 @@ def resolution2pixels(resolution, edge_size, pixel_size, print_out=True):
         print(f"The target resolution corresponds to {pixels} pixels.")
 
     return pixels
+
+
+def binarize(input_map, threshold=0.5):
+    """Converts a given input map to a binary map based on a specified threshold.
+
+    Parameters
+    ----------
+    input_map : array_like or str
+        The input map to binarize. Can be an array or a path to a file containing the map data.
+    threshold : float, default=0.5
+        The threshold value used for binarization. Values greater than this threshold will be set to 1,
+        and values less than or equal to the threshold will be set to 0. Defaults to 0.5.
+
+    Returns
+    -------
+    binary_map : ndarray
+        The binarized map as a numpy array of integers (0s and 1s).
+
+    Examples
+    --------
+    >>> input_map = np.array([0.2, 0.6, 0.4, 0.8])
+    >>> binarize(input_map)
+    array([0, 1, 0, 1])
+    """
+
+    input_map = read(input_map)
+
+    binary_map = (input_map > threshold).astype(int)
+
+    return binary_map
 
 
 def get_filter_radius(edge_size, fourier_pixels, target_resolution, pixel_size):
@@ -369,12 +400,12 @@ def read(input_map, transpose=True, data_type=None):
     """
 
     if isinstance(input_map, str):
-        if (
-            input_map.endswith(".mrc")
-            or input_map.endswith(".rec")
-            or input_map.endswith(".st")
-            or input_map.endswith(".ali")
-        ):
+
+        def valid_mrc(filename):
+            pattern = r"\.(mrc|ali|rec|st)(\.\d+)?$"
+            return bool(re.search(pattern, filename))
+
+        if valid_mrc(input_map):
             data = mrcfile.open(input_map).data
         elif input_map.endswith(".em"):
             data = emfile.read(input_map)[1]
@@ -533,6 +564,27 @@ def rotate(
         write(rot_struct, output_name, data_type=np.single)
 
     return rot_struct
+
+
+def crop(input_map, new_size, output_file=None, crop_coord=None):
+
+    input_map = read(input_map)
+
+    new_size = cryomask.get_correct_format(new_size)
+
+    if crop_coord is None:
+        crop_coord = cryomask.get_correct_format(input_map.shape) // 2
+    else:
+        crop_coord = cryomask.get_correct_format(crop_coord)
+
+    vs, ve, _, _ = get_start_end_indices(crop_coord, input_map.shape, new_size)
+
+    cropped_volume = input_map[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
+
+    if output_file is not None:
+        write(cropped_volume, output_file, data_type=np.single)
+
+    return cropped_volume
 
 
 def shift(map, delta):

@@ -622,10 +622,10 @@ def ellipsoid_shell_mask(mask_size, shell_thickness, radii, center=None, gaussia
 
     shell_thickness = shell_thickness / 2
 
-    e1 = ellipsoid_mask(mask_size, radii == radii + shell_thickness, center=center)
-    e2 = ellipsoid_mask(mask_size, radius=radii - shell_thickness, center=center)
+    e1 = ellipsoid_mask(mask_size, radii = radii + shell_thickness, center=center)
+    e2 = ellipsoid_mask(mask_size, radii = radii - shell_thickness, center=center)
 
-    shell_mask = e1 - e2
+    shell_mask = e1 & ~e2
 
     shell_mask = postprocess(shell_mask, gaussian, angles, output_name)
 
@@ -978,7 +978,7 @@ def get_mass_center(input_mask):
     mask_center = (start_ids + end_ids) / 2
 
     for i in range(3):
-        mask_center[i] = decimal.Decimal(mask_center[i]).to_integral_value(rounding=decimal.ROUND_HALF_UP) + 1
+        mask_center[i] = decimal.Decimal(mask_center[i]).to_integral_value(rounding=decimal.ROUND_HALF_UP)
 
     return mask_center.astype(int)
 

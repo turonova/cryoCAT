@@ -22,6 +22,7 @@ Modules
 
     cryomap
     cryomask
+    geom
     ioutils
     mathutils
     mdoc
