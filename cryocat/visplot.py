@@ -8,19 +8,19 @@ import matplotlib.ticker as mticker
 
 def get_colors_from_palette(num_colors, pallete_name="tab10"):
     """Generate a list of color codes in hexadecimal format from a specified color palette.
-    
+
     Parameters
     ----------
     num_colors : int
         The number of distinct colors to generate.
     pallete_name : str, optional
         The name of the color palette to use (default is "tab10").
-    
+
     Returns
     -------
     list of str
         A list containing the hexadecimal color codes.
-    
+
     Examples
     --------
     >>> get_colors_from_palette(3)
@@ -28,7 +28,7 @@ def get_colors_from_palette(num_colors, pallete_name="tab10"):
     >>> get_colors_from_palette(5, pallete_name="viridis")
     ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725']
     """
-    
+
     # Generate a colormap with the desired number of distinct colors
     cmap = plt.cm.get_cmap(pallete_name, num_colors)
 
@@ -308,11 +308,13 @@ def plot_class_occupancy(
     for i, c in enumerate(sorted(occupancy_dic)):
         ax.plot(range(1, len(occupancy_dic[c]) + 1), occupancy_dic[c], label="Class " + str(c), color=color_classes[i])
 
-    ax.set_xlabel("Iteration")  
+    ax.set_xlabel("Iteration")
     ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
     ax.set_xlim(1, len(occupancy_dic[c]))
     ax.set_ylabel("Number of particles")
-    ax.set_ylim(0,)
+    ax.set_ylim(
+        0,
+    )
     if graph_title is None:
         ax.set_title("Class occupancy progress")
     else:
@@ -346,7 +348,9 @@ def plot_class_stability(
     ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
     ax.set_xlim(1, len(values))
     ax.set_ylabel("Particles changing their class")
-    ax.set_ylim(0,)
+    ax.set_ylim(
+        0,
+    )
     if graph_title is None:
         ax.set_title("Stability of classes")
     else:
@@ -422,3 +426,109 @@ def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stab
 
     if output_file is not None:
         fig.savefig(output_file, dpi=fig.dpi)
+
+
+def scatter_with_histogram(
+    data_x,
+    data_y,
+    bins_x=None,
+    bins_y=None,
+    colors_x=None,
+    colors_y=None,
+    edges_x=None,
+    edges_y=None,
+    axis_title_x=None,
+    axis_title_y=None,
+    output_file=None,
+):
+
+    if not bins_x:
+        bins_x = 30
+    if not bins_y:
+        bins_y = 30
+
+    x_bins = np.linspace(min(data_x), max(data_x), bins_x)
+    y_bins = np.linspace(min(data_y), max(data_y), bins_y)
+
+    def assign_colors(colors, edges):
+        if not colors:
+            colors = ["cornflowerblue"]
+        else:
+            if isinstance(colors, list):
+                pass
+            elif isinstance(colors, str) and edges:  # assuming colormap
+                cmap = plt.get_cmap(colors, len(edges))
+                colors = [cmap(i) for i in range(len(edges))]
+            elif isinstance(colors, str):
+                colors = [colors]
+            else:
+                raise ValueError(
+                    f"The colors have to be either a list of colors, name of a single color or name of a colormap ."
+                )
+
+        return colors
+
+    colors_x = assign_colors(colors=colors_x, edges=edges_x)
+    colors_y = assign_colors(colors=colors_y, edges=edges_y)
+
+    def get_color(value, colors, edges):
+        if not edges:
+            colors[0]
+        else:
+            for i, e in enumerate(edges):
+                if value < e:
+                    return colors[i]
+
+    # Create figure and grid layout
+    fig = plt.figure(figsize=(20, 10), dpi=300)
+    gs = fig.add_gridspec(4, 4, hspace=0, wspace=0)
+
+    # Scatter plot (main plot)
+    ax_scatter = fig.add_subplot(gs[1:, :-1])
+    ax_scatter.scatter(data_x, data_y, alpha=0.5)
+
+    if axis_title_x:
+        ax_scatter.set_xlabel(axis_title_x)
+    if axis_title_y:
+        ax_scatter.set_ylabel(axis_title_y)
+
+    # Histogram on top (X distribution)
+    ax_histx = fig.add_subplot(gs[0, :-1], sharex=ax_scatter)
+    hist_x, bin_edges_x = np.histogram(data_x, bins=x_bins)
+
+    for i in range(len(bin_edges_x) - 1):
+        ax_histx.bar(
+            bin_edges_x[i],
+            hist_x[i],
+            width=bin_edges_x[1] - bin_edges_x[0],
+            color=get_color(bin_edges_x[i], colors_x, edges_x),
+            alpha=0.7,
+            align="edge",
+            edgecolor="black",
+        )
+
+    ax_histx.set_ylabel("Count")
+    ax_histx.xaxis.set_tick_params(labelbottom=False)  # Hide x labels
+
+    # Histogram on right (Y distribution)
+    ax_histy = fig.add_subplot(gs[1:, -1], sharey=ax_scatter)
+    hist_y, bin_edges_y = np.histogram(data_y, bins=y_bins)
+
+    for i in range(len(bin_edges_y) - 1):
+        ax_histy.barh(
+            bin_edges_y[i],
+            hist_y[i],
+            height=bin_edges_y[1] - bin_edges_y[0],
+            color=get_color(bin_edges_y[i], colors_y, edges_y),
+            alpha=0.7,
+            align="edge",
+            edgecolor="black",
+        )
+
+    ax_histy.set_xlabel("Count")
+    ax_histy.yaxis.set_tick_params(labelleft=False)  # Hide y labels
+
+    if output_file is not None:
+        fig.savefig(output_file, dpi=fig.dpi)
+
+    plt.show()

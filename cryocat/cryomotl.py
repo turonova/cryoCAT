@@ -193,21 +193,27 @@ class Motl:
             if paired_key in input_df.columns:
                 self.df[em_key] = pd.to_numeric(input_df[paired_key])
 
-    def clean_by_distance(self, distnace_in_voxels, feature_id, metric_id="score", score_cut=0, dist_mask=None):
+    def clean_by_distance(
+        self,
+        distance_in_voxels,
+        feature_id,
+        metric_id="score",
+        keep_greater=True,
+        dist_mask=None,
+    ):
         """Cleans `df` by removing particles closer than a given distnace threshold (in voxels).
 
         Parameters
         ----------
-        distnace_in_voxels : float
+        distance_in_voxels : float
             The distance cutoff in voxels.
         feature_id : str
             The ID of the feature by which the particles are grouped before cleaning.
         metric_id : str, default='score'
             The ID of the metric to decide which particles to keep. Defaults to "score". The particle with the greater
             value is kept.
-        score_cut : float, default=0.0
-            The cutoff value for the metric. Entries with metric values below this cutoff
-            will be removed. Defaults to 0.0.
+        keep_greater: bool, default=True
+            Whether to keep the particles with great (True) or lower (False) value. Default is True.
         dist_mask : str or ndarray
             Binary mask/map (or path to it) for directional cleaning. If provided the distance_in_voxels is used to
             find all points within this radius and then those points in the region where the mask is 1
@@ -224,7 +230,7 @@ class Motl:
         """
 
         # Distance cutoff (pixels)
-        d_cut = distnace_in_voxels
+        d_cut = distance_in_voxels
 
         # Load mask if provided
         if dist_mask is not None:
@@ -249,12 +255,16 @@ class Motl:
             # Parse scores
             temp_scores = feature_m.df[metric_id].values
 
-            # Sort scores
-            sort_idx = np.argsort(temp_scores)[::-1]
+            # prepare scores
+            if keep_greater:
+                # Sort scores
+                sort_idx = np.argsort(temp_scores)[::-1]
+            else:  # lower than
+                # Sort scores
+                sort_idx = np.argsort(temp_scores)
 
             # Temporary keep index
             temp_keep = np.ones((n_temp_motl,), dtype=bool)
-            temp_keep[temp_scores < score_cut] = False
 
             # Loop through in order of score
             for j in sort_idx:
@@ -283,6 +293,7 @@ class Motl:
             # Add entries to main list
             cleaned_df = pd.concat((cleaned_df, feature_m.df.iloc[temp_keep, :]), ignore_index=True)
 
+        print(f"Cleaned {self.df.shape[0] - cleaned_df.shape[0]} particles.")
         self.df = cleaned_df
 
     def clean_by_distance_to_points(
