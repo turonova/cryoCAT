@@ -93,6 +93,10 @@ def get_all_files_matching_pattern(filename_pattern, numeric_wildcards_only=Fals
     wildcards = []
     file_names = []
 
+    #No regex to be found
+    if "*" not in filename_pattern:
+        return [filename_pattern] if not return_wildcards else ([filename_pattern], [])
+
     for file_name in files_in_dir:
         full_path = os.path.join(dir_name, file_name)
         if os.path.isfile(full_path):
@@ -134,6 +138,11 @@ def sort_files_by_idx(file_list, idx_list, order="ascending"):
     numpy.ndarray
         An array of file names sorted according to the specified order of indices.
 
+    Raises
+    -------
+    ValueError
+        If idx_list and file_list aren't of list type.
+        If idx_list doesn't contain only integers, or if file_list doesn't contain only strings.
     Examples
     --------
     >>> sort_files_by_idx(['file1.txt', 'file2.txt', 'file3.txt'], ['2', '1', '3'])
@@ -143,14 +152,28 @@ def sort_files_by_idx(file_list, idx_list, order="ascending"):
     array(['file3.txt', 'file1.txt', 'file2.txt'])
     """
 
-    int_array = np.array([int(s) for s in idx_list])
-    sorted_indices = np.argsort(int_array)
+    if not isinstance(idx_list, list) or any(not isinstance(item, str) for item in idx_list) or len(idx_list)==0:
+        raise ValueError(f"idx_list must be a list of strings")
+    if not isinstance(file_list, list) or any(not isinstance(item, str) for item in file_list) or len(file_list)==0:
+        raise ValueError(f"file_list must be a list of strings")
 
-    if order == "descending":
-        sorted_indices = sorted_indices[::-1]
+    if any(not x.isdigit() for x in idx_list):
+        raise ValueError(f"idx_list can't contain elements that can't be converted to integer.")
+    else:
+        int_array = np.array([int(s) for s in idx_list])
+
+    #indices can't be empty, can't be outside of file_list boundaries, indices can't be repeated
+    if np.any(int_array > len(file_list)) or np.any(int_array < 1) or np.any(np.bincount(int_array)>1):
+        raise ValueError(f"idx_list contains invalid indices")
+
+    if order == "ascending":
+        sorted_indices = np.argsort(int_array)
+    elif order == "descending":
+        sorted_indices = np.argsort(int_array)[::-1]
+    else:
+        raise ValueError(f"Order must be ascending or descending")
 
     file_array = np.array(file_list)
-
     return file_array[sorted_indices]
 
 
@@ -611,6 +634,8 @@ def total_dose_load(input_dose, sort_mdoc=True):
 
     if isinstance(input_dose, np.ndarray):
         return input_dose
+    elif isinstance(input_dose, list):
+        return np.asarray(input_dose)
     elif isinstance(input_dose, str):
         if input_dose.endswith(".csv"):
             # load as panda frames
@@ -653,7 +678,7 @@ def total_dose_load(input_dose, sort_mdoc=True):
             total_dose = one_value_per_line_read(input_dose)
             return total_dose
     else:
-        ValueError("Error: the dose has to be either ndarray or str with valid path!")
+        raise ValueError("Error: the dose has to be either ndarray or str with valid path!")
 
 
 def rot_angles_load(input_angles, angles_order="zxz"):
@@ -1106,6 +1131,11 @@ def indices_load(input_data, numbered_from_1=True):
     -------
     numpy.ndarray
         An array of indices, adjusted based on the input data and the numbered_from_1 flag.
+
+    Raises
+    -------
+    ValueError
+        If input data isn't either a path to valid file either a list/array
     """
 
     if isinstance(input_data, str):
@@ -1118,8 +1148,12 @@ def indices_load(input_data, numbered_from_1=True):
         else:
             indices = np.loadtxt(input_data, dtype=int)
 
-    else:
+    elif isinstance(input_data, list) or isinstance(input_data, np.ndarray):
         indices = np.asarray(input_data)
+        if len(indices)==0:
+            raise ValueError(f"Input indices can't be empty")
+    else:
+        raise ValueError(f"Input data must be either path to a valid file either list/array")
 
     if numbered_from_1:
         indices = indices - 1

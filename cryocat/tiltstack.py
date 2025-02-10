@@ -39,11 +39,12 @@ class TiltStack:
     def write_out(self, output_file, new_data=None):
 
         if output_file:
-            cryomap.write(new_data or self.data, output_file, data_type=self.data_type, transpose=False)
+            data_to_write = new_data if new_data is not None else self.data
+            cryomap.write(data_to_write, output_file, data_type=self.data_type, transpose=False)
 
     def correct_order(self, new_data=None):
 
-        return_data = new_data or self.data
+        return_data = new_data if new_data is not None else self.data
 
         if return_data.dtype != self.data_type:
             return_data = return_data.astype(self.data_type)
@@ -86,8 +87,16 @@ def crop(tilt_stack, new_width=None, new_height=None, output_file=None, input_or
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
-    new_width = new_width or ts.width
-    new_height = new_height or ts.height
+    if new_width is not None:
+        if new_width > ts.width:
+            raise ValueError(f"new_width cannot be greater than ts.width ({ts.width})")
+    else:
+        new_width = ts.width
+    if new_height is not None:
+        if new_height > ts.height:
+            raise ValueError(f"new_height cannot be greater than ts.height ({ts.height})")
+    else:
+        new_height = ts.height
 
     # Calculate the center of the original array
     center_w, center_h = ts.width // 2, ts.height // 2
@@ -186,7 +195,13 @@ def remove_tilts(
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
     idx_to_remove_final = ioutils.indices_load(idx_to_remove, numbered_from_1=numbered_from_1)
-
+    # Check bounds
+    max_index = ts.data.shape[0]
+    if any(idx < 0 or idx >= max_index for idx in idx_to_remove_final):
+        raise IndexError(
+            f"One or more indices in idx_to_remove exceed bounds. "
+            f"Valid range: 0 to {max_index - 1} (0-based)."
+        )
     ts.data = np.delete(ts.data, idx_to_remove_final, axis=0)
     ts.write_out(output_file)
 
@@ -312,35 +327,9 @@ def calculate_total_dose_batch(tomo_list, prior_dose_file_format, dose_per_image
 
     for t in tomograms:
         file_name = ioutils.fileformat_replace_pattern(prior_dose_file_format, t, "x", raise_error=False)
-        total_dose = calculate_total_dose(file_name, dose_per_image)
+        total_dose = ioutils.total_dose_load(file_name) + dose_per_image
         output_file = ioutils.fileformat_replace_pattern(output_file_format, t, "x", raise_error=False)
         np.savetxt(output_file, total_dose, fmt="%.6f")
-
-
-def calculate_total_dose(prior_dose, dose_per_image):
-    """Calculate the total dose by adding a prior dose to a dose per image.
-
-    Parameters
-    ----------
-    prior_dose : float
-        The prior dose value to be loaded.
-    dose_per_image : float
-        The dose value to be added per image.
-
-    Returns
-    -------
-    float
-        The total dose calculated as the sum of the prior dose and the dose per image.
-
-    Notes
-    -----
-    This function utilizes the `ioutils.total_dose_load` method to process the prior dose before calculation.
-    """
-
-    prior_dose = ioutils.total_dose_load(prior_dose)
-    total_dose = prior_dose + dose_per_image
-
-    return total_dose
 
 
 def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_order="xyz", output_order="xyz"):
@@ -351,7 +340,7 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_orde
     tilt_stack : str or array-like
         The input tilt stack data containing the images to be filtered.
     pixel_size : float
-        The size of a pixel in the same units as the tilt stack.
+        The size of a pixel in the same units as the tilt stack in Armstrongs.
     total_dose : str or array_like
         The total dose for each tilt image in the stack specified either by a file path or directly as an array.
     output_file : str, optional
@@ -392,6 +381,7 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_orde
             frequency_array[y, x] = d
 
     # Generate filtered stack
+    ts.data = np.array(ts.data, copy=True) #Make ts.data writeable
     for z in range(ts.n_tilts):
         image = ts.data[z, :, :]
         ts.data[z, :, :] = dose_filter_single_image(image, total_dose[z], frequency_array)
@@ -589,24 +579,26 @@ def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz",
     even_stack = []
     odd_stack = []
 
-    # For each tilt image in the stack
-    for i in range(ts.n_tilts):
+    if not ts.n_tilts == 1:
+        # For each tilt image in the stack
+        for i in range(ts.n_tilts):
 
-        # Split to even and odd by using modulo 2
-        if i % 2 == 0:
-            even_stack.append(ts.data[i, :, :])
-        else:
-            odd_stack.append(ts.data[i, :, :])
+            # Split to even and odd by using modulo 2
+            if i % 2 == 0:
+                even_stack.append(ts.data[i, :, :])
+            else:
+                odd_stack.append(ts.data[i, :, :])
 
-    even_stack = np.stack(even_stack, axis=0)
-    odd_stack = np.stack(odd_stack, axis=0)
+        even_stack = np.stack(even_stack, axis=0)
+        odd_stack = np.stack(odd_stack, axis=0)
 
-    if output_file_prefix:
-        ts.write_out(output_file_prefix + "_even.mrc", new_data=even_stack)
-        ts.write_out(output_file_prefix + "_odd.mrc", new_data=odd_stack)
+        if output_file_prefix:
+            ts.write_out(output_file_prefix + "_even.mrc", new_data=even_stack)
+            ts.write_out(output_file_prefix + "_odd.mrc", new_data=odd_stack)
 
-    return ts.correct_order(even_stack), ts.correct_order(odd_stack)
-
+        return ts.correct_order(even_stack), ts.correct_order(odd_stack)
+    else:
+        raise ValueError(f"Stack contains only 1 tilt.")
 
 def merge(file_path_pattern, output_file=None, output_order="xyz"):
     """Merge multiple files matching a given pattern into a single stack.
