@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import os
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import splprep, splev
+from scipy.optimize import fsolve
 
 ANGLE_DEGREES_TOL = 10e-12
 
@@ -425,7 +426,6 @@ def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_s
     inplane_angle = np.where(inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle)
 
     return inplane_angle
-    
 
 
 def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
@@ -944,6 +944,51 @@ def fit_ellipsoid(coord):
     return center, radii, evecs, v
 
 
+def point_ellipsoid_distance(p, params):
+    """
+    Computes the shortest distance from a point p to the surface of an ellipsoid.
+
+    Parameters:
+    -----------
+    p : ndarray (3,)
+        The 3D point in space.
+    params : ndarray (26,)
+        The ellipsoid parameters in the following order:
+        ["cx", "cy", "cz", "rx", "ry", "rz",
+         "ev1x", "ev1y", "ev1z", "ev2x", "ev2y", "ev2z",
+         "ev3x", "ev3y", "ev3z", "p1", ..., "p10"]
+
+    Returns:
+    --------
+    float
+        The shortest distance from the point to the ellipsoid surface.
+    """
+    # Extract ellipsoid parameters
+    center = np.array(params[:3])  # (cx, cy, cz)
+    radii = np.array(params[3:6])  # (rx, ry, rz)
+    evecs = np.array(params[6:15]).reshape(3, 3)  # 3x3 eigenvector matrix
+
+    # Transform point to local ellipsoid coordinates
+    p_local = np.dot(evecs.T, (p - center))
+
+    # Function to solve for lambda (scaling factor)
+    def scale_equation(lmbda):
+        scaled = p_local / (1 + lmbda)
+        return np.sum((scaled / radii) ** 2) - 1
+
+    # Solve for λ numerically
+    lambda_solution = fsolve(scale_equation, 0)[0]
+
+    # Compute closest point on ellipsoid in local space
+    closest_local = p_local / (1 + lambda_solution)
+
+    # Transform back to global coordinates
+    closest_global = np.dot(evecs, closest_local) + center
+
+    # Compute Euclidean distance from point to closest surface point
+    return np.linalg.norm(p - closest_global)
+
+
 def point_pairwise_dist(coord_1, coord_2):
     """Calculate the pairwise Euclidean distance between two sets of coordinates.
 
@@ -1064,7 +1109,7 @@ def ray_ellipsoid_intersection_3d(point, normal, ellipsoid_params):
     elif D == 0:  # One intersection point
         t1 = -B / (2 * A)
         p1 = point + t1 * normal
-        d1 = np.linalg.norm(p1 - point, axis=1)
+        d1 = np.sign(t1) * np.linalg.norm(p1 - point)  # assigning the correct sign
         p2 = np.nan
         d2 = np.nan
     else:  # Two intersection points
@@ -1074,17 +1119,27 @@ def ray_ellipsoid_intersection_3d(point, normal, ellipsoid_params):
         p1 = point + t1 * normal
         p2 = point + t2 * normal
 
+        d1 = np.sign(t1) * np.linalg.norm(p1 - point)  # assigning the correct sign
+        d2 = np.sign(t2) * np.linalg.norm(p2 - point)  # assigning the correct sign
+
         ps = np.column_stack((p1, p2))
-        distances = np.linalg.norm(ps.T - point, axis=1)
-        pi = np.argmin(distances)
+        distances = np.asarray([d1, d2])
+
+        if d1 < 0 and d2 > 0:
+            is_inside = True
+            pi = 1
+        elif d1 > 0 and d2 < 0:
+            is_inside = True
+            pi = 0
+        elif d1 < 0 and d2 < 0:
+            pi = np.argmin(abs(distances))
+        else:
+            pi = np.argmin(distances)
 
         p1 = ps[:, pi]
         p2 = ps[:, 1 - pi]
         d1 = distances[pi]
         d2 = distances[1 - pi]
-
-        if np.sign(t1) != np.sign(t2):
-            is_inside = True
 
     return p1, p2, d1, d2, is_inside
 

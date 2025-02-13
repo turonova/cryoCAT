@@ -481,6 +481,60 @@ class PleomorphicSurface:
         return assigned_motl
 
     @staticmethod
+    def compute_point_surface_distance(
+        input_motl, parametric_surface, feature_id="object_id", output_file=None, store_id="geom4"
+    ):
+
+        in_motl = cryomotl.Motl.load(input_motl)
+
+        el_params = PleomorphicSurface.load_parametric_surface(
+            parametric_surface=parametric_surface, feature_id=feature_id
+        )
+        features = in_motl.get_unique_values(feature_id=feature_id)
+
+        assigned_motl_df = pd.DataFrame()
+
+        for f in features:
+            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
+            coord = fm.get_coordinates()
+            fm_ep = el_params.loc[
+                el_params[feature_id] == f,
+                [
+                    "cx",
+                    "cy",
+                    "cz",
+                    "rx",
+                    "ry",
+                    "rz",
+                    "ev1x",
+                    "ev1y",
+                    "ev1z",
+                    "ev2x",
+                    "ev2y",
+                    "ev2z",
+                    "ev3x",
+                    "ev3y",
+                    "ev3z",
+                ],
+            ].values[0]
+            distances = []
+            for p in coord:
+                distances.append(geom.point_ellipsoid_distance(p, fm_ep))
+            fm.df[store_id] = distances
+            # fm_ep = el_params.loc[el_params[feature_id] == f, ["cx", "cy", "cz"]].values
+            # avg_rad = np.mean(el_params.loc[el_params[feature_id] == f, ["rx", "ry", "rz"]].values)
+            # fm.df[store_id] = np.linalg.norm(coord - fm_ep, axis=1) - avg_rad
+            assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
+
+        assigned_motl = cryomotl.Motl(assigned_motl_df)
+        assigned_motl.df.reset_index(drop=True, inplace=True)
+
+        if output_file is not None:
+            assigned_motl.write_out(output_file)
+
+        return assigned_motl
+
+    @staticmethod
     def assign_affiliation_distance_based(
         input_motl, parametric_surface, feature_id="object_id", output_file=None, unassigned_value=None
     ):
@@ -607,7 +661,7 @@ class PleomorphicSurface:
         for f in features:
             fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
             coord = fm.get_coordinates()
-            normal_vectors = geom.euler_angles_to_normals(fm.get_angles())
+            normal_vectors = -geom.euler_angles_to_normals(fm.get_angles())
             fm_ep = el_params.loc[
                 el_params[feature_id] == f, ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]
             ].values[0]
@@ -619,13 +673,12 @@ class PleomorphicSurface:
         return intersection_points
 
     @staticmethod
-    def clean_by_normals(input_motl, feature_id="object_id", threshold=None, output_file=None):
-
+    def compute_normals(input_motl, surface_params, feature_id="object_id", store_id="geom4", output_file=None):
         in_motl = cryomotl.Motl.load(input_motl)
         features = in_motl.get_unique_values(feature_id=feature_id)
-        el_params = PleomorphicSurface.get_parametric_description(in_motl, feature_id=feature_id)
+        el_params = PleomorphicSurface.get_parametric_description(surface_params, feature_id=feature_id)
 
-        cleaned_motl_df = pd.DataFrame()
+        assigned_motl_df = pd.DataFrame()
 
         for f in features:
             fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
@@ -633,27 +686,55 @@ class PleomorphicSurface:
             normals = geom.euler_angles_to_normals(fm.get_angles())
             center = el_params.loc[el_params[feature_id] == f, ["cx", "cy", "cz"]].values
             normals_t = coord - np.tile(center, (coord.shape[0], 1))
-            diff_angles = geom.angle_between_n_vectors(normals, normals_t)
-            if not threshold:
-                to_remove = np.where(np.abs(diff_angles) > np.std(diff_angles))
-            else:
-                to_remove = np.where(np.abs(diff_angles) > threshold)
-            fm.df = fm.df.drop(index=to_remove[0])
-            cleaned_motl_df = pd.concat([cleaned_motl_df, fm.df])
+            fm.df[store_id] = geom.angle_between_n_vectors(normals, normals_t)
+            assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
 
-        cleaned_motl_df.reset_index(drop=True, inplace=True)
+        assigned_motl = cryomotl.Motl(assigned_motl_df)
 
-        cleaned_motl = cryomotl.Motl(cleaned_motl_df)
+        if output_file is not None:
+            assigned_motl.write_out(output_file)
+
+        return assigned_motl
+
+    @staticmethod
+    def clean_by_normals(
+        input_motl,
+        feature_id="object_id",
+        compute_normals=True,
+        surface_params=None,
+        normals_id="geom4",
+        threshold=None,
+        output_file=None,
+    ):
+
+        in_motl = cryomotl.Motl.load(input_motl)
+        orig_number = in_motl.df.shape[0]
+
+        if compute_normals:
+            in_motl = PleomorphicSurface.compute_normals(
+                in_motl, surface_params, feature_id=feature_id, store_id=normals_id, output_file=None
+            )
+
+        diff_angles = in_motl.df[normals_id].values
+
+        if not threshold:
+            to_remove = np.where(np.abs(diff_angles) > np.std(diff_angles))
+        else:
+            to_remove = np.where(np.abs(diff_angles) > threshold)
+
+        in_motl.df = in_motl.df.drop(index=to_remove[0])
+
+        in_motl.df.reset_index(drop=True, inplace=True)
 
         print(
-            f"{in_motl.df.shape[0]-cleaned_motl.df.shape[0]} particles "
-            f"({((in_motl.df.shape[0]-cleaned_motl.df.shape[0])/in_motl.df.shape[0]*100):.2f}%) were removed from the list."
+            f"{orig_number-in_motl.df.shape[0]} particles "
+            f"({((orig_number-in_motl.df.shape[0])/orig_number*100):.2f}%) were removed from the list."
         )
 
         if output_file is not None:
-            cleaned_motl.write_out(output_file)
+            in_motl.write_out(output_file)
 
-        return cleaned_motl
+        return in_motl
 
     @staticmethod
     def clean_by_radius(input_motl, feature_id="object_id", threshold=None, output_file=None):

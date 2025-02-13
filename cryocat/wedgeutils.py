@@ -389,6 +389,23 @@ def create_wedge_list_em_batch(
 
 
 def load_wedge_list_sg(input_data):
+    """Load a STOPGAP wedge list from a file or a pandas DataFrame.
+
+    Parameters
+    ----------
+    input_data : str or pd.DataFrame
+        The input data can either be a file path (string) to a star file or a pandas DataFrame containing the wedge list.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the wedge list extracted from the input data.
+
+    Raises
+    ------
+    ValueError
+        If the input_data is neither a string nor a pandas DataFrame.
+    """
 
     if isinstance(input_data, str):
         wedge_list_df, _, _ = starfileio.Starfile.read(input_data)
@@ -402,6 +419,29 @@ def load_wedge_list_sg(input_data):
 
 
 def load_wedge_list_em(input_data):
+    """Load an EM wedge list from various input formats.
+
+    Parameters
+    ----------
+    input_data : str, np.ndarray, or pd.DataFrame
+        The input data can be one of the following:
+        - A string representing the file path to a data source.
+        - A 2D numpy array with a shape of (n, 3), where n is the number of wedges.
+        - A pandas DataFrame containing wedge data.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the wedge list with columns:
+        - 'tomo_id': Identifier for the tomograms.
+        - 'min_tilt_angle': Minimum tilt angle.
+        - 'max_tilt_angle': Maximum tilt angle.
+
+    Raises
+    ------
+    ValueError
+        If the input_data is not of a valid type or does not conform to the expected shape.
+    """
 
     df_columns = ["tomo_id", "min_tilt_angle", "max_tilt_angle"]
 
