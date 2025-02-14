@@ -12,6 +12,7 @@ from cryocat import geom
 from cryocat import cryomap
 from cryocat import cryomotl
 from cryocat import cryomask
+from cryocat import tgeometry as tg
 
 
 class SamplePoints:
