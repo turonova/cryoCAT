@@ -291,7 +291,7 @@ class SamplePoints:
         n_normals = self.normals[points]
         # create panda frames from normals
         pd_normals = pd.DataFrame(
-            {"x": n_normals[:, 2], "y": n_normals[:, 1], "z": n_normals[:, 0]}
+            {"x": n_normals[:, 0], "y": n_normals[:, 1], "z": n_normals[:, 2]}
         )
         # get Euler angles from normals
         angles = geom.normals_to_euler_angles(pd_normals, output_order="zzx")
