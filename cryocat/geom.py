@@ -3,7 +3,6 @@ import pandas as pd
 from scipy.spatial.transform import Rotation as srot
 from cryocat.exceptions import UserInputError
 import matplotlib.pyplot as plt
-import os
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import splprep, splev
 from scipy.optimize import fsolve
@@ -11,15 +10,29 @@ from scipy.optimize import fsolve
 ANGLE_DEGREES_TOL = 10e-12
 
 
+class Line:
+    def __init__(self, starting_point, line_dir):
+        self.p = starting_point
+        self.dir = line_dir
+
+
+class LineSegment(Line):
+    def __init__(self, point1, point2):
+        self.p = point1
+        self.dir = normalize_vectors(point2 - point1)
+        self.p_end = point2
+        self.length = np.linalg.norm(point2 - point1)
+
+
 def project_points_on_plane_with_preserved_distance(starting_point, normal, nn_points):
     """
-    Project approximately coplanar points around a starting_point onto the 
+    Project approximately coplanar points around a starting_point onto the
     plane perpendicular to normal vector. The distances between projected nearest neighbors and
     starting point are preserved.
 
     Args:
         starting_point (ndarray): origin of plane specified by normal vector
-        normal (ndarray): normal vector to plane 
+        normal (ndarray): normal vector to plane
         nn_points (ndarray): nearest neighbors of starting_point
 
     Returns:
@@ -268,7 +281,7 @@ def normals_to_euler_angles(input_normals, output_order="zzx"):
 
 def quaternion_mult(qs1, qs2):
     """
-    Given arrays of unit quaternions in scalar-last convention, compute 
+    Given arrays of unit quaternions in scalar-last convention, compute
     array of products of unit quaternions.
 
     Args:
@@ -460,7 +473,7 @@ def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True
 
 def angular_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
     """
-    Compute angular distance between two rotations. 
+    Compute angular distance between two rotations.
     Formula is based on this post
     https://math.stackexchange.com/questions/90081/quaternion-distance
 
@@ -615,7 +628,7 @@ def generate_angles(
         ndarray: Sample of Euler angles.
     """
     points = sample_cone(cone_angle, cone_sampling)
-    angles = normals_to_euler_angles(points, output_order= angle_order)
+    angles = normals_to_euler_angles(points, output_order=angle_order)
     angles[:, 0] = 0.0
 
     starting_phi = 0.0
@@ -672,7 +685,7 @@ def visualize_rotations(
     radius=1.0,
 ):
     """
-    Compute z-normals of input rotations. 
+    Compute z-normals of input rotations.
     If desried, generate plot depicting z-normals of input rotations.
 
     Args:
@@ -728,7 +741,7 @@ def angle_between_vectors(vectors1, vectors2):
         vectors2 (ndarray (n, d)): Each row represents d-dimensional vector.
 
     Returns:
-        ndarray (n,): Array containing the angles (in degrees) between corresponding 
+        ndarray (n,): Array containing the angles (in degrees) between corresponding
         vectors.
     """
     dot_products = np.einsum("ij,ij->i", vectors1, vectors2)
@@ -782,7 +795,7 @@ def compute_pairwise_angles(angles1, angles2, coord1, coord2, axis="z"):
 
 def visualize_angles(angles, plot_rotations=True, color_map=None):
     """
-    Compute z-normals of input orientations as described using Euler angles in zxz-convention. 
+    Compute z-normals of input orientations as described using Euler angles in zxz-convention.
     If desried, generate plot depicting z-normals of input orientations.
     Args:
         angles (_type_ndarray (n,3)): Array of triplets of Euler angles in zxz-convention.
@@ -1055,7 +1068,7 @@ def area_triangle(coords):
 
 def ray_ellipsoid_intersection_3d(point, normal, ellipsoid_params):
     """
-    Compute the intersection between a ray starting at point in direction of normal and 
+    Compute the intersection between a ray starting at point in direction of normal and
     an ellipsoid specified by ellipsoid_params.
 
     Args:
@@ -1707,6 +1720,7 @@ def normalize_vectors(v):
     norm = np.linalg.norm(v, axis=-1, keepdims=True)
     return v / norm
 
+
 # TODO: This function should not be necessary due to "angle_between_vectors"
 def angle_between_n_vectors(v1, v2):
     """
@@ -1717,7 +1731,7 @@ def angle_between_n_vectors(v1, v2):
         v2 (ndarray (n, d)): Each row represents d-dimensional vector.
 
     Returns:
-        ndarray (n,): Array containing the angles (in degrees) between corresponding 
+        ndarray (n,): Array containing the angles (in degrees) between corresponding
         vectors.
     """
 
