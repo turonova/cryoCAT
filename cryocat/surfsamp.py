@@ -296,17 +296,10 @@ class SamplePoints:
         # get Euler angles from normals
         angles = geom.normals_to_euler_angles(pd_normals, output_order="zzx")
         # replace angles in motl
-        motl.fill(
-            {
-                "angles": pd.DataFrame(
-                    {
-                        "phi": angles[:, 0],
-                        "psi": angles[:, 1],
-                        "theta": angles[:, 2],
-                    }
-                )
-            }
+        pd_angles = pd.DataFrame(
+            {"phi": angles[:, 0], "psi": angles[:, 1], "theta": angles[:, 2]}
         )
+        motl.fill(pd_angles)
 
         return motl
 
