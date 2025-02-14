@@ -1,0 +1,14 @@
+----EXPLANATION FOR THE .csvs IN THIS TEST DATA FOLDER--------
+
+test_template_list_0.csv is an ordered csv with only one structure, with index starting from 0
+test_template_list_1.csv is an ordered csv with two structures (sorted), with index starting from 0
+test_template_list_2.csv is an unordered csv with two structures (sorted), with index starting from 0 but the rest of the indices are of random numbers
+test_template_list_3.csv is an ordered csv with two structures (sorted), with index starting from 0. The last entry's 'Tomo created' is True.
+test_template_list_4.csv is an ordered csv with two structures (unsorted), with index starting from 0
+test_template_list_5.csv is an ordered csv with two structures (sorted), with index starting from 5
+test_template_list_6.csv is an ordered csv with two structures (sorted), with index starting from 0. The second entry's 'Tomo created' is True.
+
+****
+if this line 'unique_entries = temp_df.groupby(["Structure", "Motl", "Tomogram", "Boxsize"]).indices' in 'create_subtomograms_fro_tm' with '.indices' is present, list_2 and list_5 fail the pytest (both lists are unordered or not starting from 0).
+
+if the same line is with '.groups', all tests should pass.

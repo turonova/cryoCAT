@@ -217,3 +217,22 @@ def test_create_wedge_list_em_batch():
     assert np.allclose(df_17.to_numpy(), emfile2.squeeze(), rtol=1e-5, atol=1e-8)
     if os.path.exists(str(wedgeutils_datad / "wedge_list_1.em")):
         os.remove(str(wedgeutils_datad / "wedge_list_1.em"))
+
+
+def test_load_wedge_list():
+    filename = str(Path(__file__).parent / "test_data" / "TS_017" / "017_gctf.star")
+    result = load_wedge_list_sg(filename)
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+    input_df = pd.DataFrame({"col1": [10, 20], "col2": [30, 40]})
+    result = load_wedge_list_sg(input_df)
+    assert result.equals(input_df)
+    with pytest.raises(ValueError,match="Inavlid input - only strings \(file names\) or pandas data frames are supported."):
+        load_wedge_list_sg(123)
+
+    if os.path.exists(filename):
+        os.remove(filename)
+    
+
+def test_load_wedge_list_em():
+    pass

@@ -8,12 +8,11 @@ from scipy.spatial import ConvexHull
 from scipy.spatial import KDTree
 import warnings
 
-from cryocat import tgeometry as tg
-from cryocat import surfsamp
 from cryocat import geom
 from cryocat import cryomap
 from cryocat import cryomotl
 from cryocat import cryomask
+from cryocat import tgeometry as tg
 
 
 class SamplePoints:
@@ -40,6 +39,9 @@ class SamplePoints:
                 samp.vertices = motl.get_coordinates()
                 angles = motl.get_angles()
                 samp.normals = geom.euler_angles_to_normals(angles)
+                # convert to unit vectors
+                magnitudes = np.linalg.norm(samp.normals, axis=1, keepdims=True)
+                samp.normals = samp.normals / magnitudes
             else:
                 raise ValueError(
                     "The input file name", input, "is neither mrc, csv or em file!"
@@ -132,7 +134,7 @@ class SamplePoints:
             {"x": self.normals[:, 0], "y": self.normals[:, 1], "z": self.normals[:, 2]}
         )
         # get Euler angles from coordinates
-        angles = geom.normals_to_euler_angles(pd_normals)
+        angles = geom.normals_to_euler_angles(pd_normals, output_order="zzx")
         # create pandas
         pd_angles = pd.DataFrame(
             {"phi": angles[:, 0], "psi": angles[:, 1], "theta": angles[:, 2]}
@@ -289,22 +291,15 @@ class SamplePoints:
         n_normals = self.normals[points]
         # create panda frames from normals
         pd_normals = pd.DataFrame(
-            {"x": n_normals[:, 2], "y": n_normals[:, 1], "z": n_normals[:, 0]}
+            {"x": n_normals[:, 0], "y": n_normals[:, 1], "z": n_normals[:, 2]}
         )
         # get Euler angles from normals
-        angles = geom.normals_to_euler_angles(pd_normals)
+        angles = geom.normals_to_euler_angles(pd_normals, output_order="zzx")
         # replace angles in motl
-        motl.fill(
-            {
-                "angles": pd.DataFrame(
-                    {
-                        "phi": angles[:, 0],
-                        "psi": angles[:, 1],
-                        "theta": angles[:, 2],
-                    }
-                )
-            }
+        pd_angles = pd.DataFrame(
+            {"phi": angles[:, 0], "psi": angles[:, 1], "theta": angles[:, 2]}
         )
+        motl.fill(pd_angles)
 
         return motl
 
@@ -387,33 +382,49 @@ class SamplePoints:
         cent = np.mean(self.vertices, axis=0)
         vertices = self.vertices
         normals = self.normals
+        point_spacing = self.sample_distance
         inner_class = SamplePoints()
         outer_class = SamplePoints()
 
-        sum_is_remove = np.array([0] * vertices.shape[0], dtype=bool)
-        for coord in vertices:
+        is_inner = np.zeros(vertices.shape[0], dtype=bool)
+        for i in range(vertices.shape[0]):
+            if is_inner[i]:  # Skip if already marked as inner
+                continue
+
+            coord = vertices[i]
             # find distance of all points to line between iterate points to centroid
             line_vec = cent - coord
-            cross_vec = np.cross(line_vec, vertices - cent)
-            distances = np.sqrt((cross_vec * cross_vec).sum(axis=1)) / np.sqrt(
-                line_vec.dot(line_vec)
-            )
-            is_dist_small = distances <= self.sample_distance * 2
-            # figure if the intersect of point to line is within the line segment
-            in_prod = np.inner(vertices - coord, line_vec)
-            # calculate distance of crossing starting from coord
-            d_cross = in_prod / np.sqrt(line_vec.dot(line_vec))
-            is_point_on_line = np.logical_and(
-                thickness * 0.5 < d_cross, d_cross < np.sqrt(line_vec.dot(line_vec))
-            )
-            # record idx of coord that has a distance to line less then 2 and within the range of line segment
-            is_remove = np.logical_and(is_dist_small, is_point_on_line)
-            sum_is_remove = np.logical_or(sum_is_remove, is_remove)
+            line_len = np.linalg.norm(line_vec)  # Length of the line segment
+            distances = (
+                np.linalg.norm(np.cross(line_vec, vertices - cent), axis=1) / line_len
+            )  # Distance from other points to line
 
-        inner_class.vertices = vertices[sum_is_remove]
-        inner_class.normals = normals[sum_is_remove]
-        outer_class.vertices = vertices[~sum_is_remove]
-        outer_class.normals = normals[~sum_is_remove]
+            # check if projections of all points on line fall within line segment
+            projection_lengths = np.dot(vertices - coord, line_vec) / line_len
+            is_point_on_line = (projection_lengths > thickness * 0.5) & (
+                projection_lengths < line_len
+            )
+
+            # Points close to the line
+            is_dist_small = distances <= point_spacing
+            # Normal direction check:
+            dot_products = np.dot(normals, line_vec / line_len)  # Normalize line_vec
+            # Clip values to avoid numerical errors outside [-1,1]
+            angles = np.degrees(np.arccos(np.clip(dot_products, -1, 1)))
+            is_normal_diff = angles < np.radians(90)  # 90 degrees threshold
+
+            # record idx of coord that has a distance to line less then 2 and within the range of line segment
+            is_inner_point = np.logical_and(
+                is_dist_small, is_point_on_line, is_normal_diff
+            )
+
+            if np.any(is_inner_point):
+                is_inner = np.logical_or(is_inner, is_inner_point)
+
+        inner_class.vertices = vertices[is_inner]
+        inner_class.normals = normals[is_inner]
+        outer_class.vertices = vertices[~is_inner]
+        outer_class.normals = normals[~is_inner]
         return outer_class, inner_class
 
     # shape_layer is shape data layer, e.g. viewer.layers[x].data where z is layer id

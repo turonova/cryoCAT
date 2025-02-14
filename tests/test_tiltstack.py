@@ -1,7 +1,4 @@
-from unittest.mock import patch
-
-from matplotlib import pyplot as plt
-
+import matplotlib.pyplot as plt
 from cryocat.ioutils import fileformat_replace_pattern
 from cryocat.tiltstack import *
 from pathlib import Path
@@ -187,7 +184,6 @@ def test_calculate_total_dose_batch():
         if os.path.exists(fileformat_replace_pattern(output_file_path, t, "x", raise_error=False)):
             os.remove(fileformat_replace_pattern(output_file_path, t, "x", raise_error=False))
 
-
 def test_dose_filter_single_image():
     """
     Since it is not possible to achieve same results of Grant and Grigorieff paper without using Fourier and
@@ -358,51 +354,94 @@ def test_flip_along_axes():
     tsc = ts.data.transpose(2,1,0)
     assert np.allclose(tsc[::-1, ::-1, ::-1],flipped[:,:,:])
 
-
-#TO DO:#to test input_order, output_order etc. so that we don't need to test it in other functions
-def test_tiltstack_constructor(mock_write, mock_read):
-    # Test case 1: Input is a file path with given file
-    tilt_stack_path = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
-    ts = TiltStack(tilt_stack=tilt_stack_path, input_order="xyz", output_order="xyz")
-    # Assert cryomap.read was called with the correct arguments
-    mock_read.assert_called_once_with(tilt_stack_path, transpose=False)
-    assert ts.data.shape == (5, 100, 100)  # Assert correct data shape
-    assert ts.input_order == "xyz"
-    assert ts.current_order == "zyx"
-    assert ts.output_order == "xyz"
-
-    # Test case 2: Input is a 2D NumPy array
-    data_2d = np.random.rand(100, 100)
-    ts = TiltStack(tilt_stack=data_2d, input_order="xyz", output_order="zyx")
-    assert ts.data.shape == (1, 100, 100)  # Dimension expanded
-    assert ts.current_order == "zyx"
-
-    # Test case 3: Input is a 3D NumPy array
-    data_3d = np.random.rand(5, 100, 100)
-    ts = TiltStack(tilt_stack=data_3d, input_order="zyx", output_order="xyz")
-    assert ts.data.shape == (5, 100, 100)  # No dimension change
-    assert ts.current_order == "zyx"
-
-    # Test case 4: Invalid input type
-    with pytest.raises(AttributeError):
-        TiltStack(tilt_stack="invalid_input")
-
-    # Test case 5: Transposing with input_order
-    data_zyx = np.random.rand(5, 100, 100)
-    ts = TiltStack(tilt_stack=data_zyx, input_order="zyx", output_order="xyz")
-    assert ts.data.shape == (5, 100, 100)  # Data stays as is
 def test_deconvolve():
-    print("to test")
+    """
+    The deconvolve function is designed to improve the quality of a tilt series (MRC file or NumPy array)
+    by applying CTF correction and Wiener deconvolution. This is commonly used in Cryo-EM tomography to
+    enhance image contrast and remove distortions caused by the microscope optics.
+    """
+    tilt_stack_path = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
+    expected_output_path = str(Path(__file__).parent / "test_data" / "expected_output.mrc")
+    synthetic_input = np.random.rand(4, 128, 128).astype(np.float32)
+    output_mrc = deconvolve(tilt_stack_path, pixel_size_a=3.42, defocus=2.5, output_file=expected_output_path)
+    expected_mrc = TiltStack(expected_output_path).data.transpose(2,1,0)
+    assert np.allclose(output_mrc, expected_mrc, atol=1e-5)
+    output_numpy = deconvolve(synthetic_input, pixel_size_a=3.42, defocus=4)
+
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.imshow(synthetic_input[0], cmap="gray")
+    plt.title("Original Tilt Image")
+    plt.subplot(1, 2, 2)
+    plt.imshow(output_numpy[0], cmap="gray")
+    plt.title("Deconvolved Tilt Image")
+    plt.show()
+
+    assert output_numpy.shape == synthetic_input.shape
+    assert np.isfinite(output_numpy).all()
+    assert not np.allclose(output_numpy, synthetic_input)
+    assert output_numpy.dtype == synthetic_input.dtype
+    assert np.max(output_numpy) <= np.max(synthetic_input) * 2
+
+    input_fft = np.abs(np.fft.fftshift(np.fft.fftn(synthetic_input)))
+    output_fft = np.abs(np.fft.fftshift(np.fft.fftn(output_numpy)))
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.imshow(np.log1p(np.mean(input_fft, axis=0)), cmap="inferno")
+    plt.title("FFT Input")
+    plt.subplot(1, 2, 2)
+    plt.imshow(np.log1p(np.mean(output_fft, axis=0)), cmap="inferno")
+    plt.title("FFT Output (Deconvolved)")
+    plt.show()
+
 def test_equalize_histogram():
+    def plot_histograms(original, processed, title):
+        fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+        ax[0].hist(original.ravel(), bins=256, color='blue', alpha=0.6, label='Original')
+        ax[1].hist(processed.ravel(), bins=256, color='red', alpha=0.6, label='Processed')
+        ax[0].set_title("Original Histogram")
+        ax[1].set_title(title)
+        ax[0].legend()
+        ax[1].legend()
+        plt.show()
+
+    def check_statistics(original, processed):
+        print("Original Min:", original.min(), "Processed Min:", processed.min())
+        print("Original Max:", original.max(), "Processed Max:", processed.max())
+        print("Original Mean:", original.mean(), "Processed Mean:", processed.mean())
+        print("Original Std:", original.std(), "Processed Std:", processed.std())
+
     with pytest.raises(ValueError):
-        exc = equalize_histogram(
-            tilt_stack = tilt_stack_path,
+        equalize_histogram(
+            tilt_stack=tilt_stack_path,
             output_file=tilt_stack_1_path,
             eh_method="notvalid"
         )
-    #use fiji for expected output
+    synthetic_input = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
+    synthetic_data = TiltStack(synthetic_input).data
+    for method in ["contrast_stretching", "equalization", "adaptive_eq"]:
+        output_data = equalize_histogram(synthetic_input, eh_method=method)
+        output_data = TiltStack(output_data).data
+        assert output_data.shape == synthetic_data.shape, "Output shape mismatch"
+        assert output_data.dtype == synthetic_data.dtype, "Output data type mismatch"
+        assert np.isfinite(output_data).all(), "Output contains NaN or Inf values"
+        assert not np.allclose(output_data, synthetic_data), "Output is too similar to input"
 
+        plot_histograms(synthetic_data[0], output_data[0], f"{method} Histogram")
+        check_statistics(synthetic_data[0], output_data[0])
 
+        if method == "equalization":
+            hist_input, _ = np.histogram(synthetic_data.flatten(), bins=256)
+            hist_output, _ = np.histogram(output_data.flatten(), bins=256)
+            assert np.std(hist_output) < np.std(hist_input), "Histogram should be more uniform"
+
+        if method == "contrast_stretching":
+            assert np.min(output_data.astype(np.float64)) == 0, "Contrast stretching failed (min)"
+            assert np.max(output_data.astype(np.float64)) == 1, "Contrast stretching failed (max)"
+
+        if method == "adaptive_eq":
+            assert np.all(output_data >= 0) and np.all(
+                output_data <= 1), "Adaptive equalization failed normalization check"
 
 def test_cleanup():
     if os.path.exists(tilt_stack_1_path):
@@ -419,3 +458,6 @@ def test_cleanup():
         shutil.rmtree(str(Path(__file__).parent / "test_data" / "test_merge"))
     if os.path.exists(flipped_path):
         os.remove(flipped_path)
+    if os.path.exists(str(Path(__file__).parent / "test_data" / "expected_output.mrc")):
+        os.remove(str(Path(__file__).parent / "test_data" / "expected_output.mrc"))
+

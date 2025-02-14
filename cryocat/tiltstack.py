@@ -279,7 +279,6 @@ def equalize_histogram(
     """
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
-
     for z in range(ts.n_tilts):
         if eh_method == "contrast_stretching":
             p2, p98 = np.percentile(ts.data[z, :, :], (2, 98))
@@ -288,13 +287,14 @@ def equalize_histogram(
             # Equalization
             ts.data[z, :, :] = exposure.equalize_hist(ts.data[z, :, :])
         elif eh_method == "adaptive_eq":
-            # Adaptive Equalization
-            ts.data[z, :, :] = exposure.equalize_adapthist(ts.data[z, :, :], clip_limit=0.03)
+            # Adaptive
+            img = ts.data[z, :, :]
+            img = (img - img.min()) / (img.max() - img.min())
+            ts.data[z, :, :] = exposure.equalize_adapthist(img, clip_limit=0.03)
         else:
             raise ValueError(f"The {eh_method} is not known!")
 
     ts.write_out(output_file)
-
     return ts.correct_order()
 
 
@@ -647,7 +647,6 @@ def merge(file_path_pattern, output_file=None, output_order="xyz"):
     final_ts.write_out(output_file)
 
     return final_ts.correct_order()
-
 
 def flip_along_axes(tilt_stack, axes, output_file=None, input_order="xyz", output_order="xyz"):
     """Flip the tilt stack along specified axes and optionally save the result to a file.

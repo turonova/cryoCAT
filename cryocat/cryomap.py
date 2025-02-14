@@ -403,6 +403,7 @@ def read(input_map, transpose=True, data_type=None):
     ------
     ValueError
         If the input map file name does not have a valid extension.
+        If the input map file is not a valid path or numpy array.
 
     Notes
     -----
@@ -437,9 +438,12 @@ def read(input_map, transpose=True, data_type=None):
 
         if transpose:
             data = data.transpose(2, 1, 0)
-    else:
+    elif isinstance(input_map, np.ndarray):
         data = np.array(input_map)
+    else:
+        raise ValueError(f"Input map must be path to valid file or nparray")
 
+    data = np.array(data, copy=True)
     if data_type is not None:
         data = data.astype(data_type)
 
@@ -555,16 +559,26 @@ def em2mrc(map_name, invert=False, overwrite=True, output_name=None):
     -------
     None
         The function writes the converted data to the specified output file.
-    """
 
+    Raises
+    -------
+    ValueError
+        If input map_name is not a valid .em file path
+
+    """
+    if not isinstance(map_name, str):
+        raise ValueError(f"Input file must be a string, valid path")
+    elif not map_name.endswith(".em"):
+        raise ValueError(f"Provided path must be .em file")
     data_to_write = read(map_name)
 
     if invert:
         data_to_write = data_to_write * (-1)
 
-    if output_name is None:  # maybe here it should be tested it the input is really string
+    if output_name is None:
         output_name = map_name[:-2] + "mrc"
-
+    elif not output_name.endswith(".mrc"):
+        raise ValueError(f"Specified output file name must end with .mrc")
     write(data_to_write, output_name, overwrite=overwrite)
 
 
@@ -585,15 +599,27 @@ def mrc2em(map_name, invert=False, overwrite=True, output_name=None):
     -------
     None
         The function writes the converted data to the specified output file.
-    """
 
+    Raises
+    -------
+    ValueError
+        If the provided file name does not end with .em extension.
+
+    """
+    if not isinstance(map_name, str):
+        raise ValueError(f"Input is not a string")
+    else:
+        if not map_name.endswith(".mrc"):
+            raise ValueError(f"Input file is not .mrc file")
     data_to_write = read(map_name)
 
     if invert:
         data_to_write = data_to_write * (-1)
 
-    if output_name is None:  # maybe here it should be tested it the input is really string
+    if output_name is None:
         output_name = map_name[:-3] + "em"
+    elif not output_name.endswith(".em"):
+        raise ValueError(f"Specified output_name is not .em file")
 
     write(data_to_write, output_name, overwrite=overwrite)
 
@@ -619,14 +645,27 @@ def write_hdf5(map_name, labels=None, weight=None, output_name=None):
     -------
     None
         This function does not return any value. It writes the data, labels, and weights to the specified HDF5 file.
-    """
 
+    Raises
+    -------
+    ValueError
+        If the provided file name does not end with .em or .mrc extension.
+
+    """
+    if not isinstance(map_name, str):
+        raise ValueError(f"Input is not a string")
+    else:
+        if not map_name.endswith(".mrc") and not map_name.endswith(".em"):
+            raise ValueError(f"Input file is not either .em either .mrc file")
     data_to_write = read(map_name)
 
-    if output_name is None:  # maybe here it should be tested it the input is really string
-        output_name = (
-            map_name[:-3] + "hdf5"
-        )  # TODO: replace this with proper extension extraxtion - the file can be alse .em file not .mrc
+    if output_name is None:
+        if map_name.endswith(".mrc"):
+            output_name= map_name[:-3] + "hdf5"
+        elif map_name.endswith(".em"):
+            output_name = map_name[:-2] + "hdf5"
+    elif not output_name.endswith(".mrc") and not output_name.endswith(".em"):
+        raise ValueError("Output file path must be .mrc or .em extension")
 
     f = h5py.File(output_name, "w")
 
@@ -762,7 +801,7 @@ def rotate(
     """
 
     input_map = read(input_map)
-    # create transaltion to the center of the box
+    # create translation to the center of the box
     T = np.eye(4)
     structure_center = np.asarray(input_map.shape) // 2
     T[:3, -1] = structure_center
@@ -852,8 +891,9 @@ def recenter(map, new_center):
     shift = new_center - structure_center
     T[:3, -1] = -shift
 
-    trans_struct = np.empty(map.shape)
-    affine_transform(input=map, output=trans_struct, matrix=T)
+    original_map = read(map)
+    trans_struct = np.empty(original_map.shape)
+    affine_transform(input=original_map, output=trans_struct, matrix=T)
 
     return trans_struct
 
@@ -875,10 +915,10 @@ def normalize_under_mask(ref, mask):
 
     """
 
-    # Calculate mask parameteres
+    # Calculate mask parameters
     m_idx = mask > 0
 
-    # Calcualte stats
+    # Calculate stats
     ref_mean = np.mean(ref[m_idx])
     ref_std = np.std(ref[m_idx])
 
@@ -1194,6 +1234,8 @@ def calculate_conjugates(vol, filter=None):
 
 def calculate_flcf(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None, filter=None):
     # get the size of the box and number of voxels contributing to the calculations
+    if np.isnan(vol1).any() or np.isnan(mask).any():
+        raise ValueError("Input volumes or mask contain NaN values")
     box_size = np.array(vol1.shape)
     n_pix = mask.sum()
 

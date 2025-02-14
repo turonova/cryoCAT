@@ -172,4 +172,40 @@ def test_otsu_threshold_cc(size):
     print(f"difference for size={size}: {diff_percentage:.2f}%")
     assert diff_percentage < 1
 
+def test_compute_frequency_array():
+    test_cases = [
+        ((4, 4), 1.0),
+        ((5, 5), 0.5),
+        ((3, 3), 2.0),
+        ((4, 6), 1.0),
+        ((2, 2), 0.1),
+    ]
 
+    for shape, pixel_size in test_cases:
+        freq_array = compute_frequency_array(shape, pixel_size)
+        assert freq_array.shape == shape
+        assert np.all(freq_array >= 0)
+        center = tuple(s // 2 for s in shape)
+        assert freq_array[center] == 0
+        # Check symmetry
+        for idx in np.ndindex(freq_array.shape):
+            mirror_idx = tuple((2 * c - i) % s for i, c, s in zip(idx, center, shape))
+            assert np.isclose(freq_array[idx], freq_array[mirror_idx])
+
+    shape = (5,)
+    pixel_size = 1.0
+    expected_magnitudes = np.array([0.4, 0.2, 0.0, 0.2, 0.4])  # Precomputed expected values
+    freqs = compute_frequency_array(shape, pixel_size)
+    np.testing.assert_allclose(freqs, expected_magnitudes, rtol=1e-6)
+    assert np.allclose(freqs, np.flip(freqs))
+
+    shape = (3, 3)
+    pixel_size = 1.0
+    expected_magnitudes = np.array([
+        [np.sqrt(2) * 1 / 3, 1 / 3, np.sqrt(2) * 1 / 3],
+        [1 / 3, 0.0, 1 / 3],
+        [np.sqrt(2) * 1 / 3, 1 / 3, np.sqrt(2) * 1 / 3]
+    ])
+    freqs = compute_frequency_array(shape, pixel_size)
+    np.testing.assert_allclose(freqs, expected_magnitudes, rtol=1e-6)
+    assert np.allclose(freqs, np.flip(freqs))

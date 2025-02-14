@@ -784,11 +784,13 @@ class PleomorphicSurface:
                 em[["phi", "theta", "psi"]] = angles
                 em["object_id"] = objects[i]
                 em["tomo_id"] = tomo
+                em["class"] = 1
                 new_motl_df = pd.concat((new_motl_df, em))
 
         new_motl_df.fillna(0, inplace=True)
         motl = cryomotl.Motl(new_motl_df)
         motl.update_coordinates()
+        motl.renumber_particles()
 
         if output_path is not None:
             motl.write_out(output_path)
