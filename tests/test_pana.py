@@ -22,9 +22,10 @@ def test_create_subtomograms(mocker, csv_file):
     parent_path = './'
     subvolume_sh = np.ones((64, 64, 64))
     angles = [1, 2, 3]
-    mock_cut_subtomo = mocker.patch('cryocat.pana.cut_the_best_subtomo', 
-                                    return_value=(subvolume_sh, angles))
-    mock_to_csv = mocker.patch('pandas.DataFrame.to_csv') 
+
+    mocker.patch('cryocat.pana.cut_the_best_subtomo', 
+                 return_value=(subvolume_sh, angles))
+    mocker.patch('pandas.DataFrame.to_csv') 
    
     df = pana.create_subtomograms_for_tm(csv_file, parent_path)
  
