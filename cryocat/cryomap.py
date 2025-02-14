@@ -891,8 +891,9 @@ def recenter(map, new_center):
     shift = new_center - structure_center
     T[:3, -1] = -shift
 
-    trans_struct = np.empty(map.shape)
-    affine_transform(input=map, output=trans_struct, matrix=T)
+    original_map = read(map)
+    trans_struct = np.empty(original_map.shape)
+    affine_transform(input=original_map, output=trans_struct, matrix=T)
 
     return trans_struct
 
