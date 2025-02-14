@@ -134,7 +134,7 @@ class SamplePoints:
             {"x": self.normals[:, 0], "y": self.normals[:, 1], "z": self.normals[:, 2]}
         )
         # get Euler angles from coordinates
-        angles = geom.normals_to_euler_angles(pd_normals)
+        angles = geom.normals_to_euler_angles(pd_normals, output_order="zzx")
         # create pandas
         pd_angles = pd.DataFrame(
             {"phi": angles[:, 0], "psi": angles[:, 1], "theta": angles[:, 2]}
@@ -294,7 +294,7 @@ class SamplePoints:
             {"x": n_normals[:, 2], "y": n_normals[:, 1], "z": n_normals[:, 0]}
         )
         # get Euler angles from normals
-        angles = geom.normals_to_euler_angles(pd_normals)
+        angles = geom.normals_to_euler_angles(pd_normals, output_order="zzx")
         # replace angles in motl
         motl.fill(
             {
