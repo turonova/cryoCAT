@@ -93,7 +93,7 @@ def get_all_files_matching_pattern(filename_pattern, numeric_wildcards_only=Fals
     wildcards = []
     file_names = []
 
-    #No regex to be found
+    # No regex to be found
     if "*" not in filename_pattern:
         return [filename_pattern] if not return_wildcards else ([filename_pattern], [])
 
@@ -143,6 +143,7 @@ def sort_files_by_idx(file_list, idx_list, order="ascending"):
     ValueError
         If idx_list and file_list aren't of list type.
         If idx_list doesn't contain only integers, or if file_list doesn't contain only strings.
+
     Examples
     --------
     >>> sort_files_by_idx(['file1.txt', 'file2.txt', 'file3.txt'], ['2', '1', '3'])
@@ -152,9 +153,9 @@ def sort_files_by_idx(file_list, idx_list, order="ascending"):
     array(['file3.txt', 'file1.txt', 'file2.txt'])
     """
 
-    if not isinstance(idx_list, list) or any(not isinstance(item, str) for item in idx_list) or len(idx_list)==0:
+    if not isinstance(idx_list, list) or any(not isinstance(item, str) for item in idx_list) or len(idx_list) == 0:
         raise ValueError(f"idx_list must be a list of strings")
-    if not isinstance(file_list, list) or any(not isinstance(item, str) for item in file_list) or len(file_list)==0:
+    if not isinstance(file_list, list) or any(not isinstance(item, str) for item in file_list) or len(file_list) == 0:
         raise ValueError(f"file_list must be a list of strings")
 
     if any(not x.isdigit() for x in idx_list):
@@ -162,8 +163,8 @@ def sort_files_by_idx(file_list, idx_list, order="ascending"):
     else:
         int_array = np.array([int(s) for s in idx_list])
 
-    #indices can't be empty, can't be outside of file_list boundaries, indices can't be repeated
-    if np.any(int_array > len(file_list)) or np.any(int_array < 1) or np.any(np.bincount(int_array)>1):
+    # indices can't be empty, can't be outside of file_list boundaries, indices can't be repeated
+    if np.any(int_array > len(file_list)) or np.any(int_array < 1) or np.any(np.bincount(int_array) > 1):
         raise ValueError(f"idx_list contains invalid indices")
 
     if order == "ascending":
@@ -392,10 +393,12 @@ def get_data_from_warp_xml(xml_file_path, node_name, node_level=1):
         If there is an error reading the XML file.
     Value Error
         If node_level isn't 1 or 2
+
     Examples
     --------
     >>> data = get_data_from_warp_xml('path/to/xml/file.xml', 'GridCTF', node_level=2)
     """
+
     if node_level not in [1, 2]:
         raise ValueError(f"node_level can't be {node_level}, must be 1 or 2.")
     try:
@@ -1150,7 +1153,7 @@ def indices_load(input_data, numbered_from_1=True):
 
     elif isinstance(input_data, list) or isinstance(input_data, np.ndarray):
         indices = np.asarray(input_data)
-        if len(indices)==0:
+        if len(indices) == 0:
             raise ValueError(f"Input indices can't be empty")
     else:
         raise ValueError(f"Input data must be either path to a valid file either list/array")
