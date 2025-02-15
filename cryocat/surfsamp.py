@@ -6,13 +6,13 @@ from skimage.segmentation import watershed
 from skimage.morphology import convex_hull_image
 from scipy.spatial import ConvexHull
 from scipy.spatial import KDTree
+import warnings
 
-from cryocat import tgeometry as tg
-from cryocat import surfsamp
 from cryocat import geom
 from cryocat import cryomap
 from cryocat import cryomotl
 from cryocat import cryomask
+from cryocat import tgeometry as tg
 
 
 class SamplePoints:
@@ -39,6 +39,9 @@ class SamplePoints:
                 samp.vertices = motl.get_coordinates()
                 angles = motl.get_angles()
                 samp.normals = geom.euler_angles_to_normals(angles)
+                # convert to unit vectors
+                magnitudes = np.linalg.norm(samp.normals, axis=1, keepdims=True)
+                samp.normals = samp.normals / magnitudes
             else:
                 raise ValueError(
                     "The input file name", input, "is neither mrc, csv or em file!"
@@ -51,6 +54,9 @@ class SamplePoints:
             samp.vertices = shape_input.get_coordinates()
             angles = shape_input.get_angles()
             samp.normals = geom.euler_angles_to_normals(angles)
+            # convert to unit vectors
+            magnitudes = np.linalg.norm(samp.normals, axis=1, keepdims=True)
+            samp.normals = samp.normals / magnitudes
         else:
             raise ValueError(
                 "The input is neither string, shape list, 3d volume or motl file!"
@@ -80,28 +86,31 @@ class SamplePoints:
             self.vertices, self.faces, self.normals, _ = skimage.measure.marching_cubes(
                 self.shape_mask, step_size=sampling_distance
             )
+            # make sure the normal vectors are unit vectors
+            magnitudes = np.linalg.norm(self.normals, axis=1, keepdims=True)
+            self.normals = self.normals / magnitudes
+            # calculate area
             self.area = skimage.measure.mesh_surface_area(self.vertices, self.faces)
             self.sample_distance = sampling_distance
         elif self.shape_list is not None:
             self.vertices, self.normals, self.faces, self.area = (
                 SamplePoints.get_oversampling(self.shape_list, sampling_distance)
             )
+            # make sure the normal vectors are unit vectors
+            magnitudes = np.linalg.norm(self.normals, axis=1, keepdims=True)
+            self.normals = self.normals / magnitudes
             self.sample_distance = sampling_distance
 
-    def write(self, path):
-        """Writes the vertices and normals to a motl_list.
+    def write(self, path, input_dict=None):
+        """Writes the vertices and normals to a `motl_list`.
 
         Parameters
         ----------
         path : str
-            The path where the file will be written.
-
-        Attributes
-        ----------
-        vertices : ndarray
-            The vertices of the object.
-        normals : ndarray
-            The normals of the object.
+            The destination path for the output file.
+        input_dict : dict, optional
+            A dictionary with keys from :attr:`cryocat.cryomotl.Motl.motl_columns` and new values to be assigned.
+            Coordinates and angles are derived from the class. Subtomograms are sequentially ordered starting from 1, and the class is set to 1 by default. All other fields will assign 0 if not specified in this dictionay
 
         Returns
         -------
@@ -109,8 +118,8 @@ class SamplePoints:
 
         Notes
         -----
-        This method creates pandas dataframes from the vertices and normals of the object,
-        converts the normals to Euler angles, and writes the resulting data to a file at the specified path.
+        This method creates pandas DataFrames from the object's vertices and normals, converts the normals to Euler angles,
+        and writes the resulting data to a file at the specified path.
         """
         # create panda frames from vertices
         pd_points = pd.DataFrame(
@@ -125,7 +134,7 @@ class SamplePoints:
             {"x": self.normals[:, 0], "y": self.normals[:, 1], "z": self.normals[:, 2]}
         )
         # get Euler angles from coordinates
-        angles = geom.normals_to_euler_angles(pd_normals)
+        angles = geom.normals_to_euler_angles(pd_normals, output_order="zzx")
         # create pandas
         pd_angles = pd.DataFrame(
             {"phi": angles[:, 0], "psi": angles[:, 1], "theta": angles[:, 2]}
@@ -135,88 +144,74 @@ class SamplePoints:
         motl = cryomotl.Motl()
         motl.fill(pd_points)
         motl.fill(pd_angles)
+        motl.df["class"] = float(1)
+        motl.fill({"subtomo_id": np.arange(1, motl.df.shape[0] + 1, dtype="float")})
+
+        # fill other fields base on the input_dict
+        if input_dict is not None:
+            if any(
+                key == "x"
+                or key == "y"
+                or key == "z"
+                or key == "coord"
+                or key == "phi"
+                or key == "psi"
+                or key == "theta"
+                or key == "angles"
+                for key in input_dict.keys()
+            ):
+                raise ValueError(
+                    "Coordinates and angles are filled from the class. Please assign values only to motl_columns unrelated to them."
+                )
+            else:
+                motl.fill(input_dict)
+
         motl.write_out(path)
 
     def shift_points(self, distances):
-        """Shifts the points by a certain distance along the normal direction.
+        """Shift the vertices of a geometric object along their normal vectors.
 
         Parameters
         ----------
-        distances : array_like
-            Distances to shift the points. The shape should be the same as the shape of the vertices.
+        distances : int
+            Moving distances value in pixels to shift each vertex.
 
         Notes
         -----
-        The vertices are shifted in-place.
+        This function modifies the vertices of the object in place by moving each
+        vertex along its corresponding normal vector. The normal vectors are first converted
+        to unit normal vectors before applying the shift.
         """
+
         self.vertices = self.vertices + distances * self.normals
 
-    # TODO shifting on normal groups
-    def expand_points_in_groups(self, distances, tb_distances=None):
-        """Moves sample points within a specified distance in its normal direction.
+    def shift_points_in_groups(self, shift_dict):
+        """Shift points in groups based on a dictionary of shift values.
 
         Parameters
         ----------
-        points : ndarray
-            Array of sample coordinates.
-        normals : ndarray
-            Array of sample normals.
-        distances : int
-            Moving distance in pixels.
-        tb_distances : int, optional
-            Moving distance of top and bottom surfaces if needed. Defaults to None for similar movements as the other surfaces.
+        shift_dict : dict
+            A dictionary where keys are tuples representing normal vectors and values are the shift magnitudes in pixels to be applied to the vertices corresponding to those normal vectors.
 
-        Returns
-        -------
-        ndarray
-            Array of moved sample coordinates.
-        ndarray
-            Array of moved sample normals.
+        Raises
+        ------
+        UserWarning
+            If a key in `shift_dict` does not match any normal vectors in the point cloud, a warning is issued indicating that only matching vectors have been moved.
+
+        Notes
+        -----
+        This function modifies the `vertices` attribute of the object by shifting the points in the direction of their normal vectors, scaled by the corresponding value in `shift_dict`.
         """
-        moved_points = []
-        tb_points = []
-        if tb_distances == None:
-            tb_distances = distances
-        for i in range(len(self.normals)):
-            if (
-                abs(self.normals[i, 0]) == 1
-                and self.normals[i, 1] == 0
-                and self.normals[i, 2] == 0
-            ):
-                tb_points.append(i)
+        for key, value in shift_dict.items():
+            match = (self.normals == list(key)).all(axis=1)
+            if match.any():
+                self.vertices[match] = (
+                    self.vertices[match] + value * self.normals[match]
+                )
             else:
-                moved_points.append(i)
-
-        post_points = self.vertices.copy()
-        if tb_distances == 0:  # 0 for nonmove top and bottom
-            post_points[moved_points] = (
-                post_points[moved_points] + distances * self.normals[moved_points]
-            )
-        elif tb_distances != 0:  # other value for move top and bottom specific distance
-            post_points[moved_points] = (
-                post_points[moved_points] + distances * self.normals[moved_points]
-            )
-            post_points[tb_points] = (
-                post_points[tb_points] + tb_distances * self.normals[tb_points]
-            )
-
-        if tb_points == []:
-            self.vertices = post_points
-        else:
-            # removing the distinct points after shifting
-            drop_lim = [
-                max(post_points[tb_points][:, 0]),
-                min(post_points[tb_points][:, 0]),
-            ]
-            drop_list = [
-                i
-                for i in range(len(post_points))
-                if post_points[i, 0] > drop_lim[0] or post_points[i, 0] < drop_lim[1]
-            ]
-            cleaned_points = np.delete(post_points, drop_list, axis=0)
-            cleaned_normals = np.delete(self.normals, drop_list, axis=0)
-            self.vertices = cleaned_points
-            self.normals = cleaned_normals
+                warnings.warn(
+                    f"Vectors '{key}' were not matched to any normal vectors in the point cloud. Only the matching vectors have been moved."
+                )
 
     # remove sample points with specific normals value
     # TODO more precise removing method, removing point base on normal values/eular angles
@@ -296,22 +291,15 @@ class SamplePoints:
         n_normals = self.normals[points]
         # create panda frames from normals
         pd_normals = pd.DataFrame(
-            {"x": n_normals[:, 2], "y": n_normals[:, 1], "z": n_normals[:, 0]}
+            {"x": n_normals[:, 0], "y": n_normals[:, 1], "z": n_normals[:, 2]}
         )
         # get Euler angles from normals
-        angles = geom.normals_to_euler_angles(pd_normals)
+        angles = geom.normals_to_euler_angles(pd_normals, output_order="zzx")
         # replace angles in motl
-        motl.fill(
-            {
-                "angles": pd.DataFrame(
-                    {
-                        "phi": angles[:, 0],
-                        "psi": angles[:, 1],
-                        "theta": angles[:, 2],
-                    }
-                )
-            }
+        pd_angles = pd.DataFrame(
+            {"phi": angles[:, 0], "psi": angles[:, 1], "theta": angles[:, 2]}
         )
+        motl.fill(pd_angles)
 
         return motl
 
@@ -394,33 +382,49 @@ class SamplePoints:
         cent = np.mean(self.vertices, axis=0)
         vertices = self.vertices
         normals = self.normals
+        point_spacing = self.sample_distance
         inner_class = SamplePoints()
         outer_class = SamplePoints()
 
-        sum_is_remove = np.array([0] * vertices.shape[0], dtype=bool)
-        for coord in vertices:
+        is_inner = np.zeros(vertices.shape[0], dtype=bool)
+        for i in range(vertices.shape[0]):
+            if is_inner[i]:  # Skip if already marked as inner
+                continue
+
+            coord = vertices[i]
             # find distance of all points to line between iterate points to centroid
             line_vec = cent - coord
-            cross_vec = np.cross(line_vec, vertices - cent)
-            distances = np.sqrt((cross_vec * cross_vec).sum(axis=1)) / np.sqrt(
-                line_vec.dot(line_vec)
-            )
-            is_dist_small = distances <= self.sample_distance * 2
-            # figure if the intersect of point to line is within the line segment
-            in_prod = np.inner(vertices - coord, line_vec)
-            # calculate distance of crossing starting from coord
-            d_cross = in_prod / np.sqrt(line_vec.dot(line_vec))
-            is_point_on_line = np.logical_and(
-                thickness * 0.5 < d_cross, d_cross < np.sqrt(line_vec.dot(line_vec))
-            )
-            # record idx of coord that has a distance to line less then 2 and within the range of line segment
-            is_remove = np.logical_and(is_dist_small, is_point_on_line)
-            sum_is_remove = np.logical_or(sum_is_remove, is_remove)
+            line_len = np.linalg.norm(line_vec)  # Length of the line segment
+            distances = (
+                np.linalg.norm(np.cross(line_vec, vertices - cent), axis=1) / line_len
+            )  # Distance from other points to line
 
-        inner_class.vertices = vertices[sum_is_remove]
-        inner_class.normals = normals[sum_is_remove]
-        outer_class.vertices = vertices[~sum_is_remove]
-        outer_class.normals = normals[~sum_is_remove]
+            # check if projections of all points on line fall within line segment
+            projection_lengths = np.dot(vertices - coord, line_vec) / line_len
+            is_point_on_line = (projection_lengths > thickness * 0.5) & (
+                projection_lengths < line_len
+            )
+
+            # Points close to the line
+            is_dist_small = distances <= point_spacing
+            # Normal direction check:
+            dot_products = np.dot(normals, line_vec / line_len)  # Normalize line_vec
+            # Clip values to avoid numerical errors outside [-1,1]
+            angles = np.degrees(np.arccos(np.clip(dot_products, -1, 1)))
+            is_normal_diff = angles < np.radians(90)  # 90 degrees threshold
+
+            # record idx of coord that has a distance to line less then 2 and within the range of line segment
+            is_inner_point = np.logical_and(
+                is_dist_small, is_point_on_line, is_normal_diff
+            )
+
+            if np.any(is_inner_point):
+                is_inner = np.logical_or(is_inner, is_inner_point)
+
+        inner_class.vertices = vertices[is_inner]
+        inner_class.normals = normals[is_inner]
+        outer_class.vertices = vertices[~is_inner]
+        outer_class.normals = normals[~is_inner]
         return outer_class, inner_class
 
     # shape_layer is shape data layer, e.g. viewer.layers[x].data where z is layer id

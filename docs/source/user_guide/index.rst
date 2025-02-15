@@ -7,6 +7,7 @@
    :hidden:
 
    Motl basics <motl_basics>
+   Geometric conventions <geometric_conventions>
 
 ==========
 User guide

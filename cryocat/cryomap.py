@@ -21,20 +21,22 @@ def scale(input_map, scaling_factor, output_name=None):
     input_map : str
         The path to the input map to be scaled.
     scaling_factor : float
-        The factor by which to scale the input map. If the scaling factor is greater than 1, anti-aliasing is turned off.
+        The factor by which to scale the input map (a value grater than one indicates upscaling, between 0 and downscaling). If the scaling factor is greater than 1, anti-aliasing is turned off.
     output_name : str, optional
-        The name of the output file to which to write the scaled map. If not provided, the scaled map is not written to a file.
+        The name of the output file to which to write the scaled map. If not provided, the scaled map will not be saved.
     
     Returns
     -------
     scaled_map : ndarray
         The scaled map. If the dtype of the scaled map is float64, it is cast to float32 before being returned.
-    
+
     Notes
     -----
-    The map is scaled using the transform.rescale function from the skimage library, with order set to 3 and mode set to "reflect".
+    The function reads the input map, applies a scaling transformation using bicubic interpolation, and optionally
+    saves the result to a specified output file. The output map is converted to `float32` if the original scaled map
+    is of type `float64`.
     """
-    
+
     input_map = read(input_map)
 
     if scaling_factor > 1:
@@ -65,7 +67,7 @@ def pixels2resolution(fourier_pixels, edge_size, pixel_size, print_out=True):
     pixel_size : float
         Size of one pixel/voxel in Angstroms.
     print_out : bool, default=True
-        Flag to determine whether to print the resolution. Defaults to True.
+        Flag to determine whether to print the resolution. Default is True.
 
     Returns
     -------
@@ -100,7 +102,7 @@ def resolution2pixels(resolution, edge_size, pixel_size, print_out=True):
     pixel_size : float
         The size of one pixel/voxel in Angstroms.
     print_out : bool, default=True
-        Flag to determine whether to print the resolution. Defaults to True.
+        Flag to determine whether to print the resolution. Default is True.
 
     Returns
     -------
@@ -129,7 +131,7 @@ def binarize(input_map, threshold=0.5):
         The input map to binarize. Can be an array or a path to a file containing the map data.
     threshold : float, default=0.5
         The threshold value used for binarization. Values greater than this threshold will be set to 1,
-        and values less than or equal to the threshold will be set to 0. Defaults to 0.5.
+        and values less than or equal to the threshold will be set to 0. Default is 0.5.
 
     Returns
     -------
@@ -158,11 +160,11 @@ def get_filter_radius(edge_size, fourier_pixels, target_resolution, pixel_size):
     edge_size : float
         Size of the edge of the image/map in pixels/voxels.
     fourier_pixels : int, optional
-        Number of pixels in the Fourier space. Defaults to None.
+        Number of pixels in the Fourier space. Default is None.
     target_resolution : float, optional
-        Desired resolution to achieve. Defaults to None.
+        Desired resolution to achieve. Default is None.
     pixel_size : float, optional
-        Size of a pixel/voxel in the image/map. Defaults to None.
+        Size of a pixel/voxel in the image/map. Default is None.
 
     Returns
     -------
@@ -212,21 +214,21 @@ def bandpass(
     input_map : str or array_like
         The input map to be filtered, either as a filename or as an array.
     lp_fourier_pixels : int, optional
-        Number of pixels/voxels in Fourier space for the low-pass filter. Defaults to None.
+        Number of pixels/voxels in Fourier space for the low-pass filter. Default is None.
     lp_target_resolution : float, optional
-        Target resolution in Angstroms for the low-pass filter. Defaults to None.
+        Target resolution in Angstroms for the low-pass filter. Default is None.
     hp_fourier_pixels : int, optional
-        Number of pixels/voxels in Fourier space for the high-pass filter. Defaults to None.
+        Number of pixels/voxels in Fourier space for the high-pass filter. Default is None.
     hp_target_resolution : float, optional
-        Target resolution in Angstroms for the high-pass filter. Defaults to None.
+        Target resolution in Angstroms for the high-pass filter. Default is None.
     pixel_size : float, optional
-        Pixel/voxel size in Angstroms. Defaults to None.
+        Pixel/voxel size in Angstroms. Default is None.
     lp_gaussian : int, default=3
-        Width of the Gaussian falloff for the low-pass filter. Defaults to 3.
+        Width of the Gaussian falloff for the low-pass filter. Default is 3.
     hp_gaussian : int, default=2
-        Width of the Gaussian falloff for the high-pass filter. Defaults to 2.
+        Width of the Gaussian falloff for the high-pass filter. Default is 2.
     output_name : str, optional
-        Filename to save the filtered output. If not provided, the filtered map is not saved. Defaults to None.
+        Filename to save the filtered output. If not provided, the filtered map is not saved. Default is None.
 
     Returns
     -------
@@ -290,15 +292,15 @@ def lowpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=N
     input_map : str or array_like
         The input map to be filtered, either as a file path or as an array.
     fourier_pixels : int, optional
-        Number of pixels/voxels in the Fourier space representation. Defaults to None.
+        Number of pixels/voxels in the Fourier space representation. Default is None.
     target_resolution : float, optional
-        The target resolution in Angstroms for the filtering process. Defaults to None.
+        The target resolution in Angstroms for the filtering process. Default is None.
     pixel_size : float, optional
         The size of each pixel/voxel in the input map in Angstroms.
     gaussian : int, default=3
-        Width of the Gaussian falloff for the low-pass filter. Defaults to 3.
+        Width of the Gaussian falloff for the low-pass filter. Default is 3.
     output_name : str, optional
-        The file name to save the filtered map. If not provided, the map is not saved. Defaults to None.
+        The file name to save the filtered map. If not provided, the map is not saved. Default is None.
 
     Returns
     -------
@@ -341,15 +343,15 @@ def highpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=
     input_map : str or array_like
         The input map filename or its numpy array.
     fourier_pixels : int, optional
-        Number of pixels/voxels to use in the Fourier space. Defaults to None.
+        Number of pixels/voxels to use in the Fourier space. Default is None.
     target_resolution : float, optional
-        The target resolution in Angstroms for the highpass filter. Defaults to None.
+        The target resolution in Angstroms for the highpass filter. Default is None.
     pixel_size : float, optional
-        The size of each pixel/voxel in the input map in Angstroms. Defaults to None.
+        The size of each pixel/voxel in the input map in Angstroms. Default is None.
     gaussian : int, default=2
-        The width of the Gaussian fall-off in pixels/voxels. Defaults to 2.
+        The width of the Gaussian fall-off in pixels/voxels. Default is 2.
     output_name : str, optional
-        The filename to save the filtered output. If None, the filtered map is not saved. Defaults to None.
+        The filename to save the filtered output. If None, the filtered map is not saved. Default is None.
 
     Returns
     -------
@@ -402,6 +404,7 @@ def read(input_map, transpose=True, data_type=None):
     ------
     ValueError
         If the input map file name does not have a valid extension.
+        If the input map file is not a valid path or numpy array.
 
     Notes
     -----
@@ -436,9 +439,12 @@ def read(input_map, transpose=True, data_type=None):
 
         if transpose:
             data = data.transpose(2, 1, 0)
-    else:
+    elif isinstance(input_map, np.ndarray):
         data = np.array(input_map)
+    else:
+        raise ValueError(f"Input map must be path to valid file or nparray")
 
+    data = np.array(data, copy=True)
     if data_type is not None:
         data = data.astype(data_type)
 
@@ -446,6 +452,41 @@ def read(input_map, transpose=True, data_type=None):
 
 
 def write(data_to_write, file_name, transpose=True, data_type=None, overwrite=True):
+    """Write data to a specified file in a given format.
+
+    Parameters
+    ----------
+    data_to_write : numpy.ndarray
+        The data array to be written to the file. It can be of any shape and type.
+
+    file_name : str
+        The name of the file to which the data will be written. The file extension must be
+        one of the following: '.mrc', '.rec', or '.em'.
+
+    transpose : bool, default=True
+        If True (default), the data will be transposed before writing. The transposition
+        will change the order of the axes to (2, 1, 0). Default is True.
+
+    data_type : type, optional
+        If specified, the data will be cast to this type before writing. If None (default),
+        the original data type will be used.
+
+    overwrite : bool, default=True
+        If True (default), existing files will be overwritten. If False, an error will be
+        raised if the file already exists. Default is True.
+
+    Raises
+    ------
+    ValueError
+        If the provided file name does not end with one of the allowed extensions
+        ('.mrc', '.rec', or '.em').
+
+    Notes
+    -----
+    The function will convert the data to float32 if the original data type is float64
+    before writing to the file.
+    """
+
     if data_type is not None:
         data_to_write = data_to_write.astype(data_type)
 
@@ -464,6 +505,27 @@ def write(data_to_write, file_name, transpose=True, data_type=None, overwrite=Tr
 
 
 def invert_contrast(input_map, output_name=None):
+    """Invert the contrast of an input volume map.
+
+    Parameters
+    ----------
+    input_map : str or numpy.ndarray
+        The path to the input volume map file or the volume map data itself.
+    output_name : str, optional
+        The name of the output file where the inverted volume map will be saved.
+        If not provided, the output will not be saved to a file.
+
+    Returns
+    -------
+    numpy.ndarray
+        The inverted volume map.
+
+    Notes
+    -----
+    The contrast is inverted by multiplying the input map by -1. The data type
+    of the output file will be set to single precision if the input map is of
+    type float64; otherwise, it will retain the original data type.
+    """
 
     input_map = read(input_map)
     inverted_map = input_map * (-1)
@@ -480,6 +542,35 @@ def invert_contrast(input_map, output_name=None):
 
 
 def em2mrc(map_name, invert=False, overwrite=True, output_name=None):
+    """Convert a file in EM format to MRC format.
+
+    Parameters
+    ----------
+    map_name : str
+        The name of the input map file to be converted.
+    invert : bool, default=False
+        If True, the data will be inverted (multiplied by -1). Default is False.
+    overwrite : bool, default=True
+        If True, allows overwriting of the output file if it already exists. Default is True.
+    output_name : str, optional
+        The name of the output MRC file. If None, the output name will be derived from `map_name` by replacing the
+        last two characters with 'mrc'.
+
+    Returns
+    -------
+    None
+        The function writes the converted data to the specified output file.
+
+    Raises
+    -------
+    ValueError
+        If input map_name is not a valid .em file path
+
+    """
+    if not isinstance(map_name, str):
+        raise ValueError(f"Input file must be a string, valid path")
+    elif not map_name.endswith(".em"):
+        raise ValueError(f"Provided path must be .em file")
     data_to_write = read(map_name)
 
     if invert:
@@ -487,11 +578,40 @@ def em2mrc(map_name, invert=False, overwrite=True, output_name=None):
 
     if output_name is None:
         output_name = map_name[:-2] + "mrc"
-
+    elif not output_name.endswith(".mrc"):
+        raise ValueError(f"Specified output file name must end with .mrc")
     write(data_to_write, output_name, overwrite=overwrite)
 
 
 def mrc2em(map_name, invert=False, overwrite=True, output_name=None):
+    """Convert a file in MRC format to EM format.
+
+    map_name : str
+        The name of the input map file to be converted.
+    invert : bool, default=False
+        If True, the data will be inverted (multiplied by -1). Default is False.
+    overwrite : bool, default=True
+        If True, allows overwriting of the output file if it already exists. Default is True.
+    output_name : str, optional
+        The name of the output EM file. If None, the output name will be derived from `map_name` by replacing the
+        last three characters with 'em'.
+
+    Returns
+    -------
+    None
+        The function writes the converted data to the specified output file.
+
+    Raises
+    -------
+    ValueError
+        If the provided file name does not end with .em extension.
+
+    """
+    if not isinstance(map_name, str):
+        raise ValueError(f"Input is not a string")
+    else:
+        if not map_name.endswith(".mrc"):
+            raise ValueError(f"Input file is not .mrc file")
     data_to_write = read(map_name)
 
     if invert:
@@ -499,16 +619,54 @@ def mrc2em(map_name, invert=False, overwrite=True, output_name=None):
 
     if output_name is None:
         output_name = map_name[:-3] + "em"
+    elif not output_name.endswith(".em"):
+        raise ValueError(f"Specified output_name is not .em file")
 
     write(data_to_write, output_name, overwrite=overwrite)
 
 
 def write_hdf5(map_name, labels=None, weight=None, output_name=None):
+    """Write data to an HDF5 file.
 
+    Parameters
+    ----------
+    map_name : str
+        The name of the input file containing the data to be written.
+    labels : str, optional
+        The name of the input file containing the labels to be written. If provided,
+        the labels will be stored in the HDF5 file. Default is None.
+    weight : str, optional
+        The name of the input file containing the weights to be written. If provided, the weights will be stored in
+        the HDF5 file. Default is None.
+    output_name : str, optional
+        The name of the output HDF5 file. If not provided, the output file will be named by replacing the last three
+        characters of `map_name` with 'hdf5'. Default is None.
+
+    Returns
+    -------
+    None
+        This function does not return any value. It writes the data, labels, and weights to the specified HDF5 file.
+
+    Raises
+    -------
+    ValueError
+        If the provided file name does not end with .em or .mrc extension.
+
+    """
+    if not isinstance(map_name, str):
+        raise ValueError(f"Input is not a string")
+    else:
+        if not map_name.endswith(".mrc") and not map_name.endswith(".em"):
+            raise ValueError(f"Input file is not either .em either .mrc file")
     data_to_write = read(map_name)
 
     if output_name is None:
-        output_name = map_name[:-3] + "hdf5"
+        if map_name.endswith(".mrc"):
+            output_name= map_name[:-3] + "hdf5"
+        elif map_name.endswith(".em"):
+            output_name = map_name[:-2] + "hdf5"
+    elif not output_name.endswith(".mrc") and not output_name.endswith(".em"):
+        raise ValueError("Output file path must be .mrc or .em extension")
 
     f = h5py.File(output_name, "w")
 
@@ -525,6 +683,30 @@ def write_hdf5(map_name, labels=None, weight=None, output_name=None):
 
 
 def read_hdf5(hdf5_name, dataset_name="predictions", print_datasets=False):
+    """Read a dataset from an HDF5 file.
+
+    Parameters
+    ----------
+    hdf5_name : str
+        The name of the HDF5 file to read from.
+    dataset_name : str, defaults='predictions'
+        The name of the dataset to read from the HDF5 file. Default is 'predictions'.
+    print_datasets : bool, default=False
+        If True, prints the names of available datasets in the HDF5 file. Default is False.
+
+    Returns
+    -------
+    numpy.ndarray
+        The data from the specified dataset as a NumPy array.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the specified HDF5 file does not exist.
+    KeyError
+        If the specified dataset name does not exist in the HDF5 file.
+    """
+
     f = h5py.File(hdf5_name, "r")
 
     if print_datasets:
@@ -536,8 +718,30 @@ def read_hdf5(hdf5_name, dataset_name="predictions", print_datasets=False):
     return data
 
 
-def normalize(map):
-    norm_map = read(map)
+def normalize(input_map):
+    """Normalize a given map by standardizing its values.
+
+    Parameters
+    ----------
+    map : str or numpy.ndarray
+        The input map to be normalized.
+
+    Returns
+    -------
+    numpy.ndarray
+        The normalized map with zero mean and unit variance.
+
+    Notes
+    -----
+    This function reads the input map, computes its mean and standard deviation,
+    and then normalizes the map by subtracting the mean and dividing by the standard deviation.
+
+    Examples
+    --------
+    >>> normalized_map = normalize(my_map)
+    """
+
+    norm_map = read(input_map)
 
     mean_v = np.mean(norm_map)
     std_v = np.std(norm_map)
@@ -556,8 +760,49 @@ def rotate(
     spline_order=3,
     output_name=None,
 ):
+    """Rotate a 3D input map using a specified rotation matrix or rotation angles.
+
+    Parameters
+    ----------
+    input_map : str or numpy.ndarray
+        The input 3D map to be rotated.
+
+    rotation : Rotation, optional
+        A rotation object representing the rotation to be applied. If provided,
+        `rotation_angles` (if provided) will not be considered. Default is None.
+
+    rotation_angles : array_like, optional
+        Angles for rotation in the specified coordinate space. If provided, they will be considered only if
+        `rotation` is not be specified. Default is None.
+
+    coord_space : str, default='zxz'
+        The coordinate space for the rotation angles. Default is 'zxz'.
+
+    transpose_rotation : bool, default=False
+        If True, the transpose of the rotation matrix will be used. Default is False.
+
+    degrees : bool, default=True
+        If True, the rotation angles are interpreted as degrees. Default is True.
+
+    spline_order : int, default=3
+        The order of the spline used for interpolation. Default is 3.
+
+    output_name : str, optional
+        If specified, the rotated structure will be written to this file. Default is None.
+
+    Returns
+    -------
+    rot_struct : numpy.ndarray
+        The rotated 3D map.
+
+    Raises
+    ------
+    ValueError
+        If neither `rotation` nor `rotation_angles` is specified.
+    """
+
     input_map = read(input_map)
-    # create transaltion to the center of the box
+    # create translation to the center of the box
     T = np.eye(4)
     structure_center = np.asarray(input_map.shape) // 2
     T[:3, -1] = structure_center
@@ -729,8 +974,9 @@ def recenter(map, new_center):
     shift = new_center - structure_center
     T[:3, -1] = -shift
 
-    trans_struct = np.empty(map.shape)
-    affine_transform(input=map, output=trans_struct, matrix=T)
+    original_map = read(map)
+    trans_struct = np.empty(original_map.shape)
+    affine_transform(input=original_map, output=trans_struct, matrix=T)
 
     return trans_struct
 
@@ -753,10 +999,10 @@ def normalize_under_mask(ref, mask):
         The map with the area under the mask normalized.
     """
 
-    # Calculate mask parameteres
+    # Calculate mask parameters
     m_idx = mask > 0
 
-    # Calcualte stats
+    # Calculate stats
     ref_mean = np.mean(ref[m_idx])
     ref_std = np.std(ref[m_idx])
 
@@ -1055,11 +1301,11 @@ def deconvolve(
     highpass_nyquist : float
         fraction of Nyquist frequency to be cut off on the lower end (since it will be boosted the most)
     phase_flipped : bool
-        whether the data are already phase-flipped. Defaults to False.
+        whether the data are already phase-flipped. Default is False.
     phaseshift : int
-        CTF phase shift in degrees (e. g. from a phase plate). Defaults to 0.
+        CTF phase shift in degrees (e. g. from a phase plate). Default is 0.
     output_name : str
-        Name of the output file for the deconvolved tomogram. Defaults to None (tomogram will be not written).
+        Name of the output file for the deconvolved tomogram. Default is None (tomogram will be not written).
 
     Returns
     -------
@@ -1331,6 +1577,8 @@ def calculate_flcf(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None,
     """
     
     # get the size of the box and number of voxels contributing to the calculations
+    if np.isnan(vol1).any() or np.isnan(mask).any():
+        raise ValueError("Input volumes or mask contain NaN values")
     box_size = np.array(vol1.shape)
     n_pix = mask.sum()
 

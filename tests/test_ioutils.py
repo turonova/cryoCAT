@@ -1854,11 +1854,9 @@ def test_rot_angles_load():
         # phi1, theta1, psi1
     filepath = create_test_csv_angles(angles_phi_theta_psi, "zxz")
     np.testing.assert_array_equal(rot_angles_load(str(filepath), "zxz"), result_phi_theta_psi)
-    #the lines in csv:
-        #phi, psi, theta
-        #phi, psi1, theta1
+    #the lines in csv: must be the same as before: we want this by our will
     filepath = create_test_csv_angles(angles_phi_theta_psi, "zzx")
-    np.testing.assert_array_equal(rot_angles_load(str(filepath), "zzx"), result_phi_psi_theta)
+    np.testing.assert_array_equal(rot_angles_load(str(filepath), "zzx"), result_phi_theta_psi)
     #Testing exception being raised if not valid path is being passed
     with pytest.raises(ValueError):
         rot_angles_load("random")
@@ -1871,6 +1869,8 @@ def test_rot_angles_load():
     #Test file cleanup
     if os.path.exists(filepath):
         os.remove(filepath)
+    if os.path.exists(Path(__file__).parent / "test_data" / "TS_018" / "angles_test.csv"):
+        os.remove(Path(__file__).parent / "test_data" / "TS_018" / "angles_test.csv")
 
 
 def test_tlt_load():
@@ -2200,3 +2200,312 @@ def test_dimensions_load(csv_file2):
     test_np1_pd = pd.DataFrame([[1,2,3,4]], columns=["tomo_id", "x", "y", "z"])
     np1_test = np.asarray([[1,2,3,4]])
     pd.testing.assert_frame_equal(dimensions_load(np1_test),test_np1_pd)
+
+def test_indices_load(tmp_path):
+    # Case 0: CSV file with "ToBeRemoved" column
+    csv_path = tmp_path / "test.csv"
+    df = pd.DataFrame({
+        "ToBeRemoved": [True, False, True, False],
+        "OtherColumn": [10, 20, 30, 40]
+    })
+    df.to_csv(csv_path, index=False)
+    indices = indices_load(str(csv_path))
+    expected = np.array([0, 2])  # Indices with "ToBeRemoved=True"
+    assert np.array_equal(indices, expected), "Failed on CSV file with 'ToBeRemoved' column"
+
+    # Case 1: CSV file with both "Removed" and "ToBeRemoved" columns
+    csv_path_with_removed = tmp_path / "test_removed.csv"
+    df_with_removed = pd.DataFrame({
+        "Removed": [True, False, False, False],
+        "ToBeRemoved": [True, True, False, True],
+        "OtherColumn": [50, 60, 70, 80]
+    })
+    df_with_removed.to_csv(csv_path_with_removed, index=False)
+    indices = indices_load(str(csv_path_with_removed))
+    expected = np.array([1, 3])  # Only rows where "Removed=False" and "ToBeRemoved=True"
+    assert np.array_equal(indices, expected), "Failed on CSV file with both 'Removed' and 'ToBeRemoved' columns"
+
+
+    # Case 2: Text file with one index per line
+    text_path = tmp_path / "test.txt"
+    text_data = "1\n3\n5\n"
+    text_path.write_text(text_data)
+    indices = indices_load(str(text_path))
+    expected = np.array([0, 2, 4])  # Adjusted to zero-based indexing
+    assert np.array_equal(indices, expected), "Failed on text file input"
+
+    # Case 3: List input
+    input_list = [1, 3, 5]
+    indices = indices_load(input_list)
+    expected = np.array([0, 2, 4])  # Adjusted to zero-based indexing
+    assert np.array_equal(indices, expected), "Failed on list input"
+
+    # Case 4: Numpy array input
+    input_array = np.array([2, 4, 6])
+    indices = indices_load(input_array)
+    expected = np.array([1, 3, 5])  # Adjusted to zero-based indexing
+    assert np.array_equal(indices, expected), "Failed on numpy array input"
+
+    # Case 5: Invalid input type
+    with pytest.raises(ValueError, match="Input data must be either path to a valid file either list/array"):
+        indices_load(123)  # Invalid input type
+
+    # Case 6: numbered_from_1=False
+    indices = indices_load(input_list, numbered_from_1=False)
+    expected = np.array([1, 3, 5])  # No adjustment to indexing
+    assert np.array_equal(indices, expected), "Failed when numbered_from_1=False"
+def test_indices_reset(tmp_path):
+    # Create a temporary CSV file
+    csv_path = tmp_path / "test_indices_reset.csv"
+    df = pd.DataFrame({
+        "Removed": [False, False, True, False],
+        "ToBeRemoved": [True, False, True, False],
+        "OtherColumn": [10, 20, 30, 40]
+    })
+    df.to_csv(csv_path, index=False)
+
+    # Call the function
+    indices_reset(str(csv_path))
+
+    # Read the modified CSV
+    modified_df = pd.read_csv(csv_path)
+
+    # Expected DataFrame after applying indices_reset
+    expected_df = pd.DataFrame({
+        "Removed": [True, False, True, False],  # Updated where ToBeRemoved=True
+        "ToBeRemoved": [False, False, False, False],  # Reset to False
+        "OtherColumn": [10, 20, 30, 40]
+    })
+
+    # Assert that the DataFrame matches the expected result
+    pd.testing.assert_frame_equal(modified_df, expected_df, check_dtype=True,
+                                   obj="DataFrame after indices_reset")
+
+    # Case: Input file without "Removed" column
+    csv_path_no_removed = tmp_path / "test_no_removed.csv"
+    df_no_removed = pd.DataFrame({
+        "ToBeRemoved": [True, False, True, False],
+        "OtherColumn": [10, 20, 30, 40]
+    })
+    df_no_removed.to_csv(csv_path_no_removed, index=False)
+
+    # Call the function
+    indices_reset(str(csv_path_no_removed))
+
+    # Read the modified CSV
+    modified_df_no_removed = pd.read_csv(csv_path_no_removed)
+
+    # Expected DataFrame for the case without "Removed" column
+    expected_df_no_removed = pd.DataFrame({
+        "ToBeRemoved": [False, False, False, False],  # Reset to False
+        "OtherColumn": [10, 20, 30, 40]
+    })
+
+    # Assert that the DataFrame matches the expected result
+    pd.testing.assert_frame_equal(modified_df_no_removed, expected_df_no_removed, check_dtype=True,
+                                   obj="DataFrame after indices_reset (no 'Removed' column)")
+
+    # Case: Invalid input path
+    with pytest.raises(FileNotFoundError, match="No such file or directory"):
+        indices_reset("nonexistent_file.csv")
+
+def normalize_lines(file_content):
+    return [" ".join(line.split()) for line in file_content.strip().split("\n") if line.strip()]
+def test_defocus_remove_file_entries(tmp_path):
+    # Creazione del file di input GCTF
+    input_file_path = tmp_path / "test_gctf.star"
+    input_lines = [
+        "data_\n",
+        "loop_\n",
+        "_rlnMicrographName #1\n",
+        "_rlnDefocusU #2\n",
+        "file1.mrc 10000.0\n",
+        "file2.mrc 11000.0\n",
+        "file3.mrc 12000.0\n",
+        "file4.mrc 13000.0\n",
+    ]
+    input_file_path.write_text("".join(input_lines))
+
+    # Elementi da rimuovere: linee 2 e 4 (indice 1-based)
+    entries_to_remove = [2, 4]  # Rimuovere "file2.mrc" e "file4.mrc"
+    output_file_path = tmp_path / "test_gctf_output.star"
+
+    # Chiamata alla funzione
+    defocus_remove_file_entries(
+        input_file=str(input_file_path),
+        entries_to_remove=entries_to_remove,
+        file_type="gctf",
+        numbered_from_1=True,
+        output_file=str(output_file_path),
+    )
+
+    # Contenuto atteso
+    expected_lines = [
+        "data_",
+        "loop_",
+        "_rlnMicrographName #1",
+        "_rlnDefocusU #2",
+        "file1.mrc 10000.0",
+        "file3.mrc 12000.0",
+    ]
+
+    # Confronto normalizzato
+    produced_content = output_file_path.read_text()
+    produced_lines = normalize_lines(produced_content)
+    expected_normalized = normalize_lines("\n".join(expected_lines))
+
+    assert produced_lines == expected_normalized, "Failed GCTF file case"
+
+    # Case 2: CTFFIND4 file
+    input_file_path_ctffind4 = tmp_path / "test_ctffind4.txt"
+    input_lines_ctffind4 = [
+        "# Comment line\n",
+        "file1.ctf\n",
+        "file2.ctf\n",
+        "file3.ctf\n",
+        "file4.ctf\n",
+    ]
+    input_file_path_ctffind4.write_text("".join(input_lines_ctffind4))
+
+    # Entries to remove: line 2 and 4 (1-based indexing)
+    entries_to_remove_ctffind4 = [2, 4]  # Removing "file2.ctf" and "file4.ctf"
+    output_file_path_ctffind4 = tmp_path / "test_ctffind4_output.txt"
+
+    defocus_remove_file_entries(
+        input_file=str(input_file_path_ctffind4),
+        entries_to_remove=entries_to_remove_ctffind4,
+        file_type="ctffind4",
+        numbered_from_1=True,
+        output_file=str(output_file_path_ctffind4),
+    )
+
+    # Expected output: keep lines 0, 2, 4 (zero-based)
+    expected_lines_ctffind4 = [
+        "# Comment line\n",
+        "file1.ctf\n",
+        "file3.ctf\n",
+    ]
+    assert output_file_path_ctffind4.read_text() == "".join(expected_lines_ctffind4), "Failed CTFFIND4 file case"
+
+    # Case 3: real star file input
+
+
+def create_files_in_directory(directory, files):
+    os.makedirs(directory, exist_ok=True)
+    for file in files:
+        with open(os.path.join(directory, file), "w") as f:
+            f.write("Test content")
+@pytest.fixture
+def setup_temp_directory(tmp_path):
+    """Fixture to set up a temporary directory with some files."""
+    test_dir = tmp_path / "test_files"
+    test_files = [
+        "file1.txt",
+        "file2.txt",
+        "image1.png",
+        "image2.png",
+        "file3.doc",
+        "file4_123.doc",
+        "file4_abc.doc",
+        "file5_456.doc",
+    ]
+    create_files_in_directory(test_dir, test_files)
+    return test_dir, test_files
+
+def test_get_all_files_matching_pattern(setup_temp_directory):
+    test_dir, _ = setup_temp_directory
+
+    # Test case 1: Match all .txt files
+    pattern = os.path.join(str(test_dir), "*.txt")
+    result = get_all_files_matching_pattern(pattern, return_wildcards=False)
+    expected = [os.path.join(test_dir, "file1.txt"), os.path.join(test_dir, "file2.txt")]
+    assert sorted(result) == sorted(expected)
+
+    # Test case 2: Match all .doc files with wildcards
+    pattern = os.path.join(str(test_dir), "*.doc")
+    file_names, wildcards = get_all_files_matching_pattern(pattern, numeric_wildcards_only=False,return_wildcards=True)
+    expected_files = [
+        os.path.join(test_dir, "file3.doc"),
+        os.path.join(test_dir, "file4_123.doc"),
+        os.path.join(test_dir, "file4_abc.doc"),
+        os.path.join(test_dir, "file5_456.doc"),
+    ]
+    expected_wildcards = ["file3", "file4_abc", "file4_123", "file5_456"]
+    assert sorted(file_names) == sorted(expected_files)
+    assert sorted(wildcards) == sorted(expected_wildcards)
+
+    # Test case 3: Match files with numeric wildcards only
+    pattern = os.path.join(str(test_dir), "file4_*.doc")
+    file_names, wildcards = get_all_files_matching_pattern(
+        pattern, numeric_wildcards_only=True, return_wildcards=True
+    )
+    expected_files = [os.path.join(test_dir, "file4_123.doc")]
+    expected_wildcards = ["123"]
+    assert sorted(file_names) == sorted(expected_files)
+    assert sorted(wildcards) == sorted(expected_wildcards)
+
+    #test case: Match files not only with numeric wildcards
+    pattern = os.path.join(str(test_dir), "file4_*.doc")
+    file_names, wildcards = get_all_files_matching_pattern(
+        pattern, numeric_wildcards_only=False, return_wildcards=True
+    )
+    expected_files = [os.path.join(test_dir, "file4_123.doc"),
+                      os.path.join(test_dir, "file4_abc.doc")]
+    expected_wildcards = ["abc","123"]
+    assert sorted(file_names) == sorted(expected_files)
+    assert sorted(wildcards) == sorted(expected_wildcards)
+
+    # Test case 4: No wildcard match for a single file
+    pattern = os.path.join(str(test_dir), "file1.txt")
+    result = get_all_files_matching_pattern(pattern, return_wildcards=False)
+    expected = [os.path.join(test_dir, "file1.txt")]
+    assert result == expected
+
+    # Test case 5: Directory does not exist
+    with pytest.raises(FileNotFoundError):
+        get_all_files_matching_pattern("nonexistent_dir/*.txt")
+
+    # Test case 6: Empty directory
+    empty_dir = test_dir / "empty"
+    os.makedirs(empty_dir)
+    pattern = os.path.join(str(empty_dir), "*.txt")
+    result = get_all_files_matching_pattern(pattern, return_wildcards=False)
+    assert result == []
+
+
+def test_sort_files_by_idx():
+    #passing a string as an index that can't be converted to integer
+    with pytest.raises(ValueError, match="idx_list can't contain elements that can't be converted to integer."):
+        res = sort_files_by_idx(["string1", "string2", "string3"], ['1', '2', 'ciao'])
+
+    #passing a string as an index that represents an integer but "outbounds" the file_list array
+    with pytest.raises(ValueError, match="idx_list contains invalid indices"):
+        res = sort_files_by_idx(["string1", "string2", "string3"],['1','2','4'])
+
+    #passing not a list of strings but a string as file_list
+    with pytest.raises(ValueError, match="file_list must be a list of strings"):
+        res = sort_files_by_idx("test", ['1'])
+
+    #passing 1 element
+    assert sort_files_by_idx(["test.txt"], ["1"]) == ["test.txt"]
+
+    #passing 2 element, with repetition of index, should raise exception
+    with pytest.raises(ValueError, match="idx_list contains invalid indices"):
+        assert np.array_equal(sort_files_by_idx(["test.txt", "test2.txt"],['1','1']), np.array(["test.txt", "test2.txt"]))
+
+    # passing 2 elements, with two indexes, should produce a regular result
+    assert np.array_equal(sort_files_by_idx(["test.txt", "test2.txt"], ['2', '1']), np.array(["test2.txt", "test.txt"]))
+
+    #check if exception is being raised for order
+    with pytest.raises(ValueError):
+        res = sort_files_by_idx(["test"], ['1'], "randomOrder")
+
+    #check if order is working
+    assert np.array_equal(sort_files_by_idx(["test1.txt","test2.txt"],['1','2'], "descending"), np.array(["test2.txt", "test1.txt"]))
+
+    #passing empty list of indexes or file_list is not allowed.
+    with pytest.raises(ValueError):
+        res = sort_files_by_idx(["file.txt"], [])
+    with pytest.raises(ValueError):
+        res = sort_files_by_idx([],['1'])
+

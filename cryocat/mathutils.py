@@ -21,6 +21,7 @@ def compute_rmse(array1, array2):
     -------
     ValueError
         If input arrays are not nparray type or if they don't contain numbers.
+
     Notes
     -----
     This function computes the RMSE by first calculating the squared differences between corresponding elements of the
@@ -45,7 +46,6 @@ def compute_rmse(array1, array2):
     # Ensure the arrays have the same shape
     if array1.shape != array2.shape:
         raise ValueError("Input arrays must have the same shape")
-
 
     # Compute squared differences along each column
     squared_diff = (array1 - array2) ** 2
@@ -76,6 +76,7 @@ def get_all_pairs(input_numbers):
     -------
     ValueError
         If input isn't a list or the list doesn't contain only integers and floats
+
     Examples
     --------
     >>> get_all_pairs([1, 2, 3])
@@ -199,7 +200,7 @@ def get_similar_size_factors(number, order="ascending"):
     """
     if not isinstance(number, int):
         raise ValueError(f"Input number is not an integer")
-    if not isinstance(order,str) or not (order=="ascending" or order=="descending"):
+    if not isinstance(order, str) or not (order == "ascending" or order == "descending"):
         raise ValueError("Order must be either ascending or descending")
 
     def sort(a, b):
@@ -216,3 +217,32 @@ def get_similar_size_factors(number, order="ascending"):
     # If no factors are found, return the number itself and 1
     return sort(number, 1)
 
+
+def compute_frequency_array(shape, pixel_size):
+    """Compute the frequency array for a given shape and pixel size.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        The shape of the array for which the frequency array is computed.
+    pixel_size : float
+        The size of each pixel in the spatial domain.
+
+    Returns
+    -------
+    numpy.ndarray
+        An array representing the frequency magnitudes corresponding to the input shape.
+
+    Notes
+    -----
+    The function uses the Fast Fourier Transform (FFT) to compute the frequency bins and then calculates the magnitude
+    of the frequency vector for each point in the frequency domain.
+    """
+
+    freqs = np.array(
+        np.meshgrid(
+            *[np.fft.fftshift(np.fft.fftfreq(n, pixel_size)) for n in shape],
+            indexing="ij",
+        )
+    )
+    return np.sqrt(np.sum(freqs**2, axis=0))

@@ -39,7 +39,7 @@ def check_data_consistency(data1, data2, data_type1, data_type2):
     if not isinstance(data2, np.ndarray):
         raise TypeError(f"Expected np.ndarray but got {type(data2)} for {data_type2} file.")
 
-    #Check entire shape of both nparrays: could have same number of rows but different number of other dimensions
+    # Check entire shape of both nparrays: could have same number of rows but different number of other dimensions
     if data1.shape != data2.shape:
         raise ValueError(f"The {data_type1} file has different number of entries than the {data_type2} file!")
 
@@ -386,6 +386,87 @@ def create_wedge_list_em_batch(
         wedge_array = wedge_list_df.to_numpy()
         wedge_array = wedge_array.reshape((1, wedge_array.shape[0], wedge_array.shape[1])).astype(np.single)
         emfile.write(output_file, wedge_array, {}, overwrite=True)
+
+    return wedge_list_df
+
+
+def load_wedge_list_sg(input_data):
+    """Load a STOPGAP wedge list from a file or a pandas DataFrame.
+
+    Parameters
+    ----------
+    input_data : str or pd.DataFrame
+        The input data can either be a file path (string) to a star file or a pandas DataFrame containing the wedge list.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the wedge list extracted from the input data.
+
+    Raises
+    ------
+    ValueError
+        If the input_data is neither a string nor a pandas DataFrame.
+    """
+
+    if isinstance(input_data, str):
+        wedge_list_df, _, _ = starfileio.Starfile.read(input_data)
+        wedge_list_df = wedge_list_df[0]
+    elif isinstance(input_data, pd.DataFrame):
+        wedge_list_df = input_data
+    else:
+        raise ValueError("Inavlid input - only strings (file names) or pandas data frames are supported.")
+
+    return wedge_list_df
+
+
+def load_wedge_list_em(input_data):
+    """Load an EM wedge list from various input formats.
+
+    Parameters
+    ----------
+    input_data : str, np.ndarray, or pd.DataFrame
+        The input data can be one of the following:
+        - A string representing the file path to a data source.
+        - A 2D numpy array with a shape of (n, 3), where n is the number of wedges.
+        - A pandas DataFrame containing wedge data.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the wedge list with columns:
+        - 'tomo_id': Identifier for the tomograms.
+        - 'min_tilt_angle': Minimum tilt angle.
+        - 'max_tilt_angle': Maximum tilt angle.
+
+    Raises
+    ------
+    ValueError
+        If the input_data is not of a valid type or does not conform to the expected shape.
+    """
+
+    df_columns = ["tomo_id", "min_tilt_angle", "max_tilt_angle"]
+
+    if isinstance(input_data, str):
+        wedge_list_df = pd.DataFrame(columns=df_columns, data=np.squeeze(cryomap.read(input_data)).T)
+    elif isinstance(input_data, np.ndarray):
+        if input_data.dim == 2 and input_data.shape[1] == 3:
+            wedge_list_df = pd.DataFrame(columns=df_columns, data=input_data)
+        else:
+            raise ValueError(
+                "Provided array does not have the correct shape - it has to be 2D with second dim of size 3!"
+            )
+    elif isinstance(input_data, pd.DataFrame):
+        wedge_list_df = input_data
+        if all(col in input_data.columns for col in df_columns):
+            pass
+        else:
+            if len(input_data.columns) == len(df_columns):
+                wedge_list_df.columns = df_columns
+            else:
+                raise ValueError("Provided data frame does not have the correct shape!")
+    else:
+        raise ValueError("Inavlid input - only strings (file names), np.ndarrays or pandas data frames are supported.")
 
     return wedge_list_df
 
