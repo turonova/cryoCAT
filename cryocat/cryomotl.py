@@ -3621,7 +3621,7 @@ class ModMotl(Motl):
         Parameters
         ----------
         input_path : str
-            The path to a IMOD modl file or to the directory containing the model files.
+            The path to a IMOD mod file or to the directory containing the model files.
         mod_prefix : str, default=""
             The prefix to add to each file name before reading. Defaults to an empty string.
         mod_suffix : str, default=".mod"
