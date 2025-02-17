@@ -505,8 +505,10 @@ class Motl:
                 fm = tm.loc[tm[feature_id] == f]
                 bin_counts, bin_centers, _ = plt.hist(fm.loc[:, "score"], bins=hbin)  # TODO check if correct
                 bn = mathutils.otsu_threshold(bin_counts)
-                cc_t = bin_centers[bn]
-                fm = fm.loc[fm["score"] >= cc_t]
+                ind = np.where(bin_counts == bin_counts[bin_counts > bn][0]) #get index of the first bin_counts element that is greater than the threshold
+                cc_t = bin_centers[ind[0]+1][0] #get the upper edge of the first bin that is greater than the threshold - this is the score that will be used for cleaning
+                fm = fm.loc[fm["score"] >= cc_t] #retain all particles with a scores greater than the threshold
+                plt.axvline(cc_t, color="r") #plot the threshold
 
                 cleaned_motl = pd.concat([cleaned_motl, fm])
 
