@@ -221,23 +221,16 @@ def corrected_fsc(refA_name,
     # print('full_fsc',len(full_fsc))
     full_fsc = substitute_neg_or_nan(full_fsc)
     # print('full_fsc',len(full_fsc)) #9
-    ### Check input pixel size                  #FIXME
+    ### Check input pixel size                  
     if pixelsize_angstrom is None:
-        pixelsize = None
+        pixelsize = 1
         print('Pixel size not provided. FSC calculated as the function of shell radius.') 
         x_vals = list(range(1, len(full_fsc)+1)) ## TODO test
-    
-
-    else:           # TODO test this condition
-        # try:
+    else:           
         pixelsize = float(pixelsize_angstrom)
         print(f'Pixel size provided as {pixelsize}. FSC calculated as the function of resolution.')
-        x_vals = [i * pixelsize for i in list(range(len(full_fsc)))]
+        x_vals = [round((len(mrefA))*pixelsize/i, 2) for i in range(1,len(full_fsc)+1)] #[i * pixelsize for i in list(range(len(full_fsc)))]
 
-
-    #FIXME
-    # def get_x_for_y(a,b,c):
-    # pass
     def get_x_for_y(x_experimental, y_experimental, y_of_interest):
         if not np.less_equal(y_experimental, y_of_interest).any():
                 print(f'FSC does not cross {y_of_interest}!')
@@ -250,7 +243,6 @@ def corrected_fsc(refA_name,
             # y_closest = y_working[idx_closest]
             y_2ndclosest = np.min([y_working[int(idx_closest)-1],y_working[int(idx_closest)+1]])
             idx_2ndclosest = y_working.index(y_2ndclosest)
-            # print('idx', idx_closest,'y',y_closest,'idx', idx_2ndclosest, y_2ndclosest)
             #x_of_interest = np.abs(np.divide(y_of_interest*(x_experimental[idx_2ndclosest]-x_experimental[idx_closest]),(y_2ndclosest-y_closest)))
             
             #assuming linearity:
@@ -258,34 +250,11 @@ def corrected_fsc(refA_name,
             print(f'FSC at {y_of_interest} is {np.round(x_of_interest,2)}')
         return x_of_interest
 
-    # def get_x_for_y(x_range, y_interpolated, y_value):
-    #     ## check if the value exists
-    #     if not np.less_equal(y_interpolated, y_value).any():
-    #         print(f'FSC does not cross {y_value}!')
-    #     else:
-    #         try:
-    #             idx_y_val = np.min(np.where(np.isclose(y_interpolated, y_value, atol=1e-3)))
-    #             if pixelsize:
-    #                 print(f'FSC at {y_value} is', round(len(mrefA)*pixelsize/x_range[idx_y_val], 3))
-    #         except ValueError:
-    #             idx_y_val = np.min(np.where(np.isclose(y_interpolated, y_value, atol=1e-2)))
-    #             if pixelsize:
-    #                 print(f'FSC at {y_value} is', round(len(mrefA)*pixelsize/x_range[idx_y_val], 2))
-    #         finally:
-    #             if not pixelsize:
-    #                 print(f'FSC at {y_value} is {round(x_range[idx_y_val], 3)}.')
-    #     return None
-
-
     ### Conditional calculation of phase-separated maps and FSC correction
     if n_repeats == None: #TODO different interpolation likely needed
         print('No number of repeats provided - no randomisation will be executed.')    
-        xnew = [round((len(mrefA))*pixelsize/i, 2) for i in range(1,len(full_fsc)+1)]#x_vals #list(np.arange(0, len(full_fsc)+0.01, 0.01)) #x_vals #ist(np.arange(0, max(x_vals)+0.001, 0.001) )
-        # ynew =# list(np.interp(xnew, x_vals, full_fsc)) 
+        xnew = x_vals #list(np.arange(0, len(full_fsc)+0.01, 0.01)) #x_vals #ist(np.arange(0, max(x_vals)+0.001, 0.001) )
         ynew = full_fsc
-
-        # print(ynew)
-        # print(full_fsc)
 
         ### Get values for 0.5, 0.143
         get_x_for_y(xnew, ynew, 0.5)
@@ -352,9 +321,9 @@ def corrected_fsc(refA_name,
             corr_fsc[i] = full_fsc[i]
 
         ### Get interpolated values out of corrected FSC
-        xnew = [round((len(mrefA))*pixelsize/i, 2) for i in range(1,len(corr_fsc)+1)]#np.arange(0, max(x_vals)+0.001, 0.001) 
+        xnew = x_vals #[round((len(mrefA))*pixelsize/i, 2) for i in range(1,len(corr_fsc)+1)]#np.arange(0, max(x_vals)+0.001, 0.001) 
         ynew = corr_fsc #np.interp(xnew, x_vals, corr_fsc)
-        print('ynew', ynew, 'corr_fsc',corr_fsc)
+        
         ### Get values for 0.5, 0.143
         get_x_for_y(xnew, ynew, 0.5)
         get_x_for_y(xnew, ynew, 0.143)
@@ -426,7 +395,7 @@ def plot_fsc(calc_fsc_df, pixelsize_angstrom, output_path=None):
     fig, ax = plt.subplots()
     ax.set_prop_cycle(color=['xkcd:light navy blue', 'black', 'xkcd:dull red'])
 
-    res_label = [32,16, 8, 4, 2, 1] # TODO plot only above nyquist
+    res_label = [16, 8, 4, 3, 2, 1] # TODO plot only above nyquist
 
     if pixelsize_angstrom is not None :
         pixelsize = pixelsize_angstrom
@@ -435,7 +404,7 @@ def plot_fsc(calc_fsc_df, pixelsize_angstrom, output_path=None):
         ax.set_xlabel('Global resolution [A]')
         
     elif pixelsize_angstrom is None:
-        pixelsize = 1 #FIXME
+        pixelsize = 1 
         res_label = [i for i in range(0, len(calc_fsc_df), 5)]
         x_res = res_label.copy()
         ax.set_xlabel('Fourier shell')
