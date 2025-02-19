@@ -415,7 +415,7 @@ def load_wedge_list_sg(input_data):
     elif isinstance(input_data, pd.DataFrame):
         wedge_list_df = input_data
     else:
-        raise ValueError("Inavlid input - only strings (file names) or pandas data frames are supported.")
+        raise ValueError("Invalid input - only strings (file names) or pandas data frames are supported.")
 
     return wedge_list_df
 
@@ -450,7 +450,7 @@ def load_wedge_list_em(input_data):
     if isinstance(input_data, str):
         wedge_list_df = pd.DataFrame(columns=df_columns, data=np.squeeze(cryomap.read(input_data)).T)
     elif isinstance(input_data, np.ndarray):
-        if input_data.dim == 2 and input_data.shape[1] == 3:
+        if input_data.ndim == 2 and input_data.shape[1] == 3:
             wedge_list_df = pd.DataFrame(columns=df_columns, data=input_data)
         else:
             raise ValueError(
@@ -466,13 +466,16 @@ def load_wedge_list_em(input_data):
             else:
                 raise ValueError("Provided data frame does not have the correct shape!")
     else:
-        raise ValueError("Inavlid input - only strings (file names), np.ndarrays or pandas data frames are supported.")
+        raise ValueError("Invalid input - only strings (file names), np.ndarrays or pandas data frames are supported.")
 
     return wedge_list_df
 
 def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape='wedge', output_path=None):
 
-    for value in tomo_list:
+    if not isinstance(wg_list_star_df, pd.DataFrame):
+        raise ValueError("Provided wg_list_star_df is not a pandas DataFrame!")
+    tomograms = ioutils.tlt_load(tomo_list).astype(int)
+    for value in tomograms:
         sub_wg = wg_list_star_df.loc[wg_list_star_df['tomo_num'] == value].copy()
         angles = [i for i in sub_wg.loc[:, 'tilt_angle']]
         

@@ -10,7 +10,8 @@ temp_dir = './tests/test_data/temp/'
 
 @pytest.fixture(scope='session', autouse=True)
 def cleannup():
-    os.mkdir(temp_dir[:-1])
+    os.makedirs(temp_dir, exist_ok=True)
+    #os.makedirs(gen_dir, exist_ok=True)
     yield
     for filename in os.listdir(temp_dir):
         file_path = os.path.join(temp_dir, filename)
