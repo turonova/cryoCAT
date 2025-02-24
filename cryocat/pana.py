@@ -377,6 +377,7 @@ def create_subtomograms_for_tm(template_list, parent_folder_path):
 
     temp_df.to_csv(template_list)
 
+    return temp_df
 
 def get_mask_stats(template_list, indices, parent_folder_path):
     temp_df = pd.read_csv(template_list, index_col=0)

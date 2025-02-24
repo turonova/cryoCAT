@@ -15,7 +15,7 @@
 Tutorials
 =========
 
-This section contains useful tutorials but is currently under developement.
+This section contains useful tutorials but is currently under developement. Please refer to the available tutorials from the list on the left hand side.
 
 |
 

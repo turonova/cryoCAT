@@ -21,6 +21,7 @@ def compute_rmse(array1, array2):
     -------
     ValueError
         If input arrays are not nparray type or if they don't contain numbers.
+
     Notes
     -----
     This function computes the RMSE by first calculating the squared differences between corresponding elements of the
@@ -75,6 +76,7 @@ def get_all_pairs(input_numbers):
     -------
     ValueError
         If input isn't a list or the list doesn't contain only integers and floats
+
     Examples
     --------
     >>> get_all_pairs([1, 2, 3])

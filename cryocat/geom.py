@@ -4,11 +4,26 @@ from scipy.spatial.transform import Rotation as srot
 from cryocat.exceptions import UserInputError
 import matplotlib.pyplot as plt
 import os
+import math
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import splprep, splev
 from scipy.optimize import fsolve
 
 ANGLE_DEGREES_TOL = 10e-12
+
+
+class Line:
+    def __init__(self, starting_point, line_dir):
+        self.p = starting_point
+        self.dir = line_dir
+
+
+class LineSegment(Line):
+    def __init__(self, point1, point2):
+        self.p = point1
+        self.dir = normalize_vectors(point2 - point1)
+        self.p_end = point2
+        self.length = np.linalg.norm(point2 - point1)
 
 
 def project_points_on_plane_with_preserved_distance(starting_point, normal, nn_points):
@@ -703,7 +718,7 @@ def generate_angles(
         Sample of Euler angles.
     """
     points = sample_cone(cone_angle, cone_sampling)
-    angles = normals_to_euler_angles(points, output_order= angle_order)
+    angles = normals_to_euler_angles(points, output_order=angle_order)
     angles[:, 0] = 0.0
 
     starting_phi = 0.0
@@ -1794,6 +1809,7 @@ def normalize_vectors(v):
     norm = np.linalg.norm(v, axis=-1, keepdims=True)
     return v / norm
 
+
 # TODO: This function should not be necessary due to "angle_between_vectors"
 def angle_between_n_vectors(v1, v2):
     """Compute the angle (in degrees) between corresponding pairs of vectors in two arrays.
@@ -1939,3 +1955,11 @@ def oversample_spline(coords, target_spacing):
     oversampled_points = np.array(splev(u_fine, tck)).T
 
     return oversampled_points
+
+def distance_array(vol):
+    shell_grid = np.arange(math.floor(-len(vol[0]) / 2), math.ceil(len(vol[0]) / 2), 1)
+    xv, yv, zv = shell_grid, shell_grid, shell_grid
+    shell_space = np.meshgrid(xv, yv, zv, indexing="xy")  ## 'ij' denominates matrix indexing, 'xy' cartesian
+    distance_v = np.sqrt(shell_space[0] ** 2 + shell_space[1] ** 2 + shell_space[2] ** 2)
+
+    return distance_v

@@ -8,12 +8,13 @@
 
    Motl basics <motl_basics>
    Geometric conventions <geometric_conventions>
+   Masks basics <masks_basics>
 
 ==========
 User guide
 ==========
 
-This section explains basic principles behind cryoCAT but is currently under developement. More content will come.
+This section explains basic principles behind cryoCAT is still under developement. Please refer to the available topics from the list.
 
 |
 

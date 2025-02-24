@@ -11,6 +11,7 @@ from cryocat import mathutils
 from cryocat import ribana
 from cryocat import nnana
 from cryocat import ioutils
+from cryocat import quadric
 from scipy.spatial.transform import Rotation as srot
 
 
@@ -482,48 +483,24 @@ class PleomorphicSurface:
 
     @staticmethod
     def compute_point_surface_distance(
-        input_motl, parametric_surface, feature_id="object_id", output_file=None, store_id="geom4"
+        input_motl,
+        parametric_surface,
+        surface_type="ellipsoid",
+        feature_id="object_id",
+        output_file=None,
+        store_id="geom4",
     ):
 
         in_motl = cryomotl.Motl.load(input_motl)
-
-        el_params = PleomorphicSurface.load_parametric_surface(
-            parametric_surface=parametric_surface, feature_id=feature_id
-        )
         features = in_motl.get_unique_values(feature_id=feature_id)
-
         assigned_motl_df = pd.DataFrame()
+
+        m_qs = quadric.QuadricsM(parametric_surface, quadric=surface_type, feature_id=feature_id)
 
         for f in features:
             fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
             coord = fm.get_coordinates()
-            fm_ep = el_params.loc[
-                el_params[feature_id] == f,
-                [
-                    "cx",
-                    "cy",
-                    "cz",
-                    "rx",
-                    "ry",
-                    "rz",
-                    "ev1x",
-                    "ev1y",
-                    "ev1z",
-                    "ev2x",
-                    "ev2y",
-                    "ev2z",
-                    "ev3x",
-                    "ev3y",
-                    "ev3z",
-                ],
-            ].values[0]
-            distances = []
-            for p in coord:
-                distances.append(geom.point_ellipsoid_distance(p, fm_ep))
-            fm.df[store_id] = distances
-            # fm_ep = el_params.loc[el_params[feature_id] == f, ["cx", "cy", "cz"]].values
-            # avg_rad = np.mean(el_params.loc[el_params[feature_id] == f, ["rx", "ry", "rz"]].values)
-            # fm.df[store_id] = np.linalg.norm(coord - fm_ep, axis=1) - avg_rad
+            fm.df[store_id] = m_qs.distance_point_surface(fm.df["tomo_id"].values[0], f, coord)
             assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
 
         assigned_motl = cryomotl.Motl(assigned_motl_df)
@@ -536,7 +513,12 @@ class PleomorphicSurface:
 
     @staticmethod
     def assign_affiliation_distance_based(
-        input_motl, parametric_surface, feature_id="object_id", output_file=None, unassigned_value=None
+        input_motl,
+        parametric_surface,
+        surface_type="ellipsoid",
+        feature_id="object_id",
+        output_file=None,
+        unassigned_value=None,
     ):
 
         in_motl = cryomotl.Motl.load(input_motl)
@@ -550,6 +532,9 @@ class PleomorphicSurface:
         el_params = PleomorphicSurface.load_parametric_surface(
             parametric_surface=parametric_surface, feature_id=feature_id
         )
+
+        m_qs = quadric.QuadricsM(parametric_surface, quadric=surface_type, feature_id=feature_id)
+
         tomos = in_motl.get_unique_values(feature_id="tomo_id")
 
         assigned_motl_df = pd.DataFrame()

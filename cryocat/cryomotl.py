@@ -505,8 +505,10 @@ class Motl:
                 fm = tm.loc[tm[feature_id] == f]
                 bin_counts, bin_centers, _ = plt.hist(fm.loc[:, "score"], bins=hbin)  # TODO check if correct
                 bn = mathutils.otsu_threshold(bin_counts)
-                cc_t = bin_centers[bn]
-                fm = fm.loc[fm["score"] >= cc_t]
+                ind = np.where(bin_counts == bin_counts[bin_counts > bn][0]) #get index of the first bin_counts element that is greater than the threshold
+                cc_t = bin_centers[ind[0]+1][0] #get the upper edge of the first bin that is greater than the threshold - this is the score that will be used for cleaning
+                fm = fm.loc[fm["score"] >= cc_t] #retain all particles with a scores greater than the threshold
+                plt.axvline(cc_t, color="r") #plot the threshold
 
                 cleaned_motl = pd.concat([cleaned_motl, fm])
 
@@ -1495,6 +1497,53 @@ class Motl:
 
         return merged_motl
 
+    @classmethod
+    def merge_and_drop_duplicates(cls, motl_list):
+        """Merge a list of Motl instances or paths to motl files to a single motl. Does not renumber particles - uniqueness 
+        has to be inherent to the instances! 
+
+        Parameters
+        ----------
+        motl_list : list
+            A list of Motl instances or paths.
+
+        Returns
+        -------
+        Motl instance
+            The merged Motl instance (or instance of the input class) with renumbered objects and particles.
+
+        Raises
+        ------
+        UserInputError
+            If motl_list is not a list or is empty.
+
+        """
+
+        merged_df = cls.create_empty_motl_df()
+        feature_add = 0
+
+        if not isinstance(motl_list, list) or len(motl_list) == 0:
+            raise UserInputError(
+                f"You must provide a list of em file paths, or Motl instances. "
+                f"Instead, an instance of {type(motl_list).__name__} was given."
+            )
+
+        for m in motl_list:
+            motl = cls.load(m)
+            feature_min = min(motl.df.loc[:, "object_id"])
+
+            if feature_min <= feature_add:
+                motl.df.loc[:, "object_id"] = motl.df.loc[:, "object_id"] + (feature_add - feature_min + 1)
+
+            merged_df = pd.concat([merged_df, motl.df])
+            feature_add = max(motl.df.loc[:, "object_id"])
+
+        merged_motl = cls(merged_df)
+        merged_motl.drop_duplicates()
+        merged_motl.df.reset_index(inplace=True, drop=True)
+
+        return merged_motl
+
     def remove_out_of_bounds_particles(self, dimensions, boundary_type="center", box_size=None):
         """Removes particles that are out of tomogram bounds.
 
@@ -1540,7 +1589,7 @@ class Motl:
 
         recentered = self.get_coordinates()
         idx_list = []
-        for i, row in recentered.iterrows():
+        for i, row in recentered.iterrows():## FIXME
             tn = row["tomo_id"]
             tomo_dim = dim.loc[dim["tomo_id"] == tn, "x":"z"].reset_index(drop=True)
             c_min = [c - boundary for c in row["x":"z"]]
@@ -3574,7 +3623,7 @@ class ModMotl(Motl):
         Parameters
         ----------
         input_path : str
-            The path to a IMOD modl file or to the directory containing the model files.
+            The path to a IMOD mod file or to the directory containing the model files.
         mod_prefix : str, default=""
             The prefix to add to each file name before reading. Defaults to an empty string.
         mod_suffix : str, default=".mod"
