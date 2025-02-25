@@ -3,6 +3,8 @@ import pandas as pd
 from scipy.spatial.transform import Rotation as srot
 from cryocat.exceptions import UserInputError
 import matplotlib.pyplot as plt
+import os
+import math
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import splprep, splev
 from scipy.optimize import fsolve
@@ -1953,3 +1955,11 @@ def oversample_spline(coords, target_spacing):
     oversampled_points = np.array(splev(u_fine, tck)).T
 
     return oversampled_points
+
+def distance_array(vol):
+    shell_grid = np.arange(math.floor(-len(vol[0]) / 2), math.ceil(len(vol[0]) / 2), 1)
+    xv, yv, zv = shell_grid, shell_grid, shell_grid
+    shell_space = np.meshgrid(xv, yv, zv, indexing="xy")  ## 'ij' denominates matrix indexing, 'xy' cartesian
+    distance_v = np.sqrt(shell_space[0] ** 2 + shell_space[1] ** 2 + shell_space[2] ** 2)
+
+    return distance_v

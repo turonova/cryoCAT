@@ -1,5 +1,6 @@
 import struct
 import os
+import re
 import pandas as pd
 from dataclasses import dataclass
 from cryocat import ioutils
@@ -257,7 +258,14 @@ class ModelHeader(ImodHeader):
 def read_mod_files(input_path, file_prefix="", file_suffix=".mod"):
 
     if os.path.isfile(input_path):
-        return read_mod_file(input_path)
+        m_df = read_mod_file(input_path)
+        mod_filename_no_ext = os.path.splitext(os.path.basename(input_path))[0] #get filename without the extension
+        pattern_id = r'\d+' #regex to get the tomo number from filename
+        mod_id = re.search(pattern_id, mod_filename_no_ext).group(0) #get first occurrence of the tomo number in file name
+        m_df["mod_id"] = mod_id #append mod_id column to dataframe object
+        
+        return m_df
+
     else:
         mod_files = ioutils.get_files_prefix_suffix(input_path, prefix=file_prefix, suffix=file_suffix)
         mod_df = pd.DataFrame()

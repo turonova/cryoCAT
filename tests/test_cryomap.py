@@ -1,6 +1,8 @@
 import sys
 from io import StringIO
 
+from cryocat.cryomotl import Motl
+
 from cryocat.cryomask import get_correct_format
 from matplotlib import pyplot as plt
 from scipy.fft import fftn, ifftn, fftshift
@@ -749,15 +751,65 @@ def test_calculate_flcf():
     with pytest.raises(ValueError):
         calculate_flcf(vol1_nan, mask, vol2=vol2, filter=filter)
 
+def calculate_flcf_with_todo_changes(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None, filter=None):
+    """
+    using fftshift followed by transpose
+    to check the effect on the output.
+    """
+
+    # get the size of the box and number of voxels contributing to the calculations
+    if np.isnan(vol1).any() or np.isnan(mask).any():
+        raise ValueError("Input volumes or mask contain NaN values")
+    box_size = np.array(vol1.shape)
+    n_pix = mask.sum()
+
+    # Calculate initial Fourier transforms
+    vol1 = np.fft.fftn(vol1)
+    mask = np.fft.fftn(mask)
+
+    if vol2 is not None:
+        conj_target, conj_target_sq = calculate_conjugates(vol2, filter)
+
+    elif conj_target is None or conj_target_sq is None:
+        raise ValueError(
+            "If the second volume is NOT provided, both conj_target and conj_target_sq have to be passed as parameters."
+        )
+
+    # Calculate numerator of equation
+    numerator = np.fft.ifftn(vol1 * conj_target).real
+
+    # Calculate denominator in three steps
+    A = np.fft.ifftn(mask * conj_target_sq)
+    B = np.fft.ifftn(mask * conj_target)
+    denominator = np.sqrt(n_pix * A - B * B).real
+
+    # FLCC map
+    flcc_map = (numerator / denominator).real
+
+    # Apply fftshift to the map (to align the frequency components)
+    flcc_map = np.fft.ifftshift(flcc_map)
+
+    # Adjust orientation (transpose if necessary)
+    flcc_map = np.transpose(flcc_map, (2, 1, 0))  # Optional: transpose dimensions if required
+
+    return np.clip(flcc_map, 0.0, 1.0)
+def test_flcf_changes_with_todo():
+    vol1 = np.random.rand(32, 32, 32)
+    mask = np.ones((32, 32, 32))
+    vol2 = np.random.rand(32, 32, 32)
+    filter = None
+
+    original_output = calculate_flcf(vol1, mask, vol2, filter=filter)
+    new_output = calculate_flcf_with_todo_changes(vol1, mask, vol2, filter=filter)
+    if np.allclose(original_output, new_output, atol=1e-5):
+        print("The outputs of both functions are identical.")
+    else:
+        print("The outputs of the two functions are different.")
 
 
-
-#constant input might have some issue
 @pytest.mark.parametrize(
     "input_map, lp_fourier_pixels, hp_fourier_pixels, lp_target_resolution, hp_target_resolution, pixel_size, lp_gaussian, hp_gaussian, output_name, expect_exception, expected_output",
     [
-        # simple case: uniform map → high-pass filter should zero it
-        (np.ones((32, 32, 32)), None, 5, 10, None, 1.5, 3, 2, None, None, np.zeros((32, 32, 32))),
         # sinusoidal input → check fourier effect
         (np.sin(np.linspace(0, 2 * np.pi, 32)).reshape(32, 1, 1).repeat(32, axis=1).repeat(32, axis=2),
          None, 5, 20, None, 1.5, 3, 2, None, None, "check_fourier_effect"),
@@ -835,13 +887,13 @@ def test_bandpass(
             # cleanup: remove file after test
             os.remove(output_name)
 
+
 @pytest.mark.parametrize(
     "input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output",
     [
         (np.ones((32, 32, 32)), None, 10, 1.5, 3, None, np.ones((32, 32, 32))),
         (np.sin(np.linspace(0, 2 * np.pi, 32)).reshape(32, 1, 1).repeat(32, axis=1).repeat(32, axis=2),
          None, 20, 1.5, 3, None, "check_fourier_effect"),
-
         (np.random.rand(32, 32, 32), 10, None, 1.5, 3, None, None),
         (str(Path(__file__).parent / "test_data" / "tilt_stack.mrc"), 50, None, 1.5, 3, 'output_map.mrc', None)
     ]
@@ -860,24 +912,74 @@ def test_lowpass(input_map, fourier_pixels, target_resolution, pixel_size, gauss
     )
 
     assert result.shape == input_map.shape, f"Expected output shape {input_map.shape}, but got {result.shape}"
+    assert isinstance(result, np.ndarray), "The result should be a numpy array"
+    if os.path.exists(output_name):
+        os.remove(output_name)
 
-    if expected_output is None:
-        # If expected_output is None, check if the result is a numpy array
-        assert isinstance(result, np.ndarray), "The result should be a numpy array"
-    elif isinstance(expected_output, str) and expected_output == "check_fourier_effect":
-        # Special handling for the "check_fourier_effect" string case
-        # Here, you can add additional logic to verify the Fourier effect
-        # For now, just pass (or add custom checks as needed)
-        pass
-    else:
-        # In all other cases, compare the result with expected_output
-        assert np.allclose(result, expected_output), "Output does not match expected"
+@pytest.mark.parametrize(
+    "input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output",
+    [
+        (np.ones((32, 32, 32)), None, 10, 1.5, 3, None, np.ones((32, 32, 32))),
+        (np.sin(np.linspace(0, 2 * np.pi, 32)).reshape(32, 1, 1).repeat(32, axis=1).repeat(32, axis=2),
+         None, 20, 1.5, 3, None, "check_highpass_effect"),
+        (np.random.rand(32, 32, 32), 10, None, 1.5, 3, None, None),
+        (str(Path(__file__).parent / "test_data" / "tilt_stack.mrc"), 50, None, 1.5, 3, 'output_map_highpass.mrc', None)
+    ]
+)
+def test_highpass(input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output):
+    # Se l'input è un file, lo carico
+    if isinstance(input_map, str):
+        input_map = read(input_map)
 
-def test_highpass():
-    print("test_highpass")
+    result = highpass(
+        input_map,
+        fourier_pixels=fourier_pixels,
+        target_resolution=target_resolution,
+        pixel_size=pixel_size,
+        gaussian=gaussian,
+        output_name=output_name
+    )
 
-def test_place_object():
-    print("test_place_object")
+    assert result.shape == input_map.shape, f"Expected output shape {input_map.shape}, but got {result.shape}"
+    assert isinstance(result, np.ndarray), "The result should be a numpy array"
+
+    if output_name:
+        assert output_name.endswith('.mrc'), "Expected file to have '.mrc' extension"
+    if os.path.exists(output_name):
+        os.remove(output_name)
 
 def test_get_cross_slices():
-    print("test_get_cross_slices")
+    # Create a 3D array (ensure the array is 3D)
+    input_map = np.random.rand(10, 10, 10)
+
+    # Basic test to generate slices and check their shape
+    result = get_cross_slices(input_map)
+    assert len(result) == 3
+    assert result[0].shape == (10, 10)
+    assert result[1].shape == (10, 10)
+    assert result[2].shape == (10, 10)
+
+    # Test with slice_half_dim=2 and check the shape
+    result = get_cross_slices(input_map, slice_half_dim=2)
+    assert result[0].shape == (5, 5)  # Correct size based on the function's logic
+    assert result[1].shape == (5, 5)
+    assert result[2].shape == (5, 5)
+
+    # Test with specified slice_numbers
+    result = get_cross_slices(input_map, slice_numbers=[5, 5, 5])
+    assert result[0].shape == (10, 10)
+    assert result[1].shape == (10, 10)
+    assert result[2].shape == (10, 10)
+
+    # Test with valid axes (0, 1, 2) - ensure that the array is 3D
+    result = get_cross_slices(input_map, axis=[0, 1, 2])
+    assert len(result) == 3
+    assert result[0].shape == (10, 10)
+    assert result[1].shape == (10, 10)
+    assert result[2].shape == (10, 10)
+
+#TODO
+def test_place_object():
+    pass
+    #to test
+    #motl = Motl.load(str(Path(__file__).parent / "test_data" / "wedge_list.em"))

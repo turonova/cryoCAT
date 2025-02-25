@@ -219,7 +219,7 @@ def test_create_wedge_list_em_batch():
         os.remove(str(wedgeutils_datad / "wedge_list_1.em"))
 
 
-def test_load_wedge_list():
+def test_load_wedge_list_sg():
     filename = str(Path(__file__).parent / "test_data" / "TS_017" / "017_gctf.star")
     result = load_wedge_list_sg(filename)
     assert isinstance(result, pd.DataFrame)
@@ -232,7 +232,125 @@ def test_load_wedge_list():
 
     if os.path.exists(filename):
         os.remove(filename)
-    
+
 
 def test_load_wedge_list_em():
-    pass
+    directory = Path(__file__).parent / "test_data"
+    wedgeutils_datad = directory / "wedgeutils_data"
+    wedge_listem = wedgeutils_datad / "wedge_list.em"
+
+    # Test loading from file
+    df_file = load_wedge_list_em(str(wedge_listem))
+    assert isinstance(df_file, pd.DataFrame)
+    assert list(df_file.columns) == ["tomo_id", "min_tilt_angle", "max_tilt_angle"]
+
+    # Test loading from valid numpy array
+    valid_array = np.array([[1, -60, 60], [2, -50, 50]])
+    df_numpy = load_wedge_list_em(valid_array)
+    assert isinstance(df_numpy, pd.DataFrame)
+    assert df_numpy.shape == (2, 3)
+
+    # Test loading from invalid numpy array
+    invalid_array = np.array([[1, -60], [2, -50]])  # Wrong shape
+    with pytest.raises(ValueError, match="correct shape"):
+        load_wedge_list_em(invalid_array)
+
+    # Test loading from valid DataFrame
+    valid_df = pd.DataFrame({"tomo_id": [1, 2], "min_tilt_angle": [-60, -50], "max_tilt_angle": [60, 50]})
+    df_dataframe = load_wedge_list_em(valid_df)
+    assert isinstance(df_dataframe, pd.DataFrame)
+    assert df_dataframe.shape == (2, 3)
+
+    """# Test loading from invalid DataFrame (wrong column names)
+    invalid_df = pd.DataFrame({"A": [1, 2], "B": [-60, -50], "C": [60, 50]})
+    with pytest.raises(ValueError, match="correct shape"):
+        load_wedge_list_em(invalid_df)"""
+
+    # Test invalid input type
+    with pytest.raises(ValueError, match="Invalid input"):
+        load_wedge_list_em(12345)
+
+
+def test_create_wg_mask():
+    #print(sample_wedge_list)
+    sample_wedge_list = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_list.star")
+    sample_wedge_list = load_wedge_list_sg(sample_wedge_list)
+    #sample_tomo_list = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "tomo_list.txt")
+    sample_tomo_list = np.asarray([17,18])
+    box_size = 64
+    mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size)
+
+    assert isinstance(mask, np.ndarray)
+    assert mask.shape == (box_size, box_size, box_size)
+
+    box_size_array = np.array([64, 64, 64])
+    mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size_array)
+    assert mask.shape == tuple(box_size_array), f"Forma errata: {mask.shape}"
+
+    output_file = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_mask.em")
+    mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size, output_path=str(output_file))
+    assert os.path.exists(output_file)
+
+    with pytest.raises(ValueError):
+        create_wg_mask(12345, sample_tomo_list, box_size)
+
+    with pytest.raises(ValueError):
+        create_wg_mask(sample_wedge_list, "wrong_tomo_list.txt", box_size)
+
+    with pytest.raises(ValueError):
+        create_wg_mask(sample_wedge_list, sample_tomo_list, [64, 64])
+
+    """if os.path.exists(output_file):
+        os.remove(output_file)"""
+
+#to fix
+def test_apply_wedge_mask():
+    # Prepare sample data paths
+    directory = Path(__file__).parent / "test_data"
+    wedge_mask_path = str(directory / "wedgeutils_data" / "wedge_mask.em")
+    in_map_path = str(directory /  "wedgeutils_data" / "wedge_list.em")  # Example input map file
+
+    # Create a sample input map (you can mock this if needed for isolated testing)
+    # Make sure the map is in a compatible format
+    in_map = cryomap.read(in_map_path)  # This should return a numpy array
+
+    # Apply the wedge mask without rotation or output path
+    result_map = apply_wedge_mask(wedge_mask_path, in_map_path)
+
+    # Test the type of the result
+    assert isinstance(result_map, np.ndarray), "Output is not a numpy array"
+
+    # Check that the output map has the same shape as the input map
+    assert result_map.shape == in_map.shape, f"Expected shape {in_map.shape}, but got {result_map.shape}"
+
+    # Test apply with rotation (example: rotate the map by 30 degrees)
+    rotation = [30, 0, 0]  # Example rotation (adjust as needed)
+    result_map_rot = apply_wedge_mask(wedge_mask_path, in_map_path, rotation_zxz=rotation)
+
+    # Assert that the rotated map is still a valid numpy array
+    assert isinstance(result_map_rot, np.ndarray), "Rotated map is not a numpy array"
+    assert result_map_rot.shape == in_map.shape, f"Expected rotated map shape {in_map.shape}, but got {result_map_rot.shape}"
+
+    # Test apply with output path (check if the file is created)
+    output_file = str(Path(__file__).parent / "test_data" / "output_map.em")
+    result_map_with_output = apply_wedge_mask(wedge_mask_path, in_map_path, output_path=output_file)
+
+    # Ensure the output file was created
+    assert os.path.exists(output_file), f"Output file {output_file} was not created"
+
+    # Optionally, you can also check the contents of the output file if needed
+    output_map = cryomap.read(output_file)
+    assert isinstance(output_map, np.ndarray), "Output file does not contain a valid numpy array"
+
+    # Test with invalid inputs
+    with pytest.raises(ValueError):
+        apply_wedge_mask(wedge_mask_path, "invalid_map_path", rotation_zxz=rotation)
+
+    with pytest.raises(ValueError):
+        apply_wedge_mask("invalid_wedge_mask.em", in_map_path, rotation_zxz=rotation)
+
+    # Clean up output file after the test
+"""    if os.path.exists(output_file):
+        os.remove(output_file)
+"""
+

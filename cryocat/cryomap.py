@@ -7,27 +7,28 @@ from numpy import fft
 from scipy.ndimage import affine_transform
 from scipy.spatial.transform import Rotation as srot
 from scipy.interpolate import interp1d
+import re
 from cryocat import cryomask
 from skimage import transform
 
 
 def scale(input_map, scaling_factor, output_name=None):
-    """Scale an input map by a specified scaling factor.
-
+    """
+    Scales an input map by a given scaling factor.
+    
     Parameters
     ----------
-    input_map : str on nd.array
-        The file path of the input map to be scaled.
+    input_map : str
+        The path to the input map to be scaled.
     scaling_factor : float
-        The factor by which to scale the input map. A value greater than 1 indicates upscaling, while a value less
-        than 1 indicates downscaling.
+        The factor by which to scale the input map (a value grater than one indicates upscaling, between 0 and downscaling). If the scaling factor is greater than 1, anti-aliasing is turned off.
     output_name : str, optional
-        The file path where the scaled map will be saved. If None, the scaled map will not be saved.
-
+        The name of the output file to which to write the scaled map. If not provided, the scaled map will not be saved.
+    
     Returns
     -------
-    numpy.ndarray
-        The scaled map as a NumPy array.
+    scaled_map : ndarray
+        The scaled map. If the dtype of the scaled map is float64, it is cast to float32 before being returned.
 
     Notes
     -----
@@ -833,7 +834,28 @@ def rotate(
 
 
 def crop(input_map, new_size, output_file=None, crop_coord=None):
-
+    """
+    This function crops a given input map to a new size. If no crop coordinates are provided, the function will crop from the center of the input map. If an output file is specified, the cropped volume will be written to this file.
+    Parameters
+    ----------
+    input_map : str or np.array
+        The input map to be cropped. If a string is provided, it is assumed to be the path to the input map file.
+    new_size : tuple or str
+        The desired size of the cropped volume. If a string is provided, it is assumed to be in the format 'x,y,z'.
+    output_file : str, optional
+        The path to the output file where the cropped volume will be written. If not provided, the cropped volume will not be written to a file.
+    crop_coord : tuple or str, optional
+        The coordinates from which to start cropping. If a string is provided, it is assumed to be in the format 'x,y,z'. If not provided, the function will crop from the center of the input map.
+    
+    Returns
+    -------
+    cropped_volume : np.array
+        The cropped volume.
+    
+    Notes
+    -----
+    see also: trim
+    """
     input_map = read(input_map)
 
     new_size = cryomask.get_correct_format(new_size)
@@ -854,6 +876,26 @@ def crop(input_map, new_size, output_file=None, crop_coord=None):
 
 
 def shift(map, delta):
+    """
+    Shifts the input map by a given delta.
+    
+    Parameters
+    ----------
+    map : ndarray
+        The input map to be shifted. It should be a 3D array.
+    delta : float
+        The amount by which to shift the map.
+    
+    Returns
+    -------
+    shifted_map : ndarray
+        The shifted map. It is a 3D array of the same shape as the input map.
+    
+    Notes
+    -----
+    This function uses the Fourier shift theorem to perform the shift, which involves a Fourier transform, a multiplication by a phase shift factor, and an inverse Fourier transform.
+    """
+    
     dimx, dimy, dimz = map.shape
 
     x = np.arange(-dimx / 2, dimx / 2, 1)
@@ -870,7 +912,28 @@ def shift(map, delta):
 
 
 def shift2(input_map, delta, output_name=None):
-
+    """
+    Shifts an input map by a specified delta.
+    
+    Parameters
+    ----------
+    input_map : str or np.ndarray
+        The input map to be shifted. If a string is provided, it is assumed to be a filename from which to read the map.
+    delta : array_like
+        The shift to apply to the input map. Must be of length 3.
+    output_name : str, optional
+        If provided, the shifted map will be written to a file with this name. The data type of the output will be np.single.
+    
+    Returns
+    -------
+    shifted_map : np.ndarray
+        The input map, shifted by the specified delta.
+    
+    Notes
+    -----
+    The shift is applied using an affine transformation with a matrix that is the identity except for the last column, which is set to the negative of the delta. The mode of the affine transformation is "grid-wrap".
+    """
+    
     input_map = read(input_map)
 
     T = np.eye(4)
@@ -886,6 +949,26 @@ def shift2(input_map, delta, output_name=None):
 
 
 def recenter(map, new_center):
+    """
+    Recenter a given map around a new center.
+    
+    Parameters
+    ----------
+    map : ndarray
+        The input map to be recentered.
+    new_center : ndarray
+        The new center coordinates for the map, with relation to the coordinate frame of the map (eg. box size).
+    
+    Returns
+    -------
+    trans_struct : ndarray
+        The recentered map.
+    
+    Notes
+    -----
+    The function creates a transformation matrix, calculates the shift required to move the center of the map to the new center, applies the transformation to the map, and returns the recentered map.
+    """
+    
     T = np.eye(4)
     structure_center = np.asarray(map.shape) // 2
     shift = new_center - structure_center
@@ -905,14 +988,15 @@ def normalize_under_mask(ref, mask):
 
     Parameters
     ----------
-    ref :
+    ref : np.ndarray
 
-    mask :
+    mask : np.ndarray
 
 
     Returns
     -------
-
+    norm_ref : np.ndarray
+        The map with the area under the mask normalized.
     """
 
     # Calculate mask parameters
@@ -930,6 +1014,34 @@ def normalize_under_mask(ref, mask):
 
 
 def get_start_end_indices(coord, volume_shape, subvolume_shape):
+    """
+    This function calculates the start and end indices of a subvolume within a larger volume, given the center coordinate of the subvolume.
+    
+    Parameters
+    ----------
+    coord : array_like
+        The center coordinate of the subvolume.
+    volume_shape : array_like
+        The shape of the larger volume.
+    subvolume_shape : array_like
+        The shape of the subvolume.
+    
+    Returns
+    -------
+    volume_start_clip : ndarray
+        The start indices of the subvolume within the larger volume, after being clipped to ensure they are within the volume.
+    volume_end_clip : ndarray
+        The end indices of the subvolume within the larger volume, after being clipped to ensure they are within the volume.
+    subvolume_start : ndarray
+        The start indices of the subvolume, relative to its own shape.
+    subvolume_end : ndarray
+        The end indices of the subvolume, relative to its own shape.
+    
+    Notes
+    -----
+    The function first calculates the start and end indices of the subvolume within the larger volume, without considering whether they are within the volume. It then clips these indices to ensure they are within the volume. Finally, it calculates the start and end indices of the subvolume, relative to its own shape.
+    """
+    
     subvolume_shape = np.asarray(subvolume_shape)
     subvolume_half = subvolume_shape / 2
 
@@ -947,6 +1059,34 @@ def get_start_end_indices(coord, volume_shape, subvolume_shape):
 
 
 def extract_subvolume(volume, coordinates, subvolume_shape, output_file=None):
+    """
+    Extracts a subvolume from a given volume.
+    
+    Parameters
+    ----------
+    volume : ndarray
+        The 3D array from which to extract the subvolume.
+    coordinates : tuple
+        The (x, y, z) coordinates of the center of the subvolume to extract.
+    subvolume_shape : tuple
+        The (x, y, z) shape of the subvolume to extract.
+    output_file : str, optional
+        If provided, the extracted subvolume will be written to this file.
+    
+    Returns
+    -------
+    subvolume : ndarray
+        The extracted subvolume.
+    
+    Notes
+    -----
+    The function first calculates the start and end indices for the volume and subvolume. 
+    Then it creates an empty subvolume with the same shape as the desired subvolume, 
+    filled with the mean value of the original volume. 
+    The values from the original volume are then copied into the subvolume. 
+    If an output file is provided, the subvolume is written to this file.
+    """
+    
     vs, ve, ss, se = get_start_end_indices(coordinates, volume.shape, subvolume_shape)
 
     subvolume = np.full(subvolume_shape, np.mean(volume))
@@ -960,6 +1100,30 @@ def extract_subvolume(volume, coordinates, subvolume_shape, output_file=None):
 
 
 def get_cross_slices(input_map, slice_half_dim=None, slice_numbers=None, axis=None):
+    """
+    This function generates cross slices across an axis from a given input map.
+    
+    Parameters
+    ----------
+    input_map : array_like
+        The input map from which to generate cross slices.
+    slice_half_dim : int, optional
+        The half dimension of the slice. If None, the slice will cover the entire dimension of the input map.
+    slice_numbers : array_like, optional
+        The slice numbers to use. If None, the slice numbers will be calculated as the ceiling of half the shape of the input map.
+    axis : array_like, optional
+        The axis along which to generate the slices. If None, slices will be generated along all axes.
+    
+    Returns
+    -------
+    cross_slices : list
+        A list of cross slices generated from the input map.
+    
+    Notes
+    -----
+    The function first reads the input map and checks the axis and slice numbers. If the axis is not provided, it defaults to [0, 1, 2]. If the slice numbers are not provided, they are calculated as the ceiling of half the shape of the input map. The function then generates the cross slices along the specified axis and returns them as a list.
+    """
+    
     cmap = read(input_map)
 
     if axis is None:
@@ -998,6 +1162,30 @@ def get_cross_slices(input_map, slice_half_dim=None, slice_numbers=None, axis=No
 
 
 def pad(input_volume, new_size, fill_value=None):
+    """
+    Pads an input volume to a new size.
+    
+    This function reads an input volume, calculates the mean of the volume if no fill value is provided, and creates a new volume of the specified size filled with the mean or provided fill value. The original volume is then placed in the center of the new volume.
+    
+    Parameters
+    ----------
+    input_volume : ndarray
+        The input volume to be padded.
+    new_size : tuple
+        The desired size of the new volume. Must be a 3-element tuple.
+    fill_value : float, optional
+        The value to fill the new volume with. If None, the new volume is filled with the mean of the input volume.
+    
+    Returns
+    -------
+    padded_volume : ndarray
+        The padded volume of the new size.
+    
+    Notes
+    -----
+    The original volume is placed in the center of the new volume. If the new size is not an integer multiple of the original size, the original volume is placed such that there is an equal number of padding voxels on either side of the volume in each dimension.
+    """
+    
     volume = read(input_volume)
 
     if fill_value is None:
@@ -1022,7 +1210,35 @@ def pad(input_volume, new_size, fill_value=None):
 
 
 def place_object(input_object, motl, volume_shape=None, volume=None, feature_to_color="object_id"):
-
+    """
+    Places an object or a list of objects into a volume based on the given motion list (motl).
+    
+    Parameters
+    ----------
+    input_object : str or list
+        The object or list of objects to be placed. If a string is provided, it is assumed to be a path to the object file.
+    motl : object
+        The motion list containing the rotations and coordinates for placing the objects.
+    volume_shape : tuple, optional
+        The shape of the volume in which the objects are to be placed. If not provided, the volume parameter must be provided.
+    volume : str, optional
+        The volume in which the objects are to be placed. If not provided, the volume_shape parameter must be provided.
+    feature_to_color : str, default="object_id"
+        The feature in the motion list dataframe to use for coloring the objects.
+    
+    Returns
+    -------
+    object_container : ndarray
+        The volume with the objects placed.
+    
+    Notes
+    -----
+    The objects are rotated according to the rotations in the motl list and placed at the coordinates in the motl list.
+    The objects are colored according to the feature_to_color parameter.
+    If the input_object is a list, each object in the list is placed according to the corresponding rotation and coordinate in the motl list.
+    If the input_object is a single object, it is placed at each rotation and coordinate in the motl list.
+    """
+    
     if not isinstance(input_object, list):
         input_object = read(input_object)
 
@@ -1155,6 +1371,34 @@ def deconvolve(
 
 
 def compute_ctf_1d(length, pixel_size, voltage, cs, defocus, amplitude, phaseshift, bfactor):
+    """
+    This function computes the 1D Contrast Transfer Function (CTF) for a given set of parameters.
+    
+    Parameters
+    ----------
+    length : int
+        The length of the 1D array for which the CTF is computed.
+    pixel_size : float
+        The size of the pixel in the image.
+    voltage : float
+        The voltage used in the microscope.
+    cs : float
+        The spherical aberration coefficient.
+    defocus : float
+        The defocus value.
+    amplitude : float
+        The amplitude contrast.
+    phaseshift : float
+        The phase shift value.
+    bfactor : float
+        The B-factor for the envelope function.
+    
+    Returns
+    -------
+    ctf : ndarray
+        The computed 1D Contrast Transfer Function.
+    """
+    
     ny = 1 / pixel_size
     lambda_factor = 12.2643247 / np.sqrt(voltage * (1.0 + voltage * 0.978466e-6)) * 1e-10
     lambda2 = lambda_factor * 2
@@ -1175,6 +1419,32 @@ def compute_ctf_1d(length, pixel_size, voltage, cs, defocus, amplitude, phaseshi
 
 
 def trim(input_map, trim_start, trim_end, output_name=None):
+    """
+    Trims a 3D map to a specified range.
+
+    Parameters
+    ----------
+    input_map : ndarray
+        The 3D map to be trimmed.
+    trim_start : array_like
+        The starting coordinates for the trim. Must be a 3-element array-like object.
+    trim_end : array_like
+        The ending coordinates for the trim. Must be a 3-element array-like object.
+    output_name : str, optional
+        If provided, the trimmed map will be written to a file with this name. The file will be written in single precision float format.
+    
+    Returns
+    -------
+    output_map : ndarray
+        The trimmed 3D map.
+    
+    Notes
+    -----
+    The trim_start and trim_end parameters are inclusive. That is, the output_map will include the voxels at these coordinates.
+    If either trim_start or trim_end is beyond the bounds of input_map, it will be adjusted to fit within the bounds.
+    see also: crop
+    """
+    
     output_map = read(input_map)
 
     trim_start = np.asarray(trim_start)
@@ -1192,6 +1462,28 @@ def trim(input_map, trim_start, trim_end, output_name=None):
 
 
 def flip(input_map, axis="z", output_name=None):
+    """
+    Function to flip a given input map along specified axis.
+    
+    Parameters
+    ----------
+    input_map : array_like
+        The input map to be flipped.
+    axis : str, optional
+        The axis along which to flip the input map. Default is "z".
+    output_name : str, optional
+        The name of the output file. If not provided, the function will return the flipped map.
+    
+    Returns
+    -------
+    output_map : array_like
+        The flipped map.
+    
+    Notes
+    -----
+    The function reads the input map, flips it along the specified axis, and writes the output map to a file if an output name is provided.
+    """
+    
     output_map = read(input_map)
 
     if "z" in axis.lower():
@@ -1210,6 +1502,28 @@ def flip(input_map, axis="z", output_name=None):
 
 
 def calculate_conjugates(vol, filter=None):
+    """
+    This function calculates the complex conjugates of a volume and its square after applying a Fourier transform and an optional filter.
+    
+    Parameters
+    ----------
+    vol : ndarray
+        The input volume to be transformed and filtered.
+    filter : ndarray, optional
+        The filter to be applied to the Fourier transform of the volume. If None, no filter is applied. Default is None.
+    
+    Returns
+    -------
+    conj_target : ndarray
+        The complex conjugate of the Fourier transform of the input volume after applying the filter.
+    conj_target_sq : ndarray
+        The complex conjugate of the square of the filtered volume after applying the Fourier transform.
+    
+    Notes
+    -----
+    The 0-frequency peak of the Fourier transform of the input volume is set to zero before calculating the complex conjugates.
+    """
+    
     # Fourier transform tile
     vol_fft = np.fft.fftn(vol)
 
@@ -1233,6 +1547,35 @@ def calculate_conjugates(vol, filter=None):
 
 
 def calculate_flcf(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None, filter=None):
+    """
+    This function calculates the Fast Local Correlation Coefficient (FLCC) map between two volumes (3D arrays). 
+    
+    Parameters
+    ----------
+    vol1 : ndarray
+        The first volume for which the FLCC map is to be calculated.
+    mask : ndarray
+        The mask to be applied on the volumes.
+    vol2 : ndarray, optional
+        The second volume for which the FLCC map is to be calculated. If not provided, `conj_target` and `conj_target_sq` must be provided.
+    conj_target : ndarray, optional
+        The conjugate of the target volume. Required if `vol2` is not provided.
+    conj_target_sq : ndarray, optional
+        The square of the conjugate of the target volume. Required if `vol2` is not provided.
+    filter : ndarray, optional
+        The filter to be applied on the volumes. 
+    
+    Raises
+    ------
+    ValueError
+        If `vol2` is not provided, both `conj_target` and `conj_target_sq` must be provided.
+    
+    Returns
+    -------
+    cc_map : ndarray
+        The calculated FLCC map, clipped between 0.0 and 1.0.
+    """
+    
     # get the size of the box and number of voxels contributing to the calculations
     if np.isnan(vol1).any() or np.isnan(mask).any():
         raise ValueError("Input volumes or mask contain NaN values")
@@ -1270,8 +1613,43 @@ def calculate_flcf(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None,
     # Following code corresponds to the original one from Matlab and was tested to be working despite looking ugly...
     # TODO: maybe check (on unflipped data) fftshift, followed by transpose - that could work. fftshift followed by flip
     # was having an offset of 1
+    # TODO: check nomenclature: flcc, flcf, flcl
     cen = np.floor(box_size / 2).astype(int) + 1
     cc_map = np.flip(cc_map)
     cc_map = np.roll(cc_map, cen, (0, 1, 2))
 
     return np.clip(cc_map, 0.0, 1.0)
+
+def symmterize_volume(vol, symmetry): 
+    """
+    Symmetrize the input volume based on the specified symmetry.
+
+    Parameters:
+    vol (ndarray): The input volume to be symmetrized.
+    symmetry (str or int or float): The symmetry of the volume. If a string, it should start with 'C' followed by a number indicating the rotational symmetry. If an integer or float, it directly specifies the rotational symmetry.
+
+    Returns:
+    ndarray: The symmetrized volume.
+
+    Raises:
+    ValueError: If the symmetry is not specified correctly.
+
+    """
+    if isinstance(symmetry, str):
+        nfold = int(re.findall(r"\d+", symmetry)[-1])
+    elif isinstance(symmetry, (int, float)):
+        nfold = symmetry
+    else:
+        raise ValueError("The symmetry has to be specified as a string (starting with C) or as a number (only for C)!")
+
+    inplane_step = 360 / nfold
+    rotated_sum = np.empty(vol.shape)
+
+    for inplane in range(1, nfold+1):
+        # print('inplane',inplane, inplane*inplane_step)
+        rotated_volume = rotate(vol, rotation_angles=[0, 0, 360%(inplane*inplane_step)])
+        # print('rot vol',rotated_volume[0][0][0:10])
+        rotated_sum = np.add(rotated_sum, rotated_volume)
+    sym_vol = np.divide(rotated_sum, nfold)
+
+    return sym_vol
