@@ -665,6 +665,7 @@ def total_dose_load(input_dose, sort_mdoc=True):
             if "PriorRecordDose" in mdoc_file.imgs:
                 prior_dose = mdoc_file.get_image_feature("PriorRecordDose").values
                 total_dose = image_dose + prior_dose
+                return total_dose
             else:
                 mdoc_file.imgs["original_order"] = range(len(mdoc_file.imgs))
                 mdoc_file.imgs["DateTime"] = pd.to_datetime(mdoc_file.imgs["DateTime"])  # Convert to datetime
@@ -672,8 +673,8 @@ def total_dose_load(input_dose, sort_mdoc=True):
                 sorted_df.reset_index(drop=True, inplace=True)
                 sorted_df["total_dose"] = sorted_df["ExposureDose"] * (sorted_df.index + 1)
                 result_df = sorted_df.sort_values("original_order").drop(columns=["original_order"])
+                return result_df["total_dose"].values
 
-            return result_df["total_dose"].values
         elif input_dose.endswith(".xml"):
             total_dose = get_data_from_warp_xml(input_dose, "Dose", node_level=1)
             return total_dose
