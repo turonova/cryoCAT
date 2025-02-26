@@ -303,7 +303,8 @@ def test_create_wg_mask():
     """if os.path.exists(output_file):
         os.remove(output_file)"""
 
-#to fix
+
+#TODO, to fix
 def test_apply_wedge_mask():
     # Prepare sample data paths
     directory = Path(__file__).parent / "test_data"
@@ -350,7 +351,6 @@ def test_apply_wedge_mask():
         apply_wedge_mask("invalid_wedge_mask.em", in_map_path, rotation_zxz=rotation)
 
     # Clean up output file after the test
-"""    if os.path.exists(output_file):
+    if os.path.exists(output_file):
         os.remove(output_file)
-"""
 

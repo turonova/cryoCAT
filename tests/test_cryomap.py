@@ -978,7 +978,7 @@ def test_get_cross_slices():
     assert result[1].shape == (10, 10)
     assert result[2].shape == (10, 10)
 
-#TODO
+#TODO, to create instance of Motl object
 def test_place_object():
     pass
     #to test
