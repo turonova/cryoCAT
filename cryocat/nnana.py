@@ -11,6 +11,30 @@ import matplotlib.pyplot as plt
 
 
 def get_nn_within_distance(feature_motl, radius, unique_only=True):
+    """Get nearest neighbors within a specified distance from a set of coordinates.
+
+    Parameters
+    ----------
+    feature_motl : cryomotl.Motl
+        A motl for which each particle should be analyzed.
+    radius : float
+        The distance within which to search for nearest neighbors.
+    unique_only : bool, default=True
+        If True, only unique nearest neighbors are returned. Default is True.
+
+    Returns
+    -------
+    center_idx : numpy.ndarray
+        An array of indices representing the center particles for which neighbors are found.
+    nn_idx : list of list of int
+        A list where each element is a list of indices of the nearest neighbors corresponding to each center index.
+
+    Notes
+    -----
+    This function uses a KDTree for efficient spatial querying of nearest neighbors. If `unique_only` is set to True,
+    it ensures that each neighbor is unique by removing duplicates.
+    """
+
     def remove_duplicates(list_of_arrays):
         unique_arrays = []
         seen_tuples = set()
@@ -48,6 +72,36 @@ def get_nn_within_distance(feature_motl, radius, unique_only=True):
 
 
 def get_feature_nn_indices(fm_a, fm_nn, nn_number=1):
+    """Get the indices and distances of nearest neighbors for given feature coordinates.
+
+    Parameters
+    ----------
+    fm_a : cryomotl.Motl
+        A motl for which nearest neighbors are to be found.
+    fm_nn : cryomotl.Motl
+        A motl in which the nearest neighbors will be searched for.
+    nn_number : int, default=1
+        The number of nearest neighbors to retrieve for each feature. Default is 1.
+
+    Returns
+    -------
+    ordered_idx : ndarray
+        An array of indices corresponding to the ordered features in `fm_a`.
+    nn_idx : ndarray
+        A 2D array of shape (n_features, nn_count) containing the indices of the nearest neighbors for each feature
+        in `fm_a`.
+    nn_dist : ndarray
+        A 2D array of shape (n_features, nn_count) containing the distances to the nearest neighbors for each feature
+        in `fm_a`.
+    nn_count : int
+        The actual number of nearest neighbors retrieved, which is the minimum of `nn_number` and the number of
+        available neighbors.
+
+    Notes
+    -----
+    This function uses a KDTree for efficient nearest neighbor search.
+    """
+
     coord_a = fm_a.get_coordinates()
     coord_nn = fm_nn.get_coordinates()
 
@@ -144,6 +198,45 @@ def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_numbe
 
 
 def get_nn_distances(motl_a, motl_nn, pixel_size=1.0, nn_number=1, feature="tomo_id", rotation_type="angular_distance"):
+    """Get nearest neighbor distances and related information between two sets of particles.
+
+    Parameters
+    ----------
+    motl_a : str or Motl
+        Path to the first motl file or a Motl object containing the first set of particles.
+    motl_nn : str or Motl
+        Path to the second motl file or a Motl object containing the second set of particles.
+    pixel_size : float, default=1.0
+        The size of a pixel in the same units as the coordinates. Default is 1.0.
+    nn_number : int, default=1
+        The number of nearest neighbors to consider. Default is 1.
+    feature : str, default='tomo_id'
+        The feature to use for splitting the particles. Default is 'tomo_id'.
+    rotation_type : str, default='angular_distance'
+        The type of rotation distance to compute. Default is 'angular_distance'.
+
+    Returns
+    -------
+    centered_coord : np.ndarray
+        The coordinates of the nearest neighbors centered around the reference particles.
+    rotated_coord : np.ndarray
+        The coordinates of the nearest neighbors after applying the rotation.
+    nn_dist : np.ndarray
+        The distances to the nearest neighbors.
+    angular_distances : np.ndarray
+        The angular distances between the reference particles and their nearest neighbors.
+    subtomo_idx : np.ndarray
+        The subtomo IDs of the reference motifs.
+    subtomo_idx_nn : np.ndarray
+        The subtomo IDs of the nearest neighbors.
+
+    Notes
+    -----
+    This function assumes that the input motifs have angle information and that the
+    motl files are compatible with the Motl class. The function will only work with
+    the intersection of features present in both motls.
+    """
+
     if isinstance(motl_a, str):
         motl_a = cryomotl.Motl(motl_path=motl_a)
 
@@ -215,6 +308,34 @@ def get_nn_distances(motl_a, motl_nn, pixel_size=1.0, nn_number=1, feature="tomo
 
 
 def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id", type_id="geom1"):
+    """Get nearest neighbor rotations based on specified features from two motl objects.
+
+    Parameters
+    ----------
+    motl_a : str or Motl
+        The path to the first motl file or a Motl object containing the first set of data.
+    motl_nn : str or Motl
+        The path to the second motl file or a Motl object containing the nearest neighbor data.
+    nn_number : int, default=1
+        The number of nearest neighbors to consider for each feature. Dfault is 1.
+    feature : str, default='tomo_id'
+        The feature used to identify unique elements in the motl data. Default is 'tomo_id'.
+    type_id : str, default='geom1'
+        The type identifier for the geometry. Default is 'geom1'.
+
+    Returns
+    -------
+    points_on_sphere : ndarray
+        An array of points on the sphere representing the rotations.
+    angles : ndarray
+        An array of Euler angles corresponding to the computed rotations in degrees.
+
+    Notes
+    -----
+    This function assumes that the input motl objects or paths contain the necessary data
+    and that the `get_motl_subset` and `get_angles` methods are available for the Motl class.
+    """
+
     if isinstance(motl_a, str):
         motl_a = cryomotl.Motl(motl_path=motl_a)
 
@@ -252,6 +373,29 @@ def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id", type_id="g
 
 
 def filter_nn_radial_stats(input_stats, binary_mask):
+    """Filter nearest neighbor radial statistics based on a binary mask.
+
+    Parameters
+    ----------
+    input_stats : pandas.DataFrame
+        A DataFrame containing the nearest neighbor statistics, which must include
+        columns for coordinates and a grouping identifier.
+
+    binary_mask : str
+        Path to a binary mask file that will be read to create a boolean mask for filtering.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame containing the filtered nearest neighbor statistics, with rows
+        removed based on the provided binary mask.
+
+    Notes
+    -----
+    The function adjusts the coordinates of the input statistics, ensuring they
+    fall within the bounds of the binary mask. It then applies the mask to filter
+    the statistics for each group defined by the 'qp_subtomo_id' column.
+    """
 
     def filter_group(group, dx, dy, dz, boolean_mask):
         # Cast x, y, z columns to integers and adjust coordinates

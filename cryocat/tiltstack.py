@@ -199,8 +199,7 @@ def remove_tilts(
     max_index = ts.data.shape[0]
     if any(idx < 0 or idx >= max_index for idx in idx_to_remove_final):
         raise IndexError(
-            f"One or more indices in idx_to_remove exceed bounds. "
-            f"Valid range: 0 to {max_index - 1} (0-based)."
+            f"One or more indices in idx_to_remove exceed bounds. " f"Valid range: 0 to {max_index - 1} (0-based)."
         )
     ts.data = np.delete(ts.data, idx_to_remove_final, axis=0)
     ts.write_out(output_file)
@@ -340,7 +339,7 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_orde
     tilt_stack : str or array-like
         The input tilt stack data containing the images to be filtered.
     pixel_size : float
-        The size of a pixel in the same units as the tilt stack in Armstrongs.
+        The size of a pixel in the same units as the tilt stack in Angstroms.
     total_dose : str or array_like
         The total dose for each tilt image in the stack specified either by a file path or directly as an array.
     output_file : str, optional
@@ -381,7 +380,7 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_orde
             frequency_array[y, x] = d
 
     # Generate filtered stack
-    ts.data = np.array(ts.data, copy=True) #Make ts.data writeable
+    ts.data = np.array(ts.data, copy=True)  # Make ts.data writeable
     for z in range(ts.n_tilts):
         image = ts.data[z, :, :]
         ts.data[z, :, :] = dose_filter_single_image(image, total_dose[z], frequency_array)
@@ -600,6 +599,7 @@ def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz",
     else:
         raise ValueError(f"Stack contains only 1 tilt.")
 
+
 def merge(file_path_pattern, output_file=None, output_order="xyz"):
     """Merge multiple files matching a given pattern into a single stack.
 
@@ -647,6 +647,7 @@ def merge(file_path_pattern, output_file=None, output_order="xyz"):
     final_ts.write_out(output_file)
 
     return final_ts.correct_order()
+
 
 def flip_along_axes(tilt_stack, axes, output_file=None, input_order="xyz", output_order="xyz"):
     """Flip the tilt stack along specified axes and optionally save the result to a file.
