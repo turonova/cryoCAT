@@ -470,6 +470,38 @@ def load_wedge_list_em(input_data):
 
     return wedge_list_df
 
+def wedge_list_sg_to_em(input_path, output_path, write_out=True):
+    '''convert a STOPGAP star format wedge list into a em wedge list;
+    only 3 columns [tomo_id, min_tilt_angle, max_tilt_angle] are collected
+    
+    Parameters
+    ----------
+    input_path: path to a STOPGAP star wedge list
+    output_path: path to save the new em format wedge list
+    write_out: whether to save the output; default is True
+
+    Return
+    -------
+    wedge_list_em: Pandas Dataframe with the 3 columns mentioned above
+    '''
+
+    # read STOPGAP wedge list star file
+    wedge_list_sg = wedgeutils.load_wedge_list_sg(input_path)
+
+    # get the min and max of tilt_angle column and create a new df 
+    wedge_list_em = wedge_list_sg.groupby("tomo_num").agg(min_tilt_angle=('tilt_angle', 'min'),
+                                                          max_tilt_angle=('tilt_angle', 'max'))
+    wedge_list_em.reset_index(inplace=True)
+    wedge_list_em.rename(columns={'tomo_num':'tomo_id'}, inplace=True)
+
+    # write out to em format
+    if write_out:
+        wedge_array = wedge_list_em.to_numpy()
+        wedge_array = wedge_array.reshape((1, wedge_array.shape[0], wedge_array.shape[1])).astype(np.single)
+        emfile.write(output_path, wedge_array, {}, overwrite=True)
+
+    return wedge_list_em
+
 def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape='wedge', output_path=None):
 
     if not isinstance(wg_list_star_df, pd.DataFrame):

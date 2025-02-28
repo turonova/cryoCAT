@@ -353,7 +353,7 @@ def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
 # get subtomograms out
 def create_subtomograms_for_tm(template_list, parent_folder_path):
     temp_df = pd.read_csv(template_list, index_col=0)
-    unique_entries = temp_df.groupby(["Structure", "Motl", "Tomogram", "Boxsize"]).indices
+    unique_entries = temp_df.groupby(["Structure", "Motl", "Tomogram", "Boxsize"]).groups
     entry_indices = list(unique_entries.values())
 
     for i, entry in enumerate(unique_entries):

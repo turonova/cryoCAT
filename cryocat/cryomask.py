@@ -292,7 +292,7 @@ def subtraction(mask_list, output_name=None):
         3D array with the final mask as a numpy array.
 
     """
-    final_mask = cryomap.read(mask_list[0]).shape
+    final_mask = cryomap.read(mask_list[0])
 
     for m in mask_list[1:]:
         mask = cryomap.read(m)
