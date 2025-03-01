@@ -8,6 +8,7 @@
 
    Motl basics <motl_basics>
    Geometric conventions <geometric_conventions>
+   Maps basics <maps_basics>
    Masks basics <masks_basics>
 
 ==========
