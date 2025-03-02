@@ -159,6 +159,8 @@ class Motl:
         >>> motl.write_out("rotated_motl.em")
 
         """
+        if not isinstance(rotation, rot):  # Use `rot` instead of `R`
+            raise ValueError("rotation must be an instance of scipy.spatial.transform.Rotation")
 
         angles = self.df.loc[:, ["phi", "theta", "psi"]].to_numpy()
 
@@ -719,7 +721,7 @@ class Motl:
             else:
                 tomos = dims["tomo_id"].unique()
                 for t in tomos:
-                    z_dim = float(dims[dims["tomo_id"] == t, "z"]) + 1
+                    z_dim = float(dims.loc[dims["tomo_id"] == t, "z"].iloc[0]) + 1
                     self.df.loc[self.df["tomo_id"] == t, "z"] = z_dim - self.df.loc[self.df["tomo_id"] == t, "z"]
 
     def get_angles(self, tomo_number=None):
@@ -806,6 +808,8 @@ class Motl:
 
         """
         angles = self.get_angles(tomo_number)
+        if angles.shape[0] == 0:
+            return []  # Return an empty list if angles is empty
         rotations = rot.from_euler("zxz", angles, degrees=True)
 
         return rotations
