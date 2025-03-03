@@ -836,6 +836,7 @@ def rotate(
 def crop(input_map, new_size, output_file=None, crop_coord=None):
     """
     This function crops a given input map to a new size. If no crop coordinates are provided, the function will crop from the center of the input map. If an output file is specified, the cropped volume will be written to this file.
+    
     Parameters
     ----------
     input_map : str or np.array
