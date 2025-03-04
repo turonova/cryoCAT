@@ -18,8 +18,8 @@ def scale(input_map, scaling_factor, output_name=None):
     
     Parameters
     ----------
-    input_map : str
-        The path to the input map to be scaled.
+    input_map : str or np.ndarray
+        The input map to be scaled passed as a numpy.ndarray or as the path to its file.
     scaling_factor : float
         The factor by which to scale the input map (a value grater than one indicates upscaling, between 0 and downscaling). If the scaling factor is greater than 1, anti-aliasing is turned off.
     output_name : str, optional
