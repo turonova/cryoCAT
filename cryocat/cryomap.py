@@ -955,8 +955,8 @@ def recenter(map, new_center):
     
     Parameters
     ----------
-    map : ndarray
-        The input map to be recentered.
+    map : str or ndarray
+        The input map to be recentered.  If a string is passed, that is assumed to be the path to the map file.
     new_center : ndarray
         The new center coordinates for the map, with relation to the coordinate frame of the map (eg. box size).
     
@@ -970,12 +970,12 @@ def recenter(map, new_center):
     The function creates a transformation matrix, calculates the shift required to move the center of the map to the new center, applies the transformation to the map, and returns the recentered map.
     """
     
+    original_map = read(map)
     T = np.eye(4)
-    structure_center = np.asarray(map.shape) // 2
+    structure_center = np.asarray(original_map.shape) // 2
     shift = new_center - structure_center
     T[:3, -1] = -shift
 
-    original_map = read(map)
     trans_struct = np.empty(original_map.shape)
     affine_transform(input=original_map, output=trans_struct, matrix=T)
 
