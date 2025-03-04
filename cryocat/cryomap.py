@@ -1059,7 +1059,7 @@ def get_start_end_indices(coord, volume_shape, subvolume_shape):
     return volume_start_clip, volume_end_clip, subvolume_start, subvolume_end
 
 
-def extract_subvolume(volume, coordinates, subvolume_shape, output_file=None):
+def extract_subvolume(volume, coordinates, subvolume_shape, enforce_shape=False, output_file=None):
     """
     Extracts a subvolume from a given volume.
     
@@ -1071,6 +1071,8 @@ def extract_subvolume(volume, coordinates, subvolume_shape, output_file=None):
         The (x, y, z) coordinates of the center of the subvolume to extract.
     subvolume_shape : tuple
         The (x, y, z) shape of the subvolume to extract.
+    enforce_shape : bool, optional
+        If True, the final volume will have the same shape as the original volume and the voxels outside the region of interest will be set to the mean value of the original volume. Default is False.
     output_file : str, optional
         If provided, the extracted subvolume will be written to this file.
     
@@ -1089,10 +1091,12 @@ def extract_subvolume(volume, coordinates, subvolume_shape, output_file=None):
     """
     
     vs, ve, ss, se = get_start_end_indices(coordinates, volume.shape, subvolume_shape)
-
-    subvolume = np.full(subvolume_shape, np.mean(volume))
-
-    subvolume[ss[0] : se[0], ss[1] : se[1], ss[2] : se[2]] = volume[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
+    if enforce_shape is not False:
+        subvolume = np.full(volume.shape, np.mean(volume))
+        subvolume[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]] = volume[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
+    else:
+        subvolume = np.full(subvolume_shape, np.mean(volume))
+        subvolume[ss[0] : se[0], ss[1] : se[1], ss[2] : se[2]] = volume[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
 
     if output_file is not None:
         write(subvolume, output_file, data_type=np.single)
