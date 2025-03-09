@@ -466,6 +466,8 @@ class Motl:
         histogram_bin : int, optional
             The number of bins for the histogram. If not provided, a default value will be used based on the feature ID.
             Defaults to None.
+        global_level : bool, default=False
+            Flag to indicate whether to compute the Otsu threshold grouping the particles based on feature_id on the dataset-level instead of on a tomogram-basis
 
         Returns
         -------
