@@ -504,7 +504,7 @@ class Motl:
         if global_level is False:
 
             for t in tomos:  # if feature == object_id, tomo_id needs to be used too
-                tm = self.df.loc[self.df["tomo_id"] == t]
+                tm = self.get_motl_subset(t).df 
                 features = tm.loc[:, feature_id].unique()
 
                 for f in features:
@@ -537,6 +537,27 @@ class Motl:
 
         print(f"Cleaned {self.df.shape[0] - cleaned_motl.shape[0]} particles.")
         self.df = cleaned_motl.reset_index(drop=True)
+
+
+    def compute_otsu_threshold(self, feature_id, hbin):
+        tm = self.df
+        features = tm.loc[:, feature_id].unique()
+        subset_motl = self.__class__.create_empty_motl_df()
+
+        for f in features:
+            fm = tm.loc[tm[feature_id] == f]
+            bin_counts, bin_centers, _ = plt.hist(fm.loc[:, "score"], bins=hbin) 
+            bn = mathutils.otsu_threshold(bin_counts)
+            ind = np.where(bin_counts == bin_counts[bin_counts > bn][0]) #get index of the first bin_counts element that is greater than the threshold
+            cc_t = bin_centers[ind[0]+1][0] #get the upper edge of the first bin that is greater than the threshold - this is the score that will be used for cleaning
+            print(f"Otsu threhold for particles grouped on {feature_id}={f} is {cc_t}")
+            fm = fm.loc[fm["score"] >= cc_t] #retain all particles with a scores greater than the threshold                
+            plt.axvline(cc_t, color="r") #plot the threshold
+
+            subset_motl = pd.concat([subset_motl, fm]) 
+        
+        return subset_motl
+
 
     def convert_to_motl(self, input_df):
         """Abstract method implemented only within child classes.
