@@ -486,7 +486,7 @@ class Motl:
         """
 
         tomos = self.get_unique_values('tomo_id')
-        cleaned_motl = self.__class__.create_empty_motl_df()
+        #cleaned_motl = self.__class__.create_empty_motl_df()
 
         if histogram_bin:
             hbin = histogram_bin
@@ -503,43 +503,41 @@ class Motl:
 
         if global_level is False:
 
-            for t in tomos:  # if feature == object_id, tomo_id needs to be used too
-                tm = self.get_motl_subset(t).df 
-                features = tm.loc[:, feature_id].unique()
-
-                for f in features:
-                    fm = tm.loc[tm[feature_id] == f]
-                    bin_counts, bin_centers, _ = plt.hist(fm.loc[:, "score"], bins=hbin)  # TODO check if correct
-                    bn = mathutils.otsu_threshold(bin_counts)
-                    ind = np.where(bin_counts == bin_counts[bin_counts > bn][0]) #get index of the first bin_counts element that is greater than the threshold
-                    cc_t = bin_centers[ind[0]+1][0] #get the upper edge of the first bin that is greater than the threshold - this is the score that will be used for cleaning
-                    print(f"Otsu threhold for particles grouped on {feature_id}={f} is {cc_t}")
-                    fm = fm.loc[fm["score"] >= cc_t] #retain all particles with a scores greater than the threshold
-                    plt.axvline(cc_t, color="r") #plot the threshold
-
-                    cleaned_motl = pd.concat([cleaned_motl, fm])
+            cleaned_motl = self.__class__.create_empty_motl_df()
+            for t in tomos:  # if feature == object_id, tomo_id needs to be used too     
+                tm = self.get_motl_subset(t)
+                cleaned_motl_tm = tm.compute_otsu_threshold(feature_id, hbin)
+                cleaned_motl = pd.concat([cleaned_motl, cleaned_motl_tm])
 
         else:
-            tm = self.df
-            features = tm.loc[:, feature_id].unique()
-
-            for f in features:
-                fm = tm.loc[tm[feature_id] == f]
-                bin_counts, bin_centers, _ = plt.hist(fm.loc[:, "score"], bins=hbin)  # TODO check if correct
-                bn = mathutils.otsu_threshold(bin_counts)
-                ind = np.where(bin_counts == bin_counts[bin_counts > bn][0]) #get index of the first bin_counts element that is greater than the threshold
-                cc_t = bin_centers[ind[0]+1][0] #get the upper edge of the first bin that is greater than the threshold - this is the score that will be used for cleaning
-                print(f"Otsu threhold for particles grouped on {feature_id}={f} is {cc_t}")
-                fm = fm.loc[fm["score"] >= cc_t] #retain all particles with a scores greater than the threshold
-                plt.axvline(cc_t, color="r") #plot the threshold
-
-                cleaned_motl = pd.concat([cleaned_motl, fm])
+            cleaned_motl = self.compute_otsu_threshold(feature_id, hbin)
 
         print(f"Cleaned {self.df.shape[0] - cleaned_motl.shape[0]} particles.")
         self.df = cleaned_motl.reset_index(drop=True)
 
 
     def compute_otsu_threshold(self, feature_id, hbin):
+        """Compute Otsu threshold on the Motl 'score' value after grouping the particles by a desired feature.
+        This function generates a plot of the particle distribution for each value of the feature and overlays the threshold value.
+
+        Parameters
+        ----------
+            feature_id : str
+               The feature ID to be used to group particles. 
+            hbin : int
+               The number of bins for the histogram. 
+
+        Returns:
+        --------
+            subset_motl : pandas.DataFrame
+                Dataframe in Motl format containing the particles filtered according to the Otsu threshold.
+        
+        Examples
+        --------
+        >>> original_motl = cryomotl.Motl.load("my_motl.em")
+        >>> filtered_motl_df = original_motl.compute_otsu_threshold(feature_id='class', hbin=40)
+
+        """
         tm = self.df
         features = tm.loc[:, feature_id].unique()
         subset_motl = self.__class__.create_empty_motl_df()
