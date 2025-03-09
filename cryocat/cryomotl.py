@@ -483,7 +483,7 @@ class Motl:
 
         """
 
-        tomos = self.get_unique_values(feature_id)
+        tomos = self.get_unique_values('tomo_id')
         cleaned_motl = self.__class__.create_empty_motl_df()
 
         if histogram_bin:
