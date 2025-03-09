@@ -456,7 +456,7 @@ class Motl:
         else:
             return cleaned_motl
 
-    def clean_by_otsu(self, feature_id, histogram_bin=None):
+    def clean_by_otsu(self, feature_id, histogram_bin=None, global_level=False):
         """Clean the DataFrame by applying Otsu's thresholding algorithm on the scores.
 
         Parameters
@@ -499,8 +499,25 @@ class Motl:
                     f"object_id. You need to specify the histogram_bin."
                 )
 
-        for t in tomos:  # if feature == object_id, tomo_id needs to be used too
-            tm = self.df.loc[self.df["tomo_id"] == t]
+        if global_level is False:
+
+            for t in tomos:  # if feature == object_id, tomo_id needs to be used too
+                tm = self.df.loc[self.df["tomo_id"] == t]
+                features = tm.loc[:, feature_id].unique()
+
+                for f in features:
+                    fm = tm.loc[tm[feature_id] == f]
+                    bin_counts, bin_centers, _ = plt.hist(fm.loc[:, "score"], bins=hbin)  # TODO check if correct
+                    bn = mathutils.otsu_threshold(bin_counts)
+                    ind = np.where(bin_counts == bin_counts[bin_counts > bn][0]) #get index of the first bin_counts element that is greater than the threshold
+                    cc_t = bin_centers[ind[0]+1][0] #get the upper edge of the first bin that is greater than the threshold - this is the score that will be used for cleaning
+                    fm = fm.loc[fm["score"] >= cc_t] #retain all particles with a scores greater than the threshold
+                    plt.axvline(cc_t, color="r") #plot the threshold
+
+                    cleaned_motl = pd.concat([cleaned_motl, fm])
+
+        else:
+            tm = self.df
             features = tm.loc[:, feature_id].unique()
 
             for f in features:
