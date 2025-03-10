@@ -527,9 +527,9 @@ class Motl:
             hbin : int
                The number of bins for the histogram. 
 
-        Returns:
+        Returns
         --------
-            subset_motl : pandas.DataFrame
+            pandas.DataFrame
                 Dataframe in Motl format containing the particles filtered according to the Otsu threshold.
         
         Examples
