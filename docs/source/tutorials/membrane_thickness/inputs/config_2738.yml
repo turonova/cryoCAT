@@ -1,0 +1,4 @@
+segmentation_values:
+  NE: 1
+  OMM: 2
+  IMM: 3
