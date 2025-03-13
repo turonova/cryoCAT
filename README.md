@@ -25,13 +25,7 @@ The documentation including tutorials and basic user guide can be found here: [c
       
 ## PIP
 
-You can install cryoCAT directly using pip:
-
-```
-pip install cryocat
-```
-
-or you can clone the repository and run:
+Since cryoCAT is being developed on daily basis, it is recommended to clone the github repository and install it with pip:
 
 ```
 pip install -e /path/to/your/local/copy/of/cryocat/.
