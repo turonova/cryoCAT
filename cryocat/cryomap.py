@@ -1631,13 +1631,16 @@ def symmetrize_volume(vol, symmetry):
     Symmetrize the input volume based on the specified symmetry.
 
     Parameters:
+    -----------
     vol (ndarray): The input volume to be symmetrized.
     symmetry (str or int or float): The symmetry of the volume. If a string, it should start with 'C' followed by a number indicating the rotational symmetry. If an integer or float, it directly specifies the rotational symmetry.
 
     Returns:
+    --------
     ndarray: The symmetrized volume.
 
     Raises:
+    -------
     ValueError: If the symmetry is not specified correctly.
 
     """
