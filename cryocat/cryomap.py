@@ -1625,19 +1625,26 @@ def calculate_flcf(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None,
 
     return np.clip(cc_map, 0.0, 1.0)
 
-def symmterize_volume(vol, symmetry): 
+
+def symmetrize_volume(vol, symmetry): 
     """
     Symmetrize the input volume based on the specified symmetry.
 
     Parameters:
-    vol (ndarray): The input volume to be symmetrized.
-    symmetry (str or int or float): The symmetry of the volume. If a string, it should start with 'C' followed by a number indicating the rotational symmetry. If an integer or float, it directly specifies the rotational symmetry.
+    -----------
+    vol : ndarray
+        The input volume to be symmetrized.
+    symmetry : str or int or float
+        The symmetry of the volume. If a string, it should start with 'C' followed by a number indicating the rotational symmetry. If an integer or float, it directly specifies the rotational symmetry.
 
     Returns:
+    --------
     ndarray: The symmetrized volume.
 
     Raises:
-    ValueError: If the symmetry is not specified correctly.
+    -------
+    ValueError
+        If the symmetry is not specified correctly
 
     """
     if isinstance(symmetry, str):
