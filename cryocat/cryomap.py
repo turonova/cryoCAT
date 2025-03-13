@@ -1625,7 +1625,8 @@ def calculate_flcf(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None,
 
     return np.clip(cc_map, 0.0, 1.0)
 
-def symmterize_volume(vol, symmetry): 
+
+def symmetrize_volume(vol, symmetry): 
     """
     Symmetrize the input volume based on the specified symmetry.
 
