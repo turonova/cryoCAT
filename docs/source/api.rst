@@ -26,6 +26,7 @@ Modules
     ioutils
     mathutils
     mdoc
+    memthick
     nnana
     pana
     ribana
