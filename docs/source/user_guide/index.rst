@@ -10,6 +10,7 @@
    Geometric conventions <geometric_conventions>
    Maps basics <maps_basics>
    Masks basics <masks_basics>
+   Tiltstack and Mdoc modules: Functions for preprocessing tilt-series <tiltstack_basics>
 
 ==========
 User guide
