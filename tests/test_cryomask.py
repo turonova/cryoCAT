@@ -1,5 +1,8 @@
 import sys, os, random, math
 from matplotlib import pyplot as plt
+
+from cryocat.cryomotl import Motl
+
 sys.path.append('.')
 import pytest
 from cryocat.cryomask import *
@@ -745,62 +748,111 @@ def test_ellipsoid_shell_mask():
     result4 = ellipsoid_shell_mask(mask_size, shell_thickness, radii=(3, 3, 3), gaussian=gaussian_std)
     assert result4.shape == mask_size, "Output shape mismatch"
 
-#TODO
-def test_fill_hollow_mask():
+def create_sample_map_file(tmp_path, data, filename):
+    file_path = tmp_path / filename
+    cryomap.write(data, str(file_path), transpose=True, data_type=np.single)
+    return str(file_path)
 
-    # Case 1: Empty mask (all zeros) -> Should remain unchanged
-    empty_mask = np.zeros((5, 5, 5), dtype=int)
-    result = fill_hollow_mask(empty_mask)
-    np.testing.assert_array_equal(result.astype(int), empty_mask)
+def test_fill_hollow_mask(tmp_path):
+    # 1. Simple Hollow Cube
+    hollow_cube = np.zeros((5, 5, 5), dtype=np.int8)
+    hollow_cube[1:4, 1:4, 1:4] = 0
+    hollow_cube[0,:,:] = 1
+    hollow_cube[4,:,:] = 1
+    hollow_cube[:,0,:] = 1
+    hollow_cube[:,4,:] = 1
+    hollow_cube[:,:,0] = 1
+    hollow_cube[:,:,4] = 1
 
-    # Case 2: Fully filled mask (all ones) -> Should remain unchanged
-    full_mask = np.ones((5, 5, 5), dtype=int)
-    result = fill_hollow_mask(full_mask)
-    np.testing.assert_array_equal(result.astype(int), full_mask)
+    filled_cube = fill_hollow_mask(hollow_cube)
+    expected_filled_cube = np.ones((5, 5, 5), dtype=np.int8) # Expected output
+    assert np.array_equal(filled_cube, expected_filled_cube), "Simple hollow cube test failed"
 
-    # Case 3: Simple 3D mask with a hole in the middle -> Hole should be filled
-    input_mask = np.array([
-        [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
-        [[0, 1, 0], [1, 0, 1], [0, 1, 0]],
-        [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
-    ], dtype=int)
+    # 2. Complex Hollow Shape
+    complex_hollow = np.zeros((10, 10, 10), dtype=np.int8)
+    complex_hollow[2:8, 2:8, 2:8] = 1
+    complex_hollow[4, 4, 4] = 0
+    complex_hollow[6, 6, 6] = 0
 
-    expected_result = np.array([
-        [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
-        [[0, 1, 0], [1, 1, 1], [0, 1, 0]],  # Hole should be filled
-        [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
-    ], dtype=int)
+    expected_filled_complex = morphology.binary_closing(complex_hollow)
 
-    result = fill_hollow_mask(input_mask)
+    filled_complex = fill_hollow_mask(complex_hollow)
+    assert np.array_equal(filled_complex, expected_filled_complex), "Complex hollow shape test failed"
 
-    print("Expected:\n", expected_result)
-    print("Result:\n", result.astype(int))  # Convert to int before checking
+    # 3. No Holes
+    solid_mask = np.ones((5, 5, 5), dtype=np.int8)
+    filled_solid = fill_hollow_mask(solid_mask)
+    assert np.array_equal(filled_solid, solid_mask), "No holes test failed"
 
-    np.testing.assert_array_equal(result.astype(int), expected_result)
+    # 4. Empty Mask
+    empty_mask = np.zeros((5, 5, 5), dtype=np.int8)
+    filled_empty = fill_hollow_mask(empty_mask)
+    assert np.array_equal(filled_empty, empty_mask), "Empty mask test failed"
 
-    # Case 4: Large 3D mask with random holes -> Validate shape & binary values
-    np.random.seed(42)
-    random_mask = (np.random.rand(10, 10, 10) > 0.7).astype(int)
-    result = fill_hollow_mask(random_mask)
-    assert result.shape == random_mask.shape
-    assert np.all(np.isin(result, [0, 1]))  # Ensure binary output
+    # 5. Output File
+    hollow_cube_file = create_sample_map_file(tmp_path, hollow_cube, "hollow_cube.em")
+    output_file = tmp_path / "filled_cube.em"
+    fill_hollow_mask(hollow_cube_file, output_name=str(output_file))
+    assert os.path.exists(output_file), "Output file was not created"
+    filled_cube_from_file = cryomap.read(str(output_file))
+    assert np.array_equal(filled_cube_from_file, expected_filled_cube), "Output file content is incorrect"
 
-    # Case 5: Thin structure with gaps (2D-like) -> Should be filled in 3D
-    thin_mask = np.zeros((5, 5, 5), dtype=int)
-    thin_mask[:, 2, 2] = 1  # Thin vertical line with gaps
-    thin_mask[2, 2, 1] = 0  # A small hole in the middle
+    #6. input from file
+    filled_cube_2 = fill_hollow_mask(hollow_cube_file)
+    assert np.array_equal(filled_cube_2, expected_filled_cube), "Input from file test failed"
 
-    expected_result = np.ones((5, 5, 5), dtype=int)  # Should fill completely
-    result = fill_hollow_mask(thin_mask)
-    np.testing.assert_array_equal(result, expected_result)
+@pytest.fixture
+def sample_motl():
+    motl_data = {
+        "score": [0.5, 0.7],
+        "geom1": [1, 1],
+        "geom2": [2, 2],
+        "subtomo_id": [1, 2],
+        "tomo_id": [1, 1],
+        "object_id": [100, 200],
+        "subtomo_mean": [0.2, 0.4],
+        "x": [10, 50],
+        "y": [20, 60],
+        "z": [30, 70],
+        "shift_x": [0, 0],
+        "shift_y": [0, 0],
+        "shift_z": [0, 0],
+        "geom3": [3, 3],
+        "geom4": [4, 4],
+        "geom5": [5, 5],
+        "phi": [0, 10],
+        "psi": [5, 15],
+        "theta": [10, 20],
+        "class": [1, 2],
+    }
+    return Motl(pd.DataFrame(motl_data))
 
-    # Case 6: Check that small objects are not falsely removed
-    small_object_mask = np.zeros((5, 5, 5), dtype=int)
-    small_object_mask[2, 2, 2] = 1  # A single voxel object
+def create_tomo_dim_file(tmp_path, data, filename):
+    """Creates a mock tomogram dimensions file."""
+    file_path = tmp_path / filename
+    df = pd.DataFrame(data)
+    with open(str(file_path), 'w') as f:
+        f.write(df.to_string(header=False, index=False)) # Corrected line
+    return str(file_path)
 
-    result = fill_hollow_mask(small_object_mask)
-    np.testing.assert_array_equal(result, small_object_mask)  # Should remain
 
-def test_def_tomogram_shell_mask():
-    pass
-    #TODO
+def test_tomogram_shell_mask(tmp_path, sample_motl):
+    # 1. Single-Particle Test
+    motl = sample_motl.get_motl_subset(1)
+    motl.df = motl.df.iloc[[0]]
+
+    tomo_dim_data = {"tomo_id": [1], "x": [100], "y": [100], "z": [100]}
+    tomo_dim_file = create_tomo_dim_file(tmp_path, tomo_dim_data, "tomo_dim.csv")
+
+    tomo_mask = tomogram_shell_mask(motl, tomo_dim_file, shell_size=2, output_prefix=str(tmp_path / "tomo_"), output_suffix=".em")
+
+    assert tomo_mask is None
+
+    # 2. Multiple-Particle Test
+    motl = sample_motl.get_motl_subset(1)
+    tomo_dim_data = {"tomo_id": [1], "x": [100], "y": [100], "z": [100]}
+    tomo_dim_file = create_tomo_dim_file(tmp_path, tomo_dim_data, "tomo_dim.csv")
+
+    tomo_mask = tomogram_shell_mask(motl, tomo_dim_file, shell_size=2, output_prefix=str(tmp_path / "tomo_"), output_suffix=".em")
+
+    assert tomo_mask is None

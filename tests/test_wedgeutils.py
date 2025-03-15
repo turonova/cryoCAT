@@ -304,53 +304,93 @@ def test_create_wg_mask():
         os.remove(output_file)"""
 
 
-#TODO, to fix
-def test_apply_wedge_mask():
-    # Prepare sample data paths
-    directory = Path(__file__).parent / "test_data"
-    wedge_mask_path = str(directory / "wedgeutils_data" / "wedge_mask.em")
-    in_map_path = str(directory /  "wedgeutils_data" / "wedge_list.em")  # Example input map file
+def create_sample_map_file(tmp_path, data, filename):
+    file_path = tmp_path / filename
+    cryomap.write(data, str(file_path), transpose=True, data_type=np.single)
+    return str(file_path)
 
-    # Create a sample input map (you can mock this if needed for isolated testing)
-    # Make sure the map is in a compatible format
-    in_map = cryomap.read(in_map_path)  # This should return a numpy array
+def test_apply_wedge_mask(tmp_path):
+    """Tests apply_wedge_mask."""
+    wedge_mask_data = np.ones((10, 10, 10))
+    in_map_data = np.random.rand(10, 10, 10)
+    wedge_mask_path = create_sample_map_file(tmp_path, wedge_mask_data, "wedge_mask.em")
+    in_map_path = create_sample_map_file(tmp_path, in_map_data, "in_map.em")
 
-    # Apply the wedge mask without rotation or output path
     result_map = apply_wedge_mask(wedge_mask_path, in_map_path)
 
-    # Test the type of the result
     assert isinstance(result_map, np.ndarray), "Output is not a numpy array"
+    assert result_map.shape == in_map_data.shape, f"Expected shape {in_map_data.shape}, but got {result_map.shape}"
 
-    # Check that the output map has the same shape as the input map
-    assert result_map.shape == in_map.shape, f"Expected shape {in_map.shape}, but got {result_map.shape}"
-
-    # Test apply with rotation (example: rotate the map by 30 degrees)
-    rotation = [30, 0, 0]  # Example rotation (adjust as needed)
+    rotation = [30, 0, 0]
     result_map_rot = apply_wedge_mask(wedge_mask_path, in_map_path, rotation_zxz=rotation)
 
-    # Assert that the rotated map is still a valid numpy array
     assert isinstance(result_map_rot, np.ndarray), "Rotated map is not a numpy array"
-    assert result_map_rot.shape == in_map.shape, f"Expected rotated map shape {in_map.shape}, but got {result_map_rot.shape}"
+    assert result_map_rot.shape == in_map_data.shape, f"Expected rotated map shape {in_map_data.shape}, but got {result_map_rot.shape}"
 
-    # Test apply with output path (check if the file is created)
-    output_file = str(Path(__file__).parent / "test_data" / "output_map.em")
-    result_map_with_output = apply_wedge_mask(wedge_mask_path, in_map_path, output_path=output_file)
+    output_file = tmp_path / "output_map.em"
+    result_map_with_output = apply_wedge_mask(wedge_mask_path, in_map_path, output_path=str(output_file))
 
-    # Ensure the output file was created
     assert os.path.exists(output_file), f"Output file {output_file} was not created"
 
-    # Optionally, you can also check the contents of the output file if needed
-    output_map = cryomap.read(output_file)
+    output_map = cryomap.read(str(output_file))
     assert isinstance(output_map, np.ndarray), "Output file does not contain a valid numpy array"
 
-    # Test with invalid inputs
-    with pytest.raises(ValueError):
+    with pytest.raises(FileNotFoundError):
+        apply_wedge_mask("invalid_mask.em", in_map_path, rotation_zxz=rotation)
+
+    with pytest.raises(ValueError): # changed line
         apply_wedge_mask(wedge_mask_path, "invalid_map_path", rotation_zxz=rotation)
 
-    with pytest.raises(ValueError):
-        apply_wedge_mask("invalid_wedge_mask.em", in_map_path, rotation_zxz=rotation)
+def create_sample_star_file(tmp_path):
+    data = {
+        "tomo_num": [1, 1, 1, 2, 2, 2, 3, 3],
+        "tilt_angle": [-60, -30, 0, -45, 0, 45, -20, 20],
+    }
+    df = pd.DataFrame(data)
+    star_file_path = tmp_path / "sample_wedge_list.star"
+    starfileio.Starfile.write([df], star_file_path, specifiers=["data_stopgap_wedgelist"])
+    return str(star_file_path)
 
-    # Clean up output file after the test
-    if os.path.exists(output_file):
-        os.remove(output_file)
+def test_wedge_list_sg_to_em_basic(tmp_path):
+    star_file_path = create_sample_star_file(tmp_path)
+    em_file_path = tmp_path / "output_wedge_list.em"
+    result_df = wedge_list_sg_to_em(star_file_path, em_file_path, write_out=False)
+
+    expected_data = {
+        "tomo_id": [1, 2, 3],
+        "min_tilt_angle": [-60, -45, -20],
+        "max_tilt_angle": [0, 45, 20],
+    }
+    expected_df = pd.DataFrame(expected_data)
+    expected_df['min_tilt_angle'] = expected_df['min_tilt_angle'].astype('int64')
+    expected_df['max_tilt_angle'] = expected_df['max_tilt_angle'].astype('int64')
+
+    pd.testing.assert_frame_equal(result_df, expected_df)
+
+def test_wedge_list_sg_to_em_file_creation(tmp_path):
+    star_file_path = create_sample_star_file(tmp_path)
+    em_file_path = tmp_path / "output_wedge_list.em"
+    wedge_list_sg_to_em(star_file_path, em_file_path, write_out=True)
+
+    assert os.path.exists(em_file_path)
+
+    em_df = load_wedge_list_em(str(em_file_path)) # convert to string
+
+    expected_data = {
+        "tomo_id": [1, 2, 3],
+        "min_tilt_angle": [-60.0, -45.0, -20.0],
+        "max_tilt_angle": [0.0, 45.0, 20.0],
+    }
+    expected_df = pd.DataFrame(expected_data)
+    expected_df['min_tilt_angle'] = expected_df['min_tilt_angle'].astype('float32') # changed line
+    expected_df['max_tilt_angle'] = expected_df['max_tilt_angle'].astype('float32') # changed line
+    expected_df['tomo_id'] = expected_df['tomo_id'].astype('float32')
+
+    pd.testing.assert_frame_equal(em_df, expected_df)
+
+def test_wedge_list_sg_to_em_invalid_input(tmp_path):
+    invalid_file_path = tmp_path / "invalid.star"
+    with pytest.raises(FileNotFoundError):
+        wedge_list_sg_to_em(str(invalid_file_path), tmp_path / "output.em")
+
 

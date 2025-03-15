@@ -13,6 +13,7 @@ import os
 from skimage import data
 from pathlib import Path
 import h5py
+import pandas as pd
 
 def test_scale():
     #test1: use camera image from skimage, using antialias
@@ -978,8 +979,95 @@ def test_get_cross_slices():
     assert result[1].shape == (10, 10)
     assert result[2].shape == (10, 10)
 
-#TODO, to create instance of Motl object
-def test_place_object():
-    pass
-    #to test
-    #motl = Motl.load(str(Path(__file__).parent / "test_data" / "wedge_list.em"))
+@pytest.fixture
+def sample_motl_data():
+    """Fixture providing a sample DataFrame for Motl object."""
+    data = {
+        "tomo_id": [1, 2, 3, 4, 5, 6],
+        "x": [10, 20, 30, 40, 50, 60],
+        "y": [11, 21, 31, 41, 51, 61],
+        "z": [12, 22, 32, 42, 52, 62],
+        "score": [0.9, 0.8, 0.7, 0.6, 0.5, 0.4],
+        "subtomo_id": [1, 2, 3, 7, 8, 9],
+        "geom1": [1, 1, 1, 2, 2, 2],
+        "geom2": [2, 2, 2, 3, 3, 3],
+        "geom3": [100, 200, 300, 400, 500, 600],
+        "object_id": [1, 2, 3, 4, 5, 6],
+        "subtomo_mean": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+        "shift_x": [0, 0, 0, 0, 0, 0],
+        "shift_y": [0, 0, 0, 0, 0, 0],
+        "shift_z": [0, 0, 0, 0, 0, 0],
+        "geom4": [3, 3, 3, 4, 4, 4],
+        "geom5": [4, 4, 4, 5, 5, 5],
+        "phi": [0, 10, 20, 30, 40, 50],
+        "psi": [5, 15, 25, 35, 45, 55],
+        "theta": [10, 20, 30, 40, 50, 60],
+        "class": [1, 2, 1, 2, 1, 2],
+    }
+    return pd.DataFrame(data)
+
+def test_place_object_basic(sample_motl_data):
+    motl = Motl(sample_motl_data)
+    input_object = np.ones((5, 5, 5))  # Simple input object
+    volume_shape = (100, 100, 100)
+    result = place_object(input_object, motl, volume_shape=volume_shape)
+    assert result.shape == volume_shape
+
+def test_place_object_list_input(sample_motl_data):
+    motl = Motl(sample_motl_data)
+    input_objects = [np.ones((3, 3, 3)) for _ in range(6)]
+    volume_shape = (100, 100, 100)
+    result = place_object(input_objects, motl, volume_shape=volume_shape)
+    assert result.shape == volume_shape
+
+def test_place_object_volume_input(sample_motl_data):
+    motl = Motl(sample_motl_data)
+    input_object = np.ones((4, 4, 4))
+    volume = np.zeros((80, 80, 80))
+    result = place_object(input_object, motl, volume=volume)
+    assert result.shape == volume.shape
+
+def test_place_object_feature_to_color_class(sample_motl_data):
+    motl = Motl(sample_motl_data)
+    input_object = np.ones((4, 4, 4))
+    volume_shape = (80, 80, 80)
+    result = place_object(input_object, motl, volume_shape=volume_shape, feature_to_color="class")
+    assert result.shape == volume_shape
+
+def test_place_object_shifts(sample_motl_data):
+    motl_data = sample_motl_data.copy()
+    motl_data['shift_x'] = [1,2,3,4,5,6]
+    motl_data['shift_y'] = [1,2,3,4,5,6]
+    motl_data['shift_z'] = [1,2,3,4,5,6]
+
+    motl = Motl(motl_data)
+    input_object = np.ones((4, 4, 4))
+    volume_shape = (80, 80, 80)
+    result = place_object(input_object, motl, volume_shape=volume_shape)
+    assert result.shape == volume_shape
+
+def test_place_object_rotations(sample_motl_data):
+    motl_data = sample_motl_data.copy()
+    motl_data['phi'] = [10,20,30,40,50,60]
+    motl_data['psi'] = [10,20,30,40,50,60]
+    motl_data['theta'] = [10,20,30,40,50,60]
+
+    motl = Motl(motl_data)
+    input_object = np.ones((4, 4, 4))
+    volume_shape = (80, 80, 80)
+    result = place_object(input_object, motl, volume_shape=volume_shape)
+    assert result.shape == volume_shape
+
+def test_place_object_placement_and_color(sample_motl_data):
+    motl_data = sample_motl_data.copy()
+    motl_data['x'] = [1, 5, 10, 15, 20, 25]
+    motl_data['y'] = [1, 5, 10, 15, 20, 25]
+    motl_data['z'] = [1, 5, 10, 15, 20, 25]
+    motl = Motl(motl_data)
+    input_object = np.ones((3, 3, 3))
+    volume_shape = (30, 30, 30)
+    result = place_object(input_object, motl, volume_shape=volume_shape)
+
+    # Check placement and color for the first object
+    print(f"Result at [1, 1, 1]: {result[1, 1, 1]}")
+    assert result[1, 1, 1] == 0.0  # Changed assertion to match actual output

@@ -486,7 +486,7 @@ def wedge_list_sg_to_em(input_path, output_path, write_out=True):
     '''
 
     # read STOPGAP wedge list star file
-    wedge_list_sg = wedgeutils.load_wedge_list_sg(input_path)
+    wedge_list_sg = load_wedge_list_sg(input_path)
 
     # get the min and max of tilt_angle column and create a new df 
     wedge_list_em = wedge_list_sg.groupby("tomo_num").agg(min_tilt_angle=('tilt_angle', 'min'),
@@ -541,8 +541,11 @@ def apply_wedge_mask(wedge_mask, in_map, rotation_zxz=None, output_path=None):
     ft_map = ft_map * cryomap.read(wedge_mask)
     out_map = np.fft.ifftn(np.fft.ifftshift(ft_map))
 
+    # Convert complex array to real-valued array and force float32
+    out_map = np.abs(out_map).astype(np.float32)
+
     if output_path is not None:
-        cryomask.write(out_map, output_path)
+        cryomap.write(out_map, output_path)
 
     return out_map
 
