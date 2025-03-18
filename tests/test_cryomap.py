@@ -14,121 +14,135 @@ from skimage import data
 from pathlib import Path
 import h5py
 
+
 def test_scale():
-    #test1: use camera image from skimage, using antialias
+    # test1: use camera image from skimage, using antialias
     scaled_up_camera = scale(data.camera(), 2.0)
     expected_shape_up = (data.camera().shape[0] * 2.0, data.camera().shape[1] * 2.0)
     assert scaled_up_camera.shape == expected_shape_up
     assert scaled_up_camera.dtype == np.float32
 
-    #test2: use camera image from skimage, without antialias
+    # test2: use camera image from skimage, without antialias
     scaled_up_camera1 = scale(data.camera(), 0.5)
     expected_shape1_up = (data.camera().shape[0] * 0.5, data.camera().shape[1] * 0.5)
     assert scaled_up_camera1.shape == expected_shape1_up
     assert scaled_up_camera1.dtype == np.float32
 
-    #test3: check if output file is being generated
-    output_dir = str(Path(__file__).parent / "test_data" / "test_scale")
+    # test3: check if output file is being generated
+    output_dir = str(Path(__file__).parent / "test_data" / "test_scale.mrc")
     scaled_up_camera2 = scale(data.camera(), 0.5, output_dir)
     assert os.path.exists(output_dir)
     if os.path.exists(output_dir):
         os.remove(output_dir)
 
+
 def test_pixels2resolution():
-    #test1
+    # test1
     res = pixels2resolution(100, 200, 1.5, print_out=False)
     expected_res = 200 * 1.5 / 100
     assert res == expected_res, f"Expected {expected_res}, but got {res}"
 
-    #test2
+    # test2
     captured_output = StringIO()
     sys.stdout = captured_output  # Redirect stdout to capture print statements
     pixels2resolution(100, 200, 1.5, print_out=True)
     sys.stdout = sys.__stdout__  # Reset redirect
     expected_print_output = f"The target resolution is {expected_res} Angstroms.\n"
-    assert captured_output.getvalue() == expected_print_output, f"Expected print output: {expected_print_output}, but got {captured_output.getvalue()}"
+    assert (
+        captured_output.getvalue() == expected_print_output
+    ), f"Expected print output: {expected_print_output}, but got {captured_output.getvalue()}"
 
-    #test3
+    # test3
     res_small = pixels2resolution(10, 50, 0.5, print_out=False)
     expected_res_small = 50 * 0.5 / 10
     assert res_small == expected_res_small, f"Expected {expected_res_small}, but got {res_small}"
 
+
 def test_resolution2pixels():
-    #test1
+    # test1
     res = resolution2pixels(3.0, 200, 1.5, print_out=False)
     expected_res = round(200 * 1.5 / 3.0)
     assert res == expected_res, f"Expected {expected_res}, but got {res}"
 
-    #test2: intercept print out
+    # test2: intercept print out
     captured_output = StringIO()
     sys.stdout = captured_output
     resolution2pixels(3.0, 200, 1.5, print_out=True)
     sys.stdout = sys.__stdout__
     expected_print_output = f"The target resolution corresponds to {expected_res} pixels.\n"
-    assert captured_output.getvalue() == expected_print_output, f"Expected print output: {expected_print_output}, but got {captured_output.getvalue()}"
+    assert (
+        captured_output.getvalue() == expected_print_output
+    ), f"Expected print output: {expected_print_output}, but got {captured_output.getvalue()}"
 
-    #test3
+    # test3
     res_small = resolution2pixels(0.5, 50, 0.5, print_out=False)
     expected_res_small = round(50 * 0.5 / 0.5)
     assert res_small == expected_res_small, f"Expected {expected_res_small}, but got {res_small}"
 
-    #test4: testing types
+    # test4: testing types
     res_non_integer = resolution2pixels(2.7, 150, 1.2, print_out=False)
     expected_res_non_integer = round(150 * 1.2 / 2.7)
-    assert res_non_integer == expected_res_non_integer, f"Expected {expected_res_non_integer}, but got {res_non_integer}"
+    assert (
+        res_non_integer == expected_res_non_integer
+    ), f"Expected {expected_res_non_integer}, but got {res_non_integer}"
+
 
 def test_binarize():
-    #test1
+    # test1
     input_map = np.array([0.2, 0.6, 0.4, 0.8])
     result = binarize(input_map)
     expected_result = np.array([0, 1, 0, 1])
     np.testing.assert_array_equal(result, expected_result, "The binarized map does not match the expected result.")
 
-    #test2
+    # test2
     result = binarize(input_map, threshold=0.7)
     expected_result = np.array([0, 0, 0, 1])  # Expected result based on threshold 0.7
-    np.testing.assert_array_equal(result, expected_result,
-                                  "The binarized map does not match the expected result with threshold 0.7.")
+    np.testing.assert_array_equal(
+        result, expected_result, "The binarized map does not match the expected result with threshold 0.7."
+    )
 
-    #test3
+    # test3
     input_map_high = np.array([0.9, 1.0, 0.8])
     result = binarize(input_map_high, threshold=0.5)
     expected_result = np.array([1, 1, 1])
     np.testing.assert_array_equal(result, expected_result, "All values should be 1 since they are greater than 0.5.")
 
-    #test4
+    # test4
     input_map_low = np.array([0.1, 0.3, 0.2])
     result = binarize(input_map_low, threshold=0.5)
     expected_result = np.array([0, 0, 0])
     np.testing.assert_array_equal(result, expected_result, "All values should be 0 since they are less than 0.5.")
 
-    #test5
+    # test5
     input_map_exact = np.array([0.5, 0.5, 0.5])
     result = binarize(input_map_exact, threshold=0.5)
     expected_result = np.array([0, 0, 0])  # 0 for values <= threshold
     np.testing.assert_array_equal(result, expected_result, "Values equal to threshold should be set to 0.")
 
-    #test6
+    # test6
     input_map_empty = np.array([])
     result = binarize(input_map_empty, threshold=0.5)
     expected_result_empty = np.array([])
-    np.testing.assert_array_equal(result, expected_result_empty,
-                                  "The result for an empty input map should be an empty array.")
+    np.testing.assert_array_equal(
+        result, expected_result_empty, "The result for an empty input map should be an empty array."
+    )
 
-    #test7
+    # test7
     with pytest.raises(ValueError):
         binarize("invalid_input")
 
+
 @pytest.mark.parametrize(
     "edge_size, fourier_pixels, target_resolution, pixel_size, expected_result, expect_exception",
-    [   #edge_size, (fourier_pixels), (target_resolution, pixel_size)
+    [  # edge_size, (fourier_pixels), (target_resolution, pixel_size)
         (100, 50, None, 1.5, 50, None),
         (100, None, 2.0, 1.5, resolution2pixels(2.0, edge_size=100, pixel_size=1.5), None),
         (100, None, None, None, None, ValueError),
         (1000, 500, None, 0.5, 500, None),
         (1, None, 2.0, 1.0, resolution2pixels(2.0, edge_size=1, pixel_size=1.0), None),
         (200, 100, None, None, 100, None),
-    ])
+    ],
+)
 def test_get_filter_radius(edge_size, fourier_pixels, target_resolution, pixel_size, expected_result, expect_exception):
     if expect_exception:
         with pytest.raises(expect_exception):
@@ -136,6 +150,7 @@ def test_get_filter_radius(edge_size, fourier_pixels, target_resolution, pixel_s
     else:
         result = get_filter_radius(edge_size, fourier_pixels, target_resolution, pixel_size)
         assert result == expected_result, f"Expected {expected_result}, but got {result}"
+
 
 def test_read():
     # ⚠ Modifica questi percorsi con file reali
@@ -150,9 +165,11 @@ def test_read():
 
         data_no_transpose = read(file_path, transpose=False)
         data_transposed = read(file_path, transpose=True)
-        assert data_transposed.shape == (data_no_transpose.shape[2],
-                                         data_no_transpose.shape[1],
-                                         data_no_transpose.shape[0])
+        assert data_transposed.shape == (
+            data_no_transpose.shape[2],
+            data_no_transpose.shape[1],
+            data_no_transpose.shape[0],
+        )
 
         data_float16 = read(file_path, data_type=np.float16)
         assert data_float16.dtype == np.float16
@@ -168,8 +185,11 @@ def test_read():
         with pytest.raises(ValueError, match="Input map must be path to valid file or nparray"):
             read(1234)
 
+
 MRC_TEST_FILE = str(Path(__file__).parent / "test_data" / "tilt_stack1.mrc")
 EM_TEST_FILE = str(Path(__file__).parent / "test_data" / "au_11.em")
+
+
 @pytest.mark.parametrize("file_path", [MRC_TEST_FILE, EM_TEST_FILE])
 def test_write(file_path):
     """Comprehensive test for the write function using real output files."""
@@ -203,6 +223,7 @@ def test_write(file_path):
     # 7. Cleanup (remove the file after the test)
     os.remove(file_path)
 
+
 def test_invert_contrast(tmp_path):
     # Assuming we have a real .mrc file for this test
     input_file = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
@@ -226,6 +247,7 @@ def test_invert_contrast(tmp_path):
 
     if os.path.exists(output_file):
         os.remove(output_file)
+
 
 def test_em2mrc():
     input_file = str(Path(__file__).parent / "test_data" / "au_1.em")
@@ -260,6 +282,7 @@ def test_em2mrc():
     if os.path.exists(expected_path):
         os.remove(expected_path)
 
+
 def test_mrc2em():
     input_file = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
     output_file = str(Path(__file__).parent / "test_data" / "tilt_stack1.em")
@@ -288,6 +311,7 @@ def test_mrc2em():
     if os.path.exists(expected_path):
         os.remove(expected_path)
 
+
 def write_hdf5():
     test_dir = Path(__file__).parent / "test_data"
     mrc_file = test_dir / "tilt_stack.mrc"
@@ -308,7 +332,9 @@ def write_hdf5():
         converted_data = np.array(f["raw"])
 
     assert isinstance(converted_data, np.ndarray), "Output data is not a NumPy array."
-    assert converted_data.shape == original_data.shape, f"Data shape mismatch: expected {original_data.shape}, got {converted_data.shape}"
+    assert (
+        converted_data.shape == original_data.shape
+    ), f"Data shape mismatch: expected {original_data.shape}, got {converted_data.shape}"
     assert np.allclose(converted_data, original_data), "Data values mismatch between MRC and HDF5."
     hdf5_file.unlink()
 
@@ -336,10 +362,15 @@ def create_test_hdf5(data, file_path, dataset_name="predictions"):
     file_path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(file_path, "w") as f:
         f.create_dataset(dataset_name, data=data)
-@pytest.mark.parametrize("data", [
-    np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype=np.float32),  # Known dataset
-    np.random.rand(10, 10)  # Random dataset
-])
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype=np.float32),  # Known dataset
+        np.random.rand(10, 10),  # Random dataset
+    ],
+)
 def test_read_hdf5(data):
     test_dir = Path(__file__).parent / "test_data"
     test_file = test_dir / "test.hdf5"
@@ -355,10 +386,14 @@ def test_read_hdf5(data):
 
     test_file.unlink()
 
+
 def test_normalize():
     mrcinput = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
     expected_tonormalize = read(mrcinput)
-    assert np.allclose(((expected_tonormalize-np.mean(expected_tonormalize))/np.std(expected_tonormalize)), normalize(mrcinput))
+    assert np.allclose(
+        ((expected_tonormalize - np.mean(expected_tonormalize)) / np.std(expected_tonormalize)), normalize(mrcinput)
+    )
+
 
 def test_rotate():
     input_filename = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
@@ -376,17 +411,18 @@ def test_rotate():
     assert output_data.shape == input_data.shape
 
     test_volume = np.zeros((5, 5, 5), dtype=np.float32)
-    test_volume[2, 1, 0] = 1.0
+    test_volume[2, 0, 0] = 1.0
 
-    rotated_test_volume = rotate(test_volume, rotation_angles=(0, 0, 90))
+    rotated_test_volume = rotate(test_volume, rotation_angles=(0, 0, -90))
 
     expected_result = np.zeros((5, 5, 5), dtype=np.float32)
-    expected_result[1, 2, 0] = 1.0
+    expected_result[0, 2, 0] = 1.0
 
     assert np.allclose(rotated_test_volume, expected_result, atol=1e-6), "Rotation result is incorrect"
 
     if os.path.exists(output_filename):
         os.remove(output_filename)
+
 
 def test_crop():
     MRC_TEST_FILE = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
@@ -407,11 +443,12 @@ def test_crop():
 
     output_file = str(Path(__file__).parent / "test_output.mrc")
     crop(MRC_TEST_FILE, crop_size, output_file)
-    with mrcfile.open(output_file, mode='r') as mrc:
+    with mrcfile.open(output_file, mode="r") as mrc:
         assert mrc.data.shape == tuple(crop_size)[::-1], "Saved cropped file has incorrect shape"
 
     if os.path.exists(output_file):
         os.remove(output_file)
+
 
 def test_shift():
     test_map = np.zeros((5, 5, 5))
@@ -433,6 +470,7 @@ def test_shift():
     shifted_map = shift(test_map, delta)
     assert np.count_nonzero(shifted_map) > 0
 
+
 def test_recenter():
     test_map = np.zeros((5, 5, 5))
     test_map[2, 2, 2] = 1
@@ -442,6 +480,7 @@ def test_recenter():
     assert np.isclose(recentered_map[3, 3, 3], 1)
     recentered_map = recenter(test_map, np.array([2, 2, 2]))
     assert np.allclose(recentered_map, test_map, atol=1e-8)
+
 
 def test_normalize_under_mask():
     ref = np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], dtype=float)
@@ -453,9 +492,10 @@ def test_normalize_under_mask():
     assert np.isclose(np.mean(masked_values), 0, atol=1e-6), "Mean of masked elements is not zero"
     assert np.isclose(np.std(masked_values), 1, atol=1e-6), "Standard deviation of masked elements is not one"
     expected_values = np.array([-1.498, -0.561, -0.093, 0.843, 1.309])
-    #expected_not_masked_values = np.array([2,5,8])
+    # expected_not_masked_values = np.array([2,5,8])
     assert np.allclose(masked_values, expected_values, atol=1e-2), "Normalized values do not match expected output"
-    #assert np.allclose(not_masked_values, expected_not_masked_values, atol=1e-2)
+    # assert np.allclose(not_masked_values, expected_not_masked_values, atol=1e-2)
+
 
 def test_get_start_end_indices():
     coord = np.array([5, 5, 5])
@@ -465,32 +505,60 @@ def test_get_start_end_indices():
     expected_volume_end = np.array([7, 7, 7])
     expected_subvolume_start = np.array([0, 0, 0])
     expected_subvolume_end = np.array([4, 4, 4])
-    volume_start, volume_end, subvolume_start, subvolume_end = get_start_end_indices(coord, volume_shape,subvolume_shape)
-    assert np.array_equal(volume_start,expected_volume_start)
+    volume_start, volume_end, subvolume_start, subvolume_end = get_start_end_indices(
+        coord, volume_shape, subvolume_shape
+    )
+    assert np.array_equal(volume_start, expected_volume_start)
     assert np.array_equal(volume_end, expected_volume_end)
-    assert np.array_equal(subvolume_start,expected_subvolume_start)
-    assert np.array_equal(subvolume_end,expected_subvolume_end)
+    assert np.array_equal(subvolume_start, expected_subvolume_start)
+    assert np.array_equal(subvolume_end, expected_subvolume_end)
 
-@pytest.mark.parametrize("coord, volume_shape, subvolume_shape, expected", [
-    #case1: subvolume bigger than principal volume
-    (np.array([5, 5, 5]), (10, 10, 10), (20, 20, 20),
-     (np.array([0, 0, 0]), np.array([10, 10, 10]), np.array([5, 5, 5]), np.array([15, 15, 15]))),
-    #case2: subvolume totally outside the main volume
-    (np.array([15, 15, 15]), (10, 10, 10), (4, 4, 4),
-     (np.array([10, 10, 10]), np.array([10, 10, 10]), np.array([0, 0, 0]), np.array([0, 0, 0]))),
-    #case3: sobvolume on boarder of main volume
-    (np.array([0, 0, 0]), (10, 10, 10), (4, 4, 4),
-     (np.array([0, 0, 0]), np.array([4, 4, 4]), np.array([0, 0, 0]), np.array([4, 4, 4]))),
-    #case4: subvolume with odd
-    (np.array([5, 5, 5]), (10, 10, 10), (3, 3, 3),
-     (np.array([4, 4, 4]), np.array([7, 7, 7]), np.array([0, 0, 0]), np.array([3, 3, 3]))),
-    #case5: minimal subvolume
-    (np.array([0, 0, 0]), (1, 1, 1), (1, 1, 1),
-     (np.array([0, 0, 0]), np.array([1, 1, 1]), np.array([0, 0, 0]), np.array([1, 1, 1])))])
+
+@pytest.mark.parametrize(
+    "coord, volume_shape, subvolume_shape, expected",
+    [
+        # case1: subvolume bigger than principal volume
+        (
+            np.array([5, 5, 5]),
+            (10, 10, 10),
+            (20, 20, 20),
+            (np.array([0, 0, 0]), np.array([10, 10, 10]), np.array([5, 5, 5]), np.array([15, 15, 15])),
+        ),
+        # case2: subvolume totally outside the main volume
+        (
+            np.array([15, 15, 15]),
+            (10, 10, 10),
+            (4, 4, 4),
+            (np.array([10, 10, 10]), np.array([10, 10, 10]), np.array([0, 0, 0]), np.array([0, 0, 0])),
+        ),
+        # case3: sobvolume on boarder of main volume
+        (
+            np.array([0, 0, 0]),
+            (10, 10, 10),
+            (4, 4, 4),
+            (np.array([0, 0, 0]), np.array([2, 2, 2]), np.array([2, 2, 2]), np.array([4, 4, 4])),
+        ),
+        # case4: subvolume with odd
+        (
+            np.array([5, 5, 5]),
+            (10, 10, 10),
+            (3, 3, 3),
+            (np.array([3, 3, 3]), np.array([6, 6, 6]), np.array([0, 0, 0]), np.array([3, 3, 3])),
+        ),
+        # case5: minimal subvolume
+        (
+            np.array([0, 0, 0]),
+            (1, 1, 1),
+            (1, 1, 1),
+            (np.array([0, 0, 0]), np.array([0, 0, 0]), np.array([1, 1, 1]), np.array([1, 1, 1])),
+        ),
+    ],
+)
 def test_edge_get_start_end_indices(coord, volume_shape, subvolume_shape, expected):
     result = get_start_end_indices(coord, volume_shape, subvolume_shape)
     for res, exp in zip(result, expected):
-        assert np.array_equal(res,exp)
+        assert np.array_equal(res, exp)
+
 
 def test_extract_subvolume():
     # Create a 3D volume with unique values for verification
@@ -498,22 +566,19 @@ def test_extract_subvolume():
     # Define the center coordinate and subvolume shape
     coordinates = (2, 2, 2)
     subvolume_shape = (3, 3, 3)
-    expected = np.array([[[31, 32, 33],
-                          [36, 37, 38],
-                          [41, 42, 43]],
-
-                         [[56, 57, 58],
-                          [61, 62, 63],
-                          [66, 67, 68]],
-
-                         [[81, 82, 83],
-                          [86, 87, 88],
-                          [91, 92, 93]]])
+    expected = np.array(
+        [
+            [[0, 1, 2], [5, 6, 7], [10, 11, 12]],
+            [[25, 26, 27], [30, 31, 32], [35, 36, 37]],
+            [[50, 51, 52], [55, 56, 57], [60, 61, 62]],
+        ]
+    )
     # Extract subvolume
     result = extract_subvolume(volume, coordinates, subvolume_shape)
     assert result.shape == subvolume_shape, "Extracted subvolume shape is incorrect."
     # Check values
     np.testing.assert_array_equal(result, expected, "Extracted subvolume values are incorrect.")
+
 
 def test_pad():
     input_volume = np.ones((3, 3, 3))
@@ -531,7 +596,6 @@ def test_pad():
     assert np.all(padded_volume_custom[0, 0] == 5)  # Front top corner
     assert np.all(padded_volume_custom[-1, -1] == 5)  # Back bottom corner
     assert np.all(padded_volume_custom[1:4, 1:4, 1:4] == 1)
-
 
     input_volume_same_size = np.ones((5, 5, 5))
     new_size_same = (5, 5, 5)
@@ -563,6 +627,7 @@ def test_pad():
     except Exception:
         pass
 
+
 def test_deconvolve():
     # Parameters for the synthetic test
     input_volume = np.random.rand(64, 64, 64).astype(np.float32)  # Random 3D volume
@@ -576,8 +641,7 @@ def test_deconvolve():
 
     # Apply deconvolution to the synthetic 3D volume
     output_volume = deconvolve(
-        input_volume, pixel_size_a, defocus, snr_falloff, deconv_strength,
-        highpass_nyquist, phase_flipped, phaseshift
+        input_volume, pixel_size_a, defocus, snr_falloff, deconv_strength, highpass_nyquist, phase_flipped, phaseshift
     )
 
     assert output_volume.shape == input_volume.shape
@@ -605,8 +669,9 @@ def test_deconvolve():
     assert np.max(output_volume) <= np.max(input_volume) * 2
     assert np.isfinite(output_volume).all()
 
+
 def test_compute_ctf_1d():
-    length = 128  # Numero di punti
+    length = 128  # length
     pixel_size = 1.32e-10  # 1.32 Å per pixel
     voltage = 300000  # 300 kV
     cs = 2.7e-3  # 2.7 mm
@@ -624,6 +689,7 @@ def test_compute_ctf_1d():
 
     expected_ctf = np.load(str(expected_ctf_path))
     assert np.allclose(ctf, expected_ctf, atol=1e-6)
+
 
 def test_trim():
     input_map = np.arange(27).reshape(3, 3, 3)
@@ -658,6 +724,7 @@ def test_trim():
     trimmed = trim(input_map, [1, 1, 1], [3, 3, 3], output_name)
     assert os.path.exists(output_name)
     os.remove(output_name)
+
 
 def test_flip():
     input_filename = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
@@ -697,6 +764,7 @@ def test_flip():
     if os.path.exists(output_filename):
         os.remove(output_filename)
 
+
 def test_calculate_conjugates():
     vol = np.random.rand(4, 4, 4)
     test_filter = np.ones((4, 4, 4))
@@ -707,13 +775,16 @@ def test_calculate_conjugates():
     vol_fft = np.fft.fftn(vol) * test_filter
     vol_fft[0, 0, 0] = 0
     expected_conj_target = np.conj(vol_fft)
-    np.testing.assert_array_almost_equal(conj_target, expected_conj_target,
-                                         err_msg="conj_target does not match expected result")
+    np.testing.assert_array_almost_equal(
+        conj_target, expected_conj_target, err_msg="conj_target does not match expected result"
+    )
 
     filtered_volume = np.fft.ifftn(vol_fft).real
     expected_conj_target_sq = np.conj(np.fft.fftn(np.power(filtered_volume, 2)))
-    np.testing.assert_array_almost_equal(conj_target_sq, expected_conj_target_sq,
-                                         err_msg="conj_target_sq does not match expected result")
+    np.testing.assert_array_almost_equal(
+        conj_target_sq, expected_conj_target_sq, err_msg="conj_target_sq does not match expected result"
+    )
+
 
 def test_calculate_flcf():
     vol1 = np.random.rand(4, 4, 4)
@@ -750,6 +821,7 @@ def test_calculate_flcf():
     vol1_nan[0, 0, 0] = np.nan
     with pytest.raises(ValueError):
         calculate_flcf(vol1_nan, mask, vol2=vol2, filter=filter)
+
 
 def calculate_flcf_with_todo_changes(vol1, mask, vol2=None, conj_target=None, conj_target_sq=None, filter=None):
     """
@@ -793,6 +865,8 @@ def calculate_flcf_with_todo_changes(vol1, mask, vol2=None, conj_target=None, co
     flcc_map = np.transpose(flcc_map, (2, 1, 0))  # Optional: transpose dimensions if required
 
     return np.clip(flcc_map, 0.0, 1.0)
+
+
 def test_flcf_changes_with_todo():
     vol1 = np.random.rand(32, 32, 32)
     mask = np.ones((32, 32, 32))
@@ -811,13 +885,35 @@ def test_flcf_changes_with_todo():
     "input_map, lp_fourier_pixels, hp_fourier_pixels, lp_target_resolution, hp_target_resolution, pixel_size, lp_gaussian, hp_gaussian, output_name, expect_exception, expected_output",
     [
         # sinusoidal input → check fourier effect
-        (np.sin(np.linspace(0, 2 * np.pi, 32)).reshape(32, 1, 1).repeat(32, axis=1).repeat(32, axis=2),
-         None, 5, 20, None, 1.5, 3, 2, None, None, "check_fourier_effect"),
+        (
+            np.sin(np.linspace(0, 2 * np.pi, 32)).reshape(32, 1, 1).repeat(32, axis=1).repeat(32, axis=2),
+            None,
+            5,
+            20,
+            None,
+            1.5,
+            3,
+            2,
+            None,
+            None,
+            "check_fourier_effect",
+        ),
         # normal case with random input, result not manually predictable but should be a numpy array
         (np.random.rand(32, 32, 32), 10, 5, None, None, 1.5, 3, 2, None, None, None),
         # file input case (simulated, does not check file content)
-        (str(Path(__file__).parent / "test_data" / "tilt_stack.mrc"), 50, 30, None, None, 1.5, 3, 2,
-         str(Path(__file__).parent / "test_data" / "test1.mrc"), None, None),
+        (
+            str(Path(__file__).parent / "test_data" / "tilt_stack.mrc"),
+            50,
+            30,
+            None,
+            None,
+            1.5,
+            3,
+            2,
+            str(Path(__file__).parent / "test_data" / "test1.mrc"),
+            None,
+            None,
+        ),
         # missing low-pass parameter but target resolution given → should work
         (np.random.rand(100, 100, 100), None, 30, 2.0, None, 1.5, 3, 2, None, None, None),
         # missing high-pass parameter but target resolution given → should work
@@ -825,12 +921,21 @@ def test_flcf_changes_with_todo():
         # missing both lp and hp parameters → should raise ValueError
         (np.random.rand(100, 100, 100), None, None, None, None, 1.5, 3, 2, None, ValueError, None),
         # invalid input (empty string) → should raise ValueError
-        ('', 50, 30, None, None, 1.5, 3, 2, None, ValueError, None),
-    ]
+        ("", 50, 30, None, None, 1.5, 3, 2, None, ValueError, None),
+    ],
 )
 def test_bandpass(
-    input_map, lp_fourier_pixels, hp_fourier_pixels, lp_target_resolution, hp_target_resolution,
-    pixel_size, lp_gaussian, hp_gaussian, output_name, expect_exception, expected_output
+    input_map,
+    lp_fourier_pixels,
+    hp_fourier_pixels,
+    lp_target_resolution,
+    hp_target_resolution,
+    pixel_size,
+    lp_gaussian,
+    hp_gaussian,
+    output_name,
+    expect_exception,
+    expected_output,
 ):
     """
     Bandpass filter implements both lowpass and highpass filter, so that only those frequences between a range
@@ -847,7 +952,7 @@ def test_bandpass(
                 pixel_size=pixel_size,
                 lp_gaussian=lp_gaussian,
                 hp_gaussian=hp_gaussian,
-                output_name=output_name
+                output_name=output_name,
             )
     else:
         result = bandpass(
@@ -859,7 +964,7 @@ def test_bandpass(
             pixel_size=pixel_size,
             lp_gaussian=lp_gaussian,
             hp_gaussian=hp_gaussian,
-            output_name=output_name
+            output_name=output_name,
         )
 
         # check if the output is a numpy array
@@ -892,11 +997,18 @@ def test_bandpass(
     "input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output",
     [
         (np.ones((32, 32, 32)), None, 10, 1.5, 3, None, np.ones((32, 32, 32))),
-        (np.sin(np.linspace(0, 2 * np.pi, 32)).reshape(32, 1, 1).repeat(32, axis=1).repeat(32, axis=2),
-         None, 20, 1.5, 3, None, "check_fourier_effect"),
+        (
+            np.sin(np.linspace(0, 2 * np.pi, 32)).reshape(32, 1, 1).repeat(32, axis=1).repeat(32, axis=2),
+            None,
+            20,
+            1.5,
+            3,
+            None,
+            "check_fourier_effect",
+        ),
         (np.random.rand(32, 32, 32), 10, None, 1.5, 3, None, None),
-        (str(Path(__file__).parent / "test_data" / "tilt_stack.mrc"), 50, None, 1.5, 3, 'output_map.mrc', None)
-    ]
+        (str(Path(__file__).parent / "test_data" / "tilt_stack.mrc"), 50, None, 1.5, 3, "output_map.mrc", None),
+    ],
 )
 def test_lowpass(input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output):
     if isinstance(input_map, str):
@@ -908,23 +1020,39 @@ def test_lowpass(input_map, fourier_pixels, target_resolution, pixel_size, gauss
         target_resolution=target_resolution,
         pixel_size=pixel_size,
         gaussian=gaussian,
-        output_name=output_name
+        output_name=output_name,
     )
 
     assert result.shape == input_map.shape, f"Expected output shape {input_map.shape}, but got {result.shape}"
     assert isinstance(result, np.ndarray), "The result should be a numpy array"
-    if os.path.exists(output_name):
+    if output_name and os.path.exists(output_name):
         os.remove(output_name)
+
 
 @pytest.mark.parametrize(
     "input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output",
     [
         (np.ones((32, 32, 32)), None, 10, 1.5, 3, None, np.ones((32, 32, 32))),
-        (np.sin(np.linspace(0, 2 * np.pi, 32)).reshape(32, 1, 1).repeat(32, axis=1).repeat(32, axis=2),
-         None, 20, 1.5, 3, None, "check_highpass_effect"),
+        (
+            np.sin(np.linspace(0, 2 * np.pi, 32)).reshape(32, 1, 1).repeat(32, axis=1).repeat(32, axis=2),
+            None,
+            20,
+            1.5,
+            3,
+            None,
+            "check_highpass_effect",
+        ),
         (np.random.rand(32, 32, 32), 10, None, 1.5, 3, None, None),
-        (str(Path(__file__).parent / "test_data" / "tilt_stack.mrc"), 50, None, 1.5, 3, 'output_map_highpass.mrc', None)
-    ]
+        (
+            str(Path(__file__).parent / "test_data" / "tilt_stack.mrc"),
+            50,
+            None,
+            1.5,
+            3,
+            "output_map_highpass.mrc",
+            None,
+        ),
+    ],
 )
 def test_highpass(input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output):
     # Se l'input è un file, lo carico
@@ -937,16 +1065,17 @@ def test_highpass(input_map, fourier_pixels, target_resolution, pixel_size, gaus
         target_resolution=target_resolution,
         pixel_size=pixel_size,
         gaussian=gaussian,
-        output_name=output_name
+        output_name=output_name,
     )
 
     assert result.shape == input_map.shape, f"Expected output shape {input_map.shape}, but got {result.shape}"
     assert isinstance(result, np.ndarray), "The result should be a numpy array"
 
     if output_name:
-        assert output_name.endswith('.mrc'), "Expected file to have '.mrc' extension"
-    if os.path.exists(output_name):
-        os.remove(output_name)
+        assert output_name.endswith(".mrc"), "Expected file to have '.mrc' extension"
+        if os.path.exists(output_name):
+            os.remove(output_name)
+
 
 def test_get_cross_slices():
     # Create a 3D array (ensure the array is 3D)
@@ -978,8 +1107,9 @@ def test_get_cross_slices():
     assert result[1].shape == (10, 10)
     assert result[2].shape == (10, 10)
 
-#TODO, to create instance of Motl object
+
+# TODO, to create instance of Motl object
 def test_place_object():
     pass
-    #to test
-    #motl = Motl.load(str(Path(__file__).parent / "test_data" / "wedge_list.em"))
+    # to test
+    # motl = Motl.load(str(Path(__file__).parent / "test_data" / "wedge_list.em"))

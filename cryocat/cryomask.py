@@ -622,8 +622,8 @@ def ellipsoid_shell_mask(mask_size, shell_thickness, radii, center=None, gaussia
 
     shell_thickness = shell_thickness / 2
 
-    e1 = ellipsoid_mask(mask_size, radii = radii + shell_thickness, center=center)
-    e2 = ellipsoid_mask(mask_size, radii = radii - shell_thickness, center=center)
+    e1 = ellipsoid_mask(mask_size, radii=radii + shell_thickness, center=center)
+    e2 = ellipsoid_mask(mask_size, radii=radii - shell_thickness, center=center)
 
     shell_mask = e1 & ~e2
 
@@ -1047,7 +1047,7 @@ def shrink_full_mask(input_mask, shrink_factor, output_name=None):
     return filled_mask
 
 
-def fill_hollow_mask(input_mask, output_name=None):
+def fill_hollow_mask(input_mask, output_name=None, apply_opening_closing=True, footprint=None):
     """Takes in a binary mask and returns the same mask with all holes filled in.
 
     Parameters
@@ -1056,6 +1056,14 @@ def fill_hollow_mask(input_mask, output_name=None):
         Input mask specified either by its path or already loaded as 3D numpy.ndarray.
     output_name : str, optional
         Path to write out the created mask. If not specified, the mask is not written out. Defaults to None.
+    apply_opening_closing : bool, default=True
+        If True the morphological operations of opening and closing will be applied as post-processing step.
+        For closing very small regions, it should be set to False. Defaults to True.
+    footprint : ndarray or tuple, optional
+        The neighborhood for the opening operation, expressed as a 2-D array of 1s and 0s. Used only if
+        apply_opening_closing is True. If footprint is None, uses footprint np.ones((2,2,2)). The footprint can
+        also be provided as a sequence of smaller footprints as described on the scikit-image documentation. Default is None.
+
 
     Returns
     -------
@@ -1089,8 +1097,12 @@ def fill_hollow_mask(input_mask, output_name=None):
 
     filled_mask = np.where(filled_mask > 0, 1, 0)
 
-    filled_mask = morphology.binary_opening(filled_mask, footprint=np.ones((2, 2, 2)))
-    filled_mask = morphology.binary_closing(filled_mask)
+    if apply_opening_closing:
+        if not footprint:
+            footprint = np.ones((2, 2, 2))
+
+        filled_mask = morphology.binary_opening(filled_mask, footprint=footprint)
+        filled_mask = morphology.binary_closing(filled_mask)
 
     write_out(filled_mask, output_name)
 

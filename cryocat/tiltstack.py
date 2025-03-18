@@ -37,12 +37,49 @@ class TiltStack:
         self.n_tilts, self.height, self.width = self.data.shape
 
     def write_out(self, output_file, new_data=None):
+        """Writes data to a specified output file.
+
+        Parameters
+        ----------
+        output_file : str
+            The path to the output file where data will be written.
+        new_data : optional
+            The data to write to the output file. If not provided, the method will use the instance's data. Default is None.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This method uses the `cryomap.write` function to perform the actual writing of data.
+        """
 
         if output_file:
             data_to_write = new_data if new_data is not None else self.data
             cryomap.write(data_to_write, output_file, data_type=self.data_type, transpose=False)
 
     def correct_order(self, new_data=None):
+        """Corrects the order of the data and ensures it is of the correct type.
+
+        Parameters
+        ----------
+        new_data : array-like, optional
+            The new data to be corrected. If None, the method will use the instance's data. Default is None.
+
+        Returns
+        -------
+        array
+            The corrected data, which is either the new data with the correct type and order,
+            or the instance's data if no new data is provided.
+
+        Notes
+        -----
+        The method checks if the data type of the provided or instance data matches the expected
+        data type. If not, it converts the data to the expected type. Additionally, if the current
+        order of the data does not match the desired output order, the data is transposed to
+        the correct order.
+        """
 
         return_data = new_data if new_data is not None else self.data
 

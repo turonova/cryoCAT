@@ -11,7 +11,7 @@ from scipy.spatial.transform import Rotation as R
 
 @pytest.fixture
 def shape():
-    shape = load_shapes("./tests/test_data/point_clouds/c10x10.csv")
+    shape = SamplePoints.load_shapes("./tests/test_data/point_clouds/c10x10.csv")
     return shape
 
 
@@ -23,7 +23,7 @@ def motl():
 
 def test_get_oversampling(shape, d=1):
     # check if points are within the given distance
-    points, _ = get_oversampling(shape, sampling_distance=d)
+    points, _ = SamplePoints.get_oversampling(shape, sampling_distance=d)
     # find distances between all pair of points
     distances = cdist(points, points)
     distances[distances == 0] = np.nan
@@ -36,7 +36,7 @@ def test_get_oversampling(shape, d=1):
 # TODO add test for expand points without moving top and bottom.
 def test_expand_points_with_tb(shape, d=3):
     # Checking that the difference in distances between coordinates before and after expansion is consistent with the setting.
-    points, normals = get_oversampling(shape, sampling_distance=d)
+    points, normals = SamplePoints.get_oversampling(shape, sampling_distance=d)
     mv_points, _ = expand_points(points, normals, distances=d, tb_distances=d)
     distances = np.sqrt(np.sum(np.square(mv_points - points), axis=1))
     # Return true when distance difference are similar to the setting.
@@ -44,12 +44,10 @@ def test_expand_points_with_tb(shape, d=3):
     assert diff_dist.all()
 
 
-@pytest.mark.parametrize(
-    "clean_face, exclude_normals", [(1, [1, 0, 0]), (-1, [-1, 0, 0])]
-)
+@pytest.mark.parametrize("clean_face, exclude_normals", [(1, [1, 0, 0]), (-1, [-1, 0, 0])])
 def test_rm_points(shape, clean_face, exclude_normals, d=3):
     # After removing flat surface at top and bottom, there should be no normals in [1, 0, 0] or [-1, 0, 0]
-    points, normals = get_oversampling(shape, sampling_distance=d)
+    points, normals = SamplePoints.get_oversampling(shape, sampling_distance=d)
     _, clean_normals = rm_points(points, normals, rm_surface=clean_face)
     assert not np.all(clean_normals == exclude_normals)
 
@@ -182,11 +180,9 @@ def test_angle_clean(shape, motl):
     # rotation of 180 degrees
     rot = R.from_matrix([[0, 0, -1], [0, -1, 0], [1, 0, 0]])
     motl.apply_rotation(rot)
-    points, normals = get_oversampling(shape, sampling_distance=1)
+    points, normals = SamplePoints.get_oversampling(shape, sampling_distance=1)
     # clean motl
-    clean_motl = angles_clean(
-        motl, points, normals, angle_threshold=45, normal_vector=[0, 0, 1]
-    )
+    clean_motl = angles_clean(motl, points, normals, angle_threshold=45, normal_vector=[0, 0, 1])
     # a empty dataframe was expected because all position should be removed after rotating in 180
     assert len(clean_motl.df) == 0
 
@@ -196,9 +192,7 @@ def check_mask(mask1, mask2):
 
 
 # only check the output dimension of volume, using skimage.morphology for all operation, no need for testing.
-@pytest.mark.parametrize(
-    "r, mode", [(2, "closing"), (2, "opening"), (2, "dilation"), (2, "erosion")]
-)
+@pytest.mark.parametrize("r, mode", [(2, "closing"), (2, "opening"), (2, "dilation"), (2, "erosion")])
 def test_process_mask(r, mode):
     sperical_mask = cryomask.spherical_mask(20, radius=5)
     processed_mask = process_mask(sperical_mask, r, mode)
@@ -224,8 +218,6 @@ def test_mask_clean_all_out(motl, r=2):
 def test_marker_from_centroid(box=10, sper_rad=2, cent_size=1):
     sperical_mask = cryomask.spherical_mask(box, radius=sper_rad)
     mask = marker_from_centroid(sperical_mask, centroid_mark_size=cent_size)
-    ground_truth = cryomap.read(
-        "./tests/test_data/point_clouds/sphere_centroid_marker_10x10.mrc"
-    )
+    ground_truth = cryomap.read("./tests/test_data/point_clouds/sphere_centroid_marker_10x10.mrc")
     liken = mask == ground_truth
     assert liken.all()
