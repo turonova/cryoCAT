@@ -1202,7 +1202,7 @@ def tomogram_shell_mask(
 
     for t in tomos:
 
-        t_dim = tomo_dim.loc[tomo_dim["tomo_id"] == t, ["x", "y", "z"]].values[0]
+        t_dim = tuple(tomo_dim.loc[tomo_dim["tomo_id"] == t, ["x", "y", "z"]].values[0].astype(int))
         tm = input_motl.get_motl_subset(t)
         tm.df["class"] = 1
         radii = (tm.df[motl_radius_id].values + radius_offset).astype(int).astype(str)
