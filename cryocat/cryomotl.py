@@ -20,6 +20,7 @@ from cryocat import imod
 
 from math import ceil
 from matplotlib import pyplot as plt
+from pathlib import Path
 
 from scipy.spatial import KDTree
 from sklearn.neighbors import KDTree as snKDTree
@@ -485,8 +486,8 @@ class Motl:
 
         """
 
-        tomos = self.get_unique_values('tomo_id')
-        #cleaned_motl = self.__class__.create_empty_motl_df()
+        tomos = self.get_unique_values("tomo_id")
+        # cleaned_motl = self.__class__.create_empty_motl_df()
 
         if histogram_bin:
             hbin = histogram_bin
@@ -504,7 +505,7 @@ class Motl:
         if global_level is False:
 
             cleaned_motl = self.__class__.create_empty_motl_df()
-            for t in tomos:  # if feature == object_id, tomo_id needs to be used too     
+            for t in tomos:  # if feature == object_id, tomo_id needs to be used too
                 tm = self.get_motl_subset(t)
                 cleaned_motl_tm = tm.compute_otsu_threshold(feature_id, hbin)
                 cleaned_motl = pd.concat([cleaned_motl, cleaned_motl_tm])
@@ -515,7 +516,6 @@ class Motl:
         print(f"Cleaned {self.df.shape[0] - cleaned_motl.shape[0]} particles.")
         self.df = cleaned_motl.reset_index(drop=True)
 
-
     def compute_otsu_threshold(self, feature_id, hbin):
         """Compute Otsu threshold on the Motl 'score' value after grouping the particles by a desired feature.
         This function generates a plot of the particle distribution for each value of the feature and overlays the threshold value.
@@ -523,15 +523,15 @@ class Motl:
         Parameters
         ----------
             feature_id : str
-               The feature ID to be used to group particles. 
+               The feature ID to be used to group particles.
             hbin : int
-               The number of bins for the histogram. 
+               The number of bins for the histogram.
 
         Returns
         --------
             pandas.DataFrame
                 Dataframe in Motl format containing the particles filtered according to the Otsu threshold.
-        
+
         Examples
         --------
         >>> original_motl = cryomotl.Motl.load("my_motl.em")
@@ -544,18 +544,21 @@ class Motl:
 
         for f in features:
             fm = tm.loc[tm[feature_id] == f]
-            bin_counts, bin_centers, _ = plt.hist(fm.loc[:, "score"], bins=hbin) 
+            bin_counts, bin_centers, _ = plt.hist(fm.loc[:, "score"], bins=hbin)
             bn = mathutils.otsu_threshold(bin_counts)
-            ind = np.where(bin_counts == bin_counts[bin_counts > bn][0]) #get index of the first bin_counts element that is greater than the threshold
-            cc_t = bin_centers[ind[0]+1][0] #get the upper edge of the first bin that is greater than the threshold - this is the score that will be used for cleaning
+            ind = np.where(
+                bin_counts == bin_counts[bin_counts > bn][0]
+            )  # get index of the first bin_counts element that is greater than the threshold
+            cc_t = bin_centers[ind[0] + 1][
+                0
+            ]  # get the upper edge of the first bin that is greater than the threshold - this is the score that will be used for cleaning
             print(f"Otsu threhold for particles grouped on {feature_id}={f} is {cc_t}")
-            fm = fm.loc[fm["score"] >= cc_t] #retain all particles with a scores greater than the threshold                
-            plt.axvline(cc_t, color="r") #plot the threshold
+            fm = fm.loc[fm["score"] >= cc_t]  # retain all particles with a scores greater than the threshold
+            plt.axvline(cc_t, color="r")  # plot the threshold
 
-            subset_motl = pd.concat([subset_motl, fm]) 
-        
+            subset_motl = pd.concat([subset_motl, fm])
+
         return subset_motl
-
 
     def convert_to_motl(self, input_df):
         """Abstract method implemented only within child classes.
@@ -1544,8 +1547,8 @@ class Motl:
 
     @classmethod
     def merge_and_drop_duplicates(cls, motl_list):
-        """Merge a list of Motl instances or paths to motl files to a single motl. Does not renumber particles - uniqueness 
-        has to be inherent to the instances! 
+        """Merge a list of Motl instances or paths to motl files to a single motl. Does not renumber particles - uniqueness
+        has to be inherent to the instances!
 
         Parameters
         ----------
@@ -1634,7 +1637,7 @@ class Motl:
 
         recentered = self.get_coordinates()
         idx_list = []
-        for i, row in recentered.iterrows():## FIXME
+        for i, row in recentered.iterrows():  ## FIXME
             tn = row["tomo_id"]
             tomo_dim = dim.loc[dim["tomo_id"] == tn, "x":"z"].reset_index(drop=True)
             c_min = [c - boundary for c in row["x":"z"]]
@@ -1942,7 +1945,7 @@ class EmMotl(Motl):
                 self = copy.deepcopy(input_motl)
             elif isinstance(input_motl, pd.DataFrame):
                 self.check_df_type(input_motl)
-            elif isinstance(input_motl, str):
+            elif isinstance(input_motl, (str, Path)):
                 self.df, self.header = self.read_in(input_motl)
             else:
                 raise UserInputError(

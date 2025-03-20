@@ -19,12 +19,13 @@ def create_temp_file_with_encoding(content, encoding):
     return temp_file.name
 #not working yet: iso88591 and windows1252 are very similar?
 @pytest.mark.parametrize("content, encoding, expected_encoding", [
-    ("hello, this is a test.", "utf-8", "utf-8"),
-    ("hello, this is a test with é.", "iso-8859-1", "iso-8859-1"),  # Added accented character for testing
-    ("hello, this is a test with € symbol.", "windows-1252", "windows-1252"),  # Euro symbol for testing
+    ("hello", "utf-8", "utf-8"),
+    ("¦", "iso-8859-1", "iso-8859-1"),
+    ("…", "windows-1252", "windows-1252"),
 ])
 def test_get_file_encoding_valid(content, encoding, expected_encoding):
-    """Test the get_file_encoding function for various encodings."""
+    #FIXME
+
     # Create the temporary file with the specified encoding
     temp_file_path = create_temp_file_with_encoding(content, encoding)
 
@@ -2170,7 +2171,7 @@ def test_dimensions_load(csv_file2):
     pd.testing.assert_frame_equal(result3, expected_result)
 
     #com file with tomo_idx!= null
-    #tomo_idx basically works like this: we repeat x,y,z for all tomo_ids in tomo_idx! always same values!
+    #tomo_idx basically works like this: we repeat x,y,z for all tomo_ids in tomo_idx!
 
     angles_mdoc018_test2values = [
         -52.0064, -50.0066

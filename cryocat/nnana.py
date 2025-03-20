@@ -441,6 +441,37 @@ def filter_nn_radial_stats(input_stats, binary_mask):
 
 
 def get_nn_stats_within_radius(input_motl, nn_radius, feature="tomo_id", index_by_feature=True):
+    """Get nearest neighbor statistics within a specified radius from a given input motl.
+
+    Parameters
+    ----------
+    input_motl : str or Motl object
+        Path to the input motl file or Motl object to be loaded.
+    nn_radius : float
+        The radius within which to search for nearest neighbors.
+    feature : str, default='tomo_id'
+        The feature to index by. Default is 'tomo_id'.
+    index_by_feature : bool, default=True
+        If True, the output will be indexed by the specified feature; otherwise, it will be indexed by the original
+        df of the motl. Default is True.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the nearest neighbor statistics, including:
+        - qp_subtomo_id: Subtomo ID of the query point.
+        - nn_subtomo_id: Subtomo ID of the nearest neighbor.
+        - coord_x, coord_y, coord_z: Coordinates of the centered neighbor.
+        - coord_rx, coord_ry, coord_rz: Rotated coordinates of the neighbor.
+        - angular_distance: Angular distance between the query and nearest neighbor.
+        - cone_distance: Cone distance between the query and nearest neighbor.
+        - inplane_distance: In-plane distance between the query and nearest neighbor.
+        - rot_x, rot_y, rot_z: Rotation angles of the nearest neighbor.
+        - phi, theta, psi: Euler angles of the nearest neighbor.
+        - qp_motl_id: Motl index of the query point.
+        - nn_motl_idx: Motl index of the nearest neighbor.
+    """
+
     input_motl = cryomotl.Motl.load(input_motl)
 
     # Get unique feature idx
@@ -566,6 +597,27 @@ def get_nn_within_radius(
     pixel_size=1.0,
     feature="tomo_id",
 ):
+    """Get the number of nearest neighbors within a specified radius for features in two motls.
+
+    Parameters
+    ----------
+    motl_a : str or Motl
+        Path to the first Motl file or a Motl object containing the particles to analyze.
+    motl_nn : str or Motl
+        Path to the second Motl file or a Motl object containing the particles for NN search.
+    nn_radius : float
+        The radius within which to count the nearest neighbors.
+    pixel_size : float, default=1.0
+        The size of the pixel/voxel that corresponds to the motls. Default is 1.0.
+    feature : str, default='tomo_id'
+        The feature identifier to use for matching between the two motls. Default is 'tomo_id'.
+
+    Returns
+    -------
+    numpy.ndarray
+        An array containing the count of nearest neighbors for each particle in the first motl within the specified radius.
+    """
+
     if isinstance(motl_a, str):
         motl_a = cryomotl.Motl(motl_path=motl_a)
 
@@ -604,6 +656,29 @@ def plot_nn_coord_df(
     title=None,
     marker_size=20,
 ):
+    """Plot 2D scatter plots of nearest neighbor coordinates.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame containing the coordinates with columns 'coord_x', 'coord_y', and 'coord_z'.
+    circle_radius : float
+        Radius of the circles to be drawn on the plots.
+    output_name : str, optional
+        Name of the file to save the figure. If None, the figure will not be saved. Default is None.
+    displ_threshold : float, optional
+        Threshold for displaying limits on the axes. If None, limits will not be set. Default is None.
+    title : str, optional
+        Title for the entire figure. If None, no title will be set. Default is None.
+    marker_size : int, default=20
+        Size of the markers in the scatter plots. Default is 20.
+
+    Returns
+    -------
+    None
+        The function displays the plots and optionally saves the figure to a file.
+    """
+
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
     axs[0].set_title("XY distribution")
     sns.scatterplot(ax=axs[0], data=df, x="coord_x", y="coord_y", s=marker_size)
@@ -642,6 +717,26 @@ def plot_nn_coord_df(
 
 
 def plot_nn_rot_coord_df(df, output_name=None, displ_threshold=None, title=None, marker_size=20):
+    """Plot 2D scatter plots of nearest neighbor coordinates that are rotated to the reference frame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame containing the coordinates with columns 'coord_x', 'coord_y', and 'coord_z'.
+    output_name : str, optional
+        Name of the file to save the figure. If None, the figure will not be saved. Default is None.
+    displ_threshold : float, optional
+        Threshold for displaying limits on the axes. If None, limits will not be set. Default is None.
+    title : str, optional
+        Title for the entire figure. If None, no title will be set. Default is None.
+    marker_size : int, default=20
+        Size of the markers in the scatter plots. Default is 20.
+
+    Returns
+    -------
+    None
+        The function displays the plots and optionally saves the figure to a file.
+    """
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
     axs[0].set_title("XY distribution")
     sns.scatterplot(ax=axs[0], data=df, x="coord_rx", y="coord_ry", hue="type", s=marker_size)
@@ -673,8 +768,23 @@ def plot_nn_rot_coord_df(df, output_name=None, displ_threshold=None, title=None,
 
 
 def plot_nn_coord(coord, displ_threshold=None, marker_size=20):
-    # if displ_threshold is not None:
-    #   coord[:,0] = coord[:, (coord#[:,0] >= -displ_threshold) & (coord[:,0] <= displ_threshold) ]
+    """Plot 2D scatter distributions of 3D coordinates.
+
+    Parameters
+    ----------
+    coord : numpy.ndarray
+        A 2D array of shape (n, 3) where n is the number of points and each row represents a point in 3D space (x, y, z).
+    displ_threshold : float, optional
+        A threshold value to set the limits of the scatter plots. If provided, the x and y limits of each subplot will
+        be set to [-displ_threshold, displ_threshold]. Default is None.
+    marker_size : int, default=20
+        The size of the markers in the scatter plots. Default is 20.
+
+    Returns
+    -------
+    None
+        This function does not return any value. It displays the scatter plots of the coordinates.
+    """
 
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
     axs[0].set_title("XY distribution")

@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pandas as pd
 from cryocat import ioutils
@@ -410,12 +412,14 @@ def load_wedge_list_sg(input_data):
     """
 
     if isinstance(input_data, str):
+        if not os.path.exists(input_data):
+            raise ValueError(f"Filepath '{input_data}' is not valid.")
         wedge_list_df, _, _ = starfileio.Starfile.read(input_data)
         wedge_list_df = wedge_list_df[0]
     elif isinstance(input_data, pd.DataFrame):
         wedge_list_df = input_data
     else:
-        raise ValueError("Invalid input - only strings (file names) or pandas data frames are supported.")
+        raise ValueError(f"Input must be either a valid pathfile either a dataframe")
 
     return wedge_list_df
 
@@ -486,7 +490,7 @@ def wedge_list_sg_to_em(input_path, output_path, write_out=True):
     '''
 
     # read STOPGAP wedge list star file
-    wedge_list_sg = wedgeutils.load_wedge_list_sg(input_path)
+    wedge_list_sg = load_wedge_list_sg(input_path)
 
     # get the min and max of tilt_angle column and create a new df 
     wedge_list_em = wedge_list_sg.groupby("tomo_num").agg(min_tilt_angle=('tilt_angle', 'min'),
@@ -541,8 +545,11 @@ def apply_wedge_mask(wedge_mask, in_map, rotation_zxz=None, output_path=None):
     ft_map = ft_map * cryomap.read(wedge_mask)
     out_map = np.fft.ifftn(np.fft.ifftshift(ft_map))
 
+    # Convert complex array to real-valued array and force float32
+    out_map = np.abs(out_map).astype(np.float32)
+
     if output_path is not None:
-        cryomask.write(out_map, output_path)
+        cryomap.write(out_map, output_path)
 
     return out_map
 
