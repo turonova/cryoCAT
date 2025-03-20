@@ -686,11 +686,12 @@ def test_compute_ctf_1d():
     expected_ctf_path = Path(__file__).parent / "test_data" / "expected_ctf.npy"
     if not expected_ctf_path.exists():
         np.save(expected_ctf_path, ctf)
-        raise RuntimeError
 
     expected_ctf = np.load(str(expected_ctf_path))
     assert np.allclose(ctf, expected_ctf, atol=1e-6)
 
+    if expected_ctf_path.exists():
+        os.remove(expected_ctf_path)
 
 def test_trim():
     input_map = np.arange(27).reshape(3, 3, 3)

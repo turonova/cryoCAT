@@ -342,7 +342,7 @@ def test_merge():
         if i<res.shape[2]/2 :
             assert np.allclose(ts1c[:,:,i],res[:,:,i])
         else :
-            assert np.allclose(ts2c[:,:,i-res.shape[2]/2],res[:,:,i])
+            assert np.allclose(ts2c[:,:,i-res.shape[2]//2],res[:,:,i])
 
 def test_flip_along_axes():
     flipped = flip_along_axes(

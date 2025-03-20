@@ -529,7 +529,7 @@ def deconvolve(
         defocus = ioutils.defocus_load(defocus, defocus_file_type)
         defocus = defocus["defocus_mean"].values
     else:
-        defocus = np.full((ts.data.n_tilts,), defocus)
+        defocus = np.full((ts.n_tilts,), defocus)
 
     for z in range(ts.n_tilts):
         tilt = ts.data[z, :, :]
