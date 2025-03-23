@@ -9,8 +9,8 @@ from cryocat.cryomask import *
 from cryocat.cryomap import read
 
 # sys.path.append(".")
-gen_dir = "./tests/test_data/masks/"
-temp_dir = "./tests/test_data/temp/"
+gen_dir = "./test_data/masks/"
+temp_dir = "./test_data/temp/"
 
 
 @pytest.fixture
