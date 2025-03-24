@@ -57,6 +57,7 @@ extensions = [
     "sphinx_design",
     "sphinx.ext.todo",
     "nbsphinx",
+    "sphinx_sitemap",
     # "IPython.sphinxext.ipython_directive",
     # "IPython.sphinxext.ipython_console_highlighting",
     # "sphinx.ext.doctest",
@@ -70,6 +71,8 @@ templates_path = ["_templates"]
 
 # The root document.
 root_doc = "index"
+
+html_baseurl = "https://cryocat.readthedocs.io/en/latest/"
 
 # The master toctree document.
 # master_doc = "index"
