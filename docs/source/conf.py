@@ -72,7 +72,8 @@ templates_path = ["_templates"]
 # The root document.
 root_doc = "index"
 
-html_baseurl = "https://cryocat.readthedocs.io/en/latest/"
+html_baseurl = "https://cryocat.readthedocs.io/latest/"
+sitemap_url_scheme = "{link}"
 
 # The master toctree document.
 # master_doc = "index"
