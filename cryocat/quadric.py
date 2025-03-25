@@ -26,6 +26,8 @@ class QuadricsM:
         else:
             raise ValueError(f"The input type {type(input_data)} is currently not supported.")
 
+        self.dict = {k: v for k, v in self.dict.items() if not v.singular}
+
     def write_out(self, output_name):
 
         full_df = pd.DataFrame()
@@ -119,6 +121,8 @@ class Ellipsoid(Quadric):
             "p9",
             "p10",
         ]
+
+        self.singular = False
 
         if isinstance(input_data, dict):
             self.from_dict(input_data)
@@ -214,7 +218,7 @@ class Ellipsoid(Quadric):
         self.radii *= np.sign(evals)
 
     @staticmethod
-    def load(input_data=None, feature_id="object_id"):
+    def load(input_data=None, feature_id="object_id", columns=None):
 
         if isinstance(input_data, cryomotl.Motl):
             el_params = Ellipsoid.load_from_motl(input_data, feature_id=feature_id)
@@ -243,6 +247,7 @@ class Ellipsoid(Quadric):
             fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id)
             coord = fm.get_coordinates()
             el_params = pd.DataFrame()
+            # TODO fix - this is not working anymore, the method cannot be static
             center, radii, evecs, v = Ellipsoid.fit_into_coord(coord)
             el_params["tomo_id"] = [fm.df.iloc[0]["tomo_id"]]  # assuming that each object has unified tomo_id
             el_params[feature_id] = [f]
@@ -321,6 +326,9 @@ class Ellipsoid(Quadric):
         parameters of the ellipsoid's equation in its algebraic form. It stores the parametric coefficients into
         self.params and compute self.center, self.radii, and self.e_vec1-3.
         """
+        if coord.shape[0] < 3:
+            self.singular = True
+            return
 
         x = coord[:, 0]
         y = coord[:, 1]
