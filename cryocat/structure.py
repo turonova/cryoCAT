@@ -674,6 +674,7 @@ class PleomorphicSurface:
             fm.df[store_id] = geom.angle_between_n_vectors(normals, normals_t)
             assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
 
+        assigned_motl_df.index = in_motl.df.index  # ensuring same indexation
         assigned_motl = cryomotl.Motl(assigned_motl_df)
 
         if output_file is not None:
@@ -707,7 +708,10 @@ class PleomorphicSurface:
         else:
             to_remove = np.where(np.abs(diff_angles) > threshold)
 
-        in_motl.df = in_motl.df.drop(index=to_remove[0])
+        # Looks ugly but in case there are duplicate indices this is the only way to make it work correctly
+        mask = np.ones(len(in_motl.df), dtype=bool)
+        mask[to_remove[0]] = False
+        in_motl.df = in_motl.df.iloc[mask]
 
         in_motl.df.reset_index(drop=True, inplace=True)
 
