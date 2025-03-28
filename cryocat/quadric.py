@@ -567,3 +567,5 @@ class Ellipsoid(Quadric):
 
         # Compute Euclidean distance from point to closest surface point
         return np.linalg.norm(point - closest_global)
+
+
