@@ -891,7 +891,7 @@ class Motl:
 
         """
 
-        coord1 = self.get_coordinates()[idx, :]
+        coord1 = self.get_coordinates()[idx, :].astype(np.float32)
         new_coord = coord1.copy()
 
         n_vertices = nn_idx.shape[1]
@@ -1519,6 +1519,8 @@ class Motl:
             If motl_list is not a list or is empty.
 
         """
+        if not isinstance(motl_list, list) or len(motl_list) == 0:
+            raise UserInputError(f"Input must be a list of em file paths, or Motl instances.")
 
         merged_df = cls.create_empty_motl_df()
         feature_add = 0
@@ -1530,8 +1532,14 @@ class Motl:
             )
 
         for m in motl_list:
+            if m is None:
+                raise ValueError("Motl list cannot contain None values.")
             motl = cls.load(m)
-            feature_min = min(motl.df.loc[:, "object_id"])
+            if not motl.df.empty:
+                feature_min = min(motl.df.loc[:, "object_id"])
+            else:
+                print("Warning: Encountered an empty Motl DataFrame. Skipping.")
+                continue
 
             if feature_min <= feature_add:
                 motl.df.loc[:, "object_id"] = motl.df.loc[:, "object_id"] + (feature_add - feature_min + 1)
@@ -1578,6 +1586,9 @@ class Motl:
 
         for m in motl_list:
             motl = cls.load(m)
+            if motl.df.empty:
+                print(f"Skipping empty Motl: {motl}")
+                continue  # Skip empty motls
             feature_min = min(motl.df.loc[:, "object_id"])
 
             if feature_min <= feature_add:
@@ -1636,8 +1647,14 @@ class Motl:
             raise UserInputError(f"Unknown type of boundaries: {boundary_type}")
 
         recentered = self.get_coordinates()
+        recentered_df = pd.DataFrame({
+            "x": recentered[:, 0],
+            "y": recentered[:, 1],
+            "z": recentered[:, 2],
+            "tomo_id": self.df["tomo_id"].values  # Add the tomo_id column from the original df.
+        })
         idx_list = []
-        for i, row in recentered.iterrows():  ## FIXME
+        for i, row in recentered_df.iterrows():
             tn = row["tomo_id"]
             tomo_dim = dim.loc[dim["tomo_id"] == tn, "x":"z"].reset_index(drop=True)
             c_min = [c - boundary for c in row["x":"z"]]
@@ -1942,7 +1959,8 @@ class EmMotl(Motl):
     def __init__(self, input_motl=None, header=None):
         if input_motl is not None:
             if isinstance(input_motl, EmMotl):
-                self = copy.deepcopy(input_motl)
+                self.df = input_motl.df.copy()
+                self.header = copy.deepcopy(input_motl.header)
             elif isinstance(input_motl, pd.DataFrame):
                 self.check_df_type(input_motl)
             elif isinstance(input_motl, (str, Path)):
@@ -2104,7 +2122,16 @@ class RelionMotl(Motl):
 
         if input_motl is not None:
             if isinstance(input_motl, RelionMotl):
-                self = copy.deepcopy(input_motl)
+                self.df = input_motl.df.copy()
+                self.relion_df = input_motl.relion_df.copy()
+                self.version = input_motl.version
+                self.pixel_size = input_motl.pixel_size
+                self.binning = input_motl.binning
+                self.optics_data = input_motl.optics_data
+                self.tomo_id_name = input_motl.tomo_id_name
+                self.subtomo_id_name = input_motl.subtomo_id_name
+                self.shifts_id_names = input_motl.shifts_id_names
+                self.data_spec = input_motl.data_spec
             elif isinstance(input_motl, pd.DataFrame):
                 self.check_df_type(input_motl)
             elif isinstance(input_motl, str):
@@ -3364,7 +3391,9 @@ class StopgapMotl(Motl):
 
         if input_motl is not None:
             if isinstance(input_motl, StopgapMotl):
-                self = copy.deepcopy(input_motl)
+                self.df = input_motl.df.copy()
+                self.sg_df = input_motl.sg_df.copy()
+
             elif isinstance(input_motl, pd.DataFrame):
                 self.check_df_type(input_motl)
             elif isinstance(input_motl, str):
@@ -3558,7 +3587,8 @@ class DynamoMotl(Motl):
 
         if input_motl is not None:
             if isinstance(input_motl, DynamoMotl):
-                self = copy.deepcopy(input_motl)
+                self.df = input_motl.df.copy()
+                self.dynamo_df = input_motl.dynamo_df.copy()
             elif isinstance(input_motl, pd.DataFrame):
                 self.convert_to_motl(input_motl)
             elif isinstance(input_motl, str):
@@ -3590,7 +3620,6 @@ class DynamoMotl(Motl):
 
         Notes
         -----
-        TODO: Test proper functionality.
 
         """
 
@@ -3642,6 +3671,7 @@ class DynamoMotl(Motl):
 
     def write_out(self, ouptut_path):
         pass
+        #TODO
 
 
 class ModMotl(Motl):
@@ -3651,7 +3681,8 @@ class ModMotl(Motl):
 
         if input_motl is not None:
             if isinstance(input_motl, ModMotl):
-                self = copy.deepcopy(input_motl)
+                self.df = input_motl.df.copy()
+                self.mod_df = input_motl.mod_df.copy()
             elif isinstance(input_motl, pd.DataFrame):
                 self.check_df_type(input_motl)
             elif isinstance(input_motl, str):
