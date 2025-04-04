@@ -50,15 +50,17 @@ class Mdoc:
         if reset_z_value:
             self.imgs["ZValue"] = range(self.imgs.shape[0])
 
-    def remove_image(self, index, kept_only=True):
-        if kept_only:
-            kept_indices = self.kept_images().index
-            index = kept_indices[index]
+    def remove_image(self, index):
         self.imgs.loc[index, "Removed"] = True
 
     def remove_images(self, indices, kept_only=True):
+        if kept_only:
+            kept_indices = self.kept_images().index
+        else:
+            kept_indices = self.imgs.index
         for index in indices:
-            self.remove_image(index, kept_only)
+            index = kept_indices[index]
+            self.remove_image(index)
 
     def removed_images(self):
         return self.imgs[self.imgs["Removed"] == True]
