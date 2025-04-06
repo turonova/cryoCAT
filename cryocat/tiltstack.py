@@ -122,14 +122,18 @@ def crop(tilt_stack, new_width=None, new_height=None, output_file=None, input_or
     place and saves the cropped data if an output file is specified.
     """
 
+    print(f"Cropping of the tilt stack started...")
+
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
     if new_width is not None:
+        new_width = int(new_width)
         if new_width > ts.width:
             raise ValueError(f"new_width cannot be greater than ts.width ({ts.width})")
     else:
         new_width = ts.width
     if new_height is not None:
+        new_height = int(new_height)
         if new_height > ts.height:
             raise ValueError(f"new_height cannot be greater than ts.height ({ts.height})")
     else:
@@ -149,6 +153,8 @@ def crop(tilt_stack, new_width=None, new_height=None, output_file=None, input_or
     ts.data = ts.data[:, start_h:end_h, start_w:end_w]
 
     ts.write_out(output_file)
+
+    print(f"...cropping of the tilt stack successfully finished. New dimensions are {end_w-start_w}, {end_h-start_h}\n")
 
     return ts.correct_order()
 
@@ -182,6 +188,8 @@ def sort_tilts_by_angle(tilt_stack, input_tilts, output_file=None, input_order="
     specified to accommodate different needs.
     """
 
+    print(f"Reordering of the tilt stack started...")
+
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
     tilt_angles = ioutils.tlt_load(input_tilts, sort_angles=False)
@@ -189,6 +197,8 @@ def sort_tilts_by_angle(tilt_stack, input_tilts, output_file=None, input_order="
 
     ts.data = ts.data[sorted_indices, :, :]
     ts.write_out(output_file)
+
+    print("...reordering of the tilt stack successfully finished.\n")
 
     return ts.correct_order()
 
@@ -229,6 +239,8 @@ def remove_tilts(
     This function modifies the tilt stack in place and can save the result to a specified output file.
     """
 
+    print(f"Removing of specified tilts started...")
+
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
     idx_to_remove_final = ioutils.indices_load(idx_to_remove, numbered_from_1=numbered_from_1)
@@ -240,6 +252,8 @@ def remove_tilts(
         )
     ts.data = np.delete(ts.data, idx_to_remove_final, axis=0)
     ts.write_out(output_file)
+
+    print(f"...removing of {idx_to_remove_final.shape[0]} tilts successfully finished.\n")
 
     return ts.correct_order()
 
@@ -273,10 +287,16 @@ def bin(tilt_stack, binning_factor, output_file=None, input_order="xyz", output_
     file path is provided.
     """
 
+    print(f"Binning tilt stack with binning factor of {str(binning_factor)} started...")
+
+    # cast in case of string
+    binning_factor = int(binning_factor)
+
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
     ts.data = downscale_local_mean(ts.data, (1, binning_factor, binning_factor))
     ts.write_out(output_file)
 
+    print("...binning finished successfully.\n")
     return ts.correct_order()
 
 
@@ -398,6 +418,8 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_orde
     tilt stack. The filtered images are then saved to the specified output file if provided.
     """
 
+    print(f"Dose-filtering started...")
+
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
     pixel_size = float(pixel_size)
     total_dose = ioutils.total_dose_load(total_dose)
@@ -423,6 +445,8 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_file=None, input_orde
         ts.data[z, :, :] = dose_filter_single_image(image, total_dose[z], frequency_array)
 
     ts.write_out(output_file)
+
+    print(f"...dose-filtering finished.")
 
     return ts.correct_order()
 
