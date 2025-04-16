@@ -3,6 +3,7 @@ from copy import deepcopy
 from os import path
 import warnings
 from cryocat import ioutils
+from pathlib import PureWindowsPath
 
 
 class Mdoc:
@@ -318,7 +319,7 @@ def split_mdoc_file(input_mdoc, new_id=None, output_folder=None):
             section_id=full_mdoc.section_id,
         )
         if output_folder is not None:
-            frames_file = path.split(new_mdoc.imgs["SubFramePath"].values[0])[-1]
+            frames_file = PureWindowsPath(new_mdoc.imgs["SubFramePath"].values[0]).name # raw data typically saved in a Windows machine
             new_mdoc.write(output_folder + frames_file + ".mdoc", overwrite=True)
 
         mdocs_all.append(new_mdoc)
