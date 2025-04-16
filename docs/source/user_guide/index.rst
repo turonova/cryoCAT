@@ -6,7 +6,7 @@
    :maxdepth: 2
    :hidden:
 
-   Tiltstack and Mdoc modules: Functions for preprocessing tilt-series <tiltstack_basics>
+   Tiltstack and Mdoc modules: Functions for preprocessing tilt-series <preprocessing_basics>
    Geometric conventions <geometric_conventions>
    Motl basics <motl_basics>
    Maps basics <maps_basics>
