@@ -7,7 +7,7 @@ from cryocat import starfileio as sf
 
 @pytest.fixture
 def relion_optics():
-    relion_sf = sf.Starfile("./tests/test_data/relion_3.1_optics.star")
+    relion_sf = sf.Starfile("./test_data/relion_3.1_optics.star")
     return relion_sf
 
 
