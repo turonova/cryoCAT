@@ -2349,7 +2349,7 @@ class RelionMotl(Motl):
             return input_list.index("data_")
         else:
             for index, item in enumerate(input_list):
-                if "data_" in item and item!="data_optics":
+                if "data_" in item and item != "data_optics":
                     return index
 
             raise UserInputError("The starfile does not contain particle list.")
@@ -3860,7 +3860,9 @@ class ModMotl(Motl):
 
         contours_per_object = mod_df["object_id"].value_counts(sort=False)
         points_per_contour = mod_df.groupby(["object_id", "contour_id"])["contour_id"].value_counts(sort=False)
-        if len(set(contours_per_object)) == 1:  # each object has the same number of contours
+        if (
+            len(set(contours_per_object)) == 1 and mod_df["object_id"].unique() != 1
+        ):  # each object has the same number of contours
             if (contours_per_object == 1).all():
                 points = {
                     "coord": mod_df[["x", "y", "z"]].values,
@@ -3874,7 +3876,15 @@ class ModMotl(Motl):
             else:
                 raise ValueError(f"Passed mod_df is not currently supported for conversion.")
         elif len(set(points_per_contour)) == 1:  # each contour has the same number of points
-            if (points_per_contour == 2).all():
+            if (points_per_contour == 1).all():
+                points = {
+                    "coord": mod_df[["x", "y", "z"]].values,
+                    "object_id": mod_df["object_id"].values,
+                    "tomo_id": mod_df["mod_id"].astype(int).values,
+                    "geom2": mod_df["contour_id"].values,
+                    "geom5": mod_df["object_radius"].values,
+                }
+            elif (points_per_contour == 2).all():
                 points = mod_df.groupby(["object_id", "contour_id"]).apply(subtract_rows).reset_index(drop=True)
             else:
                 raise ValueError(f"Passed mod_df is not currently supported for conversion")
@@ -3894,7 +3904,8 @@ class ModMotl(Motl):
 
     def write_out(self):
         pass
-        #TODO
+        # TODO
+
 
 def emmotl2relion(
     input_motl,
