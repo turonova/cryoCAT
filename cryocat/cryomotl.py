@@ -2244,7 +2244,6 @@ class RelionMotl(Motl):
             if len(self.optics_data) == 1:
                 self.pixel_size = pixel_size_optics[0]
             else:
-                # TODO: test this
                 self.pixel_size = np.zeros((self.relion_df.shape[0],))
                 for ps, og in zip(pixel_size_optics, optic_groups):
                     self.pixel_size[self.relion_df["rlnOpticsGroup"] == og] = ps
@@ -2349,6 +2348,10 @@ class RelionMotl(Motl):
         elif "data_" in input_list:
             return input_list.index("data_")
         else:
+            for index, item in enumerate(input_list):
+                if "data_" in item and item!="data_optics":
+                    return index
+
             raise UserInputError("The starfile does not contain particle list.")
 
     @staticmethod
@@ -2900,9 +2903,9 @@ class RelionMotl(Motl):
         elif optics_data is not None:
             if isinstance(optics_data, str):
                 if version >= 3.1:
-                    optics_df, _ = starfileio.get_frame_and_comments(optics_data, "data_optics")
+                    optics_df, _ = starfileio.Starfile.get_frame_and_comments(optics_data, "data_optics")
                 else:
-                    optics_df, _ = starfileio.get_frame_and_comments(optics_data, "data_")
+                    optics_df, _ = starfileio.Starfile.get_frame_and_comments(optics_data, "data_")
             elif isinstance(optics_data, dict):
                 optics_df = pd.DataFrame(optics_data)
             else:
@@ -3159,7 +3162,7 @@ class RelionMotl(Motl):
             "rlnImageSize": subtomo_size,
         }
 
-        return pd.DataFrame(optics_default)
+        return pd.DataFrame(optics_default, index=[0])
 
     def create_final_output(self, relion_df, optics_df=None):
         """Creates the final output frames and specifiers based on the given input dataframes.
@@ -3866,11 +3869,15 @@ class ModMotl(Motl):
                     "geom2": mod_df["contour_id"].values,
                     "geom5": mod_df["object_radius"].values,
                 }
-            if (contours_per_object == 2).all():
+            elif (contours_per_object == 2).all():
                 points = mod_df.groupby("object_id").apply(subtract_rows).reset_index(drop=True)
+            else:
+                raise ValueError(f"Passed mod_df is not currently supported for conversion.")
         elif len(set(points_per_contour)) == 1:  # each contour has the same number of points
             if (points_per_contour == 2).all():
                 points = mod_df.groupby(["object_id", "contour_id"]).apply(subtract_rows).reset_index(drop=True)
+            else:
+                raise ValueError(f"Passed mod_df is not currently supported for conversion")
         else:
             points = {
                 "coord": mod_df[["x", "y", "z"]].values,
@@ -3885,6 +3892,9 @@ class ModMotl(Motl):
         self.df = self.df.fillna(0)
         self.update_coordinates()
 
+    def write_out(self):
+        pass
+        #TODO
 
 def emmotl2relion(
     input_motl,
