@@ -525,6 +525,86 @@ def cylindrical_mask(
 
     return mask
 
+def cylindrical_mask_from_points(
+        marker1,
+        marker2,
+        mask_size,
+        pixel_size=1,
+        chimera_origin_idx=[0,0,0],
+        radius=None,
+        height=None,
+        gaussian=0,
+        gaussian_outwards=True,
+        output_name=None,
+):
+    """Creates a cylindrical mask with given parameters, with center in the middle of the two given points and the rotation
+    based on the vector from these points.
+
+    Parameters
+    ----------
+    mask_size : array-like
+        Specifies the dimensions of the box for the mask. Type is `int`.
+    pixel_size: float, optional
+        Pixel size used in ChimeraX for the map on which the markers of interest were defined.
+    chimera_origin_idx: array-like, optional
+        The placement of data array in ChimeraX coordinate space; change is needed when 'center' option was used for the masked map.
+    radius : int, optional
+        Defines the radius of the cylinder base in voxels. If not specified half of the smallest
+        dimensions in (x,y) is used as the radius. Defaults to None.
+    height : int, optional
+        Defines the height of the cylinder in voxels. If not specified the dimension z
+        is used as the height. Defaults to None.
+    center : array-like, optional
+        Specify the center of the mask within the box. If not specified, the mask is placed in the center of the box
+        (e.g. for box size of 64 the center will be at (32, 32, 32) when numbered from 0). Type is `int`. Defaults to None.
+    gaussian : float, default=0.0
+        Defines the sigma of the Gaussian blur. If set to 0 no blur is applied. Defaults to 0.
+    gaussian_outwards : bool, default=True
+        Determines if the blur will be done outwards from the mask surface (True) or if it will be centered around the
+        mask surface (False). The latter is consistent with Dynamo convention. Defaults to True.
+    angles : numpy.ndarray, optional
+        1D array defining the rotation of the mask specified as three Euler angles in degrees in
+        zxz convention. If all angles are zero, no rotation is applied. Defaults to None.
+    output_name : str, optional
+        Path to write out the created mask. If not specified, the mask is not written out.
+        Defaults to None.
+
+
+    Returns
+    -------
+    numpy.ndarray
+        3D array containing the cylindrical mask.
+
+    Notes
+    -----
+    Beta version.
+    """
+    marker1 = np.asarray(marker1)
+    marker2 = np.asarray(marker2)
+
+    # Get normalised vector from points
+    direction_vector = np.subtract(marker2, marker1)
+    direction_vector = direction_vector / np.linalg.norm([direction_vector], axis=1)[:, np.newaxis]
+
+    # Find rotation with relation to z-pointing vector
+    rot = srot.align_vectors(direction_vector,np.asarray([[0,0,1]]))
+    angles = rot[0].as_euler('zxz',degrees=True)
+
+    # Find center within the global frame of rereference
+    center = np.average([marker1,marker2], axis=0)
+    center = center/pixel_size
+    center = center + chimera_origin_idx
+
+    # Create, rotate, and shift mask
+    mask = cylindrical_mask(mask_size, radius=radius, height=height, gaussian=gaussian, gaussian_outwards=gaussian_outwards)
+    rot_mask = cryomap.rotate(mask, rotation_angles=angles)
+
+    rot_shifted = cryomap.recenter(rot_mask, new_center=center)
+    rot_shifted = cryomap.recenter(rot_mask, center)
+    
+    write_out(rot_shifted, output_name=output_name)
+
+    return rot_shifted
 
 def get_correct_format(input_value, reference_size=None):
     """Formats correctly the size of the mask, radius or coordinates of the mask centers.

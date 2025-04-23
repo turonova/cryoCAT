@@ -180,12 +180,12 @@ def plot_polar_nn_distances(
     gs = gridspec.GridSpec(1, 3, width_ratios=[12, 12, 1])
     ax1 = plt.subplot(gs[0], projection="polar")
     ax1.set_yticklabels([])
-    ax1.scatter(theta_r_pos[:, 0], theta_r_pos[:, 1], c=dist_pos, s=marker_size,cmap=colormap)
+    ax1.scatter(theta_r_pos[:, 0], theta_r_pos[:, 1], c=dist_pos, s=marker_size, cmap=colormap)
     ax1.set_xlabel("Northern hemisphere")
 
     ax2 = plt.subplot(gs[1], projection="polar")
     ax2.set_yticklabels([])
-    ax2.scatter(theta_r_neg[:, 0], theta_r_neg[:, 1], c=dist_neg, s=marker_size,cmap=colormap)
+    ax2.scatter(theta_r_neg[:, 0], theta_r_neg[:, 1], c=dist_neg, s=marker_size, cmap=colormap)
     ax2.set_xlabel("Southern hemisphere")
 
     ax3 = plt.subplot(gs[2])
@@ -241,6 +241,7 @@ def plot_orientational_distribution(
     max_radius=None,
     colormap="viridis_r",
     output_file=None,
+    show=True,
 ):
     theta_r_pos, _, theta_r_neg, _ = create_projection(coordinates, projection_type=projection)
 
@@ -289,10 +290,13 @@ def plot_orientational_distribution(
     if graph_title is not None:
         fig.suptitle(graph_title)
 
-    plt.show()
+    if show:
+        plt.show()
 
     if output_file is not None:
         fig.savefig(output_file, dpi=fig.dpi)
+
+    return fig
 
 
 def plot_class_occupancy(

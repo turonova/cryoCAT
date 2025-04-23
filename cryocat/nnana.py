@@ -5,9 +5,10 @@ from cryocat import cryomap
 from scipy.spatial.transform import Rotation as srot
 from cryocat import geom
 import seaborn as sns
-from scipy.spatial import KDTree
 import sklearn.neighbors as sn
 import matplotlib.pyplot as plt
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
 
 
 def get_nn_within_distance(feature_motl, radius, unique_only=True):
@@ -803,3 +804,104 @@ def plot_nn_coord(coord, displ_threshold=None, marker_size=20):
         axs[0].set(xlim=limits, ylim=limits)
         axs[1].set(xlim=limits, ylim=limits)
         axs[2].set(xlim=limits, ylim=limits)
+
+
+def plot_nn_rot_coord_df_plotly(df, displ_threshold=None, title=None, marker_size=5, output_name=None):
+    """
+    Create 2D scatter plots of rotated NN coordinates using Plotly (XY, XZ, YZ).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with columns 'coord_rx', 'coord_ry', 'coord_rz', and 'type'.
+    displ_threshold : float, optional
+        Axis limit for all plots (symmetric), default: None.
+    title : str, optional
+        Overall figure title.
+    marker_size : int
+        Size of scatter markers.
+    output_name : str, optional
+        If given, saves the figure as HTML or image.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        A Plotly figure with 3 subplots.
+    """
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=["XY Distribution", "XZ Distribution", "YZ Distribution"],
+        shared_yaxes=False,
+        horizontal_spacing=0.08,
+    )
+
+    # Add XY
+    fig.add_trace(
+        go.Scattergl(
+            x=df["coord_rx"],
+            y=df["coord_ry"],
+            mode="markers",
+            marker=dict(size=marker_size),
+            name="XY",
+            text=df["type"],
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
+    )
+
+    # Add XZ
+    fig.add_trace(
+        go.Scattergl(
+            x=df["coord_rx"],
+            y=df["coord_rz"],
+            mode="markers",
+            marker=dict(size=marker_size),
+            name="XZ",
+            text=df["type"],
+            showlegend=False,
+        ),
+        row=1,
+        col=2,
+    )
+
+    # Add YZ
+    fig.add_trace(
+        go.Scattergl(
+            x=df["coord_ry"],
+            y=df["coord_rz"],
+            mode="markers",
+            marker=dict(size=marker_size),
+            name="YZ",
+            text=df["type"],
+            showlegend=False,
+        ),
+        row=1,
+        col=3,
+    )
+
+    if displ_threshold is not None:
+        limits = [-displ_threshold, displ_threshold]
+        fig.update_xaxes(range=limits, row=1, col=1)
+        fig.update_yaxes(range=limits, row=1, col=1)
+        fig.update_xaxes(range=limits, row=1, col=2)
+        fig.update_yaxes(range=limits, row=1, col=2)
+        fig.update_xaxes(range=limits, row=1, col=3)
+        fig.update_yaxes(range=limits, row=1, col=3)
+
+    fig.update_layout(
+        title=title or "Rotated Coordinate Distributions",
+        height=400,
+        margin=dict(t=40, b=30, l=30, r=30),
+        plot_bgcolor="white",
+    )
+
+    # Save to file if needed
+    if output_name:
+        if output_name.endswith(".html"):
+            fig.write_html(output_name)
+        else:
+            fig.write_image(output_name)
+
+    return fig

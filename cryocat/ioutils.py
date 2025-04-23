@@ -1147,7 +1147,8 @@ def indices_load(input_data, numbered_from_1=True):
             df = pd.read_csv(input_data)
             if "Removed" in df.columns:
                 df = df[~df["Removed"]]
-            indices = df.index[df["ToBeRemoved"]].to_numpy(dtype=int)
+            # indices = df.index[df["ToBeRemoved"]].to_numpy(dtype=int)
+            indices = df["ToBeRemoved"].to_numpy().nonzero()[0]
             numbered_from_1 = False  # Always from 0
         else:
             indices = np.loadtxt(input_data, dtype=int)
