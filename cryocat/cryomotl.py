@@ -81,6 +81,66 @@ class Motl:
         else:
             return "Motive list is empty."
 
+    def __len__(self):
+        """Returns the number of particles in the Motl.
+
+        Returns
+        -------
+        int
+            The number of particles in the Motl.
+        """
+
+        # TODO: add tests
+        return self.df.shape[0]
+
+    def __getitem__(self, row_number):
+        """Retrieve a specific row from the Motl.
+
+        Parameters
+        ----------
+        row_number : int
+            The index of the row to retrieve from the Motl.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the specified row.
+
+        Notes
+        -----
+        This method uses the `iloc` indexer to access the row by its integer position.
+        """
+
+        # TODO: add tests
+        # Does it make sense - could be also index of the frame or subtomo id
+        return self.df.iloc[[row_number]]
+
+    def __add__(self, other_motl):
+        """Add two Motl objects together by concatenating their dataframes.
+
+        Parameters
+        ----------
+        other_motl : Motl
+            An instance of the Motl class to be added to the current instance.
+
+        Returns
+        -------
+        Motl
+            A new Motl object containing the concatenated dataframes of the two Motl instances.
+
+        Raises
+        ------
+        ValueError
+            If the other_motl is not an instance of the Motl class.
+        """
+
+        # TODO: add tests
+        if isinstance(other_motl, Motl):
+            concat_pd = pd.concat([self.df, other_motl.df])
+            return Motl(concat_pd)
+        else:
+            raise ValueError("Both objects need to be instances of Motl class.")
+
     def adapt_to_trimming(self, trim_coord_start, trim_coord_end):
         """The adapt_to_trimming function takes in the trim_coord_start and trim_coord_end values, which are the
         coordinates used for trimming the tomogram, and changes particle coordinates to correspond to the trimmed
@@ -1007,7 +1067,7 @@ class Motl:
         ----------
         feature_values : array-like or int
             The feature values to filter the Motl object by.
-        feature_id : str default= "tomo_id"
+        feature_id : str, default="tomo_id"
             The name of the feature column to filter by. Defaults to "tomo_id".
         return_df : bool, default=False
             Whether to return the filtered subset as a DataFrame. Defaults to False.
@@ -1647,12 +1707,14 @@ class Motl:
             raise UserInputError(f"Unknown type of boundaries: {boundary_type}")
 
         recentered = self.get_coordinates()
-        recentered_df = pd.DataFrame({
-            "x": recentered[:, 0],
-            "y": recentered[:, 1],
-            "z": recentered[:, 2],
-            "tomo_id": self.df["tomo_id"].values  # Add the tomo_id column from the original df.
-        })
+        recentered_df = pd.DataFrame(
+            {
+                "x": recentered[:, 0],
+                "y": recentered[:, 1],
+                "z": recentered[:, 2],
+                "tomo_id": self.df["tomo_id"].values,  # Add the tomo_id column from the original df.
+            }
+        )
         idx_list = []
         for i, row in recentered_df.iterrows():
             tn = row["tomo_id"]
@@ -3671,7 +3733,7 @@ class DynamoMotl(Motl):
 
     def write_out(self, ouptut_path):
         pass
-        #TODO
+        # TODO
 
 
 class ModMotl(Motl):

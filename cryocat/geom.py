@@ -9,7 +9,11 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import splprep, splev
 from scipy.optimize import fsolve
 
+# Constants
 ANGLE_DEGREES_TOL = 10e-12
+PHI = (1 + np.sqrt(5)) / 2
+ROOT3 = np.sqrt(3)
+ROOT2 = np.sqrt(2)
 
 
 class Line:
@@ -26,18 +30,542 @@ class LineSegment(Line):
         self.length = np.linalg.norm(point2 - point1)
 
 
+class Point3D:
+    def __init__(self, x, y, z):
+        self._coords = np.array([x, y, z], dtype=float)
+
+    @property
+    def x(self):
+        return self._coords[0]
+
+    @x.setter
+    def x(self, value):
+        self._coords[0] = value
+
+    @property
+    def y(self):
+        return self._coords[1]
+
+    @y.setter
+    def y(self, value):
+        self._coords[1] = value
+
+    @property
+    def z(self):
+        return self._coords[2]
+
+    @z.setter
+    def z(self, value):
+        self._coords[2] = value
+
+    def __getitem__(self, index):
+        return self._coords[index]
+
+    def __setitem__(self, index, value):
+        self._coords[index] = value
+
+    def __array__(self, dtype=None):
+        return self._coords.astype(dtype) if dtype else self._coords
+
+    def __iter__(self):
+        return iter(self._coords)
+
+    def __len__(self):
+        return len(self._coords)
+
+    def __repr__(self):
+        return repr(self._coords)  # will print like a NumPy array
+
+    def _binary_op(self, other, op):
+        if isinstance(other, Point3D):
+            other = other._coords
+        return Point3D(*op(self._coords, other))
+
+    def __add__(self, other):
+        return self._binary_op(other, np.add)
+
+    def __sub__(self, other):
+        return self._binary_op(other, np.subtract)
+
+    def __mul__(self, other):
+        return self._binary_op(other, np.multiply)
+
+    def __truediv__(self, other):
+        return self._binary_op(other, np.divide)
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __rsub__(self, other):
+        return Point3D(*np.subtract(other, self._coords))
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
+    def __rtruediv__(self, other):
+        return Point3D(*np.divide(other, self._coords))
+
+    def __neg__(self):
+        return Point3D(*-self._coords)
+
+    def __eq__(self, other):
+        if isinstance(other, Point3D):
+            return np.allclose(self._coords, other._coords)
+        return False
+
+    def cone_indicator(self, cone_height, cone_radius, axis=None):
+        """Boolean function that checks whether a given point lies within a cone.
+
+        Args:
+            input_point (numpy array): Point for which to check whether it lies in a cone
+            cone_height (float): Height of the cone.
+            cone_radius (float): Radius of the cone.
+            axis (numpy array): Axis of revolution for cone. Defaults to -np.array([0,0,1]).
+
+        Returns:
+            Bool: True if input_point lies in cone. False else.
+        """
+        if axis is None:
+            axis = -np.array([0, 0, 1])
+
+        # cone tip is at origin
+
+        axis = axis / np.linalg.norm(axis)
+
+        cone_slope_angle = np.arctan2(cone_radius, cone_height)
+
+        input_axis_angle = angle_between_n_vectors(self, axis)
+
+        # projection of input point onto axis of revolution
+        axis_porjection = np.dot(self, axis) * axis
+
+        # projection of input point onto orthogonal complement of span of axis of revolution
+        perp_projection = self - axis_porjection
+
+        height_bool = np.linalg.norm(axis_porjection) <= cone_height
+
+        radial_bool = np.linalg.norm(perp_projection) <= cone_radius
+
+        angular_bool = np.abs(input_axis_angle) <= cone_slope_angle
+
+        return height_bool and radial_bool and angular_bool
+
+    def torus_indicator(self, inner_rad, outer_rad, axis=None):
+        """Boolean function that checks whether a given point lies within a solid torus.
+
+        Args:
+            input_point (_type_): Point for which to check whether it lies in a solid torus.
+            inner_rad (_type_): Inner radius of solid torus
+            outer_rad (_type_): Outer radius of solid torus
+            axis (_type_, optional): Axis of revolution. Tours lies in orthogonal complement of the axis. Defaults to np.array([0,0,1]).
+
+        Returns:
+            Bool: True if input_point lies in solid torus. False else.
+        """
+        if axis is None:
+            axis = np.array([0, 0, 1])
+
+        # torus revolves around axis in plane through origin
+
+        axis = axis / np.linalg.norm(axis)
+
+        # a solid torus can be described as cartesian product
+        # S^1 \times D^2
+        # S^1 can be thought of as the central latitude
+
+        rad_center = (outer_rad + inner_rad) / 2
+
+        # radius of D^2 (outer_rad > inner_rad, but let's distrust user anyway):
+        disc_rad = np.abs(outer_rad - inner_rad) / 2
+
+        # projection onto orthogonal complement of span of axis
+        axis_porjection = np.dot(self, axis) * axis
+        perp_projection = self - axis_porjection
+
+        # length of vector connecting input point to projection
+        proj_len = np.linalg.norm(axis_porjection)
+
+        # distance between projected point and central S^1:
+        circle_in_plane_dist = np.abs(np.linalg.norm(perp_projection) - rad_center)
+
+        # distance between input point and central central S^1:
+        circle_dist = np.sqrt(proj_len**2 + circle_in_plane_dist**2)
+
+        # the above distance is an indicator for whether the input point lies within solid torus
+        return circle_dist <= disc_rad
+
+    def torus_section_indicator(
+        self,
+        inner_rad,
+        outer_rad,
+        cone_radius,
+        torus_revolution=None,
+        cone_revolution=None,
+    ):
+        """Boolean function that checks whether a given point lies in the intersection of a solid torus and a cone.
+
+        Args:
+            input_point (_type_): Point for which to check whether it lies in the intersection.
+            inner_rad (_type_): Inner radius of torus
+            outer_rad (_type_): Outer radius of torus
+            cone_radius (_type_): Radius of cone
+            torus_revolution (_type_, optional): Axis of revolution of torus. Defaults to np.array([0,0,1]).
+            cone_revolution (_type_, optional): Axis of revolution of cone. Defaults to np.array([1,0,0]).
+
+        Returns:
+            Bool: _description_
+        """
+        if torus_revolution is None:
+            torus_revolution = np.array([0, 0, 1])
+
+        if cone_revolution is None:
+            cone_revolution = np.array([1, 0, 0])
+
+        # check that axes are not (anti-)parallel
+        if not np.allclose(np.zeros(3), np.cross(torus_revolution, cone_revolution)):
+            torus_ind = self.torus_indicator(inner_rad, outer_rad, torus_revolution)
+            cone_ind = self.cone_indicator(outer_rad, cone_radius, cone_revolution)
+
+            return torus_ind and cone_ind
+
+        else:
+            return False
+
+
+class Matrix:
+
+    def __init__(self, input_data=None, size=3):
+
+        if input_data is not None:
+            # TODO write properly, i.e. reading from a file, changing dimensions etc.
+            self.m = input_data
+        else:
+            if isinstance(size, int):
+                self.m = np.identity(size)
+            else:
+                raise ValueError(
+                    f"The size of the matrix has to be specified as int, instead {type(size)} was provided."
+                )
+
+        self.nrow = self.m.shape[0]
+        self.ncol = self.m.shape[1]
+
+    def is_SE3(self):
+        """Boolean function to check whether an input matrix is a rototranslation.
+
+        Args:
+            input_matrix (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        rotation = self.m[:3, :3]
+        if Matrix(rotation).is_SO3():
+            return np.allclose(self.m[3, :3], np.zeros(3)) and np.allclose(self.m[3, 3], 1)
+        else:
+            return False
+
+    def is_SO3(self):
+        """
+        Boolean function to check whether an input matrix is a rotation matrix.
+        """
+        det = np.linalg.det(self.m)
+        potential_id = self.m @ self.m.T
+
+        return np.allclose(det, 1, atol=0.01) and np.allclose(potential_id, np.identity(3), atol=0.01)
+
+    def dual_basis_so3(self):
+        """Given a skew-symmetric 3x3 matric, return the coefficients
+        of said matrix in linear combination w.r.t. canonical basis of
+        so3
+
+        Args:
+            so_3 (nd-array): so(3)-matrix
+        """
+        coefficients = np.asarray([self.m[2, 1], self.m[0, 2], self.m[1, 0]])
+        return coefficients
+
+    def dual_basis_se3(self, index=None):
+        """Given an se(3)-matrix, return the ith coefficient of
+        said matrix in linear combination w.r.t. canonical basis of
+        se(3)
+
+        Args:
+            i (int): 1,2,3,4,5 or 6
+            se_3 (_type_): se(3)-matrix
+
+        Returns:
+            float: Coefficient from linear combination
+        """
+        # input index is i = 1,2,3,4,5,6
+        # input matrix needs to live in se(3)
+        coefficients = [self.m[2, 1], self.m[0, 2], self.m[1, 0], self.m[0, 3], self.m[1, 3], self.m[2, 3]]
+        if index is None:
+            return coefficients
+        else:
+            return coefficients[index - 1]
+
+    def twist_from_skew_translation(self, translation):
+        """Combine so(3) matrix with R^3 translation to se(3) matrix.
+
+        Args:
+            skew_symm (np.array): so(3) matrix
+            translation (np.array): translation vector
+
+        Returns:
+            np.array: se(3) vector
+        """
+        skew_portion = self.dual_basis_so3()
+
+        twist = np.hstack((skew_portion, translation))
+
+        return twist
+
+    def add_noise_and_project_to_so3(self, noise_level=0.05, degrees=False):
+        """Add noise to a matrix and project it back to SO(3) using SVD.
+        (Singular value decomp.)
+        """
+        # Make sure that noise level is small enough
+        noise_threshold = np.pi  # injectvity radius of SO(3)
+
+        if degrees:
+
+            noise_level = noise_level * 180 / np.pi  # express in radians
+
+        if noise_level < noise_threshold:
+            # Noise matrix
+            noise = np.random.randn(3, 3)
+            noise = noise / np.linalg.norm(noise, "fro")
+            # Add noise
+            noisy_matrix = self.m + noise_level * noise
+            # Project to the nearest orthogonal matrix with determinant +1
+            U, _, Vt = np.linalg.svd(noisy_matrix)
+            so3_matrix = U @ Vt
+            # Ensure determinant is +1, correct if needed
+            if np.linalg.det(so3_matrix) < 0:
+                so3_matrix[:, -1] *= -1  # Flip the last column
+            return so3_matrix
+        else:
+            raise ValueError(f"Noise level should be below {noise_threshold} for orientational noise.")
+
+    def matrix_power(self, k):
+
+        if isinstance(self.m, np.ndarray) and isinstance(k, int):
+            if k >= 0 and self.m.shape[0] == self.m.shape[1]:
+                if k == 0:
+                    return np.identity(self.m.shape[0])
+                elif k > 0:
+                    result = np.identity(self.m.shape[0])
+
+                    while k > 0:
+                        result = result @ self.m
+                        k = k - 1
+                    return result
+            else:
+                raise ValueError("k needs to be non-negative.\nmat has to be square matrix.")
+        else:
+            raise TypeError("mat has to be np.ndarray.")
+
+    def SE3_cleanup(self):
+        """Given an input matrix that is a rototranslation, perform some cleanup of
+        rounding errors etc.
+
+        Args:
+            input_matrix (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        rotation_m = Matrix(self.m[:3, :3])
+        if rotation_m.is_SE3():
+
+            result = rotation_m.special_euclidean_from_rot_translation(self.m[:3, 3])
+
+            threshold = 1e-15
+
+            result = np.where(np.abs(result) < threshold, 0, result)
+
+            return result
+
+        else:
+            print("Input matrix is not rototranslation")
+
+    def special_euclidean_from_rot_translation(self, translation):
+        """Combine SO(3) matrix with R^3 translation to SE(3) matrix.
+
+        Args:
+            rotation (np.array): SO(3) matrix
+            translation (np.array): translation vector
+
+        Returns:
+            np.array: SE(3) matrix
+        """
+        bottom_portion = np.zeros(4)
+        bottom_portion[-1] = 1
+
+        top_portion = np.hstack((self.m, translation.reshape(-1, 1)))
+
+        return np.vstack((top_portion, bottom_portion))
+
+    def cone_in_plane_decomp(self):
+        """
+        Decomposes input rotation matrix into matrices
+        cone, in_plane, where cone describes cone-rotation
+        and in_plane describes in-plane-rotation.
+
+        It holds: rot_matrix == in_plane @ cone
+        """
+
+        eulers = srot.from_matrix(self.m).as_euler("zxz")
+
+        factor_0 = srot.from_rotvec(eulers[-1] * np.array([0, 0, 1])).as_matrix()
+        factor_1 = srot.from_rotvec(eulers[1] * factor_0 @ np.array([1, 0, 0])).as_matrix()
+        factor_2 = srot.from_rotvec(eulers[0] * factor_1 @ np.array([0, 0, 1])).as_matrix()
+
+        cone = factor_1 @ factor_0  # factor_1 @ factor_0
+        in_plane = factor_2
+
+        return cone, in_plane
+
+    def in_plane_angle(self):
+
+        eulers = srot.from_matrix(self.m).as_euler("zxz")
+
+        return eulers[0]
+
+
+def tetrahedron():
+
+    vertices = 1 / ROOT3 * np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]])
+
+    return vertices
+
+
+def octahedron():
+
+    vertices = np.vstack((np.identity(3), -np.identity(3)))
+
+    return vertices
+
+
+def cube():
+
+    vertices = (
+        1
+        / ROOT3
+        * np.array([[1, 1, 1], [-1, -1, -1], [-1, 1, 1], [1, -1, 1], [1, 1, -1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]])
+    )
+
+    return vertices
+
+
+def icosahedron():
+
+    vertices = np.array(
+        [
+            [0, 1, PHI],
+            [0, 1, -PHI],
+            [0, -1, PHI],
+            [0, -1, -PHI],
+            [1, PHI, 0],
+            [1, -PHI, 0],
+            [-1, PHI, 0],
+            [-1, -PHI, 0],
+            [PHI, 0, 1],
+            [-PHI, 0, 1],
+            [PHI, 0, -1],
+            [-PHI, 0, -1],
+        ]
+    )
+
+    return vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
+
+
+def dodecahedron():
+
+    vertices = np.array(
+        [
+            [0, 1 / PHI, PHI],
+            [0, -1 / PHI, PHI],
+            [0, 1 / PHI, -PHI],
+            [0, -1 / PHI, -PHI],
+            [1 / PHI, PHI, 0],
+            [-1 / PHI, PHI, 0],
+            [1 / PHI, -PHI, 0],
+            [-1 / PHI, -PHI, 0],
+            [PHI, 0, 1 / PHI],
+            [-PHI, 0, 1 / PHI],
+            [PHI, 0, -1 / PHI],
+            [-PHI, 0, -1 / PHI],
+        ]
+    )
+
+    vertices = vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
+
+    vertices = np.vstack((vertices, cube()))
+
+    return vertices
+
+
+def n_gon_points(n):
+
+    coordinates = [np.array([np.cos(2 * np.pi * k / n), np.sin(2 * np.pi * k / n)]) for k in range(n)]
+
+    return np.vstack(coordinates)
+
+
+def great_circle_distance(p1, p2):
+
+    dot_product = np.clip(np.dot(p1, p2), -1.0, 1.0)
+    return np.arccos(dot_product)
+
+
+def min_great_circle_distance(set1, set2):
+    """
+    Computes the minimum great-circle distance between two sets of points on S^n.
+    """
+    min_distance = np.inf
+    for p1 in set1:
+        for p2 in set2:
+            dist = great_circle_distance(p1, p2)
+            min_distance = min(min_distance, dist)
+
+    return min_distance
+
+
+def great_circle_distance_matrix(points1, points2):
+    """
+    Compute the pairwise great-circle distances between two sets of points on an n-sphere.
+    """
+    dot_products = np.clip(np.dot(points1, points2.T), -1.0, 1.0)
+    return np.arccos(dot_products)
+
+
+def hausdorff_distance_sphere(set1, set2):
+    """
+    Compute the simplified Hausdorff distance between two discrete sets of points on an n-sphere.
+    """
+    dist_matrix = great_circle_distance_matrix(set1, set2)
+
+    # Compute directed Hausdorff distances
+    dist_hd_ab = np.max(np.min(dist_matrix, axis=1))
+    dist_hd_ba = np.max(np.min(dist_matrix, axis=0))
+
+    return max(dist_hd_ab, dist_hd_ba)
+
+
 def project_points_on_plane_with_preserved_distance(starting_point, normal, nn_points):
-    """Project approximately coplanar points around a starting_point onto the 
+    """Project approximately coplanar points around a starting_point onto the
     plane perpendicular to normal vector. The distances between projected nearest neighbors and
     starting point are preserved.
 
     Parameters
     ----------
-    starting_point : ndarray 
+    starting_point : ndarray
         origin of plane specified by normal vector
     normal : ndarray
-        normal vector to plane 
-    nn_points : ndarray 
+        normal vector to plane
+    nn_points : ndarray
         nearest neighbors of starting_point
 
     Returns
@@ -83,7 +611,7 @@ def align_points_to_xy_plane(points_on_plane, plane_normal=None):
 
     Raises
     ------
-    ValueError 
+    ValueError
         One needs at least 3 points to specify a plane if plane normal is not given.
 
     Returns
@@ -134,7 +662,7 @@ def spline_sampling(coords, sampling_distance):
 
     Returns
     -------
-    ndarray 
+    ndarray
         coordinates of points on the spline
     """
 
@@ -303,14 +831,14 @@ def normals_to_euler_angles(input_normals, output_order="zxz"):
 
 
 def quaternion_mult(qs1, qs2):
-    """Given arrays of quaternions in scalar-last convention, compute 
+    """Given arrays of quaternions in scalar-last convention, compute
     array of products of unit quaternions.
 
     Parameters
     ----------
     qs1 : ndarray (n,4)
         n quaternions in scalar-last convention.
-    qs2 : ndarray (n,4) 
+    qs2 : ndarray (n,4)
         n quaternions in scalar-last convention.
 
     Returns
@@ -318,7 +846,7 @@ def quaternion_mult(qs1, qs2):
     ndarray (n,4)
         n quaternions in scalar-last convention.
         Row i is product of qs1[i] and qs2[i].
-    
+
     """
     mutliplied = []
     for q, q1 in enumerate(qs1):
@@ -529,7 +1057,7 @@ def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True
 
 
 def angular_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
-    """Compute angular distance between two rotations. 
+    """Compute angular distance between two rotations.
     Formula is based on this post
     https://math.stackexchange.com/questions/90081/quaternion-distance
 
@@ -774,7 +1302,7 @@ def visualize_rotations(
     alpha=1.0,
     radius=1.0,
 ):
-    """Compute z-normals of input rotations. 
+    """Compute z-normals of input rotations.
     If desried, generate plot depicting z-normals of input rotations.
 
     Parameters
@@ -844,7 +1372,7 @@ def angle_between_vectors(vectors1, vectors2):
     -------
     ndarray (n,)
         Array containing the angles (in degrees) between corresponding vectors.
-     
+
     Examples
     --------
     >>> vectors1 = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
@@ -864,12 +1392,12 @@ def angle_between_vectors(vectors1, vectors2):
 
 
 def visualize_angles(angles, plot_rotations=True, color_map=None):
-    """Compute z-normals of input orientations as described using Euler angles in zxz-convention. 
+    """Compute z-normals of input orientations as described using Euler angles in zxz-convention.
     If desried, generate plot depicting z-normals of input orientations.
-    
+
     Parameters
-    ---------- 
-    angles : ndarray (n, 3) 
+    ----------
+    angles : ndarray (n, 3)
         Array of triplets of Euler angles in zxz-convention.
     plot_rotations : bool, optional
         If True, plot is generated. Defaults to True.
@@ -1142,7 +1670,7 @@ def area_triangle(coords):
 
 
 def ray_ellipsoid_intersection_3d(point, normal, ellipsoid_params):
-    """Compute the intersection between a ray starting at point in direction of normal and 
+    """Compute the intersection between a ray starting at point in direction of normal and
     an ellipsoid specified by ellipsoid_params.
 
     Parameters
@@ -1811,7 +2339,7 @@ def normalize_vectors(v):
 
 
 # TODO: This function should not be necessary due to "angle_between_vectors"
-def angle_between_n_vectors(v1, v2):
+def angle_between_n_vectors(v1, v2, degrees=True):
     """Compute the angle (in degrees) between corresponding pairs of vectors in two arrays.
 
     Parameters
@@ -1843,8 +2371,12 @@ def angle_between_n_vectors(v1, v2):
     dot_product = np.einsum("ij,ij->i", v1_u, v2_u) if v1.ndim > 1 else np.dot(v1_u, v2_u)
 
     # Clip values to avoid numerical errors outside the valid range for arccos
-    angle = np.degrees(np.arccos(np.clip(dot_product, -1.0, 1.0)))
-    return angle
+    angle = np.arccos(np.clip(dot_product, -1.0, 1.0))
+
+    if degrees:
+        return np.rad2deg(angle)
+    else:
+        return angle
 
 
 def vector_angular_distance(v1, v2):
@@ -1955,6 +2487,7 @@ def oversample_spline(coords, target_spacing):
     oversampled_points = np.array(splev(u_fine, tck)).T
 
     return oversampled_points
+
 
 def distance_array(vol):
     shell_grid = np.arange(math.floor(-len(vol[0]) / 2), math.ceil(len(vol[0]) / 2), 1)
