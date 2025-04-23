@@ -532,7 +532,7 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
                     position=coord[i],
                     tomo_id=tm.df["tomo_id"].values[i],
                     motl_fid=features[i],
-                    particle_id=tm.iloc[i]["subtomo_id"],
+                    particle_id=tm.df.iloc[i]["subtomo_id"],
                     degrees=True,
                 )
             )
@@ -543,7 +543,7 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
                     position=coord[i],
                     tomo_id=tm.df["tomo_id"].values[i],
                     motl_fid=features[i],
-                    particle_id=tm.iloc[i]["subtomo_id"],
+                    particle_id=tm.df.iloc[i]["subtomo_id"],
                     degrees=True,
                     symm=symm,
                     custom_rot=custom_rot,
