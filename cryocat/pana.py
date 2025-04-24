@@ -26,6 +26,34 @@ warnings.filterwarnings("ignore")
 
 
 def rotate_image(image, alpha, fill_mode="constant", fill_value=0.0):
+    """
+    Rotate an ndarray image by a specified angle.
+
+    Uses `skimage.transform.rotate` to rotate the input image without resizing
+    the output. Pixels outside the boundaries of the input are filled
+    according to the specified mode and fill value.
+    
+    Some descriptions are taken from skicit-image page (https://scikit-image.org).
+
+    Parameters
+    ----------
+    image : ndarray
+        nD NumPy array representing the image to rotate.
+    alpha : float
+        Angle of rotation in degrees. Positive values rotate counterclockwise.
+    fill_mode : {'constant', 'edge', 'symmetric', 'reflect', 'wrap'}, optional
+        Points outside the boundaries of the input are filled according to the
+        given mode. Default is 'constant'.
+    fill_value : float, optional
+        Value used to fill points outside the boundaries when `fill_mode`
+        is 'constant'. Default is 0.0.
+
+    Returns
+    -------
+    ndarray
+        Rotated image as a NumPy array with the same shape as the input.
+    """
+
     return skimage_rotate(image, alpha, resize=False, mode=fill_mode, cval=fill_value)
 
 
@@ -249,17 +277,75 @@ def generate_wedge_masks(
 
 
 def create_structure_path(folder_path, structure_name):
+    """
+    Put together a path for the structure folder by combining a base folder path
+    and the name of the structure.
+
+    Parameters
+    ----------
+    folder_path : str
+        The base directory path where the structure folder should be created.
+        It should include a trailing slash if needed, otherwise the function
+        will not insert a separator between `folder_path` and `structure_name`.
+    structure_name : str
+        The name of the structure of interest.
+
+    Returns
+    -------
+    structure_folder : str
+        Full path to the structure folder.
+    """
+    
     structure_folder = folder_path + structure_name + "/"
     return structure_folder
 
 
 def create_em_path(folder_path, structure_name, em_filename):
+    """
+    Constructs the full path to an `.em` file within a specific structure folder.
+
+    Parameters
+    ----------
+    folder_path : str
+        The base directory path.
+    structure_name : str
+        The name of the structure, used to create a subdirectory under `folder_path`.
+    em_filename : str
+        The name of the `.em` file, without the file extension.
+
+    Returns
+    -------
+    em_path : str
+        The full path to the `.em` file, including the `.em` extension.
+    """
+
     structure_folder_path = create_structure_path(folder_path, structure_name)
     em_path = structure_folder_path + em_filename + ".em"
     return em_path
-
+    
 
 def create_subtomo_name(structure_name, motl_name, tomo_id, boxsize):
+    """
+    Generate a standardized filename for a subtomogram.
+    The generated file name is 'subtomo_<structure_name>_m<motl_name>_t<tomo_id>_s<boxsize>.em'.
+
+    Parameters
+    ----------
+    structure_name : str
+        Name of the structure.
+    motl_name : str
+        Name of the motive list file containing particle information.
+    tomo_id : str
+        Tomogram id/number from which the subtomogram is extracted.
+    boxsize : int
+        Size of the subtomogram box in voxels. 
+
+    Returns
+    -------
+    subtomo_name : str
+        The constructed filename for the subtomogram.
+    """
+
     subtomo_name = "subtomo_" + structure_name + "_m" + motl_name + "_t" + tomo_id + "_s" + str(boxsize) + ".em"
     return subtomo_name
 
@@ -268,11 +354,53 @@ def create_tomo_name(
     folder_path,
     tomo,
 ):
+    """
+    Generate a full file path for a tomogram with an .mrc extension.
+
+    Parameters
+    ----------
+    folder_path : str
+        Path to the directory containing the tomogram.
+    tomo : str
+        Base name of the tomogram file (without extension).
+
+    Returns
+    -------
+    tomo_name : str
+        Full path to the tomogram file with .mrc extension.
+    """
+
     tomo_name = folder_path + tomo + ".mrc"
     return tomo_name
 
 
 def create_wedge_names(wedge_path, tomo_number, boxsize, binning, filter=None):
+    """
+    Generate filenames for tomogram and template wedge masks with filtering info.
+
+    If no filter size is provided, it defaults to half of the box size.
+
+    Parameters
+    ----------
+    wedge_path : str
+        Directory path where the wedge files will be stored.
+    tomo_number : int
+        Number of the tomogram.
+    boxsize : int
+        Size of the subtomogram box in voxels.
+    binning : int
+        Binning level applied to the tomogram.
+    filter : int, optional, default=boxsize // 2
+        Size of the filter applied during processing.
+
+    Returns
+    -------
+    tomo_wedge : str
+        Filename for the filtered tomogram wedge mask.
+    tmpl_wedge : str
+        Filename for the filtered template wedge mask.
+    """
+
     if filter is None:
         filter = boxsize // 2
 
@@ -284,15 +412,69 @@ def create_wedge_names(wedge_path, tomo_number, boxsize, binning, filter=None):
 
 
 def create_output_base_name(tmpl_index):
+    """
+    Generates the base name for peak analysis output folders / files.
+
+    Includes the index of the row from the template list csv to indicate the row analyzed.
+
+    Parameters
+    ----------
+    tmpl_index : int
+        The index of the row analyzed in the templatel list csv.
+
+    Returns
+    -------
+    output_base : str
+        Output file based name. It should be "id_<tmpl_index>".
+    """
+
     output_base = "id_" + str(tmpl_index)
     return output_base
 
 
 def create_output_folder_name(tmpl_index):
+    """
+    Generates the name of the folder (not the full path) where the peak analysis 
+    results will be stored, given the index of the row from the template list csv.
+
+    Parameters
+    ----------
+    tmpl_index : int
+        The index of the row analyzed in the templatel list csv.
+
+    Returns
+    -------
+    str
+        The name of result folder. It should be "id_<tmpl_index>_results".
+        
+    """
+
     return create_output_base_name(tmpl_index) + "_results"
 
 
 def create_output_folder_path(folder_path, structure_name, folder_spec):
+    """
+    Constructs the full path of the output folder.
+
+    Parameters
+    ----------
+    folder_path : str
+        The path to the peak analysis base folder.
+    structure_name : str
+        The name of the structure.
+    folder_spec : int or else
+        Information about the output folder.
+        If int (should be an index from the template list csv), 
+             the output folder name will be "id_<folder_spec>_results";
+        if not int, the output folder name will be "<folder_spec>".
+
+    Returns
+    -------
+    output_path : str
+        The full path to the output folder. Should be either "id_<folder_spec>_results" or "<folder_spec>".
+ 
+    """
+
     if isinstance(folder_spec, int):
         output_path = create_structure_path(folder_path, structure_name) + create_output_folder_name(folder_spec) + "/"
     else:
@@ -302,6 +484,26 @@ def create_output_folder_path(folder_path, structure_name, folder_spec):
 
 
 def get_indices(template_list, conditions, sort_by=None):
+    """
+    Get the indices of a filtered and optionally sorted template list csv file.
+
+    Parameters
+    ----------
+    template_list : str
+        Path to the template list csv file.
+    conditions : dict
+        Dictionary where keys are template list column names and values are the values to
+        filter by. Only rows matching all conditions are retained.
+    sort_by : str, optional
+        Column name to sort the filtered DataFrame by. If None, no sorting
+        is applied.
+
+    Returns
+    -------
+    pandas.Index
+        Index of the filtered (and optionally sorted) rows in the template list DataFrame.
+    """
+
     temp_df = pd.read_csv(template_list, index_col=0)
 
     for key, value in conditions.items():
@@ -315,6 +517,23 @@ def get_indices(template_list, conditions, sort_by=None):
 
 
 def get_sharp_mask_stats(input_mask):
+    """
+    Get the boxsize of the nonzero element inside the sharp mask and the total volume of the nonzero element.
+
+    Parameters
+    ----------
+    input_mask : str or numpy.ndarray
+         Input mask specified either by its path or already loaded as 3D numpy.ndarray.
+         The nonzero element in this mask has sharp edges, i.e.: the values inside the mask are either 1 or 0.    
+
+    Returns
+    -------
+    n_voxels : int
+        The number of voxels of where the input_mask is not zero. 
+    mask_bb : tuple of int
+        The bounding box size in (x, y, z) of the nonzero element. 
+    """
+
     mask_bb = cryomask.get_mass_dimensions(input_mask)
     n_voxels = np.count_nonzero(input_mask)
 
@@ -322,6 +541,24 @@ def get_sharp_mask_stats(input_mask):
 
 
 def get_soft_mask_stats(input_mask):
+    """
+    Get the boxsize of the element (> 0.5) inside the soft mask and the total volume of the nonzero element.
+
+    Parameters
+    ----------
+    input_mask : str or numpy.ndarray
+         Input mask specified either by its path or already loaded as 3D numpy.ndarray.
+         The nonzero element in this mask has soft edges, i.e.: the values inside the mask are between 0 and 1.
+
+    Returns
+    -------
+    n_voxels : int
+        The number of voxels of where the input_mask is bigger than 0.5. 
+    mask_bb : tuple of int
+        The bounding box size in (x, y, z) of the element that has values bigger than 0.5. 
+    """
+
+    # mask the mask where the values are bigger than 0.5
     mask_th = np.where(input_mask > 0.5, 1.0, 0.0)
     mask_bb = cryomask.get_mass_dimensions(mask_th)
     n_voxels = np.count_nonzero(mask_th)
@@ -330,11 +567,37 @@ def get_soft_mask_stats(input_mask):
 
 
 def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
+    """
+    Extract the highest-scoring subtomogram from a tomogram.
+
+    Loads a tomogram and its corresponding particle motive list, identifies the entry
+    with the highest score, and extracts the aligned subtomogram around that
+    position. Optionally writes the result to a file.
+
+    Parameters
+    ----------
+    tomogram : str
+        Path to the tomogram file to extract from.
+    motl_path : str
+        Path to the motive list with extracted particle information (.csv or compatible format).
+    subtomo_shape : tuple of int
+        Shape of the subtomogram to extract, in (x, y, z) order.
+    output_file : str or None
+        Path to save the extracted subtomogram. If None, the file is not saved.
+
+    Returns
+    -------
+    subvolume_sh : numpy.ndarray
+        The extracted and shifted subtomogram.
+    angles : numpy.ndarray
+        The Euler angles (phi, theta, psi) rotation associated with the best subtomogram.
+    """
+
     tomo = cryomap.read(tomogram)
     m = cryomotl.Motl.load(motl_path)
     m.update_coordinates()
 
-    max_idx = m.df["score"].idxmax()
+    max_idx = m.df["score"].idxmax()  # get the dataframe idx where ccc is max
 
     coord = m.df.loc[m.df.index[max_idx], ["x", "y", "z"]].to_numpy() - 1
     shifts = -m.df.loc[m.df.index[max_idx], ["shift_x", "shift_y", "shift_z"]].to_numpy()
@@ -352,18 +615,40 @@ def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
 
 # get subtomograms out
 def create_subtomograms_for_tm(template_list, parent_folder_path):
+    """
+    Generates subtomograms with highest ccc score from tomograms for each entry in template list csv.
+    Updates the template list with orientation and status info, and saves the updated list.
+
+    Parameters
+    ----------
+    template_list : str
+        Path to the template list file containing extracted particle info.
+    parent_folder_path : str
+        Path to the base directory for peak analysis.
+
+    Returns
+    -------
+    temp_df : pandas.DataFrame
+        The updated DataFrame containing subtomogram metadata, including
+        creation status, orientation angles, and filenames.
+    """
+
     temp_df = pd.read_csv(template_list, index_col=0)
     unique_entries = temp_df.groupby(["Structure", "Motl", "Tomogram", "Boxsize"]).groups
     entry_indices = list(unique_entries.values())
 
     for i, entry in enumerate(unique_entries):
         if np.all(temp_df.loc[entry_indices[i], "Tomo created"]):
-            continue
+            continue  # skip if subtomograms have been created
         else:
             motl = create_em_path(parent_folder_path, entry[0], entry[1])
             boxsize = entry[3]
+
+            # find out which entries from template list have not had subtomos created
             not_created = temp_df.loc[temp_df["Tomo created"] == False, "Tomo created"].index
             create_idx = np.intersect1d(not_created, entry_indices[i])
+
+            # cut the subtomos with best ccc scores and save them
             subtomo_name = create_subtomo_name(entry[0], entry[1], entry[2], boxsize)
             _, subtomo_rotation = cut_the_best_subtomo(
                 create_tomo_name(parent_folder_path, entry[2]),
@@ -371,6 +656,8 @@ def create_subtomograms_for_tm(template_list, parent_folder_path):
                 (boxsize, boxsize, boxsize),
                 create_structure_path(parent_folder_path, entry[0]) + subtomo_name,
             )
+
+            # updates the template list df after creating best subtomos
             temp_df.loc[create_idx, ["Phi", "Theta", "Psi"]] = np.tile(subtomo_rotation, (create_idx.shape[0], 1))
             temp_df.loc[create_idx, "Tomo created"] = True
             temp_df.loc[create_idx, "Tomo map"] = subtomo_name[0:-3]
