@@ -1944,7 +1944,7 @@ class Motl:
             elif symmetry.lower().startswith("d"):
                 s_type = 2  # d symmetry
             else:
-                ValueError("Unknown symmetry - currently only c and are supported!")
+                ValueError("Unknown symmetry - currently only c and d are supported!")
         elif isinstance(symmetry, (int, float)):
             s_type = 1  # c symmetry
             nfold = symmetry

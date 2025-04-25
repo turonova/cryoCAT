@@ -1056,6 +1056,62 @@ def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True
     return cone_angle, inplane_angle
 
 
+def angular_score_for_c_symmetry(inplane_1, inplane_2, c_symmetry, max_val=None):
+    """
+    Computes an angular similarity score for arrays of in-plane angles, based on rotational symmetry.
+
+    Parameters:
+    -----------
+    inplane_1 : array-like
+        First set of in-plane angles (in radians).
+    inplane_2 : array-like
+        Second set of in-plane angles (in radians).
+    c_symmetry : int
+        Symmetry category, must be greater than 5.
+    max_val : float, optional
+        Maximum possible angular distance for normalization.
+
+    Returns:
+    --------
+    np.ndarray: Array of angular similarity scores in [0, 1].
+    """
+    if not isinstance(c_symmetry, int) or c_symmetry <= 1:
+        raise TypeError("symmetry_category must be an integer greater than 1.")
+
+    symm = c_symmetry
+
+    if max_val is None:
+        max_val = np.pi / symm
+
+    vertices = n_gon_points(symm)
+    inplane_1 = np.atleast_1d(inplane_1)
+    inplane_2 = np.atleast_1d(inplane_2)
+
+    if inplane_1.shape != inplane_2.shape:
+        raise ValueError("inplane_1 and inplane_2 must have the same shape.")
+
+    scores = []
+
+    for angle1, angle2 in zip(inplane_1, inplane_2):
+        rot_1 = np.array([[np.cos(angle1), -np.sin(angle1)], [np.sin(angle1), np.cos(angle1)]])
+        rot_2 = np.array([[np.cos(angle2), -np.sin(angle2)], [np.sin(angle2), np.cos(angle2)]])
+        vert_1 = vertices @ rot_1.T
+        vert_2 = vertices @ rot_2.T
+
+        sim_measure = hausdorff_distance_sphere(vert_1, vert_2)
+        out = 1 - sim_measure / max_val
+
+        # Refine the bounds
+        if out > 1 - 1e-5:
+            out = 1.0
+        elif out < 1e-5:
+            out = 0.0
+
+        scores.append(out)
+
+    return np.array(scores)
+
+
 def angular_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
     """Compute angular distance between two rotations.
     Formula is based on this post
