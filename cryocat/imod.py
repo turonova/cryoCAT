@@ -355,7 +355,12 @@ def write_model_binary(df, filename):
             object_df = df[df["object_id"] == obj_id]
 
             # Create and write the ObjectHeader
-            obj_header = ObjectHeader(contsize=object_df["contour_id"].nunique())
+            if "object_radius" in object_df.columns and not object_df["object_radius"].isnull().all():
+                object_radius = object_df["object_radius"].iloc[0]
+            else:
+                object_radius = ObjectHeader.pdrawsize
+
+            obj_header = ObjectHeader(contsize=object_df["contour_id"].nunique(), pdrawsize=int(object_radius))
             file.write(obj_header.to_bytes())
 
             # Loop over contours of the current object

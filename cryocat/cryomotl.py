@@ -90,7 +90,6 @@ class Motl:
             The number of particles in the Motl.
         """
 
-        # TODO: add tests
         return self.df.shape[0]
 
     def __getitem__(self, row_number):
@@ -134,7 +133,6 @@ class Motl:
             If the other_motl is not an instance of the Motl class.
         """
 
-        # TODO: add tests
         if isinstance(other_motl, Motl):
             concat_pd = pd.concat([self.df, other_motl.df])
             return Motl(concat_pd)
@@ -3655,7 +3653,7 @@ class DynamoMotl(Motl):
                 self.df = input_motl.df.copy()
                 self.dynamo_df = input_motl.dynamo_df.copy()
             elif isinstance(input_motl, pd.DataFrame):
-                self.convert_to_motl(input_motl)
+                self.check_df_type(input_motl)
             elif isinstance(input_motl, str):
                 sg_df = self.read_in(input_motl)
                 self.convert_to_motl(sg_df)
@@ -3734,12 +3732,83 @@ class DynamoMotl(Motl):
 
         self.df["class"] = dynamo_df.loc[:, 21]
 
-    def write_out(self, ouptut_path):
-        pass
-        # TODO
+    @staticmethod
+    def convert_to_dynamo_motl(motl_df):
+        """Converts a standard MOTL DataFrame to a Dynamo-style MOTL DataFrame.
+
+        This method modifies the `dynamo_df` attribute of the object.
+
+        Returns
+        -------
+        dynamo_df: pd DataFrame
+        """
+        # Initialize a new DataFrame with 26 columns (Dynamo format)
+        dynamo_df = pd.DataFrame(index=motl_df.index, columns=range(26))  # 26 columns for Dynamo format
+
+        # Map values from df to dynamo_df
+        dynamo_df[0] = motl_df["subtomo_id"]  # subtomo_id
+        dynamo_df[1] = 0
+        dynamo_df[2] = 0
+        dynamo_df[3] = motl_df["shift_x"]  # shift_x
+        dynamo_df[4] = motl_df["shift_y"]  # shift_y
+        dynamo_df[5] = motl_df["shift_z"]  # shift_z
+        dynamo_df[6] = -motl_df["psi"]  # psi (negative)
+        dynamo_df[7] = -motl_df["theta"]  # theta (negative)
+        dynamo_df[8] = -motl_df["phi"]  # phi (negative)
+        dynamo_df[9] = motl_df["score"]  # score
+        dynamo_df[10] = 0
+        dynamo_df[11] = 0
+        dynamo_df[12] = 0
+        dynamo_df[13] = 0
+        dynamo_df[14] = 0
+        dynamo_df[15] = 0
+        dynamo_df[16] = 0
+        dynamo_df[17] = 0
+        dynamo_df[18] = 0
+        dynamo_df[19] = motl_df["tomo_id"]  # tomo_id (same as column 1)
+        dynamo_df[20] = motl_df["object_id"]  # object_id (same as column 2)
+        dynamo_df[21] = motl_df["class"]
+        dynamo_df[22] = 0  # x (regular x coordinate)
+        dynamo_df[23] = motl_df["x"]  # y (regular y coordinate)
+        dynamo_df[24] = motl_df["y"]  # z (regular z coordinate)
+        dynamo_df[25] = motl_df["z"]
+
+        # Assign the converted DataFrame to the dynamo_df attribute
+        return dynamo_df
+
+
+    def write_out(self, output_path):
+        """Writes the dynamo DataFrame to a .tbl file.
+
+            Parameters
+            ----------
+            output_path : str
+                The path to the output file where the data should be written.
+
+            Returns
+            -------
+            None
+            """
+        # Check if the file path has the correct .tbl extension
+        if not output_path.endswith(".tbl"):
+            raise ValueError("Output file must have a .tbl extension.")
+
+        # Write the dynamo_df to a .tbl file, using space as the separator
+        if self.dynamo_df.empty:
+            self.dynamo_df = self.convert_to_dynamo_motl(self.df)
+        self.dynamo_df.to_csv(output_path, sep=" ", header=False, index=False)
 
 
 class ModMotl(Motl):
+    columns = [
+        "object_id",
+        "contour_id",
+        "x",
+        "y",
+        "z",
+        "object_radius",
+        "mod_id"
+    ]
     def __init__(self, input_motl=None, mod_prefix="", mod_suffix=".mod"):
         super().__init__()
         self.mod_df = pd.DataFrame()
@@ -3861,7 +3930,7 @@ class ModMotl(Motl):
         contours_per_object = mod_df["object_id"].value_counts(sort=False)
         points_per_contour = mod_df.groupby(["object_id", "contour_id"])["contour_id"].value_counts(sort=False)
         if (
-            len(set(contours_per_object)) == 1 and mod_df["object_id"].unique() != 1
+            len(set(contours_per_object)) == 1 and (mod_df["object_id"].unique()).any() != 1
         ):  # each object has the same number of contours
             if (contours_per_object == 1).all():
                 points = {
@@ -3902,10 +3971,44 @@ class ModMotl(Motl):
         self.df = self.df.fillna(0)
         self.update_coordinates()
 
-    def write_out(self):
-        pass
-        # TODO
+    @staticmethod
+    def convert_to_mod_motl(motl_df):
+        mod_df = pd.DataFrame(data=np.zeros((motl_df.shape[0], 7)), columns=ModMotl.columns)
+        mod_df["object_id"] = motl_df["object_id"]
+        mod_df["x"] = motl_df["x"]
+        mod_df["y"] = motl_df["y"]
+        mod_df["z"] = motl_df["z"]
+        #mod_df["mod_id"] = motl_df["tomo_id"] #This should be filled given the filename
+        mod_df["contour_id"] = motl_df["geom2"]
+        mod_df["object_radius"] = motl_df["geom5"]
 
+        return mod_df
+
+
+    def write_out(self, output_path, motl_type="mod_motl"):
+        """
+        Write the mod_df (IMOD model format) to a .mod file using imod-compatible binary writer.
+
+        Parameters
+        ----------
+        output_path : str
+            The name of the output .mod file.
+        df : DataFrame
+            The pd DataFram
+        """
+
+        self.mod_df = ModMotl.convert_to_mod_motl(self.df)
+
+        #Set mod_id to self.mod_df correctly as well
+        mod_filename_no_ext = os.path.splitext(os.path.basename(output_path))[0]  # Get filename without the extension
+        mod_id = re.search(r'\d+', mod_filename_no_ext).group(0)
+        self.mod_df["mod_id"] = int(mod_id)  # Append mod_id column to dataframe object
+
+        if {"object_id", "contour_id", "x", "y", "z"} - set(self.mod_df.columns):
+            raise ValueError(f"mod_df is missing required columns.")
+
+        df_to_write = self.mod_df.copy()
+        imod.write_model_binary(df_to_write, output_path)
 
 def emmotl2relion(
     input_motl,
