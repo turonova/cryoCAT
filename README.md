@@ -22,6 +22,7 @@ The documentation including tutorials and basic user guide can be found here: [c
     * scikit-learn (1.0.2)
     * lmfit (1.2.2)
     * h5py (3.10.0)
+    * plotly (6.0.1)
       
 ## PIP
 
