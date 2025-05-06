@@ -517,9 +517,6 @@ def test_stopgap2relion_write():
     if os.path.exists(relion_written):
         os.remove(relion_written)
 
-
-
-
 class TestMotl:
 
     def test_check_df_correct_format(self):
@@ -2032,6 +2029,58 @@ class TestMotl:
         np.testing.assert_allclose(result.df["phi"].values, expected_phi, atol=1e-5)
         np.testing.assert_allclose(result.df["theta"].values, expected_theta, atol=1e-5)
         np.testing.assert_allclose(result.df["psi"].values, expected_psi, atol=1e-5)
+
+    @pytest.fixture
+    def get_sample_data1(self):
+        sample_data = {
+            "score": [0.5, 0.7, 0.9, 1.0],
+            "geom1": [1, 1, 1, 1],
+            "geom2": [2, 2, 2, 2],
+            "subtomo_id": [1, 2, 3, 4],
+            "tomo_id": [1, 1, 1, 1],
+            "object_id": [100, 200, 300, 400],
+            "subtomo_mean": [0.2, 0.4, 0.6, 0.8],
+            "x": [10, 50, 100, 200],  # X coordinates
+            "y": [20, 60, 110, 250],  # Y coordinates
+            "z": [30, 70, 120, 300],  # Z coordinates
+            "shift_x": [0, 0, 0, 0],
+            "shift_y": [0, 0, 0, 0],
+            "shift_z": [0, 0, 0, 0],
+            "geom3": [3, 3, 3, 3],
+            "geom4": [4, 4, 4, 4],
+            "geom5": [5, 5, 5, 5],
+            "phi": [0, 10, 20, 30],
+            "psi": [5, 15, 25, 35],
+            "theta": [10, 20, 30, 40],
+            "class": [1, 2, 1, 2],
+        }
+        return pd.DataFrame(sample_data)
+
+    def test_add_f(self, get_sample_data1):
+        df1 = get_sample_data1
+        df2 = get_sample_data1
+        motl1 = Motl(df1)
+        print(len(motl1))
+        motl2 = Motl(df2)
+        combined_motl = motl1.__add__(motl2)
+        assert isinstance(combined_motl, Motl)
+        assert len(combined_motl.df) == 8  # 4 rows + 4 rows
+        pd.testing.assert_frame_equal(
+            combined_motl.df.reset_index(drop=True),
+            pd.concat([df1, df2]).reset_index(drop=True)
+        )
+
+        with pytest.raises(ValueError):
+            combined_motl = motl1.__add__("not a motl object")
+    def test_len(self, get_sample_data1):
+        motl1 = Motl(get_sample_data1)
+        assert motl1.__len__() == 4
+        empty = Motl()
+        assert empty.__len__() == 0
+
+    def test_getitem(self, get_sample_data1):
+        #TODO
+        pass
 
 class TestEmMotl:
     @pytest.fixture
@@ -3758,7 +3807,7 @@ class TestRelionMotl:
             write_optics=False,
             version=3.0
         )
-        # FIXME: class column contains nan: wait for explanation from boss.
+        # FIXME: class column contains nan: wait for explanation from beata
         #two_loaded_motl30= RelionMotl(input_motl=two_output_path30, version=3.0)
         #loaded_motl30 = RelionMotl(input_motl=output_path30, version=3.0)
         #assert list(loaded_motl.relion_df.columns) == RelionMotl.columns_v3_0
@@ -4104,19 +4153,78 @@ class TestStopgapMotl:
         # Verify that the data is correct
         pd.testing.assert_frame_equal(read_motl.df, stopgap_motl.df.fillna(0), check_dtype=False)
 
+    @pytest.fixture
+    def motl_df(self):
+        sample_data = {
+            "score": [0.5, 0.7, 0.9, 1.0],
+            "geom1": [1, 1, 1, 1],
+            "geom2": [2, 2, 2, 2],
+            "subtomo_id": [1, 2, 3, 4],
+            "tomo_id": [1, 1, 1, 1],
+            "object_id": [100, 200, 300, 400],
+            "subtomo_mean": [0.2, 0.4, 0.6, 0.8],
+            "x": [10, 50, 100, 200],  # X coordinates
+            "y": [20, 60, 110, 250],  # Y coordinates
+            "z": [30, 70, 120, 300],  # Z coordinates
+            "shift_x": [0, 0, 0, 0],
+            "shift_y": [0, 0, 0, 0],
+            "shift_z": [0, 0, 0, 0],
+            "geom3": [3, 3, 3, 3],
+            "geom4": [4, 4, 4, 4],
+            "geom5": [5, 5, 5, 5],
+            "phi": [0, 10, 20, 30],
+            "psi": [5, 15, 25, 35],
+            "theta": [10, 20, 30, 40],
+            "class": [1, 2, 1, 2],
+        }
+        return pd.DataFrame(sample_data)
+    def test_reconvert(self, motl_df):
+        pd.set_option('display.max_rows', None)  # Print all rows
+        pd.set_option('display.max_columns', None)  # Print all columns
+
+        test_file_path = "./test_data/motl_data/"
+        motl_df_sg = StopgapMotl(motl_df)
+        print("\n")
+        print(motl_df_sg.df)
+        assert motl_df_sg.sg_df.empty  # OK - normal
+
+        motl_df_sg.write_out(output_path=test_file_path + "test1_sg.star")
+        mod11 = StopgapMotl(input_motl=test_file_path + "test1_sg.star")
+        # print(mod11.mod_df)
+        print(mod11.df)
+        # fixme: the issue is when reloading?
+        columns_to_compare = motl_df_sg.df.columns[
+            ~(motl_df_sg.df.isna().all() | mod11.df.isna().all())
+        ]
+        pd.testing.assert_frame_equal(
+            motl_df_sg.df[columns_to_compare],
+            mod11.df[columns_to_compare],
+            check_dtype=False
+        )
+        if os.path.exists(test_file_path + "test1_sg.star"):
+            os.remove(test_file_path + "test1_sg.star")
+
+
 class TestDynamoMotl:
     def test_constructor1(self):
+        pd.set_option('display.max_rows', None)  # Print all rows
+        pd.set_option('display.max_columns', None)  # Print all columns
+
         pathfile = "./test_data/motl_data/b4_motl_CR_tm_topbott_clean600_1_dynamo.tbl"
         test1 = DynamoMotl(pathfile)
         print(test1.df)
-        print(test1.dynamo_df)
+        #print(test1.dynamo_df)
 
-        test2 = DynamoMotl(pathfile)
-        print(test2.df)
-        print(test2.dynamo_df)
 
         with pytest.raises(Exception):
             excp = DynamoMotl("test")
+
+        pathfile = "./test_data/motl_data/bin1.6_SG_j013_afterM_24k_subtomos_MN_Dyn_v2.tbl"
+        test2 = DynamoMotl(pathfile)
+        print(test2.df)
+
+        #print(test2.dynamo_df)
+
 
     def test_read_in(self):
         pathfile = "./test_data/motl_data/b4_motl_CR_tm_topbott_clean600_1_dynamo.tbl"
@@ -4170,17 +4278,44 @@ class TestDynamoMotl:
 
         assert Motl.check_df_correct_format(motl_df) == True
 
+    def test_write_out(self):
+        # Test using a real EM file pandas dataframe as input
+        em_motl_test = EmMotl(input_motl="./test_data/au_1.em")
+        em_dynamo_motl = DynamoMotl(input_motl=em_motl_test.df)
+        print("\n")
+        # (em_mod_motl.df)
+        assert em_dynamo_motl.dynamo_df.empty
+        em_dynamo_motl.write_out(output_path="./test_data/motl_data/test_dynamo.tbl")
+        em_dynamo_motl1 = DynamoMotl(input_motl="./test_data/motl_data/test_dynamo.tbl")
+        pd.set_option('display.max_rows', None)  # Print all rows
+        pd.set_option('display.max_columns', None)  # Print all columns
+        print(em_dynamo_motl1.dynamo_df)
+
+        if os.path.exists("./test_data/motl_data/test_dynamo.tbl"):
+            os.remove("./test_data_motl_data/test_dynamo.tbl")
+
 class TestModMotl:
+    def test_init(self):
+        test_file_path = "./test_data/motl_data/modMotl/"
+        mod_df = ModMotl(input_motl=test_file_path)
+        """pd.set_option('display.max_rows', None)  # Print all rows
+        pd.set_option('display.max_columns', None)  # Print all columns"""
+        print("\n")
+        print(mod_df.df)
+        print(mod_df.mod_df)
+
     def test_read_in_valid_file(self):
-        test_file_path = "./test_data/motl_data/"
+        test_file_path = "./test_data/motl_data/modMotl/"
         mod_df = ModMotl.read_in(input_path=test_file_path)
         assert isinstance(mod_df, pd.DataFrame)
         assert not mod_df.empty
         assert all(col in mod_df.columns for col in ['object_id', 'x', 'y', 'z', 'mod_id', 'contour_id'])
         unique_mod_ids = mod_df["mod_id"].unique()
-        expected_ids = ["empty089", "empty111"]
+        expected_ids = ["correct189", "correct111"]
         assert all(uid in unique_mod_ids for uid in expected_ids)
         assert len(unique_mod_ids) == len(expected_ids)
+
+
 
         test_file_path = "./test_data/motl_data/empty089.mod"
         mod_df = ModMotl.read_in(input_path=test_file_path)
@@ -4273,7 +4408,95 @@ class TestModMotl:
         # Now contours_per_object is {1: 2, 2: 2}, and there are 2 contours per object
         contours_per_object = mod_df_incorrect["object_id"].value_counts(sort=False)
 
-        #add checks with files
-        #TODO
+    @pytest.fixture
+    def motl_df(self):
+        sample_data = {
+            "score": [0.5, 0.7, 0.9, 1.0],
+            "geom1": [1, 1, 1, 1],
+            "geom2": [1, 2, 1, 1],
+            "subtomo_id": [1, 2, 3, 4],
+            "tomo_id": [888, 888, 888, 888],
+            "object_id": [1, 1, 2, 3],
+            "subtomo_mean": [0.2, 0.4, 0.6, 0.8],
+            "x": [10, 50, 100, 200],  # X coordinates
+            "y": [20, 60, 110, 250],  # Y coordinates
+            "z": [30, 70, 120, 300],  # Z coordinates
+            "shift_x": [0, 0, 0, 0],
+            "shift_y": [0, 0, 0, 0],
+            "shift_z": [0, 0, 0, 0],
+            "geom3": [3, 3, 3, 3],
+            "geom4": [4, 4, 4, 4],
+            "geom5": [5, 5, 5, 5],
+            "phi": [0, 10, 20, 30],
+            "psi": [5, 15, 25, 35],
+            "theta": [10, 20, 30, 40],
+            "class": [1, 2, 1, 2],
+        }
+        return pd.DataFrame(sample_data)
+
+    def test_write_out(self, motl_df):
+        pd.set_option('display.max_rows', None)  # Print all rows
+        pd.set_option('display.max_columns', None)  # Print all columns
+
+        test_file_path = "./test_data/motl_data/modMotl/"
+        mod_motl = ModMotl(test_file_path)
+        mod_motl.write_out(output_path=test_file_path + "test999.mod")
+        mod = ModMotl(test_file_path + "test999.mod")
+        """print(mod.mod_df)
+        pd.testing.assert_frame_equal(
+            ModMotl(test_file_path + "test999.mod").mod_df.drop(columns='mod_id'),
+            mod_motl.mod_df.drop(columns='mod_id'))"""
+        if os.path.exists(test_file_path + "test999.mod"):
+            os.remove(test_file_path + "test999.mod")
+
+        input_df_test_single = pd.DataFrame({
+            "object_id": [1, 2, 3],
+            "contour_id": [1, 1, 1],
+            "x": [1, 2, 3],
+            "y": [4, 5, 6],
+            "z": [7, 8, 9],
+            "object_radius": [3, 3, 3],
+            "mod_id": ["669", "669", "669"]
+        })
+        mod = ModMotl(input_motl=input_df_test_single)
+        mod.write_out(output_path="./test_data/motl_data/test669.mod")
+        mod1 = ModMotl(input_motl="./test_data/motl_data/test669.mod")
+
+        pd.testing.assert_frame_equal(mod.mod_df, mod1.mod_df, check_dtype=False)
+        pd.testing.assert_frame_equal(mod.df, mod1.df, check_dtype=False)
+        if os.path.exists("./test_data/motl_data/test669.mod"):
+            os.remove("./test_data/motl_data/test669.mod")
+
+        #create a ModMotl using a Motl df
+        motl_df_mod = ModMotl(motl_df)
+        """print("\n")
+        print(motl_df_mod.df)"""
+        assert motl_df_mod.mod_df.empty #OK - normal
+
+        motl_df_mod.write_out(output_path= test_file_path + "test888.mod")
+        mod11 = ModMotl(input_motl = test_file_path + "test888.mod")
+        print(mod11.mod_df)
+        #print(mod11.df)
+        #print(mod11.mod_df)
+        #print(motl_df_mod.mod_df)
+        #pd.testing.assert_frame_equal(motl_df_mod.df, mod11.df)
+        pd.testing.assert_frame_equal(motl_df_mod.mod_df, mod11.mod_df, check_dtype=False)
+
+        if os.path.exists(test_file_path + "test888.mod"):
+            os.remove(test_file_path + "test888.mod")
 
 
+        #Test using a real EM file pandas dataframe as input
+        em_motl_test = EmMotl(input_motl = "./test_data/au_1.em")
+        em_mod_motl = ModMotl(input_motl = em_motl_test.df)
+        print("\n")
+        #(em_mod_motl.df)
+        assert em_mod_motl.mod_df.empty
+        em_mod_motl.write_out(output_path = test_file_path + "test567.mod")
+        em_mod_motl1 = ModMotl(input_motl = test_file_path + "test567.mod")
+        print(em_mod_motl1.mod_df)
+        #print(em_mod_motl1.df)
+
+        """if os.path.exists(test_file_path + "test567.mod"):
+            os.remove(test_file_path + "test567.mod")
+        """
