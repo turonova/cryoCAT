@@ -232,6 +232,81 @@ class Point3D:
             return False
 
 
+class Triangle:
+
+    def __init__(self, a, b, c):
+        self.a = Point3D(a[0], a[1], a[2])
+        self.b = Point3D(b[0], b[1], b[2])
+        self.c = Point3D(c[0], c[1], c[2])
+
+    def _side_lengths(self):
+        ab = np.linalg.norm(self.b - self.a)
+        bc = np.linalg.norm(self.c - self.b)
+        ca = np.linalg.norm(self.a - self.c)
+        return ab, bc, ca
+
+    def area(self):
+        ab = self.b - self.a
+        ac = self.c - self.a
+        cross = np.cross(ab, ac)
+        return 0.5 * np.linalg.norm(cross)
+
+    def inner_angles(self):
+        ab = np.array(self.b - self.a)
+        bc = np.array(self.c - self.b)
+        ca = np.array(self.a - self.c)
+
+        angle_A = angle_between_n_vectors(-ca, ab)
+        angle_B = angle_between_n_vectors(-ab, bc)
+        angle_C = angle_between_n_vectors(-bc, ca)
+
+        return angle_A, angle_B, angle_C
+
+    def inscribed_circle(self):
+        a, b, c = self._side_lengths()
+        p = a + b + c
+        center = (a * self.a + b * self.b + c * self.c) / p
+
+        radius = self.area() * 2 / p
+        return center, radius
+
+    def circumcircle_radius(self):
+
+        a, b, c = self._side_lengths()
+        radius = a * b * c / (4 * self.area())
+
+        return radius
+
+    def circumcircle(self):
+
+        ab = np.array(self.b - self.a)
+        ac = np.array(self.c - self.a)
+        ab_cross_ac = np.cross(ab, ac)
+        norm_sq = np.linalg.norm(ab_cross_ac) ** 2
+
+        if norm_sq == 0:
+            return np.full(3, np.nan), np.nan  # Degenerate triangle
+
+        ab_sq = np.dot(ab, ab)
+        ac_sq = np.dot(ac, ac)
+        ab_dot_ac = np.dot(ab, ac)
+
+        # Vector from A to circumcenter
+        alpha = ac_sq * np.dot(ab, ac) - ab_sq * np.dot(ac, ac)
+        beta = ab_sq * np.dot(ac, ac) - ac_sq * np.dot(ab, ac)
+        vector_to_center = (alpha * ab + beta * ac) / (2 * norm_sq)
+
+        center = self.a + vector_to_center
+
+        a, b, c = self._side_lengths()
+        radius = a * b * c / (4 * self.area())
+
+        return center, radius
+
+    def __repr__(self):
+        return f"Triangle3D({self.a}, {self.b}, {self.c})"
+
+
 class Matrix:
 
     def __init__(self, input_data=None, size=3):
@@ -2552,3 +2627,44 @@ def distance_array(vol):
     distance_v = np.sqrt(shell_space[0] ** 2 + shell_space[1] ** 2 + shell_space[2] ** 2)
 
     return distance_v
+
+
+def order_points_on_circle(points):
+    """Order points on a circle based on their angles with respect to the x-axis.
+
+    Parameters
+    ----------
+    points : numpy.ndarray
+        A 2D array of shape (n, 3) where each row represents a point in 3D space (x, y, z).
+
+    Returns
+    -------
+    numpy.ndarray
+        A 2D array of shape (n, 3) containing the input points ordered by their angles
+        in the xy-plane, starting from the positive x-axis and moving counterclockwise.
+    numpy.ndarray
+        A 1D array of shape (n,) containing the order of points.
+
+    Notes
+    -----
+    This function assumes that the input points are approximately in the xy-plane,
+    and it discards the z-coordinate for the ordering process. The points are normalized
+    to lie on the unit circle before calculating their angles.
+    """
+
+    # Project points onto a plane (optional if already planar)
+    # Assuming points lie approximately in the xy-plane, we discard the z-coordinate.
+    planar_points = points[:, :2]
+
+    # Normalize points to unit circle
+    magnitudes = np.linalg.norm(planar_points, axis=1, keepdims=True)
+    normalized_points = planar_points / magnitudes
+
+    # Compute angles with respect to the x-axis
+    angles = np.arctan2(normalized_points[:, 1], normalized_points[:, 0])
+
+    # Sort points by angle
+    sorted_indices = np.argsort(angles)
+    ordered_points = points[sorted_indices]
+
+    return ordered_points, sorted_indices

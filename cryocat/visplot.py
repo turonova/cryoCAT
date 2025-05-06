@@ -4,6 +4,8 @@ from matplotlib import colors
 from matplotlib import gridspec
 from matplotlib import cm
 import matplotlib.ticker as mticker
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 def get_colors_from_palette(num_colors, pallete_name="tab10"):
@@ -536,3 +538,67 @@ def scatter_with_histogram(
         fig.savefig(output_file, dpi=fig.dpi)
 
     plt.show()
+
+
+def plot_pca_summary(cumulative_variance, feature_importances, scatter_kwargs=None, bar_kwargs=None):
+    """Create a combined subplot fro PCA analysis:
+    - Cumulative explained variance (line plot)
+    - Feature importance (horizontal bar plot)
+
+    Parameters
+    ----------
+    cumulative_variance : ndarray
+        Values of cumulative explained variance.
+    feature_importances : pd.Series
+        Series of feature importance (e.g., squared loadings) from PCA.
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        Combined plotly figure.
+    """
+
+    if scatter_kwargs is None:
+        scatter_kwargs = {"mode": "lines+markers", "line": dict(color="blue")}
+
+    if bar_kwargs is None:
+        bar_kwargs = {"marker_color": "blue"}
+
+    # Create subplot layout
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        row_heights=[0.5, 0.5],
+        subplot_titles=("Cumulative Explained Variance", "Feature Importance"),
+    )
+
+    # First plot: Cumulative Variance Line
+    fig.add_trace(
+        go.Scatter(
+            x=feature_importances.index.to_list(), y=cumulative_variance, name="Cumulative Variance", **scatter_kwargs
+        ),
+        row=1,
+        col=1,
+    )
+
+    # Second plot: Feature Importance Bar
+    fig.add_trace(
+        go.Bar(
+            x=feature_importances.index,
+            y=feature_importances.values,
+            name="Feature Importance",
+            **bar_kwargs,
+        ),
+        row=2,
+        col=1,
+    )
+
+    # Layout tuning
+    fig.update_layout(showlegend=False)
+
+    fig.update_xaxes(tickangle=-30, row=1, col=1)
+
+    fig.update_xaxes(tickangle=-30, row=2, col=1)
+    fig.update_yaxes(row=1, col=2, categoryorder="total ascending")
+
+    return fig

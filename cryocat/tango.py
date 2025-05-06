@@ -14,15 +14,17 @@ from scipy.spatial.transform import Rotation as R
 from scipy.linalg import logm
 from scipy.interpolate import interp1d
 from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from scipy.spatial import Delaunay
 
 import sklearn.neighbors as sn
 
-from gudhi import AlphaComplex
-
 from cryocat import geom
+from cryocat import nnana
 from cryocat import cryomotl
 from cryocat.geom import Matrix
-from cryocat.classutils import get_classes_from_names
+from cryocat.classutils import get_classes_from_names, get_class_names_by_parent
+from cryocat import visplot
 import pandas as pd
 
 
@@ -556,20 +558,145 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
     return particle_list
 
 
-###### TwistFeature Class ######
+###### Parent descriptor Class ####
 
 
-class TwistFeature:
+class Descriptor:
+
+    def __init__(self):
+        self.desc = None
+        self.pca_components = 1
+
+    @staticmethod
+    def remove_nans(df, axis_type="row"):
+
+        if axis_type == "row":
+            return df.dropna(axis=0)
+        elif axis_type == "column":
+            return df.dropna(axis=1)
+        else:
+            raise ValueError("axis_type must be either 'row' or 'column'")
+
+    def get_important_features(self, pca, input_df, n_components):
+
+        # Square of loadings → proportion of variance that each feature contributes to each PC
+        components_matrix = pca.components_  # shape: (n_components, n_features)
+        loadings = components_matrix[:n_components, :] ** 2
+
+        # Sum contributions across selected components
+        feature_scores = loadings.sum(axis=0)
+
+        # Create a series with feature names
+        feature_importance = pd.Series(feature_scores, index=input_df.columns)
+
+        # Sort if you want to see most important features
+        important_features = feature_importance.sort_values(ascending=False)
+
+        return important_features
+
+    def pca_analysis(
+        self, variance_threshold=0.95, show_fig=True, nan_drop="row", scatter_kwargs=None, bar_kwargs=None
+    ):
+
+        desc_df = self.remove_nans(self.desc, axis_type=nan_drop)
+        desc_df = desc_df.drop(columns=["qp_id"])
+
+        pca = PCA()
+        _ = pca.fit_transform(desc_df)
+
+        explained = pca.explained_variance_ratio_
+        cumulative = np.cumsum(explained)
+
+        # Choose number of components to explain at least 95% variance
+        n_components = np.argmax(cumulative >= variance_threshold) + 1
+        # print(explained)
+        print(f"Use {n_components} components to explain ≥95% variance")
+
+        important_features = self.get_important_features(pca, desc_df, n_components=n_components)
+        print(important_features)
+
+        fig = visplot.plot_pca_summary(cumulative, important_features, scatter_kwargs, bar_kwargs)
+
+        if show_fig:
+            fig.show()
+
+        self.pca_components = n_components
+
+        return n_components, important_features, fig
+
+    def filter_features(self, input_df, feature_ids="all"):
+
+        if isinstance(feature_ids, str):
+            if feature_ids == "all":
+                filtered_df = input_df
+            elif feature_ids in input_df.columns:
+                filtered_df = input_df[[feature_ids, "qp_id"]]
+            else:
+                raise ValueError(f"{feature_ids} is not a valid option for feature_ids parameter.")
+        elif isinstance(feature_ids, list):
+            features = [feature for feature in feature_ids if feature in input_df.columns]
+            features.append("qp_id")
+            if len(features) <= 1:
+                raise ValueError("None of the provided features (columns) is in this descriptor catalogue.")
+            else:
+                filtered_df = input_df[features]
+        else:
+            raise ValueError("The feature_ids has to be a name of a computed feature, list of features or 'all'.")
+
+        return filtered_df
+
+    def compute_pca(self, pca_components=None, feature_ids="all", nan_drop="row"):
+
+        pca_df = self.remove_nans(self.desc, axis_type=nan_drop)
+        pca_df = self.filter_features(pca_df, feature_ids=feature_ids)
+
+        pca_components = pca_components or self.pca_components
+        pca_components = min(pca_components, len(pca_df.columns) - 1)
+
+        qp_ids = pca_df["qp_id"].to_numpy()
+        pca_df = pca_df.drop(columns=["qp_id"])
+
+        pca = PCA(n_components=pca_components)
+        X_pca = pca.fit_transform(pca_df)
+
+        important_features = self.get_important_features(pca, pca_df, n_components=pca_components)
+        columns = important_features.head(pca_components).index.tolist()
+
+        return pd.DataFrame(X_pca, columns=columns), qp_ids
+
+    def k_means_clustering(self, n_clusters, nan_drop="row", pca_dict=None, feature_ids="all"):
+
+        if pca_dict is None:
+            km_data = self.remove_nans(self.desc, axis_type=nan_drop)
+            km_data = self.filter_features(km_data, feature_ids=feature_ids)
+            qp_ids = km_data["qp_id"].to_numpy()
+            km_data = km_data.drop(columns=["qp_id"])
+        else:
+            km_data, qp_ids = self.compute_pca(**pca_dict, feature_ids=feature_ids, nan_drop=nan_drop)
+
+        # Run k-means
+        kmeans = KMeans(n_clusters=n_clusters, n_init="auto")
+        clusters = kmeans.fit_predict(km_data)
+
+        # Make DataFrame
+        result_df = pd.DataFrame(km_data, columns=km_data.columns)
+        result_df["cluster"] = clusters
+        result_df["qp_id"] = qp_ids
+
+        return result_df
+
+
+###### TwistDescriptor Class ######
+
+
+class TwistDescriptor(Descriptor):
 
     def __init__(
         self,
         input_twist=None,
         input_motl=None,
         nn_radius=None,
-        tomo_id_selection=None,
-        degrees=False,
         symm=False,
-        feature=None,
     ):
 
         if input_twist is not None:
@@ -578,14 +705,13 @@ class TwistFeature:
             elif isinstance(input_twist, str):
                 self.df = self.read_in(input_twist)
         elif input_motl is not None and isinstance(nn_radius, (float, int)):
-            motl = cryomotl.Motl.load(input_motl)
-            self.df = TwistFeature.get_nn_twist_stats_within_radius(
-                motl, nn_radius, tomo_id_selection, degrees, symm, motl_fid=feature
-            )
+            self.df = TwistDescriptor.get_nn_twist_stats_within_radius(input_motl, nn_radius, symm)
         else:
             raise ValueError(
                 "One has to specify (at least) either input_twist or input_motl in combination with nn_radius."
             )
+
+        self.desc = self.df
 
     def __getitem__(self, item):
 
@@ -627,21 +753,21 @@ class TwistFeature:
     @classmethod
     def load(cls, input_data):
         """
-        Create a TwistFeature object from input data
+        Create a TwistDescriptor object from input data
 
         Parameters
         ----------
-        input_data : str or TwistFeature
-            File path or TwistFeature object.
+        input_data : str or TwistDescriptor
+            File path or TwistDescriptor object.
         """
 
-        if isinstance(input_data, TwistFeature):
+        if isinstance(input_data, TwistDescriptor):
             return copy.deepcopy(input_data)
         elif isinstance(input_data, str):
-            df = TwistFeature.read_in(input_data)
-            return TwistFeature(df)
+            df = TwistDescriptor.read_in(input_data)
+            return TwistDescriptor(df)
         else:
-            raise ValueError("The input has to be either a TwistFeature object or a file path (in str format).")
+            raise ValueError("The input has to be either a TwistDescriptor object or a file path (in str format).")
 
     @staticmethod
     def get_pos_feature_ids():
@@ -685,86 +811,71 @@ class TwistFeature:
         return columns
 
     @staticmethod
-    def process_tomo_twist(tomo_id, input_motl, nn_radius, degrees=False, symm=False, motl_fid=None):
+    def process_tomo_twist(t_nn, symm=False, symm_max_value=None, symm_category=None):
 
-        coord = input_motl.get_motl_subset(tomo_id).get_coordinates()
-        rotations = input_motl.get_motl_subset(tomo_id).get_rotations()
-        angles = input_motl.get_motl_subset(tomo_id).get_angles()
-        subtomo_ids = input_motl.get_motl_subset(tomo_id).df["subtomo_id"].values
-
-        sub_list = convert_to_particle_list(input_motl, motl_fid=motl_fid, subset_tomo_id=tomo_id)
-
-        kdt_nn = sn.KDTree(coord)
-        nn_idx = kdt_nn.query_radius(coord, nn_radius)  # Query all neighbors within radius
-
-        nn_indices = [neighbors[neighbors != i] for i, neighbors in enumerate(nn_idx)]  # Remove self-matches
-
-        # Filter out points with no neighbors left and sort neighbors
-        center_idx = [i for i, neighbors in enumerate(nn_indices) if len(neighbors) > 0]
-        nn_indices = [np.sort(nn_indices[i]) for i in center_idx]
-
-        flat_center_idx = np.repeat(center_idx, [len(nns) for nns in nn_indices])
-        flat_nn_idx = np.concatenate(nn_indices)
+        norm_coord = t_nn.get_normalized_coord()
+        rotations_qp = t_nn.get_qp_rotations()
+        rotations_nn = t_nn.get_nn_rotations()
+        phi_qp = t_nn.df["qp_angles_phi"].to_numpy()
+        phi_nn = t_nn.df["nn_angles_phi"].to_numpy()
+        subtomo_qp = t_nn.df["qp_subtomo_id"].to_numpy()
+        subtomo_nn = t_nn.df["nn_subtomo_id"].to_numpy()
+        tomo_idx = t_nn.df["tomo_id"].to_numpy()
 
         if symm:
-            # make sure that this is computed only once
-            max_val = sub_list[0].max_dissimilarity()  # was p_list before will this be the same?
-            symm_cat = sub_list[0].category
-
-            inplane_1 = np.deg2rad(angles[flat_center_idx, 0])
-            inplane_2 = np.deg2rad(angles[flat_nn_idx, 0])
-
-            ang_scores = geom.angular_score_for_c_symmetry(inplane_1, inplane_2, symm_cat, max_val)
+            ang_scores = geom.angular_score_for_c_symmetry(
+                np.deg2rad(phi_qp), np.deg2rad(phi_nn), symm_category, symm_max_value
+            )
 
         # Compute relative quantities
-        rel_pos = rotations[flat_center_idx].inv().apply(coord[flat_nn_idx] - coord[flat_center_idx])
-        rel_quat = rotations[flat_center_idx].inv() * rotations[flat_nn_idx]
+        rel_pos = rotations_qp.inv().apply(norm_coord)
+        rel_quat = rotations_qp.inv() * rotations_nn
 
         axis_angle = rel_quat.as_rotvec()
         twists = np.hstack((axis_angle, rel_pos))
 
-        tomo_idx = tomo_id * np.ones(len(twists), dtype=int)
-
         if not symm:
             twist_df = pd.DataFrame(
-                np.column_stack(
-                    (subtomo_ids[flat_center_idx], subtomo_ids[flat_nn_idx], tomo_idx, twists, angles[flat_nn_idx, 0])
-                ),
-                columns=["qp_id", "nn_id", "tomo_id"] + TwistFeature.get_mixed_feature_ids() + ["nn_inplane"],
+                data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_nn)),
+                columns=["qp_id", "nn_id", "tomo_id"] + TwistDescriptor.get_mixed_feature_ids() + ["nn_inplane"],
             )
 
         else:
             twist_df = pd.DataFrame(
-                np.column_stack(
-                    (
-                        subtomo_ids[flat_center_idx],
-                        subtomo_ids[flat_nn_idx],
-                        tomo_idx,
-                        twists,
-                        angles[flat_nn_idx, 0],
-                        ang_scores,
-                    )
-                ),
+                data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_nn, ang_scores)),
                 columns=["qp_id", "nn_id", "tomo_id"]
-                + TwistFeature.get_mixed_feature_ids()
+                + TwistDescriptor.get_mixed_feature_ids()
                 + ["nn_inplane", "angular_score"],
             )
 
         return twist_df
 
     @staticmethod
-    def get_nn_twist_stats_within_radius(
-        input_motl, nn_radius, tomo_id_selection=None, degrees=True, symm=False, motl_fid=None
-    ):
+    def get_symm_parameters(input_motl, symm):
+        if not symm:
+            return None, None
 
-        tomo_idx = input_motl.get_unique_values("tomo_id")
-        if tomo_id_selection is not None:
-            tomo_idx = [i for i in tomo_idx if i in tomo_id_selection]
+        if isinstance(input_motl, list):
+            motl = cryomotl.Motl.load(input_motl[0])
+        else:
+            motl = cryomotl.Motl.load(input_motl)
+
+        pm = motl.get_motl_subset(feature_values=motl.df["subtomo_id"].iloc[0], feature_id="subtomo_id")
+        part = convert_to_particle_list(pm)
+        return part[0].max_dissimilarity(), part[0].category
+
+    @staticmethod
+    def get_nn_twist_stats_within_radius(input_motl, nn_radius, symm=False):
+
+        nn = nnana.NearestNeighbors(input_motl, feature_id="tomo_id", nn_type="radius", type_param=nn_radius)
+        symm_max_value, symm_category = TwistDescriptor.get_symm_parameters(input_motl=input_motl, symm=symm)
+        tomo_idx = nn.get_unique_values()
 
         results = []
 
         for tomo_id in tomo_idx:
-            results.append(TwistFeature.process_tomo_twist(tomo_id, input_motl, nn_radius, degrees, symm, motl_fid))
+            t_nn = nn.get_nn_subset(motl_values=1, feature_values=tomo_id)
+            results.append(TwistDescriptor.process_tomo_twist(t_nn, symm, symm_max_value, symm_category))
 
         # if len(tomo_idx) == 1:
         #     work_opt = 1
@@ -812,7 +923,7 @@ class TwistFeature:
 
     def get_twist_mixed_np(self):
 
-        return self.df[TwistFeature.get_mixed_feature_ids()].to_numpy()
+        return self.df[TwistDescriptor.get_mixed_feature_ids()].to_numpy()
 
     def twist_template_comparison(self, referenc_particle: Particle):
         """
@@ -824,9 +935,9 @@ class TwistFeature:
 
         return twist_vectors - template_twist
 
-    def sort_by_distance(self, twist_feature_id="geodesic_distance_rad"):
+    def sort_by_distance(self, twist_descriptor_id="geodesic_distance_rad"):
 
-        if not (twist_feature_id not in self.df.columns):
+        if not (twist_descriptor_id not in self.df.columns):
             raise ValueError(f"Feature needs to be one of the following: {self.df.columns}.")
 
         all_distances = self.df["euclidean_distance"]
@@ -839,7 +950,7 @@ class TwistFeature:
             df_qp = df_qp.sort_values(by="euclidean_distance")
 
             e_distances = df_qp["euclidean_distance"]
-            feat_values = df_qp[twist_feature_id]
+            feat_values = df_qp[twist_descriptor_id]
 
             dist_tuples.append((e_distances, feat_values))
 
@@ -859,9 +970,9 @@ class TwistFeature:
 
         return unified_distances, average_values
 
-    #### Get weighted product distance for given TwistFeature
+    #### Get weighted product distance for given TwistDescriptor
     def weighted_stats(self, position_weight: float, orientation_weight: float):
-        weighted_data = TwistFeature()
+        weighted_data = TwistDescriptor()
         weighted_df = self.df.copy()
 
         euc_dist = self.df["euclidean_distance"].to_numpy()
@@ -879,11 +990,11 @@ class TwistFeature:
         """Cluster particles based on spatial proximity. The num_connected_components largest clusters are returned.
 
         Args:
-            twist_stats (TwistFeature or pandas dataframe): Yields particle indices with respect to which to cluster
+            twist_stats (TwistDescriptor or pandas dataframe): Yields particle indices with respect to which to cluster
             num_connected_components (int, optional): Desired number of clusters. Defaults to 1.
 
         Raises:
-            TypeError: if input data is neither a pandas data frame nor a TwistFeature.
+            TypeError: if input data is neither a pandas data frame nor a TwistDescriptor.
 
         Returns:
             list: List of networkx graphs representing the num_connected_components largest components.
@@ -907,8 +1018,8 @@ class TwistFeature:
 
         return S[:num_connected_components]
 
-    def get_qp_twist_feat(self, query_particle, tomo_id=None):
-        """Get twist features for a specific query particle from a twist dataframe.
+    def get_qp_twist_desc(self, query_particle, tomo_id=None):
+        """Get twist descriptor for a specific query particle from a twist dataframe.
 
         Parameters
         ----------
@@ -920,8 +1031,8 @@ class TwistFeature:
 
         Returns
         -------
-        filtered_twist_feat : TwistFeature
-            A TwistFeature containing the filtered statistics for the specified query particle and tomo id.
+        filtered_twist_desc : TwistDescriptor
+            A TwistDescriptor containing the filtered statistics for the specified query particle and tomo id.
 
         Raises
         ------
@@ -945,22 +1056,22 @@ class TwistFeature:
             else:
                 filtered_data = self.df[(self.df["qp_id"] == ind)]
 
-            return TwistFeature(input_twist=filtered_data)
+            return TwistDescriptor(input_twist=filtered_data)
 
         else:
             raise ValueError("query_particle has to be an instance of Particle or an index, both associated to p_list.")
 
     @classmethod
-    def get_data_range(cls, twist_feat, twist_feature_id=None, min_value=None, max_value=None):
+    def get_data_range(cls, twist_desc, twist_descriptor_id=None, min_value=None, max_value=None):
         """
-        Filter a TwistFeature instance by a specific column and return a new instance.
+        Filter a TwistDescriptor instance by a specific column and return a new instance.
 
         Parameters
         ----------
-        twist_feat : TwistFeature
-            The original TwistFeature instance.
-        twist_feature_id : str, optional
-            The name of the column to filter on. If None, the original twist_feat will be returned.
+        twist_desc : TwistDescriptor
+            The original TwistDescriptor instance.
+        twist_descriptor_id : str, optional
+            The name of the column to filter on. If None, the original twist_desc will be returned.
         min_value : float, optional
             Minimum value for filtering. Default is None.
         max_value : float, optional
@@ -968,36 +1079,36 @@ class TwistFeature:
 
         Returns
         -------
-        TwistFeature
-            A new instance of TwistFeature with filtered data.
+        TwistDescriptor
+            A new instance of TwistDescriptor with filtered data.
         """
         # Return unmodified if no filtering is requested
-        if twist_feature_id is None or (min_value is None and max_value is None):
-            return twist_feat
+        if twist_descriptor_id is None or (min_value is None and max_value is None):
+            return twist_desc
 
-        df = twist_feat.df.copy()
+        df = twist_desc.df.copy()
 
         if min_value is not None:
-            df = df[df[twist_feature_id] >= min_value]
+            df = df[df[twist_descriptor_id] >= min_value]
         if max_value is not None:
-            df = df[df[twist_feature_id] <= max_value]
+            df = df[df[twist_descriptor_id] <= max_value]
 
-        return TwistFeature(df)
+        return TwistDescriptor(df)
 
     def get_twist_pos_df(self):
-        return self.df[TwistFeature.get_pos_feature_ids()]
+        return self.df[TwistDescriptor.get_pos_feature_ids()]
 
     def get_twist_rot_df(self):
-        return self.df[TwistFeature.get_rot_feature_ids()]
+        return self.df[TwistDescriptor.get_rot_feature_ids()]
 
     def get_twist_mixed_df(self):
-        return self.df[TwistFeature.get_mixed_feature_ids()]
+        return self.df[TwistDescriptor.get_mixed_feature_ids()]
 
     def get_twist_pos_np(self):
-        return self.df[TwistFeature.get_pos_feature_ids()].to_numpy()
+        return self.df[TwistDescriptor.get_pos_feature_ids()].to_numpy()
 
     def get_twist_rot_np(self):
-        return self.df[TwistFeature.get_rot_feature_ids()].to_numpy()
+        return self.df[TwistDescriptor.get_rot_feature_ids()].to_numpy()
 
 
 class Filter:
@@ -1008,40 +1119,40 @@ class Filter:
 
 class AxisRot(Filter):
 
-    def __init__(self, twist_feat, max_angle, axis="z", min_angle=0.0):
+    def __init__(self, twist_desc, max_angle, axis="z", min_angle=0.0):
 
-        feature_id = TwistFeature.get_axis_feature_id("rot_angle", axis=axis)
-        self.filter = TwistFeature.get_data_range(
-            twist_feat=twist_feat, twist_feature_id=feature_id, min_value=min_angle, max_value=max_angle
+        feature_id = TwistDescriptor.get_axis_feature_id("rot_angle", axis=axis)
+        self.filter = TwistDescriptor.get_data_range(
+            twist_desc=twist_desc, twist_descriptor_id=feature_id, min_value=min_angle, max_value=max_angle
         )
 
 
 class EuclideanDistNN(Filter):
 
-    def __init__(self, twist_feat, num_neighbors=1):
-        twist_df = twist_feat.df.sort_values(by=["qp_id", "euclidean_distance"]).groupby("qp_id").head(num_neighbors)
-        self.filter = TwistFeature(twist_df)
+    def __init__(self, twist_desc, num_neighbors=1):
+        twist_df = twist_desc.df.sort_values(by=["qp_id", "euclidean_distance"]).groupby("qp_id").head(num_neighbors)
+        self.filter = TwistDescriptor(twist_df)
 
 
 class GeodesicDistNN(Filter):
 
-    def __init__(self, twist_feat, num_neighbors=1):
-        twist_df = twist_feat.df.sort_values(by=["qp_id", "geodesic_distance_rad"]).groupby("qp_id").head(num_neighbors)
-        self.filter = TwistFeature(twist_df)
+    def __init__(self, twist_desc, num_neighbors=1):
+        twist_df = twist_desc.df.sort_values(by=["qp_id", "geodesic_distance_rad"]).groupby("qp_id").head(num_neighbors)
+        self.filter = TwistDescriptor(twist_df)
 
 
 class MixedDistNN(Filter):
 
-    def __init__(self, twist_feat, num_neighbors=1):
-        twist_df = twist_feat.df.sort_values(by=["qp_id", "product_distance"]).groupby("qp_id").head(num_neighbors)
-        self.filter = TwistFeature(twist_df)
+    def __init__(self, twist_desc, num_neighbors=1):
+        twist_df = twist_desc.df.sort_values(by=["qp_id", "product_distance"]).groupby("qp_id").head(num_neighbors)
+        self.filter = TwistDescriptor(twist_df)
 
 
 class AngularScoreNN(Filter):
 
-    def __init__(self, twist_feat, num_neighbors=1):
-        twist_df = twist_feat.df.sort_values(by=["qp_id", "angular_score"]).groupby("qp_id").head(num_neighbors)
-        self.filter = TwistFeature(twist_df)
+    def __init__(self, twist_desc, num_neighbors=1):
+        twist_df = twist_desc.df.sort_values(by=["qp_id", "angular_score"]).groupby("qp_id").head(num_neighbors)
+        self.filter = TwistDescriptor(twist_df)
 
 
 class Support:
@@ -1062,13 +1173,13 @@ class Support:
                     raise ValueError("'axis' needs to be numpy.ndarray of size 3.")
 
                 if mode == "position":
-                    columns = TwistFeature.get_pos_feature_ids()
+                    columns = TwistDescriptor.get_pos_feature_ids()
                 else:
-                    columns = TwistFeature.get_rot_feature_ids()
+                    columns = TwistDescriptor.get_rot_feature_ids()
 
             else:
 
-                columns = TwistFeature.get_mixed_feature_ids()
+                columns = TwistDescriptor.get_mixed_feature_ids()
 
                 if axis is None:
                     axis = np.array([0, 0, 0, 0, 0, 1])
@@ -1086,30 +1197,30 @@ class Support:
 
 class Sphere(Support):
 
-    def __init__(self, twist_feat, radius=None):
+    def __init__(self, twist_desc, radius=None):
         if radius is None:
-            self.support = twist_feat
+            self.support = twist_desc
         else:
-            self.support = TwistFeature.get_data_range(
-                twist_feat=twist_feat, twist_feature_id="euclidean_distance", min_value=0.0, max_value=radius
+            self.support = TwistDescriptor.get_data_range(
+                twist_desc=twist_desc, twist_descriptor_id="euclidean_distance", min_value=0.0, max_value=radius
             )
 
 
 class Shell(Support):
 
-    def __init__(self, twist_feat, radius_min, radius_max):
-        self.support = TwistFeature.get_data_range(
-            twist_feat=twist_feat, twist_feature_id="euclidean_distance", min_value=radius_min, max_value=radius_max
+    def __init__(self, twist_desc, radius_min, radius_max):
+        self.support = TwistDescriptor.get_data_range(
+            twist_desc=twist_desc, twist_descriptor_id="euclidean_distance", min_value=radius_min, max_value=radius_max
         )
 
 
 class Cone(Support):
 
-    def __init__(self, twist_feat: TwistFeature, cone_height: float, cone_radius: float, axis=None, mode="position"):
+    def __init__(self, twist_desc: TwistDescriptor, cone_height: float, cone_radius: float, axis=None, mode="position"):
 
         axis, columns = Support.set_axis_and_columns(mode=mode, axis=axis)
 
-        tangent = twist_feat.df[columns].to_numpy()
+        tangent = twist_desc.df[columns].to_numpy()
 
         if tangent.ndim != 2 or tangent.shape[1] != 3:
             raise ValueError(f"Expected tangent to have shape (n,3), but got {tangent.shape}")
@@ -1134,14 +1245,14 @@ class Cone(Support):
         # Mask: rows where all conditions hold
         mask = height_bool & radial_bool & angular_bool
 
-        self.support = TwistFeature(twist_feat.df[mask])
+        self.support = TwistDescriptor(twist_desc.df[mask])
 
 
 class Torus(Support):
 
     def __init__(
         self,
-        twist_feat: TwistFeature,
+        twist_desc: TwistDescriptor,
         inner_radius: float,
         outer_radius: float,
         axis=None,
@@ -1150,7 +1261,7 @@ class Torus(Support):
 
         axis, columns = Support.set_axis_and_columns(mode=mode, axis=axis)
 
-        tangent = twist_feat[columns].to_numpy()
+        tangent = twist_desc[columns].to_numpy()
 
         # a solid torus can be described as cartesian product
         # S^1 \times D^2
@@ -1176,16 +1287,16 @@ class Torus(Support):
         # Mask: rows where all conditions hold
         mask = circle_dist <= disc_rad
 
-        self.support = TwistFeature(twist_feat[mask])
+        self.support = TwistDescriptor(twist_desc[mask])
 
 
 class Cylinder(Support):
     def __init__(
-        self, twist_feat: TwistFeature, radius: float, height: float, axis=None, mode="position", symmetric=True
+        self, twist_desc: TwistDescriptor, radius: float, height: float, axis=None, mode="position", symmetric=True
     ):
 
         def compute_one_direction(axis):
-            tangent = twist_feat.df[columns].to_numpy()
+            tangent = twist_desc.df[columns].to_numpy()
 
             axis_projection = np.dot(tangent, axis)[:, None] * axis
             proj_dist = np.linalg.norm(axis_projection - tangent, axis=1)
@@ -1197,7 +1308,7 @@ class Cylinder(Support):
             # Mask: rows where all conditions hold
             mask = height_test & rad_test
 
-            return twist_feat.df[mask].copy()
+            return twist_desc.df[mask].copy()
 
         set_axis, columns = Support.set_axis_and_columns(mode=mode, axis=axis)
         truncated_stats_df = compute_one_direction(set_axis)
@@ -1206,185 +1317,298 @@ class Cylinder(Support):
             set_axis, columns = Support.set_axis_and_columns(mode=mode, axis=-set_axis)
             truncated_stats_df = pd.concat([truncated_stats_df, compute_one_direction(set_axis)])
 
-        self.support = TwistFeature(truncated_stats_df)
+        self.support = TwistDescriptor(truncated_stats_df)
 
 
-class Descriptor:
+class Feature:
 
-    def __init__(self, planar=False, alpha_complex_needed=False, inner_angles_needed=False):
-        self.planar = planar
-        self.ac_link_needed = alpha_complex_needed
-        self.ac_inner_angles_needed = inner_angles_needed
+    def __init__(self, desc_df):
+        self.df = desc_df
 
     def compute(self, **kwargs):
         pass
 
 
-class NNCount(Descriptor):
+class NNCount(Feature):
 
-    def __init__(self, **kwargs):
-        super().__init__(False, False, False)
+    def __init__(self, twist_df, **kwargs):
+        super().__init__(twist_df)
 
     def compute(self, **kwargs):
-        qp_support = kwargs["qp_support"]
-        return qp_support.df.shape[0]
+
+        results = []
+        for qp_id, group_df in self.df.groupby("qp_id"):
+            results.append([qp_id, group_df.shape[0]])
+
+        columns = ["qp_id", self.__class__.__name__]
+        return pd.DataFrame(data=np.array(results), columns=columns)
 
 
-class EulerChar(Descriptor):
+class EulerCharAlpha(Feature):
     """
     Computes the Euler characteristic of a 1-dimensional simplical complex, e.g. for the
     link of a vertex in a 2-dimensional triangulated surface.
     """
 
-    def __init__(self, **kwargs):
-        super().__init__(True, True, False)
-        self.alpha_param = kwargs.get("alpha_param", 200)
+    def __init__(self, alpha_desc, **kwargs):
+        super().__init__(alpha_desc.alpha_df)
+        self.link_edges = alpha_desc.link_edges
 
     def compute(self, **kwargs):
-        alpha_link = kwargs["alpha_link"]
 
-        vertices = set(itertools.chain.from_iterable(alpha_link))
-        return len(vertices) - len(alpha_link)
+        results = []
+        for qp_id, _ in self.df.groupby("qp_id"):
+            vertices = set(itertools.chain.from_iterable(self.link_edges[qp_id]))
+            results.append([qp_id, len(vertices) - len(self.link_edges[qp_id])])
+
+        columns = ["qp_id", self.__class__.__name__]
+        return pd.DataFrame(data=np.array(results), columns=columns)
 
 
-class LinkChar(Descriptor):
+class LinkTypeAlpha(Feature):
     """
     Computes a simplicial isomorphism invariant for a 1-dimensional simplicial complex,
     e.g. for tha link of a vertex in a 2-dimensional triangulated surface.
     """
 
-    def __init__(self, **kwargs):
-        super().__init__(True, True, False)
-        self.alpha_param = kwargs.get("alpha_param", 200)
+    def __init__(self, alpha_desc, **kwargs):
+        super().__init__(alpha_desc.alpha_df)
+        self.link_edges = alpha_desc.link_edges
 
     def compute(self, **kwargs):
 
-        alpha_link = kwargs["alpha_link"]
+        results = []
+        for qp_id, _ in self.df.groupby("qp_id"):
+            vertices = set(itertools.chain.from_iterable(self.link_edges[qp_id]))
+            results.append([qp_id, 1 - 0.5 * len(vertices) + len(self.link_edges[qp_id]) / 3])
 
-        vertices = set(itertools.chain.from_iterable(alpha_link))
-        return 1 - 0.5 * len(vertices) + len(alpha_link) / 3
+        columns = ["qp_id", self.__class__.__name__]
+        return pd.DataFrame(data=np.array(results), columns=columns)
 
 
-class IncidentAngleMedian(Descriptor):
+class CentralAngleStatsAlpha(Feature):
     """
     Compute median of angles incident to a given vertex, as indicated by
     edges making up the given vertex's link.
     """
 
-    def __init__(self, **kwargs):
-        super().__init__(True, True, True)
-        self.alpha_param = kwargs.get("alpha_param", 200)
+    def __init__(self, alpha_desc, **kwargs):
+        super().__init__(alpha_desc.alpha_df)
 
     def compute(self, **kwargs):
 
-        angles = kwargs["inner_angles"]
+        all_stats = []
+        for qp_id, group_df in self.df.groupby("qp_id"):
+            angles = group_df["central_angle"].values
 
-        if angles != np.NAN:
-            return np.median(angles)
+            if not np.isnan(angles).any():
+                all_stats.append([qp_id, np.mean(angles), np.median(np.sort(angles)), np.std(angles), np.var(angles)])
+            else:
+                all_stats.append([qp_id, np.NAN, np.NAN, np.NAN, np.NAN])
+
+        columns = ["Mean", "Median", "Std", "Var"]
+        columns = [f"{self.__class__.__name__}{col}" for col in columns]
+        columns.insert(0, "qp_id")
+        return pd.DataFrame(data=np.array(all_stats), columns=columns)
+
+
+class PLComplexDescriptor(Descriptor):
+
+    def __init__(self, twist_df):
+        self.ordered_vertices = {}
+        self.ordered_nn = {}
+        self.triangles = {}
+        self.df = pd.DataFrame()
+
+        # Group input_twist by 'qp_id'
+        for qp_id, group in twist_df.groupby("qp_id"):
+
+            self.ordered_vertices[qp_id], sorted_indices = geom.order_points_on_circle(
+                group[["twist_x", "twist_y", "twist_z"]].to_numpy()
+            )
+            self.ordered_nn[qp_id] = group["nn_id"].to_numpy()[sorted_indices]
+            self.triangles[qp_id] = self.compute_triangles(qp_id)
+            if self.triangles[qp_id] is not None:
+                self.df = pd.concat([self.df, self.compute_features(qp_id)])
+
+        self.desc = self.df
+
+    def compute_triangles(self, qp_id):
+
+        if self.ordered_vertices[qp_id].shape[0] < 2:
+            return None
+
+        center = np.array([0, 0, 0])
+        triangles = []
+        for i in range(self.ordered_vertices[qp_id].shape[0] - 1):
+            triangles.append(
+                geom.Triangle(center, self.ordered_vertices[qp_id][i, :], self.ordered_vertices[qp_id][i + 1, :])
+            )
+
+        triangles.append(geom.Triangle(center, self.ordered_vertices[qp_id][-1, :], self.ordered_vertices[qp_id][0]))
+
+        return triangles
+
+    def compute_features(self, qp_id):
+
+        central_angles = []
+        internal_angles = []
+        in_radii = []
+        circle_radii = []
+        areas = []
+        _, _, internal_part1 = self.triangles[qp_id][-1].inner_angles()
+        for t in self.triangles[qp_id]:
+            central_angle, internal_part2, next_part1 = t.inner_angles()
+            internal_angles.append(internal_part1 + internal_part2)
+            central_angles.append(central_angle)
+            internal_part1 = next_part1
+            _, in_radius = t.inscribed_circle()
+            _, circle_radius = t.circumcircle()
+            in_radii.append(in_radius)
+            circle_radii.append(circle_radius)
+            areas.append(t.area())
+
+        f_df = pd.DataFrame()
+        f_df["central_angle"] = central_angles
+        # f_df["internal_angles"] = internal_angles # complicated for sparse data, not really defined
+        f_df["area"] = areas
+        f_df["in_radius"] = in_radii
+        f_df["circle_radius"] = circle_radii
+        f_df["radii_ratio"] = f_df["circle_radius"].values / f_df["in_radius"].values
+        f_df["qp_id"] = qp_id
+        f_df["nn_id"] = self.ordered_nn[qp_id]
+
+        return f_df
+
+    def compute_outer_edges(self):
+        edges = [
+            (self.ordered_vertices[i], self.ordered_vertices[i + 1]) for i in range(len(self.ordered_vertices) - 1)
+        ]
+        edges.append((self.ordered_vertices[-1], self.ordered_vertices[0]))
+
+        return edges
+
+
+class AlphaComplexDescriptor(Descriptor):
+
+    def __init__(self, twist_df, alpha_param=200):
+        self.alpha_param = alpha_param
+        self.alpha_complexes = {}
+        self.stars = {}
+        self.triangles = {}
+        self.link_edges = {}
+        self.alpha_df = pd.DataFrame()
+
+        # Group input_twist by 'qp_id'
+        for qp_id, group in twist_df.groupby("qp_id"):
+            coord = group[["twist_x", "twist_y", "twist_z"]].to_numpy()
+            if coord.shape[0] < 2:
+                continue
+
+            self.triangles[qp_id], self.link_edges[qp_id] = self.compute_alpha_complex(coord)
+
+            if self.triangles[qp_id] is not None:
+                self.alpha_df = pd.concat([self.alpha_df, self.compute_features(qp_id)])
+
+        self.desc = self.alpha_df
+
+    def compute_alpha_complex(self, coord):
+
+        vertices = coord[:, :2]
+        vertices = np.vstack((np.zeros(2), vertices))
+
+        tri = Delaunay(vertices)
+
+        star_triangles = tri.simplices[np.any(tri.simplices == 0, axis=1)]  # remove those without the qp
+
+        if len(star_triangles) == 0:
+            return None, None
+
+        star_triangles = np.sort(star_triangles, axis=1)  # qp with idx 0 is always first
+
+        triangles = []
+        link_edges = []
+
+        for a, b, c in star_triangles:
+            t = geom.Triangle(np.zeros(3), coord[b - 1, :], coord[c - 1, :])
+            circum_radius = t.circumcircle_radius()
+            if (circum_radius**2) < self.alpha_param:
+                triangles.append(t)
+                link_edges.append([b - 1, c - 1])
+
+        if len(star_triangles) == 0:
+            return None, None
         else:
-            return angles
+            return triangles, link_edges
+
+    def compute_features(self, qp_id):
+
+        central_angles = []
+        in_radii = []
+        circle_radii = []
+        areas = []
+        for t in self.triangles[qp_id]:
+            central_angle, _, _ = t.inner_angles()
+            _, in_radius = t.inscribed_circle()
+
+            central_angles.append(central_angle)
+            in_radii.append(in_radius)
+            circle_radii.append(t.circumcircle_radius())
+            areas.append(t.area())
+
+        f_df = pd.DataFrame()
+        f_df["central_angle"] = central_angles
+        f_df["area"] = areas
+        f_df["in_radius"] = in_radii
+        f_df["circle_radius"] = circle_radii
+        f_df["radii_ratio"] = f_df["circle_radius"].values / f_df["in_radius"].values
+        f_df["qp_id"] = qp_id
+
+        return f_df
 
 
-class IncidentAngleSTD(Descriptor):
-    """
-    Compute median of angles incident to a given vertex, as indicated by
-    edges making up the given vertex's link.
-    """
+class Catalog:
 
-    def __init__(self, **kwargs):
-        # TODO - add support for alpha_link  and gnles computation directly to this class
-        super().__init__(True, True, True)
-        self.alpha_param = kwargs.get("alpha_param", 200)
+    def __init__(self):
+        self.module_name = None
+        self.parent_class_name = None
 
-    def compute(self, **kwargs):
-
-        angles = kwargs["inner_angles"]
-
-        if angles != np.NAN:
-            return np.std(angles)
-        else:
-            return angles
+    def get_all_supports(self, filter_contains=None, filter_exclude=None):
+        return get_class_names_by_parent(self.parent_class_name, self.module_name, filter_contains, filter_exclude)
 
 
-class PlanarAlphaComplex:
+class SupportCatalog(Catalog):
 
-    def __init__(self, alpha_param=200):
-        self.alpha = alpha_param
-        self.link_edges = None
-        self.stree = None
-        self.filtration = None
+    def __init__(self):
+        self.module_name = "cryocat.tango"
+        self.parent_class_name = "Support"
 
-    def compute_stree_and_filtration(self, coordinates):
 
-        alpha_complex = AlphaComplex(points=list(coordinates))
-        self.stree = alpha_complex.create_simplex_tree()
-        self.filtration = self.stree.get_filtration()
+class FeatureCatalog(Catalog):
 
-    def compute_link(self, vertex_index):
-        """
-        From an alpha complex tree (gudhi.AlphaComplex.create_simplex_tree()), compute
-        a vertex's link.
-        """
-        star = self.stree.get_star([vertex_index])
-        triangles = [x[0] for x in star if len(x[0]) == 3 and x[1] < self.alpha]
+    def __init__(self):
+        self.module_name = "cryocat.tango"
+        self.parent_class_name = "Feature"
 
-        self.link_edges = []
-        for x in triangles:
-            y = x.copy()
-            y.remove(vertex_index)
-            self.link_edges.append(y)
 
-        self.link_edges
+class FilterCatalog(Catalog):
 
-    def compute_inner_angles(self, coord, vertex_index=0, add_center=True):
-        # TODO - would it make sense to do this computation also for 3D?
+    def __init__(self):
+        self.module_name = "cryocat.tango"
+        self.parent_class_name = "Filter"
 
-        vertex_index = vertex_index
 
-        if add_center:
-            vertices = np.vstack((np.zeros(3), coord))
-        else:
-            vertices = coord
+class CustomDescriptor(Descriptor):
 
-        center = vertices[vertex_index]
-        angles = []
-        for [i, j] in self.link_edges:
-            point_i = vertices[i]
-            point_j = vertices[j]
-            vec1 = point_i - center
-            vec2 = point_j - center
-            angles.append(geom.angle_between_n_vectors(vec1, vec2))
-
-        if len(angles) == 0:
-            return np.NAN
-        else:
-            angles = [x for x in angles if not (isinstance(x, float) and math.isnan(x))]
-            return angles
+    def __init__(self, input_twist):
+        self.desc = None
+        self.df = input_twist
 
     @classmethod
-    def compute(cls, coord, alpha_param=200, make_planar=True, add_center=True):
-        if make_planar:
-            planar_points = coord[:, :2]  # takes only x,y
-        else:
-            planar_points = coord
-
-        if add_center:
-            planar_points = np.vstack((np.zeros(2), planar_points))  # add 0,0 for a query point
-
-        ac = PlanarAlphaComplex(alpha_param=alpha_param)
-        ac.compute_stree_and_filtration(planar_points)
-        ac.compute_link(0)
-        return ac
-
-
-class DescriptorCatalogue:
-
-    def __init__(self, planar=False, alpha_complex_needed=False, inner_angles_needed=False):
-        self.planar = planar
-        self.ac_needed = alpha_complex_needed
-        self.ac_angles_needed = inner_angles_needed
-        self.alpha_param = None
-        self.descriptors = None
+    def load(cls, desc_df):
+        dc = CustomDescriptor()
+        dc.desc = desc_df
+        return dc
 
     def set_support_parameters(self, current_desc):
 
@@ -1402,16 +1626,54 @@ class DescriptorCatalogue:
         add_kwargs = {"qp_support": qp_support}
         if self.ac_needed:
             coord = qp_support.get_twist_pos_np()
-            ac = PlanarAlphaComplex.compute(coord, alpha_param=self.alpha_param, make_planar=True, add_center=True)
+            ac = AlphaComplexDescriptor.compute(coord, alpha_param=self.alpha_param, make_planar=True, add_center=True)
             add_kwargs["alpha_link"] = ac.link_edges
             if self.ac_angles_needed:
                 add_kwargs["inner_angles"] = ac.compute_inner_angles(coord, vertex_index=0, add_center=True)
 
         return add_kwargs
 
-    def compute_descriptors(self, twist_feat, descriptor_list, descriptor_kwargs, support_class, support_kwargs):
+    def create_additional_descriptors(self, support, feature_list, feature_kwargs):
 
-        query_points = twist_feat.df["qp_id"].unique()
+        add_kwargs = {"twist_df": support}
+        alpha_computed = False
+        pl_computed = False
+        for f, f_kwargs in zip(feature_list, feature_kwargs):
+            if f.__name__.endswith("Alpha") and not alpha_computed:
+                add_kwargs["alpha_desc"] = AlphaComplexDescriptor(support, **f_kwargs)
+                alpha_computed = True
+            elif f.__name__.endswith("PL") and not pl_computed:
+                add_kwargs["pl_desc"] = PLComplexDescriptor(support, **f_kwargs)
+                pl_computed = True
+
+            if alpha_computed and pl_computed:
+                break
+
+        return add_kwargs
+
+    def build_descriptor(self, feature_list, feature_kwargs, support_class, support_kwargs):
+
+        feature_list = get_classes_from_names(feature_list, "cryocat.tango")
+        support_class = get_classes_from_names(support_class, "cryocat.tango")
+
+        support = support_class(self.df, **support_kwargs).support
+
+        if not feature_kwargs:
+            feature_kwargs = [{} for _ in range(len(feature_list))]
+
+        add_kwargs = self.create_additional_descriptors(support, feature_list, feature_kwargs)
+
+        self.desc = pd.DataFrame(self.df["qp_id"].unique(), columns=["qp_id"])
+
+        for f, f_kwargs in zip(feature_list, feature_kwargs):
+            current_feat_kwargs = {**f_kwargs, **add_kwargs}
+            current_feature = f(**current_feat_kwargs)
+            self.desc = pd.merge(self.desc, current_feature.compute(**current_feat_kwargs), on="qp_id", how="left")
+            # self.desc = pd.concat([, ], axis=1)
+
+    def compute_descriptors(self, twist_desc, descriptor_list, descriptor_kwargs, support_class, support_kwargs):
+
+        query_points = twist_desc.df["qp_id"].unique()
         qp_desc_values = []
 
         descriptor_list = get_classes_from_names(descriptor_list, "cryocat.tango")
@@ -1424,9 +1686,9 @@ class DescriptorCatalogue:
             self.set_support_parameters(d(**d_kwargs))
 
         for qp in query_points:
-            filtered_twist_feat = twist_feat.get_qp_twist_feat(qp)  # filter twist_feat based on the query point
-            qp_support = support_class(filtered_twist_feat, **support_kwargs).support  # get support for the query point
-            qp_single_desc_row = {}
+            filtered_twist_desc = twist_desc.get_qp_twist_desc(qp)  # filter twist_desc based on the query point
+            qp_support = support_class(filtered_twist_desc, **support_kwargs).support  # get support for the query point
+            qp_single_desc_row = {"qp_id": qp}
 
             add_kwargs = self.set_descriptor_parameters(qp_support)
 
@@ -1437,64 +1699,4 @@ class DescriptorCatalogue:
 
             qp_desc_values.append(qp_single_desc_row)
 
-        self.descriptors = pd.DataFrame(qp_desc_values)
-
-    def pca_analysis(self, variance_threshold=0.95):
-
-        desc_df = self.descriptors.dropna()
-        pca = PCA()  #
-        _ = pca.fit_transform(desc_df)
-
-        explained = pca.explained_variance_ratio_
-        cumulative = np.cumsum(explained)
-
-        # Choose number of components to explain at least 95% variance
-        n_components = np.argmax(cumulative >= variance_threshold) + 1
-        # print(explained)
-        print(f"Use {n_components} components to explain ≥95% variance")
-
-        # Square of loadings → proportion of variance that each feature contributes to each PC
-        components_matrix = pca.components_  # shape: (n_components, n_features)
-        loadings = components_matrix[:n_components, :] ** 2
-
-        # Sum contributions across selected components
-        feature_scores = loadings.sum(axis=0)
-
-        # Create a series with feature names
-        feature_importance = pd.Series(feature_scores, index=desc_df.columns)
-
-        # Sort if you want to see most important features
-        important_features = feature_importance.sort_values(ascending=False)
-        print(important_features)
-
-        return n_components, important_features
-
-
-def order_points_on_circle(points):
-    """
-    Orders points around a query point based on their arrangement on a circle.
-
-    Parameters:
-        points (np.ndarray): An array of shape (n, 3) representing the n points in 3D.
-            Points are assumed to be shifted towards origin
-
-    Returns:
-        ordered_points (np.ndarray): Points ordered by their angular position on the circle.
-    """
-
-    # Project points onto a plane (optional if already planar)
-    # Assuming points lie approximately in the xy-plane, we discard the z-coordinate.
-    planar_points = points[:, :2]
-
-    # Normalize points to unit circle
-    magnitudes = np.linalg.norm(planar_points, axis=1, keepdims=True)
-    normalized_points = planar_points / magnitudes
-
-    # Compute angles with respect to the x-axis
-    angles = np.arctan2(normalized_points[:, 1], normalized_points[:, 0])
-
-    # Sort points by angle
-    sorted_indices = np.argsort(angles)
-    ordered_points = points[sorted_indices]
-
-    return ordered_points
+        self.desc = pd.DataFrame(qp_desc_values)

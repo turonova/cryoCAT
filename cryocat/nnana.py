@@ -11,6 +11,208 @@ from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
 
+class NearestNeighbors:
+
+    def __init__(self, input_data=None, feature_id="tomo_id", nn_type="closest_dist", type_param=None):
+
+        if input_data is None:
+            self.features = None
+            self.df = None
+            return
+
+        motl_list = []
+        single_motl = False
+        if not isinstance(input_data, list):
+            motl_list.append(cryomotl.Motl.load(input_data))
+            motl_list.append(cryomotl.Motl.load(input_data))
+            single_motl = True
+        else:
+            for m in input_data:
+                motl_list.append(cryomotl.Motl.load(m))
+
+        features = motl_list[0].get_unique_values(feature_id)
+        for m in motl_list[1:]:
+            features = np.intersect1d(features, m.get_unique_values(feature_id), assume_unique=True)
+
+        results = []
+        columns = [
+            "motl_id",
+            feature_id,
+            "qp_id",
+            "qp_subtomo_id",
+            "nn_id",
+            "nn_subtomo_id",
+            "qp_angles_phi",
+            "qp_angles_theta",
+            "qp_angles_psi",
+            "qp_coord_x",
+            "qp_coord_y",
+            "qp_coord_z",
+            "nn_angles_phi",
+            "nn_angles_theta",
+            "nn_angles_psi",
+            "nn_coord_x",
+            "nn_coord_y",
+            "nn_coord_z",
+        ]
+
+        if nn_type == "closest_dist":
+            columns.append("nn_dist")
+
+        for f in features:
+            fm_qp = motl_list[0].get_motl_subset(feature_values=f, feature_id=feature_id)
+            qp_subtomos = fm_qp.df["subtomo_id"].values
+            qp_angles = fm_qp.get_angles()
+            qp_coord = fm_qp.get_coordinates()
+
+            for i, m in enumerate(motl_list[1:], start=1):
+                fm_nn = m.get_motl_subset(feature_values=f, feature_id=feature_id)
+                nn_subtomos = fm_nn.df["subtomo_id"].values
+                nn_angles = fm_nn.get_angles()
+                nn_coord = fm_nn.get_coordinates()
+
+                def stack_nn_results(qp_idx, nn_idx):
+                    counts = np.array([len(n) for n in nn_idx])
+                    if counts.sum() == 0:
+                        return None
+
+                    nn_idx_flat = np.concatenate(nn_idx)
+
+                    qp_idx_expanded = np.repeat(qp_idx, counts)
+
+                    qp_angles_expanded = qp_angles[qp_idx_expanded]
+                    qp_coord_expanded = qp_coord[qp_idx_expanded]
+                    nn_angles_expanded = nn_angles[nn_idx_flat]
+                    nn_coord_expanded = nn_coord[nn_idx_flat]
+
+                    stacked = np.column_stack(
+                        [
+                            np.repeat(i, counts.sum()),
+                            np.repeat(f, counts.sum()),
+                            qp_idx_expanded,
+                            qp_subtomos[qp_idx_expanded],
+                            nn_idx_flat,
+                            nn_subtomos[nn_idx_flat],
+                            qp_angles_expanded,
+                            qp_coord_expanded,
+                            nn_angles_expanded,
+                            nn_coord_expanded,
+                        ]
+                    )
+                    return stacked
+
+                if nn_type == "closest_dist":
+                    nn_count = type_param or 1
+                    qp_idx, nn_idx, nn_dist, _ = get_feature_nn_indices(
+                        fm_qp, fm_nn, nn_number=nn_count, remove_qp=single_motl
+                    )
+
+                    stacked = stack_nn_results(qp_idx, nn_idx)
+
+                    if stacked is None:
+                        continue
+
+                    stacked = np.hstack((stacked, np.atleast_2d(np.concatenate(nn_dist))))
+                    results.append(stacked)
+
+                else:
+                    radius = type_param or 1
+                    qp_idx, nn_idx = get_feature_nn_within_radius(fm_qp, fm_nn, radius=radius, remove_qp=single_motl)
+                    stacked = stack_nn_results(qp_idx, nn_idx)
+                    if stacked is None:
+                        continue
+                    results.append(stacked)
+
+        final_array = np.vstack(results)
+
+        self.df = pd.DataFrame(data=final_array, columns=columns)
+
+        # self.motls = motl_list
+        self.features = features
+        self.feature_id = feature_id
+        # self.feature_id = feature_id
+
+    def get_unique_values(self):
+        return self.features
+
+    def get_nn_subset(self, motl_values, feature_values):
+        nn_subset = NearestNeighbors()
+        if not isinstance(motl_values, list):
+            motl_values = [motl_values]
+        if not isinstance(feature_values, list):
+            feature_values = [feature_values]
+
+        nn_subset.df = self.df[
+            (self.df["motl_id"].isin(motl_values)) & (self.df[self.feature_id].isin(feature_values))
+        ].copy()
+        nn_subset.features = feature_values
+
+        return nn_subset
+
+    def get_normalized_coord(self):
+
+        norm_coord = (
+            self.df[["nn_coord_x", "nn_coord_y", "nn_coord_z"]].to_numpy()
+            - self.df[["qp_coord_x", "qp_coord_y", "qp_coord_z"]].to_numpy()
+        )
+        return norm_coord
+
+    def get_qp_rotations(self):
+        angles = self.df[["qp_angles_phi", "qp_angles_theta", "qp_angles_psi"]].to_numpy()
+        return srot.from_euler("zxz", degrees=True, angles=angles)
+
+    def get_nn_rotations(self):
+        angles = self.df[["nn_angles_phi", "nn_angles_theta", "nn_angles_psi"]].to_numpy()
+        return srot.from_euler("zxz", degrees=True, angles=angles)
+
+
+def get_feature_nn_within_radius(fm_a, fm_nn, radius, remove_qp=False):
+    """Get nearest neighbors within a specified radius from a set of coordinates which are feature specific.
+
+    Parameters
+    ----------
+    fm_a : cryomotl.Motl
+        A motl for which nearest neighbors are to be found.
+    fm_nn : cryomotl.Motl
+        A motl in which the nearest neighbors will be searched for.
+    radius : float
+        The distance within which to search for nearest neighbors.
+    remove_qp : bool, default=False
+        If True, the query point will be removed from nn_indices. Default is False.
+
+    Returns
+    -------
+    qp_indices : numpy.ndarray
+        An array of indices representing the query particles for which neighbors are found.
+    nn_indices : list of list of int
+        A list where each element is a list of indices of the nearest neighbors corresponding to each center index.
+
+    Notes
+    -----
+    This function uses a KDTree for efficient spatial querying of nearest neighbors. If `unique_only` is set to True,
+    it ensures that each neighbor is unique by removing duplicates.
+    """
+
+    coord_qp = fm_a.get_coordinates()
+    coord_nn = fm_nn.get_coordinates()
+    kdt_nn = sn.KDTree(coord_nn)
+    nn_idx = kdt_nn.query_radius(coord_qp, radius)
+
+    qp_indices = []
+    nn_indices = []
+
+    for i, neighbors in enumerate(nn_idx):
+        # Optionally remove self from neighbors
+        if remove_qp:
+            neighbors = neighbors[neighbors != i]
+
+        if len(neighbors) > 0:
+            qp_indices.append(i)
+            nn_indices.append(np.sort(neighbors))
+
+    return qp_indices, nn_indices
+
+
 def get_nn_within_distance(feature_motl, radius, unique_only=True):
     """Get nearest neighbors within a specified distance from a set of coordinates.
 
@@ -72,7 +274,7 @@ def get_nn_within_distance(feature_motl, radius, unique_only=True):
     return center_idx, nn_idx
 
 
-def get_feature_nn_indices(fm_a, fm_nn, nn_number=1):
+def get_feature_nn_indices(fm_a, fm_nn, nn_number=1, remove_qp=False):
     """Get the indices and distances of nearest neighbors for given feature coordinates.
 
     Parameters
@@ -97,6 +299,9 @@ def get_feature_nn_indices(fm_a, fm_nn, nn_number=1):
     nn_count : int
         The actual number of nearest neighbors retrieved, which is the minimum of `nn_number` and the number of
         available neighbors.
+    remove_qp: bool, default=False
+        Whether to remove nn correspodning to the query point. Should be set to True, if the function is called on the same
+        motl.
 
     Notes
     -----
@@ -105,6 +310,9 @@ def get_feature_nn_indices(fm_a, fm_nn, nn_number=1):
 
     coord_a = fm_a.get_coordinates()
     coord_nn = fm_nn.get_coordinates()
+
+    if remove_qp:
+        nn_count = nn_count + 1  # increase number of nns, so one can delete the query point.
 
     nn_count = min(nn_number, coord_nn.shape[0])
     kdt_nn = sn.KDTree(coord_nn)
