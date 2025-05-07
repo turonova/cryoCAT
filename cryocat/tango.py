@@ -736,13 +736,7 @@ class Descriptor:
 
 class TwistDescriptor(Descriptor):
 
-    def __init__(
-        self,
-        input_twist=None,
-        input_motl=None,
-        nn_radius=None,
-        symm=False,
-    ):
+    def __init__(self, input_twist=None, input_motl=None, nn_radius=None, symm=False, remove_qp=False):
 
         if input_twist is not None:
             if isinstance(input_twist, pd.DataFrame):
@@ -750,7 +744,7 @@ class TwistDescriptor(Descriptor):
             elif isinstance(input_twist, str):
                 self.df = self.read_in(input_twist)
         elif input_motl is not None and isinstance(nn_radius, (float, int)):
-            self.df = TwistDescriptor.get_nn_twist_stats_within_radius(input_motl, nn_radius, symm)
+            self.df = TwistDescriptor.get_nn_twist_stats_within_radius(input_motl, nn_radius, symm, remove_qp=remove_qp)
         else:
             raise ValueError(
                 "One has to specify (at least) either input_twist or input_motl in combination with nn_radius."
@@ -910,9 +904,11 @@ class TwistDescriptor(Descriptor):
         return part[0].max_dissimilarity(), part[0].category
 
     @staticmethod
-    def get_nn_twist_stats_within_radius(input_motl, nn_radius, symm=False):
+    def get_nn_twist_stats_within_radius(input_motl, nn_radius, symm=False, remove_qp=False):
 
-        nn = nnana.NearestNeighbors(input_motl, feature_id="tomo_id", nn_type="radius", type_param=nn_radius)
+        nn = nnana.NearestNeighbors(
+            input_motl, feature_id="tomo_id", nn_type="radius", type_param=nn_radius, remove_qp=remove_qp
+        )
         symm_max_value, symm_category = TwistDescriptor.get_symm_parameters(input_motl=input_motl, symm=symm)
         tomo_idx = nn.get_unique_values()
 
@@ -1390,6 +1386,37 @@ class NNCount(Feature):
         return pd.DataFrame(data=np.array(results), columns=columns)
 
 
+class CountSHOT(Feature):
+
+    def __init__(self, shot_desc, **kwargs):
+        super().__init__(shot_desc.shot_df)
+        self.cone_number = shot_desc.cone_number
+        self.shell_number = shot_desc.shell_number
+
+    def compute(self):
+
+        # Count combinations of (qp_id, cone_id, shell_id)
+        counts = self.df.groupby(["qp_id", "cone_id", "shell_id"]).size().reset_index(name="count")
+
+        # Create unique column label for each (cone_id, shell_id)
+        counts["cone_shell"] = counts.apply(
+            lambda row: f"{self.__class__.__name__}_c{int(row['cone_id'])}_s{int(row['shell_id'])}", axis=1
+        )
+
+        # Pivot table: one row per qp_id, columns are cone-shell combos
+        pivot = counts.pivot_table(index="qp_id", columns="cone_shell", values="count", fill_value=0)
+
+        # Define all expected column names
+        all_labels = [
+            f"{self.__class__.__name__}_c{c}_s{s}" for c in range(self.cone_number) for s in range(self.shell_number)
+        ]
+
+        # Reindex to include all cone-shell combinations
+        pivot = pivot.reindex(columns=all_labels, fill_value=0)
+
+        return pivot.reset_index()
+
+
 class EulerCharAlpha(Feature):
     """
     Computes the Euler characteristic of a 1-dimensional simplical complex, e.g. for the
@@ -1541,6 +1568,8 @@ class SHOTDescriptor(Descriptor):
     def __init__(self, twist_df, cone_number=6, shell_number=1):
 
         max_radius = twist_df["euclidean_distance"].max()
+        self.cone_number = cone_number
+        self.shell_number = shell_number
 
         self.shot_df = pd.DataFrame()
         # Group input_twist by 'qp_id'
@@ -1760,34 +1789,12 @@ class CustomDescriptor(Descriptor):
         dc.desc = desc_df
         return dc
 
-    def set_support_parameters(self, current_desc):
-
-        if current_desc.ac_link_needed:
-            self.ac_needed = True
-            if self.alpha_param is None:  # save only for the first occurence
-                self.alpha_param = current_desc.alpha_param
-            elif self.alpha_param != current_desc.alpha_param:
-                raise ValueError("The alpha parameter has to be same for all features.")
-            if current_desc.ac_inner_angles_needed:
-                self.ac_angles_needed = True
-
-    def set_descriptor_parameters(self, qp_support):
-
-        add_kwargs = {"qp_support": qp_support}
-        if self.ac_needed:
-            coord = qp_support.get_twist_pos_np()
-            ac = AlphaComplexDescriptor.compute(coord, alpha_param=self.alpha_param, make_planar=True, add_center=True)
-            add_kwargs["alpha_link"] = ac.link_edges
-            if self.ac_angles_needed:
-                add_kwargs["inner_angles"] = ac.compute_inner_angles(coord, vertex_index=0, add_center=True)
-
-        return add_kwargs
-
     def create_additional_descriptors(self, support, feature_list, feature_kwargs):
 
         add_kwargs = {"twist_df": support}
         alpha_computed = False
         pl_computed = False
+        shot_computed = False
         for f, f_kwargs in zip(feature_list, feature_kwargs):
             if f.__name__.endswith("Alpha") and not alpha_computed:
                 add_kwargs["alpha_desc"] = AlphaComplexDescriptor(support, **f_kwargs)
@@ -1795,8 +1802,10 @@ class CustomDescriptor(Descriptor):
             elif f.__name__.endswith("PL") and not pl_computed:
                 add_kwargs["pl_desc"] = PLComplexDescriptor(support, **f_kwargs)
                 pl_computed = True
-
-            if alpha_computed and pl_computed:
+            elif f.__name__.endswith("SHOT") and not shot_computed:
+                add_kwargs["shot_desc"] = SHOTDescriptor(support, **f_kwargs)
+                shot_computed = True
+            if alpha_computed and pl_computed and shot_computed:
                 break
 
         return add_kwargs
@@ -1820,33 +1829,3 @@ class CustomDescriptor(Descriptor):
             current_feature = f(**current_feat_kwargs)
             self.desc = pd.merge(self.desc, current_feature.compute(**current_feat_kwargs), on="qp_id", how="left")
             # self.desc = pd.concat([, ], axis=1)
-
-    def compute_descriptors(self, twist_desc, descriptor_list, descriptor_kwargs, support_class, support_kwargs):
-
-        query_points = twist_desc.df["qp_id"].unique()
-        qp_desc_values = []
-
-        descriptor_list = get_classes_from_names(descriptor_list, "cryocat.tango")
-        support_class = get_classes_from_names(support_class, "cryocat.tango")
-
-        if not descriptor_kwargs:
-            descriptor_kwargs = [{} for _ in range(len(descriptor_list))]
-
-        for d, d_kwargs in zip(descriptor_list, descriptor_kwargs):
-            self.set_support_parameters(d(**d_kwargs))
-
-        for qp in query_points:
-            filtered_twist_desc = twist_desc.get_qp_twist_desc(qp)  # filter twist_desc based on the query point
-            qp_support = support_class(filtered_twist_desc, **support_kwargs).support  # get support for the query point
-            qp_single_desc_row = {"qp_id": qp}
-
-            add_kwargs = self.set_descriptor_parameters(qp_support)
-
-            for d, d_kwargs in zip(descriptor_list, descriptor_kwargs):
-                current_desc = d(**d_kwargs)
-                current_desc_kwargs = {**d_kwargs, **add_kwargs}
-                qp_single_desc_row[d.__name__] = current_desc.compute(**current_desc_kwargs)
-
-            qp_desc_values.append(qp_single_desc_row)
-
-        self.desc = pd.DataFrame(qp_desc_values)

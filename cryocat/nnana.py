@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 
 class NearestNeighbors:
 
-    def __init__(self, input_data=None, feature_id="tomo_id", nn_type="closest_dist", type_param=None):
+    def __init__(self, input_data=None, feature_id="tomo_id", nn_type="closest_dist", type_param=None, remove_qp=None):
 
         if input_data is None:
             self.features = None
@@ -30,6 +30,7 @@ class NearestNeighbors:
             for m in input_data:
                 motl_list.append(cryomotl.Motl.load(m))
 
+        single_motl = remove_qp or single_motl  # remove_qp can override the default
         features = motl_list[0].get_unique_values(feature_id)
         for m in motl_list[1:]:
             features = np.intersect1d(features, m.get_unique_values(feature_id), assume_unique=True)
