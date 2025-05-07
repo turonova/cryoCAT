@@ -25,7 +25,7 @@ dependencies = [
     "numba>=0.60.0",
     "pyyaml>=6.0.1",
     "tqdm>=4.66.1",
-    "gudhi>=3.11",
+    "plotly>=5.24",
 ]
 classifiers = [
     "Intended Audience :: Science/Research",

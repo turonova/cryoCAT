@@ -112,7 +112,7 @@ class NearestNeighbors:
                     if stacked is None:
                         continue
 
-                    stacked = np.hstack((stacked, np.atleast_2d(np.concatenate(nn_dist))))
+                    stacked = np.column_stack((stacked, np.concatenate(nn_dist)))
                     results.append(stacked)
 
                 else:

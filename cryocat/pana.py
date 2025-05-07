@@ -32,7 +32,7 @@ def rotate_image(image, alpha, fill_mode="constant", fill_value=0.0):
     Uses `skimage.transform.rotate` to rotate the input image without resizing
     the output. Pixels outside the boundaries of the input are filled
     according to the specified mode and fill value.
-    
+
     Some descriptions are taken from skicit-image page (https://scikit-image.org).
 
     Parameters
@@ -295,7 +295,7 @@ def create_structure_path(folder_path, structure_name):
     structure_folder : str
         Full path to the structure folder.
     """
-    
+
     structure_folder = folder_path + structure_name + "/"
     return structure_folder
 
@@ -322,7 +322,7 @@ def create_em_path(folder_path, structure_name, em_filename):
     structure_folder_path = create_structure_path(folder_path, structure_name)
     em_path = structure_folder_path + em_filename + ".em"
     return em_path
-    
+
 
 def create_subtomo_name(structure_name, motl_name, tomo_id, boxsize):
     """
@@ -338,7 +338,7 @@ def create_subtomo_name(structure_name, motl_name, tomo_id, boxsize):
     tomo_id : str
         Tomogram id/number from which the subtomogram is extracted.
     boxsize : int
-        Size of the subtomogram box in voxels. 
+        Size of the subtomogram box in voxels.
 
     Returns
     -------
@@ -434,7 +434,7 @@ def create_output_base_name(tmpl_index):
 
 def create_output_folder_name(tmpl_index):
     """
-    Generates the name of the folder (not the full path) where the peak analysis 
+    Generates the name of the folder (not the full path) where the peak analysis
     results will be stored, given the index of the row from the template list csv.
 
     Parameters
@@ -446,7 +446,7 @@ def create_output_folder_name(tmpl_index):
     -------
     str
         The name of result folder. It should be "id_<tmpl_index>_results".
-        
+
     """
 
     return create_output_base_name(tmpl_index) + "_results"
@@ -463,16 +463,14 @@ def create_output_folder_path(folder_path, structure_name, folder_spec):
     structure_name : str
         The name of the structure.
     folder_spec : int or else
-        Information about the output folder.
-        If int (should be an index from the template list csv), 
-             the output folder name will be "id_<folder_spec>_results";
-        if not int, the output folder name will be "<folder_spec>".
+        Information about the output folder. If int (should be an index from the template list csv), the output folder
+        name will be "id_<folder_spec>_results". If not int, the output folder name will be "<folder_spec>".
 
     Returns
     -------
     output_path : str
         The full path to the output folder. Should be either "id_<folder_spec>_results" or "<folder_spec>".
- 
+
     """
 
     if isinstance(folder_spec, int):
@@ -524,14 +522,14 @@ def get_sharp_mask_stats(input_mask):
     ----------
     input_mask : str or numpy.ndarray
          Input mask specified either by its path or already loaded as 3D numpy.ndarray.
-         The nonzero element in this mask has sharp edges, i.e.: the values inside the mask are either 1 or 0.    
+         The nonzero element in this mask has sharp edges, i.e.: the values inside the mask are either 1 or 0.
 
     Returns
     -------
     n_voxels : int
-        The number of voxels of where the input_mask is not zero. 
+        The number of voxels of where the input_mask is not zero.
     mask_bb : tuple of int
-        The bounding box size in (x, y, z) of the nonzero element. 
+        The bounding box size in (x, y, z) of the nonzero element.
     """
 
     mask_bb = cryomask.get_mass_dimensions(input_mask)
@@ -553,9 +551,9 @@ def get_soft_mask_stats(input_mask):
     Returns
     -------
     n_voxels : int
-        The number of voxels of where the input_mask is bigger than 0.5. 
+        The number of voxels of where the input_mask is bigger than 0.5.
     mask_bb : tuple of int
-        The bounding box size in (x, y, z) of the element that has values bigger than 0.5. 
+        The bounding box size in (x, y, z) of the element that has values bigger than 0.5.
     """
 
     # mask the mask where the values are bigger than 0.5
@@ -665,6 +663,7 @@ def create_subtomograms_for_tm(template_list, parent_folder_path):
     temp_df.to_csv(template_list)
 
     return temp_df
+
 
 def get_mask_stats(template_list, indices, parent_folder_path):
     temp_df = pd.read_csv(template_list, index_col=0)

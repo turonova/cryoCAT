@@ -8,9 +8,11 @@ import itertools
 import pandas as pd
 
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
 from functools import partial
 
 from scipy.spatial.transform import Rotation as R
+from sklearn.preprocessing import StandardScaler
 from scipy.linalg import logm
 from scipy.interpolate import interp1d
 from sklearn.decomposition import PCA
@@ -26,6 +28,7 @@ from cryocat.geom import Matrix
 from cryocat.classutils import get_classes_from_names, get_class_names_by_parent
 from cryocat import visplot
 import pandas as pd
+import plotly.graph_objects as go
 
 
 class Particle:
@@ -565,6 +568,7 @@ class Descriptor:
 
     def __init__(self):
         self.desc = None
+        self.df = None
         self.pca_components = 1
 
     @staticmethod
@@ -600,6 +604,8 @@ class Descriptor:
 
         desc_df = self.remove_nans(self.desc, axis_type=nan_drop)
         desc_df = desc_df.drop(columns=["qp_id"])
+        if "nn_id" in desc_df.columns:
+            desc_df = desc_df.drop(columns=["nn_id"])
 
         pca = PCA()
         _ = pca.fit_transform(desc_df)
@@ -656,6 +662,9 @@ class Descriptor:
         qp_ids = pca_df["qp_id"].to_numpy()
         pca_df = pca_df.drop(columns=["qp_id"])
 
+        if "nn_id" in pca_df.columns:
+            pca_df = pca_df.drop(columns=["nn_id"])
+
         pca = PCA(n_components=pca_components)
         X_pca = pca.fit_transform(pca_df)
 
@@ -664,19 +673,28 @@ class Descriptor:
 
         return pd.DataFrame(X_pca, columns=columns), qp_ids
 
-    def k_means_clustering(self, n_clusters, nan_drop="row", pca_dict=None, feature_ids="all"):
+    def k_means_clustering(self, n_clusters, nan_drop="row", pca_dict=None, feature_ids="all", scale_data=True):
 
         if pca_dict is None:
             km_data = self.remove_nans(self.desc, axis_type=nan_drop)
             km_data = self.filter_features(km_data, feature_ids=feature_ids)
             qp_ids = km_data["qp_id"].to_numpy()
             km_data = km_data.drop(columns=["qp_id"])
+            if "nn_id" in km_data.columns:
+                km_data = km_data.drop(columns=["nn_id"])
         else:
             km_data, qp_ids = self.compute_pca(**pca_dict, feature_ids=feature_ids, nan_drop=nan_drop)
 
         # Run k-means
         kmeans = KMeans(n_clusters=n_clusters, n_init="auto")
-        clusters = kmeans.fit_predict(km_data)
+
+        # Scale data
+        if scale_data:
+            scaler = StandardScaler()
+            scaled_data = scaler.fit_transform(km_data)
+            clusters = kmeans.fit_predict(scaled_data)
+        else:
+            clusters = kmeans.fit_predict(km_data)
 
         # Make DataFrame
         result_df = pd.DataFrame(km_data, columns=km_data.columns)
@@ -684,6 +702,33 @@ class Descriptor:
         result_df["qp_id"] = qp_ids
 
         return result_df
+
+    def plot_k_means(self, color_column):
+
+        if "nn_id" in self.df.columns and "nn_id" in self.desc.columns:
+            merged_df = pd.merge(self.desc, self.df, on=["qp_id", "nn_id"], how="left")
+        else:
+            merged_df = pd.merge(self.desc, self.df, on="qp_id", how="left")
+
+        fig = go.Figure(
+            data=[
+                go.Scatter3d(
+                    x=merged_df["twist_x"],
+                    y=merged_df["twist_y"],
+                    z=merged_df["twist_z"],
+                    mode="markers",
+                    marker=dict(size=3, opacity=1, color=merged_df[color_column], colorbar=dict(title="Group")),
+                )
+            ]
+        )
+
+        fig.update_layout(
+            title="K-means analysis",
+            scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
+            margin=dict(l=0, r=0, b=0, t=30),
+        )
+
+        fig.show()
 
 
 ###### TwistDescriptor Class ######
@@ -875,7 +920,8 @@ class TwistDescriptor(Descriptor):
 
         for tomo_id in tomo_idx:
             t_nn = nn.get_nn_subset(motl_values=1, feature_values=tomo_id)
-            results.append(TwistDescriptor.process_tomo_twist(t_nn, symm, symm_max_value, symm_category))
+            if t_nn.df.shape[0] > 0:
+                results.append(TwistDescriptor.process_tomo_twist(t_nn, symm, symm_max_value, symm_category))
 
         # if len(tomo_idx) == 1:
         #     work_opt = 1
@@ -1418,7 +1464,7 @@ class PLComplexDescriptor(Descriptor):
         self.ordered_vertices = {}
         self.ordered_nn = {}
         self.triangles = {}
-        self.df = pd.DataFrame()
+        self.pl_df = pd.DataFrame()
 
         # Group input_twist by 'qp_id'
         for qp_id, group in twist_df.groupby("qp_id"):
@@ -1429,9 +1475,10 @@ class PLComplexDescriptor(Descriptor):
             self.ordered_nn[qp_id] = group["nn_id"].to_numpy()[sorted_indices]
             self.triangles[qp_id] = self.compute_triangles(qp_id)
             if self.triangles[qp_id] is not None:
-                self.df = pd.concat([self.df, self.compute_features(qp_id)])
+                self.pl_df = pd.concat([self.pl_df, self.compute_features(qp_id)])
 
-        self.desc = self.df
+        self.desc = self.pl_df
+        self.df = twist_df
 
     def compute_triangles(self, qp_id):
 
@@ -1489,6 +1536,108 @@ class PLComplexDescriptor(Descriptor):
         return edges
 
 
+class SHOTDescriptor(Descriptor):
+
+    def __init__(self, twist_df, cone_number=6, shell_number=1):
+
+        max_radius = twist_df["euclidean_distance"].max()
+
+        self.shot_df = pd.DataFrame()
+        # Group input_twist by 'qp_id'
+        for qp_id, group_df in twist_df.groupby("qp_id"):
+            coord = group_df[["twist_x", "twist_y", "twist_z"]].to_numpy()
+            assigned_df = self.assign_shell_and_cone_ids(qp_id, coord, shell_number, cone_number, radius=max_radius)
+            assigned_df["qp_id"] = qp_id
+            assigned_df["nn_id"] = group_df["nn_id"].values
+            self.shot_df = pd.concat([self.shot_df, assigned_df])
+
+        self.desc = self.shot_df
+        self.df = twist_df
+
+    def fixed_cone_directions(self, num_cones):
+        """
+        Return evenly distributed unit vectors for small num_cones (hand-picked for symmetry).
+        These directions include one at [0, 0, 1] and others at standard axes for low counts.
+        """
+        if num_cones == 2:
+            return np.array([[0, 0, 1], [0, 0, -1]])
+        elif num_cones == 4:
+            return np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0], [0, 0, -1]])
+        elif num_cones == 6:
+            return np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0], [0, 0, -1], [0, -1, 0], [-1, 0, 0]])
+        elif num_cones == 18:
+            return np.array(
+                [-1.0, 0.0, 0.0],
+                [-0.707107, -0.707107, 0.0],
+                [-0.707107, 0.0, -0.707107],
+                [-0.707107, 0.0, 0.707107],
+                [-0.707107, 0.707107, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, -0.707107, -0.707107],
+                [0.0, -0.707107, 0.707107],
+                [0.0, 0.0, -1.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.707107, -0.707107],
+                [0.0, 0.707107, 0.707107],
+                [0.0, 1.0, 0.0],
+                [0.707107, -0.707107, 0.0],
+                [0.707107, 0.0, -0.707107],
+                [0.707107, 0.0, 0.707107],
+                [0.707107, 0.707107, 0.0],
+                [1.0, 0.0, 0.0],
+            )
+        else:
+            raise ValueError(f"No fixed directions for {num_cones} cones. Please define them.")
+
+    def assign_cone_ids_by_dot(points, cone_dirs):
+        """
+        Assign each point to the cone direction with which it has the largest cosine similarity.
+        All inputs must be normalized.
+        """
+        # Normalize points
+        points = points / np.linalg.norm(points, axis=1, keepdims=True)
+
+        # Ensure cone_dirs are normalized too
+        cone_dirs = cone_dirs / np.linalg.norm(cone_dirs, axis=1, keepdims=True)
+
+        # Compute cosine similarity: (N_points x N_cones)
+        cos_sim = points @ cone_dirs.T  # dot product
+
+        # For each point, pick the cone with highest dot product
+        cone_id = np.argmax(cos_sim, axis=1)
+
+        return cone_id
+
+    def assign_shell_and_cone_ids(self, qp_id, points, num_shells, num_cones, radius=1.0):
+        points = np.atleast_2d(np.asarray(points))
+        r_norms = np.linalg.norm(points, axis=1)
+
+        # Assign shell_id by radial distance
+        shell_edges = np.linspace(0, radius, num_shells + 1)
+        shell_id = np.digitize(r_norms, shell_edges) - 1
+
+        # Get predefined cone directions
+        cone_dirs = self.fixed_cone_directions(num_cones)
+
+        # Normalize points and cone directions
+        normed_points = points / np.linalg.norm(points, axis=1, keepdims=True)
+        normed_cones = cone_dirs / np.linalg.norm(cone_dirs, axis=1, keepdims=True)
+
+        # Compute cosine similarity (dot product)
+        cos_sim = normed_points @ normed_cones.T  # shape: (N_points, N_cones)
+
+        # Choose cone with maximum cosine similarity (i.e., smallest angle)
+        cone_id = np.argmax(cos_sim, axis=1)
+
+        # Assemble dataframe
+        df = pd.DataFrame()
+        df["shell_id"] = shell_id
+        df["cone_id"] = cone_id
+        df["qp_id"] = qp_id
+
+        return df
+
+
 class AlphaComplexDescriptor(Descriptor):
 
     def __init__(self, twist_df, alpha_param=200):
@@ -1511,6 +1660,7 @@ class AlphaComplexDescriptor(Descriptor):
                 self.alpha_df = pd.concat([self.alpha_df, self.compute_features(qp_id)])
 
         self.desc = self.alpha_df
+        self.df = twist_df
 
     def compute_alpha_complex(self, coord):
 
