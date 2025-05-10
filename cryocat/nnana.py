@@ -13,7 +13,15 @@ import plotly.graph_objects as go
 
 class NearestNeighbors:
 
-    def __init__(self, input_data=None, feature_id="tomo_id", nn_type="closest_dist", type_param=None, remove_qp=None):
+    def __init__(
+        self,
+        input_data=None,
+        feature_id="tomo_id",
+        nn_type="closest_dist",
+        type_param=None,
+        remove_qp=None,
+        remove_duplicates=False,
+    ):
 
         if input_data is None:
             self.features = None
@@ -31,6 +39,7 @@ class NearestNeighbors:
                 motl_list.append(cryomotl.Motl.load(m))
 
         single_motl = remove_qp or single_motl  # remove_qp can override the default
+
         features = motl_list[0].get_unique_values(feature_id)
         for m in motl_list[1:]:
             features = np.intersect1d(features, m.get_unique_values(feature_id), assume_unique=True)
@@ -128,10 +137,32 @@ class NearestNeighbors:
 
         self.df = pd.DataFrame(data=final_array, columns=columns)
 
+        if remove_duplicates:
+            self.df = self.drop_symmetric_duplicates()
+
         # self.motls = motl_list
         self.features = features
         self.feature_id = feature_id
         # self.feature_id = feature_id
+
+    def drop_symmetric_duplicates(self):
+
+        qp_col = "qp_subtomo_id"
+        nn_col = "nn_subtomo_id"
+        # Create a tuple (min_id, max_id) so (1,2) and (2,1) become the same
+        pairs = self.df[[qp_col, nn_col]].apply(lambda row: tuple(sorted(row)), axis=1)
+
+        # Add to a temp column
+        self.df = self.df.copy()
+        self.df["_pair_key"] = pairs
+
+        # Drop duplicates based on the sorted pair
+        df_unique = self.df.drop_duplicates(subset="_pair_key")
+
+        # Remove temp column
+        df_unique = df_unique.drop(columns="_pair_key")
+
+        return df_unique
 
     def get_unique_values(self):
         return self.features
@@ -313,7 +344,7 @@ def get_feature_nn_indices(fm_a, fm_nn, nn_number=1, remove_qp=False):
     coord_nn = fm_nn.get_coordinates()
 
     if remove_qp:
-        nn_count = nn_count + 1  # increase number of nns, so one can delete the query point.
+        nn_number = nn_number + 1  # increase number of nns, so one can delete the query point.
 
     nn_count = min(nn_number, coord_nn.shape[0])
     kdt_nn = sn.KDTree(coord_nn)

@@ -736,7 +736,9 @@ class Descriptor:
 
 class TwistDescriptor(Descriptor):
 
-    def __init__(self, input_twist=None, input_motl=None, nn_radius=None, symm=False, remove_qp=False):
+    def __init__(
+        self, input_twist=None, input_motl=None, nn_radius=None, symm=False, remove_qp=False, remove_duplicates=False
+    ):
 
         if input_twist is not None:
             if isinstance(input_twist, pd.DataFrame):
@@ -744,7 +746,9 @@ class TwistDescriptor(Descriptor):
             elif isinstance(input_twist, str):
                 self.df = self.read_in(input_twist)
         elif input_motl is not None and isinstance(nn_radius, (float, int)):
-            self.df = TwistDescriptor.get_nn_twist_stats_within_radius(input_motl, nn_radius, symm, remove_qp=remove_qp)
+            self.df = TwistDescriptor.get_nn_twist_stats_within_radius(
+                input_motl, nn_radius, symm, remove_qp=remove_qp, remove_duplicates=remove_duplicates
+            )
         else:
             raise ValueError(
                 "One has to specify (at least) either input_twist or input_motl in combination with nn_radius."
@@ -904,10 +908,15 @@ class TwistDescriptor(Descriptor):
         return part[0].max_dissimilarity(), part[0].category
 
     @staticmethod
-    def get_nn_twist_stats_within_radius(input_motl, nn_radius, symm=False, remove_qp=False):
+    def get_nn_twist_stats_within_radius(input_motl, nn_radius, symm=False, remove_qp=None, remove_duplicates=False):
 
         nn = nnana.NearestNeighbors(
-            input_motl, feature_id="tomo_id", nn_type="radius", type_param=nn_radius, remove_qp=remove_qp
+            input_motl,
+            feature_id="tomo_id",
+            nn_type="radius",
+            type_param=nn_radius,
+            remove_qp=remove_qp,
+            remove_duplicates=remove_duplicates,
         )
         symm_max_value, symm_category = TwistDescriptor.get_symm_parameters(input_motl=input_motl, symm=symm)
         tomo_idx = nn.get_unique_values()
@@ -1565,7 +1574,7 @@ class PLComplexDescriptor(Descriptor):
 
 class SHOTDescriptor(Descriptor):
 
-    def __init__(self, twist_df, cone_number=6, shell_number=1):
+    def __init__(self, twist_df, cone_number=6, shell_number=1, north_pole_axis=None):
 
         max_radius = twist_df["euclidean_distance"].max()
         self.cone_number = cone_number
@@ -1575,13 +1584,34 @@ class SHOTDescriptor(Descriptor):
         # Group input_twist by 'qp_id'
         for qp_id, group_df in twist_df.groupby("qp_id"):
             coord = group_df[["twist_x", "twist_y", "twist_z"]].to_numpy()
-            assigned_df = self.assign_shell_and_cone_ids(qp_id, coord, shell_number, cone_number, radius=max_radius)
+            assigned_df = self.assign_shell_and_cone_ids(
+                qp_id, coord, shell_number, cone_number, radius=max_radius, north_pole_axis=north_pole_axis
+            )
             assigned_df["qp_id"] = qp_id
             assigned_df["nn_id"] = group_df["nn_id"].values
             self.shot_df = pd.concat([self.shot_df, assigned_df])
 
         self.desc = self.shot_df
         self.df = twist_df
+
+    def generate_rotated_axes(self, num_cones, north_pole_axis=None):
+
+        base_vectors = self.fixed_cone_directions(num_cones)
+        if north_pole_axis is None:
+            return base_vectors
+        else:
+            new_north = np.asarray(north_pole_axis) / np.linalg.norm(north_pole_axis)
+            old_north = np.array([0, 0, 1])
+            axis = np.cross(old_north, new_north)
+            angle = np.arccos(np.clip(np.dot(old_north, new_north), -1.0, 1.0))
+            if np.linalg.norm(axis) < 1e-8:
+                rot = R.identity() if angle < 1e-8 else R.from_rotvec([0, 0, np.pi])
+            else:
+                axis = axis / np.linalg.norm(axis)
+                rot = R.from_rotvec(axis * angle)
+
+            rotated_vectors = rot.apply(base_vectors)
+            return rotated_vectors
 
     def fixed_cone_directions(self, num_cones):
         """
@@ -1596,24 +1626,26 @@ class SHOTDescriptor(Descriptor):
             return np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0], [0, 0, -1], [0, -1, 0], [-1, 0, 0]])
         elif num_cones == 18:
             return np.array(
-                [-1.0, 0.0, 0.0],
-                [-0.707107, -0.707107, 0.0],
-                [-0.707107, 0.0, -0.707107],
-                [-0.707107, 0.0, 0.707107],
-                [-0.707107, 0.707107, 0.0],
-                [0.0, -1.0, 0.0],
-                [0.0, -0.707107, -0.707107],
-                [0.0, -0.707107, 0.707107],
-                [0.0, 0.0, -1.0],
-                [0.0, 0.0, 1.0],
-                [0.0, 0.707107, -0.707107],
-                [0.0, 0.707107, 0.707107],
-                [0.0, 1.0, 0.0],
-                [0.707107, -0.707107, 0.0],
-                [0.707107, 0.0, -0.707107],
-                [0.707107, 0.0, 0.707107],
-                [0.707107, 0.707107, 0.0],
-                [1.0, 0.0, 0.0],
+                [
+                    [0.0, 0.0, 1.0],
+                    [-0.707107, -0.707107, 0.0],
+                    [-0.707107, 0.0, -0.707107],
+                    [-0.707107, 0.0, 0.707107],
+                    [-0.707107, 0.707107, 0.0],
+                    [0.0, -1.0, 0.0],
+                    [0.0, -0.707107, -0.707107],
+                    [0.0, -0.707107, 0.707107],
+                    [0.0, 0.0, -1.0],
+                    [-1.0, 0.0, 0.0],
+                    [0.0, 0.707107, -0.707107],
+                    [0.0, 0.707107, 0.707107],
+                    [0.0, 1.0, 0.0],
+                    [0.707107, -0.707107, 0.0],
+                    [0.707107, 0.0, -0.707107],
+                    [0.707107, 0.0, 0.707107],
+                    [0.707107, 0.707107, 0.0],
+                    [1.0, 0.0, 0.0],
+                ]
             )
         else:
             raise ValueError(f"No fixed directions for {num_cones} cones. Please define them.")
@@ -1637,7 +1669,7 @@ class SHOTDescriptor(Descriptor):
 
         return cone_id
 
-    def assign_shell_and_cone_ids(self, qp_id, points, num_shells, num_cones, radius=1.0):
+    def assign_shell_and_cone_ids(self, qp_id, points, num_shells, num_cones, radius=1.0, north_pole_axis=None):
         points = np.atleast_2d(np.asarray(points))
         r_norms = np.linalg.norm(points, axis=1)
 
@@ -1646,7 +1678,7 @@ class SHOTDescriptor(Descriptor):
         shell_id = np.digitize(r_norms, shell_edges) - 1
 
         # Get predefined cone directions
-        cone_dirs = self.fixed_cone_directions(num_cones)
+        cone_dirs = self.generate_rotated_axes(num_cones, north_pole_axis=north_pole_axis)
 
         # Normalize points and cone directions
         normed_points = points / np.linalg.norm(points, axis=1, keepdims=True)

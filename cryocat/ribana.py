@@ -986,6 +986,6 @@ def trace_chains(
     traced_motl = cryomotl.Motl(motl_df=traced_motl)
 
     if output_motl is not None:
-        traced_motl.write_to_emfile(output_motl)
+        traced_motl.write_out(output_motl)
 
     return traced_motl
