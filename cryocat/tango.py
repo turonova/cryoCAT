@@ -343,7 +343,6 @@ class Particle:
 
 ##### Subclass for symmetric particles #####
 
-
 class SymmParticle(Particle):
 
     def __init__(self, rotation, position, tomo_id=None, motl_fid=None, particle_id=None, symm=None, custom_rot=None):
@@ -552,7 +551,6 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
                     tomo_id=tm.df["tomo_id"].values[i],
                     motl_fid=features[i],
                     particle_id=tm.df.iloc[i]["subtomo_id"],
-                    degrees=True,
                     symm=symm,
                     custom_rot=custom_rot,
                 )
@@ -904,7 +902,7 @@ class TwistDescriptor(Descriptor):
             motl = cryomotl.Motl.load(input_motl)
 
         pm = motl.get_motl_subset(feature_values=motl.df["subtomo_id"].iloc[0], feature_id="subtomo_id")
-        part = convert_to_particle_list(pm)
+        part = convert_to_particle_list(pm, symm= symm)
         return part[0].max_dissimilarity(), part[0].category
 
     @staticmethod
