@@ -1035,12 +1035,14 @@ class TwistDescriptor(Descriptor):
 
         return weighted_data
 
-    def proximity_clustering(self, num_connected_components=1):
+    def proximity_clustering(self, num_connected_components = 1, size_connected_components = None):
         """Cluster particles based on spatial proximity. The num_connected_components largest clusters are returned.
 
         Args:
             twist_stats (TwistDescriptor or pandas dataframe): Yields particle indices with respect to which to cluster
             num_connected_components (int, optional): Desired number of clusters. Defaults to 1.
+            size_connected_components (int, optional): If this is not None, all connected components with more than
+                size_connected_components particles are returned.
 
         Raises:
             TypeError: if input data is neither a pandas data frame nor a TwistDescriptor.
@@ -1060,12 +1062,27 @@ class TwistDescriptor(Descriptor):
 
         n = nx.number_connected_components(G)
 
-        if num_connected_components >= n:
-            num_connected_components = n
+        if size_connected_components is None or not isinstance(size_connected_components, int):
 
-        S = [G.subgraph(c).copy() for c in sorted(nx.connected_components(G), key=len, reverse=True)]
+            if num_connected_components >= n:
+                num_connected_components = n
+            
+            S = [G.subgraph(c).copy() for c in sorted(nx.connected_components(G), key=len, reverse=True)]
 
-        return S[:num_connected_components]
+            return S[:num_connected_components]
+        
+        elif isinstance(size_connected_components, int):
+
+            S = [G.subgraph(c).copy() for c in nx.connected_components(G) if len(c) >= size_connected_components]
+
+            return S
+
+        # if num_connected_components >= n:
+        #     num_connected_components = n
+
+        # S = [G.subgraph(c).copy() for c in sorted(nx.connected_components(G), key=len, reverse=True)]
+
+        # return S[:num_connected_components]
 
     def get_qp_twist_desc(self, query_particle, tomo_id=None):
         """Get twist descriptor for a specific query particle from a twist dataframe.
