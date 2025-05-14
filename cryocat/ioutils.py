@@ -457,6 +457,46 @@ def warp_ctf_read(input_file):
     defocus_df["astigmatism"] = get_data_from_warp_xml(input_file, "GridCTFDefocusAngle", node_level=2)
     return defocus_df
 
+def extract_defocus_data(df, u_col, v_col, angle_col, phase_col=None):
+    """
+    Extracts and standardizes defocus-related data from a DataFrame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The raw DataFrame parsed from a STAR file.
+    u_col : str
+        Column name for Defocus U (rlnDefocusU).
+    v_col : str
+        Column name for Defocus V (rlnDefocusV).
+    angle_col : str
+        Column name for astigmatism angle (rlnDefocusAngle).
+    phase_col : str or None, optional
+        Column name for phase shift (rlnPhaseShift). If None or missing, phase_shift is set to 0.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame with columns: defocus1, defocus2, astigmatism, phase_shift, defocus_mean in micrometers
+    """
+    defocus1 = df[u_col].astype(float) * 10e-5
+    defocus2 = df[v_col].astype(float) * 10e-5
+    astigmatism = df[angle_col].astype(float)
+
+    if phase_col and phase_col in df.columns:
+        phase_shift = df[phase_col].astype(float)
+    else:
+        phase_shift = pd.Series(0.0, index=df.index)
+
+    defocus_mean = (defocus1 + defocus2) / 2.0
+
+    return pd.DataFrame({
+        "defocus1": defocus1,
+        "defocus2": defocus2,
+        "astigmatism": astigmatism,
+        "phase_shift": phase_shift,
+        "defocus_mean": defocus_mean
+    })
 
 def defocus_load(input_data, file_type="gctf"):
     """Load defocus data from various file types or a pandas DataFrame.
@@ -493,6 +533,8 @@ def defocus_load(input_data, file_type="gctf"):
             defocus_df = ctffind4_read(input_data)
         elif file_type.lower() == "warp":
             defocus_df = warp_ctf_read(input_data)
+        elif file_type.lower() == "relion_ctffind4":
+            defocus_df = relion_ctffind4_read(input_data)
         else:
             raise ValueError(f"The file type {file_type} is not supported.")
     else:  # isinstance(input_data, np.ndarray):
@@ -500,7 +542,6 @@ def defocus_load(input_data, file_type="gctf"):
         defocus_df = pd.DataFrame(input_data, columns=df_columns)
 
     return defocus_df
-
 
 def gctf_read(file_path):
     """This function reads in a gctf starfile and returns a pandas dataframe with the following columns:
@@ -523,27 +564,13 @@ def gctf_read(file_path):
 
     gctf_df = sf.Starfile.read(file_path, data_id=0)[0]
 
-    # extract columns number 2, 3, 4 to new df
-    if "rlnPhaseShift" in gctf_df.columns:
-        converted_gctf = gctf_df[["rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", "rlnPhaseShift"]].astype(float)
-    else:
-        converted_gctf = gctf_df[["rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle"]].astype(float)
-        converted_gctf["rlnPhaseShift"] = 0.0
-
-    converted_gctf.iloc[:, 0:2] = converted_gctf.iloc[:, 0:2] * 10e-5
-    converted_gctf = converted_gctf.rename(
-        columns={
-            "rlnDefocusU": "defocus1",
-            "rlnDefocusV": "defocus2",
-            "rlnDefocusAngle": "astigmatism",
-            "rlnPhaseShift": "phase_shift",
-        }
+    return extract_defocus_data(
+        gctf_df,
+        u_col="rlnDefocusU",
+        v_col="rlnDefocusV",
+        angle_col="rlnDefocusAngle",
+        phase_col="rlnPhaseShift"
     )
-
-    converted_gctf["defocus_mean"] = (converted_gctf["defocus1"] + converted_gctf["defocus2"]).values / 2.0
-
-    return converted_gctf
-
 
 def ctffind4_read(file_path):
     """This function reads in a ctffind4 file (typically .txt) and returns a pandas dataframe with the following columns:
@@ -570,6 +597,29 @@ def ctffind4_read(file_path):
 
     converted_ctf["defocus_mean"] = (converted_ctf["defocus1"] + converted_ctf["defocus2"]).values / 2.0
     return converted_ctf
+
+def relion_ctffind4_read(file_path):
+    """Reads a Relion ctffind4-style STAR file and extracts defocus data.
+
+    Parameters
+    ----------
+    file_path : str
+        Path to the STAR file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with columns: defocus1, defocus2, astigmatism, phase_shift, defocus_mean
+    """
+    df = sf.Starfile.read(file_path, data_id=0)[0]
+
+    return extract_defocus_data(
+        df,
+        u_col="rlnDefocusU",
+        v_col="rlnDefocusV",
+        angle_col="rlnDefocusAngle",
+        phase_col="rlnPhaseShift"
+    )
 
 
 def one_value_per_line_read(file_path, data_type=np.float32):

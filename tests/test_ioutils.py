@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from cryocat import ioutils
 from cryocat.ioutils import *
 import tempfile
 import pytest
@@ -4214,3 +4215,9 @@ def test_sort_files_by_idx():
         res = sort_files_by_idx(["file.txt"], [])
     with pytest.raises(ValueError):
         res = sort_files_by_idx([], ["1"])
+
+
+def test_relion_ctffind4_read():
+    file_path = "./test_data/dc02t01_ctf.star"
+    result = ioutils.defocus_load(input_data=file_path, file_type="relion_ctffind4")
+    print(result)
