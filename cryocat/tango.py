@@ -160,6 +160,21 @@ class Particle:
         return Particle(rotation=rot_new, position=pos_new)
 
     def scale(self, scaling_factor, overwrite=True):
+        """
+        Scales the translation vector associated to self.
+
+        Parameters:
+        -----------
+        scaling_factor : float or int
+            The factor by which the particle position is scaled.
+        overwrite : bool
+            If True, the original particle is overwritten.
+            Otherwise, False.
+
+        Returns:
+        --------
+        If overwrite == False, Particle is returned.
+        """
 
         if isinstance(scaling_factor, (int, float)):
 
@@ -182,6 +197,10 @@ class Particle:
         """
         Compute tangent from identity in SE(3) pointing in direction of
         self.
+
+        Returns:
+        --------
+        numpy ndarray (6,)
         """
         log = logm(self.rotation)
         log = log.real
@@ -190,6 +209,10 @@ class Particle:
     def twist_vector(self, other):
         """
         Compute twist vector describing relative pose of input particles.
+
+        Returns:
+        --------
+        numpy ndarray (6,)
         """
         if isinstance(other, Particle):
             shift = self.inv()
@@ -205,7 +228,16 @@ class Particle:
         Project tangent vector at identity pointing in direction self --> other
         onto subspace corresponding to mode.
 
-        Possible modes: 'orientation', 'position', 'mixed'
+        Parameters:
+        -----------
+        mode : str
+                'orientation' for geodesic (angular) distance between particle orientations
+                'position' for Euclidean distance between physical particle positions
+                'mixed' for product metric
+        
+        Returns:
+        --------
+        numpy ndarray (3,) or (6,) (depends on mode)
         """
         if isinstance(other, Particle):
 
@@ -234,11 +266,19 @@ class Particle:
     def distance(self, other, mode="orientation", degrees=False):
         """
         Compute distance between particles based on mode.
+        
+        Parameters:
+        -----------
+        mode : str
+                'orientation' for geodesic (angular) distance between particle orientations
+                'position' for Euclidean distance between physical particle positions
+                'mixed' for product metric
+        degrees : bool
+                If True, angular distance is expressed in degrees. Otherwise: radians.
 
-        Possible modes:
-        - 'orientation' for geodesic (angular) distance between particle orientations
-        - 'position' for Euclidean distance between physical particle positions
-        - 'mixed' for product metric
+        Returns:
+        --------
+        float
         """
         if isinstance(other, Particle):
 
@@ -277,10 +317,24 @@ class Particle:
         """
         Add noise to particle based on mode.
 
-        Possible modes:
-        - 'orientation' for geodesic (angular) distance between particle orientations
-        - 'position' for Euclidean distance between physical particle positions
-        - 'mixed' for product metric
+        Parameters:
+        -----------
+        noise_level : int, float, tuple, list
+                Controls how much perturbed particle deviates from input particle.
+                Defaults to 0.05.
+                Tuple or list are only to be used in mixed-mode, where first entry refers to 
+                orientational noise, second one to positional noise.
+        mode : str
+                'orientation' for geodesic (angular) distance between particle orientations
+                'position' for Euclidean distance between physical particle positions
+                'mixed' for product metric
+        degrees : bool
+                If True, orientational noise is expressed in degrees. Otherwise: radians.
+                Defaults to False.
+
+        Returns:
+        --------
+        Particle
         """
 
         if mode in ["orientation", "position", "mixed"]:
@@ -309,32 +363,55 @@ class Particle:
 
     @classmethod
     def identity(cls):
+        """
+        Returns the identity particle. This is the particle positioned at the origin and equipped with the
+        trivial (canonical) orientation.
+
+        Returns:
+        --------
+        Particle
+        """
         canonical_orientation = np.identity(3)
         origin = np.zeros(3)
         return Particle(canonical_orientation, origin)
 
     @classmethod
-    def random(cls, lower_bound=0.0, upper_bound=100.0):
+    def random(cls, x_range, y_range, z_range):
         """
-        Args:
-            upper_bound (float, optional): Upper bound on norm of position of randomly generated
-            particle. Defaults to 100.0.
+        Generates a random particle with a translation vector position within bounds.
+
+        Parameters:
+        -----------
+        - x_range: Tuple of (min_x, max_x)
+        - y_range: Tuple of (min_y, max_y)
+        - z_range: Tuple of (min_z, max_z)
+
+        Returns:
+        --------
+        Particle
         """
-        if upper_bound > 0:
+        x = np.random.uniform(x_range[0], x_range[1])
+        y = np.random.uniform(y_range[0], y_range[1])
+        z = np.random.uniform(z_range[0], z_range[1])
 
-            random_orientation = R.random().as_matrix()
-            rand_signs = np.random.choice([-1, 1], 3)
-            rand_pos = np.random.rand(3) * rand_signs
-            rand_pos = rand_pos / np.linalg.norm(rand_pos)
-            rand_scale = np.random.uniform(low=lower_bound, high=upper_bound)
-            rand_pos = rand_scale * rand_pos
+        random_orientation = R.random().as_matrix()
+        pos = np.array([x,y,z])
 
-            return Particle(random_orientation, rand_pos)
-
-        else:
-            raise ValueError("Upper bound needs to be positive.")
+        return Particle(random_orientation, pos)
 
     def in_plane_angle(self, degrees=True):
+        """
+        Returns the rotation angle of the inplane portion of a rotation matrix.
+
+        Parameters:
+        -----------
+        rot_matrix : numpy ndarray
+                    Input rotation matrix.
+
+        Returns:
+        --------
+        float : rotation angle
+        """
 
         eulers = R.from_matrix(self.rotation).as_euler("zxz", degrees=degrees)
 
@@ -432,6 +509,14 @@ class SymmParticle(Particle):
             self.solid = vertices @ plane_rot.T
 
     def max_dissimilarity(self):
+        """
+        Given the input particle's symmetry type, this function returns the associated maximum
+        angular dissimilarity.
+
+        Returns:
+        --------
+        float
+        """
         if self.category in ["cube", "icosahedron"]:
 
             p1, p2 = self.solid[0], self.solid[2]
@@ -448,6 +533,19 @@ class SymmParticle(Particle):
             return np.pi / n
 
     def similarity_symm(self, other, degrees=False, max=None):
+        """
+        Compute angular similarity between two symmetric particles in an unambiguous manner.
+
+        Parameters:
+        -----------
+        max : float
+                If not None, the maximum dissimilarity is set to the input value. 
+                This is designed to accelerate computations by computing max only once.
+
+        Returns:
+        --------
+        float
+        """
         if self.category != other.category:
 
             raise ValueError("The symmetry tpyes of the input particles don't match!")
@@ -474,6 +572,21 @@ class SymmParticle(Particle):
     def equip_symmetry(input_particle: Particle, symm, custom_rot=None):
         """
         Equip an existing particle object with symmetry information.
+
+        Parameters:
+        -----------
+        input_particle : Particle
+                        The input particle to be equipped with symmetry information.
+        symm : str or int
+                Refers to symmetry type. Can be one of the following:
+                - 'tetra', 'octa', 'cube', 'ico', 'dodeca' for platonic solids
+                - An integer n > 1 for cyclic groups C_n.
+        custom_rot : numpy ndarray (3,3) or rotation object
+                    Rotation matrix or rotation object describing the symmetry of the particle in the case of a platonic solid.
+        
+        Returns:
+        --------
+        SymmParticle
         """
         result = SymmParticle(
             input_particle.rotation,
@@ -559,18 +672,35 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
     return particle_list
 
 
-###### Parent descriptor Class ####
+###### Parent descriptor Class ######
 
 
 class Descriptor:
 
     def __init__(self):
+        """
+        Initialize Descriptor
+
+        A Descriptor object is a base class containing a dataframe.
+        """
         self.desc = None
         self.df = None
         self.pca_components = 1
 
     @staticmethod
     def remove_nans(df, axis_type="row"):
+        """Remove NaN values from the DataFrame.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+        axis_type : str, optional
+            Either 'row' or 'column'. Default is 'row'.
+
+        Returns
+        -------
+        pandas.DataFrame
+        """
 
         if axis_type == "row":
             return df.dropna(axis=0)
@@ -580,6 +710,22 @@ class Descriptor:
             raise ValueError("axis_type must be either 'row' or 'column'")
 
     def get_important_features(self, pca, input_df, n_components):
+        """Get important features based on PCA loadings.
+
+        Parameters
+        ----------
+        pca : sklearn.decomposition.PCA
+            PCA object fitted to the data.
+        input_df : pandas.DataFrame
+            The input DataFrame containing the features.
+        n_components : int
+            The number of components to consider.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the feature importance scores.
+        """
 
         # Square of loadings → proportion of variance that each feature contributes to each PC
         components_matrix = pca.components_  # shape: (n_components, n_features)
@@ -599,6 +745,31 @@ class Descriptor:
     def pca_analysis(
         self, variance_threshold=0.95, show_fig=True, nan_drop="row", scatter_kwargs=None, bar_kwargs=None
     ):
+        """Perform PCA analysis on the descriptor DataFrame.
+
+        Parameters
+        ----------
+        variance_threshold : float, optional
+            The threshold for cumulative explained variance to determine the number of components. Default is 0.95.
+        show_fig : bool, optional
+            Whether to show the figure. Default is True.
+        nan_drop : str, optional
+            The axis to drop NaN values from. Default is "row".
+        scatter_kwargs : dict, optional
+            Additional arguments for the scatter plot. Default is None.
+        bar_kwargs : dict, optional
+            Additional arguments for the bar plot. Default is None.
+
+        Returns
+        -------
+        tuple
+            - n_components : int
+                The number of components chosen based on the variance threshold.
+            - important_features : pandas.DataFrame
+                A DataFrame containing the important features based on PCA loadings.
+            - fig : plotly.graph_objects.Figure
+                The figure object containing the PCA summary plot.
+        """
 
         desc_df = self.remove_nans(self.desc, axis_type=nan_drop)
         desc_df = desc_df.drop(columns=["qp_id"])
@@ -629,6 +800,20 @@ class Descriptor:
         return n_components, important_features, fig
 
     def filter_features(self, input_df, feature_ids="all"):
+        """Filter features based on the feature_ids parameter.
+
+        Parameters
+        ----------
+        input_df : pandas.DataFrame
+            The input DataFrame to filter.
+        feature_ids : str or list, optional
+            The feature IDs to filter by. Can be "all" or a list of feature names. Default is "all".
+
+        Returns
+        -------
+        pandas.DataFrame
+            The filtered DataFrame containing only the specified features.
+        """
 
         if isinstance(feature_ids, str):
             if feature_ids == "all":
@@ -650,6 +835,25 @@ class Descriptor:
         return filtered_df
 
     def compute_pca(self, pca_components=None, feature_ids="all", nan_drop="row"):
+        """Compute PCA on the descriptor DataFrame.
+
+        Parameters
+        ----------
+        pca_components : int, optional
+            The number of PCA components to compute. Default is None.
+        feature_ids : str or list, optional
+            The feature IDs to include in the PCA. Can be "all" or a list of feature names. Default is "all".
+        nan_drop : str, optional
+            The axis to drop NaN values from. Default is "row".
+
+        Returns
+        -------
+        tuple
+            - pca_df : pandas.DataFrame
+                The DataFrame containing the PCA components.
+            - qp_ids : numpy.ndarray
+                The array of query point indices corresponding to the PCA components.
+        """
 
         pca_df = self.remove_nans(self.desc, axis_type=nan_drop)
         pca_df = self.filter_features(pca_df, feature_ids=feature_ids)
@@ -672,6 +876,26 @@ class Descriptor:
         return pd.DataFrame(X_pca, columns=columns), qp_ids
 
     def k_means_clustering(self, n_clusters, nan_drop="row", pca_dict=None, feature_ids="all", scale_data=True):
+        """Perform k-means clustering on the descriptor DataFrame.  
+
+        Parameters
+        ----------
+        n_clusters : int
+            The number of clusters to form.
+        nan_drop : str, optional
+            The axis to drop NaN values from. Default is "row".
+        pca_dict : dict, optional
+            A dictionary containing PCA parameters. If None, PCA is not applied. Default is None.
+        feature_ids : str or list, optional
+            The feature IDs to include in the clustering. Can be "all" or a list of feature names. Default is "all".
+        scale_data : bool, optional
+            Whether to scale the data before clustering. Default is True.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the clustering results, including the cluster labels and query point IDs.
+        """
 
         if pca_dict is None:
             km_data = self.remove_nans(self.desc, axis_type=nan_drop)
@@ -702,6 +926,13 @@ class Descriptor:
         return result_df
 
     def plot_k_means(self, color_column):
+        """Plot the k-means clustering results in 3D.
+
+        Parameters
+        ----------
+        color_column : str
+            The column name in the DataFrame to use for coloring the points.
+        """
 
         if "nn_id" in self.df.columns and "nn_id" in self.desc.columns:
             merged_df = pd.merge(self.desc, self.df, on=["qp_id", "nn_id"], how="left")
@@ -737,6 +968,17 @@ class TwistDescriptor(Descriptor):
     def __init__(
         self, input_twist=None, input_motl=None, nn_radius=None, symm=False, remove_qp=False, remove_duplicates=False
     ):
+        """
+        Initialize TwistDescriptor
+        A TwistDescriptor object is a subclass of Descriptor that contains a DataFrame with twist vectors and extra information.
+        The twist descriptors are computed based on the input_motl and nn_radius.
+        - The input_twist can be a DataFrame or a file path to a CSV or Pickle file.
+        - The input_motl can be a Motl object or a file path to a Motl file.
+        - The nn_radius is the radius within which to compute the twist descriptors.
+        - The symm parameter specifies whether to use symmetry information.
+        - The remove_qp parameter specifies whether to remove the query point from the DataFrame.
+        - The remove_duplicates parameter specifies whether to remove duplicate entries from the DataFrame.
+        """
 
         if input_twist is not None:
             if isinstance(input_twist, pd.DataFrame):
@@ -812,22 +1054,48 @@ class TwistDescriptor(Descriptor):
 
     @staticmethod
     def get_pos_feature_ids():
+        """
+        To access relative positions information.
+
+        Returns
+        -------
+        list
+        """
 
         return ["twist_x", "twist_y", "twist_z"]
 
     @staticmethod
     def get_rot_feature_ids():
+        """
+        To access relative orientation information.
+
+        Returns
+        -------
+        list
+        """
 
         return ["twist_so_x", "twist_so_y", "twist_so_z"]
 
     @staticmethod
     def get_mixed_feature_ids():
+        """
+        To access both relative position and orientation information.
 
+        Returns
+        -------
+        list
+        """
         return ["twist_so_x", "twist_so_y", "twist_so_z", "twist_x", "twist_y", "twist_z"]
 
     @staticmethod
     def get_all_feature_ids(symm=False):
+        """
+        To access information available to TwistDescriptors.
 
+        Returns
+        -------
+        list
+        """
         columns = [
             "qp_id",
             "nn_id",
@@ -850,7 +1118,7 @@ class TwistDescriptor(Descriptor):
             columns.append("angular_score")
 
         return columns
-
+# TODO: Markus: continue here
     @staticmethod
     def process_tomo_twist(t_nn, symm=False, symm_max_value=None, symm_category=None):
 
@@ -1076,13 +1344,6 @@ class TwistDescriptor(Descriptor):
             S = [G.subgraph(c).copy() for c in nx.connected_components(G) if len(c) >= size_connected_components]
 
             return S
-
-        # if num_connected_components >= n:
-        #     num_connected_components = n
-
-        # S = [G.subgraph(c).copy() for c in sorted(nx.connected_components(G), key=len, reverse=True)]
-
-        # return S[:num_connected_components]
 
     def get_qp_twist_desc(self, query_particle, tomo_id=None):
         """Get twist descriptor for a specific query particle from a twist dataframe.
