@@ -2808,7 +2808,6 @@ class CustomDescriptor(Descriptor):
             The support class used to compute the features.
         support_kwargs : dict
             A dictionary containing keyword arguments for the support class.
-
         """
 
         feature_list = get_classes_from_names(feature_list, "cryocat.tango")
