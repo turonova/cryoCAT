@@ -21,7 +21,7 @@ monet_colors = [(a/255, b/255, c/255) for (a,b,c) in monet_colors]
 
 hex_colors_alt = ["#1792A9", "#6FB89A", "#E7C7D4", "#BA8AB4","#854576"]
 
-rgb_colors_alt = [mcolors.to_rgb(color) for color in hex_colors]
+rgb_colors_alt = [mcolors.to_rgb(color) for color in hex_colors_alt]
 
 monet_cmap_alt = mcolors.LinearSegmentedColormap.from_list("monet_cmap_alt", rgb_colors_alt, N=256)
 
