@@ -358,14 +358,14 @@ def merge_mdoc_files(mdoc_path, new_id=None, reorder=True, stripFramePath=False,
     return merged_mdoc
 
 
-def update_mdoc_feature(mdoc_path, features_dict, output_file=None):
+def update_mdoc_features(mdoc_path, features_dict, output_file=None):
     """Update a specific entry in the mdoc file.
 
     Parameters
     ----------
     mdoc_path : str
         Path to the mdoc file to be updated.
-    feature_dict : dict
+    features_dict : dict
         Dictionary containing the features to be updated as keys and their new value.
     output_file : str, optional, default=None
         Path to save the updated mdoc file. If None, no updated file is saved.
