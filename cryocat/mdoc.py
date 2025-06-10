@@ -356,3 +356,43 @@ def merge_mdoc_files(mdoc_path, new_id=None, reorder=True, stripFramePath=False,
         merged_mdoc.write(out_path=output_file, overwrite=True)
 
     return merged_mdoc
+
+
+def update_mdoc_features(mdoc_path, features_dict, output_file=None):
+    """Update a specific entry in the mdoc file.
+
+    Parameters
+    ----------
+    mdoc_path : str
+        Path to the mdoc file to be updated.
+    features_dict : dict
+        Dictionary containing the features to be updated as keys and their new value.
+    output_file : str, optional, default=None
+        Path to save the updated mdoc file. If None, no updated file is saved.
+
+    Returns
+    -------
+    Mdoc
+        The updated Mdoc object.
+
+    Raises
+    ------
+    KeyError
+        If the specified feature is not found in the project info or image data.
+    """
+    mdoc = Mdoc(mdoc_path)
+
+    for feature, value in features_dict.items():
+        if feature in mdoc.project_info.keys():
+            mdoc.project_info[feature] = value
+            if feature in mdoc.imgs.columns:
+                mdoc.imgs[feature] = value
+        elif feature in mdoc.imgs.columns:
+            mdoc.imgs[feature] = value
+        else:
+            raise KeyError(f"Entry '{feature}' not found in project info or image data.")
+
+    if output_file:
+        mdoc.write(output_file, overwrite=True)
+
+    return mdoc

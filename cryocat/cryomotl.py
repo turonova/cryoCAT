@@ -1299,7 +1299,7 @@ class Motl:
         if motl_type == "emmotl":
             return EmMotl(input_motl)
         elif motl_type == "relion":
-            return RelionMotl(input_motl)
+            return RelionMotl(input_motl) #TODO  : kwargs - version -- pixel size -- check constructor
         elif motl_type == "stopgap":
             return StopgapMotl(input_motl)
         elif motl_type == "dynamo":
@@ -4002,7 +4002,7 @@ class ModMotl(Motl):
 
         df_to_write = self.mod_df.copy()
         imod.write_model_binary(df_to_write, output_path)
-
+#TODO : kwargs -- flexible -- possible to update it easily with kwargs
 
 def emmotl2relion(
     input_motl,
