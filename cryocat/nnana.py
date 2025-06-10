@@ -197,6 +197,13 @@ class NearestNeighbors:
         angles = self.df[["nn_angles_phi", "nn_angles_theta", "nn_angles_psi"]].to_numpy()
         return srot.from_euler("zxz", degrees=True, angles=angles)
 
+    def get_angular_distances(self, rotation_type="all"):
+
+        angles_qp = self.df[["qp_angles_phi", "qp_angles_theta", "qp_angles_psi"]].to_numpy()
+        angles_nn = self.df[["nn_angles_phi", "nn_angles_theta", "nn_angles_psi"]].to_numpy()
+        ang_dist = geom.compare_rotations(angles_qp, angles_nn, rotation_type=rotation_type)
+        return ang_dist
+
 
 def get_feature_nn_within_radius(fm_a, fm_nn, radius, remove_qp=False):
     """Get nearest neighbors within a specified radius from a set of coordinates which are feature specific.
@@ -343,20 +350,26 @@ def get_feature_nn_indices(fm_a, fm_nn, nn_number=1, remove_qp=False):
     coord_a = fm_a.get_coordinates()
     coord_nn = fm_nn.get_coordinates()
 
-    if remove_qp:
-        nn_number = nn_number + 1  # increase number of nns, so one can delete the query point.
+    query_k = nn_number + 1 if remove_qp else nn_number
+    query_k = min(query_k, coord_nn.shape[0])
 
-    nn_count = min(nn_number, coord_nn.shape[0])
     kdt_nn = sn.KDTree(coord_nn)
-    nn_dist, nn_idx = kdt_nn.query(coord_a, k=nn_count)
-    ordered_idx = np.arange(0, nn_idx.shape[0], 1)
+    nn_dist, nn_idx = kdt_nn.query(coord_a, k=query_k)
 
-    return (
-        ordered_idx,
-        nn_idx.reshape((nn_idx.shape[0], nn_count)),
-        nn_dist.reshape((nn_idx.shape[0], nn_count)),
-        nn_count,
-    )
+    # Ensure 2D shape even if k=1
+    nn_dist = np.atleast_2d(nn_dist)
+    nn_idx = np.atleast_2d(nn_idx)
+    ordered_idx = np.arange(nn_idx.shape[0])
+
+    if remove_qp:
+        # Remove the first neighbor (distance 0) assumed to be the query point
+        nn_dist = nn_dist[:, 1 : nn_number + 1]
+        nn_idx = nn_idx[:, 1 : nn_number + 1]
+        nn_count = nn_dist.shape[1]
+    else:
+        nn_count = nn_dist.shape[1]
+
+    return ordered_idx, nn_idx, nn_dist, nn_count
 
 
 def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_number=1, rotation_type="angular_distance"):

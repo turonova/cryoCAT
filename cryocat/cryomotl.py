@@ -1085,6 +1085,8 @@ class Motl:
 
         if isinstance(feature_values, list):
             feature_values = np.array(feature_values)
+        elif isinstance(feature_values, np.ndarray):
+            feature_values = feature_values
         else:
             feature_values = np.array([feature_values])
 
@@ -3776,19 +3778,18 @@ class DynamoMotl(Motl):
         # Assign the converted DataFrame to the dynamo_df attribute
         return dynamo_df
 
-
     def write_out(self, output_path):
         """Writes the dynamo DataFrame to a .tbl file.
 
-            Parameters
-            ----------
-            output_path : str
-                The path to the output file where the data should be written.
+        Parameters
+        ----------
+        output_path : str
+            The path to the output file where the data should be written.
 
-            Returns
-            -------
-            None
-            """
+        Returns
+        -------
+        None
+        """
         # Check if the file path has the correct .tbl extension
         if not output_path.endswith(".tbl"):
             raise ValueError("Output file must have a .tbl extension.")
@@ -3800,15 +3801,8 @@ class DynamoMotl(Motl):
 
 
 class ModMotl(Motl):
-    columns = [
-        "object_id",
-        "contour_id",
-        "x",
-        "y",
-        "z",
-        "object_radius",
-        "mod_id"
-    ]
+    columns = ["object_id", "contour_id", "x", "y", "z", "object_radius", "mod_id"]
+
     def __init__(self, input_motl=None, mod_prefix="", mod_suffix=".mod"):
         super().__init__()
         self.mod_df = pd.DataFrame()
@@ -3978,12 +3972,11 @@ class ModMotl(Motl):
         mod_df["x"] = motl_df["x"]
         mod_df["y"] = motl_df["y"]
         mod_df["z"] = motl_df["z"]
-        #mod_df["mod_id"] = motl_df["tomo_id"] #This should be filled given the filename
+        # mod_df["mod_id"] = motl_df["tomo_id"] #This should be filled given the filename
         mod_df["contour_id"] = motl_df["geom2"]
         mod_df["object_radius"] = motl_df["geom5"]
 
         return mod_df
-
 
     def write_out(self, output_path, motl_type="mod_motl"):
         """
@@ -3999,9 +3992,9 @@ class ModMotl(Motl):
 
         self.mod_df = ModMotl.convert_to_mod_motl(self.df)
 
-        #Set mod_id to self.mod_df correctly as well
+        # Set mod_id to self.mod_df correctly as well
         mod_filename_no_ext = os.path.splitext(os.path.basename(output_path))[0]  # Get filename without the extension
-        mod_id = re.search(r'\d+', mod_filename_no_ext).group(0)
+        mod_id = re.search(r"\d+", mod_filename_no_ext).group(0)
         self.mod_df["mod_id"] = int(mod_id)  # Append mod_id column to dataframe object
 
         if {"object_id", "contour_id", "x", "y", "z"} - set(self.mod_df.columns):
@@ -4009,6 +4002,7 @@ class ModMotl(Motl):
 
         df_to_write = self.mod_df.copy()
         imod.write_model_binary(df_to_write, output_path)
+
 
 def emmotl2relion(
     input_motl,

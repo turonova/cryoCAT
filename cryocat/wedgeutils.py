@@ -474,29 +474,35 @@ def load_wedge_list_em(input_data):
 
     return wedge_list_df
 
+
 def wedge_list_sg_to_em(input_path, output_path, write_out=True):
-    '''convert a STOPGAP star format wedge list into a em wedge list;
+    """Convert a STOPGAP star format wedge list into a em wedge list;
     only 3 columns [tomo_id, min_tilt_angle, max_tilt_angle] are collected
-    
+
     Parameters
     ----------
-    input_path: path to a STOPGAP star wedge list
-    output_path: path to save the new em format wedge list
-    write_out: whether to save the output; default is True
+    input_path: str
+        Path to a STOPGAP star wedge list.
+    output_path: str
+        Path to save the new em format wedge list.
+    write_out: bool, default=True
+        Whether to save the output. Default is True.
 
     Return
     -------
-    wedge_list_em: Pandas Dataframe with the 3 columns mentioned above
-    '''
+    wedge_list_em: pd.DataFrame
+        Pandas Dataframe with the 3 columns mentioned above.
+    """
 
     # read STOPGAP wedge list star file
     wedge_list_sg = load_wedge_list_sg(input_path)
 
-    # get the min and max of tilt_angle column and create a new df 
-    wedge_list_em = wedge_list_sg.groupby("tomo_num").agg(min_tilt_angle=('tilt_angle', 'min'),
-                                                          max_tilt_angle=('tilt_angle', 'max'))
+    # get the min and max of tilt_angle column and create a new df
+    wedge_list_em = wedge_list_sg.groupby("tomo_num").agg(
+        min_tilt_angle=("tilt_angle", "min"), max_tilt_angle=("tilt_angle", "max")
+    )
     wedge_list_em.reset_index(inplace=True)
-    wedge_list_em.rename(columns={'tomo_num':'tomo_id'}, inplace=True)
+    wedge_list_em.rename(columns={"tomo_num": "tomo_id"}, inplace=True)
 
     # write out to em format
     if write_out:
@@ -506,39 +512,41 @@ def wedge_list_sg_to_em(input_path, output_path, write_out=True):
 
     return wedge_list_em
 
-def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape='wedge', output_path=None):
+
+def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape="wedge", output_path=None):
 
     if not isinstance(wg_list_star_df, pd.DataFrame):
         raise ValueError("Provided wg_list_star_df is not a pandas DataFrame!")
     tomograms = ioutils.tlt_load(tomo_list).astype(int)
     for value in tomograms:
-        sub_wg = wg_list_star_df.loc[wg_list_star_df['tomo_num'] == value].copy()
-        angles = [i for i in sub_wg.loc[:, 'tilt_angle']]
-        
+        sub_wg = wg_list_star_df.loc[wg_list_star_df["tomo_num"] == value].copy()
+        angles = [i for i in sub_wg.loc[:, "tilt_angle"]]
+
         box_size = cryomask.get_correct_format(box_size)
         mask = np.empty(box_size)
 
-        if shape == 'wedge' or shape == 'sph_wedge':
-            x = range(-box_size[0]//2, box_size[0]//2, 1)
-            y = range(-box_size[1]//2, box_size[1]//2, 1)
-            z = range(-box_size[2]//2, box_size[2]//2, 1)
-            xx, yy, zz = np.mgrid[ x, y, z]
+        if shape == "wedge" or shape == "sph_wedge":
+            x = range(-box_size[0] // 2, box_size[0] // 2, 1)
+            y = range(-box_size[1] // 2, box_size[1] // 2, 1)
+            z = range(-box_size[2] // 2, box_size[2] // 2, 1)
+            xx, yy, zz = np.mgrid[x, y, z]
 
-            mask_xz1 = xx > (math.tan(np.deg2rad(min(angles))) * zz) 
+            mask_xz1 = xx > (math.tan(np.deg2rad(min(angles))) * zz)
             mask_xz2 = xx < (math.tan(np.deg2rad(max(angles))) * zz)
 
             mask = ~np.logical_xor(mask_xz1, mask_xz2)
-            mask[box_size[0]//2, box_size[1]//2, box_size[2]//2] = 1
+            mask[box_size[0] // 2, box_size[1] // 2, box_size[2] // 2] = 1
 
         mask = mask.transpose(2, 1, 0)
 
         if output_path is not None:
             cryomap.write(mask, output_path, transpose=True, data_type=np.single)
-     
+
     return mask
 
+
 def apply_wedge_mask(wedge_mask, in_map, rotation_zxz=None, output_path=None):
-    
+
     rot_map = cryomask.rotate(cryomap.read(in_map), rotation_zxz)
 
     ft_map = np.fft.fftshift(np.fft.fftn((rot_map)))
@@ -552,4 +560,3 @@ def apply_wedge_mask(wedge_mask, in_map, rotation_zxz=None, output_path=None):
         cryomap.write(out_map, output_path)
 
     return out_map
-
