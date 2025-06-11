@@ -38,8 +38,8 @@ class Particle:
     def __init__(self, rotation, position, tomo_id=None, motl_fid=None, degrees=True, particle_id=0):
         """Initialize a new instance with the specified rotation, position, and optional identifiers.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         rotation : R, list, tuple, np.ndarray
             The rotation can be provided as a scipy.Rotation object, Euler angles (3 values, convention zxz),
             a unit quaternion (4 values), or a rotation matrix (3x3 array).
@@ -54,8 +54,8 @@ class Particle:
         particle_id : int, default=0
             An identifier for the particle, must be an integer. Default is 0.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the rotation input is invalid.
         TypeError
@@ -163,21 +163,21 @@ class Particle:
         """
         Scales the translation vector associated to self.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         scaling_factor : float or int
             The factor by which the particle position is scaled.
-        overwrite : bool
+        overwrite : bool, default=True
             If True, the original particle is overwritten.
             Otherwise, False.
 
-        Raises:
-        -------
+        Raises
+        ------
         TypeError
             If scaling_factor is not of type int or float.
 
-        Returns:
-        --------
+        Returns
+        -------
         If overwrite == False, Particle is returned.
         """
 
@@ -203,8 +203,8 @@ class Particle:
         Compute tangent from identity in SE(3) pointing in direction of
         self.
 
-        Returns:
-        --------
+        Returns
+        -------
         numpy ndarray (6,)
         """
         log = logm(self.rotation)
@@ -215,13 +215,13 @@ class Particle:
         """
         Compute twist vector describing relative pose of input particles.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the input is not a Particle object.
 
-        Returns:
-        --------
+        Returns
+        -------
         numpy ndarray (6,)
         """
         if isinstance(other, Particle):
@@ -238,20 +238,22 @@ class Particle:
         Project tangent vector at identity pointing in direction self --> other
         onto subspace corresponding to mode.
 
-        Parameters:
-        -----------
-        mode : str
-                'orientation' for geodesic (angular) distance between particle orientations
-                'position' for Euclidean distance between physical particle positions
-                'mixed' for product metric
+        Parameters
+        ----------
+        mode : str, {"orientation", "position", "mixed"}
+            The mode refers to the notion of distance that is to be applied.
+            'orientation' for geodesic (angular) distance between particle orientations
+            'position' for Euclidean distance between physical particle positions
+            'mixed' for product metric
+            Default is "orientation".
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the input is not a Particle object or if the mode is invalid.
 
-        Returns:
-        --------
+        Returns
+        -------
         numpy ndarray (3,) or (6,) (depends on mode)
         """
         if isinstance(other, Particle):
@@ -282,22 +284,24 @@ class Particle:
         """
         Compute distance between particles based on mode.
 
-        Parameters:
-        -----------
-        mode : str
-                'orientation' for geodesic (angular) distance between particle orientations
-                'position' for Euclidean distance between physical particle positions
-                'mixed' for product metric
+        Parameters
+        ----------
+        mode : str, {"orientation", "position", "mixed"}
+            The mode refers to the notion of distance that is to be applied.
+            'orientation' for geodesic (angular) distance between particle orientations
+            'position' for Euclidean distance between physical particle positions
+            'mixed' for product metric
+            Default is "orientation".
         degrees : bool
-                If True, angular distance is expressed in degrees. Otherwise: radians.
+            If True, angular distance is expressed in degrees. Otherwise: radians.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the input is not a Particle object or if the mode is invalid.
 
-        Returns:
-        --------
+        Returns
+        -------
         float
         """
         if isinstance(other, Particle):
@@ -337,28 +341,30 @@ class Particle:
         """
         Add noise to particle based on mode.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         noise_level : int, float, tuple, list
-                Controls how much perturbed particle deviates from input particle.
-                Defaults to 0.05.
-                Tuple or list are only to be used in mixed-mode, where first entry refers to
-                orientational noise, second one to positional noise.
-        mode : str
-                'orientation' for geodesic (angular) distance between particle orientations
-                'position' for Euclidean distance between physical particle positions
-                'mixed' for product metric
-        degrees : bool
-                If True, orientational noise is expressed in degrees. Otherwise: radians.
-                Defaults to False.
+            Controls how much perturbed particle deviates from input particle.
+            Defaults to 0.05.
+            Tuple or list are only to be used in mixed-mode, where first entry refers to
+            orientational noise, second one to positional noise.
+        mode : str, {"orientation", "position", "mixed"}
+            The mode refers to the notion of distance that is to be applied.
+            'orientation' for geodesic (angular) distance between particle orientations
+            'position' for Euclidean distance between physical particle positions
+            'mixed' for product metric
+            Default is "orientation".
+        degrees : bool, default=False
+            If True, orientational noise is expressed in degrees. Otherwise: radians.
+            Default is False.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the mode is invalid.
 
-        Returns:
-        --------
+        Returns
+        -------
         Particle
         """
 
@@ -392,8 +398,8 @@ class Particle:
         Returns the identity particle. This is the particle positioned at the origin and equipped with the
         trivial (canonical) orientation.
 
-        Returns:
-        --------
+        Returns
+        -------
         Particle
         """
         canonical_orientation = np.identity(3)
@@ -405,14 +411,14 @@ class Particle:
         """
         Generates a random particle with a translation vector position within bounds.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         - x_range: Tuple of (min_x, max_x)
         - y_range: Tuple of (min_y, max_y)
         - z_range: Tuple of (min_z, max_z)
 
-        Returns:
-        --------
+        Returns
+        -------
         Particle
         """
         x = np.random.uniform(x_range[0], x_range[1])
@@ -428,13 +434,14 @@ class Particle:
         """
         Returns the rotation angle of the inplane portion of a rotation matrix.
 
-        Parameters:
-        -----------
-        rot_matrix : numpy ndarray
-                    Input rotation matrix.
+        Parameters
+        ----------
+        degrees : bool, default=True
+            If True, rotation angle is expressed in degrees. Otherwise: radians.
+            Default is True.
 
-        Returns:
-        --------
+        Returns
+        -------
         float : rotation angle
         """
 
@@ -451,6 +458,7 @@ class SymmParticle(Particle):
     def __init__(self, rotation, position, tomo_id=None, motl_fid=None, particle_id=None, symm=None, custom_rot=None):
         """
         Initialize Particle with a rotation and a position.
+
         The input rotation can be:
         - A scipy Rotation object
         - Euler angles (sequence of three floats in 'zxz' convention)
@@ -458,19 +466,26 @@ class SymmParticle(Particle):
         - A rotation matrix (3x3 array-like)
         The input position can be:
         - A numpy.ndarray of size 3
-        The input tomo_id can be:
+        The input tomo_id (optional) can be:
         - An integer
-        The input motl_fid can be:
+        - Default is None
+        The input motl_fid (optional) can be:
         - A float/ an int
-        The input symm can be:
+        - Default is None
+        The input particle_id (optional) can be:
+        - A float/ an int
+        - Default is None
+        The input symm (optional) can be:
         - A string containing one of ['tetra', 'octa', 'cube', 'ico', 'dodeca']
         - An integer n > 1 referring to C_n symmetry
-        The input custom_rot can be a rotation matrix for the case that
+        - Default is None
+        The input custom_rot (optional) can be a rotation matrix for the case that
         the given particle symmetry does not align with the canonical options
         for platonic solids presented here. This is not needed in the case where sym == n >1.
+        Default is None.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the symmetry type is invalid or if the custom rotation is not a valid rotation object or matrix.
         """
@@ -544,8 +559,8 @@ class SymmParticle(Particle):
         Given the input particle's symmetry type, this function returns the associated maximum
         angular dissimilarity.
 
-        Returns:
-        --------
+        Returns
+        -------
         float
         """
         if self.category in ["cube", "icosahedron"]:
@@ -563,23 +578,24 @@ class SymmParticle(Particle):
             n = self.category
             return np.pi / n
 
-    def similarity_symm(self, other, degrees=False, max=None):
+    def similarity_symm(self, other, max=None):
         """
         Compute angular similarity between two symmetric particles in an unambiguous manner.
 
-        Parameters:
+        Parameters
         -----------
-        max : float
-                If not None, the maximum dissimilarity is set to the input value.
-                This is designed to accelerate computations by computing max only once.
+        max : float, optional
+            If not None, the maximum dissimilarity is set to the input value.
+            This is designed to accelerate computations by computing max only once.
+            Default is None.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the symmetry types of the input particles don't match.
 
-        Returns:
-        --------
+        Returns
+        -------
         float
         """
         if self.category != other.category:
@@ -598,10 +614,6 @@ class SymmParticle(Particle):
             else:
                 max_val = self.max_dissimilarity()
 
-            if degrees:
-                sim_measure = np.degrees(sim_measure)
-                max_val = np.degrees(max_val)
-
             return 1 - sim_measure / max_val
 
     @classmethod
@@ -609,19 +621,20 @@ class SymmParticle(Particle):
         """
         Equip an existing particle object with symmetry information.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         input_particle : Particle
-                        The input particle to be equipped with symmetry information.
+            The input particle to be equipped with symmetry information.
         symm : str or int
-                Refers to symmetry type. Can be one of the following:
-                - 'tetra', 'octa', 'cube', 'ico', 'dodeca' for platonic solids
-                - An integer n > 1 for cyclic groups C_n.
-        custom_rot : numpy ndarray (3,3) or rotation object
-                    Rotation matrix or rotation object describing the symmetry of the particle in the case of a platonic solid.
+            Refers to symmetry type. Can be one of the following:
+            - 'tetra', 'octa', 'cube', 'ico', 'dodeca' for platonic solids
+            - An integer n > 1 for cyclic groups C_n.
+        custom_rot : numpy ndarray (3,3) or rotation object, optional
+            Rotation matrix or rotation object describing the symmetry of the particle in the case of a platonic solid.
+            Default is None.
 
-        Returns:
-        --------
+        Returns
+        -------
         SymmParticle
         """
         result = SymmParticle(
@@ -640,8 +653,8 @@ class SymmParticle(Particle):
 def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, symm=None, custom_rot=None):
     """Convert a Motl object to a list of Particle objects.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     input_motl : str or Motl
         The path to the input Motl file or Motl object to be loaded.
     motl_fid : str, optional
@@ -658,8 +671,8 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
         the canonical options for platonic solids as defined in geom. This is not needed in the case where sym == n >1.
         It is used only if symm is specified. Default to None.
 
-    Returns:
-    --------
+    Returns
+    -------
     list of Particle or SymmParticle
         A list of Particle or SymmParticle objects, each containing the rotation angles,
         position coordinates, tomo id, motl feature id, particle id, and symmetry (for SymmParticle).
@@ -727,19 +740,19 @@ class Descriptor:
     def remove_nans(df, axis_type="row"):
         """Remove NaN values from the DataFrame.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         df : pandas.DataFrame
-        axis_type : str, optional
-            Either 'row' or 'column'. Default is 'row'.
+        axis_type : str, {"row", "column"}
+            Default is "row".
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
-            If axis_type is not 'row' or 'column'.
+            If axis_type is not "row" or "column".
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
         """
 
@@ -753,8 +766,8 @@ class Descriptor:
     def get_important_features(self, pca, input_df, n_components):
         """Get important features based on PCA loadings.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         pca : sklearn.decomposition.PCA
             PCA object fitted to the data.
         input_df : pandas.DataFrame
@@ -762,8 +775,8 @@ class Descriptor:
         n_components : int
             The number of components to consider.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the feature importance scores.
         """
@@ -788,21 +801,21 @@ class Descriptor:
     ):
         """Perform PCA analysis on the descriptor DataFrame.
 
-        Parameters:
-        -----------
-        variance_threshold : float, optional
+        Parameters
+        ----------
+        variance_threshold : float, default=0.95
             The threshold for cumulative explained variance to determine the number of components. Default is 0.95.
-        show_fig : bool, optional
+        show_fig : bool, default=True
             Whether to show the figure. Default is True.
-        nan_drop : str, optional
+        nan_drop : str, default="row"
             The axis to drop NaN values from. Default is "row".
         scatter_kwargs : dict, optional
             Additional arguments for the scatter plot. Default is None.
         bar_kwargs : dict, optional
             Additional arguments for the bar plot. Default is None.
 
-        Returns:
-        --------
+        Returns
+        -------
         tuple
             - n_components : int
                 The number of components chosen based on the variance threshold.
@@ -843,22 +856,23 @@ class Descriptor:
     def filter_features(self, input_df, feature_ids="all"):
         """Filter features based on the feature_ids parameter.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         input_df : pandas.DataFrame
             The input DataFrame to filter.
-        feature_ids : str or list, optional
-            The feature IDs to filter by. Can be "all" or a list of feature names. Default is "all".
+        feature_ids : str or list, default="all"
+            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns from input_df. 
+            Default is "all".
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If feature_ids is not a valid option.
             If none of the provided features are in the DataFrame.
             If feature_ids is not a string or list.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             The filtered DataFrame containing only the specified features.
         """
@@ -881,12 +895,12 @@ class Descriptor:
             raise ValueError("The feature_ids has to be a name of a computed feature, list of features or 'all'.")
 
         return filtered_df
-
+# @Markus: continue here
     def compute_pca(self, pca_components=None, feature_ids="all", nan_drop="row"):
         """Compute PCA on the descriptor DataFrame.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         pca_components : int, optional
             The number of PCA components to compute. Default is None.
         feature_ids : str or list, optional
@@ -894,8 +908,8 @@ class Descriptor:
         nan_drop : str, optional
             The axis to drop NaN values from. Default is "row".
 
-        Returns:
-        --------
+        Returns
+        -------
         tuple
             - pca_df : pandas.DataFrame
                 The DataFrame containing the PCA components.
