@@ -292,8 +292,9 @@ class Particle:
             'position' for Euclidean distance between physical particle positions
             'mixed' for product metric
             Default is "orientation".
-        degrees : bool
+        degrees : bool, default=False.
             If True, angular distance is expressed in degrees. Otherwise: radians.
+            Default is False.
 
         Raises
         ------
