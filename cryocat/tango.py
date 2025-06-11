@@ -895,7 +895,7 @@ class Descriptor:
             raise ValueError("The feature_ids has to be a name of a computed feature, list of features or 'all'.")
 
         return filtered_df
-# @Markus: continue here
+
     def compute_pca(self, pca_components=None, feature_ids="all", nan_drop="row"):
         """Compute PCA on the descriptor DataFrame.
 
@@ -903,18 +903,19 @@ class Descriptor:
         ----------
         pca_components : int, optional
             The number of PCA components to compute. Default is None.
-        feature_ids : str or list, optional
-            The feature IDs to include in the PCA. Can be "all" or a list of feature names. Default is "all".
-        nan_drop : str, optional
+        feature_ids : str or list, default="all"
+            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns from input_df. 
+            Default is "all".
+        nan_drop : str, {"row", "column"}
             The axis to drop NaN values from. Default is "row".
 
         Returns
         -------
         tuple
-            - pca_df : pandas.DataFrame
-                The DataFrame containing the PCA components.
-            - qp_ids : numpy.ndarray
-                The array of query point indices corresponding to the PCA components.
+        - pca_df : pandas.DataFrame
+            The DataFrame containing the PCA components.
+        - qp_ids : numpy.ndarray
+            The array of query point indices corresponding to the PCA components.
         """
 
         pca_df = self.remove_nans(self.desc, axis_type=nan_drop)
@@ -940,21 +941,22 @@ class Descriptor:
     def k_means_clustering(self, n_clusters, nan_drop="row", pca_dict=None, feature_ids="all", scale_data=True):
         """Perform k-means clustering on the descriptor DataFrame.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         n_clusters : int
             The number of clusters to form.
-        nan_drop : str, optional
+        nan_drop : str, {"row", "column"}
             The axis to drop NaN values from. Default is "row".
         pca_dict : dict, optional
             A dictionary containing PCA parameters. If None, PCA is not applied. Default is None.
-        feature_ids : str or list, optional
-            The feature IDs to include in the clustering. Can be "all" or a list of feature names. Default is "all".
-        scale_data : bool, optional
+        feature_ids : str or list, default="all"
+            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns from input_df. 
+            Default is "all".
+        scale_data : bool, default=True
             Whether to scale the data before clustering. Default is True.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the clustering results, including the cluster labels and query point IDs.
         """
@@ -990,8 +992,8 @@ class Descriptor:
     def plot_k_means(self, color_column):
         """Plot the k-means clustering results in 3D.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         color_column : str
             The column name in the DataFrame to use for coloring the points.
         """
@@ -1034,15 +1036,15 @@ class TwistDescriptor(Descriptor):
         Initialize TwistDescriptor
         A TwistDescriptor object is a subclass of Descriptor that contains a DataFrame with twist vectors and extra information.
         The twist descriptors are computed based on the input_motl and nn_radius.
-        - The input_twist can be a DataFrame or a file path to a CSV or Pickle file.
-        - The input_motl can be a Motl object or a file path to a Motl file.
-        - The nn_radius is the radius within which to compute the twist descriptors.
-        - The symm parameter specifies whether to use symmetry information.
-        - The remove_qp parameter specifies whether to remove the query point from the DataFrame.
-        - The remove_duplicates parameter specifies whether to remove duplicate entries from the DataFrame.
+        - The input_twist (pandas dataframe, str, optional) can be a DataFrame or a file path to a CSV or Pickle file. Default is None.
+        - The input_motl (cryocat.cryomotl.motl, str, optional) can be a Motl object or a file path to a Motl file. Default is None.
+        - The nn_radius (float, optional) is the radius within which to compute the twist descriptors. Default is None.
+        - The symm parameter (bool) specifies whether to use symmetry information. Default is False.
+        - The remove_qp (bool) parameter specifies whether to remove the query point from the DataFrame. Default is False.
+        - The remove_duplicates (bool) parameter specifies whether to remove duplicate entries from the DataFrame. Default is False.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If neither input_twist nor input_motl is provided, or if nn_radius is not specified.
         """
@@ -1071,13 +1073,13 @@ class TwistDescriptor(Descriptor):
         """
         Save self.df to CSV or Pickle depending on file extension.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the file type is not supported.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         output_file : str
             File path. Must end with `.csv` or `.pkl`.
         """
@@ -1093,13 +1095,13 @@ class TwistDescriptor(Descriptor):
         """
         Reads in a pandas DataFrame from a CSV or Pickle file depending on file extension.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the file type is not supported.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         input_file : str
             File path. Must end with `.csv` or `.pkl`.
         """
@@ -1115,13 +1117,13 @@ class TwistDescriptor(Descriptor):
         """
         Create a TwistDescriptor object from input data
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the input data is not a valid type (TwistDescriptor or str).
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         input_data : str or TwistDescriptor
             File path or TwistDescriptor object.
         """
@@ -1139,8 +1141,8 @@ class TwistDescriptor(Descriptor):
         """
         To access relative positions information.
 
-        Returns:
-        --------
+        Returns
+        -------
         list
         """
 
@@ -1151,8 +1153,8 @@ class TwistDescriptor(Descriptor):
         """
         To access relative orientation information.
 
-        Returns:
-        --------
+        Returns
+        -------
         list
         """
 
@@ -1163,8 +1165,8 @@ class TwistDescriptor(Descriptor):
         """
         To access both relative position and orientation information.
 
-        Returns:
-        --------
+        Returns
+        -------
         list
         """
         return ["twist_so_x", "twist_so_y", "twist_so_z", "twist_x", "twist_y", "twist_z"]
@@ -1174,8 +1176,8 @@ class TwistDescriptor(Descriptor):
         """
         To access information available to TwistDescriptors.
 
-        Returns:
-        --------
+        Returns
+        -------
         list
         """
         columns = [
@@ -1205,19 +1207,19 @@ class TwistDescriptor(Descriptor):
     def process_tomo_twist(t_nn, symm=False, symm_max_value=None, symm_category=None):
         """Compute twist descriptors for a single tomogram.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         t_nn : cryocat.nnana.NearestNeighbors object
             Contains nearest neighbors data for a single tomogram.
-        symm : bool, optional
+        symm : bool, default=False
             If True, symmetry information is used. Default is False.
         symm_max_value : float, optional
             Maximum dissimilarity for symmetry. Default is None.
         symm_category : str, optional
             Type of symmetry. Default is None.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             DataFrame containing twist vectors and additional information.
         """
@@ -1263,20 +1265,20 @@ class TwistDescriptor(Descriptor):
     def get_symm_parameters(input_motl, symm):
         """Get symmetry parameters (symmetry type, maximum dissimilarity) for a given input_motl.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         input_motl : str or Motl
             The path to the input Motl file or Motl object to be loaded.
         symm : bool
             If True, symmetry information is used. Default is False.
 
-        Returns:
-        -------_
+        Returns
+        -------
         tuple
-            - max_dissimilarity : float
-                The maximum dissimilarity for the given symmetry type.
-            - category : str
-                The symmetry type (e.g., 'tetrahedron', 'octahedron', etc.).
+        - max_dissimilarity : float
+            The maximum dissimilarity for the given symmetry type.
+        - category : str
+            The symmetry type (e.g., 'tetrahedron', 'octahedron', etc.).
 
         """
         if not symm:
@@ -1295,21 +1297,21 @@ class TwistDescriptor(Descriptor):
     def get_nn_twist_stats_within_radius(input_motl, nn_radius, symm=False, remove_qp=None, remove_duplicates=False):
         """Compute twist descriptor for a given input_motl within a specified radius.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         input_motl : str or Motl
             The path to the input Motl file or Motl object to be loaded.
         nn_radius : float
             The radius within which to compute the twist descriptor.
-        symm : bool, optional
+        symm : bool, default=False
             If True, symmetry information is used. Default is False.
         remove_qp : bool, optional
             If True, the query point is removed from the nearest neighbors in the DataFrame. Default is None.
-        remove_duplicates : bool, optional
+        remove_duplicates : bool, default=False
             If True, duplicate entries are removed from the DataFrame. Default is False.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             DataFrame containing twist vectors and additional information.
 
@@ -1368,20 +1370,20 @@ class TwistDescriptor(Descriptor):
     def get_axis_feature_id(feature_id, axis="z"):
         """Get the feature ID for a specific axis.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         feature_id : str
             The base feature ID (e.g., "twist_so").
-        axis : str, optional
-            The axis to use (e.g., "x", "y", "z"). Default is "z".
+        axis : str, {"z", "x", "y"}
+            The axis to use. Default is "z".
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the axis is not valid (not "x", "y", or "z").
 
-        Returns:
-        --------
+        Returns
+        -------
         str
             The feature ID for the specified axis.
         """
@@ -1401,8 +1403,8 @@ class TwistDescriptor(Descriptor):
         The first three columns correspond to the relative orientation as described by (twist_so_x, twist_so_y, twist_so_z),
         and the last three columns correspond to the relative position as described by (twist_x, twist_y, twist_z).
 
-        Returns:
-        --------
+        Returns
+        -------
         numpy.ndarray
             The twist vectors as a numpy array.
         """
@@ -1413,13 +1415,13 @@ class TwistDescriptor(Descriptor):
         """Shift twist vectors by tangent vector corresponding to input particle.
         Ideally, the input particle corresponds to the relative particle pose of interest.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         referenc_particle : Particle
             The reference particle to compare against.
 
-        Returns:
-        --------
+        Returns
+        -------
         numpy.ndarray
             The shifted twist vectors as a numpy array.
         """
@@ -1430,21 +1432,21 @@ class TwistDescriptor(Descriptor):
 
     def sort_by_distance(self, twist_descriptor_id="geodesic_distance_rad"):
         """
-        Sort the twist descriptor DataFrame by a specific distance column.
+        Sort the twist descriptor DataFrame by a specific column.
         The feature corresponding to the twist descriptor ID is interpolated at the sorted distances.
 
-        Parameters:
-        -----------
-        twist_descriptor_id : str
-            The name of the distance column to sort by. Default is "geodesic_distance_rad".
+        Parameters
+        ----------
+        twist_descriptor_id : str, {"geodesic_distance_rad", "euclidean_distance", "product_distance", "twist_so_x", "twist_so_y", "twist_so_z", "twist_x", "twist_y", "twist_z", "nn_inplane"}
+            The name of the distance column to sort by. In principle, all columns of a TwistDescriptor data frame are valid input. Default is "geodesic_distance_rad".
 
-        Returns:
-        --------
+        Returns
+        -------
         tuple
-            - unified_distances : numpy.ndarray
-                The sorted unique distances.
-            - average_values : numpy.ndarray
-                The average values of the twist descriptor at the sorted distances.
+        - unified_distances : numpy.ndarray
+            The sorted unique distances.
+        - average_values : numpy.ndarray
+            The average values of the twist descriptor at the sorted distances.
 
         """
 
@@ -1485,15 +1487,15 @@ class TwistDescriptor(Descriptor):
     def weighted_stats(self, position_weight: float, orientation_weight: float):
         """Compute a weighted product metric for the twist vectors in the TwistDescriptor.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         position_weight : float
             The weight for the position component of the twist vector.
         orientation_weight : float
             The weight for the orientation component of the twist vector.
 
-        Returns:
-        --------
+        Returns
+        -------
         TwistDescriptor
             A new TwistDescriptor object containing the weighted product metric.
 
@@ -1516,15 +1518,15 @@ class TwistDescriptor(Descriptor):
         """Cluster particles based on spatial proximity. If size_connected_components is None, num_connected_components is used to
         determine the number of connected components to return. If size_connected_components is specified, it returns all connected components with size >= size_connected_components.
 
-        Parameters:
-        -----------
-        num_connected_components : int, optional
+        Parameters
+        ----------
+        num_connected_components : int, default=1
             The number of connected components to return. Default is 1.
         size_connected_components : int, optional
             The minimum size of the connected components to return. Default is None.
 
-        Returns:
-        --------
+        Returns
+        -------
         list
             A list of connected components, each represented as a subgraph of the original graph.
         """
@@ -1558,26 +1560,26 @@ class TwistDescriptor(Descriptor):
     def get_qp_twist_desc(self, query_particle, tomo_id=None):
         """Get twist descriptor for a specific query particle from a twist dataframe.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         query_particle : int, float or Particle
             The index of the particle or a Particle instance for which statistics are to be retrieved.
         tomo_id : int, optional
             The tomogram id to filter the data. If None, data will be retrieved for all tomograms associated with the
-            query particle.
+            query particle. Default is None.
 
-        Returns:
-        --------
+        Returns
+        -------
         filtered_twist_desc : TwistDescriptor
             A TwistDescriptor containing the filtered statistics for the specified query particle and tomo id.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If `query_particle` is neither an instance of Particle nor an integer index.
 
-        Notes:
-        ------
+        Notes
+        -----
         This function assumes that `twist_df` contains a column named "qp_id" for particle IDs and "tomo_id" for tomography IDs.
         """
 
@@ -1602,19 +1604,20 @@ class TwistDescriptor(Descriptor):
     def get_data_range(cls, twist_desc, twist_descriptor_id=None, min_value=None, max_value=None):
         """Filter a TwistDescriptor instance by a specific column and return a new instance.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         twist_desc : TwistDescriptor
             The original TwistDescriptor instance.
         twist_descriptor_id : str, optional
             The name of the column to filter on. If None, the original twist_desc will be returned.
+            Default is None.
         min_value : float, optional
             Minimum value for filtering. Default is None.
         max_value : float, optional
             Maximum value for filtering. Default is None.
 
-        Returns:
-        --------
+        Returns
+        -------
         TwistDescriptor
             A new instance of TwistDescriptor with filtered data.
         """
@@ -1634,8 +1637,8 @@ class TwistDescriptor(Descriptor):
     def get_twist_pos_df(self):
         """Get the relative position from the twist descriptor DataFrame.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the relative positions (twist_x, twist_y, twist_z).
         """
@@ -1644,8 +1647,8 @@ class TwistDescriptor(Descriptor):
     def get_twist_rot_df(self):
         """Get the relative orientation from the twist descriptor DataFrame.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the relative orientations (twist_so_x, twist_so_y, twist_so_z).
         """
@@ -1655,8 +1658,8 @@ class TwistDescriptor(Descriptor):
         """Get the relative position and orientation from the twist descriptor DataFrame.
         This data corresponds to the twist vectors.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the relative position and orientation (twist_x, twist_y, twist_z, twist_so_x, twist_so_y, twist_so_z).
         """
@@ -1666,8 +1669,8 @@ class TwistDescriptor(Descriptor):
         """Get the relative position from the twist descriptor DataFrame as a numpy array.
         This data corresponds to the twist vectors.
 
-        Returns:
-        --------
+        Returns
+        -------
         numpy.ndarray
             A numpy array containing the relative positions (twist_x, twist_y, twist_z).
         """
@@ -1676,8 +1679,8 @@ class TwistDescriptor(Descriptor):
     def get_twist_rot_np(self):
         """Get the relative orientation from the twist descriptor DataFrame as a numpy array.
 
-        Returns:
-        --------
+        Returns
+        -------
         numpy.ndarray
             A numpy array containing the relative orientations (twist_so_x, twist_so_y, twist_so_z).
         """
@@ -1699,7 +1702,7 @@ class AxisRot(Filter):
         """Filter twist descriptor based on the rotation angle around a specified axis.
 
         Parameters
-        -----------
+        ----------
         twist_desc : TwistDescriptor
             The original TwistDescriptor instance.
         max_angle : float
@@ -1722,11 +1725,11 @@ class EuclideanDistNN(Filter):
     def __init__(self, twist_desc, num_neighbors=1):
         """Filter twist descriptor based on the Euclidean distance.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         twist_desc : TwistDescriptor
             The original TwistDescriptor instance.
-        num_neighbors : int, optional
+        num_neighbors : int, default=1
             The number of nearest neighbors to consider. Default is 1.
         """
         twist_df = twist_desc.df.sort_values(by=["qp_id", "euclidean_distance"]).groupby("qp_id").head(num_neighbors)
@@ -1738,11 +1741,11 @@ class GeodesicDistNN(Filter):
     def __init__(self, twist_desc, num_neighbors=1):
         """Filter twist descriptor based on the geodesic distance.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         twist_desc : TwistDescriptor
             The original TwistDescriptor instance.
-        num_neighbors : int, optional
+        num_neighbors : int, default=1
             The number of nearest neighbors to consider. Default is 1.
         """
         twist_df = twist_desc.df.sort_values(by=["qp_id", "geodesic_distance_rad"]).groupby("qp_id").head(num_neighbors)
@@ -1754,11 +1757,11 @@ class MixedDistNN(Filter):
     def __init__(self, twist_desc, num_neighbors=1):
         """Filter twist descriptor based on the product metric.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         twist_desc : TwistDescriptor
             The original TwistDescriptor instance.
-        num_neighbors : int, optional
+        num_neighbors : int, default=1
             The number of nearest neighbors to consider. Default is 1.
         """
         twist_df = twist_desc.df.sort_values(by=["qp_id", "product_distance"]).groupby("qp_id").head(num_neighbors)
@@ -1770,11 +1773,11 @@ class AngularScoreNN(Filter):
     def __init__(self, twist_desc, num_neighbors=1):
         """Filter twist descriptor based on the angular score.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         twist_desc : TwistDescriptor
             The original TwistDescriptor instance.
-        num_neighbors : int, optional
+        num_neighbors : int, default=1
             The number of nearest neighbors to consider. Default is 1.
         """
         twist_df = twist_desc.df.sort_values(by=["qp_id", "angular_score"]).groupby("qp_id").head(num_neighbors)
@@ -1795,25 +1798,25 @@ class Support:
         The axis is considered in a different subspace depending on the mode.
         The choice depends on the type of suport that is being used.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         mode : str
             The mode of the twist descriptor. Can be "orientation", "position", or "mixed".
         axis : numpy.ndarray, optional
             The axis used in the defintion of the required support. Default is None.
 
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
             If the mode is not supported or if the axis is not a numpy array of size 3 or 6.
 
-        Returns:
-        --------
+        Returns
+        -------
         tuple
-            - axis : numpy.ndarray
-                The normalized axis vector.
-            - columns : list
-                The feature IDs corresponding to the specified mode.
+        - axis : numpy.ndarray
+            The normalized axis vector.
+        - columns : list
+            The feature IDs corresponding to the specified mode.
         """
 
         if mode in ["orientation", "position", "mixed"]:
@@ -1858,6 +1861,7 @@ class Sphere(Support):
         twist_desc : TwistDescriptor
             The original TwistDescriptor instance.
         radius : float, optional
+            Default is None.
         """
         if radius is None:
             self.support = twist_desc
@@ -2093,8 +2097,8 @@ class NNCount(Feature):
     def compute(self, **kwargs):
         """Compute the number of nearest neighbors for each query point.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the number of nearest neighbors for each query point.
         """
@@ -2112,8 +2116,8 @@ class CountSHOT(Feature):
     def __init__(self, shot_desc, **kwargs):
         """The CountSHOT feature computes the number of occurrences of each (cone_id, shell_id) combination.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         shot_desc : pandas.DataFrame
             The DataFrame containing the shot descriptor data.
         kwargs : dict, optional
@@ -2126,8 +2130,8 @@ class CountSHOT(Feature):
     def compute(self):
         """Compute the number of occurrences of each (cone_id, shell_id) combination.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the counts of each (cone_id, shell_id) combination for each query point.
         """
@@ -2160,8 +2164,8 @@ class EulerCharAlpha(Feature):
         """The EulerCharAlpha feature computes the Euler characteristic of a 1-dimensional simplicial complex,
         e.g. for the link of a vertex in a 2-dimensional triangulated surface.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         alpha_desc : pandas.DataFrame
             The DataFrame containing the alpha descriptor data.
         kwargs : dict, optional
@@ -2173,8 +2177,8 @@ class EulerCharAlpha(Feature):
     def compute(self, **kwargs):
         """Compute the Euler characteristic of a 1-dimensional simplicial complex.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the Euler characteristic for each query point.
         """
@@ -2194,8 +2198,8 @@ class LinkTypeAlpha(Feature):
         """The LinkTypeAlpha feature computes a simplicial isomorphism invariant for a 1-dimensional simplicial complex,
         e.g. for the link of a vertex in a 2-dimensional triangulated surface (``link type'').
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         alpha_desc : pandas.DataFrame
             The DataFrame containing the alpha descriptor data.
         kwargs : dict, optional
@@ -2207,8 +2211,8 @@ class LinkTypeAlpha(Feature):
     def compute(self, **kwargs):
         """Compute a simplicial isomorphism invariant (``link type'') for a 1-dimensional simplicial complex.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the simplicial isomorphism invariant (``link type'') for each query point.
         """
@@ -2228,8 +2232,8 @@ class CentralAngleStatsAlpha(Feature):
         """The CentralAngleStatsAlpha feature computes the mean, median, standard deviation, and variance of the central angles
         of a vertex's star.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         alpha_desc : pandas.DataFrame
             The DataFrame containing the alpha descriptor data.
         """
@@ -2238,8 +2242,8 @@ class CentralAngleStatsAlpha(Feature):
     def compute(self, **kwargs):
         """Compute the mean, median, standard deviation, and variance of the central angles of a vertex's star.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the mean, median, standard deviation, and variance of the central angles for each query point.
         """
@@ -2264,8 +2268,8 @@ class PLComplexDescriptor(Descriptor):
     def __init__(self, twist_df):
         """The PLComplexDescriptor computes geometric properties describing the stars of vertices in a triangulated surface.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         twist_df : pandas.DataFrame
             The DataFrame containing the twist descriptor data.
         """
@@ -2291,8 +2295,8 @@ class PLComplexDescriptor(Descriptor):
     def compute_triangles(self, qp_id):
         """Compute the triangles for a given query point ID.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         qp_id : int
             The ID of the query point.
         """
@@ -2314,13 +2318,13 @@ class PLComplexDescriptor(Descriptor):
     def compute_features(self, qp_id):
         """Compute geometric features for a given query point ID.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         qp_id : int
             The ID of the query point.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the computed features for the given query point ID.
         """
@@ -2357,8 +2361,8 @@ class PLComplexDescriptor(Descriptor):
     def compute_outer_edges(self):
         """Compute the edges making up links of the triangulated surface.
 
-        Returns:
-        --------
+        Returns
+        -------
         list
             A list of tuples representing the edges of the triangulated surface.
         """
@@ -2376,13 +2380,13 @@ class SHOTDescriptor(Descriptor):
         """The SHOTDescriptor computes a 3D histogram describing the occupancy of nearest neighbors
         within a subdivided spherical support.
 
-        Parameters:
+        Parameters
         -----------
         twist_df : pandas.DataFrame
             The DataFrame containing the twist descriptor data.
-        cone_number : int, optional
+        cone_number : int, default=6
             The number of cones to divide the spherical support into. Default is 6.
-        shell_number : int, optional
+        shell_number : int, default=1
            The number of radial subdivisions (shells) to create. Default is 1.
         north_pole_axis : numpy.ndarray, optional
             The axis corresponding to the north-pole of the subdivided support. Default is None, which uses the z-axis.
@@ -2409,15 +2413,15 @@ class SHOTDescriptor(Descriptor):
     def generate_rotated_axes(self, num_cones, north_pole_axis=None):
         """Compute the rotated axes for the subdivided spherical support.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         num_cones : int
             The number of cones to divide the spherical support into.
         north_pole_axis : numpy.ndarray, optional
             The axis corresponding to the north-pole of the subdivided support. Default is None, which uses the z-axis.
 
-        Returns:
-        --------
+        Returns
+        -------
         numpy.ndarray
             The rotated axes for the subdivided spherical support.
         """
@@ -2443,13 +2447,13 @@ class SHOTDescriptor(Descriptor):
         """Return evenly distributed unit vectors for small num_cones (hand-picked for symmetry).
         These directions include one at [0, 0, 1] and others at standard axes for low counts.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         num_cones : int
             The number of cones to divide the spherical support into.
 
-        Returns:
-        --------
+        Returns
+        -------
         numpy.ndarray
             The fixed cone directions for the subdivided spherical support.
         """
@@ -2489,15 +2493,15 @@ class SHOTDescriptor(Descriptor):
         """Assign each point to the cone direction with which it has the largest cosine similarity.
         All inputs must be normalized.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         points : numpy.ndarray
             The points to be assigned to cone directions.
         cone_dirs : numpy.ndarray
             The cone directions to which the points are assigned.
 
-        Returns:
-        --------
+        Returns
+        -------
         numpy.ndarray
             The indices of the cone directions to which each point is assigned.
         """
@@ -2520,8 +2524,8 @@ class SHOTDescriptor(Descriptor):
         The points are normalized to lie within a sphere of the specified radius.
         The cone directions are generated based on the specified number of cones and the north pole axis.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         qp_id : int
             The ID of the query point.
         points : numpy.ndarray
@@ -2530,13 +2534,13 @@ class SHOTDescriptor(Descriptor):
             The number of shells to divide the spherical support into.
         num_cones : int
             The number of cones to divide the spherical support into.
-        radius : float, optional
+        radius : float, default=1.0
             The radius of the spherical support. Default is 1.0.
         north_pole_axis : numpy.ndarray, optional
             The axis corresponding to the north-pole of the subdivided support. Default is None, which uses the z-axis.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the assigned shell and cone IDs for each point.
         """
@@ -2571,15 +2575,15 @@ class SHOTDescriptor(Descriptor):
 
 class AlphaComplexDescriptor(Descriptor):
 
-    def __init__(self, twist_df, alpha_param=200):
+    def __init__(self, twist_df, alpha_param=200.0):
         """The AlphaComplexDescriptor computes geometric and topological properties describing the links and stars of vertices in an alpha complex.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         twist_df : pandas.DataFrame
             The DataFrame containing the twist descriptor data.
-        alpha_param : float, optional
-            The alpha parameter used to compute the alpha complex. Default is 200.
+        alpha_param : float, default=200.0
+            The alpha parameter used to compute the alpha complex. Default is 200.0.
 
         """
         self.alpha_param = alpha_param
@@ -2607,18 +2611,18 @@ class AlphaComplexDescriptor(Descriptor):
         """Compute the stars and links of vertices corresponding to an alpha complex.
         This computation is performed in 2D. Thus, the input coordinates have t be close enough to a plane.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         coord : numpy.ndarray
             The coordinates of the points in the alpha complex.
 
-        Returns:
-        --------
+        Returns
+        -------
         tuple
-            - triangles : list
-                A list of triangles representing the stars of the vertices in the alpha complex.
-            - link_edges : list
-                A list of edges representing the links of the vertices in the alpha complex.
+        - triangles : list
+            A list of triangles representing the stars of the vertices in the alpha complex.
+        - link_edges : list
+            A list of edges representing the links of the vertices in the alpha complex.
         """
 
         vertices = coord[:, :2]
@@ -2653,13 +2657,13 @@ class AlphaComplexDescriptor(Descriptor):
         These features include the central angles, the triangle areas, the radii of the inner circles,
         the radii of the circumcircles, and the ratio of the circumcircle radius to the inner circle radius.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         qp_id : int
             The ID of the query point.
 
-        Returns:
-        --------
+        Returns
+        -------
         pandas.DataFrame
             A DataFrame containing the computed features for the given query point ID.
         """
@@ -2701,14 +2705,16 @@ class Catalog:
         """Returns all class names in the catalog that are subclasses of the respective parent class.
 
         Parameters
-        -----------
+        ----------
         filter_contains : str, optional
             A string to filter the class names that contain this substring.
+            Default is None.
         filter_exclude : str, optional
             A string to filter the class names that do not contain this substring.
+            Default is None.
 
         Returns
-        --------
+        -------
         list
             A list of class names that are subclasses of the parent class and match the filters.
         """
@@ -2760,8 +2766,8 @@ class CustomDescriptor(Descriptor):
         """Load a custom descriptor from a DataFrame.
         This method is a class method that creates an instance of the CustomDescriptor class.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         desc_df : pandas.DataFrame
             The DataFrame containing the custom descriptor data.
         """
@@ -2773,8 +2779,8 @@ class CustomDescriptor(Descriptor):
         """Create additional descriptors based on the provided feature list and support.
         This method generates the necessary keyword arguments for the features based on the support.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         support : Support
             The support object used to compute the additional descriptors.
         feature_list : list
@@ -2782,8 +2788,8 @@ class CustomDescriptor(Descriptor):
         feature_kwargs : list
             A list of dictionaries containing keyword arguments for each feature class.
 
-        Returns:
-        --------
+        Returns
+        -------
         dict
             A dictionary containing the additional keyword arguments for the features.
         """
@@ -2814,8 +2820,8 @@ class CustomDescriptor(Descriptor):
         The `df` attribute contains the original DataFrame.
         This method is a class method that creates an instance of the CustomDescriptor class.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         feature_list : list
             A list of feature classes to be computed.
         feature_kwargs : list
