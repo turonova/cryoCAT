@@ -2,6 +2,9 @@ import importlib
 import inspect
 import sys
 import types
+import re
+import numpy as np
+from numpydoc.docscrape import NumpyDocString
 
 
 def filter_strings(input_list, filter_contains=None, filter_exclude=None):
@@ -104,3 +107,113 @@ def get_class_names_by_prefix(prefix):
         if name.startswith(prefix) and cls.__module__ == __name__
     ]
     return class_names
+
+
+def parse_allowed_types(input_string):
+
+    # Define the words to filter out because they cannot be passed on command line
+    unsupported_types = {"pandas", "dataframe", "pandas.dataframe"}
+
+    # Split the input string by commas, "and", or "or"
+    input_types = re.split(r",| and | or ", input_string)
+
+    # Remove leading and trailing whitespace from each word
+    input_types = [word.strip() for word in input_types]
+
+    # Filter out empty strings and forbidden words
+    input_types = [word for word in input_types if word and word.lower() not in unsupported_types]
+
+    return sorted(input_types)
+
+
+def parse_string_into_array(s):
+    # Split the input string by commas
+    values = s.split(",")
+
+    # Try to convert the first value to different types until successful
+    for dtype in (int, float, str):
+        try:
+            # Convert the values to the determined data type
+            values = np.array([dtype(x) for x in values])
+            break
+        except ValueError:
+            pass
+
+    return values
+
+
+def parse_choices(input_string):
+    # Remove curly braces and split the string by comma
+    s = input_string.strip("{}")
+    elements = s.split(",")
+
+    # Determine the type of the first element
+    first_element = elements[0].strip()
+    if first_element.isdigit():
+        return [int(e.strip()) for e in elements]
+    elif first_element.replace(".", "").isdigit():
+        return [float(e.strip()) for e in elements]
+    else:
+        return [str(e.strip().strip('"')) for e in elements]
+
+
+def parse_doc_param(doc_param, add_prefix=""):
+
+    param_name = add_prefix + doc_param[0]
+    help_desc = " ".join(doc_param[2])
+    help_desc = replace_cross_references(help_desc)
+
+    default_value = None
+    required_param = False
+    choices = []
+
+    if "optional" in doc_param[1]:
+        param_types = parse_allowed_types(doc_param[1].split("optional")[0].strip()[:-1])
+    elif "default=" in doc_param[1]:
+        param_types = parse_allowed_types(doc_param[1].split("default=")[0].strip()[:-1])
+        default_value = eval(doc_param[1].split("default=")[1].strip())
+    elif "{" in doc_param[1]:
+        choices = parse_choices(doc_param[1].split("{")[1])
+        param_types = type(choices[0])
+        default_value = choices[0]
+    else:
+        required_param = True
+        param_types = parse_allowed_types(doc_param[1])
+
+    # if not isinstance(list, param_types):
+    #    param_types = [param_types]
+
+    return param_name, help_desc, required_param, param_types, default_value, choices
+
+
+def replace_cross_references(input_string):
+
+    if ":meth:" in input_string:
+        input_string = input_string.replace(":meth:", "")
+
+    return input_string
+
+
+def process_method_docstring(path_to_method, method_name, pretty_print=False):
+
+    method_obj = inspect.getattr_static(path_to_method, method_name)
+    docstring = inspect.getdoc(method_obj)
+    np_doc = NumpyDocString(docstring)
+
+    params_dict = {}
+    for p in np_doc["Parameters"]:
+        param_name, help_desc, required_param, param_types, default_value, choices = parse_doc_param(p)
+        original_name = param_name
+        if pretty_print:
+            param_name = param_name.capitalize().replace("_", " ")
+
+        params_dict[param_name] = {
+            "desc": help_desc,
+            "required": required_param,
+            "types": param_types,
+            "default": default_value,
+            "options": choices,
+            "name": original_name,
+        }
+
+    return params_dict
