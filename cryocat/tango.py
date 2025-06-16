@@ -764,6 +764,28 @@ class Descriptor:
         else:
             raise ValueError("axis_type must be either 'row' or 'column'")
 
+    @staticmethod
+    def build_descriptor_feature_map(desc_list, feat_list):
+        result = {}
+        for desc in desc_list:
+            if not desc.endswith("Descriptor"):
+                continue  # skip invalid entries
+            base = desc[: -len("Descriptor")]
+            matches = [b for b in feat_list if b.endswith(base)]
+            result[desc] = matches
+        return result
+
+    @staticmethod
+    def build_feature_descriptor_map(feat_list, desc_list):
+        result = {}
+        for feat in feat_list:
+            for desc in desc_list:
+                base = desc.replace("Descriptor", "")
+                if feat.endswith(base):
+                    result[feat] = desc
+
+        return result
+
     def get_important_features(self, pca, input_df, n_components):
         """Get important features based on PCA loadings.
 
@@ -1032,9 +1054,8 @@ class Descriptor:
 
         Returns
         -------
-        None
-            The method modifies the instance's `desc` attribute in place, creating a DataFrame
-            that contains unique 'qp_id' values and their corresponding computed features.
+        new_desc_df : pandas.DataFrame
+            A data frame with the descriptor values.
 
         Notes
         -----
@@ -1048,11 +1069,13 @@ class Descriptor:
         avail_features = [s for s in avail_features if s.endswith(desc_name)]
         all_cls_feats = get_classes_from_names(avail_features, "cryocat.tango")
 
-        self.desc = pd.DataFrame(self.df["qp_id"].unique(), columns=["qp_id"])
+        new_desc_df = pd.DataFrame(self.df["qp_id"].unique(), columns=["qp_id"])
 
         for c_feat in all_cls_feats:
             current_feature = c_feat(self)
-            self.desc = pd.merge(self.desc, current_feature.compute(), on="qp_id", how="left")
+            new_desc_df = pd.merge(new_desc_df, current_feature.compute(), on="qp_id", how="left")
+
+        return new_desc_df
 
 
 ###### TwistDescriptor Class ######
@@ -1061,18 +1084,44 @@ class Descriptor:
 class TwistDescriptor(Descriptor):
 
     def __init__(
-        self, input_twist=None, input_motl=None, nn_radius=None, symm=False, remove_qp=False, remove_duplicates=False
+        self,
+        input_twist=None,
+        input_motl=None,
+        nn_radius=None,
+        symm=False,
+        remove_qp=False,
+        remove_duplicates=False,
+        build_unique_desc=True,
     ):
         """
-        Initialize TwistDescriptor
         A TwistDescriptor object is a subclass of Descriptor that contains a DataFrame with twist vectors and extra information.
         The twist descriptors are computed based on the input_motl and nn_radius.
-        - The input_twist (pandas dataframe, str, optional) can be a DataFrame or a file path to a CSV or Pickle file. Default is None.
-        - The input_motl (cryocat.cryomotl.motl, str, optional) can be a Motl object or a file path to a Motl file. Default is None.
-        - The nn_radius (float, optional) is the radius within which to compute the twist descriptors. Default is None.
-        - The symm parameter (bool) specifies whether to use symmetry information. Default is False.
-        - The remove_qp (bool) parameter specifies whether to remove the query point from the DataFrame. Default is False.
-        - The remove_duplicates (bool) parameter specifies whether to remove duplicate entries from the DataFrame. Default is False.
+
+        Parameters
+        ----------
+        input_twist : pandas dataframe, str, optional
+            It can be a DataFrame or a file path to a CSV or Pickle file. Default is None.
+        input_motl : Motl, str, or list, optional
+            A path to a particle list (motl) or Motl object to be used for twist vector compuation. If the twist vector
+            should be computed between two different motl files, one can pass list containing both motls (or their paths).
+            Default is None.
+        nn_radius : float, optional
+            The radius within which to compute the twist descriptors. If input_motl is passed as a parameter, the radius
+            has to be specified. Default is None.
+        symm : bool, default=False
+            Specifies whether to use symmetry information. Default is False.
+        remove_qp : bool, default=False
+            Specifies whether to remove the query point during the nearest neighbor analysis. The parameter is relevant
+            only if two motls are specified and it can happen that the nearest point is identical to the query point or
+            is assosicated with the same particle. If only one motl is used for twist vector computation, this parameter
+            is obsolete as the query point is removed by default. Default is False.
+        remove_duplicates : bool, default=False
+            Specifies whether to remove duplicate entries from nearest neighbor analysis. Duplicate entries are considered
+            pairs where (qp_id, nn_id) also occur as (nn_id, qp_id) in the nearest neighbor analysis. Default is False.
+        build_unique_desc : bool, default=True
+            Whether to create unique descriptor for all features associated with this descriptor (ending with Twist).
+            Unlike in the associated descriptor (self.df), in the unique descriptor each query point has only one
+            entry. The unique descriptor is stores in self.desc. If False, the self.desc is None. Default is True.
 
         Raises
         ------
@@ -1094,7 +1143,10 @@ class TwistDescriptor(Descriptor):
                 "One has to specify (at least) either input_twist or input_motl in combination with nn_radius."
             )
 
-        self.desc = self.build_descriptor()
+        if build_unique_desc:
+            self.desc = self.build_descriptor()
+        else:
+            self.desc = None
 
     def __getitem__(self, item):
 
@@ -2113,17 +2165,17 @@ class Feature:
 
 class NNCountTwist(Feature):
 
-    def __init__(self, twist_desc, **kwargs):
+    def __init__(self, assoc_desc, **kwargs):
         """The NNCount feature computes the number of nearest neighbors for each query point.
 
         Parameters
         ----------
-        twist_desc : TwistDescriptor
+        assoc_desc : TwistDescriptor
             The DataFrame containing the twist descriptor data.
         kwargs : dict, optional
             Additional keyword arguments for customization.
         """
-        super().__init__(twist_desc.df)
+        super().__init__(assoc_desc.df)
 
     def compute(self, **kwargs):
         """Compute the number of nearest neighbors for each query point.
@@ -2142,21 +2194,58 @@ class NNCountTwist(Feature):
         return pd.DataFrame(data=np.array(results), columns=columns)
 
 
+class CentralAngleStatsPLComplex(Feature):
+
+    def __init__(self, assoc_desc):
+        """The CentralAngleStatsPL feature computes the mean, median, standard deviation, and variance of the central angles
+        of a qp and all its nn vertices.
+
+        Parameters
+        ----------
+        assoc_desc : PLComplexDescriptor
+            The PLComplexDescriptor object containing the alpha descriptor data.
+        """
+        super().__init__(assoc_desc.pl_df)
+
+    def compute(self, **kwargs):
+        """Compute the mean, median, standard deviation, and variance of the central angles of a vertex's star.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the mean, median, standard deviation, and variance of the central angles for each query point.
+        """
+
+        all_stats = []
+        for qp_id, group_df in self.df.groupby("qp_id"):
+            angles = group_df["central_angle"].values
+
+            if not np.isnan(angles).any():
+                all_stats.append([qp_id, np.mean(angles), np.median(np.sort(angles)), np.std(angles), np.var(angles)])
+            else:
+                all_stats.append([qp_id, np.NAN, np.NAN, np.NAN, np.NAN])
+
+        columns = ["Mean", "Median", "Std", "Var"]
+        columns = [f"{self.__class__.__name__}{col}" for col in columns]
+        columns.insert(0, "qp_id")
+        return pd.DataFrame(data=np.array(all_stats), columns=columns)
+
+
 class CountSHOT(Feature):
 
-    def __init__(self, shot_desc, **kwargs):
+    def __init__(self, assoc_desc, **kwargs):
         """The CountSHOT feature computes the number of occurrences of each (cone_id, shell_id) combination.
 
         Parameters
         ----------
-        shot_desc : SHOTDescriptor
+        assoc_desc : SHOTDescriptor
             The SHOTDescriptor object containing the shot descriptor data.
         kwargs : dict, optional
             Additional keyword arguments for customization.
         """
-        super().__init__(shot_desc.shot_df)
-        self.cone_number = shot_desc.cone_number
-        self.shell_number = shot_desc.shell_number
+        super().__init__(assoc_desc.shot_df)
+        self.cone_number = assoc_desc.cone_number
+        self.shell_number = assoc_desc.shell_number
 
     def compute(self):
         """Compute the number of occurrences of each (cone_id, shell_id) combination.
@@ -2189,21 +2278,21 @@ class CountSHOT(Feature):
         return pivot.reset_index()
 
 
-class EulerCharAlpha(Feature):
+class EulerCharAlphaComplex(Feature):
 
-    def __init__(self, alpha_desc, **kwargs):
+    def __init__(self, assoc_desc, **kwargs):
         """The EulerCharAlpha feature computes the Euler characteristic of a 1-dimensional simplicial complex,
         e.g. for the link of a vertex in a 2-dimensional triangulated surface.
 
         Parameters
         ----------
-        alpha_desc : AlphaComplexDescriptor
+        assoc_desc : AlphaComplexDescriptor
             The AlphaComplexDescriptor object containing the alpha descriptor data.
         kwargs : dict, optional
             Additional keyword arguments for customization.
         """
-        super().__init__(alpha_desc.alpha_df)
-        self.link_edges = alpha_desc.link_edges
+        super().__init__(assoc_desc.alpha_df)
+        self.link_edges = assoc_desc.link_edges
 
     def compute(self, **kwargs):
         """Compute the Euler characteristic of a 1-dimensional simplicial complex.
@@ -2219,25 +2308,28 @@ class EulerCharAlpha(Feature):
             vertices = set(itertools.chain.from_iterable(self.link_edges[qp_id]))
             results.append([qp_id, len(vertices) - len(self.link_edges[qp_id])])
 
-        columns = ["qp_id", self.__class__.__name__]
-        return pd.DataFrame(data=np.array(results), columns=columns)
+        if results:
+            columns = ["qp_id", self.__class__.__name__]
+            return pd.DataFrame(data=np.array(results), columns=columns)
+        else:
+            return pd.DataFrame()
 
 
-class LinkTypeAlpha(Feature):
+class LinkTypeAlphaComplex(Feature):
 
-    def __init__(self, alpha_desc, **kwargs):
+    def __init__(self, assoc_desc, **kwargs):
         """The LinkTypeAlpha feature computes a simplicial isomorphism invariant for a 1-dimensional simplicial complex,
         e.g. for the link of a vertex in a 2-dimensional triangulated surface (``link type'').
 
         Parameters
         ----------
-        alpha_desc : AlphaComplexDescriptor
+        assoc_desc : AlphaComplexDescriptor
             The AlphaComplexDescriptor object containing the alpha descriptor data.
         kwargs : dict, optional
             Additional keyword arguments for customization.
         """
-        super().__init__(alpha_desc.alpha_df)
-        self.link_edges = alpha_desc.link_edges
+        super().__init__(assoc_desc.alpha_df)
+        self.link_edges = assoc_desc.link_edges
 
     def compute(self, **kwargs):
         """Compute a simplicial isomorphism invariant (``link type'') for a 1-dimensional simplicial complex.
@@ -2253,22 +2345,25 @@ class LinkTypeAlpha(Feature):
             vertices = set(itertools.chain.from_iterable(self.link_edges[qp_id]))
             results.append([qp_id, 1 - 0.5 * len(vertices) + len(self.link_edges[qp_id]) / 3])
 
-        columns = ["qp_id", self.__class__.__name__]
-        return pd.DataFrame(data=np.array(results), columns=columns)
+        if results:
+            columns = ["qp_id", self.__class__.__name__]
+            return pd.DataFrame(data=np.array(results), columns=columns)
+        else:
+            return pd.DataFrame()
 
 
-class CentralAngleStatsAlpha(Feature):
+class CentralAngleStatsAlphaComplex(Feature):
 
-    def __init__(self, alpha_desc, **kwargs):
+    def __init__(self, assoc_desc, **kwargs):
         """The CentralAngleStatsAlpha feature computes the mean, median, standard deviation, and variance of the central angles
         of a vertex's star.
 
         Parameters
         ----------
-        alpha_desc : AlphaComplexDescriptor
+        assoc_desc : AlphaComplexDescriptor
             The AlphaComplexDescriptor object containing the alpha descriptor data.
         """
-        super().__init__(alpha_desc.alpha_df)
+        super().__init__(assoc_desc.alpha_df)
 
     def compute(self, **kwargs):
         """Compute the mean, median, standard deviation, and variance of the central angles of a vertex's star.
@@ -2288,21 +2383,28 @@ class CentralAngleStatsAlpha(Feature):
             else:
                 all_stats.append([qp_id, np.NAN, np.NAN, np.NAN, np.NAN])
 
-        columns = ["Mean", "Median", "Std", "Var"]
-        columns = [f"{self.__class__.__name__}{col}" for col in columns]
-        columns.insert(0, "qp_id")
-        return pd.DataFrame(data=np.array(all_stats), columns=columns)
+        if all_stats:
+            columns = ["Mean", "Median", "Std", "Var"]
+            columns = [f"{self.__class__.__name__}{col}" for col in columns]
+            columns.insert(0, "qp_id")
+            return pd.DataFrame(data=np.array(all_stats), columns=columns)
+        else:
+            return pd.DataFrame()
 
 
 class PLComplexDescriptor(Descriptor):
 
-    def __init__(self, twist_df):
+    def __init__(self, twist_df, build_unique_desc=True):
         """The PLComplexDescriptor computes geometric properties describing the stars of vertices in a triangulated surface.
 
         Parameters
         ----------
         twist_df : pandas.DataFrame
             The DataFrame containing the twist descriptor data.
+        build_unique_desc : bool, default=True
+            Whether to create unique descriptor for all features associated with this descriptor (ending with PLComplex).
+            Unlike in the associated descriptor (self.pl_df), in the unique descriptor each query point has only one
+            entry. The unique descriptor is stores in self.desc. If False, the self.desc is None. Default is True.
         """
         self.ordered_vertices = {}
         self.ordered_nn = {}
@@ -2320,8 +2422,12 @@ class PLComplexDescriptor(Descriptor):
             if self.triangles[qp_id] is not None:
                 self.pl_df = pd.concat([self.pl_df, self.compute_features(qp_id)])
 
-        self.desc = self.build_descriptor()
         self.df = twist_df
+
+        if build_unique_desc:
+            self.desc = self.build_descriptor()
+        else:
+            self.desc = None
 
     def compute_triangles(self, qp_id):
         """Compute the triangles for a given query point ID.
@@ -2407,7 +2513,7 @@ class PLComplexDescriptor(Descriptor):
 
 class SHOTDescriptor(Descriptor):
 
-    def __init__(self, twist_df, cone_number=6, shell_number=1, north_pole_axis=None):
+    def __init__(self, twist_df, cone_number=6, shell_number=1, north_pole_axis=None, build_unique_desc=True):
         """The SHOTDescriptor computes a 3D histogram describing the occupancy of nearest neighbors
         within a subdivided spherical support.
 
@@ -2421,6 +2527,10 @@ class SHOTDescriptor(Descriptor):
            The number of radial subdivisions (shells) to create. Default is 1.
         north_pole_axis : numpy.ndarray, optional
             The axis corresponding to the north-pole of the subdivided support. Default is None, which uses the z-axis.
+        build_unique_desc : bool, default=True
+            Whether to create unique descriptor for all features associated with this descriptor (ending with SHOT).
+            Unlike in the associated descriptor (self.shot_df), in the unique descriptor each query point has only one
+            entry. The unique descriptor is stores in self.desc. If False, the self.desc is None. Default is True.
         """
 
         max_radius = twist_df["euclidean_distance"].max()
@@ -2438,8 +2548,11 @@ class SHOTDescriptor(Descriptor):
             assigned_df["nn_id"] = group_df["nn_id"].values
             self.shot_df = pd.concat([self.shot_df, assigned_df])
 
-        self.desc = self.build_descriptor()
         self.df = twist_df
+        if build_unique_desc:
+            self.desc = self.build_descriptor()
+        else:
+            self.desc = None
 
     def generate_rotated_axes(self, num_cones, north_pole_axis=None):
         """Compute the rotated axes for the subdivided spherical support.
@@ -2606,7 +2719,7 @@ class SHOTDescriptor(Descriptor):
 
 class AlphaComplexDescriptor(Descriptor):
 
-    def __init__(self, twist_df, alpha_param=200.0):
+    def __init__(self, twist_df, alpha_param=200.0, build_unique_desc=True):
         """The AlphaComplexDescriptor computes geometric and topological properties describing the links and stars of vertices in an alpha complex.
 
         Parameters
@@ -2615,6 +2728,10 @@ class AlphaComplexDescriptor(Descriptor):
             The DataFrame containing the twist descriptor data.
         alpha_param : float, default=200.0
             The alpha parameter used to compute the alpha complex. Default is 200.0.
+        build_unique_desc : bool, default=True
+            Whether to create unique descriptor for all features associated with this descriptor (ending with AlphaComplex).
+            Unlike in the associated descriptor (self.alpha_df), in the unique descriptor each query point has only one
+            entry. The unique descriptor is stores in self.desc. If False, the self.desc is None. Default is True.
 
         """
         self.alpha_param = alpha_param
@@ -2635,8 +2752,11 @@ class AlphaComplexDescriptor(Descriptor):
             if self.triangles[qp_id] is not None:
                 self.alpha_df = pd.concat([self.alpha_df, self.compute_features(qp_id)])
 
-        self.desc = self.build_descriptor()
         self.df = twist_df
+        if build_unique_desc:
+            self.desc = self.build_descriptor()
+        else:
+            self.desc = None
 
     def compute_alpha_complex(self, coord):
         """Compute the stars and links of vertices corresponding to an alpha complex.
@@ -2785,12 +2905,16 @@ class FilterCatalog(Catalog):
 
 class CustomDescriptor(Descriptor):
 
-    def __init__(self, twist_df):
+    def __init__(self, twist_df, feature_list=None, feature_kwargs=None, support_class=None, support_kwargs=None):
         """Initialize a CustomDescriptor object.
         This class handles custom descriptors.
         """
         self.desc = None
         self.df = twist_df
+        if feature_list is not None or support_class is not None:
+            self.desc = self.build_descriptor(
+                feature_list, feature_kwargs=feature_kwargs, support_class=support_class, support_kwargs=support_kwargs
+            )
 
     @classmethod
     def load(cls, desc_df):
@@ -2802,44 +2926,43 @@ class CustomDescriptor(Descriptor):
         desc_df : pandas.DataFrame
             The DataFrame containing the custom descriptor data.
         """
-        dc = CustomDescriptor()
+        dc = CustomDescriptor(None)
         dc.desc = desc_df
         return dc
 
     def create_additional_descriptors(self, support_df, feature_list, feature_kwargs):
         """Create additional descriptors based on the provided feature list and support.
-        This method generates the necessary keyword arguments for the features based on the support.
+        This method generates the necessary descriptors associated with the features and based on the provided support.
 
         Parameters
         ----------
         support_df : pd.DataFrame
             DataFrame with qp from the defined support.
         feature_list : list
-            A list of feature classes to be computed.
+            A list of feature classes names to be computed.
         feature_kwargs : list
-            A list of dictionaries containing keyword arguments for each feature class.
+            A list of dictionaries containing keyword arguments for each descriptor class.
 
         Returns
         -------
         dict
-            A dictionary containing the additional keyword arguments for the features.
+            A dictionary containing computed descriptors for all features.
         """
-        add_kwargs = {"twist_df": support_df}
-        alpha_computed = False
-        pl_computed = False
-        shot_computed = False
+
+        computed_desc = {"TwistDescriptor": TwistDescriptor(input_twist=support_df, build_unique_desc=False)}
+
+        descriptors = get_class_names_by_parent("Descriptor", "cryocat.tango")
+        feat_desc_map = Descriptor.build_feature_descriptor_map(feature_list, descriptors)
+
+        add_kwargs = {}
+
         for f, f_kwargs in zip(feature_list, feature_kwargs):
-            if f.__name__.endswith("Alpha") and not alpha_computed:
-                add_kwargs["alpha_desc"] = AlphaComplexDescriptor(support_df, **f_kwargs)
-                alpha_computed = True
-            elif f.__name__.endswith("PL") and not pl_computed:
-                add_kwargs["pl_desc"] = PLComplexDescriptor(support_df, **f_kwargs)
-                pl_computed = True
-            elif f.__name__.endswith("SHOT") and not shot_computed:
-                add_kwargs["shot_desc"] = SHOTDescriptor(support_df, **f_kwargs)
-                shot_computed = True
-            if alpha_computed and pl_computed and shot_computed:
-                break
+            desc = feat_desc_map[f]
+            if desc not in computed_desc.keys():
+                desc_cls = get_classes_from_names(desc, "cryocat.tango")
+                computed_desc[desc] = desc_cls(support_df, **f_kwargs, build_unique_desc=False)
+
+            add_kwargs[f] = computed_desc[desc]
 
         return add_kwargs
 
@@ -2862,9 +2985,14 @@ class CustomDescriptor(Descriptor):
             Default is None.
         support_kwargs : dict, optional
             A dictionary containing keyword arguments for the support class (if specified). Default is None.
+
+        Returns
+        -------
+        new_desc_df : pandas.DataFrame
+            A data frame with the custom descriptor values.
         """
 
-        feature_list = get_classes_from_names(feature_list, "cryocat.tango")
+        feature_cls_list = get_classes_from_names(feature_list, "cryocat.tango")
 
         if support_class is not None:
             support_class = get_classes_from_names(support_class, "cryocat.tango")
@@ -2873,14 +3001,20 @@ class CustomDescriptor(Descriptor):
             support_df = self.df
 
         if not feature_kwargs:
-            feature_kwargs = [{} for _ in range(len(feature_list))]
+            feature_kwargs = [{} for _ in range(len(feature_cls_list))]
 
         add_kwargs = self.create_additional_descriptors(support_df, feature_list, feature_kwargs)
 
-        self.desc = pd.DataFrame(self.df["qp_id"].unique(), columns=["qp_id"])
+        new_desc_df = pd.DataFrame(self.df["qp_id"].unique(), columns=["qp_id"])
 
-        for f, f_kwargs in zip(feature_list, feature_kwargs):
-            current_feat_kwargs = {**f_kwargs, **add_kwargs}
-            current_feature = f(**current_feat_kwargs)
-            self.desc = pd.merge(self.desc, current_feature.compute(**current_feat_kwargs), on="qp_id", how="left")
-            # self.desc = pd.concat([, ], axis=1)
+        # for f, f_kwargs in zip(feature_list, feature_kwargs):
+        for f, key in zip(feature_cls_list, feature_list):
+            current_feature = f(assoc_desc=add_kwargs[key])
+            current_df = current_feature.compute()
+            # new_desc_df = pd.merge(new_desc_df, current_feature.compute(), on="qp_id", how="left")
+
+            if not current_df.empty and "qp_id" in current_df.columns:
+                new_desc_df = pd.merge(new_desc_df, current_df, on="qp_id", how="left")
+                # self.desc = pd.concat([, ], axis=1)
+
+        return new_desc_df
