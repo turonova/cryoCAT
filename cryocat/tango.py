@@ -24,6 +24,7 @@ import sklearn.neighbors as sn
 from cryocat import geom
 from cryocat import nnana
 from cryocat import cryomotl
+from cryocat import cryomap
 from cryocat.geom import Matrix
 from cryocat.classutils import get_classes_from_names, get_class_names_by_parent
 from cryocat import visplot
@@ -796,7 +797,7 @@ class Descriptor:
             List of descriptor names.
         feat_list : list of str
             List of feature names.
-        
+
         Returns
         -------
         dict
@@ -822,7 +823,7 @@ class Descriptor:
             List of feature names.
         desc_list : list of str
             List of descriptor names.
-        
+
         Returns
         -------
         dict
@@ -2002,6 +2003,57 @@ class Support:
 
         axis = axis / np.linalg.norm(axis)
         return axis, columns
+
+
+class CustomSupport(Support):
+
+    def __init__(self, twist_desc, binary_mask):
+        """Crop the initial twist descriptor support to a shape specified by the binary mask.
+
+        Parameters
+        ----------
+        twist_desc : TwistDescriptor
+            The original TwistDescriptor instance.
+        binary_mask : str or np.ndarray
+            Path to a binary mask file or an array containing a binary mask that will be used to crop twist coordinates.
+
+        Attributes
+        ----------
+        support : TwistDescriptor
+            A filtered TwistDescriptor object containing only the cooridnates within the the binary mask.
+
+        Notes
+        -----
+        The function reads a binary mask, computes the center offset, and checks which twist coordinates fall within
+        the bounds of the mask. It then filters the twist data to retain only those twists that correspond to valid
+        mask values.
+        """
+
+        mask = cryomap.read(binary_mask)
+
+        # Compute the center offset of the mask
+        center = np.array(mask.shape) // 2
+
+        # Shift the coordinates from centered space to index space
+        coords = twist_desc.df[["twist_x", "twist_y", "twist_z"]].values + center
+        coords = coords.astype(int)  # array indices must be integers
+
+        # Check bounds
+        in_bounds = np.all((coords >= 0) & (coords < mask.shape), axis=1)
+
+        # Get mask values
+        valid_coords = coords[in_bounds]
+        mask_values = mask[valid_coords[:, 0], valid_coords[:, 1], valid_coords[:, 2]]
+
+        # Final valid point mask
+        valid = np.zeros(len(twist_desc.df), dtype=bool)
+        valid_indices = np.where(in_bounds)[0]
+        valid[valid_indices] = mask_values == 1
+
+        # Filter
+        filtered_df = twist_desc.df[valid].reset_index(drop=True)
+
+        self.support = TwistDescriptor(input_twist=filtered_df)
 
 
 class Sphere(Support):
