@@ -33,6 +33,7 @@ Modules
     sta
     starfileio
     structure
+    tango
     tiltstack
     tmana
     visplot
