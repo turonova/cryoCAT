@@ -22,6 +22,44 @@ class NearestNeighbors:
         remove_qp=None,
         remove_duplicates=False,
     ):
+        """Initialize the class with input data and parameters for feature extraction.
+
+        Parameters
+        ----------
+        input_data : str or list of str, optional
+            A single Motl object (or path to a Motl file) or a list of Motls (or paths). If None,
+            self.features and self.df will be set to None.
+        feature_id : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
+            The identifier for the motl feature which specifies the level of comparison. For instance, if "tomo_id" is
+            specified the NN analysis will be computed at the tomogram level. If "object_id" is specified, the nearest
+            neighbors will be searched in the objects with same "object_id". Note that one should ensure unique
+            numbering among all tomograms in case "tomo_id" is not set, otherwise objects from different tomograms might
+            be incorrectly grouped together. Default is "tomo_id".
+        nn_type : str, {"closest_dist", "radius"}
+            The type of nearest neighbor search to perform. Options are "closest_dist" to find N closest neighbors,
+            where N is specified by type_param, or "radius" to return or neigbors within radius R speficied by type_param.
+            Default is "closest_dist".
+        type_param : int or float, optional
+            Parameter for nearest neighbor search type. If nn_type is "closest_dist" one should specify how many of
+            the nearest neighbors should be considered. If nn_type is "radius" one should specify the search radius for
+            which all neighbors within this radius will be considered. Default is None.
+        remove_qp : bool, default=False
+            Flag to indicate whether to remove the query point from the nearest neighbors search. It is always True in case
+            only one motl is specified. If two or more motls are specified, it should be set to True if it is expected
+            that the found neighbors could contain the query point itself (or the point that belongs to the same
+            particle). Default is False.
+        remove_duplicates : bool, default=False
+            Flag to indicate whether to remove symmetric duplicates from the resulting DataFrame. Default is False.
+
+        Attributes
+        ----------
+        features : array-like
+            Unique feature values extracted from the MOTL files.
+        df : pandas.DataFrame
+            DataFrame containing the results of the nearest neighbor search, including various attributes and coordinates.
+        feature_id : str
+            The identifier for the feature used in the extraction process.
+        """
 
         if input_data is None:
             self.features = None
@@ -38,7 +76,7 @@ class NearestNeighbors:
             for m in input_data:
                 motl_list.append(cryomotl.Motl.load(m))
 
-        single_motl = remove_qp or single_motl  # remove_qp can override the default
+        single_motl = remove_qp or single_motl  # if only one motl is given, always remove the qp
 
         features = motl_list[0].get_unique_values(feature_id)
         for m in motl_list[1:]:
@@ -125,13 +163,15 @@ class NearestNeighbors:
                     stacked = np.column_stack((stacked, np.concatenate(nn_dist)))
                     results.append(stacked)
 
-                else:
+                elif nn_type == "radius":
                     radius = type_param or 1
                     qp_idx, nn_idx = get_feature_nn_within_radius(fm_qp, fm_nn, radius=radius, remove_qp=single_motl)
                     stacked = stack_nn_results(qp_idx, nn_idx)
                     if stacked is None:
                         continue
                     results.append(stacked)
+                else:
+                    raise ValueError(f"The type {nn_type} is not supported, choose between closest_dist and radius.")
 
         final_array = np.vstack(results)
 
