@@ -1088,7 +1088,8 @@ class TwistDescriptor(Descriptor):
         input_twist=None,
         input_motl=None,
         nn_radius=None,
-        symm=False,
+        feature_id="tomo_id",
+        symm=None,
         remove_qp=False,
         remove_duplicates=False,
         build_unique_desc=True,
@@ -1108,8 +1109,15 @@ class TwistDescriptor(Descriptor):
         nn_radius : float, optional
             The radius within which to compute the twist descriptors. If input_motl is passed as a parameter, the radius
             has to be specified. Default is None.
-        symm : bool, default=False
-            Specifies whether to use symmetry information. Default is False.
+        feature_id : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
+            The identifier for the motl feature which specifies the level of comparison. For instance, if "tomo_id" is
+            specified the NN analysis will be computed at the tomogram level. If "object_id" is specified, the nearest
+            neighbors will be searched in the objects with same "object_id". Note that one should ensure unique
+            numbering among all tomograms in case "tomo_id" is not set, otherwise objects from different tomograms might
+            be incorrectly grouped together. Default is "tomo_id".
+        symm : int or str, optional
+            Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
+            values see :class:`cryocat.tango.SymmParticle`. Default is None.
         remove_qp : bool, default=False
             Specifies whether to remove the query point during the nearest neighbor analysis. The parameter is relevant
             only if two motls are specified and it can happen that the nearest point is identical to the query point or
@@ -1136,7 +1144,7 @@ class TwistDescriptor(Descriptor):
                 self.df = self.read_in(input_twist)
         elif input_motl is not None and isinstance(nn_radius, (float, int)):
             self.df = TwistDescriptor.get_nn_twist_stats_within_radius(
-                input_motl, nn_radius, symm, remove_qp=remove_qp, remove_duplicates=remove_duplicates
+                input_motl, nn_radius, feature_id, symm, remove_qp=remove_qp, remove_duplicates=remove_duplicates
             )
         else:
             raise ValueError(
@@ -1287,15 +1295,16 @@ class TwistDescriptor(Descriptor):
         return columns
 
     @staticmethod
-    def process_tomo_twist(t_nn, symm=False, symm_max_value=None, symm_category=None):
+    def process_tomo_twist(t_nn, symm=None, symm_max_value=None, symm_category=None):
         """Compute twist descriptors for a single tomogram.
 
         Parameters
         ----------
         t_nn : cryocat.nnana.NearestNeighbors object
             Contains nearest neighbors data for a single tomogram.
-        symm : bool, default=False
-            If True, symmetry information is used. Default is False.
+        symm : int or str, optional
+            Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
+            values see :class:`cryocat.tango.SymmParticle`. Default is None.
         symm_max_value : float, optional
             Maximum dissimilarity for symmetry. Default is None.
         symm_category : str, optional
@@ -1316,7 +1325,7 @@ class TwistDescriptor(Descriptor):
         subtomo_nn = t_nn.df["nn_subtomo_id"].to_numpy()
         tomo_idx = t_nn.df["tomo_id"].to_numpy()
 
-        if symm:
+        if symm is not None:
             ang_scores = geom.angular_score_for_c_symmetry(
                 np.deg2rad(phi_qp), np.deg2rad(phi_nn), symm_category, symm_max_value
             )
@@ -1328,7 +1337,7 @@ class TwistDescriptor(Descriptor):
         axis_angle = rel_quat.as_rotvec()
         twists = np.hstack((axis_angle, rel_pos))
 
-        if not symm:
+        if symm is None:
             twist_df = pd.DataFrame(
                 data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_nn)),
                 columns=["qp_id", "nn_id", "tomo_id"] + TwistDescriptor.get_mixed_feature_ids() + ["nn_inplane"],
@@ -1345,15 +1354,16 @@ class TwistDescriptor(Descriptor):
         return twist_df
 
     @staticmethod
-    def get_symm_parameters(input_motl, symm):
+    def get_symm_parameters(input_motl, symm=None):
         """Get symmetry parameters (symmetry type, maximum dissimilarity) for a given input_motl.
 
         Parameters
         ----------
         input_motl : str or Motl
             The path to the input Motl file or Motl object to be loaded.
-        symm : bool
-            If True, symmetry information is used. Default is False.
+        symm : int or str, optional
+            Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
+            values see :class:`cryocat.tango.SymmParticle`. Default is None.
 
         Returns
         -------
@@ -1377,7 +1387,9 @@ class TwistDescriptor(Descriptor):
         return part[0].max_dissimilarity(), part[0].category
 
     @staticmethod
-    def get_nn_twist_stats_within_radius(input_motl, nn_radius, symm=False, remove_qp=None, remove_duplicates=False):
+    def get_nn_twist_stats_within_radius(
+        input_motl, nn_radius, feature_id="tomo_id", symm=None, remove_qp=None, remove_duplicates=False
+    ):
         """Compute twist descriptor for a given input_motl within a specified radius.
 
         Parameters
@@ -1386,8 +1398,15 @@ class TwistDescriptor(Descriptor):
             The path to the input Motl file or Motl object to be loaded.
         nn_radius : float
             The radius within which to compute the twist descriptor.
-        symm : bool, default=False
-            If True, symmetry information is used. Default is False.
+        feature_id : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
+            The identifier for the motl feature which specifies the level of comparison. For instance, if "tomo_id" is
+            specified the NN analysis will be computed at the tomogram level. If "object_id" is specified, the nearest
+            neighbors will be searched in the objects with same "object_id". Note that one should ensure unique
+            numbering among all tomograms in case "tomo_id" is not set, otherwise objects from different tomograms might
+            be incorrectly grouped together. Default is "tomo_id".
+        symm : int or str, optional
+            Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
+            values see :class:`cryocat.tango.SymmParticle`. Default is None.
         remove_qp : bool, optional
             If True, the query point is removed from the nearest neighbors in the DataFrame. Default is None.
         remove_duplicates : bool, default=False
@@ -1402,7 +1421,7 @@ class TwistDescriptor(Descriptor):
 
         nn = nnana.NearestNeighbors(
             input_motl,
-            feature_id="tomo_id",
+            feature_id=feature_id,
             nn_type="radius",
             type_param=nn_radius,
             remove_qp=remove_qp,
