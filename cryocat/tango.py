@@ -95,6 +95,27 @@ class Particle:
         self.position = position.reshape(3)
 
         def check_type(input_param, param_desc, return_int=True):
+            """
+            Check if the input parameter is of type int or float and return it as an int or float.
+
+            Parameters
+            ----------
+            input_param : int, float, None
+                The input parameter to check.
+            param_desc : str
+                A description of the parameter for error messages.
+            return_int : bool, default=True
+                If True, integer is returned. Defaults to True.
+
+            Raises
+            ------
+            TypeError
+                If the input parameter is not of type int or float.
+
+            Returns
+            -------
+            int or float or None
+            """
 
             if input_param is not None:
                 if isinstance(input_param, (int, float)):
@@ -766,6 +787,21 @@ class Descriptor:
 
     @staticmethod
     def build_descriptor_feature_map(desc_list, feat_list):
+        """
+        Build a mapping between descriptors and features.
+
+        Parameters
+        ----------
+        desc_list : list of str
+            List of descriptor names.
+        feat_list : list of str
+            List of feature names.
+        
+        Returns
+        -------
+        dict
+            A dictionary where keys are descriptor names and values are lists of matching feature names.
+        """
         result = {}
         for desc in desc_list:
             if not desc.endswith("Descriptor"):
@@ -777,6 +813,21 @@ class Descriptor:
 
     @staticmethod
     def build_feature_descriptor_map(feat_list, desc_list):
+        """
+        Build a mapping between features and descriptors.
+
+        Parameters
+        ----------
+        feat_list : list of str
+            List of feature names.
+        desc_list : list of str
+            List of descriptor names.
+        
+        Returns
+        -------
+        dict
+            A dictionary where keys are feature names and values are the corresponding descriptor names.
+        """
         result = {}
         for feat in feat_list:
             for desc in desc_list:
