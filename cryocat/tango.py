@@ -1116,6 +1116,10 @@ class Descriptor:
         - The merging is performed using a left join on the 'qp_id' column.
         """
 
+        if self.df.empty:
+            print("The descriptor does not contain any points!")
+            return pd.DataFrame()
+
         desc_name = self.__class__.__name__.replace("Descriptor", "")
         avail_features = FeatureCatalog().get_all_classes(filter_contains=desc_name)
         avail_features = [s for s in avail_features if s.endswith(desc_name)]
@@ -1125,7 +1129,9 @@ class Descriptor:
 
         for c_feat in all_cls_feats:
             current_feature = c_feat(self)
-            new_desc_df = pd.merge(new_desc_df, current_feature.compute(), on="qp_id", how="left")
+            current_df = current_feature.compute()
+            if not current_df.empty and "qp_id" in current_df.columns:
+                new_desc_df = pd.merge(new_desc_df, current_df, on="qp_id", how="left")
 
         return new_desc_df
 
@@ -2281,62 +2287,76 @@ class Feature:
         """
         self.df = desc_df
 
-    def compute(self, **kwargs):
+    def compute(self):
         pass
 
 
 class NNCountTwist(Feature):
 
-    def __init__(self, assoc_desc, **kwargs):
+    def __init__(self, assoc_desc):
         """The NNCount feature computes the number of nearest neighbors for each query point.
 
         Parameters
         ----------
         assoc_desc : TwistDescriptor
             The DataFrame containing the twist descriptor data.
-        kwargs : dict, optional
-            Additional keyword arguments for customization.
+
         """
         super().__init__(assoc_desc.df)
 
-    def compute(self, **kwargs):
+    def compute(self):
         """Compute the number of nearest neighbors for each query point.
 
         Returns
         -------
         pandas.DataFrame
             A DataFrame containing the number of nearest neighbors for each query point.
+
         """
+
+        if self.df.empty:
+            print("The descriptor is empty")
+            return pd.DataFrame()
 
         results = []
         for qp_id, group_df in self.df.groupby("qp_id"):
             results.append([qp_id, group_df.shape[0]])
 
-        columns = ["qp_id", self.__class__.__name__]
-        return pd.DataFrame(data=np.array(results), columns=columns)
+        if results:
+            columns = ["qp_id", self.__class__.__name__]
+            return pd.DataFrame(data=np.array(results), columns=columns)
+        else:
+            return pd.DataFrame()
 
 
 class CentralAngleStatsPLComplex(Feature):
 
     def __init__(self, assoc_desc):
-        """The CentralAngleStatsPL feature computes the mean, median, standard deviation, and variance of the central angles
-        of a qp and all its nn vertices.
+        """The CentralAngleStatsPL feature computes the mean, median, standard deviation, and variance of the central
+        angles of a qp and all its nn vertices.
 
         Parameters
         ----------
         assoc_desc : PLComplexDescriptor
             The PLComplexDescriptor object containing the alpha descriptor data.
+
         """
         super().__init__(assoc_desc.pl_df)
 
-    def compute(self, **kwargs):
+    def compute(self):
         """Compute the mean, median, standard deviation, and variance of the central angles of a vertex's star.
 
         Returns
         -------
         pandas.DataFrame
-            A DataFrame containing the mean, median, standard deviation, and variance of the central angles for each query point.
+            A DataFrame containing the mean, median, standard deviation, and variance of the central angles for each
+            query point.
+
         """
+
+        if self.df.empty:
+            print("The descriptor is empty")
+            return pd.DataFrame()
 
         all_stats = []
         for qp_id, group_df in self.df.groupby("qp_id"):
@@ -2347,23 +2367,25 @@ class CentralAngleStatsPLComplex(Feature):
             else:
                 all_stats.append([qp_id, np.NAN, np.NAN, np.NAN, np.NAN])
 
-        columns = ["Mean", "Median", "Std", "Var"]
-        columns = [f"{self.__class__.__name__}{col}" for col in columns]
-        columns.insert(0, "qp_id")
-        return pd.DataFrame(data=np.array(all_stats), columns=columns)
+        if all_stats:
+            columns = ["Mean", "Median", "Std", "Var"]
+            columns = [f"{self.__class__.__name__}{col}" for col in columns]
+            columns.insert(0, "qp_id")
+            return pd.DataFrame(data=np.array(all_stats), columns=columns)
+        else:
+            return pd.DataFrame()
 
 
 class CountSHOT(Feature):
 
-    def __init__(self, assoc_desc, **kwargs):
+    def __init__(self, assoc_desc):
         """The CountSHOT feature computes the number of occurrences of each (cone_id, shell_id) combination.
 
         Parameters
         ----------
         assoc_desc : SHOTDescriptor
             The SHOTDescriptor object containing the shot descriptor data.
-        kwargs : dict, optional
-            Additional keyword arguments for customization.
+
         """
         super().__init__(assoc_desc.shot_df)
         self.cone_number = assoc_desc.cone_number
@@ -2376,7 +2398,12 @@ class CountSHOT(Feature):
         -------
         pandas.DataFrame
             A DataFrame containing the counts of each (cone_id, shell_id) combination for each query point.
+
         """
+
+        if self.df.empty:
+            print("The descriptor is empty")
+            return pd.DataFrame()
 
         # Count combinations of (qp_id, cone_id, shell_id)
         counts = self.df.groupby(["qp_id", "cone_id", "shell_id"]).size().reset_index(name="count")
@@ -2402,7 +2429,7 @@ class CountSHOT(Feature):
 
 class EulerCharAlphaComplex(Feature):
 
-    def __init__(self, assoc_desc, **kwargs):
+    def __init__(self, assoc_desc):
         """The EulerCharAlpha feature computes the Euler characteristic of a 1-dimensional simplicial complex,
         e.g. for the link of a vertex in a 2-dimensional triangulated surface.
 
@@ -2410,20 +2437,24 @@ class EulerCharAlphaComplex(Feature):
         ----------
         assoc_desc : AlphaComplexDescriptor
             The AlphaComplexDescriptor object containing the alpha descriptor data.
-        kwargs : dict, optional
-            Additional keyword arguments for customization.
+
         """
         super().__init__(assoc_desc.alpha_df)
         self.link_edges = assoc_desc.link_edges
 
-    def compute(self, **kwargs):
+    def compute(self):
         """Compute the Euler characteristic of a 1-dimensional simplicial complex.
 
         Returns
         -------
         pandas.DataFrame
             A DataFrame containing the Euler characteristic for each query point.
+
         """
+
+        if self.df.empty:
+            print("The descriptor is empty")
+            return pd.DataFrame()
 
         results = []
         for qp_id, _ in self.df.groupby("qp_id"):
@@ -2439,7 +2470,7 @@ class EulerCharAlphaComplex(Feature):
 
 class LinkTypeAlphaComplex(Feature):
 
-    def __init__(self, assoc_desc, **kwargs):
+    def __init__(self, assoc_desc):
         """The LinkTypeAlpha feature computes a simplicial isomorphism invariant for a 1-dimensional simplicial complex,
         e.g. for the link of a vertex in a 2-dimensional triangulated surface (``link type'').
 
@@ -2447,20 +2478,24 @@ class LinkTypeAlphaComplex(Feature):
         ----------
         assoc_desc : AlphaComplexDescriptor
             The AlphaComplexDescriptor object containing the alpha descriptor data.
-        kwargs : dict, optional
-            Additional keyword arguments for customization.
+
         """
         super().__init__(assoc_desc.alpha_df)
         self.link_edges = assoc_desc.link_edges
 
-    def compute(self, **kwargs):
+    def compute(self):
         """Compute a simplicial isomorphism invariant (``link type'') for a 1-dimensional simplicial complex.
 
         Returns
         -------
         pandas.DataFrame
             A DataFrame containing the simplicial isomorphism invariant (``link type'') for each query point.
+
         """
+
+        if self.df.empty:
+            print("The descriptor is empty")
+            return pd.DataFrame()
 
         results = []
         for qp_id, _ in self.df.groupby("qp_id"):
@@ -2476,7 +2511,7 @@ class LinkTypeAlphaComplex(Feature):
 
 class CentralAngleStatsAlphaComplex(Feature):
 
-    def __init__(self, assoc_desc, **kwargs):
+    def __init__(self, assoc_desc):
         """The CentralAngleStatsAlpha feature computes the mean, median, standard deviation, and variance of the central angles
         of a vertex's star.
 
@@ -2484,17 +2519,23 @@ class CentralAngleStatsAlphaComplex(Feature):
         ----------
         assoc_desc : AlphaComplexDescriptor
             The AlphaComplexDescriptor object containing the alpha descriptor data.
+
         """
         super().__init__(assoc_desc.alpha_df)
 
-    def compute(self, **kwargs):
+    def compute(self):
         """Compute the mean, median, standard deviation, and variance of the central angles of a vertex's star.
 
         Returns
         -------
         pandas.DataFrame
             A DataFrame containing the mean, median, standard deviation, and variance of the central angles for each query point.
+
         """
+
+        if self.df.empty:
+            print("The descriptor is empty")
+            return pd.DataFrame()
 
         all_stats = []
         for qp_id, group_df in self.df.groupby("qp_id"):
@@ -3121,6 +3162,10 @@ class CustomDescriptor(Descriptor):
             support_df = support_class(TwistDescriptor(input_twist=self.df), **support_kwargs).support.df
         else:
             support_df = self.df
+
+        if support_df.empty:
+            print("The support does not contain any points!")
+            return pd.DataFrame()
 
         if not feature_kwargs:
             feature_kwargs = [{} for _ in range(len(feature_cls_list))]

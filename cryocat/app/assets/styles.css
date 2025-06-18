@@ -1,0 +1,225 @@
+:root {
+    --color1: #AEC684;
+    --color2: #83BA99;
+    --color3: #59AFAF;
+    --color4: #74A9B7;
+    --color5: #A6A5B9;
+    --color6: #B09BB6;
+    --color7: #938CB0;
+    --color8: #7E7DA8;
+    --color9: #826C9F;
+    --color10: #865B96;
+    --color11: #fbedff;
+    --color12: #14041a;
+    --color13: #83BA99;
+}
+
+/* general settings for accordion in not selected, not open stated */
+.accordion-button {
+    background-color: var(--color11);
+    border-radius: 8px;
+    color: var(--color10);
+}
+
+
+/* settings for open, i.e. active state of the button */
+.accordion-button:not(.collapsed) {
+  color: var(--color11);
+  background-color: var(--color10);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.125);
+}
+
+/* highlighing of the selected, active button */
+.accordion-button:focus {
+  z-index: 3;
+  border-color: var(--color11);
+  outline: 0;
+  box-shadow: none;
+}
+.accordion-item {
+    background-color: var(--color6);
+    color: var(--color11);
+    border: none;
+}
+
+.accordion-header {
+    background-color: var(--color2);
+}
+
+h6, .h6, h5, .h5, h4, .h4, h3, .h3, h2, .h2, h1, .h1 {
+    color: var(--color12);
+}
+
+label {
+  color: var(--color11);
+}
+
+/* Reduce horizontal padding inside header cells */
+.ag-theme-balham .ag-header-cell {
+    padding-left: 4px !important;
+    padding-right: 4px !important;
+}
+
+/* Optional: shrink the label wrapper inside the cell */
+.ag-theme-balham .ag-header-cell-label {
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.Select-input{
+    height: 25px !important;
+    align-items: center; 
+}
+
+.Select-control{
+    height: 27px !important;
+    align-items: center; 
+}
+
+.Select-placeholder, .Select--single > .Select-control .Select-value {
+    line-height: 25px !important;
+    display: flex;
+    align-items: center;
+}
+
+.Select-option {
+    padding-top: 0px;
+    padding-bottom: 0px;
+    line-height: 25px !important;
+    height: 25px !important;         /* Adjust height of each item */
+    align-items: center;  /* Vertical centering */
+}
+
+.VirtualizedSelectOption {
+    height: 25px !important;
+    padding-top: 0px !important;
+    padding-bottom: 0px !important;
+    line-height: 25px !important;
+    display: flex !important;
+    align-items: center !important;
+}
+
+.Select-menu-outer, .Select-menu {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin-top: 0 !important;
+}
+
+.VirtualizedSelectFocusedOption {
+    height: 25px !important;
+    line-height: 25px !important;
+}
+
+.ag-theme-alpine {
+    font-size: 10px;
+}
+
+.Select-multi-value-wrapper {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+.Select-placeholder {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+.Select-arrow-zone {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+.Select-clear-zone {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+.Select-control {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+/* The dropdown menu */
+.VirtualizedSelectOption {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+/* Highlight on hover */
+.VirtualizedSelectOption:hover {
+    background-color: var(--color7);
+    color: var(--color12);
+}
+
+/* Selected item in menu */
+.Select-option.is-selected {
+    background-color: var(--color7);
+    font-weight: bold;
+}
+
+/* Selected label text */
+.Select-value-label {
+    background-color: var(--color11) !important;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    overflow-x: hidden;
+    font-size: 11px;  /* or 11px or even 10px for ultra compact */
+    color: var(--color12) !important;
+}
+
+.btn {
+    font-size: 11px;
+    padding: 4px 8px;
+}
+
+.sidebar {
+    background-color: var(--color13);
+    height: fit-content;
+    padding: 10px;
+    color: white;
+    margin-left: 0px;
+    width: 100%;
+    left : 0px;
+}
+
+/* Override danger button */
+.btn-danger {
+    background-color: var(--color10) !important;
+    border-color: var(--color9) !important;
+    color: var(--color11) !important;
+}
+
+.section-title {
+    margin-top: 2rem;
+    margin-bottom: 0.5rem;
+    font-weight: bold;
+}
+
+.upload-button, .run-button, .save-button {
+    width: 100%;
+    margin-bottom: 1rem;
+}
+
+.data-section {
+    padding: 20px;
+}
+
+.table-header {
+    background-color: var(--color2);
+    color: white;
+}
+
+.custom-radius-button {
+    background-color: var(--color4);
+    border: none;
+    color: white;
+}
+
+.custom-radius-button:hover {
+    background-color: var(--color5);
+}
