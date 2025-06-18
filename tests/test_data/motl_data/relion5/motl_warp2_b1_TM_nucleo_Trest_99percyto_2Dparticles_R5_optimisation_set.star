@@ -1,0 +1,5 @@
+
+data_
+
+_rlnTomoParticlesFile   inputs/motl_warp2_b1_TM_nucleo_Trest_99percyto_2Dparticles_R5.star
+_rlnTomoTomogramsFile   inputs/motl_warp2_b1_TM_nucleo_Trest_99percyto_2Dparticles_R5_tomograms.star

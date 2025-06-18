@@ -307,10 +307,12 @@ def test_emmotl2relion():
     assert list(rln_motl.relion_df.columns) == []
     #print(rln_motl.df)
 
-    relion_written = "./test_data/motl_data/relionfromem.star"
+    relion_written = "./test_data/motl_data/relionfromem1.star"
     rln_motl = cryomotl.emmotl2relion(
         input_motl=em_motl,
-        output_motl_path=relion_written
+        output_motl_path=relion_written,
+        #load_kwargs={"pixel_size":1.0, "binning":1.0}
+        #load_kwargs={"version": 4.0}
     )
     #fixme: Only once having written, and loaded the new written file, we can access
     #relion_df attribute correctly!
@@ -320,8 +322,8 @@ def test_emmotl2relion():
     assert list(rln_motl_written.relion_df.columns) == RelionMotl.columns_v3_1 + ["ccSubtomoID"]
     assert isinstance(rln_motl_written, cryomotl.RelionMotl)
 
-    if os.path.exists(relion_written):
-        os.remove(relion_written)
+    """if os.path.exists(relion_written):
+        os.remove(relion_written)"""
 
 def test_relion2emmotl():
     relion="./test_data/motl_data/relion_3.1_optics2.star"
@@ -2081,6 +2083,36 @@ class TestMotl:
     def test_getitem(self, get_sample_data1):
         #TODO
         pass
+
+    def test_load(self):
+        #emmotldf = EmMotl(input_motl="./test_data/au_1.em").df
+        relionmotldf = RelionMotl(input_motl="./test_data/motl_data/relion_3.0.star").df
+        #stopgapmotldf = StopgapMotl(input_motl="./test_data/motl_data/bin1_1deg_500.star").sg_df
+        #modmotldf = ModMotl(input_motl="./test_data/motl_data/modMotl/correct111.mod").mod_df
+        #dynamomotldf = DynamoMotl(input_motl="./test_data/motl_data/crop.tbl").dynamo_df
+
+
+
+        #relionmotl
+        relionmotl = Motl.load(
+            input_motl=relionmotldf,
+            motl_type="relion",
+            version = 3.0,
+            pixel_size = 6,
+            binning  = 2.0
+        )
+        assert relionmotl.pixel_size == 6
+        assert relionmotl.binning==2.0
+        assert relionmotl.version == 3.0
+
+        #passing not existing arguments should throw an exception
+        with pytest.raises(Exception):
+            relionmotl2 = Motl.load(
+                input_motl=relionmotldf,
+                motl_type="relion",
+                version=3.0,
+                random=5
+            )
 
 class TestEmMotl:
     @pytest.fixture
@@ -4204,7 +4236,6 @@ class TestStopgapMotl:
         if os.path.exists(test_file_path + "test1_sg.star"):
             os.remove(test_file_path + "test1_sg.star")
 
-
 class TestDynamoMotl:
     def test_constructor1(self):
         pd.set_option('display.max_rows', None)  # Print all rows
@@ -4293,6 +4324,15 @@ class TestDynamoMotl:
 
         if os.path.exists("./test_data/motl_data/test_dynamo.tbl"):
             os.remove("./test_data_motl_data/test_dynamo.tbl")
+
+    def test_convert_to_dynamo(self):
+        #Create a dynamo using real - confirmed - dynamo df
+        #and then try to create the same object with dynamo.df
+        dynamo_test = DynamoMotl(input_motl="./test_data/motl_data/crop.tbl")
+        dynamo_test_reconvert = DynamoMotl(input_motl=dynamo_test.df)
+        dynamo_test_reconvert.write_out(output_path="./test_data/motl_data/crop2.tbl")
+        if os.path.exists("./test_data/motl_data/crop2.tbl"):
+            os.remove("./test_data/motl_data/crop2.tbl")
 
 class TestModMotl:
     def test_init(self):

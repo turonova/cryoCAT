@@ -1269,7 +1269,7 @@ class Motl:
         return self.df.loc[:, feature_id].unique()
 
     @classmethod
-    def load(cls, input_motl, motl_type="emmotl"):
+    def load(cls, input_motl, motl_type="emmotl", **kwargs):
         """This function is a factory function that returns an instance of the appropriate Motl class.
 
         Parameters
@@ -1277,9 +1277,12 @@ class Motl:
         input_motl : pandas.DataFrame or Motl
             Either path to the motl or pandas.DataFrame in the format corresponding
             to general motl_df or in the format specific to the motl_type.
-        motl_type : str, {'emmotl', 'dynamo', 'relion', 'stopgap'}
-            A string indicating what type of Motl input should be loaded (emmotl, relion, stopgap, dynamo).
+        motl_type : str, {'emmotl', 'dynamo', 'relion', 'stopgap', 'modmotl'}
+            A string indicating what type of Motl input should be loaded (emmotl, relion, stopgap, dynamo, mod).
             Defaults to emmotl.
+        **kwargs : dict
+            Additional keyword arguments to pass to the constructor of the specified Motl subclass.
+            Implemented for RelionMotl; additional arguments: version, pixel_size, binning, optics_data
 
         Returns
         -------
@@ -1299,11 +1302,13 @@ class Motl:
         if motl_type == "emmotl":
             return EmMotl(input_motl)
         elif motl_type == "relion":
-            return RelionMotl(input_motl) #TODO  : kwargs - version -- pixel size -- check constructor
+            return RelionMotl(input_motl, **kwargs) #kwargs: version, pixel_size, binning, optics_data
         elif motl_type == "stopgap":
             return StopgapMotl(input_motl)
         elif motl_type == "dynamo":
             return DynamoMotl(input_motl)
+        elif motl_type == "mod":
+            return ModMotl(input_motl)
         else:
             raise UserInputError(f"Provided motl file {input_motl} has format that is currently not supported.")
 
@@ -2203,11 +2208,16 @@ class RelionMotl(Motl):
                 raise UserInputError(
                     f"Provided input_motl is neither DataFrame nor path to the motl file: {input_motl}."
                 )
+
+            self.set_pixel_size() #ensure pixel_size is always set
         else:
             self.set_version(self.relion_df, version)
             self.set_pixel_size()
 
         self.set_version_specific_names()
+        if self.version==4.0 and binning is None:
+            raise UserInputError("Binning parameter must be specified for this Relion version")
+
 
     def set_pixel_size(self):
         """Sets the pixel size of the object (self.pixel_size). The function first checks if the pixel size has already
@@ -2914,8 +2924,9 @@ class RelionMotl(Motl):
             # TODO add support for 3.0
             if version == 3.1:
                 optics_df = self.create_optics_group_v3_1()
+                #fixme: subtomosize always None -> imagePixelSize: NaN
             elif version > 3.1:
-                optics_df = self.create_optics_group_v4()
+                optics_df = self.create_optics_group_v4() #fixme
             else:
                 raise Warning(
                     f"There is no information on optics available - use optics_data argument to provide this information."
@@ -3413,6 +3424,7 @@ class RelionMotl(Motl):
         starfileio.Starfile.write(frames, output_path, specifiers=specifiers)
 
 
+
 class StopgapMotl(Motl):
     pairs = {
         "subtomo_id": "subtomo_num",
@@ -3744,38 +3756,26 @@ class DynamoMotl(Motl):
         -------
         dynamo_df: pd DataFrame
         """
-        # Initialize a new DataFrame with 26 columns (Dynamo format)
-        dynamo_df = pd.DataFrame(index=motl_df.index, columns=range(26))  # 26 columns for Dynamo format
-
-        # Map values from df to dynamo_df
-        dynamo_df[0] = motl_df["subtomo_id"]  # subtomo_id
-        dynamo_df[1] = 0
-        dynamo_df[2] = 0
-        dynamo_df[3] = motl_df["shift_x"]  # shift_x
-        dynamo_df[4] = motl_df["shift_y"]  # shift_y
-        dynamo_df[5] = motl_df["shift_z"]  # shift_z
-        dynamo_df[6] = -motl_df["psi"]  # psi (negative)
-        dynamo_df[7] = -motl_df["theta"]  # theta (negative)
-        dynamo_df[8] = -motl_df["phi"]  # phi (negative)
-        dynamo_df[9] = motl_df["score"]  # score
-        dynamo_df[10] = 0
-        dynamo_df[11] = 0
-        dynamo_df[12] = 0
-        dynamo_df[13] = 0
-        dynamo_df[14] = 0
-        dynamo_df[15] = 0
-        dynamo_df[16] = 0
-        dynamo_df[17] = 0
-        dynamo_df[18] = 0
-        dynamo_df[19] = motl_df["tomo_id"]  # tomo_id (same as column 1)
-        dynamo_df[20] = motl_df["object_id"]  # object_id (same as column 2)
-        dynamo_df[21] = motl_df["class"]
-        dynamo_df[22] = 0  # x (regular x coordinate)
-        dynamo_df[23] = motl_df["x"]  # y (regular y coordinate)
-        dynamo_df[24] = motl_df["y"]  # z (regular z coordinate)
-        dynamo_df[25] = motl_df["z"]
-
-        # Assign the converted DataFrame to the dynamo_df attribute
+        dynamo_df = pd.DataFrame(index=motl_df.index, columns=range(35))
+        dynamo_df[:] = 0
+        dynamo_df.update({
+            0: motl_df["subtomo_id"],
+            1: 1,
+            2: 1,
+            3: motl_df["shift_x"],
+            4: motl_df["shift_y"],
+            5: motl_df["shift_z"],
+            6: -motl_df["psi"],
+            7: -motl_df["theta"],
+            8: -motl_df["phi"],
+            9: motl_df["score"],
+            19: motl_df["tomo_id"],
+            20: motl_df["object_id"],
+            21: motl_df["class"],
+            23: motl_df["x"],
+            24: motl_df["y"],
+            25: motl_df["z"]
+        })
         return dynamo_df
 
     def write_out(self, output_path):
@@ -4002,42 +4002,61 @@ class ModMotl(Motl):
 
         df_to_write = self.mod_df.copy()
         imod.write_model_binary(df_to_write, output_path)
-#TODO : kwargs -- flexible -- possible to update it easily with kwargs
 
 def emmotl2relion(
     input_motl,
     output_motl_path=None,
-    tomo_format="",
-    subtomo_format="",
-    relion_version=3.1,
-    pixel_size=1.0,
-    binning=1.0,
     flip_handedness=False,
     tomo_dim=None,
-    write_optics=False,
-    optics_data=None,
-    add_object_id=False,
-    add_subunit_id=False,
+    load_kwargs=None,
+    write_kwargs=None
 ):
+    """Converts an EmMotl to RelionMotl format and optionally writes it to file.
+
+        Parameters
+        ----------
+        input_motl : str or pandas.Dataframe or EmMotl
+            Path to the input EM MOTL file or an already loaded EmMotl object.
+
+        output_motl_path : str, optional
+            If provided, the converted motl will be written to this path.
+
+        flip_handedness : bool, default=False
+            If True, flips the handedness of the coordinates.
+
+        tomo_dim : tuple of int, optional
+            Dimensions of the tomogram (required if `flip_handedness=True`).
+
+        load_kwargs : dict, optional
+            Dictionary of keyword arguments passed to the `RelionMotl` constructor.
+            See `RelionMotl.__init__` for full list of accepted keys, e.g.:
+            `{"pixel_size": 2.3, "version": 3, "optics_data": ...,}`
+
+        write_kwargs : dict, optional
+            Dictionary of keyword arguments passed to `RelionMotl.write_out()`.
+            See `RelionMotl.write_out` for details, e.g.:
+            `{"optics_data": ..., "optics_data": ...}`
+
+        Returns
+        ----------
+        rln_motl : RelionMotl converted object.
+        """
     em_motl = EmMotl(input_motl)
     em_motl.update_coordinates()
 
     if flip_handedness:
         em_motl.flip_handedness(tomo_dimensions=tomo_dim)
 
+    load_kwargs = load_kwargs or {} #Ensure the argument is a dictionary
     rln_motl = RelionMotl(
-        em_motl.df, version=relion_version, pixel_size=pixel_size, binning=binning, optics_data=optics_data
+        em_motl.df, **load_kwargs
     )
 
+    write_kwargs = write_kwargs or {} #Ensure the argument is a dictionary
     if output_motl_path is not None:
         rln_motl.write_out(
             output_motl_path,
-            write_optics=write_optics,
-            add_object_id=add_object_id,
-            add_subunit_id=add_subunit_id,
-            tomo_format=tomo_format,
-            subtomo_format=subtomo_format,
-            optics_data=optics_data,
+            **write_kwargs,
         )
 
     return rln_motl
@@ -4111,37 +4130,57 @@ def relion2stopgap(input_motl, output_motl_path=None, update_coordinates=False, 
 def stopgap2relion(
     input_motl,
     output_motl_path=None,
-    tomo_format="",
-    subtomo_format="",
-    relion_version=3.1,
-    pixel_size=1.0,
-    binning=1.0,
     flip_handedness=False,
     tomo_dim=None,
-    write_optics=False,
-    optics_data=None,
-    add_object_id=False,
-    add_subunit_id=False,
+    load_kwargs=None,
+    write_kwargs=None,
 ):
+    """Converts a StopgapMotl to RelionMotl format and optionally writes it to file.
+
+        Parameters
+        ----------
+        input_motl : str or pandas.Dataframe or EmMotl
+            Path to the input EM MOTL file or an already loaded EmMotl object.
+
+        output_motl_path : str, optional
+            If provided, the converted motl will be written to this path.
+
+        flip_handedness : bool, default=False
+            If True, flips the handedness of the coordinates.
+
+        tomo_dim : tuple of int, optional
+            Dimensions of the tomogram (required if `flip_handedness=True`).
+
+        load_kwargs : dict, optional
+            Dictionary of keyword arguments passed to the `RelionMotl` constructor.
+            See `RelionMotl.__init__` for full list of accepted keys, e.g.:
+            `{"pixel_size": 2.3, "version": 3, "optics_data" : ...}`
+
+        write_kwargs : dict, optional
+            Dictionary of keyword arguments passed to `RelionMotl.write_out()`.
+            See `RelionMotl.write_out` for details, e.g.:
+            `{"optics_data": ..., "optics_data": ...}`
+
+        Returns
+        ----------
+        rln_motl : RelionMotl converted object.
+        """
     sg_motl = StopgapMotl(input_motl)
     sg_motl.update_coordinates()
 
     if flip_handedness:
         sg_motl.flip_handedness(tomo_dimensions=tomo_dim)
 
+    load_kwargs = load_kwargs or {}
     rln_motl = RelionMotl(
-        sg_motl.df, version=relion_version, pixel_size=pixel_size, binning=binning, optics_data=optics_data
+        sg_motl.df, **load_kwargs
     )
 
+    write_kwargs = write_kwargs or {}
     if output_motl_path is not None:
         rln_motl.write_out(
             output_motl_path,
-            write_optics=write_optics,
-            add_object_id=add_object_id,
-            add_subunit_id=add_subunit_id,
-            tomo_format=tomo_format,
-            subtomo_format=subtomo_format,
-            optics_data=optics_data,
+            **write_kwargs
         )
 
     return rln_motl
