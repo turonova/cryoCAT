@@ -61,9 +61,9 @@ def get_viewer_component(prefix: str):
                                     id=f"{prefix}-colorscale-dropdown",
                                     placeholder="Color scale",
                                     options=[
-                                        {"label": s, "value": s} for s in ["Viridis", "Cividis", "Plasma", "Jet", "Hot", "Monet"]
+                                        {"label": s, "value": s} for s in ["Monet", "Viridis", "Cividis", "Plasma", "Jet", "Hot"]
                                     ],
-                                    value="Viridis",
+                                    value="Monet",
                                 ),
                                 width=1,
                             ),
