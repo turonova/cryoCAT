@@ -900,6 +900,9 @@ class Descriptor:
                 The figure object containing the PCA summary plot.
         """
 
+        if self.desc.empty:
+            return None, None, None
+        
         desc_df = self.remove_nans(self.desc, axis_type=nan_drop)
         desc_df = desc_df.drop(columns=["qp_id"])
         if "nn_id" in desc_df.columns:
@@ -2291,6 +2294,29 @@ class Feature:
     def compute(self):
         pass
 
+    def compute_stats(self, column_name):
+
+        if self.df.empty:
+            print("The descriptor is empty")
+            return pd.DataFrame()
+
+        all_stats = []
+        for qp_id, group_df in self.df.groupby("qp_id"):
+            values = group_df[column_name].values
+
+            if not np.isnan(values).any():
+                all_stats.append([qp_id, np.mean(values), np.median(np.sort(values)), np.std(values), np.var(values)])
+            else:
+                all_stats.append([qp_id, np.NAN, np.NAN, np.NAN, np.NAN])
+
+        if all_stats:
+            columns = ["Mean", "Median", "Std", "Var"]
+            columns = [f"{self.__class__.__name__}{col}" for col in columns]
+            columns.insert(0, "qp_id")
+            return pd.DataFrame(data=np.array(all_stats), columns=columns)
+        else:
+            return pd.DataFrame()
+
 
 class NNCountTwist(Feature):
 
@@ -2329,6 +2355,207 @@ class NNCountTwist(Feature):
         else:
             return pd.DataFrame()
 
+class AngularScoreStatsTwist(Feature):
+
+    def __init__(self, assoc_desc):
+        """Compute the mean, median, standard deviation, and variance of the angular score
+        between the query point and its neighbors. Works only for particles with symmetry.
+
+        Parameters
+        ----------
+        assoc_desc : TwistDescriptor
+            The DataFrame containing the twist descriptor data.
+
+        """
+        super().__init__(assoc_desc.df)
+
+    def compute(self):
+        """Compute the mean, median, standard deviation, and variance of the angular score
+        between the query point and its neighbors. Works only for particles with symmetry.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the mean, median, standard deviation, and variance
+            of the angular score between each query point and its neighbors. If the TwistDescriptor
+            does not contain the angular score, it returns empty data frame.
+
+        """
+
+        if "angular_score" in self.df.columns:
+            return self.compute_stats("angular_score")
+        else:
+            return pd.DataFrame()
+
+
+class EuclideanDistStatsTwist(Feature):
+
+    def __init__(self, assoc_desc):
+        """Compute the mean, median, standard deviation, and variance of the Euclidean distance
+        between the query point and its neighbors.
+
+        Parameters
+        ----------
+        assoc_desc : TwistDescriptor
+            The DataFrame containing the twist descriptor data.
+
+        """
+        super().__init__(assoc_desc.df)
+
+    def compute(self):
+        """Compute the mean, median, standard deviation, and variance of the Euclidean distance
+        between the query point and its neighbors.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the mean, median, standard deviation, and variance
+            of the Euclidean distance between each query point and its neighbors.
+
+        """
+
+        return self.compute_stats("euclidean_distance")
+        
+class GeodesicnDistStatsTwist(Feature):
+
+    def __init__(self, assoc_desc):
+        """Compute the mean, median, standard deviation, and variance of the geodesic distance
+        between the query point and its neighbors.
+
+        Parameters
+        ----------
+        assoc_desc : TwistDescriptor
+            The DataFrame containing the twist descriptor data.
+
+        """
+        super().__init__(assoc_desc.df)
+
+    def compute(self):
+        """Compute the mean, median, standard deviation, and variance of the geodesic distance
+        between the query point and its neighbors.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the mean, median, standard deviation, and variance
+            of the geodesic distance between each query point and its neighbors.
+
+        """
+
+        return self.compute_stats("geodesic_distance_rad")
+        
+
+class DistProductStatsTwist(Feature):
+
+    def __init__(self, assoc_desc):
+        """Compute the mean, median, standard deviation, and variance of the product of Euclidean and geodesic distance
+        between the query point and its neighbors.
+
+        Parameters
+        ----------
+        assoc_desc : TwistDescriptor
+            The DataFrame containing the twist descriptor data.
+
+        """
+        super().__init__(assoc_desc.df)
+
+    def compute(self):
+        """Compute the mean, median, standard deviation, and variance of the product of Euclidean and geodesic distance
+        between the query point and its neighbors.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the mean, median, standard deviation, and variance
+            of the product of Euclidean and geodesic distance between each query point and its neighbors.
+
+        """
+
+        return self.compute_stats("product_distance")
+        
+class RotAngleXStatsTwist(Feature):
+
+    def __init__(self, assoc_desc):
+        """Compute the mean, median, standard deviation, and variance of the rotation angle of x axis
+        between the query point and its neighbors.
+
+        Parameters
+        ----------
+        assoc_desc : TwistDescriptor
+            The DataFrame containing the twist descriptor data.
+
+        """
+        super().__init__(assoc_desc.df)
+
+    def compute(self):
+        """Compute the mean, median, standard deviation, and variance of the rotation angle of x axis
+        between the query point and its neighbors.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the mean, median, standard deviation, and variance
+            of the rotation angle of x axis between each query point and its neighbors.
+
+        """
+
+        return self.compute_stats("rot_angle_x")
+        
+class RotAngleYStatsTwist(Feature):
+
+    def __init__(self, assoc_desc):
+        """Compute the mean, median, standard deviation, and variance of the rotation angle of y axis
+        between the query point and its neighbors.
+
+        Parameters
+        ----------
+        assoc_desc : TwistDescriptor
+            The DataFrame containing the twist descriptor data.
+
+        """
+        super().__init__(assoc_desc.df)
+
+    def compute(self):
+        """Compute the mean, median, standard deviation, and variance of the rotation angle of y axis
+        between the query point and its neighbors.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the mean, median, standard deviation, and variance
+            of the rotation angle of y axis between each query point and its neighbors.
+
+        """
+
+        return self.compute_stats("rot_angle_y")
+        
+class RotAngleZStatsTwist(Feature):
+
+    def __init__(self, assoc_desc):
+        """Compute the mean, median, standard deviation, and variance of the rotation angle of z axis
+        between the query point and its neighbors.
+
+        Parameters
+        ----------
+        assoc_desc : TwistDescriptor
+            The DataFrame containing the twist descriptor data.
+
+        """
+        super().__init__(assoc_desc.df)
+
+    def compute(self):
+        """Compute the mean, median, standard deviation, and variance of the rotation angle of z axis 
+        between the query point and its neighbors.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame containing the mean, median, standard deviation, and variance
+            of the rotation angle of z axis between each query point and its neighbors.
+
+        """
+
+        return self.compute_stats("rot_angle_z")
 
 class CentralAngleStatsPLComplex(Feature):
 

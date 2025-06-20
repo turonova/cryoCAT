@@ -4,7 +4,7 @@ from dash import html, dcc, Input, Output, State, callback, exceptions, MATCH, A
 import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 import pandas as pd
-
+from cryocat import cryomotl
 
 def get_table_component(prefix: str):
     return html.Div(
@@ -85,7 +85,7 @@ def get_table_component(prefix: str):
     )
 
 
-def register_table_callbacks(prefix: str):
+def register_table_callbacks(prefix: str, csv_only=True):
 
     @callback(
         Output(f"{prefix}-grid", "columnDefs", allow_duplicate=True),
@@ -128,6 +128,7 @@ def register_table_callbacks(prefix: str):
 
     @callback(
         Output(f"{prefix}-global-data-store", "data", allow_duplicate=True),
+        Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
         Input(f"{prefix}-apply-btn", "n_clicks"),
         State(f"{prefix}-grid", "rowData"),
         prevent_initial_call=True,
@@ -135,7 +136,7 @@ def register_table_callbacks(prefix: str):
     def apply_changes(_, rows):
         if not rows:
             raise exceptions.PreventUpdate
-        return rows
+        return rows, rows
 
     @callback(
         Output(f"{prefix}-save-modal", "is_open", allow_duplicate=True),
@@ -155,8 +156,14 @@ def register_table_callbacks(prefix: str):
     )
     def save_table(_, file_path, grid_data):
         df = pd.DataFrame(grid_data)
-        print(df)
-        df.to_csv(file_path)
+        if file_path.endswith(".csv"):
+            df.to_csv(file_path)
+        elif csv_only:
+            print_dash("The table can be saved only to a csv file.")
+        elif file_path.endswith(".em"):
+            m = cryomotl.Motl(df)
+            m.write_out(file_path)
+
         return False
 
     @callback(

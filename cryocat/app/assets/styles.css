@@ -69,14 +69,21 @@ label {
 .Select-input{
     height: 25px !important;
     align-items: center; 
+    line-height: 25px !important;
+    padding-top: 0px;
+    padding-right: 0px;
+    padding-bottom: 0px;
+    padding-left: 0px;
 }
 
 .Select-control{
-    height: 27px !important;
+    height: 25px !important;
+    line-height: 25px !important;
     align-items: center; 
 }
 
 .Select-placeholder, .Select--single > .Select-control .Select-value {
+    height: 25px !important;
     line-height: 25px !important;
     display: flex;
     align-items: center;
