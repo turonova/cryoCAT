@@ -10,6 +10,19 @@ from cryocat import cryomotl
 from cryocat.app.apputils import make_axis_trace
 
 
+def get_colorscale(colorscale_name):
+    if colorscale_name == "Monet":
+        return [
+            [0.0, "#AEC684"],
+            [0.25, "#4EACB6"],
+            [0.5, "#C0A3BA"],
+            [0.75, "#7D82AB"],
+            [1.0, "#865B96"]
+        ]
+    else:
+        return colorscale_name  # use Plotly built-in name
+
+
 def get_viewer_component(prefix: str):
     return html.Div(
         id=f"{prefix}-container",
@@ -48,9 +61,9 @@ def get_viewer_component(prefix: str):
                                     id=f"{prefix}-colorscale-dropdown",
                                     placeholder="Color scale",
                                     options=[
-                                        {"label": s, "value": s} for s in ["Viridis", "Cividis", "Plasma", "Jet", "Hot"]
+                                        {"label": s, "value": s} for s in ["Monet", "Viridis", "Cividis", "Plasma", "Jet", "Hot"]
                                     ],
-                                    value="Viridis",
+                                    value="Monet",
                                 ),
                                 width=1,
                             ),
@@ -195,7 +208,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
                 customdata=customdata,
                 hovertemplate=hovertemplate,
                 mode="markers",
-                marker=dict(size=marker_size or 3, opacity=0.8, color=color_vals, colorscale=colorscale or "Viridis"),
+                marker=dict(size=marker_size or 3, opacity=0.8, color=color_vals, colorscale=get_colorscale(colorscale) or get_colorscale("Monet")),
             )
         )
 
