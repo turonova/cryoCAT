@@ -31,6 +31,31 @@ from cryocat import visplot
 import pandas as pd
 import plotly.graph_objects as go
 
+from matplotlib.colors import LinearSegmentedColormap, to_hex
+
+### Utility functions ###
+
+def get_colormap_color(cmap, val):
+    """
+    Get a color from a colormap based on a value.
+
+    Parameters
+    ----------
+    cmap : matplotlib.colors.Colormap
+        The colormap to use.
+    val : float
+        The value to map to a color. Should be in the range [0, 1].
+
+    Returns
+    -------
+    str
+        The color in hexadecimal format.
+    """
+    rgba = cmap(val)
+    return to_hex(rgba, keep_alpha=False)
+
+###
+
 
 class Particle:
 
@@ -1849,6 +1874,83 @@ class TwistDescriptor(Descriptor):
             A numpy array containing the relative orientations (twist_so_x, twist_so_y, twist_so_z).
         """
         return self.df[TwistDescriptor.get_rot_feature_ids()].to_numpy()
+    
+    def symmetry_statistics(self, c_range=None,  plot_graph=True):
+        """ 
+        Plot the angular scores for different C_n symmetries.
+
+        Parameters
+        ----------
+        c_range : int, float, or range, optional
+            The range of C_n symmetries to consider. If None, defaults to range(2, 10). If a single integer or float is provided,
+            it will be converted to a range from 2 to that value. Default is None.
+        plot_graph : bool, default=True
+            Whether to plot the graph. If True, the graph will be displayed. Default is True
+        
+        Returns
+        -------
+        fig : plotly.graph_objects.Figure
+            A Plotly figure containing the box plot of angular scores for different C_n symmetries.
+        """
+        qp_inplane = np.deg2rad(self.df['qp_inplane'].values)
+        nn_inplane = np.deg2rad(self.df['nn_inplane'].values)
+
+        if c_range is None:
+            c_range = range(2, 10)
+        elif isinstance(c_range, (int, float)):
+            c_range = range(2, int(c_range))
+
+        symmetries_dict = {}
+
+        for n in c_range:
+            max_val = np.pi / n
+            scores = geom.angular_score_for_c_symmetry(qp_inplane, nn_inplane, n, max_val=max_val)
+            symmetries_dict[n] = scores
+
+        df_symmetries = pd.DataFrame(symmetries_dict)
+        df_melted = df_symmetries.melt(var_name="Column", value_name="Value")
+
+        color_list = [
+            (0.0, "#AEC684"),
+            (0.25, "#4EACB6"),
+            (0.5, "#C0A3BA"),
+            (0.75, "#7D82AB"),
+            (1.0, "#865B96"),
+        ]
+        positions, colors = zip(*color_list)
+        cmap = LinearSegmentedColormap.from_list("custom_cmap", list(zip(positions, colors)))
+
+        fig = go.Figure()
+        unique_cols = sorted(df_melted["Column"].unique())
+        n_cols = len(unique_cols)
+
+        # For each symmetry type, add a box trace
+        for i, col in enumerate(unique_cols):
+            val = i / (n_cols - 1) if n_cols > 1 else 0  # normalise index to [0,1]
+            colour = get_colormap_color(cmap, val)
+
+            fig.add_trace(
+                go.Box(
+                    y=df_melted.loc[df_melted["Column"] == col, "Value"],
+                    name=str(col),
+                    boxpoints='outliers',
+                    marker_color=colour
+                )
+            )
+
+        fig.update_layout(
+            title="Rotational Symmetry Angular Scores",
+            xaxis_title="Rotational symmetry type",
+            yaxis_title="Angular score",
+            font=dict(size=12),
+            xaxis=dict(tickangle=45)
+        )
+
+        if plot_graph:
+
+            fig.show()
+
+        return fig
 
 
 class Filter:
