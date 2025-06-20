@@ -24,9 +24,12 @@ layout = html.Div(
         dcc.Store(id="tviewer-motl-nn-index", data=0),
         dcc.Store(id="tviewer-twist-data"),
         dcc.Store(id="tviewer-twist-index", data=0),
+        dcc.Store(id="tviewer-kmeans-data"),
+        dcc.Store(id="tviewer-kmeans-index", data=0),
         dcc.Store(id="merged-motl-twist-data-store"),
         dcc.Store(id="tviewer-desc-data"),
         dcc.Store(id="tviewer-desc-index", data=0),
+        dcc.Store(id=f"kmeans-global-data-store"),  # storing k means data
         dcc.Store(id=f"tabv-motl-global-data-store"),  # main motl table
         dcc.Store(id=f"tabv-motl-nn-global-data-store"),  # nn motl table if available
         dcc.Store(id=f"tabv-nn-global-data-store"),  # nearest neighbor table
@@ -63,7 +66,7 @@ layout = html.Div(
     Output("log-output", "children"),
     Output("log-index", "data"),
     Output("log-panel", "is_open"),
-    #Input("log-check", "n_intervals"),
+    # Input("log-check", "n_intervals"),
     Input("open-log-btn", "n_clicks"),
     State("log-index", "data"),
     State("log-panel", "is_open"),

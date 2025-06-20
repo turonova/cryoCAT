@@ -53,6 +53,13 @@ def get_tabs_menu():
                         disabled=True,
                         id="desc-tab",
                     ),
+                    dbc.Tab(
+                        dbc.Card(dbc.CardBody([get_cluster_table()]), className="mt-3"),
+                        label="Clustering",
+                        tab_id="cluster-tab",
+                        disabled=True,
+                        id="cluster-tab",
+                    ),
                 ],
                 id="table-tabs",
                 active_tab="motl-tab",
@@ -163,51 +170,96 @@ def get_desc_table():
                 className="mb-3",
                 children=[
                     dbc.Col(get_viewer_component("tviewer-desc")),
-                    dbc.Col(
-                        children=[
-                            html.Div(id="pca-visualization"),
-                            dcc.Checklist(
-                                id="k-means-options",
-                                options=[],
-                                inline=True,
-                                style={
-                                    "flexWrap": "wrap",
-                                    "display": "flex",
-                                    "gap": "10px",
-                                },
-                            ),
-                            dcc.Slider(
-                                id=f"k-means-n-slider",
-                                min=1,
-                                max=10,
-                                step=1,
-                                value=2,
-                            ),
-                            dbc.Button(
-                                "Compute k_means",
-                                id="k-means-run-btn",
-                                color="primary",
-                                n_clicks=0,
-                                style={"width": "100%"},
-                            ),
-                        ]
-                    ),
                 ],
             ),
         ]
     )
 
 
-# Load motl into its viewer
+def get_cluster_table():
+
+    return html.Div(
+        children=[
+            dbc.Col(
+                [
+                    html.Div(id="pca-visualization"),
+                    html.Div(
+                        id="k-means-display",
+                        style={"display": "none"},
+                        children=[
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dcc.Checklist(
+                                                id="k-means-options",
+                                                options=[],
+                                                inline=True,
+                                                style={
+                                                    "flexWrap": "wrap",
+                                                    "display": "flex",
+                                                    "gap": "10px",
+                                                },
+                                            ),
+                                            dcc.Slider(
+                                                id=f"k-means-n-slider",
+                                                min=1,
+                                                max=10,
+                                                step=1,
+                                                value=2,
+                                            ),
+                                            dbc.Button(
+                                                "Compute k_means",
+                                                id="k-means-run-btn",
+                                                color="primary",
+                                                n_clicks=0,
+                                                style={"width": "100%"},
+                                            ),
+                                        ],
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.Div(
+                                                [get_viewer_component("tviewer-kmeans")],
+                                                id="k-means-graph-cont",
+                                                style={"display": "none"},
+                                            )
+                                        ]
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    html.Div(
+                        id="prox-cluster-display",
+                        style={"display": "none"},
+                    ),
+                ]
+            ),
+        ]
+    )
+
+
+# Load motl into table view and tviewer - happens upond loading the motl
 @callback(
-    Output("tviewer-motl-data", "data"),
+    Output("tviewer-motl-data", "data", allow_duplicate=True),
     Output("tabv-motl-global-data-store", "data", allow_duplicate=True),
     Input("main-motl-data-store", "data"),
     prevent_initial_call=True,
 )
 def connect_motl_data(data):
-    # print(data)
     return data, data
+
+
+# Connect table data to the viewer
+@callback(
+    Output("tviewer-motl-data", "data", allow_duplicate=True),
+    Input("tabv-motl-global-data-store", "data"),
+    prevent_initial_call=True,
+)
+def connect_motl_table_data(data):
+
+    return data
 
 
 # Load twist into its viewer
@@ -245,11 +297,51 @@ def connect_desc_data(desc_data, motl_data):
     return merged.to_dict("records")
 
 
-# Load descriptor into its viewer
+# Load kmans clustering into its viewer
 @callback(
-    Output("nn-motl-tab", "disabled"),
-    Output("table-tabs", "active_tab"),
-    Output("tviewer-motl-nn-data", "data"),
+    Output("tviewer-kmeans-data", "data", allow_duplicate=True),
+    Input("tabv-motl-global-data-store", "data"),
+    prevent_initial_call=True,
+)
+def create_kmeans_dummy_graph(motl_data):
+
+    return motl_data
+
+
+# Load kmans clustering into its viewer
+@callback(
+    Output("tviewer-kmeans-data", "data"),
+    Output("tviewer-kmeans-graph", "figure", allow_duplicate=True),
+    Input("kmeans-global-data-store", "data"),
+    State("tabv-motl-global-data-store", "data"),
+    State("tviewer-kmeans-graph", "figure"),
+    prevent_initial_call=True,
+)
+def connect_kmeans_data(kmeans_data, motl_data, fig_data):
+
+    motl_df = pd.DataFrame(motl_data)
+    # Merge motl_df and cluster_df based on ID
+    merged = motl_df.merge(
+        kmeans_data[["qp_id", "cluster"]],
+        how="left",
+        left_on="subtomo_id",
+        right_on="qp_id",
+    )
+
+    # Fill NaN (meaning no cluster assigned) with -1
+    merged["cluster"] = merged["cluster"].fillna(-1)
+
+    # Now assign cluster values as color
+    fig_data["data"][0]["marker"]["color"] = merged["cluster"].to_numpy()
+
+    return merged.to_dict("records"), fig_data
+
+
+# Load nn motl table to the tab table and viewer - happens upon load the nn motl
+@callback(
+    Output("nn-motl-tab", "disabled", allow_duplicate=True),
+    Output("table-tabs", "active_tab", allow_duplicate=True),
+    Output("tviewer-motl-nn-data", "data", allow_duplicate=True),
     Output("tabv-motl-nn-global-data-store", "data", allow_duplicate=True),
     Input("nn-motl-data-store", "data"),
     State("tabv-motl-global-data-store", "data"),
@@ -271,6 +363,29 @@ def connect_motl_nn_data(motl_nn_data, motl_data):
     return False, "nn-motl-tab", con_motl.to_dict("records"), motl_nn_data
 
 
+# Load nn motl table to the tab table and viewer
+@callback(
+    Output("tviewer-motl-nn-data", "data", allow_duplicate=True),
+    Input("tabv-motl-nn-global-data-store", "data"),
+    State("tabv-motl-global-data-store", "data"),
+    prevent_initial_call=True,
+)
+def connect_motl_nn_data(motl_nn_data, motl_data):
+
+    if not motl_nn_data:
+        raise dash.exceptions.PreventUpdate
+
+    motl_nn_df = pd.DataFrame(motl_nn_data)
+
+    motl_df = pd.DataFrame(motl_data)
+    motl_df["type"] = 1
+    motl_nn_df["type"] = 2
+    con_motl = pd.concat([motl_df, motl_nn_df], ignore_index=True)
+    con_motl.reset_index(drop=True, inplace=True)
+
+    return con_motl.to_dict("records")
+
+
 # Register callbacks for both viewers
 register_viewer_callbacks("tviewer-motl")
 register_viewer_callbacks("tviewer-motl-nn")
@@ -281,6 +396,7 @@ register_viewer_callbacks(
     detailed_table="merged-motl-twist-data-store",
 )
 register_viewer_callbacks("tviewer-desc", show_dual_graph=False, hover_info=["subtomo_id"])
+register_viewer_callbacks("tviewer-kmeans", show_dual_graph=False, hover_info=["cluster"])
 
 register_table_callbacks("tabv-motl")
 register_table_callbacks("tabv-motl-nn")
@@ -341,7 +457,7 @@ def enable_twist_tab(data):
     Output("table-tabs", "active_tab", allow_duplicate=True),
     Output("tabv-twist-global-data-store", "data"),
     Input("run-twist-btn", "n_clicks"),
-    State("main-motl-data-store", "data"),
+    State("tabv-motl-global-data-store", "data"),
     State("symmetry-dropdown", "value"),
     State("c-symmetry-value", "value"),
     State({"type": "twist-forms-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "value"),

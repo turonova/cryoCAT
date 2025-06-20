@@ -28,50 +28,6 @@ global_nn = {"obj": None}
 tomo_ids = None
 
 
-@callback(Output("twist-ui", "style"), Input("upload-motl", "contents"), prevent_initial_call=True)
-def show_twist_ui(contents):
-    if contents:
-        return {"display": "block", "marginTop": "1rem"}
-    return {"display": "none"}
-
-
-@callback(
-    Output("motl-table", "data"), Input("main-motl-data-store", "data"), allow_duplicate=True, prevent_initial_call=True
-)
-def update_table_from_store(data):
-    return data
-
-
-@callback(
-    Output("motl-table-title", "children"),
-    Output("main-motl-data-store", "data", allow_duplicate=True),
-    Input("apply-changes-btn", "n_clicks"),
-    State("motl-table", "derived_virtual_data"),
-    prevent_initial_call=True,
-)
-def apply_changes(n_clicks, filtered_data):
-    if global_motl.get("obj") and filtered_data:
-        df = pd.DataFrame(filtered_data)
-        global_motl["obj"].df = df
-        return f"MOTL Table {len(df)} rows applied", df.to_dict("records")
-    return "MOTL Table No data", no_update
-
-
-@callback(
-    Output("main-motl-data-store", "data", allow_duplicate=True),
-    Output("motl-table", "selected_rows", allow_duplicate=True),
-    Input("remove-rows-btn", "n_clicks"),
-    State("main-motl-data-store", "data"),
-    State("motl-table", "selected_rows"),
-    prevent_initial_call=True,
-)
-def remove_selected_rows(n_clicks, current_data, selected_rows):
-    if not selected_rows:
-        return no_update, [], "No rows selected"
-    updated = [row for i, row in enumerate(current_data) if i not in selected_rows]
-    return updated, []
-
-
 @callback(
     Output("tviewer-desc-graph", "figure", allow_duplicate=True),
     Input("k-means-run-btn", "n_clicks"),

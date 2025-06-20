@@ -902,7 +902,7 @@ class Descriptor:
 
         if self.desc.empty:
             return None, None, None
-        
+
         desc_df = self.remove_nans(self.desc, axis_type=nan_drop)
         desc_df = desc_df.drop(columns=["qp_id"])
         if "nn_id" in desc_df.columns:
@@ -1678,8 +1678,9 @@ class TwistDescriptor(Descriptor):
         return weighted_data
 
     def proximity_clustering(self, num_connected_components=1, size_connected_components=None):
-        """Cluster particles based on spatial proximity. If size_connected_components is None, num_connected_components is used to
-        determine the number of connected components to return. If size_connected_components is specified, it returns all connected components with size >= size_connected_components.
+        """Cluster particles based on spatial proximity. If size_connected_components is None, num_connected_components
+        is used to determine the number of connected components to return. If size_connected_components is specified,
+        it returns all connected components with size >= size_connected_components.
 
         Parameters
         ----------
@@ -2354,6 +2355,7 @@ class NNCountTwist(Feature):
         else:
             return pd.DataFrame()
 
+
 class AngularScoreStatsTwist(Feature):
 
     def __init__(self, assoc_desc):
@@ -2414,7 +2416,8 @@ class EuclideanDistStatsTwist(Feature):
         """
 
         return self.compute_stats("euclidean_distance")
-        
+
+
 class GeodesicnDistStatsTwist(Feature):
 
     def __init__(self, assoc_desc):
@@ -2442,7 +2445,7 @@ class GeodesicnDistStatsTwist(Feature):
         """
 
         return self.compute_stats("geodesic_distance_rad")
-        
+
 
 class DistProductStatsTwist(Feature):
 
@@ -2471,7 +2474,8 @@ class DistProductStatsTwist(Feature):
         """
 
         return self.compute_stats("product_distance")
-        
+
+
 class RotAngleXStatsTwist(Feature):
 
     def __init__(self, assoc_desc):
@@ -2499,7 +2503,8 @@ class RotAngleXStatsTwist(Feature):
         """
 
         return self.compute_stats("rot_angle_x")
-        
+
+
 class RotAngleYStatsTwist(Feature):
 
     def __init__(self, assoc_desc):
@@ -2527,7 +2532,8 @@ class RotAngleYStatsTwist(Feature):
         """
 
         return self.compute_stats("rot_angle_y")
-        
+
+
 class RotAngleZStatsTwist(Feature):
 
     def __init__(self, assoc_desc):
@@ -2543,7 +2549,7 @@ class RotAngleZStatsTwist(Feature):
         super().__init__(assoc_desc.df)
 
     def compute(self):
-        """Compute the mean, median, standard deviation, and variance of the rotation angle of z axis 
+        """Compute the mean, median, standard deviation, and variance of the rotation angle of z axis
         between the query point and its neighbors.
 
         Returns
@@ -2555,6 +2561,7 @@ class RotAngleZStatsTwist(Feature):
         """
 
         return self.compute_stats("rot_angle_z")
+
 
 class CentralAngleStatsPLComplex(Feature):
 

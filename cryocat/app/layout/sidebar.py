@@ -19,10 +19,10 @@ from cryocat.tango import TwistDescriptor, Descriptor, CustomDescriptor
 from cryocat.app.globalvars import global_twist
 from cryocat.app.apputils import generate_form_from_untyped_init, generate_form_from_docstring, generate_kwargs
 
-descriptors = [name for name in get_class_names_by_parent("Descriptor", "cryocat.tango") if name != "TwistDescriptor"]
+descriptors = get_class_names_by_parent("Descriptor", "cryocat.tango")
 features = get_class_names_by_parent("Feature", "cryocat.tango")
 supports = get_class_names_by_parent("Support", "cryocat.tango")
-feat_desc_map = Descriptor.build_feature_descriptor_map(features, descriptors + ["TwistDescriptor"])
+feat_desc_map = Descriptor.build_feature_descriptor_map(features, descriptors)
 desc_feat_map = Descriptor.build_descriptor_feature_map(descriptors, features)
 
 label_style = {
@@ -46,7 +46,11 @@ def get_column_sidebar():
         className="p-0",
         style={
             "backgroundColor": "var(--color13)",
-            "height": "100vh",
+            "height": "100vh",  # Full viewport height
+            "position": "sticky",
+            "top": "0px",
+            "overflowY": "auto",  # scroll if sidebar overflows
+            "zIndex": 1,  # stay above content if needed
         },
     )
 
@@ -217,7 +221,7 @@ def get_sidebar():
                             ),  # g-2 adds spacing between cols,
                             html.Div(id="twist-status", className="small", style={"marginTop": "0.5rem"}),
                         ],
-                        title="Twist Descriptor",
+                        title="Twist Descriptor Base",
                         item_id="sacc-twist",
                     ),
                     dbc.AccordionItem(
@@ -265,19 +269,60 @@ def get_sidebar():
                                 style={"width": "100%"},
                             ),
                         ],
-                        title="Further analysis",
+                        title="Unique descriptor",
                         item_id="sacc-options",
+                    ),
+                    dbc.AccordionItem(
+                        [
+                            html.H4("Input data"),
+                            dcc.Dropdown(
+                                id="cluster-data-dropdown",
+                                options=["Twist descriptor base", "Unique descriptor"],
+                                multi=False,
+                                placeholder="Chose data...",
+                                style={"width": "100%"},
+                            ),
+                            html.H4("Clustering types"),
+                            dcc.Dropdown(
+                                id="cluster-type-dropdown",
+                                options=["K-means", "Proximity"],
+                                multi=False,
+                                placeholder="Chose clustering...",
+                                style={"width": "100%"},
+                            ),
+                            html.Br(),
+                            dbc.Button(
+                                "Compute clustering",
+                                id="cluster-run-btn",
+                                color="primary",
+                                n_clicks=0,
+                                style={"width": "100%"},
+                            ),
+                        ],
+                        title="Clustering",
+                        item_id="sacc-clustering",
                     ),
                 ],
             ),
-            dbc.Button(
-                "Show log",
-                id="open-log-btn",
-                className="custom-radius-button",
+            html.Div(
+                dbc.Button(
+                    "Show log",
+                    id="open-log-btn",
+                    className="custom-radius-button",
+                    style={"width": "100%"},
+                ),
+                style={"marginTop": "auto", "padding": "2rem"},
             ),
         ],
         className="sidebar",
-        style={"width": "100%", "padding": "0px", "margin": "0"},
+        style={
+            "width": "100%",
+            "padding": "0px",
+            "margin": "0",
+            "display": "flex",
+            "flexDirection": "column",
+            "height": "100vh",
+        },
     )
 
 
@@ -316,9 +361,9 @@ def load_twist(upload_content):
 )
 def control_accordion(requested_item, motl_data, twist_data):
 
-    if not motl_data and requested_item in ["sacc-nn", "sacc-twist", "sacc-options"]:
+    if not motl_data and requested_item in ["sacc-nn", "sacc-twist", "sacc-options", "sacc-clustering"]:
         return None  # Block tabes without having motl first
-    elif not twist_data and requested_item == "sacc-options":
+    elif not twist_data and requested_item in ["sacc-options", "sacc-clustering"]:
         return None  # Block additional descriptors without having twist first
 
     return requested_item  # Allow it
@@ -448,9 +493,26 @@ def show_desc_options(class_name):
     if not class_name:
         return [], "", [], [], {"width": "100%", "display": "none"}
 
-    forms = generate_form_from_docstring(
-        class_name, id_type="desc-params", id_name=class_name, exclude_params=["twist_df", "build_unique_desc"]
-    )
+    if class_name == "TwistDescriptor":
+        forms = generate_form_from_docstring(
+            class_name,
+            id_type="desc-params",
+            id_name=class_name,
+            exclude_params=[
+                "input_twist",
+                "input_motl",
+                "nn_radius",
+                "feature_id",
+                "symm",
+                "remove_qp",
+                "remove_duplicates",
+                "build_unique_desc",
+            ],
+        )
+    else:
+        forms = generate_form_from_docstring(
+            class_name, id_type="desc-params", id_name=class_name, exclude_params=["twist_df", "build_unique_desc"]
+        )
 
     if class_name == "CustomDescriptor":
         feature_title = "Features"
@@ -504,8 +566,6 @@ def show_feat_options(class_names, desc_class_name):
     Output("desc-tab", "disabled"),
     Output("table-tabs", "active_tab", allow_duplicate=True),
     Output("tabv-desc-global-data-store", "data"),
-    Output("pca-visualization", "children"),
-    Output("k-means-options", "options"),
     Input("desc-run-btn", "n_clicks"),
     State("desc-dropdown", "value"),
     State("support-dropdown", "value"),
@@ -571,7 +631,50 @@ def process_selection(
         desc = CustomDescriptor(support, feature_list=all_features, feature_kwargs=feat_kwargs)
         table_data = desc.desc.to_dict("records")
 
-    _, _, fig = desc.pca_analysis(
+    return False, "desc-tab", table_data
+
+
+@callback(
+    Output("cluster-data-dropdown", "options"),
+    Input("sidebar-accordion", "active_item"),
+    State("tabv-twist-global-data-store", "data"),
+    State("tabv-desc-global-data-store", "data"),
+    prevent_initial_call=True,
+)
+def populate_cluster_data_dropdown(active_item, twist_data, desc_data):
+
+    if active_item == "sacc-clustering":
+
+        if not twist_data and desc_data:
+            return []
+        elif not desc_data:
+            return ["Twist descriptor base"]
+        else:
+            return ["Twist descriptor base", "Unique descriptor"]
+
+    raise PreventUpdate
+
+
+@callback(
+    Output("table-tabs", "active_tab", allow_duplicate=True),
+    Output("cluster-tab", "disabled", allow_duplicate=True),
+    Output("pca-visualization", "children"),
+    Output("k-means-options", "options"),
+    Input("cluster-data-dropdown", "value"),
+    State("tabv-twist-global-data-store", "data"),
+    State("tabv-desc-global-data-store", "data"),
+    prevent_initial_call=True,
+)
+def compute_pca_analysis(cluster_data, twist_data, desc_data):
+
+    twist_desc = TwistDescriptor(input_twist=pd.DataFrame(twist_data))
+
+    if cluster_data == "Twist descriptor base":
+        twist_desc.desc = twist_desc.df
+    else:  # Unique descriptor
+        twist_desc.desc = pd.DataFrame(desc_data)
+
+    _, _, fig = twist_desc.pca_analysis(
         show_fig=False,
         scatter_kwargs={"mode": "lines+markers", "line": dict(color="#865B96")},
         bar_kwargs={"marker_color": "#865B96"},
@@ -579,12 +682,65 @@ def process_selection(
 
     if fig is None:
         raise PreventUpdate
-    
+
     fig.update_layout(
         font=dict(size=10),
         margin=dict(l=20, r=20, t=30, b=20),
     )
 
-    k_means_options = [col for col in desc.desc.columns if col != "qp_id"]
+    k_means_options = [col for col in twist_desc.desc.columns if col != "qp_id"]
 
-    return False, "desc-tab", table_data, dcc.Graph(figure=fig), k_means_options
+    return "cluster-tab", False, dcc.Graph(figure=fig), k_means_options
+
+
+@callback(
+    Output("table-tabs", "active_tab", allow_duplicate=True),
+    Output("cluster-tab", "disabled", allow_duplicate=True),
+    Output("k-means-display", "style"),
+    Output("prox-cluster-display", "style"),
+    Input("cluster-type-dropdown", "value"),
+    prevent_initial_call=True,
+)
+def show_cluster_options(
+    cluster_type,
+):
+
+    if not cluster_type:
+        return PreventUpdate
+
+    if cluster_type == "K-means":
+        k_means_disp = "block"
+        prox_disp = "none"
+    else:
+        k_means_disp = "none"
+        prox_disp = "block"
+
+    return "cluster-tab", False, {"display": k_means_disp}, {"display": prox_disp}
+
+
+@callback(
+    Output("k-means-graph-cont", "style", allow_duplicate=True),
+    Output("kmeans-global-data-store", "data", allow_duplicate=True),
+    Input("cluster-run-btn", "n_clicks"),
+    State("cluster-data-dropdown", "value"),
+    State("tabv-twist-global-data-store", "data"),
+    State("tabv-desc-global-data-store", "data"),
+    State("k-means-options", "options"),
+    State("k-means-n-slider", "value"),
+    prevent_initial_call=True,
+)
+def show_cluster_options(cluster_type, cluster_data, twist_data, desc_data, cluster_options, n_clusters):
+
+    if not cluster_type:
+        return PreventUpdate
+
+    twist_desc = TwistDescriptor(input_twist=pd.DataFrame(twist_data))
+
+    if cluster_data == "Twist descriptor base":
+        twist_desc.desc = twist_desc.df
+    else:  # Unique descriptor
+        twist_desc.desc = pd.DataFrame(desc_data)
+
+    km_df = twist_desc.k_means_clustering(n_clusters, feature_ids=cluster_options)
+
+    return {"display": "block"}, km_df.to_dict("records")
