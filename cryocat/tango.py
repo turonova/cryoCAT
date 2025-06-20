@@ -1339,6 +1339,7 @@ class TwistDescriptor(Descriptor):
             "twist_x",
             "twist_y",
             "twist_z",
+            "qp_inplane",
             "nn_inplane",
             "geodesic_distance_rad",
             "euclidean_distance",
@@ -1397,16 +1398,16 @@ class TwistDescriptor(Descriptor):
 
         if symm is None:
             twist_df = pd.DataFrame(
-                data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_nn)),
-                columns=["qp_id", "nn_id", "tomo_id"] + TwistDescriptor.get_mixed_feature_ids() + ["nn_inplane"],
+                data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_qp, phi_nn)),
+                columns=["qp_id", "nn_id", "tomo_id"] + TwistDescriptor.get_mixed_feature_ids() + ["qp_inplane", "nn_inplane"],
             )
 
         else:
             twist_df = pd.DataFrame(
-                data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_nn, ang_scores)),
+                data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_qp, phi_nn, ang_scores)),
                 columns=["qp_id", "nn_id", "tomo_id"]
                 + TwistDescriptor.get_mixed_feature_ids()
-                + ["nn_inplane", "angular_score"],
+                + ["qp_inplane", "nn_inplane", "angular_score"],
             )
 
         return twist_df
@@ -1597,7 +1598,7 @@ class TwistDescriptor(Descriptor):
 
         Parameters
         ----------
-        twist_descriptor_id : str, {"geodesic_distance_rad", "euclidean_distance", "product_distance", "twist_so_x", "twist_so_y", "twist_so_z", "twist_x", "twist_y", "twist_z", "nn_inplane"}
+        twist_descriptor_id : str, {"geodesic_distance_rad", "euclidean_distance", "product_distance", "twist_so_x", "twist_so_y", "twist_so_z", "twist_x", "twist_y", "twist_z", "qp_inplane","nn_inplane"}
             The name of the distance column to sort by. In principle, all columns of a TwistDescriptor data frame are valid input. Default is "geodesic_distance_rad".
 
         Returns
