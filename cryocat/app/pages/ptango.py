@@ -63,13 +63,13 @@ layout = html.Div(
     Output("log-output", "children"),
     Output("log-index", "data"),
     Output("log-panel", "is_open"),
-    Input("log-check", "n_intervals"),
+    #Input("log-check", "n_intervals"),
     Input("open-log-btn", "n_clicks"),
     State("log-index", "data"),
     State("log-panel", "is_open"),
     prevent_initial_call=True,
 )
-def update_log(n_intervals, open_clicks, last_index, is_open):
+def update_log(open_clicks, last_index, is_open):
     triggered = ctx.triggered_id
     new_logs, new_index, has_dash_logs = dash_logger.get_logs(last_index)
     full_log = dash_logger.get_all_logs()
@@ -78,6 +78,6 @@ def update_log(n_intervals, open_clicks, last_index, is_open):
         return full_log, new_index, True
 
     if has_dash_logs:
-        return full_log, new_index, True
+        return new_logs, new_index, True
 
     raise dash.exceptions.PreventUpdate

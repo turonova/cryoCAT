@@ -2,6 +2,7 @@ from cryocat.app.logger import dash_logger
 import base64
 import io
 from dash import html, dcc, ALL
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import callback, Input, Output, State, no_update
@@ -269,7 +270,11 @@ def get_sidebar():
                     ),
                 ],
             ),
-            html.Button("Show Logs", id="open-log-btn"),
+            dbc.Button(
+                "Show log",
+                id="open-log-btn",
+                className="custom-radius-button",
+            ),
         ],
         className="sidebar",
         style={"width": "100%", "padding": "0px", "margin": "0"},
@@ -572,6 +577,9 @@ def process_selection(
         bar_kwargs={"marker_color": "#865B96"},
     )
 
+    if fig is None:
+        raise PreventUpdate
+    
     fig.update_layout(
         font=dict(size=10),
         margin=dict(l=20, r=20, t=30, b=20),
