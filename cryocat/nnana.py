@@ -1099,7 +1099,9 @@ def plot_nn_coord(coord, displ_threshold=None, marker_size=20):
         axs[2].set(xlim=limits, ylim=limits)
 
 
-def plot_nn_rot_coord_df_plotly(df, displ_threshold=None, title=None, marker_size=5, output_name=None):
+def plot_nn_rot_coord_df_plotly(
+    df, coord_columns, desc, displ_threshold=None, title=None, marker_size=5, output_name=None
+):
     """
     Create 2D scatter plots of rotated NN coordinates using Plotly (XY, XZ, YZ).
 
@@ -1107,6 +1109,10 @@ def plot_nn_rot_coord_df_plotly(df, displ_threshold=None, title=None, marker_siz
     ----------
     df : pd.DataFrame
         DataFrame with columns 'coord_rx', 'coord_ry', 'coord_rz', and 'type'.
+    coord_columns : list
+        List of names with columns to use for display, in x, y, z order.
+    desc : str
+        Name of the column to use as description for the points.
     displ_threshold : float, optional
         Axis limit for all plots (symmetric), default: None.
     title : str, optional
@@ -1129,15 +1135,19 @@ def plot_nn_rot_coord_df_plotly(df, displ_threshold=None, title=None, marker_siz
         horizontal_spacing=0.08,
     )
 
+    coord_x = df[coord_columns[0]]
+    coord_y = df[coord_columns[1]]
+    coord_z = df[coord_columns[2]]
+
     # Add XY
     fig.add_trace(
         go.Scattergl(
-            x=df["coord_rx"],
-            y=df["coord_ry"],
+            x=coord_x,
+            y=coord_y,
             mode="markers",
             marker=dict(size=marker_size),
             name="XY",
-            text=df["type"],
+            text=df[desc],
             showlegend=False,
         ),
         row=1,
@@ -1147,12 +1157,12 @@ def plot_nn_rot_coord_df_plotly(df, displ_threshold=None, title=None, marker_siz
     # Add XZ
     fig.add_trace(
         go.Scattergl(
-            x=df["coord_rx"],
-            y=df["coord_rz"],
+            x=coord_x,
+            y=coord_z,
             mode="markers",
             marker=dict(size=marker_size),
             name="XZ",
-            text=df["type"],
+            text=df[desc],
             showlegend=False,
         ),
         row=1,
@@ -1162,12 +1172,12 @@ def plot_nn_rot_coord_df_plotly(df, displ_threshold=None, title=None, marker_siz
     # Add YZ
     fig.add_trace(
         go.Scattergl(
-            x=df["coord_ry"],
-            y=df["coord_rz"],
+            x=coord_y,
+            y=coord_z,
             mode="markers",
             marker=dict(size=marker_size),
             name="YZ",
-            text=df["type"],
+            text=df[desc],
             showlegend=False,
         ),
         row=1,
@@ -1184,7 +1194,7 @@ def plot_nn_rot_coord_df_plotly(df, displ_threshold=None, title=None, marker_siz
         fig.update_yaxes(range=limits, row=1, col=3)
 
     fig.update_layout(
-        title=title or "Rotated Coordinate Distributions",
+        # title=title or "Rotated Coordinate Distributions",
         height=400,
         margin=dict(t=40, b=30, l=30, r=30),
         plot_bgcolor="white",

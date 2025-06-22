@@ -1,6 +1,7 @@
 from cryocat.app.logger import dash_logger
 import base64
 import io
+import numpy as np
 from dash import html, dcc, ALL
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
@@ -16,6 +17,7 @@ from cryocat.classutils import get_class_names_by_parent, get_classes_from_names
 from cryocat.cryomotl import Motl
 from cryocat.nnana import NearestNeighbors
 from cryocat.tango import TwistDescriptor, Descriptor, CustomDescriptor
+from cryocat.nnana import plot_nn_rot_coord_df_plotly
 
 from cryocat.app.globalvars import global_twist
 from cryocat.app.apputils import generate_form_from_docstring, generate_kwargs
@@ -426,38 +428,43 @@ def show_nn_motl_option(n_clicks, main_motl_df, nn_motl_df, use_single_motl, nn_
         nn_motl = Motl(pd.DataFrame(nn_motl_df))
         nn_stats = NearestNeighbors([main_motl, nn_motl], **nn_kwargs)
 
-    info_string = (
-        f"Mean distance: {nn_stats.df['nn_dist'].mean():.3f}; Median distance: {nn_stats.df['nn_dist'].median():.3f}"
-    )
+    if nn_kwargs["nn_type"] == "closest_dist":
+        info_string = f"Mean distance: {nn_stats.df['nn_dist'].mean():.3f}; Median distance: {nn_stats.df['nn_dist'].median():.3f}"
+    else:
+        info_string = ""
 
     table_data = nn_stats.df.to_dict("records")
 
-    # Create subplot figure
-    fig = make_subplots(
-        rows=1,
-        cols=2,
-        subplot_titles=["NN Distance", "Orientational Distribution", "Distance vs Angle"],
-        vertical_spacing=0.15,
-    )
+    # # Create subplot figure
+    # fig = make_subplots(
+    #     rows=1,
+    #     cols=2,
+    #     subplot_titles=["NN Distance", "Orientational Distribution", "Distance vs Angle"],
+    #     vertical_spacing=0.15,
+    # )
 
-    # Histogram
-    fig.add_trace(go.Histogram(x=nn_stats.df["nn_dist"], name="NN Distance"), row=1, col=1)
+    # # Histogram
+    # fig.add_trace(go.Histogram(x=nn_stats.df["nn_dist"], name="NN Distance"), row=1, col=1)
 
-    # Orientation plot as image
-    # fig.add_trace(go.Image(z=img), row=1, col=2)
+    # # Orientation plot as image
+    # # fig.add_trace(go.Image(z=img), row=1, col=2)
 
-    # Distance vs Angle scatter
-    if "angular_distance" in nn_stats.df.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=nn_stats.df["nn_dist"], y=nn_stats.df["angular_distance"], mode="markers", name="Dist vs Angle"
-            ),
-            row=1,
-            col=2,
-        )
+    # # Distance vs Angle scatter
+    # if "angular_distance" in nn_stats.df.columns:
+    #     fig.add_trace(
+    #         go.Scatter(
+    #             x=nn_stats.df["nn_dist"], y=nn_stats.df["angular_distance"], mode="markers", name="Dist vs Angle"
+    #         ),
+    #         row=1,
+    #         col=2,
+    #     )
 
-    fig.update_layout(height=400, showlegend=False)
-    # fig = plot_nn_rot_coord_df_plotly(nn_stats.df)
+    # fig.update_layout(height=400, showlegend=False)
+
+    norm_data = np.column_stack((nn_stats.get_normalized_coord(), nn_stats.df["nn_subtomo_id"].values))
+    nn_df = pd.DataFrame(data=norm_data, columns=["x", "y", "z", "nn_subtomo_id"])
+    fig = plot_nn_rot_coord_df_plotly(nn_df, ["x", "y", "z"], "nn_subtomo_id")
+
     return "nn-tab", dcc.Graph(figure=fig), table_data, info_string
 
 
