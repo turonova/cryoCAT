@@ -12,13 +12,7 @@ from cryocat.app.apputils import make_axis_trace
 
 def get_colorscale(colorscale_name):
     if colorscale_name == "Monet":
-        return [
-            [0.0, "#AEC684"],
-            [0.25, "#4EACB6"],
-            [0.5, "#C0A3BA"],
-            [0.75, "#7D82AB"],
-            [1.0, "#865B96"]
-        ]
+        return [[0.0, "#AEC684"], [0.25, "#4EACB6"], [0.5, "#C0A3BA"], [0.75, "#7D82AB"], [1.0, "#865B96"]]
     else:
         return colorscale_name  # use Plotly built-in name
 
@@ -31,9 +25,18 @@ def get_viewer_component(prefix: str):
             html.Div(
                 id=f"{prefix}-graph-menu",
                 children=[
-                    dbc.Row(
+                    html.Div(
+                        style={
+                            "display": "flex",
+                            "flexDirection": "row",
+                            "gap": "1rem",
+                            "alignItems": "center",
+                            "width": "auto",  # don't stretch full width
+                            "maxWidth": "100%",  # safety for responsiveness
+                            "flexWrap": "wrap",  # optional if it might wrap on small screens
+                        },
                         children=[
-                            dbc.Col(
+                            html.Div(
                                 dbc.ButtonGroup(
                                     [
                                         dbc.Button("Previous", id=f"{prefix}-prev", n_clicks=0),
@@ -47,39 +50,59 @@ def get_viewer_component(prefix: str):
                                         dbc.Button("Next", id=f"{prefix}-next", n_clicks=0),
                                     ]
                                 ),
-                                width=2,
+                                style={"flex": "0 0 auto"},
                             ),
-                            dbc.Col(
+                            html.Div(
                                 dcc.Dropdown(
                                     id=f"{prefix}-color-dropdown",
                                     placeholder="Color by",
+                                    style={"width": "150px"},
                                 ),
-                                width=1,
+                                style={"flex": "0 0 auto"},
                             ),
-                            dbc.Col(
+                            html.Div(
                                 dcc.Dropdown(
                                     id=f"{prefix}-colorscale-dropdown",
                                     placeholder="Color scale",
                                     options=[
-                                        {"label": s, "value": s} for s in ["Monet", "Viridis", "Cividis", "Plasma", "Jet", "Hot"]
+                                        {"label": s, "value": s}
+                                        for s in ["Monet", "Viridis", "Cividis", "Plasma", "Jet", "Hot"]
                                     ],
                                     value="Monet",
+                                    style={"width": "150px"},
                                 ),
-                                width=1,
+                                style={"flex": "0 0 auto"},
                             ),
-                            dbc.Col(
-                                dcc.Slider(
-                                    id=f"{prefix}-marker-size",
-                                    min=1,
-                                    max=20,
-                                    step=1,
-                                    value=3,
-                                ),
-                                width=4,
+                            html.Div(
+                                style={
+                                    "display": "flex",
+                                    "flexDirection": "row",
+                                    "alignItems": "center",  # vertically align label + slider
+                                    "flex": "0 0 auto",  # prevent it from growing/shrinking
+                                    "gap": "0.1rem",
+                                },
+                                children=[
+                                    html.H5("Marker size:", style={"margin": 0}),
+                                    html.Div(
+                                        dcc.Slider(
+                                            id=f"{prefix}-marker-size",
+                                            min=1,
+                                            max=20,
+                                            step=1,
+                                            value=5,
+                                            tooltip={"placement": "right"},
+                                            marks=None,
+                                        ),
+                                        style={
+                                            "width": "150px",
+                                            "flex": "0 0 auto",
+                                            "paddingTop": "24px",  # adjust if needed for vertical alignment
+                                        },
+                                    ),
+                                ],
                             ),
                         ],
-                        className="g-2",  # Optional gutter spacing
-                    ),
+                    )
                 ],
                 style={
                     "marginBottom": "0.5rem",
@@ -89,7 +112,7 @@ def get_viewer_component(prefix: str):
             ),
             dbc.Row(
                 [
-                    dbc.Col(html.Div(id=f"{prefix}-graph1-container"), id=f"{prefix}-graph1-col", width=6),
+                    dbc.Col(html.Div([dcc.Graph(id=f"{prefix}-graph")]), id=f"{prefix}-graph1-col", width=6),
                     dbc.Col(html.Div(id=f"{prefix}-graph2-container"), id=f"{prefix}-graph2-col", width=6),
                 ],
                 id=f"{prefix}-graph-row",
@@ -114,8 +137,8 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
 
         updated_style = current_style.copy()
 
-        if active_tab == "motl-tab":
-            updated_style["display"] = "block"
+        if active_tab in ["motl-tab", "twist-tab", "nn-motl-tab", "cluster-tab"]:
+            updated_style["display"] = "flex"
         else:
             updated_style["display"] = "none"
 
@@ -160,7 +183,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
 
     @callback(
         # Output(f"{prefix}-graph", "figure"),
-        Output(f"{prefix}-graph1-container", "children"),
+        Output(f"{prefix}-graph", "figure"),
         Output(f"{prefix}-graph1-col", "width"),
         Output(f"{prefix}-container", "style", allow_duplicate=True),
         Output(f"{prefix}-tomo-selector", "label"),
@@ -174,6 +197,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
     def update_plot(index, color_col, colorscale, marker_size, data):
         if not data:
             raise exceptions.PreventUpdate
+
         motl_df = pd.DataFrame(data)
         motl = cryomotl.Motl(motl_df[cryomotl.Motl.motl_columns])
         tomo_ids = motl.get_unique_values("tomo_id")
@@ -208,24 +232,29 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
                 customdata=customdata,
                 hovertemplate=hovertemplate,
                 mode="markers",
-                marker=dict(size=marker_size or 3, opacity=0.8, color=color_vals, colorscale=get_colorscale(colorscale) or get_colorscale("Monet")),
+                marker=dict(
+                    size=marker_size or 5,
+                    opacity=0.8,
+                    color=color_vals,
+                    colorscale=get_colorscale(colorscale) or get_colorscale("Monet"),
+                ),
             )
         )
 
         fig.update_layout(
             # title=f"Tomo ID: {tomo} • Color by: {color_col or 'z'}",
             height=500,
-            margin=dict(t=20, b=20, l=0, r=0),
+            margin=dict(t=0, b=0, l=0, r=0),
             scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
         )
 
-        graph = dcc.Graph(id=f"{prefix}-graph", figure=fig)
+        # graph = dcc.Graph(id=f"{prefix}-graph", figure=fig)
 
         graph_width = 12
         if show_dual_graph:
             graph_width = 6
 
-        return graph, graph_width, {"display": "block", "marginTop": "1rem"}, f"Tomo ID: {tomo}"
+        return fig, graph_width, {"display": "block", "marginTop": "1rem"}, f"Tomo ID: {tomo}"
 
     @callback(
         Output(f"{prefix}-tomo-selector", "children"),
@@ -270,9 +299,10 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
         Input(f"{prefix}-graph", "clickData"),
         State(f"{prefix}-data", "data"),
         State(f"{detailed_table}", "data"),
+        State("twist-global-radius", "data"),
         prevent_initial_call=True,
     )
-    def show_detail_on_click(clickData, data, twist_data):
+    def show_detail_on_click(clickData, data, twist_data, radius):
         if not show_dual_graph or not clickData or not data:
             raise dash.exceptions.PreventUpdate
 
@@ -289,7 +319,8 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
         if qp_df.empty:
             raise exceptions.PreventUpdate
 
-        ax_limit = qp_df[["twist_x", "twist_y", "twist_z"]].abs().to_numpy().max()
+        # ax_limit = qp_df[["twist_x", "twist_y", "twist_z"]].abs().to_numpy().max()
+        ax_limit = radius
 
         fig = go.Figure()
 
@@ -327,7 +358,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
         make_axis_trace(fig, length=5)
 
         fig.update_layout(
-            margin=dict(t=10, b=10),
+            margin=dict(t=0, b=0, l=0, r=0),
             scene=dict(
                 xaxis=dict(title="X", range=[-ax_limit, ax_limit]),
                 yaxis=dict(title="Y", range=[-ax_limit, ax_limit]),

@@ -1,10 +1,11 @@
 from cryocat.app.logger import dash_logger, print_dash
 
-from dash import html, dcc, Input, Output, State, callback, exceptions, MATCH, ALL
+from dash import html, dcc, Input, Output, State, callback, exceptions, MATCH, ALL, no_update
 import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 import pandas as pd
 from cryocat import cryomotl
+
 
 def get_table_component(prefix: str):
     return html.Div(
@@ -15,9 +16,12 @@ def get_table_component(prefix: str):
                     dbc.Col(
                         [
                             dbc.Button("Apply Changes", id=f"{prefix}-apply-btn", color="primary", className="me-1"),
-                            dbc.Button("Save Snapshot", id=f"{prefix}-save-btn", color="secondary", className="me-1"),
+                            dbc.Button("Save Snapshot", id=f"{prefix}-save-btn", color="primary", className="me-1"),
                             dbc.Button(
-                                "Remove Selected Rows", id=f"{prefix}-remove-rows-btn", color="danger", className="me-1"
+                                "Remove Selected Rows",
+                                id=f"{prefix}-remove-rows-btn",
+                                color="primary",
+                                className="me-1",
                             ),
                             # dbc.Button("Remove Selected Columns", id=f"{prefix}-remove-cols-btn", color="danger"),
                         ],
@@ -47,9 +51,13 @@ def get_table_component(prefix: str):
                 # columnSize="autoSize",
                 columnSizeOptions={"skipHeader": False},
             ),
+            html.H5(
+                "Filters",
+                style={"marginBottom": "1rem", "marginTop": "1rem"},
+            ),
             html.Div(
                 id=f"{prefix}-filters-container",  # Range sliders go here
-                style={"marginBottom": "2rem", "marginTop": "2rem"},
+                style={"marginBottom": "2rem"},
             ),
             dbc.Modal(
                 [
@@ -284,12 +292,9 @@ def register_table_callbacks(prefix: str, csv_only=True):
 
         df = pd.DataFrame(global_data)
 
-        print_dash("Original rows:", len(df))
-
         for slider_id, (min_val, max_val) in zip(slider_ids, slider_values):
             col = slider_id.get("column")
             if col in df.columns:
                 df = df[df[col].between(min_val, max_val)]
 
-        print_dash("Filtered rows:", len(df))
         return df.to_dict("records")

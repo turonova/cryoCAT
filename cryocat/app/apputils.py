@@ -149,6 +149,7 @@ def generate_form_from_docstring(cls_name, id_type, id_name, exclude_params=None
                     type="number",
                     value=value["default"],
                     id=form_id,
+                    style={"width": "100%"},
                 ),
             )
         elif value["types"][0] == "numpy.ndarray":
@@ -157,6 +158,7 @@ def generate_form_from_docstring(cls_name, id_type, id_name, exclude_params=None
                     type="text",
                     value="0,0,1",
                     id=form_id,
+                    style={"width": "100%"},
                 ),
             )
         else:
@@ -166,6 +168,7 @@ def generate_form_from_docstring(cls_name, id_type, id_name, exclude_params=None
                     value=value["default"] if value["default"] is not None else None,
                     placeholder="Optional" if not value["required"] and value["default"] is None else "",
                     id=form_id,
+                    style={"width": "100%"},
                 ),
             )
 
@@ -181,15 +184,15 @@ def generate_form_from_docstring(cls_name, id_type, id_name, exclude_params=None
 
     label_style = {
         "marginRight": "0.5rem",
-        "width": "30%",
+        "width": "40%",
         "display": "flex",
         "alignItems": "center",
         "boxSizing": "border-box",
     }
     param_style = {
         "marginRight": "0.0rem",
-        "width": "70%",
-        "boxSizing": "border-box",
+        "marginBottom": "0.2rem",
+        "width": "60%",
     }
 
     for key, value in params_dict.items():
@@ -216,6 +219,7 @@ def generate_form_from_docstring(cls_name, id_type, id_name, exclude_params=None
                     "flexDirection": "row",
                     "boxSizing": "border-box",
                     "width": "100%",
+                    "marginBottom": "0.2rem",
                 },
             )
             forms.append(form)

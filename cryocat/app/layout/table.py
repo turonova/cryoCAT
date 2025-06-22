@@ -3,13 +3,15 @@ from cryocat.app.logger import dash_logger
 import dash
 import pandas as pd
 from dash import dash_table
-from dash import html, dcc
+import plotly.express as px
+from dash import html, dcc, ctx
 import dash_bootstrap_components as dbc
 from dash import callback, Input, Output, State, html, dcc, ALL, ctx, no_update
 from cryocat.app.layout.tomoview import get_viewer_component, register_viewer_callbacks
 from cryocat.app.layout.tableview import get_table_component, register_table_callbacks
 
 from cryocat.tango import TwistDescriptor
+from cryocat.cryomotl import Motl
 from cryocat.app.globalvars import global_twist
 from cryocat.app.apputils import generate_kwargs
 
@@ -182,57 +184,163 @@ def get_cluster_table():
         children=[
             dbc.Col(
                 [
-                    html.Div(id="pca-visualization"),
                     html.Div(
-                        id="k-means-display",
-                        style={"display": "none"},
                         children=[
                             dbc.Row(
                                 [
                                     dbc.Col(
                                         [
-                                            dcc.Checklist(
-                                                id="k-means-options",
-                                                options=[],
-                                                inline=True,
-                                                style={
-                                                    "flexWrap": "wrap",
-                                                    "display": "flex",
-                                                    "gap": "10px",
-                                                },
-                                            ),
-                                            dcc.Slider(
-                                                id=f"k-means-n-slider",
-                                                min=1,
-                                                max=10,
-                                                step=1,
-                                                value=2,
-                                            ),
-                                            dbc.Button(
-                                                "Compute k_means",
-                                                id="k-means-run-btn",
-                                                color="primary",
-                                                n_clicks=0,
-                                                style={"width": "100%"},
-                                            ),
+                                            html.Div(id="pca-visualization"),
                                         ],
+                                        width=8,
                                     ),
                                     dbc.Col(
                                         [
                                             html.Div(
-                                                [get_viewer_component("tviewer-kmeans")],
-                                                id="k-means-graph-cont",
+                                                id="prox-cluster-display",
                                                 style={"display": "none"},
-                                            )
-                                        ]
+                                                children=[
+                                                    html.H4(
+                                                        "Proximity clustering parameters",
+                                                        style={"marginBottom": "1rem"},
+                                                    ),
+                                                    html.H5("Number of connected components:"),
+                                                    dcc.Slider(
+                                                        id=f"prox-cluster-num-com-slider",
+                                                        min=1,
+                                                        max=50,
+                                                        step=1,
+                                                        value=2,
+                                                        tooltip={"placement": "right"},
+                                                        marks=None,
+                                                    ),
+                                                    html.H5("Or", style={"marginBottom": "1rem", "Top": "0rem"}),
+                                                    html.H5("Minimum occupancy of each component:"),
+                                                    dcc.Slider(
+                                                        id=f"prox-cluster-occ-com-slider",
+                                                        min=1,
+                                                        max=50,
+                                                        step=1,
+                                                        value=2,
+                                                        tooltip={"placement": "right"},
+                                                        marks=None,
+                                                    ),
+                                                ],
+                                            ),
+                                            html.Div(
+                                                id="k-means-display",
+                                                style={"display": "none"},
+                                                children=[
+                                                    html.H4("K-means parameters"),
+                                                    html.H5(
+                                                        "Features to cluster",
+                                                        style={"marginBottom": "1rem", "marginTop": "1rem"},
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id="k-means-options",
+                                                        options=[],
+                                                        inline=True,
+                                                        style={
+                                                            "display": "flex",
+                                                            "flexWrap": "wrap",
+                                                            "flexDirection": "column",
+                                                            "height": "100px",  # fixed height
+                                                            "overflowY": "auto",  # optional scroll if needed
+                                                        },
+                                                        labelStyle={"color": "var(--color12)"},
+                                                        inputStyle={"marginRight": "5px"},
+                                                        className="sidebar-checklist",
+                                                    ),
+                                                    html.H5(
+                                                        "Number of clusters",
+                                                        style={"marginBottom": "1rem", "marginTop": "1rem"},
+                                                    ),
+                                                    dcc.Slider(
+                                                        id=f"k-means-n-slider",
+                                                        min=1,
+                                                        max=50,
+                                                        step=1,
+                                                        value=2,
+                                                        tooltip={"placement": "right"},
+                                                        marks=None,
+                                                    ),
+                                                    dbc.Button(
+                                                        "Compute k_means",
+                                                        id="cluster-run-btn",
+                                                        color="primary",
+                                                        n_clicks=0,
+                                                        style={
+                                                            "width": "100%",
+                                                            "marginTop": "0",
+                                                            "marginBottom": "1rem",
+                                                        },
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                        width=4,
+                                    ),
+                                ],
+                            ),
+                            dbc.Row(
+                                [
+                                    html.Div(
+                                        id="proximity-graph-cont",
+                                        style={"display": "none"},
+                                        children=[
+                                            dbc.Col(
+                                                get_viewer_component("tviewer-proximity"),
+                                                width=12,
+                                            ),
+                                        ],
+                                    ),
+                                    html.Div(
+                                        id="k-means-graph-cont",
+                                        style={"display": "none"},
+                                        children=[
+                                            dbc.Row(
+                                                [
+                                                    dbc.Col(
+                                                        get_viewer_component("tviewer-kmeans"),
+                                                        width=6,
+                                                    ),
+                                                    dbc.Col(
+                                                        children=[
+                                                            html.Div(
+                                                                [
+                                                                    dcc.Dropdown(
+                                                                        id="kmeans-x-axis",
+                                                                        placeholder="Select X axis",
+                                                                        style={"minWidth": "100px", "width": "100%"},
+                                                                    ),
+                                                                    dcc.Dropdown(
+                                                                        id="kmeans-y-axis",
+                                                                        placeholder="Select Y axis",
+                                                                        style={"minWidth": "100px", "width": "100%"},
+                                                                    ),
+                                                                    dcc.Dropdown(
+                                                                        id="kmeans-z-axis",
+                                                                        placeholder="Select Z axis (optional)",
+                                                                        style={"minWidth": "100px", "width": "100%"},
+                                                                    ),
+                                                                ],
+                                                                style={
+                                                                    "display": "flex",
+                                                                    "gap": "10px",
+                                                                    "marginBottom": "1rem",
+                                                                },
+                                                            ),
+                                                            dcc.Graph(id="kmeans-all-graph"),
+                                                        ],
+                                                        width=6,
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
                                     ),
                                 ],
                             ),
                         ],
-                    ),
-                    html.Div(
-                        id="prox-cluster-display",
-                        style={"display": "none"},
                     ),
                 ]
             ),
@@ -255,11 +363,19 @@ def connect_motl_data(data):
 @callback(
     Output("tviewer-motl-data", "data", allow_duplicate=True),
     Input("tabv-motl-global-data-store", "data"),
+    Input("tabv-motl-grid", "rowData"),
     prevent_initial_call=True,
 )
-def connect_motl_table_data(data):
+def connect_motl_table_data(motl_data, table_data):
 
-    return data
+    trigger_id = ctx.triggered_id
+
+    if trigger_id == "tabv-motl-grid":
+        changed_data = table_data
+    else:
+        changed_data = motl_data
+
+    return changed_data
 
 
 # Load twist into its viewer
@@ -267,17 +383,26 @@ def connect_motl_table_data(data):
     Output("tviewer-twist-data", "data"),
     Output("merged-motl-twist-data-store", "data", allow_duplicate=True),
     Input("tabv-twist-global-data-store", "data"),
+    Input("tabv-twist-grid", "rowData"),
     State("tabv-motl-global-data-store", "data"),
     prevent_initial_call=True,
 )
-def connect_twist_data(desc_data, motl_data):
+def connect_twist_data(desc_data, table_data, motl_data):
 
-    desc_df = pd.DataFrame(desc_data)
     motl_df = pd.DataFrame(motl_data)
-    merged = motl_df.merge(desc_df, left_on="subtomo_id", right_on="qp_id", how="left")
+
+    trigger_id = ctx.triggered_id
+
+    if trigger_id == "tabv-twist-grid":
+        changed_df = pd.DataFrame(table_data)
+        motl_df = motl_df[motl_df["subtomo_id"].isin(changed_df["qp_id"])]
+    else:
+        changed_df = pd.DataFrame(desc_data)
+
+    merged = motl_df.merge(changed_df, left_on="subtomo_id", right_on="qp_id", how="left")
     merged = merged.dropna()
 
-    return motl_data, merged.to_dict("records")
+    return motl_df.to_dict("records"), merged.to_dict("records")
 
 
 # Load descriptor into its viewer
@@ -308,33 +433,37 @@ def create_kmeans_dummy_graph(motl_data):
     return motl_data
 
 
-# Load kmans clustering into its viewer
-@callback(
-    Output("tviewer-kmeans-data", "data"),
-    Output("tviewer-kmeans-graph", "figure", allow_duplicate=True),
-    Input("kmeans-global-data-store", "data"),
-    State("tabv-motl-global-data-store", "data"),
-    State("tviewer-kmeans-graph", "figure"),
-    prevent_initial_call=True,
-)
-def connect_kmeans_data(kmeans_data, motl_data, fig_data):
+# # Load kmans clustering into its viewer
+# @callback(
+#     # Output("tviewer-kmeans-data", "data"),
+#     Output("tviewer-kmeans-graph", "figure", allow_duplicate=True),
+#     Input("kmeans-global-data-store", "data"),
+#     State("tabv-motl-global-data-store", "data"),
+#     State("tviewer-kmeans-graph", "figure"),
+#     prevent_initial_call=True,
+# )
+# def connect_kmeans_data(kmeans_data, motl_data, fig_data):
 
-    motl_df = pd.DataFrame(motl_data)
-    # Merge motl_df and cluster_df based on ID
-    merged = motl_df.merge(
-        kmeans_data[["qp_id", "cluster"]],
-        how="left",
-        left_on="subtomo_id",
-        right_on="qp_id",
-    )
+#     kmeans_df = pd.DataFrame(kmeans_data)
+#     motl_df = pd.DataFrame(motl_data)
+#     # Merge motl_df and cluster_df based on ID
+#     merged = motl_df.merge(
+#         kmeans_df[["qp_id", "cluster"]],
+#         how="left",
+#         left_on="subtomo_id",
+#         right_on="qp_id",
+#     )
 
-    # Fill NaN (meaning no cluster assigned) with -1
-    merged["cluster"] = merged["cluster"].fillna(-1)
+#     # Fill NaN (meaning no cluster assigned) with -1
+#     merged["cluster"] = merged["cluster"].fillna(-1)
 
-    # Now assign cluster values as color
-    fig_data["data"][0]["marker"]["color"] = merged["cluster"].to_numpy()
+#     fig_data["data"][0]["marker"]["color"] = merged["cluster"].to_numpy()
+#     fig_data["data"][0]["marker"]["colorscale"] = "Turbo"  # or something distinct
+#     fig_data["data"][0]["marker"]["cmin"] = merged["cluster"].min()
+#     fig_data["data"][0]["marker"]["cmax"] = merged["cluster"].max()
+#     fig_data["data"][0]["marker"]["showscale"] = True
 
-    return merged.to_dict("records"), fig_data
+#     return fig_data  # merged.to_dict("records"),
 
 
 # Load nn motl table to the tab table and viewer - happens upon load the nn motl
@@ -367,20 +496,28 @@ def connect_motl_nn_data(motl_nn_data, motl_data):
 @callback(
     Output("tviewer-motl-nn-data", "data", allow_duplicate=True),
     Input("tabv-motl-nn-global-data-store", "data"),
+    Input("tabv-motl-nn-grid", "rowData"),
     State("tabv-motl-global-data-store", "data"),
     prevent_initial_call=True,
 )
-def connect_motl_nn_data(motl_nn_data, motl_data):
+def connect_motl_nn_data(motl_nn_data, table_data, motl_data):
 
     if not motl_nn_data:
         raise dash.exceptions.PreventUpdate
 
-    motl_nn_df = pd.DataFrame(motl_nn_data)
-
     motl_df = pd.DataFrame(motl_data)
+
+    trigger_id = ctx.triggered_id
+
+    if trigger_id == "tabv-motl-nn-grid":
+        changed_df = pd.DataFrame(table_data)
+        motl_df = motl_df[motl_df["subtomo_id"].isin(changed_df["subtomo_id"])]
+    else:
+        changed_df = pd.DataFrame(motl_nn_data)
+
     motl_df["type"] = 1
-    motl_nn_df["type"] = 2
-    con_motl = pd.concat([motl_df, motl_nn_df], ignore_index=True)
+    changed_df["type"] = 2
+    con_motl = pd.concat([motl_df, changed_df], ignore_index=True)
     con_motl.reset_index(drop=True, inplace=True)
 
     return con_motl.to_dict("records")
@@ -396,10 +533,11 @@ register_viewer_callbacks(
     detailed_table="merged-motl-twist-data-store",
 )
 register_viewer_callbacks("tviewer-desc", show_dual_graph=False, hover_info=["subtomo_id"])
-register_viewer_callbacks("tviewer-kmeans", show_dual_graph=False, hover_info=["cluster"])
+register_viewer_callbacks("tviewer-kmeans", show_dual_graph=False, hover_info=["subtomo_id", "class"])
+register_viewer_callbacks("tviewer-proximity", show_dual_graph=False, hover_info=["subtomo_id", "class"])
 
-register_table_callbacks("tabv-motl")
-register_table_callbacks("tabv-motl-nn")
+register_table_callbacks("tabv-motl", csv_only=False)
+register_table_callbacks("tabv-motl-nn", csv_only=False)
 register_table_callbacks("tabv-nn")
 register_table_callbacks("tabv-twist")
 register_table_callbacks("tabv-desc")
@@ -456,6 +594,7 @@ def enable_twist_tab(data):
 @callback(
     Output("table-tabs", "active_tab", allow_duplicate=True),
     Output("tabv-twist-global-data-store", "data"),
+    Output("twist-global-radius", "data"),
     Input("run-twist-btn", "n_clicks"),
     State("tabv-motl-global-data-store", "data"),
     State("symmetry-dropdown", "value"),
@@ -475,6 +614,88 @@ def compute_twist_vector(n_clicks, motl_df, symm_type, symm_value, param_valus, 
     else:
         symm = symm_type
 
+    radius = twist_kwargs["nn_radius"]
     global_twist["obj"] = TwistDescriptor(input_motl=pd.DataFrame(motl_df), symm=symm, **twist_kwargs)
 
-    return "twist-tab", global_twist["obj"].df.to_dict("records")
+    return "twist-tab", global_twist["obj"].df.to_dict("records"), radius
+
+
+@callback(
+    Output("kmeans-x-axis", "options"),
+    Output("kmeans-y-axis", "options"),
+    Output("kmeans-z-axis", "options"),
+    Input("cluster-run-btn", "n_clicks"),
+    State("k-means-options", "value"),
+)
+def populate_axes_dropdown(n_clicks, k_means_options):
+
+    if not k_means_options:
+        return no_update
+
+    return k_means_options, k_means_options, k_means_options
+
+
+@callback(
+    Output("kmeans-all-graph", "figure"),
+    Input("kmeans-x-axis", "value"),
+    Input("kmeans-y-axis", "value"),
+    Input("kmeans-z-axis", "value"),
+    State("kmeans-global-data-store", "data"),
+    prevent_initial_call=True,
+)
+def update_kmeans_all_graph(x, y, z, kmeans_data):
+
+    if not kmeans_data:
+        return no_update
+
+    kmeans_df = pd.DataFrame(kmeans_data)
+    # Validation
+    if not x or not y or x == y or (z and (x == z or y == z)):
+        return no_update
+
+    if z:
+        fig = px.scatter_3d(kmeans_df, x=x, y=y, z=z, color="cluster")
+    else:
+        fig = px.scatter(kmeans_df, x=x, y=y, color="cluster")
+
+    fig.update_layout(height=400, margin=dict(l=0, r=0, t=20, b=20))
+    return fig
+
+
+@callback(
+    Output("proximity-graph-cont", "style", allow_duplicate=True),
+    Output("merged-motl-proximity-data-store", "data", allow_duplicate=True),
+    Output("tviewer-proximity-data", "data"),
+    Output("tviewer-proximity-color-dropdown", "value"),
+    Input("prox-cluster-occ-com-slider", "value"),
+    Input("prox-cluster-num-com-slider", "value"),
+    State("cluster-data-dropdown", "value"),
+    State("tabv-twist-global-data-store", "data"),
+    State("tabv-desc-global-data-store", "data"),
+    State("tabv-motl-global-data-store", "data"),
+    prevent_initial_call=True,
+)
+def compute_proximity(min_occ_number, number_of_comp, cluster_data, twist_data, desc_data, motl_data):
+
+    trigger_id = ctx.triggered_id
+
+    twist_desc = TwistDescriptor(input_twist=pd.DataFrame(twist_data))
+
+    if cluster_data != "Twist descriptor base":
+        desc_df = pd.DataFrame(desc_data)
+        # the proximity is computed on df on qp_id and nn_id pairs
+        twist_desc.df = twist_desc.df[twist_desc.df["qp_id"].isin(desc_df["qp_id"])]
+
+    if trigger_id == "prox-cluster-occ-com-slider":
+        prox = twist_desc.proximity_clustering(size_connected_components=min_occ_number)
+    else:  # prox-cluster-num-com-slider
+        prox = twist_desc.proximity_clustering(num_connected_components=number_of_comp)
+
+    motl_df = pd.DataFrame(motl_data)
+
+    for i, subset in enumerate(prox):
+
+        subtomo_indices = list(set(subset.nodes()))
+        motl_df.loc[motl_df["subtomo_id"].isin(subtomo_indices), "class"] = i
+
+    return {"display": "block"}, motl_df.to_dict("records"), motl_df.to_dict("records"), "class"

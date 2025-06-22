@@ -35,6 +35,7 @@ from matplotlib.colors import LinearSegmentedColormap, to_hex
 
 ### Utility functions ###
 
+
 def get_colormap_color(cmap, val):
     """
     Get a color from a colormap based on a value.
@@ -53,6 +54,7 @@ def get_colormap_color(cmap, val):
     """
     rgba = cmap(val)
     return to_hex(rgba, keep_alpha=False)
+
 
 ###
 
@@ -1126,6 +1128,50 @@ class Descriptor:
 
         fig.show()
 
+    def proximity_clustering(self, num_connected_components=1, size_connected_components=None):
+        """Cluster particles based on spatial proximity. If size_connected_components is None, num_connected_components
+        is used to determine the number of connected components to return. If size_connected_components is specified,
+        it returns all connected components with size >= size_connected_components.
+
+        Parameters
+        ----------
+        num_connected_components : int, default=1
+            The number of connected components to return. Default is 1.
+        size_connected_components : int, optional
+            The minimum size of the connected components to return. Default is None.
+
+        Returns
+        -------
+        list
+            A list of connected components, each represented as a subgraph of the original graph.
+        """
+
+        qp_idx = self.df["qp_id"]
+        nn_idx = self.df["nn_id"]
+
+        edges = list(zip(qp_idx, nn_idx))
+
+        G = nx.Graph()
+
+        G.add_edges_from(edges)
+
+        n = nx.number_connected_components(G)
+
+        if size_connected_components is None or not isinstance(size_connected_components, int):
+
+            if num_connected_components >= n:
+                num_connected_components = n
+
+            S = [G.subgraph(c).copy() for c in sorted(nx.connected_components(G), key=len, reverse=True)]
+
+            return S[:num_connected_components]
+
+        elif isinstance(size_connected_components, int):
+
+            S = [G.subgraph(c).copy() for c in nx.connected_components(G) if len(c) >= size_connected_components]
+
+            return S
+
     def build_descriptor(self):
         """Builds a descriptor DataFrame by merging computed features based on unique 'qp_id' values.
 
@@ -1427,7 +1473,9 @@ class TwistDescriptor(Descriptor):
         if symm is None:
             twist_df = pd.DataFrame(
                 data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_qp, phi_nn)),
-                columns=["qp_id", "nn_id", "tomo_id"] + TwistDescriptor.get_mixed_feature_ids() + ["qp_inplane", "nn_inplane"],
+                columns=["qp_id", "nn_id", "tomo_id"]
+                + TwistDescriptor.get_mixed_feature_ids()
+                + ["qp_inplane", "nn_inplane"],
             )
 
         else:
@@ -1703,50 +1751,6 @@ class TwistDescriptor(Descriptor):
 
         return weighted_data
 
-    def proximity_clustering(self, num_connected_components=1, size_connected_components=None):
-        """Cluster particles based on spatial proximity. If size_connected_components is None, num_connected_components
-        is used to determine the number of connected components to return. If size_connected_components is specified,
-        it returns all connected components with size >= size_connected_components.
-
-        Parameters
-        ----------
-        num_connected_components : int, default=1
-            The number of connected components to return. Default is 1.
-        size_connected_components : int, optional
-            The minimum size of the connected components to return. Default is None.
-
-        Returns
-        -------
-        list
-            A list of connected components, each represented as a subgraph of the original graph.
-        """
-
-        qp_idx = self.df["qp_id"]
-        nn_idx = self.df["nn_id"]
-
-        edges = list(zip(qp_idx, nn_idx))
-
-        G = nx.Graph()
-
-        G.add_edges_from(edges)
-
-        n = nx.number_connected_components(G)
-
-        if size_connected_components is None or not isinstance(size_connected_components, int):
-
-            if num_connected_components >= n:
-                num_connected_components = n
-
-            S = [G.subgraph(c).copy() for c in sorted(nx.connected_components(G), key=len, reverse=True)]
-
-            return S[:num_connected_components]
-
-        elif isinstance(size_connected_components, int):
-
-            S = [G.subgraph(c).copy() for c in nx.connected_components(G) if len(c) >= size_connected_components]
-
-            return S
-
     def get_qp_twist_desc(self, query_particle, tomo_id=None):
         """Get twist descriptor for a specific query particle from a twist dataframe.
 
@@ -1875,9 +1879,9 @@ class TwistDescriptor(Descriptor):
             A numpy array containing the relative orientations (twist_so_x, twist_so_y, twist_so_z).
         """
         return self.df[TwistDescriptor.get_rot_feature_ids()].to_numpy()
-    
-    def symmetry_statistics(self, c_range=None,  plot_graph=True):
-        """ 
+
+    def symmetry_statistics(self, c_range=None, plot_graph=True):
+        """
         Plot the angular scores for different C_n symmetries.
 
         Parameters
@@ -1887,14 +1891,14 @@ class TwistDescriptor(Descriptor):
             it will be converted to a range from 2 to that value. Default is None.
         plot_graph : bool, default=True
             Whether to plot the graph. If True, the graph will be displayed. Default is True
-        
+
         Returns
         -------
         fig : plotly.graph_objects.Figure
             A Plotly figure containing the box plot of angular scores for different C_n symmetries.
         """
-        qp_inplane = np.deg2rad(self.df['qp_inplane'].values)
-        nn_inplane = np.deg2rad(self.df['nn_inplane'].values)
+        qp_inplane = np.deg2rad(self.df["qp_inplane"].values)
+        nn_inplane = np.deg2rad(self.df["nn_inplane"].values)
 
         if c_range is None:
             c_range = range(2, 10)
@@ -1934,8 +1938,8 @@ class TwistDescriptor(Descriptor):
                 go.Box(
                     y=df_melted.loc[df_melted["Column"] == col, "Value"],
                     name=str(col),
-                    boxpoints='outliers',
-                    marker_color=colour
+                    boxpoints="outliers",
+                    marker_color=colour,
                 )
             )
 
@@ -1944,7 +1948,7 @@ class TwistDescriptor(Descriptor):
             xaxis_title="Rotational symmetry type",
             yaxis_title="Angular score",
             font=dict(size=12),
-            xaxis=dict(tickangle=45)
+            xaxis=dict(tickangle=45),
         )
 
         if plot_graph:

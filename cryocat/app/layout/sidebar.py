@@ -27,14 +27,14 @@ desc_feat_map = Descriptor.build_descriptor_feature_map(descriptors, features)
 
 label_style = {
     "marginRight": "0.5rem",
-    "width": "30%",
+    "width": "40%",
     "display": "flex",
     "alignItems": "center",
     "boxSizing": "border-box",
 }
 param_style = {
     "marginRight": "0.0rem",
-    "width": "70%",
+    "width": "60%",
     "boxSizing": "border-box",
 }
 
@@ -61,7 +61,7 @@ def get_sidebar():
             html.H3(
                 "Twist Analysis",
                 className="mb-4",
-                style={"text-align": "center", "marginTop": "1rem", "marginLeft": "1rem"},
+                style={"text-align": "center", "marginTop": "1rem", "marginLeft": "0rem", "marginRight": "0rem"},
             ),
             dbc.Accordion(
                 id="sidebar-accordion",
@@ -79,6 +79,7 @@ def get_sidebar():
                                 inline=True,
                                 id="use-nn-motl-checkbox",
                                 inputStyle={"marginRight": "5px"},
+                                className="sidebar-checklist",
                             ),
                             get_motl_load_component("nn", display_option="none"),
                         ],
@@ -100,10 +101,14 @@ def get_sidebar():
                                             module_path="cryocat.nnana",
                                         ),
                                     ),
-                                    dbc.Button(
-                                        "Compute NN analyis",
-                                        id="compute-nn-btn",
-                                        className="custom-radius-button",
+                                    dbc.Col(
+                                        dbc.Button(
+                                            "Compute NN analysis",
+                                            id="compute-nn-btn",
+                                            color="light",
+                                        ),
+                                        width=12,
+                                        className="d-grid gap-1 col-6 mx-auto mt-3",
                                     ),
                                 ],
                                 id="compute-nn-div",
@@ -120,7 +125,11 @@ def get_sidebar():
                                 children=dbc.Button("Upload twist", color="light", className="upload-button"),
                                 multiple=False,
                             ),
-                            html.Div("or", className="text-center text-muted mb-2", style={"fontStyle": "italic"}),
+                            html.Div(
+                                "or",
+                                className="text-center mb-2",
+                                style={"fontStyle": "italic", "color": "var(--color11)"},
+                            ),
                             dbc.Row(
                                 [
                                     html.Div(
@@ -210,10 +219,10 @@ def get_sidebar():
                                         dbc.Button(
                                             "Compute twist",
                                             id="run-twist-btn",
-                                            className="custom-radius-button",
+                                            color="light",
                                         ),
                                         width=12,
-                                        className="d-grid gap-1 col-6 mx-auto",
+                                        className="d-grid gap-1 col-6 mx-auto mt-3",
                                     ),
                                 ],
                                 # className="align-items-center g-2 mb-2",
@@ -264,7 +273,7 @@ def get_sidebar():
                             dbc.Button(
                                 "Compute descriptors",
                                 id="desc-run-btn",
-                                color="primary",
+                                color="light",
                                 n_clicks=0,
                                 style={"width": "100%"},
                             ),
@@ -288,14 +297,6 @@ def get_sidebar():
                                 options=["K-means", "Proximity"],
                                 multi=False,
                                 placeholder="Chose clustering...",
-                                style={"width": "100%"},
-                            ),
-                            html.Br(),
-                            dbc.Button(
-                                "Compute clustering",
-                                id="cluster-run-btn",
-                                color="primary",
-                                n_clicks=0,
                                 style={"width": "100%"},
                             ),
                         ],
@@ -686,6 +687,7 @@ def compute_pca_analysis(cluster_data, twist_data, desc_data):
     fig.update_layout(
         font=dict(size=10),
         margin=dict(l=20, r=20, t=30, b=20),
+        height=200,
     )
 
     k_means_options = [col for col in twist_desc.desc.columns if col != "qp_id"]
@@ -698,12 +700,14 @@ def compute_pca_analysis(cluster_data, twist_data, desc_data):
     Output("cluster-tab", "disabled", allow_duplicate=True),
     Output("k-means-display", "style"),
     Output("prox-cluster-display", "style"),
+    Output("k-means-graph-cont", "style", allow_duplicate=True),
+    Output("proximity-graph-cont", "style", allow_duplicate=True),
     Input("cluster-type-dropdown", "value"),
+    State("kmeans-global-data-store", "data"),
+    State("merged-motl-proximity-data-store", "data"),
     prevent_initial_call=True,
 )
-def show_cluster_options(
-    cluster_type,
-):
+def show_cluster_options(cluster_type, kmeans_data, prox_data):
 
     if not cluster_type:
         return PreventUpdate
@@ -711,36 +715,71 @@ def show_cluster_options(
     if cluster_type == "K-means":
         k_means_disp = "block"
         prox_disp = "none"
+        prox_graph = "none"
+        if not kmeans_data:
+            k_means_graph = "none"
+        else:
+            k_means_graph = "block"
     else:
         k_means_disp = "none"
         prox_disp = "block"
+        k_means_graph = "none"
+        if not prox_data:
+            prox_graph = "none"
+        else:
+            prox_graph = "block"
 
-    return "cluster-tab", False, {"display": k_means_disp}, {"display": prox_disp}
+    return (
+        "cluster-tab",
+        False,
+        {"display": k_means_disp},
+        {"display": prox_disp},
+        {"display": k_means_graph},
+        {"display": prox_graph},
+    )
 
 
 @callback(
     Output("k-means-graph-cont", "style", allow_duplicate=True),
     Output("kmeans-global-data-store", "data", allow_duplicate=True),
+    Output("tviewer-kmeans-data", "data", allow_duplicate=True),
+    Output("tviewer-kmeans-color-dropdown", "value"),
     Input("cluster-run-btn", "n_clicks"),
     State("cluster-data-dropdown", "value"),
     State("tabv-twist-global-data-store", "data"),
     State("tabv-desc-global-data-store", "data"),
-    State("k-means-options", "options"),
+    State("tabv-motl-global-data-store", "data"),
+    State("k-means-options", "value"),
     State("k-means-n-slider", "value"),
     prevent_initial_call=True,
 )
-def show_cluster_options(cluster_type, cluster_data, twist_data, desc_data, cluster_options, n_clusters):
-
-    if not cluster_type:
-        return PreventUpdate
+def compute_k_means(_, cluster_data, twist_data, desc_data, motl_data, cluster_options, n_clusters):
 
     twist_desc = TwistDescriptor(input_twist=pd.DataFrame(twist_data))
 
     if cluster_data == "Twist descriptor base":
-        twist_desc.desc = twist_desc.df
+        twist_desc.desc = twist_desc.df  # clustering is computed on desc, but here we want to use original base
     else:  # Unique descriptor
         twist_desc.desc = pd.DataFrame(desc_data)
 
     km_df = twist_desc.k_means_clustering(n_clusters, feature_ids=cluster_options)
 
-    return {"display": "block"}, km_df.to_dict("records")
+    # Replace NaNs and shift by 1 -> unassigned cluster will have 0
+    km_df["cluster"] = km_df["cluster"].fillna(-1).astype(int) + 1
+
+    # Reduction - for the twist descriptor base case, where there can be non-unique qp_id
+    if cluster_data == "Twist descriptor base":
+        most_frequent = (
+            km_df.groupby("qp_id")["cluster"].agg(lambda x: x.value_counts().idxmax()).reset_index()  # most frequent
+        )
+    else:
+        most_frequent = km_df[["qp_id", "cluster"]]
+
+    # merge with motl based on subtomo_id - qp_id correspondence
+    motl_df = pd.DataFrame(motl_data)
+    motl_df = motl_df.merge(most_frequent, left_on="subtomo_id", right_on="qp_id", how="left")
+    motl_df["class"] = motl_df["cluster"]
+    motl_df["class"] = motl_df["class"].fillna(0).astype(int)
+    motl_df.drop(columns=["qp_id", "cluster"], inplace=True)  # drop the columns
+
+    return {"display": "block"}, km_df.to_dict("records"), motl_df.to_dict("records"), "class"

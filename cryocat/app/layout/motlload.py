@@ -85,12 +85,16 @@ def get_motl_load_component(prefix: str, display_option="block"):
             dbc.Row(
                 dcc.Upload(
                     id=f"{prefix}-motl-upload",
-                    children=dbc.Button(
-                        f"Upload {prefix} motl file", color="light", className="upload-button", size="sm"
+                    children=dbc.Col(
+                        dbc.Button(
+                            f"Upload {prefix} motl file",
+                            color="light",
+                        ),
+                        width=12,
+                        className="d-grid gap-1 col-6 mx-auto mt-3 mb-3",
                     ),
                     multiple=False,
                 ),
-                style={"marginTop": "1rem"},
             ),
         ],
     )

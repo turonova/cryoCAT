@@ -566,9 +566,9 @@ def plot_pca_summary(cumulative_variance, feature_importances, scatter_kwargs=No
 
     # Create subplot layout
     fig = make_subplots(
-        rows=2,
-        cols=1,
-        row_heights=[0.5, 0.5],
+        rows=1,
+        cols=2,
+        column_widths=[0.5, 0.5],
         subplot_titles=("Cumulative Explained Variance", "Feature Importance"),
     )
 
@@ -589,8 +589,8 @@ def plot_pca_summary(cumulative_variance, feature_importances, scatter_kwargs=No
             name="Feature Importance",
             **bar_kwargs,
         ),
-        row=2,
-        col=1,
+        row=1,
+        col=2,
     )
 
     # Layout tuning
@@ -598,7 +598,7 @@ def plot_pca_summary(cumulative_variance, feature_importances, scatter_kwargs=No
 
     fig.update_xaxes(tickangle=-30, row=1, col=1)
 
-    fig.update_xaxes(tickangle=-30, row=2, col=1)
+    fig.update_xaxes(tickangle=-30, row=1, col=2)
     fig.update_yaxes(row=1, col=2, categoryorder="total ascending")
 
     return fig

@@ -14,6 +14,24 @@
     --color13: #83BA99;
 }
 
+/* === Track (background bar) === */
+.rc-slider-track {
+  background-color: var(--color6); /* default blue, customizable */
+}
+
+/* === Handle (the knob) === */
+.rc-slider-handle {
+  background-color:  var(--color11);
+  border: 2px solid  var(--color6);
+  box-shadow: none;
+}
+
+/* === Hover/focus state for handle === */
+.rc-slider-handle:hover,
+.rc-slider-handle:focus {
+  border-color: var(--color6);
+}
+
 /* general settings for accordion in not selected, not open stated */
 .accordion-button {
     background-color: var(--color11);
@@ -54,6 +72,16 @@ label {
   color: var(--color11);
 }
 
+input[type="text"],
+input[type="number"] {
+  background-color: var(--color11);   /* light background */
+  /* color: #333;                  input text color */
+ /* border: 1px solid #ccc;       border color */
+  /*  border-radius: 4px;         optional rounded corners */
+    padding-left: 8px;           /* optional spacing */
+ /* font-size: 14px; */
+}
+
 /* Reduce horizontal padding inside header cells */
 .ag-theme-balham .ag-header-cell {
     padding-left: 4px !important;
@@ -66,10 +94,15 @@ label {
     margin: 0 !important;
 }
 
+.sidebar-checklist input[type="checkbox"]:checked {
+  accent-color: var(--color10);
+}
+
+
 .Select-input{
     height: 25px !important;
-    align-items: center; 
     line-height: 25px !important;
+    align-items: center; 
     padding-top: 0px;
     padding-right: 0px;
     padding-bottom: 0px;
@@ -83,7 +116,6 @@ label {
 }
 
 .Select-placeholder, .Select--single > .Select-control .Select-value {
-    height: 25px !important;
     line-height: 25px !important;
     display: flex;
     align-items: center;
@@ -98,10 +130,9 @@ label {
 }
 
 .VirtualizedSelectOption {
-    height: 25px !important;
+    
     padding-top: 0px !important;
     padding-bottom: 0px !important;
-    line-height: 25px !important;
     display: flex !important;
     align-items: center !important;
 }
@@ -112,10 +143,15 @@ label {
     margin-top: 0 !important;
 }
 
+/* 
 .VirtualizedSelectFocusedOption {
-    height: 25px !important;
-    line-height: 25px !important;
+    height: 20px !important;
+    line-height: 20px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin-top: 0 !important;
 }
+*/
 
 .ag-theme-alpine {
     font-size: 10px;
