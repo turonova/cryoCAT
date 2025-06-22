@@ -80,7 +80,7 @@ def get_motl_save_component(prefix: str):
                                         options=[],
                                         inline=True,
                                         id=f"{prefix}-classes-checklist",
-                                        labelStyle={"color": "var(--color12)"},
+                                        labelStyle={"color": "var(--color12)", "marginRight": "1.0rem"},
                                         inputStyle={"marginRight": "5px"},
                                         className="sidebar-checklist",
                                         style={
