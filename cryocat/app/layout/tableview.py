@@ -5,6 +5,7 @@ import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 import pandas as pd
 from cryocat import cryomotl
+from cryocat.app.apputils import save_output
 
 
 def get_table_component(prefix: str):
@@ -163,14 +164,8 @@ def register_table_callbacks(prefix: str, csv_only=True):
         prevent_initial_call=True,
     )
     def save_table(_, file_path, grid_data):
-        df = pd.DataFrame(grid_data)
-        if file_path.endswith(".csv"):
-            df.to_csv(file_path)
-        elif csv_only:
-            print_dash("The table can be saved only to a csv file.")
-        elif file_path.endswith(".em"):
-            m = cryomotl.Motl(df)
-            m.write_out(file_path)
+
+        save_output(file_path=file_path, data_to_save=grid_data, csv_only=csv_only)
 
         return False
 

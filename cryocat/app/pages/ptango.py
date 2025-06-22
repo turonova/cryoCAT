@@ -29,11 +29,12 @@ layout = html.Div(
         dcc.Store(id="tviewer-proximity-data"),
         dcc.Store(id="tviewer-proximity-index", data=0),
         dcc.Store(id="merged-motl-twist-data-store"),
-        dcc.Store(id="merged-motl-proximity-data-store"),
+        dcc.Store(id="merged-motl-proximity-data-store"),  # storing proximity clustering info in class of motl
+        dcc.Store(id="merged-motl-kmeans-data-store"),  # storing k means clustering info in class of motl
         dcc.Store(id="tviewer-desc-data"),
         dcc.Store(id="tviewer-desc-index", data=0),
         dcc.Store(id="twist-global-radius"),  # to store radius
-        dcc.Store(id=f"kmeans-cluster-data-store"),  # storing k means clustering info
+        # dcc.Store(id=f"kmeans-cluster-data-store"),  # storing k means clustering info
         dcc.Store(id=f"kmeans-global-data-store"),  # storing k means data
         dcc.Store(id=f"tabv-motl-global-data-store"),  # main motl table
         dcc.Store(id=f"tabv-motl-nn-global-data-store"),  # nn motl table if available

@@ -6,24 +6,30 @@ from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import callback, Input, Output, State, no_update
-from cryocat.app.layout.motlload import get_motl_load_component, register_motl_load_callbacks
+from cryocat.app.layout.motlio import get_motl_load_component, register_motl_load_callbacks
+from cryocat.app.layout.motlio import get_motl_save_component, register_motl_save_callbacks
 
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
 from cryocat.classutils import get_class_names_by_parent, get_classes_from_names
 from cryocat.cryomotl import Motl
-from cryocat.nnana import NearestNeighbors, plot_nn_rot_coord_df_plotly
+from cryocat.nnana import NearestNeighbors
 from cryocat.tango import TwistDescriptor, Descriptor, CustomDescriptor
 
 from cryocat.app.globalvars import global_twist
-from cryocat.app.apputils import generate_form_from_untyped_init, generate_form_from_docstring, generate_kwargs
+from cryocat.app.apputils import generate_form_from_docstring, generate_kwargs
 
 descriptors = get_class_names_by_parent("Descriptor", "cryocat.tango")
 features = get_class_names_by_parent("Feature", "cryocat.tango")
 supports = get_class_names_by_parent("Support", "cryocat.tango")
 feat_desc_map = Descriptor.build_feature_descriptor_map(features, descriptors)
 desc_feat_map = Descriptor.build_descriptor_feature_map(descriptors, features)
+
+stored_outputs = {
+    "K-means clustering": "merged-motl-kmeans-data-store",
+    "Proximity clustering": "merged-motl-proximity-data-store",
+}
 
 label_style = {
     "marginRight": "0.5rem",
@@ -306,13 +312,17 @@ def get_sidebar():
                 ],
             ),
             html.Div(
+                get_motl_save_component("save-main"),
+                style={"marginTop": "auto", "paddingLeft": "2rem", "paddingRight": "2rem", "width": "100%"},
+            ),
+            html.Div(
                 dbc.Button(
                     "Show log",
                     id="open-log-btn",
                     className="custom-radius-button",
                     style={"width": "100%"},
                 ),
-                style={"marginTop": "auto", "padding": "2rem"},
+                style={"padding": "2rem"},
             ),
         ],
         className="sidebar",
@@ -330,6 +340,7 @@ def get_sidebar():
 # Register callbacks for motl loads:
 register_motl_load_callbacks("main")
 register_motl_load_callbacks("nn")
+register_motl_save_callbacks("save-main", stored_outputs, "tabv-motl-global-data-store")
 
 
 @callback(
@@ -743,6 +754,7 @@ def show_cluster_options(cluster_type, kmeans_data, prox_data):
     Output("k-means-graph-cont", "style", allow_duplicate=True),
     Output("kmeans-global-data-store", "data", allow_duplicate=True),
     Output("tviewer-kmeans-data", "data", allow_duplicate=True),
+    Output("merged-motl-kmeans-data-store", "data", allow_duplicate=True),
     Output("tviewer-kmeans-color-dropdown", "value"),
     Input("cluster-run-btn", "n_clicks"),
     State("cluster-data-dropdown", "value"),
@@ -782,4 +794,10 @@ def compute_k_means(_, cluster_data, twist_data, desc_data, motl_data, cluster_o
     motl_df["class"] = motl_df["class"].fillna(0).astype(int)
     motl_df.drop(columns=["qp_id", "cluster"], inplace=True)  # drop the columns
 
-    return {"display": "block"}, km_df.to_dict("records"), motl_df.to_dict("records"), "class"
+    return (
+        {"display": "block"},
+        km_df.to_dict("records"),
+        motl_df.to_dict("records"),
+        motl_df.to_dict("records"),
+        "class",
+    )

@@ -1,6 +1,8 @@
-from cryocat.app.logger import dash_logger
+from cryocat.app.logger import dash_logger, print_dash
 
 import numpy as np
+import pandas as pd
+import pickle
 import io
 import sys
 import inspect
@@ -13,12 +15,40 @@ import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 
 from cryocat.classutils import process_method_docstring
+from cryocat.cryomotl import Motl
 
 # mport dash_html_components as html
 
 
 # def series_to_dash_list(series):
 #    return html.Ul([html.Li(f"{idx}: {val}") for idx, val in series.items()])
+
+
+def save_output(file_path, data_to_save, csv_only=True):
+
+    if not isinstance(data_to_save, pd.DataFrame):
+        df = pd.DataFrame(data_to_save)
+    else:
+        df = data_to_save
+
+    status = f"File saved to {file_path}"
+
+    if file_path.endswith(".csv"):
+        df.to_csv(file_path, index=False)
+    elif file_path.endswith(".pkl"):
+        with open(file_path, "wb") as f:
+            pickle.dump(data_to_save, f)
+    elif csv_only:
+        print_dash("The table can be saved only to a csv file.")
+        status = "The table can be saved only to a csv file."
+    elif file_path.endswith(".em"):
+        m = Motl(df)
+        m.write_out(file_path)
+    else:
+        print_dash("Currently only csv, pkl, and em formats are supported")
+        status = "Currently only csv, pkl, and em formats are supported"
+
+    return status
 
 
 def get_class_by_name(class_name: str, module_path="cryocat.tango"):

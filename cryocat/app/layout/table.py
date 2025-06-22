@@ -693,7 +693,7 @@ def compute_proximity(min_occ_number, number_of_comp, cluster_data, twist_data, 
 
     motl_df = pd.DataFrame(motl_data)
 
-    for i, subset in enumerate(prox):
+    for i, subset in enumerate(prox, start=1):  # ensure assignment from 1, 0 is not assigned
 
         subtomo_indices = list(set(subset.nodes()))
         motl_df.loc[motl_df["subtomo_id"].isin(subtomo_indices), "class"] = i
