@@ -17,7 +17,11 @@ class StreamToList:
         return new_messages, len(self.buffer), new_dash
 
     def get_all_logs(self):
-        return "\n".join(msg for msg, _ in self.buffer)
+   
+        return "\n".join(
+            msg.decode('utf-8') if isinstance(msg, bytes) else msg
+            for msg, _ in self.buffer
+        )
 
     def clear(self):
         self.buffer.clear()
