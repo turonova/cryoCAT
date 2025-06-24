@@ -1148,7 +1148,7 @@ def plot_nn_rot_coord_df_plotly(
             marker=dict(size=marker_size),
             name="XY",
             text=df[desc],
-            showlegend=False,
+            showlegend=False
         ),
         row=1,
         col=1,
