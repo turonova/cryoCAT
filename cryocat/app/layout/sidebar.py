@@ -349,6 +349,7 @@ register_motl_save_callbacks("save-main", stored_outputs, "tabv-motl-global-data
     Output("nn-motl-tab", "disabled", allow_duplicate=True),
     Output("table-tabs", "active_tab", allow_duplicate=True),
     Output("tabv-twist-global-data-store", "data", allow_duplicate=True),
+    Output("twist-global-radius", "data", allow_duplicate=True),
     Input("upload-twist", "contents"),
     prevent_initial_call=True,
 )
@@ -362,9 +363,11 @@ def load_twist(upload_content):
         df = pd.read_csv(io.StringIO(decoded.decode("utf-8")))
         global_twist["obj"] = TwistDescriptor(input_twist=pd.DataFrame(df))
 
-        return False, "twist-tab", df.to_dict("records")
+        radius = int(np.ceil(df['euclidean_distance'].max()))
+
+        return False, "twist-tab", df.to_dict("records"), radius
     except Exception as e:
-        return True, no_update, "motl-tab"
+        return True, no_update, "motl-tab", None
 
 
 @callback(
