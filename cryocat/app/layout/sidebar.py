@@ -362,9 +362,6 @@ def load_twist(upload_content):
         df = pd.read_csv(io.StringIO(decoded.decode("utf-8")))
         global_twist["obj"] = TwistDescriptor(input_twist=pd.DataFrame(df))
 
-        # get aproximate support radius from data
-        radius = np.ceil(pd.DataFrame(df)['euclidean_distance'].max())
-
         return False, "twist-tab", df.to_dict("records")
     except Exception as e:
         return True, no_update, "motl-tab"
