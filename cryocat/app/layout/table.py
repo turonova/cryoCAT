@@ -396,6 +396,7 @@ def connect_twist_data(desc_data, table_data, motl_data):
     if trigger_id == "tabv-twist-grid":
         changed_df = pd.DataFrame(table_data)
         motl_df = motl_df[motl_df["subtomo_id"].isin(changed_df["qp_id"])]
+
     else:
         changed_df = pd.DataFrame(desc_data)
 
@@ -615,6 +616,7 @@ def compute_twist_vector(n_clicks, motl_df, symm_type, symm_value, param_valus, 
         symm = symm_type
 
     radius = twist_kwargs["nn_radius"]
+    
     global_twist["obj"] = TwistDescriptor(input_motl=pd.DataFrame(motl_df), symm=symm, **twist_kwargs)
 
     return "twist-tab", global_twist["obj"].df.to_dict("records"), radius
