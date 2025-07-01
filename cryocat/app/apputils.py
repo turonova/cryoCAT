@@ -272,6 +272,13 @@ def generate_kwargs(ids_dict, values):
 
         if id["p_type"] == "numpy.ndarray":
             new_kwargs[id["param"]] = parse_array_string(value)
+
+        elif value == 'True':
+            new_kwargs[id["param"]] = True
+
+        elif value == 'False':
+            new_kwargs[id["param"]] = False
+
         else:
             new_kwargs[id["param"]] = value
 
