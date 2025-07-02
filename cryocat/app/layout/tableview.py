@@ -135,17 +135,40 @@ def register_table_callbacks(prefix: str, csv_only=True):
     def adapt_column_size(col, rows):
         return "sizeToFit"
 
+    # @callback(
+    #     Output(f"{prefix}-global-data-store", "data", allow_duplicate=True),
+    #     Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
+    #     Input(f"{prefix}-apply-btn", "n_clicks"),
+    #     State(f"{prefix}-grid", "rowData"),
+    #     prevent_initial_call=True,
+    # )
+    # def apply_changes(_, rows):
+    #     if not rows:
+    #         raise exceptions.PreventUpdate
+    #     return rows, rows
+    
     @callback(
         Output(f"{prefix}-global-data-store", "data", allow_duplicate=True),
         Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
         Input(f"{prefix}-apply-btn", "n_clicks"),
-        State(f"{prefix}-grid", "rowData"),
+        State(f"{prefix}-global-data-store", "data"),
+        State({"type": f"{prefix}-filter-slider", "column": ALL}, "value"),
+        State({"type": f"{prefix}-filter-slider", "column": ALL}, "id"),
         prevent_initial_call=True,
     )
-    def apply_changes(_, rows):
-        if not rows:
+    def apply_filters(_, global_data, slider_values, slider_ids):
+        if not global_data:
             raise exceptions.PreventUpdate
-        return rows, rows
+
+        df = pd.DataFrame(global_data)
+
+        for slider_id, (min_val, max_val) in zip(slider_ids, slider_values):
+            col = slider_id.get("column")
+            if col in df.columns:
+                df = df[df[col].between(min_val, max_val)]
+
+        filtered_data = df.to_dict("records")
+        return filtered_data, filtered_data
 
     @callback(
         Output(f"{prefix}-save-modal", "is_open", allow_duplicate=True),
