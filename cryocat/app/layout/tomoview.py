@@ -200,7 +200,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
 
         motl_df = pd.DataFrame(data)
         motl = cryomotl.Motl(motl_df[cryomotl.Motl.motl_columns])
-        tomo_ids = motl.get_unique_values("tomo_id")
+        tomo_ids = sorted(motl.df["tomo_id"].unique())
         if tomo_ids is None:
             raise exceptions.PreventUpdate
 
