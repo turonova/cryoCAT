@@ -45,7 +45,7 @@ def get_viewer_component(prefix: str):
                                             label="Tomo ID",
                                             children=[],
                                             group=True,
-                                            className="scrollable-dropdown",
+                                            className="scrollable-dropdown"
                                         ),
                                         dbc.Button("Next", id=f"{prefix}-next", n_clicks=0),
                                     ]
