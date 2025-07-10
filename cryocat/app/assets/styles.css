@@ -266,3 +266,8 @@ html, body {
 .custom-radius-button:hover {
     background-color: var(--color5);
 }
+
+.scrollable-dropdown .dropdown-menu {
+    max-height: 200px; /* adjust as suits your layout */
+    overflow-y: auto;
+}
