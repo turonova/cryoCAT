@@ -207,7 +207,7 @@ def get_cluster_table():
                                                     html.H5("Number of connected components:"),
                                                     dcc.Slider(
                                                         id=f"prox-cluster-num-com-slider",
-                                                        min=1,
+                                                        min=0,
                                                         max=50,
                                                         step=1,
                                                         value=2,
@@ -218,7 +218,7 @@ def get_cluster_table():
                                                     html.H5("Minimum occupancy of each component:"),
                                                     dcc.Slider(
                                                         id=f"prox-cluster-occ-com-slider",
-                                                        min=1,
+                                                        min=0,
                                                         max=50,
                                                         step=1,
                                                         value=2,
