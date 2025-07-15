@@ -1200,6 +1200,8 @@ def indices_load(input_data, numbered_from_1=True):
             # indices = df.index[df["ToBeRemoved"]].to_numpy(dtype=int)
             indices = df["ToBeRemoved"].to_numpy().nonzero()[0]
             numbered_from_1 = False  # Always from 0
+            if len(indices) == df.shape[0]:
+                return None
         else:
             indices = np.loadtxt(input_data, dtype=int)
 

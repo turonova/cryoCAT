@@ -232,7 +232,7 @@ def remove_tilts(
     Returns
     -------
     numpy.ndarray
-        Numpy 3D array with tilt stack data with the specified tilts removed.
+        Numpy 3D array with tilt stack data with the specified tilts removed. If the tilts to be cleaned correspond to all the tilts (apart from those already cleaned), the numpy 3D array with the original tilt stack data is returned.
 
     Notes
     -----
@@ -244,18 +244,21 @@ def remove_tilts(
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
     idx_to_remove_final = ioutils.indices_load(idx_to_remove, numbered_from_1=numbered_from_1)
-    # Check bounds
-    max_index = ts.data.shape[0]
-    if any(idx < 0 or idx >= max_index for idx in idx_to_remove_final):
-        raise IndexError(
-            f"One or more indices in idx_to_remove exceed bounds. " f"Valid range: 0 to {max_index - 1} (0-based)."
-        )
-    ts.data = np.delete(ts.data, idx_to_remove_final, axis=0)
-    ts.write_out(output_file)
+    if idx_to_remove_final is not None:
+        # Check bounds
+        max_index = ts.data.shape[0]
+        if any(idx < 0 or idx >= max_index for idx in idx_to_remove_final):
+            raise IndexError(
+                f"One or more indices in idx_to_remove exceed bounds. " f"Valid range: 0 to {max_index - 1} (0-based)."
+            )
+        ts.data = np.delete(ts.data, idx_to_remove_final, axis=0)
+        ts.write_out(output_file)
 
-    print(f"...removing of {idx_to_remove_final.shape[0]} tilts successfully finished.\n")
+        print(f"...removing of {idx_to_remove_final.shape[0]} tilts successfully finished.\n")
 
-    return ts.correct_order()
+        return ts.correct_order()
+    else:
+        return ts
 
 
 def bin(tilt_stack, binning_factor, output_file=None, input_order="xyz", output_order="xyz"):
