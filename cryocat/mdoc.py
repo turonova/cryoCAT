@@ -267,10 +267,11 @@ def remove_images(input_mdoc, idx_to_remove, numbered_from_1=True, output_file=N
 
     mdoc = Mdoc(input_mdoc)
     idx_to_remove_final = ioutils.indices_load(idx_to_remove, numbered_from_1=numbered_from_1)
-    mdoc.remove_images(idx_to_remove_final)
+    if idx_to_remove_final is not None:
+        mdoc.remove_images(idx_to_remove_final)
 
-    if output_file:
-        mdoc.write(output_file, overwrite=True)
+        if output_file:
+            mdoc.write(output_file, overwrite=True)
 
     return mdoc
 
