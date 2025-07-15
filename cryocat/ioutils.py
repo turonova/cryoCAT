@@ -1280,19 +1280,20 @@ def defocus_remove_file_entries(
     """
 
     lines_to_remove = indices_load(entries_to_remove, numbered_from_1=numbered_from_1)
+    if lines_to_remove is not None:
 
-    if output_file is None:
-        output_file = input_file
+        if output_file is None:
+            output_file = input_file
 
-    if file_type.lower() == "gctf":
-        sf.Starfile.remove_lines(
-            input_file,
-            lines_to_remove,
-            output_file=output_file,
-            data_specifier="data_",
-            number_columns=True,
-        )
-    elif file_type.lower() == "ctffind4":
-        _ = remove_lines(input_file, lines_to_remove, start_str_to_skip=["#"], output_file=output_file)
-    else:
-        print(f"The defocus filetype {file_type} is not supported and thus will not be cleaned.")
+        if file_type.lower() == "gctf":
+            sf.Starfile.remove_lines(
+                input_file,
+                lines_to_remove,
+                output_file=output_file,
+                data_specifier="data_",
+                number_columns=True,
+            )
+        elif file_type.lower() == "ctffind4":
+            _ = remove_lines(input_file, lines_to_remove, start_str_to_skip=["#"], output_file=output_file)
+        else:
+            print(f"The defocus filetype {file_type} is not supported and thus will not be cleaned.")
