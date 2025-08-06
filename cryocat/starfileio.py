@@ -1,3 +1,5 @@
+import os
+import tempfile
 from enum import Enum
 import pandas as pd
 from os import path
@@ -479,3 +481,64 @@ class Starfile:
                 # formatted_row = "\t".join("{:<10}".format(str(value)) for value in row)
                 # file.write(formatted_row + "\n")
                 file.write("\n")
+
+    @staticmethod
+    def fix_relion5_star(input_path):
+        with open(input_path) as f:
+            lines = f.readlines()
+
+        fixed = []
+        in_data_general = False
+        headers = []
+        values = []
+        was_modified = False
+        has_loop = False
+        for line in lines:
+            l = line.strip()
+            if l.startswith("data_general"):
+                in_data_general = True
+                was_modified = True
+                fixed.append(l)
+                continue
+            if in_data_general:
+                if l.startswith("loop_"):
+                    has_loop = True
+                    break
+                if l.startswith("data_") and not l.startswith("data_general"):
+                    #end of data_general block — write collected loop if any
+                    if headers:
+                        fixed.append("loop_")
+                        fixed.extend(headers)
+                        fixed.extend(values)
+                        fixed.append("")
+                        was_modified = True
+                    in_data_general = False
+                    fixed.append(l)  #append the new data block header line (important!)
+                    continue
+                elif l.startswith("_rln"):
+                    parts = l.split(None, 1)
+                    headers.append(parts[0])
+                    values.append(parts[1].strip() if len(parts) > 1 else "")
+                elif l == "":
+                    continue  # skip empty lines inside data_general
+                else:
+                    fixed.append(line.rstrip())
+            else:
+                fixed.append(line.rstrip())
+        #flush if file ends inside data_general
+        if in_data_general and headers and not has_loop:
+            fixed.append("loop_")
+            fixed.extend(headers)
+            fixed.extend(values)
+            fixed.append("")
+            was_modified = True
+
+        if was_modified and not has_loop:
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".star", prefix="fixed_", text=True)
+            os.close(tmp_fd)
+            with open(tmp_path, "w") as out:
+                out.write("\n".join(fixed) + "\n")
+            return tmp_path
+        else:
+            #no changes, return original path
+            return input_path

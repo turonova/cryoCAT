@@ -23,3 +23,9 @@ def test_relion_optics(relion_optics):
         and relion_optics.frames[0].shape == (1, 7)
         and relion_optics.frames[1].shape == (3, 22)
     )
+
+def test_relion5_star_fix():
+    path = "test_data/motl_data/relion5/clean/warp2_particles_matching3.star"
+    output_path = "./test_data/motl_data/relion5/clean/warp2_particles_matching_clean.star"
+    sf.Starfile.fix_relion5_star(path, output_path)
+    #no exception!

@@ -4,9 +4,11 @@ import json
 from copy import deepcopy
 import re
 import os
-from cryocat import starfileio as sf
+from cryocat import starfileio as sf, starfileio
 from cryocat import mdoc
 import xml.etree.ElementTree as ET
+
+from cryocat.exceptions import UserInputError
 
 
 def get_file_encoding(file_path):
@@ -858,8 +860,8 @@ def dimensions_load(input_dims, tomo_idx=None):
         Either a path to a file with the dimensions, array-like input or pandas.DataFrame. The shape of the input should
         be 1x3 (x y z) in case of one tomogram or Nx4 for multiple tomograms (tomo_id x y z). In case of file, the
         dimensions can be fetched from .com file (typically tilt.com file) from parameters FULLIMAGE (x,y) and
-        THICKNESS (z) or from general file with either 1x3 values on a single line or Nx4 values on N lines (separator
-        is a space(s)).
+        THICKNESS (z), from .star file (relion5 >) or from general file with either 1x3 values on a single line or Nx4
+        values on N lines (separator is a space(s)).
     tomo_idx : str or array-like, optional
         Path to a file containing tomogram indices or an 1D array with the indices. It is used only if the input_dims
         do not contain 4 columns (i.e., do not have tomo_id). If provided, the function will replicate the 1x3
@@ -894,6 +896,21 @@ def dimensions_load(input_dims, tomo_idx=None):
             dimensions[0, 0:2] = com_file_d["FULLIMAGE"]
             dimensions[0, 2] = com_file_d["THICKNESS"][0]
             dimensions = pd.DataFrame(dimensions)
+        elif input_dims.endswith(".star"):
+            #wedgelist - based on the label - specifier
+            frames, specifiers, _ = starfileio.Starfile.read(input_dims)
+            if "data_global" in specifiers:
+                data_id = specifiers.index("data_global")
+            else:
+                raise UserInputError(f"Wrong file format. Must contain data_global: warp2, relionv5")
+            columns = ["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]
+            df = frames[data_id][columns]
+            if "rlnTomoName" not in df.columns:
+                raise ValueError("'rlnTomoName' column not found in DataFrame")
+            df["rlnTomoName"] = df["rlnTomoName"].apply(
+                lambda name: int(re.search(r"\d+", name).group()) if isinstance(name, str) else name
+            )
+            dimensions = df
         else:
             if os.path.isfile(input_dims):
                 dimensions = pd.read_csv(input_dims, sep="\s+", header=None, dtype=float)

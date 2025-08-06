@@ -10,7 +10,7 @@ import pytest
 import os
 
 from cryocat import ioutils, cryomap, cryomask, geom
-from cryocat.cryomotl import Motl, EmMotl, RelionMotl, StopgapMotl, DynamoMotl, ModMotl, stopgap2emmotl, emmotl2stopgap
+from cryocat.cryomotl import Motl, EmMotl, RelionMotl, RelionMotlv5, StopgapMotl, DynamoMotl, ModMotl, stopgap2emmotl, emmotl2stopgap
 from cryocat.exceptions import UserInputError
 from scipy.spatial.transform import Rotation as rot
 
@@ -2221,7 +2221,7 @@ class TestRelionMotl:
         }
 
     def test_set_version_already_set(self):
-        motl = RelionMotl(version=4.0)
+        motl = RelionMotl(version=4.0, binning=1.0)
         motl.set_version(pd.DataFrame())
         assert motl.version == 4.0
 
@@ -2334,7 +2334,7 @@ class TestRelionMotl:
 
 
         # Test with v4.0 file
-        relion_motl_v40 = RelionMotl(relion_paths['relion40_path'])
+        relion_motl_v40 = RelionMotl(relion_paths['relion40_path'], binning=1.0)
         relion_v4_0 = [
             "rlnCoordinateX",
             "rlnCoordinateY",
@@ -3205,7 +3205,7 @@ class TestRelionMotl:
 
         # Test with a Relion 4.0 file (you'll need a sample 4.0 file)
         if os.path.exists(relion_paths['relion40_path']):
-            relion_motl_40 = RelionMotl(relion_paths['relion40_path'])
+            relion_motl_40 = RelionMotl(relion_paths['relion40_path'], binning=1.0)
             assert relion_motl_40.version >= 4.0
             assert relion_motl_40.tomo_id_name == "rlnTomoName"
             assert relion_motl_40.subtomo_id_name == "rlnTomoParticleName"
@@ -3249,11 +3249,8 @@ class TestRelionMotl:
         assert list(particles_df.columns) == RelionMotl.columns_v4
         assert np.all(particles_df.values == 0)
 
-        particles_df_higher = relion_motl.create_particles_data(version=4.2)
-        assert isinstance(particles_df_higher, pd.DataFrame)
-        assert len(particles_df_higher) == num_particles
-        assert list(particles_df_higher.columns) == RelionMotl.columns_v4
-        assert np.all(particles_df_higher.values == 0)
+        with pytest.raises(Exception):
+            particles_df_higher = relion_motl.create_particles_data(version=4.2)
 
     class TestPrepareOpticsData:
         @pytest.fixture
@@ -3452,7 +3449,7 @@ class TestRelionMotl:
         assert "rlnPixelSize" in df_pixelsize_arg.columns
         assert df_pixelsize_arg["rlnPixelSize"].iloc[0] == 2.0
 
-        rln_motl_v4_no_pixelsize = RelionMotl(input_motl=relion_paths["relion40_path"], version=4.0)
+        rln_motl_v4_no_pixelsize = RelionMotl(input_motl=relion_paths["relion40_path"], version=4.0, binning=1.0)
         df_v4_pixelsize_arg = rln_motl_v4_no_pixelsize.prepare_particles_data(pixel_size=2.0)
         assert "rlnPixelSize" not in df_v4_pixelsize_arg.columns
 
@@ -3482,7 +3479,7 @@ class TestRelionMotl:
             rln_motl.prepare_particles_data(tomo_format="/path/to/tomo.rec")
 
         #v4
-        rln_motl_v4 = RelionMotl(input_motl=relion_paths["relion40_path"], version=4.0)
+        rln_motl_v4 = RelionMotl(input_motl=relion_paths["relion40_path"], version=4.0, binning=1.0)
         df_v4 = rln_motl_v4.prepare_particles_data(
             tomo_format="tomo_{$xx}",
             subtomo_format="particle_{$yyy}"
@@ -3515,7 +3512,7 @@ class TestRelionMotl:
         assert list(df_empty_subtomo_format["rlnImageName"]) == [0, 1, 2]  # subtomo_id defaults to index
 
         #pixelsetting
-        rln_motl_v4_no_init_pixelsize = RelionMotl(input_motl=relion_paths["relion40_path"], version=4.0)
+        rln_motl_v4_no_init_pixelsize = RelionMotl(input_motl=relion_paths["relion40_path"], version=4.0, binning=1.0)
         df_v4_pixelsize_arg = rln_motl_v4_no_init_pixelsize.prepare_particles_data(pixel_size=3.0)
         assert "rlnPixelSize" not in df_v4_pixelsize_arg.columns
 
@@ -3809,7 +3806,7 @@ class TestRelionMotl:
         two_output_path30 = "./test_data/motl_data/two_out_3_0.star"
         output_path31 = "./test_data/motl_data/out_3_1.star"
         output_path40 = "./test_data/motl_data/out_4_0.star"
-        motl40 = RelionMotl(relion_paths["relion40_path"])
+        motl40 = RelionMotl(relion_paths["relion40_path"], binning=1.0)
         motl31 = RelionMotl(relion_paths["relion31_path"])
         motl30 = RelionMotl(relion_paths["relion30_path"])
 
@@ -3859,7 +3856,7 @@ class TestRelionMotl:
             version=4.0,
             binning= 2
         )
-        loaded_motl40 = RelionMotl(input_motl=output_path40, version=4.0)
+        loaded_motl40 = RelionMotl(input_motl=output_path40, version=4.0, binning=1.0)
         assert list(loaded_motl40.relion_df.columns) == RelionMotl.columns_v4 + ["ccSubtomoID"]
 
         #Test write_optics=True
@@ -3886,7 +3883,7 @@ class TestRelionMotl:
             write_optics=True,
             version=4.0
         )
-        loaded_motl40_2 = RelionMotl(input_motl=output_path40_2, version=4.0)
+        loaded_motl40_2 = RelionMotl(input_motl=output_path40_2, version=4.0, binning=1.0)
 
         # Test if to keep original relion the dataframes are the same?
         motl31 = RelionMotl(relion_paths["relion31_path"])
@@ -4540,3 +4537,92 @@ class TestModMotl:
         """if os.path.exists(test_file_path + "test567.mod"):
             os.remove(test_file_path + "test567.mod")
         """
+
+class TestRelionMotlv5:
+    warp_tomo_path = "./test_data/motl_data/relion5/clean/warp2_matching_tomograms.star"
+    warp_particles_path = "test_data/motl_data/relion5/clean/warp2_particles_matching.star"
+    relion_tomo_path = "./test_data/motl_data/relion5/clean/R5_tutorial_run_tomograms.star"
+    relion_particles_path = "./test_data/motl_data/relion5/clean/R5_tutorial_run_data.star"
+
+    def test_getpd(self):
+        result = RelionMotlv5.read_in_tomograms(self, self.warp_tomo_path)
+        print(result)
+    def test_write2(self):
+        motl5 = RelionMotlv5(
+            input_particles = self.warp_particles_path,
+            input_tomograms = self.warp_tomo_path,
+            pixel_size = 1.0,
+        )
+        motl5.write_out(
+            output_path = "./test_data/motl_data/relion5/clean/warp2test.star",
+            type="relion",
+            write_optics=True,
+            optics_data= self.warp_particles_path,
+        )
+
+    def test_readInWarpStar(self):
+        pd.set_option('display.max_rows', None)
+        pd.set_option('display.max_columns', None)
+        pd.set_option("display.width", 2000)
+        pd.set_option("display.expand_frame_repr", False)
+        #relion files
+        motl5_relion = RelionMotlv5(
+            input_particles = self.relion_particles_path,
+            input_tomograms = self.relion_tomo_path,
+        ) #ok
+        #print(motl5_relion.relion_df)
+        #print(motl5_relion.optics_data)
+        #print(motl5_relion.tomo_df)
+        # print(motl5_relion.df) #todo: test conversion, how?
+
+        with pytest.raises(Exception):
+            motl5_relion1 = RelionMotlv5(
+                input_particles = self.relion_particles_path,
+            )
+
+        motl5_relion2 = RelionMotlv5(
+            input_tomograms = self.relion_tomo_path
+        ) #empty object
+        assert motl5_relion2.relion_df.empty
+        assert not motl5_relion2.tomo_df.empty
+        assert motl5_relion2.df.empty
+
+        #test: input_tomo with file
+        data_rows = [
+            [1, 4000, 4000, 2000],
+            [3, 4000, 4000, 2000],
+            [43, 4000, 4000, 2000],
+            [45, 4000, 4000, 2000],
+            [54, 4000, 4000, 2000]
+        ]
+        column_names = ['rlnTomoName', 'rlnTomoSizeX', 'rlnTomoSizeY', 'rlnTomoSizeZ']
+        dim_tomo_df = pd.DataFrame(data_rows, columns=column_names)
+        motl5_relion4 = RelionMotlv5(
+            input_particles=self.relion_particles_path,
+            input_tomograms=dim_tomo_df
+        )
+        pd.testing.assert_frame_equal(dim_tomo_df, motl5_relion.tomo_df)
+
+        #test: use relion object as input
+        motl5_relion3 = RelionMotlv5(
+            input_particles=motl5_relion2
+        )
+        pd.testing.assert_frame_equal(motl5_relion2.relion_df, motl5_relion3.relion_df)
+
+        #warp file test -- same tests
+        relion5motl_warp = RelionMotlv5(
+            input_particles=self.warp_particles_path,
+            input_tomograms=self.warp_tomo_path
+        )
+        with pytest.raises(Exception):
+            relion5motl_warp1 = RelionMotlv5(
+                input_particles = self.warp_particles_path,
+            )
+        relion5motl_warp2 = RelionMotlv5(
+            input_tomograms=self.warp_tomo_path
+        )  # empty object
+        assert relion5motl_warp2.relion_df.empty
+        assert not relion5motl_warp2.tomo_df.empty
+        assert relion5motl_warp2.df.empty
+
+
