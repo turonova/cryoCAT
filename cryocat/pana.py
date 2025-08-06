@@ -33,7 +33,7 @@ def rotate_image(image, alpha, fill_mode="constant", fill_value=0.0):
     the output. Pixels outside the boundaries of the input are filled
     according to the specified mode and fill value.
 
-    Some descriptions are taken from skicit-image page (https://scikit-image.org).
+    Some descriptions are from skicit-image page (https://scikit-image.org).
 
     Parameters
     ----------
@@ -58,64 +58,160 @@ def rotate_image(image, alpha, fill_mode="constant", fill_value=0.0):
 
 
 def _ctf(defocus, pshift, famp, cs, evk, f):
-    """Original 'docstring':
-    %% sg_ctf
-    % Calculate a CTF curve.
-    %
-    % WW 07-2018
+    """Compute Contrast Transfer Function (CTF) for an acquisition scheme.
+
+    This function evaluates the 1D CTF over a 1D spatial frequency array 
+    using image acquisition parameters such as defocus, spherical aberration, and 
+    accelerating voltage.
+
+    Parameters
+    ----------
+    defocus : array_like
+        Defocus values (in μm) for each tilt.
+        Shape is `(len(defocus), 1)`.
+    pshift : array_like
+        Phase shift values (in degrees) for each tilt. 0 if no phase shift is added.
+        Shape is `(len(pshift), 1)`.
+    famp : float
+        Amplitude contrast (typically between 0.0 and 0.2).
+    cs : float
+        Spherical aberration (in mm).
+    evk : float
+        Accelerating voltage (in kV).
+    f : ndarray
+        1D spatial frequency magnitude array (in Å⁻¹) at which to evaluate the CTF.
+        Must be 1D, as other shapes cannot be broadcasted with defocus /  
+        phase shift array of shape (len(defocus), 1). 
+
+    Returns
+    -------
+    ctf : ndarray
+        The computed 1D CTF curve evaluated at each tilt as a function of 
+        frequency array `f`. Shape is `(len(defocus), len(f))`.
+
+    Notes
+    -----
+    - The output combines both sine and cosine components weighted by 
+      phase and amplitude contrast:
+        CTF(f) = sqrt(1 - famp²) * sin(χ(f)) + famp * cos(χ(f))
+      where χ(f) is the aberration phase function.
+    - this output is of radial symmetry  
     """
 
-    defocus = defocus * 1.0e4
-    cs = cs * 1.0e7
-    pshift = pshift * np.pi / 180
+    defocus = defocus * 1.0e4  # convert defocus distance from μm to Å
+    cs = cs * 1.0e7  # spherical aberration from mm to Å 
+    pshift = pshift * np.pi / 180  # phase shift degree to radian
 
-    h = 6.62606957e-34
-    c = 299792458
-    erest = 511000
-    v = evk * 1000
-    e = 1.602e-19
+    h = 6.62606957e-34  # Planck's constant (m^2*kg/s)
+    c = 299792458  # speed of light (m/s) 
+    erest = 511000  # electron rest energy (eV) 
+    v = evk * 1000  # accelerating voltage (V)
+    e = 1.602e-19  # unit of e- charge (C)
 
+    # de Broglie e- wavelength
     lam = (c * h) / np.sqrt(((2 * erest * v) + (v**2)) * (e**2)) * (10**10)
-    w = (1 - (famp**2)) ** 0.5
+    
+    # phase contrast weighting factor
+    w = (1 - (famp**2)) ** 0.5  
 
-    v = (np.pi * lam * (f**2)) * (defocus - 0.5 * (lam**2) * (f**2) * cs)
-    v += pshift
-    ctf = (w * np.sin(v)) + (famp * np.cos(v))
+    # compute the ctf phase shift term / wave aberration equation 
+    chi = (np.pi * lam * (f**2)) * (defocus - 0.5 * (lam**2) * (f**2) * cs)
+    chi += pshift
+
+    # CTF function
+    ctf = (w * np.sin(chi)) + (famp * np.cos(chi))
 
     return ctf
 
 
 def generate_ctf(wl, slice_idx, slice_weight, binning):
-    """Generate ctf filter."""
+    """Generate a CTF filter for a weighted volume that is subset of a full volume.
 
+    This function computes defocus and phase shift-specific CTF filters for a template.
+    
+    It does so by:
+    1. computing the frequency array of a tomogram; 
+    2. interpolating the CTF based on the full sized frequency array and 
+       defocus / pshift values;
+    3. fourier cropping the full size CTF values to fit the size of a template, to keep
+       only the lower frequencies;
+    4. applying the CTF values to the given `slice_weight` array.
+
+    Parameters
+    ----------
+    wl : pandas.DataFrame
+        Wedge list dataframe containing metadata and microscope parameters 
+        for one tomogram.
+    slice_idx : array-like of int
+        Indices of the frequency components (aka. points in fourier space) 
+        to which the CTF filter should be applied.
+    slice_weight : ndarray
+        A 3D array representing the frequency domain weighting (missing wedge + 
+        bandpass) of each tilt.
+        The shape is assumed to be (depth, height, width) or (zyx).
+    binning : int or float
+        The binning factor of the tomogram. Used to scale the pixel size.
+
+    Returns
+    -------
+    ctf_filt : ndarray
+        The computed CTF filter applied on top of the weighted filter input
+        (i.e. bandpass and missing wedge), in fourier space.
+        Same shape as `slice_weight`.
+
+    Notes
+    -----
+    - If `pshift` is not provided in `wl`, it defaults to zeros.
+    """
+
+    # determine template and full tomogram sizes
     tmpl_size = slice_weight.shape[0]
-    full_size = int(max(wl["tomo_x"].values[0], wl["tomo_y"].values[0], wl["tomo_z"].values[0]))
+    full_size = int(max(wl["tomo_x"].values[0], 
+                        wl["tomo_y"].values[0], 
+                        wl["tomo_z"].values[0]))
     pixelsize = wl["pixelsize"].values[0] * binning
 
+    # calculate frequency arrays of tomogram and template sizes
     freqs_full = mathutils.compute_frequency_array((full_size,), pixelsize)
-    freqs_crop = mathutils.compute_frequency_array((tmpl_size,), pixelsize)[tmpl_size // 2 :]
+    freqs_crop = mathutils.compute_frequency_array((tmpl_size,), pixelsize)
+    freqs_crop = freqs_crop[tmpl_size // 2 :]  # only need half of the freq array
 
+    # selects the central part (len = tmpl length) of the frequency array from 
+    # the full frequency array and wraps it to match FFT layout
     f_idx = np.zeros(full_size, dtype="bool")
     f_idx[:tmpl_size] = 1
     f_idx = np.roll(f_idx, -tmpl_size // 2)
-    f_idx = np.nonzero(f_idx)[0]
+    f_idx = np.nonzero(f_idx)[0]  # get the indices of selected part
 
+    # acquisition parameters
     defocus = np.array(wl["defocus"])
     pshift = wl.get("pshift", np.zeros_like(defocus))
-
-    # microscope parameters
     famp = wl["amp_contrast"].values[0]
     cs = wl["cs"].values[0]
     evk = wl["voltage"].values[0]
 
-    full_ctf = np.abs(_ctf(defocus[:, None], pshift[:, None], famp, cs, evk, freqs_full))
+    # compute the 1D CTF as a function of full tomo freq magnitude array
+    full_ctf = np.abs(_ctf(defocus[:, None], 
+                           pshift[:, None], 
+                           famp, 
+                           cs, 
+                           evk, 
+                           freqs_full))
+
+    # cropping the ctf that only belongs to template size from the full size ctf
+    # cropping is done in fourier space to remove high freq ctf content
     ft_ctf = np.fft.fft(full_ctf, axis=1)
     ft_ctf = ft_ctf[:, f_idx] * tmpl_size / full_size
     crop_ctf = np.real(np.fft.ifft(ft_ctf, axis=1))
     crop_ctf = crop_ctf[:, tmpl_size // 2 :]
 
+    # init an empty vol to save ctf values
     ctf_filt = np.zeros_like(slice_weight)
-    x = np.fft.ifftshift(mathutils.compute_frequency_array(slice_weight.shape, pixelsize))
+    
+    # map weighted spatial components to their freq magnitudes
+    x = np.fft.ifftshift(mathutils.compute_frequency_array(slice_weight.shape, pixelsize)) 
+
+    # for each tilt, interpolate the CTF value for each weighted voxel
     for ictf, sidx in zip(crop_ctf, slice_idx):
         ip = RegularGridInterpolator(
             (freqs_crop,),  # Grid points
@@ -124,24 +220,73 @@ def generate_ctf(wl, slice_idx, slice_weight, binning):
             bounds_error=False,  # Do not raise error for out-of-bound points
             fill_value=0,  # Fill with 0 for out-of-bound points
         )
+        
+        # write the interpolated CTF values for all weighted voxels to an empty vol   
         ctf_filt[sidx] += ip(x[sidx])
 
     # ? np.nan_to_num(ctf_filt)
+
+    # apply the CTF filter to input weight filter 
     ctf_filt *= slice_weight
 
     return ctf_filt
 
 
 def generate_exposure(wedgelist, slice_idx, slice_weight, binning):
-    """Generate exposure filter."""
+    """Generate exposure filter.
+    
+    Generate an exposure-based filter to account for frequency-dependent signal 
+    attenuation due to electron dose in cryo-electron tomography.
+
+    This function models the decay of signal at different spatial frequencies 
+    based on cumulative electron exposure per tilt. The filter is computed per 
+    tilt exposure using an empirical decay function and returned as a 3D volume matching 
+    the input slice weights.
+
+    Parameters
+    ----------
+    wedgelist : pandas.DataFrame
+        Metadata table containing at least the following columns:
+        - "exposure": float, cumulative electron exposure per tilt (in e⁻/Å²)
+        - "pixelsize": float, unbinned pixel size (in Å)
+    
+    slice_idx : list of numpy.ndarray
+        Indices of the frequency components (aka. points in fourier space)              
+        to which the exposure filter should be applied.    
+ 
+    slice_weight : numpy.ndarray
+        A 3D array representing the frequency domain weighting (missing wedge +         
+        bandpass) of each tilt.                                                         
+        The shape is assumed to be (depth, height, width) or (zyx). 
+  
+    binning : int
+        The binning factor of the tomogram. Used to scale the pixel size.
+
+    Returns
+    -------
+    exp_filt : numpy.ndarray
+        3D exposure filter of the same shape as `slice_weight`. Each voxel contains 
+        a multiplicative factor representing attenuation based on frequency and dose.
+
+    Notes
+    -----
+    The attenuation function follows the empirical dose-dependent decay model:
+
+        exp(-exposure / (2 * (a * f^b + c)))
+
+    where f is the spatial frequency in Å⁻¹ and a, b, c are empirical constants.
+    See `this paper <https://elifesciences.org/articles/06980>`_ for more info. 
+    """
 
     expo = wedgelist["exposure"].values
-    a, b, c = (0.245, -1.665, 2.81)
+    a, b, c = (0.245, -1.665, 2.81)  # values that best fit the function in the paper 
     pixelsize = wedgelist["pixelsize"].values[0] * binning
 
     freq_array = np.fft.ifftshift(mathutils.compute_frequency_array(slice_weight.shape, pixelsize))
 
     exp_filt = np.zeros_like(slice_weight)
+
+    # for each weighted component, find its corresponding freq then exposure 
     for expi, idx in zip(expo, slice_idx):
         freqs = freq_array[idx]
         exp_filt[idx] += np.exp(-expi / (2 * ((a * freqs**b) + c)))
@@ -152,40 +297,100 @@ def generate_exposure(wedgelist, slice_idx, slice_weight, binning):
 
 
 def generate_wedgemask_slices_template(wedgelist, template_filter):
-    """Generate wedgemask slices for template"""
+    """
+    Generate missing wedge masks and weights for a template in Fourier space.
+
+    This function simulates the sampling of a 3D template volume in Fourier space,
+    given a set of tilt angles. It computes:
+    - Which voxels are covered based on tilt range.
+    - A normalized weight to compensate for unequal coverage of tilts, 
+      due to rotation interpolation artifacts (some voxels may be covered by >1 tilt).
+    - A binary template mask that shows active voxels 
+      after bandpass & missing wedge filters. 
+
+    Parameters
+    ----------
+    wedgelist : pandas.DataFrame
+        A table with a column `tilt_angle` (in degrees) representing the tilt angles
+        of the acquisition. This should only contain info for one tomogram.
+    template_filter : ndarray
+        A 3D frequency-filtered template in numpy array. The dimensions have to be equal, 
+        aka. a cube shape.
+
+    Returns
+    -------
+    active_slices_idx : list of tuple of ndarrays
+        A list of index tuples `[(zs, ys, xs)]` for each tilt, indicating where the
+        projection intersects the bandpassed Fourier space.
+        Each value inside the tuple is an array indicating where all active points
+        is on each dimension. len(active_slices_idx) = len(wedgelist). 
+    wedge_slices_weights : ndarray
+        A 3D array of the same shape as `template_filter`, containing weights that
+        normalize the contribution of each voxel based on how frequently it was sampled.
+        Voxels that are not sampled receive a weight of 0.
+    wedge_slices : ndarray
+        A binary 3D mask of the same shape as `template_filter` with 1s at all voxels 
+        that were sampled by at least one tilt.
+
+    Notes
+    -----
+    - since the wedge mask is manually built and assume zero frequency component in
+      center of array, shifting of the mask from center of array to top-left corner is 
+      needed for later operations in fourier space. 
+    - rotating the ray at specified degrees (not a continuous range) to match the real
+      tilting scheme better (star-shaped). 
+    """
 
     template_size = np.array(template_filter.shape)
+    assert len(template_size) == 3, 'The template is not 3D!'
+    assert len(np.unique(template_size) == 1, 'The template is not cubic in shape!'
 
-    # original codes uses matlab axes 1 and 3 which correspond to x and z
-    # according to the original gsg_mrcread; so with mrcfile this is 2 and 0
-    mx = np.max(template_size[[2, 0]])
+    # get the x and z length of the filtered template
+    # (original codes uses matlab axes 1 and 3 which correspond to x and z
+    # according to the original gsg_mrcread; so with mrcfile this is 2 and 0)
+    mx = np.max(template_size[[2, 0]])  # template is in zyx order
+
+    # create a 2D (xz) image of a line going down through the middle 
+    # to simluate a projection ray at 0 deg tilt
     img = np.zeros((mx, mx))
     img[:, mx // 2] = 1.0
 
-    bpf_idx = template_filter > 0
+    # binary mask of where the bandpass filter is applied on the template 
+    bpf_idx = template_filter > 0  # shouldn't this be in fourier space?
 
-    # tmpl filter stuff
+    # initialize a few vars to store info
     active_slices_idx = []
     wedge_slices_weights = np.zeros_like(template_filter)
     weight = np.zeros_like(template_filter)
 
     for alpha in wedgelist["tilt_angle"]:
 
+        # rotate the ray projection img by alpha deg
         r_img = rotate_image(img, alpha)
 
-        # template filter
-        crop_r_img = r_img > np.exp(-2)
+        # after rotation, smoothing effect thus need to turn interpolated values into binary
+        crop_r_img = r_img > np.exp(-2)  #e^-2 is common effective support threshold for g-blur 
 
+        # repeat the 2D ray img into a 3D vol; 
+        # transpose it to the same dims as template (yxz to zyx);
+        # then shift the zero freuqency pixels to origin
         slice_vol = np.fft.ifftshift(np.transpose(np.tile(crop_r_img, (mx, 1, 1)), (2, 0, 1)))
 
+        # apply the actual bandpass filter mask to the 3D ray image
         slice_idx = slice_vol & bpf_idx
+
+        # add together all tilts into one weight that indicates the complete missing wedge loc 
         weight += slice_idx
+    
+        # store locations of nonzero voxels per tilt
         active_slices_idx.append(np.nonzero(slice_idx))
 
-    # invert values for filter
+    # add together projection interporlations may lead to overlapping pixels; 
+    # invert the values to balance the over/under-sampling
     w_idx = np.nonzero(weight)
     wedge_slices_weights[w_idx] = 1.0 / weight[w_idx]
 
+    # create a binary wedge mask
     wedge_slices = np.zeros_like(weight)
     wedge_slices[w_idx] = 1.0
 
