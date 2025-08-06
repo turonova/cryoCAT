@@ -1303,7 +1303,11 @@ class Motl:
         if motl_type == "emmotl":
             return EmMotl(input_motl)
         elif motl_type == "relion":
-            return RelionMotl(input_motl, **kwargs) #kwargs: version, pixel_size, binning, optics_data
+            return RelionMotl(input_motl, **kwargs)  # kwargs: version, pixel_size, binning, optics_data
+        elif motl_type == "relion5":
+            return RelionMotlv5(
+                input_motl, **kwargs
+            )  # kwargs: input_tomograms, tomo_idx, pixel_size, binning, optics_data
         elif motl_type == "stopgap":
             return StopgapMotl(input_motl)
         elif motl_type == "dynamo":
@@ -2210,15 +2214,14 @@ class RelionMotl(Motl):
                     f"Provided input_motl is neither DataFrame nor path to the motl file: {input_motl}."
                 )
 
-            self.set_pixel_size() #ensure pixel_size is always set
+            self.set_pixel_size()  # ensure pixel_size is always set
         else:
             self.set_version(self.relion_df, version)
             self.set_pixel_size()
 
         self.set_version_specific_names()
-        if self.version>=4.0 and binning is None:
+        if self.version >= 4.0 and binning is None:
             raise UserInputError("Binning parameter must be specified for this Relion version")
-
 
     def set_pixel_size(self):
         """Sets the pixel size of the object (self.pixel_size). The function first checks if the pixel size has already
@@ -2257,7 +2260,7 @@ class RelionMotl(Motl):
                         self.optics_data[["rlnOpticsGroup", "rlnImagePixelSize"]],
                         on="rlnOpticsGroup",
                         how="left",
-                        validate="many_to_one"
+                        validate="many_to_one",
                     )
                     if merged["rlnImagePixelSize"].isnull().any():
                         raise ValueError("Pixel size could not be assigned for some particles. Check optics groups.")
@@ -2265,11 +2268,11 @@ class RelionMotl(Motl):
             else:
                 self.pixel_size = 1.0
                 warnings.warn(
-                    "Could not find 'rlnImagePixelSize' or 'rlnOpticsGroup' in optics_data. Pixel size set to 1.0.")
+                    "Could not find 'rlnImagePixelSize' or 'rlnOpticsGroup' in optics_data. Pixel size set to 1.0."
+                )
         else:
             self.pixel_size = 1.0
             warnings.warn("Could not determine the pixel size from the data. The pixel size is set to 1.0.")
-
 
     @staticmethod
     def get_version_from_file(frames, specifiers):
@@ -2720,7 +2723,6 @@ class RelionMotl(Motl):
             relion_column = "rlnCoordinate" + coord.upper()
             self.assign_column(relion_df, {coord: relion_column})
 
-
         self.convert_shifts(relion_df)
         self.convert_angles_from_relion(relion_df)
 
@@ -2937,9 +2939,9 @@ class RelionMotl(Motl):
             # TODO add support for 3.0
             if version == 3.1:
                 optics_df = self.create_optics_group_v3_1()
-                #fixme: subtomosize always None -> imagePixelSize: NaN
+                # fixme: subtomosize always None -> imagePixelSize: NaN
             elif version > 3.1:
-                optics_df = self.create_optics_group_v4() #fixme
+                optics_df = self.create_optics_group_v4()  # fixme
             else:
                 raise Warning(
                     f"There is no information on optics available - use optics_data argument to provide this information."
@@ -3438,7 +3440,7 @@ class RelionMotl(Motl):
 
 
 class RelionMotlv5(RelionMotl, Motl):
-    #warp2
+    # warp2
     columns_v5 = [
         "rlnCoordinateX",
         "rlnCoordinateY",
@@ -3453,7 +3455,7 @@ class RelionMotlv5(RelionMotl, Motl):
         "rlnOriginYAngst",
         "rlnOriginZAngst",
     ]
-    #relion5
+    # relion5
     columns_v5_centAng = [
         "rlnCenteredCoordinateXAngst",
         "rlnCenteredCoordinateYAngst",
@@ -3469,11 +3471,12 @@ class RelionMotlv5(RelionMotl, Motl):
         "rlnOriginZAngst",
         "rlnclassNumber",
         "rlnRandomSubset",
-        "rlnGroupNumber"
+        "rlnGroupNumber",
     ]
 
-    def __init__(self, input_particles=None, input_tomograms=None, tomo_idx=None,
-                 pixel_size=None, binning=1.0, optics_data=None):
+    def __init__(
+        self, input_particles=None, input_tomograms=None, tomo_idx=None, pixel_size=None, binning=1.0, optics_data=None
+    ):
         Motl.__init__(self, motl_df=None)
 
         self.isWarp = False
@@ -3484,8 +3487,8 @@ class RelionMotlv5(RelionMotl, Motl):
         self.relion_df = pd.DataFrame()
         self.tomo_df = pd.DataFrame()
         self.data_spec = "data_particles"
-        self.tomo_id_name = "rlnTomoName" 
-        self.subtomo_id_name = "rlnTomoParticleName" 
+        self.tomo_id_name = "rlnTomoName"
+        self.subtomo_id_name = "rlnTomoParticleName"
         self.shifts_id_names = ["rlnOriginXAngst", "rlnOriginYAngst", "rlnOriginZAngst"]
         self.fixed_path = ""
         if input_tomograms is not None:
@@ -3493,13 +3496,13 @@ class RelionMotlv5(RelionMotl, Motl):
             self.tomo_df = ioutils.dimensions_load(input_tomograms, tomo_idx)
             self.tomo_df.columns = ["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]
             if input_particles is not None:
-                if isinstance(input_particles, str): #star file
+                if isinstance(input_particles, str):  # star file
                     relion_df, optics_data = self.read_in(input_particles)
                     self.convert_to_motl(relion_df, optics_data)
                 elif isinstance(input_particles, pd.DataFrame):
                     if isinstance(input_particles, pd.DataFrame):
                         self.check_df_type(input_particles)
-                #allow to specify tomo_data and particles_data - but only latter is used?
+                # allow to specify tomo_data and particles_data - but only latter is used?
                 elif isinstance(input_particles, RelionMotlv5):
                     self.df = input_particles.df.copy()
                     self.relion_df = input_particles.relion_df.copy()
@@ -3509,7 +3512,7 @@ class RelionMotlv5(RelionMotl, Motl):
                     self.binning = input_particles.binning
                     self.optics_data = input_particles.optics_data
         else:
-            #case: input_tomogram is None, input_particles is a RelionMotlv5 object
+            # case: input_tomogram is None, input_particles is a RelionMotlv5 object
             if isinstance(input_particles, RelionMotlv5):
                 self.df = input_particles.df.copy()
                 self.relion_df = input_particles.relion_df.copy()
@@ -3520,7 +3523,7 @@ class RelionMotlv5(RelionMotl, Motl):
                 self.check_isWarp()
 
             else:
-                #warning - default to 1 - tomograms to number 1
+                # warning - default to 1 - tomograms to number 1
                 raise UserInputError(f"Tomogram data must be specified, or Particles data must be a Relion5 object")
 
         self.set_pixel_size()
@@ -3534,8 +3537,8 @@ class RelionMotlv5(RelionMotl, Motl):
         if optics_id is not None and self.optics_data is None:
             optics_df = frames[optics_id]
 
-        #fixme: to clean it up later due to writeout --> need to use fixed tmp file! store e.g. optics data in extra cell - self
-        if fixed_path != input_path: #cleanup tmp file
+        # fixme: to clean it up later due to writeout --> need to use fixed tmp file! store e.g. optics data in extra cell - self
+        if fixed_path != input_path:  # cleanup tmp file
             os.remove(fixed_path)
         self.fixed_path = fixed_path
         return frames[data_id], optics_df
@@ -3567,7 +3570,7 @@ class RelionMotlv5(RelionMotl, Motl):
     def read_in_tomograms(self, input_path):
         frames, specifiers, _ = starfileio.Starfile.read(input_path)
         if "data_global" in specifiers:
-            data_id =  specifiers.index("data_global")
+            data_id = specifiers.index("data_global")
         else:
             raise UserInputError(f"Wrong file format. Must contain data_global: warp2, relionv5")
 
@@ -3599,7 +3602,6 @@ class RelionMotlv5(RelionMotl, Motl):
         if self.optics_data is None and isinstance(optics_df, pd.DataFrame):
             self.optics_data = optics_df
 
-
         self.relion_df = relion_df.copy()
         self.relion_df.reset_index(inplace=True, drop=True)
 
@@ -3609,7 +3611,7 @@ class RelionMotlv5(RelionMotl, Motl):
         for coord in ("x", "y", "z"):
             relion_column = "rlnCenteredCoordinate" + coord.upper() + "Angst"
             self.assign_column(relion_df, {coord: relion_column})
-        #warp2.0
+        # warp2.0
         for coord in ("x", "y", "z"):
             relion_column = "rlnCoordinate" + coord.upper()
             self.assign_column(relion_df, {coord: relion_column})
@@ -3620,9 +3622,9 @@ class RelionMotlv5(RelionMotl, Motl):
         self.convert_angles_from_relion(relion_df)
 
         self.parse_tomo_id(relion_df)
-        self.parse_subtomo_id(relion_df) #missing in warp2
+        self.parse_subtomo_id(relion_df)  # missing in warp2
 
-        #missing in warp2
+        # missing in warp2
         self.assign_column(relion_df, {"class": "rlnClassNumber"})  # getting class number
         self.assign_column(
             relion_df, {"score": "rlnMaxValueProbDistribution"}
@@ -3632,10 +3634,8 @@ class RelionMotlv5(RelionMotl, Motl):
         self.relion_df["ccSubtomoID"] = self.df["subtomo_id"]
 
     def convert_coordinates_merge(self):
-        #convert new relion system into old one
-        centeredSystem = ["rlnCenteredCoordinateXAngst",
-                          "rlnCenteredCoordinateYAngst",
-                          "rlnCenteredCoordinateZAngst"]
+        # convert new relion system into old one
+        centeredSystem = ["rlnCenteredCoordinateXAngst", "rlnCenteredCoordinateYAngst", "rlnCenteredCoordinateZAngst"]
         if not all(col in self.relion_df.columns for col in centeredSystem):
             raise UserInputError(f"Tomogram is not in relion5 format.")
         if "rlnTomoName" not in self.relion_df.columns or "rlnTomoName" not in self.tomo_df.columns:
@@ -3645,7 +3645,7 @@ class RelionMotlv5(RelionMotl, Motl):
                 self.tomo_df[["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]],
                 on="rlnTomoName",
                 how="left",
-                validate="many_to_one"  # each particle maps to one tomo
+                validate="many_to_one",  # each particle maps to one tomo
             )
             # Check for missing matches by looking for NaNs in any of the joined columns
             missing_mask = merged_df[["rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]].isnull().any(axis=1)
@@ -3654,19 +3654,19 @@ class RelionMotlv5(RelionMotl, Motl):
                 raise ValueError(f"The following rlnTomoName values are missing in tomo_df: {missing_tomos}")
 
             merged_df["rlnCoordinateX"] = (merged_df["rlnTomoSizeX"] / 2) + (
-                    merged_df["rlnCenteredCoordinateXAngst"] / self.pixel_size
+                merged_df["rlnCenteredCoordinateXAngst"] / self.pixel_size
             )
             merged_df["rlnCoordinateY"] = (merged_df["rlnTomoSizeY"] / 2) + (
-                    merged_df["rlnCenteredCoordinateYAngst"] / self.pixel_size
+                merged_df["rlnCenteredCoordinateYAngst"] / self.pixel_size
             )
             merged_df["rlnCoordinateZ"] = (merged_df["rlnTomoSizeZ"] / 2) + (
-                    merged_df["rlnCenteredCoordinateZAngst"] / self.pixel_size
+                merged_df["rlnCenteredCoordinateZAngst"] / self.pixel_size
             )
-            #self.relion_df = merged_df #todo: should it be?
+            # self.relion_df = merged_df #todo: should it be?
             return merged_df
 
     def convert_coordinates_ang_merge(self):
-        #convert old system into relion new system
+        # convert old system into relion new system
         standardSystem = ["rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ"]
         if not all(col in self.relion_df.columns for col in standardSystem):
             raise UserInputError("Tomogram is not in warp format.")
@@ -3677,7 +3677,7 @@ class RelionMotlv5(RelionMotl, Motl):
                 self.tomo_df[["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]],
                 on="rlnTomoName",
                 how="left",
-                validate="many_to_one"
+                validate="many_to_one",
             )
             # Check for missing matches by looking for NaNs in any of the joined columns
             missing_mask = merged_df[["rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]].isnull().any(axis=1)
@@ -3686,15 +3686,15 @@ class RelionMotlv5(RelionMotl, Motl):
                 raise ValueError(f"The following rlnTomoName values are missing in tomo_df: {missing_tomos}")
 
             merged_df["rlnCenteredCoordinateXAngst"] = (
-                    (merged_df["rlnCoordinateX"] - merged_df["rlnTomoSizeX"] / 2) * self.pixel_size
-            )
+                merged_df["rlnCoordinateX"] - merged_df["rlnTomoSizeX"] / 2
+            ) * self.pixel_size
             merged_df["rlnCenteredCoordinateYAngst"] = (
-                    (merged_df["rlnCoordinateY"] - merged_df["rlnTomoSizeY"] / 2) * self.pixel_size
-            )
+                merged_df["rlnCoordinateY"] - merged_df["rlnTomoSizeY"] / 2
+            ) * self.pixel_size
             merged_df["rlnCenteredCoordinateZAngst"] = (
-                    (merged_df["rlnCoordinateZ"] - merged_df["rlnTomoSizeZ"] / 2) * self.pixel_size
-            )
-            #self.relion_df = merged_df #todo: should it be?
+                merged_df["rlnCoordinateZ"] - merged_df["rlnTomoSizeZ"] / 2
+            ) * self.pixel_size
+            # self.relion_df = merged_df #todo: should it be?
             return merged_df
 
     def check_isWarp(self):
@@ -3713,7 +3713,7 @@ class RelionMotlv5(RelionMotl, Motl):
             "rlnOriginXAngst",
             "rlnOriginYAngst",
             "rlnOriginZAngst",
-            "rlnTomoVisibleFrames"
+            "rlnTomoVisibleFrames",
         ]
         df_columns_set = set(self.relion_df.columns)
         required_warp_columns_set = set(warp_columns)
@@ -3726,7 +3726,9 @@ class RelionMotlv5(RelionMotl, Motl):
         if self.isWarp:
             relion_df = pd.DataFrame(data=np.zeros((self.df.shape[0], len(self.columns_v5))), columns=self.columns_v5)
         else:
-           relion_df = pd.DataFrame(data=np.zeros((self.df.shape[0], len(self.columns_v5_centAng))), columns=self.columns_v5_centAng)
+            relion_df = pd.DataFrame(
+                data=np.zeros((self.df.shape[0], len(self.columns_v5_centAng))), columns=self.columns_v5_centAng
+            )
         return relion_df
 
     def warp2relion(self):
@@ -3741,13 +3743,15 @@ class RelionMotlv5(RelionMotl, Motl):
         if not all(col in self.relion_df for col in warp_coord) or not self.isWarp:
             raise UserInputError("Motl is not in warp format.")
 
-        relion_df = pd.DataFrame(data=np.zeros((self.df.shape[0], len(self.columns_v5_centAng))), columns=self.columns_v5_centAng)
+        relion_df = pd.DataFrame(
+            data=np.zeros((self.df.shape[0], len(self.columns_v5_centAng))), columns=self.columns_v5_centAng
+        )
         merged_df = self.convert_coordinates_ang_merge()
         for col in relion_df.columns:
             if col in merged_df.columns:
                 relion_df[col] = merged_df[col].values
             else:
-                relion_df[col] = 1.0 #default value: missing from warp2relion columns
+                relion_df[col] = 1.0  # default value: missing from warp2relion columns
                 warnings.warn(f"Column '{col}' is missing in warp2 format. Default to 1.0 in relion5 format.")
         return relion_df
 
@@ -3761,14 +3765,15 @@ class RelionMotlv5(RelionMotl, Motl):
         relion_coord = ["rlnCenteredCoordinateXAngst", "rlnCenteredCoordinateYAngst", "rlnCenteredCoordinateZAngst"]
         if not all(col in self.relion_df for col in relion_coord) or self.isWarp:
             raise UserInputError("Motl is not in relion format.")
-        relion_df = pd.DataFrame(data=np.zeros((self.df.shape[0], len(self.columns_v5_centAng))),
-                                 columns=self.columns_v5_centAng)
+        relion_df = pd.DataFrame(
+            data=np.zeros((self.df.shape[0], len(self.columns_v5_centAng))), columns=self.columns_v5_centAng
+        )
         merged_df = self.convert_coordinates_merge()
         for col in relion_df.columns:
             if col in merged_df.columns:
                 relion_df[col] = merged_df[col].values
             else:
-                #from relion to warp, there are no columns misisng.
+                # from relion to warp, there are no columns misisng.
                 raise UserInputError(f"Missing column '{col}' during relion2warp conversion.")
         return relion_df
 
@@ -3784,10 +3789,10 @@ class RelionMotlv5(RelionMotl, Motl):
             if isinstance(optics_data, str):
                 optics_data = self.fixed_path
                 optics_df, _ = starfileio.Starfile.get_frame_and_comments(optics_data, "data_optics")
-                #cleanup tmp file
+                # cleanup tmp file
                 if os.path.exists(self.fixed_path):
                     os.remove(self.fixed_path)
-                #todo: could be that we need to use the modified temp file -- due to relion5 _rlnTomoSubTomosAre2DStacks
+                # todo: could be that we need to use the modified temp file -- due to relion5 _rlnTomoSubTomosAre2DStacks
             elif isinstance(optics_data, dict):
                 optics_df = pd.DataFrame(optics_data)
             else:
@@ -3823,7 +3828,8 @@ class RelionMotlv5(RelionMotl, Motl):
 
             relion_df[self.tomo_id_name] = tomo_format
             relion_df[self.tomo_id_name] = relion_df.apply(
-                lambda row: row[self.tomo_id_name].replace(tomo_sequence, str(int(row["tomo_id"])).zfill(tomo_digits)), axis=1
+                lambda row: row[self.tomo_id_name].replace(tomo_sequence, str(int(row["tomo_id"])).zfill(tomo_digits)),
+                axis=1,
             )
 
             # drop the column
@@ -3860,7 +3866,6 @@ class RelionMotlv5(RelionMotl, Motl):
 
         relion_df.loc[:, self.shifts_id_names] = np.zeros((relion_df.shape[0], 3))
 
-
         return relion_df
 
     def create_optics_group_v5(self, pixel_size=None, subtomo_size=None, binning=None):
@@ -3881,7 +3886,7 @@ class RelionMotlv5(RelionMotl, Motl):
             "rlnTomoSubtomogramBinning": binning,
             "rlnImagePixelSize": pixel_size,
             "rlnImageSize": subtomo_size,
-            "rlnAmplitudeContrast" : 0.1
+            "rlnAmplitudeContrast": 0.1,
         }
 
         return pd.DataFrame(optics_default, index=[0])
@@ -3897,7 +3902,7 @@ class RelionMotlv5(RelionMotl, Motl):
         binning=None,
         pixel_size=None,
         adapt_object_attr=False,
-        convert=None
+        convert=None,
     ):
         if binning is None:
             binning = self.binning
@@ -3911,22 +3916,20 @@ class RelionMotlv5(RelionMotl, Motl):
                 relion_df = relion_df.drop(columns=["subtomo_id"])
                 return relion_df
         else:
-            relion_df = self.prepare_particles_data(
-                tomo_format=tomo_format, subtomo_format=subtomo_format
-            )
-            if "rlnRandomSubset" in relion_df.columns: #only in relion
+            relion_df = self.prepare_particles_data(tomo_format=tomo_format, subtomo_format=subtomo_format)
+            if "rlnRandomSubset" in relion_df.columns:  # only in relion
                 relion_df.loc[self.df["subtomo_id"].mod(2).eq(0).to_numpy(), "rlnRandomSubset"] = 2
                 relion_df.loc[self.df["subtomo_id"].mod(2).eq(1).to_numpy(), "rlnRandomSubset"] = 1
 
         # set coordinates, assumes that subtomograms will be extracted before at exact coordinate with subpixel precision
-        #todo: valid in warp, but in relion?
+        # todo: valid in warp, but in relion?
         if self.isWarp:
             relion_df.loc[:, ["rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ"]] = self.get_coordinates()
         else:
-            pass #todo: how to get coordinates in centeredAngst?
+            pass  # todo: how to get coordinates in centeredAngst?
 
         relion_df = self.convert_angles_to_relion(relion_df)
-        if not self.isWarp: #only in relion
+        if not self.isWarp:  # only in relion
             relion_df["rlnClassNumber"] = self.df["class"].to_numpy()
 
         if add_object_id:
@@ -3941,16 +3944,15 @@ class RelionMotlv5(RelionMotl, Motl):
                     relion_df["rlnCoordinate" + coord] = relion_df["rlnCoordinate" + coord] * binning
             else:
                 for coord in ("X", "Y", "Z"):
-                    pass #todo how should it be in the two different coordinate systems?
-                
+                    pass  # todo how should it be in the two different coordinate systems?
+
         if adapt_object_attr:
             self.relion_df = relion_df
 
         if "subtomo_id" in relion_df.columns:
             relion_df = relion_df.drop(columns=["subtomo_id"])
 
-        #todo: last step --> check convert parameter, check self.isWarp and convert to opposite?
-
+        # todo: last step --> check convert parameter, check self.isWarp and convert to opposite?
 
         return relion_df
 
@@ -3967,11 +3969,11 @@ class RelionMotlv5(RelionMotl, Motl):
         binning=None,
         pixel_size=None,
         optics_data=None,
-        convert=None
+        convert=None,
     ):
-        #todo: tag for possible conversion --> warptorelion, reliontowarp
-        #todo: when from warp to relion, put default values for missing columns and warn
-        #fixme: buggy coordinates
+        # todo: tag for possible conversion --> warptorelion, reliontowarp
+        # todo: when from warp to relion, put default values for missing columns and warn
+        # fixme: buggy coordinates
         relion_df = self.create_relion_df(
             use_original_entries=use_original_entries,
             keep_all_entries=keep_all_entries,
@@ -3982,7 +3984,7 @@ class RelionMotlv5(RelionMotl, Motl):
             binning=binning,
             pixel_size=pixel_size,
             adapt_object_attr=False,
-            convert=convert #if true: check isWarp, convert to opposite!
+            convert=convert,  # if true: check isWarp, convert to opposite!
         )
 
         if write_optics:
@@ -4328,24 +4330,26 @@ class DynamoMotl(Motl):
         """
         dynamo_df = pd.DataFrame(index=motl_df.index, columns=range(35))
         dynamo_df[:] = 0
-        dynamo_df.update({
-            0: motl_df["subtomo_id"],
-            1: 1,
-            2: 1,
-            3: motl_df["shift_x"],
-            4: motl_df["shift_y"],
-            5: motl_df["shift_z"],
-            6: -motl_df["psi"],
-            7: -motl_df["theta"],
-            8: -motl_df["phi"],
-            9: motl_df["score"],
-            19: motl_df["tomo_id"],
-            20: motl_df["object_id"],
-            21: motl_df["class"],
-            23: motl_df["x"],
-            24: motl_df["y"],
-            25: motl_df["z"]
-        })
+        dynamo_df.update(
+            {
+                0: motl_df["subtomo_id"],
+                1: 1,
+                2: 1,
+                3: motl_df["shift_x"],
+                4: motl_df["shift_y"],
+                5: motl_df["shift_z"],
+                6: -motl_df["psi"],
+                7: -motl_df["theta"],
+                8: -motl_df["phi"],
+                9: motl_df["score"],
+                19: motl_df["tomo_id"],
+                20: motl_df["object_id"],
+                21: motl_df["class"],
+                23: motl_df["x"],
+                24: motl_df["y"],
+                25: motl_df["z"],
+            }
+        )
         return dynamo_df
 
     def write_out(self, output_path):
@@ -4573,56 +4577,50 @@ class ModMotl(Motl):
         df_to_write = self.mod_df.copy()
         imod.write_model_binary(df_to_write, output_path)
 
+
 def emmotl2relion(
-    input_motl,
-    output_motl_path=None,
-    flip_handedness=False,
-    tomo_dim=None,
-    load_kwargs=None,
-    write_kwargs=None
+    input_motl, output_motl_path=None, flip_handedness=False, tomo_dim=None, load_kwargs=None, write_kwargs=None
 ):
     """Converts an EmMotl to RelionMotl format and optionally writes it to file.
 
-        Parameters
-        ----------
-        input_motl : str or pandas.Dataframe or EmMotl
-            Path to the input EM MOTL file or an already loaded EmMotl object.
+    Parameters
+    ----------
+    input_motl : str or pandas.Dataframe or EmMotl
+        Path to the input EM MOTL file or an already loaded EmMotl object.
 
-        output_motl_path : str, optional
-            If provided, the converted motl will be written to this path.
+    output_motl_path : str, optional
+        If provided, the converted motl will be written to this path.
 
-        flip_handedness : bool, default=False
-            If True, flips the handedness of the coordinates.
+    flip_handedness : bool, default=False
+        If True, flips the handedness of the coordinates.
 
-        tomo_dim : tuple of int, optional
-            Dimensions of the tomogram (required if `flip_handedness=True`).
+    tomo_dim : tuple of int, optional
+        Dimensions of the tomogram (required if `flip_handedness=True`).
 
-        load_kwargs : dict, optional
-            Dictionary of keyword arguments passed to the `RelionMotl` constructor.
-            See `RelionMotl.__init__` for full list of accepted keys, e.g.:
-            `{"pixel_size": 2.3, "version": 3, "optics_data": ...,}`
+    load_kwargs : dict, optional
+        Dictionary of keyword arguments passed to the `RelionMotl` constructor.
+        See `RelionMotl.__init__` for full list of accepted keys, e.g.:
+        `{"pixel_size": 2.3, "version": 3, "optics_data": ...,}`
 
-        write_kwargs : dict, optional
-            Dictionary of keyword arguments passed to `RelionMotl.write_out()`.
-            See `RelionMotl.write_out` for details, e.g.:
-            `{"optics_data": ..., "optics_data": ...}`
+    write_kwargs : dict, optional
+        Dictionary of keyword arguments passed to `RelionMotl.write_out()`.
+        See `RelionMotl.write_out` for details, e.g.:
+        `{"optics_data": ..., "optics_data": ...}`
 
-        Returns
-        ----------
-        rln_motl : RelionMotl converted object.
-        """
+    Returns
+    ----------
+    rln_motl : RelionMotl converted object.
+    """
     em_motl = EmMotl(input_motl)
     em_motl.update_coordinates()
 
     if flip_handedness:
         em_motl.flip_handedness(tomo_dimensions=tomo_dim)
 
-    load_kwargs = load_kwargs or {} #Ensure the argument is a dictionary
-    rln_motl = RelionMotl(
-        em_motl.df, **load_kwargs
-    )
+    load_kwargs = load_kwargs or {}  # Ensure the argument is a dictionary
+    rln_motl = RelionMotl(em_motl.df, **load_kwargs)
 
-    write_kwargs = write_kwargs or {} #Ensure the argument is a dictionary
+    write_kwargs = write_kwargs or {}  # Ensure the argument is a dictionary
     if output_motl_path is not None:
         rln_motl.write_out(
             output_motl_path,
@@ -4707,34 +4705,34 @@ def stopgap2relion(
 ):
     """Converts a StopgapMotl to RelionMotl format and optionally writes it to file.
 
-        Parameters
-        ----------
-        input_motl : str or pandas.Dataframe or EmMotl
-            Path to the input EM MOTL file or an already loaded EmMotl object.
+    Parameters
+    ----------
+    input_motl : str or pandas.Dataframe or EmMotl
+        Path to the input EM MOTL file or an already loaded EmMotl object.
 
-        output_motl_path : str, optional
-            If provided, the converted motl will be written to this path.
+    output_motl_path : str, optional
+        If provided, the converted motl will be written to this path.
 
-        flip_handedness : bool, default=False
-            If True, flips the handedness of the coordinates.
+    flip_handedness : bool, default=False
+        If True, flips the handedness of the coordinates.
 
-        tomo_dim : tuple of int, optional
-            Dimensions of the tomogram (required if `flip_handedness=True`).
+    tomo_dim : tuple of int, optional
+        Dimensions of the tomogram (required if `flip_handedness=True`).
 
-        load_kwargs : dict, optional
-            Dictionary of keyword arguments passed to the `RelionMotl` constructor.
-            See `RelionMotl.__init__` for full list of accepted keys, e.g.:
-            `{"pixel_size": 2.3, "version": 3, "optics_data" : ...}`
+    load_kwargs : dict, optional
+        Dictionary of keyword arguments passed to the `RelionMotl` constructor.
+        See `RelionMotl.__init__` for full list of accepted keys, e.g.:
+        `{"pixel_size": 2.3, "version": 3, "optics_data" : ...}`
 
-        write_kwargs : dict, optional
-            Dictionary of keyword arguments passed to `RelionMotl.write_out()`.
-            See `RelionMotl.write_out` for details, e.g.:
-            `{"optics_data": ..., "optics_data": ...}`
+    write_kwargs : dict, optional
+        Dictionary of keyword arguments passed to `RelionMotl.write_out()`.
+        See `RelionMotl.write_out` for details, e.g.:
+        `{"optics_data": ..., "optics_data": ...}`
 
-        Returns
-        ----------
-        rln_motl : RelionMotl converted object.
-        """
+    Returns
+    ----------
+    rln_motl : RelionMotl converted object.
+    """
     sg_motl = StopgapMotl(input_motl)
     sg_motl.update_coordinates()
 
@@ -4742,15 +4740,10 @@ def stopgap2relion(
         sg_motl.flip_handedness(tomo_dimensions=tomo_dim)
 
     load_kwargs = load_kwargs or {}
-    rln_motl = RelionMotl(
-        sg_motl.df, **load_kwargs
-    )
+    rln_motl = RelionMotl(sg_motl.df, **load_kwargs)
 
     write_kwargs = write_kwargs or {}
     if output_motl_path is not None:
-        rln_motl.write_out(
-            output_motl_path,
-            **write_kwargs
-        )
+        rln_motl.write_out(output_motl_path, **write_kwargs)
 
     return rln_motl

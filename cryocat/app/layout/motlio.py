@@ -267,32 +267,58 @@ def get_motl_load_component(prefix: str, display_option="block"):
             dbc.Row(
                 dcc.Dropdown(
                     id=f"{prefix}-motl-relion-version-dropdown",
-                    options=["Version 3.0", "Version 3.1", "Version 4.x"],
+                    options=["Version 3.0", "Version 3.1", "Version 4.x", "Version 5.x"],
                 ),
                 style={"display": "none"},
                 id=f"{prefix}-motl-relion-version",
             ),
             dbc.Row(
                 [
-                    dbc.Col(
-                        dbc.Input(
-                            id=f"{prefix}-motl-relion-pixelsize",
-                            type="number",
-                            placeholder="Pixel size",
-                            min=1.0,
-                            step=1,
-                        ),
-                        width=6,
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                dbc.Input(
+                                    id=f"{prefix}-motl-relion-pixelsize",
+                                    type="number",
+                                    placeholder="Pixel size",
+                                    min=1.0,
+                                    step=1,
+                                ),
+                                width=6,
+                            ),
+                            dbc.Col(
+                                dbc.Input(
+                                    id=f"{prefix}-motl-relion-binning",
+                                    type="number",
+                                    placeholder="Binning",
+                                    min=1.0,
+                                    step=1,
+                                ),
+                                width=6,
+                            ),
+                        ],
                     ),
-                    dbc.Col(
-                        dbc.Input(
-                            id=f"{prefix}-motl-relion-binning",
-                            type="number",
-                            placeholder="Binning",
-                            min=1.0,
-                            step=1,
-                        ),
-                        width=6,
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                dcc.Upload(
+                                    id=f"{prefix}-tomos-upload",
+                                    children=dbc.Col(
+                                        dbc.Button(
+                                            f"Upload {prefix} tomogram file (if any)",
+                                            color="light",
+                                        ),
+                                        width=12,
+                                        className="d-grid gap-1 col-6 mx-auto mt-3 mb-3",
+                                    ),
+                                    multiple=False,
+                                ),
+                                width=12,
+                            ),
+                            dbc.Col(html.Div(id=f"{prefix}-tomo-load-status"), width=12),
+                        ],
+                        style={"display": "none"},
+                        id=f"{prefix}-motl-relion-tomos-display",
                     ),
                 ],
                 style={"display": "none"},
@@ -319,6 +345,21 @@ def get_motl_load_component(prefix: str, display_option="block"):
 def register_motl_load_callbacks(prefix: str):
 
     @callback(
+        Output(f"{prefix}-relion5-tomos-store", "data"),
+        Output(f"{prefix}-tomo-load-status", "children"),
+        Input(f"{prefix}-tomos-upload", "contents"),
+        State(f"{prefix}-tomos-upload", "filename"),
+        prevent_initial_call=True,
+    )
+    def load_motl_file(contents, file_name):
+        if contents is None:
+            return no_update
+
+        content_type, content_string = contents.split(",")
+        decoded = base64.b64decode(content_string)
+        return decoded.decode("utf-8"), f"Tomograms loaded: {file_name}"
+
+    @callback(
         Output(f"{prefix}-motl-data-store", "data", allow_duplicate=True),
         Input(f"{prefix}-motl-upload", "contents"),
         State(f"{prefix}-motl-upload", "filename"),
@@ -326,9 +367,10 @@ def register_motl_load_callbacks(prefix: str):
         State(f"{prefix}-motl-relion-version-dropdown", "value"),
         State(f"{prefix}-motl-relion-pixelsize", "value"),
         State(f"{prefix}-motl-relion-binning", "value"),
+        State(f"{prefix}-relion5-tomos-store", "data"),
         prevent_initial_call=True,
     )
-    def load_motl(upload_content, filename, motl_type, rln_version, rln_pixelsize, rln_binning):
+    def load_motl(upload_content, filename, motl_type, rln_version, rln_pixelsize, rln_binning, rln_tomos):
 
         _, content_string = upload_content.split(",")
         decoded = base64.b64decode(content_string)
@@ -336,19 +378,37 @@ def register_motl_load_callbacks(prefix: str):
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[-1]) as tmp_file:
             tmp_file.write(decoded)
             tmp_file_path = tmp_file.name
+            tmp_file.close()
 
         motl_type = motl_type.lower().replace(" ", "")
-        if motl_type != "Relion":
+        if motl_type != "relion":
             motl = Motl.load(tmp_file_path, motl_type)
         else:
             if rln_version == "Version 3.0":
                 rln_kwargs = {"version": 3.0}
             elif rln_version == "Version 3.1":
                 rln_kwargs = {"version": 3.0}
+            elif rln_version == "Version 4.x":
+                rln_kwargs = {"version": 4.0, "pixel_size": rln_pixelsize, "binning": rln_binning}
             else:
-                rln_kwargs = {"version": 3.0, "pixel_size": rln_pixelsize, "binning": rln_binning}
 
-            motl = Motl.load(tmp_file_path, motl_type, rln_kwargs)
+                rln_kwargs = {"pixel_size": rln_pixelsize, "binning": rln_binning}
+                motl_type = "relion5"
+
+                if rln_tomos:
+                    with tempfile.NamedTemporaryFile(
+                        delete=False, suffix=os.path.splitext(filename)[-1], mode="w", encoding="utf-8", newline="\n"
+                    ) as tomo_tmp_file:
+                        tomo_tmp_file.write(rln_tomos)
+                        tomo_tmp_file_path = tomo_tmp_file.name
+                        tomo_tmp_file.close()  # necessary on windows
+                        rln_kwargs["input_tomograms"] = tomo_tmp_file_path
+
+            motl = Motl.load(tmp_file_path, motl_type, **rln_kwargs)
+            if rln_tomos:
+                os.remove(tomo_tmp_file_path)
+
+        os.remove(tmp_file_path)
 
         global tomo_ids
         tomo_ids = motl.get_unique_values("tomo_id")
@@ -359,6 +419,7 @@ def register_motl_load_callbacks(prefix: str):
         return table_data
 
     @callback(
+        Output(f"{prefix}-motl-relion-version-dropdown", "value", allow_duplicate=True),
         Output(f"{prefix}-motl-relion-version", "style", allow_duplicate=True),
         Output(f"{prefix}-motl-relion-options", "style", allow_duplicate=True),
         Input(f"{prefix}-motl-dropdown", "value"),
@@ -367,18 +428,21 @@ def register_motl_load_callbacks(prefix: str):
     def display_options_motl_type(motl_type):
 
         if motl_type == "Relion":
-            return {"display": "flex", "marginTop": "1rem"}, {"display": "none"}
+            return "Version 3.0", {"display": "flex", "marginTop": "1rem"}, {"display": "none"}
         else:
-            return {"display": "none"}, {"display": "none"}
+            return "Version 3.0", {"display": "none"}, {"display": "none"}
 
     @callback(
         Output(f"{prefix}-motl-relion-options", "style", allow_duplicate=True),
+        Output(f"{prefix}-motl-relion-tomos-display", "style", allow_duplicate=True),
         Input(f"{prefix}-motl-relion-version-dropdown", "value"),
         prevent_initial_call=True,
     )
     def display_options_relion_version(relion_version):
 
         if relion_version == "Version 3.0" or relion_version == "Version 3.1":
-            return {"display": "none"}
+            return {"display": "none"}, {"display": "none"}
+        elif relion_version == "Version 4.x":
+            return {"display": "flex", "marginTop": "1rem"}, {"display": "none"}
         else:
-            return {"display": "flex", "marginTop": "1rem"}
+            return {"display": "flex", "marginTop": "1rem"}, {"display": "flex", "marginTop": "1rem"}

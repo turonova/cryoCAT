@@ -45,7 +45,7 @@ def get_viewer_component(prefix: str):
                                             label="Tomo ID",
                                             children=[],
                                             group=True,
-                                            className="scrollable-dropdown"
+                                            className="scrollable-dropdown",
                                         ),
                                         dbc.Button("Next", id=f"{prefix}-next", n_clicks=0),
                                     ]
@@ -357,12 +357,28 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
 
         make_axis_trace(fig, length=5)
 
+        # Calculate data ranges
+        x_range = qp_df["twist_x"].max() - qp_df["twist_x"].min()
+        y_range = qp_df["twist_y"].max() - qp_df["twist_y"].min()
+        z_range = qp_df["twist_z"].max() - qp_df["twist_z"].min()
+
+        # Avoid divide by zero (fallback to 1)
+        max_range = max(x_range, y_range, z_range) or 1
+
+        aspect_ratio = dict(
+            x=x_range / max_range,
+            y=y_range / max_range,
+            z=z_range / max_range,
+        )
+
         fig.update_layout(
             margin=dict(t=0, b=0, l=0, r=0),
             scene=dict(
                 xaxis=dict(title="X", range=[-ax_limit, ax_limit]),
                 yaxis=dict(title="Y", range=[-ax_limit, ax_limit]),
                 zaxis=dict(title="Z", range=[-ax_limit, ax_limit]),
+                aspectmode="manual",
+                aspectratio=aspect_ratio,
             ),
             showlegend=False,
         )

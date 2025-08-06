@@ -34,7 +34,8 @@ layout = html.Div(
         dcc.Store(id="tviewer-desc-data"),
         dcc.Store(id="tviewer-desc-index", data=0),
         dcc.Store(id="twist-global-radius"),  # to store radius
-        # dcc.Store(id=f"kmeans-cluster-data-store"),  # storing k means clustering info
+        dcc.Store(id="main-relion5-tomos-store"),  # storing tomogram file content for relion5 main motl
+        dcc.Store(id="nn-relion5-tomos-store"),  # storing tomogram file content for relion5 nn motl
         dcc.Store(id=f"kmeans-global-data-store"),  # storing k means data
         dcc.Store(id=f"tabv-motl-global-data-store"),  # main motl table
         dcc.Store(id=f"tabv-motl-nn-global-data-store"),  # nn motl table if available
@@ -51,7 +52,7 @@ layout = html.Div(
             className="g-0",
             style={"margin": "0", "padding": "0"},
         ),
-        dcc.Interval(id="log-check", interval=1000, n_intervals=0),
+        # dcc.Interval(id="log-check", interval=1000, n_intervals=0),
         dcc.Store(id="log-index", data=0),
         dcc.Store(id="log-content", data=""),
         dbc.Offcanvas(
