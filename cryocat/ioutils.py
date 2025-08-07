@@ -897,7 +897,7 @@ def dimensions_load(input_dims, tomo_idx=None):
             dimensions[0, 2] = com_file_d["THICKNESS"][0]
             dimensions = pd.DataFrame(dimensions)
         elif input_dims.endswith(".star"):
-            #wedgelist - based on the label - specifier
+            #todo: add compatibility with wedgelist - based on the label - specifier
             frames, specifiers, _ = starfileio.Starfile.read(input_dims)
             if "data_global" in specifiers:
                 data_id = specifiers.index("data_global")
@@ -907,9 +907,6 @@ def dimensions_load(input_dims, tomo_idx=None):
             df = frames[data_id][columns]
             if "rlnTomoName" not in df.columns:
                 raise ValueError("'rlnTomoName' column not found in DataFrame")
-            df["rlnTomoName"] = df["rlnTomoName"].apply(
-                lambda name: int(re.search(r"\d+", name).group()) if isinstance(name, str) else name
-            )
             dimensions = df
         else:
             if os.path.isfile(input_dims):

@@ -4555,12 +4555,11 @@ class TestRelionMotlv5:
         )
         motl5.write_out(
             output_path = "./test_data/motl_data/relion5/clean/warp2test.star",
-            type="relion",
             write_optics=True,
             optics_data= self.warp_particles_path,
         )
 
-    def test_readInWarpStar(self):
+    def test_readInWarpRelion(self):
         pd.set_option('display.max_rows', None)
         pd.set_option('display.max_columns', None)
         pd.set_option("display.width", 2000)
@@ -4574,6 +4573,9 @@ class TestRelionMotlv5:
         #print(motl5_relion.optics_data)
         #print(motl5_relion.tomo_df)
         # print(motl5_relion.df) #todo: test conversion, how?
+        print(motl5_relion.relion_df[['rlnCenteredCoordinateXAngst', 'rlnCenteredCoordinateYAngst', 'rlnCenteredCoordinateZAngst']])
+        print("\n")
+        print(motl5_relion.df[['x','y','z']])
 
         with pytest.raises(Exception):
             motl5_relion1 = RelionMotlv5(
@@ -4589,11 +4591,11 @@ class TestRelionMotlv5:
 
         #test: input_tomo with file
         data_rows = [
-            [1, 4000, 4000, 2000],
-            [3, 4000, 4000, 2000],
-            [43, 4000, 4000, 2000],
-            [45, 4000, 4000, 2000],
-            [54, 4000, 4000, 2000]
+            ["TS_01", 4000, 4000, 2000],
+            ["TS_03", 4000, 4000, 2000],
+            ["TS_43", 4000, 4000, 2000],
+            ["TS_45", 4000, 4000, 2000],
+            ["TS_54", 4000, 4000, 2000]
         ]
         column_names = ['rlnTomoName', 'rlnTomoSizeX', 'rlnTomoSizeY', 'rlnTomoSizeZ']
         dim_tomo_df = pd.DataFrame(data_rows, columns=column_names)
@@ -4625,4 +4627,13 @@ class TestRelionMotlv5:
         assert not relion5motl_warp2.tomo_df.empty
         assert relion5motl_warp2.df.empty
 
+
+    def test_convert1(self):
+        motl5_relion = RelionMotlv5(
+            input_particles=self.relion_particles_path,
+            input_tomograms=self.relion_tomo_path,
+        )
+        # convert tests
+        convertedtowarp = motl5_relion.convert_coordinates_merge()
+        print(convertedtowarp)
 

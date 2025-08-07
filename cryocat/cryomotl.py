@@ -3575,7 +3575,8 @@ class RelionMotlv5(RelionMotl, Motl):
             raise UserInputError(f"Wrong file format. Must contain data_global: warp2, relionv5")
 
         columns = ["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]
-        tomo_df = RelionMotlv5.clean_tomo_name_column(frames[data_id][columns])
+        tomo_df = RelionMotlv5.clean_tomo_name_column(frames[data_id][columns])#to consider when merging
+        tomo_df = frames[data_id][columns]
 
         return tomo_df
 
@@ -3606,17 +3607,17 @@ class RelionMotlv5(RelionMotl, Motl):
         self.relion_df.reset_index(inplace=True, drop=True)
 
         self.set_pixel_size()
+        self.check_isWarp()  # identify warp or relion
 
-        # assign coordinates (relionv5)
-        for coord in ("x", "y", "z"):
-            relion_column = "rlnCenteredCoordinate" + coord.upper() + "Angst"
-            self.assign_column(relion_df, {coord: relion_column})
-        # warp2.0
+
         for coord in ("x", "y", "z"):
             relion_column = "rlnCoordinate" + coord.upper()
-            self.assign_column(relion_df, {coord: relion_column})
+            if not self.isWarp: #relion5
+                converted_relion_df = self.convert_coordinates_merge()
+                self.assign_column(converted_relion_df, {coord: relion_column})
+            else: #warp2
+                self.assign_column(relion_df, {coord: relion_column})
 
-        self.check_isWarp()  # identify warp or relion
 
         self.convert_shifts(relion_df)
         self.convert_angles_from_relion(relion_df)
