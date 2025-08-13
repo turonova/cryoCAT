@@ -2813,7 +2813,7 @@ class LinkTypeAlphaComplex(Feature):
 
     def __init__(self, assoc_desc):
         """The LinkTypeAlpha feature computes a simplicial isomorphism invariant for a 1-dimensional simplicial complex,
-        e.g. for the link of a vertex in a 2-dimensional triangulated surface (``link type'').
+        e.g. for the link of a vertex in a 2-dimensional triangulated surface ('link type').
 
         Parameters
         ----------
@@ -2825,12 +2825,12 @@ class LinkTypeAlphaComplex(Feature):
         self.link_edges = assoc_desc.link_edges
 
     def compute(self):
-        """Compute a simplicial isomorphism invariant (``link type'') for a 1-dimensional simplicial complex.
+        """Compute a simplicial isomorphism invariant ('link type') for a 1-dimensional simplicial complex.
 
         Returns
         -------
         pandas.DataFrame
-            A DataFrame containing the simplicial isomorphism invariant (``link type'') for each query point.
+            A DataFrame containing the simplicial isomorphism invariant ('link type') for each query point.
 
         """
 
