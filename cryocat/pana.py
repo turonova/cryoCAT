@@ -26,14 +26,13 @@ warnings.filterwarnings("ignore")
 
 
 def rotate_image(image, alpha, fill_mode="constant", fill_value=0.0):
-    """
-    Rotate an ndarray image by a specified angle.
+    """Rotate an ndarray image by a specified angle.
 
-    Uses `skimage.transform.rotate` to rotate the input image without resizing
+    Uses ``skimage.transform.rotate`` to rotate the input image without resizing
     the output. Pixels outside the boundaries of the input are filled
     according to the specified mode and fill value.
 
-    Some descriptions are from skicit-image page (https://scikit-image.org).
+    Some descriptions are from `scikit-image page <https://scikit-image.org>`_.
 
     Parameters
     ----------
@@ -67,11 +66,11 @@ def _ctf(defocus, pshift, famp, cs, evk, f):
     Parameters
     ----------
     defocus : array_like
-        Defocus values (in μm) for each tilt.
-        Shape is `(len(defocus), 1)`.
+        Defocus values (in :math:`\mu\mathrm{m}`) for each tilt.
+        Shape is ``(len(defocus), 1)``.
     pshift : array_like
         Phase shift values (in degrees) for each tilt. 0 if no phase shift is added.
-        Shape is `(len(pshift), 1)`.
+        Shape is ``(len(pshift), 1)``.
     famp : float
         Amplitude contrast (typically between 0.0 and 0.2).
     cs : float
@@ -79,7 +78,7 @@ def _ctf(defocus, pshift, famp, cs, evk, f):
     evk : float
         Accelerating voltage (in kV).
     f : ndarray
-        1D spatial frequency magnitude array (in Å⁻¹) at which to evaluate the CTF.
+        1D spatial frequency magnitude array (in :math:`\mathrm{\AA}^{-1}`) at which to evaluate the CTF.
         Must be 1D, as other shapes cannot be broadcasted with defocus /  
         phase shift array of shape (len(defocus), 1). 
 
@@ -87,14 +86,15 @@ def _ctf(defocus, pshift, famp, cs, evk, f):
     -------
     ctf : ndarray
         The computed 1D CTF curve evaluated at each tilt as a function of 
-        frequency array `f`. Shape is `(len(defocus), len(f))`.
+        frequency array `f`. Shape is ``(len(defocus), len(f))``.
 
     Notes
     -----
     - The output combines both sine and cosine components weighted by 
       phase and amplitude contrast:
-        CTF(f) = sqrt(1 - famp²) * sin(χ(f)) + famp * cos(χ(f))
-      where χ(f) is the aberration phase function.
+.. math::
+   \mathrm{CTF}(f) = \sqrt{1 - f_\mathrm{amp}^2} \, \sin(\chi(f)) + f_\mathrm{amp} \, \cos(\chi(f))
+       where :math:`\chi(f)` is the aberration phase function.
     - this output is of radial symmetry  
     """
 
@@ -245,8 +245,8 @@ def generate_exposure(wedgelist, slice_idx, slice_weight, binning):
     ----------
     wedgelist : pandas.DataFrame
         Metadata table containing at least the following columns:
-        - "exposure": float, cumulative electron exposure per tilt (in e⁻/Å²)
-        - "pixelsize": float, unbinned pixel size (in Å)
+        - "exposure": float, cumulative electron exposure per tilt (in \mathrm{e^- / \AA^2})
+        - "pixelsize": float, unbinned pixel size (in :math:`\mathrm{\AA}`)
     
     slice_idx : list of numpy.ndarray
         Indices of the frequency components (aka. points in fourier space)              
@@ -270,9 +270,9 @@ def generate_exposure(wedgelist, slice_idx, slice_weight, binning):
     -----
     The attenuation function follows the empirical dose-dependent decay model:
 
-        exp(-exposure / (2 * (a * f^b + c)))
+    .. math::\exp\Bigg(-\frac{\mathrm{exposure}}{2 \, (a \, f^b + c)}\Bigg)
 
-    where f is the spatial frequency in Å⁻¹ and a, b, c are empirical constants.
+    where f is the spatial frequency in :math:`\mathrm{\AA}^{-1}` and a, b, c are empirical constants.
     See `this paper <https://elifesciences.org/articles/06980>`_ for more info. 
     """
 
@@ -317,7 +317,7 @@ def generate_wedgemask_slices_template(wedgelist, template_filter):
     Returns
     -------
     active_slices_idx : list of tuple of ndarrays
-        A list of index tuples `[(zs, ys, xs)]` for each tilt, indicating where the
+        A list of index tuples ``[(zs, ys, xs)]`` for each tilt, indicating where the
         projection intersects the bandpassed Fourier space.
         Each value inside the tuple is an array indicating where all active points
         is on each dimension. len(active_slices_idx) = len(wedgelist). 
@@ -635,7 +635,8 @@ def create_em_path(folder_path, structure_name, em_filename):
 
 def create_subtomo_name(structure_name, motl_name, tomo_id, boxsize):
     """Generate a standardized filename for a subtomogram.
-    The generated file name is 'subtomo_<structure_name>_m<motl_name>_t<tomo_id>_s<boxsize>.em'.
+    The generated file name is 
+    :code:`subtomo_<structure_name>_m<motl_name>_t<tomo_id>_s<boxsize>.em`
 
     Parameters
     ----------
@@ -752,7 +753,7 @@ def create_output_folder_name(tmpl_index):
     Returns
     -------
     str
-        The name of result folder. It should be "id_<tmpl_index>_results".
+        The name of result folder. It should be ``id_<tmpl_index>_results``.
     """
 
     return create_output_base_name(tmpl_index) + "_results"
@@ -769,14 +770,14 @@ def create_output_folder_path(folder_path, structure_name, folder_spec):
         The name of the structure.
     folder_spec : int or else
         Information about the output folder. If int (should be an index from the 
-        template list csv), the output folder name will be "id_<folder_spec>_results". 
-        If not int, the output folder name will be "<folder_spec>".
+        template list csv), the output folder name will be ``id_<folder_spec>_results``. 
+        If not int, the output folder name will be ``<folder_spec>``.
 
     Returns
     -------
     output_path : str
-        The full path to the output folder. Should be either "id_<folder_spec>_results" 
-        or "<folder_spec>".
+        The full path to the output folder. Should be either ``id_<folder_spec>_results`` 
+        or ``<folder_spec>``.
     """
 
     if isinstance(folder_spec, int):
@@ -1316,7 +1317,7 @@ def compute_center_peak_stats_and_profiles(template_list, indices, parent_folder
     For each specified template index, this function:
     1. Identifies the peak location and value.
     2. Saves the 1D line profiles through the peak along x, y, and z axes. Saved as 
-        `<output_base>_peak_line_profiles.csv` in the output folder.
+        ``<output_base>_peak_line_profiles.csv`` in the output folder.
     3. Computes the drop in score from the peak to its immediate neighbors along 
        each axis.
     6. Calculates mean, median, and variance of scores in small areas where the peaks
@@ -1662,10 +1663,10 @@ def run_analysis(template_list,
     Notes
     -------
     - Writes output files for each processed index:
-        * `<output_base>_scores.em` (cross-correlation coefficient map)
-        * `<output_base>_angles.em` (best-angle index map)
+        * ``<output_base>_scores.em`` (cross-correlation coefficient map)
+        * ``<output_base>_angles.em`` (best-angle index map)
         * CSV file with per-angle statistics
-    - Writes angular distance maps via `tmana.create_angular_distance_maps`
+    - Writes angular distance maps via ``tmana.create_angular_distance_maps``
     - Updates `template_list` CSV in place:
         * "Output folder" set for each processed index
         * "Done" flag set to True
@@ -1795,9 +1796,9 @@ def run_angle_analysis(
     - A histogram of CCC values across the angular range is also computed for each 
       rotation type.
     - output files are:
-      - `<output_base>_gradual_angles_analysis.csv`: Table containing detailed 
+      - ``<output_base>_gradual_angles_analysis.csv``: Table containing detailed 
         rotation metrics for all tested angles and rotation types.
-      - `<output_base>_gradual_angles_histograms.csv`: Histograms of CCC values for 
+      - ``<output_base>_gradual_angles_histograms.csv``: Histograms of CCC values for 
         each rotation type.
     """
 
@@ -1935,7 +1936,7 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
     - Scatter plots, histograms, and gradual rotation CCC analysis (if available)
     - Cross-sectional heatmaps of masks, score maps, and angular distance maps
     
-    The output is saved as id_<index>_summary.pdf` in the corresponding 
+    The output is saved as ``id_<index>_summary.pdf`` in the corresponding 
     output folder for each index.
 
     Parameters
@@ -1951,7 +1952,7 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
     -----
     - If the "Done" column is False for a given index, that entry is skipped.
     - Gradual rotation histogram and CCC analysis are included if the corresponding
-      `_gradual_angles_histograms.csv` and `_gradual_angles_analysis.csv` are found.
+      ``_gradual_angles_histograms.csv`` and ``_gradual_angles_analysis.csv`` are found.
     """
 
     temp_df = pd.read_csv(template_list, index_col=0)
@@ -2497,8 +2498,8 @@ def rename_folders(template_list, indices, parent_folder_path):
 
     Notes
     -----
-    - Uses `create_structure_path` to locate the parent folder for each structure.
-    - Uses `create_output_folder_name` to generate a new standardized folder name
+    - Uses ``create_structure_path`` to locate the parent folder for each structure.
+    - Uses ``create_output_folder_name`` to generate a new standardized folder name
       based on the index.
     """
 
@@ -2543,12 +2544,12 @@ def rename_scores_angles(template_list, indices, parent_folder_path):
         * `"subtomo"` → `"ts_t<tomogram_number>_" + Map type`
         * other → `"td_<Compare>_" + Map type`
     - The following files are renamed with new base name for each entry:
-        * `<base>.csv`
-        * `<base>_scores.em`
-        * `<base>_angles.em`
-        * `<base>_angles_dist_all.em`
-        * `<base>_angles_dist_normals.em`
-        * `<base>_angles_dist_inplane.em`
+        * ``<base>.csv``
+        * ``<base>_scores.em``
+        * ``<base>_angles.em``
+        * ``<base>_angles_dist_all.em``
+        * ``<base>_angles_dist_normals.em``
+        * ``<base>_angles_dist_inplane.em``
     """
 
     temp_df = pd.read_csv(template_list, index_col=0)
