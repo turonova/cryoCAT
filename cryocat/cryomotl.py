@@ -3575,13 +3575,14 @@ class RelionMotlv5(RelionMotl, Motl):
             raise UserInputError(f"Wrong file format. Must contain data_global: warp2, relionv5")
 
         columns = ["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]
-        tomo_df = RelionMotlv5.clean_tomo_name_column(frames[data_id][columns])#to consider when merging
+        tomo_df = RelionMotlv5.clean_tomo_name_column(frames[data_id][columns])  # to consider when merging
         tomo_df = frames[data_id][columns]
 
         return tomo_df
 
     def convert_to_motl(self, relion_df, optics_df):
         """The function converts a DataFrame in relion format into a motl DataFrame.
+
         Parameters
         ----------
         relion_df : pandas.DataFrame
@@ -3609,15 +3610,13 @@ class RelionMotlv5(RelionMotl, Motl):
         self.set_pixel_size()
         self.check_isWarp()  # identify warp or relion
 
-
         for coord in ("x", "y", "z"):
             relion_column = "rlnCoordinate" + coord.upper()
-            if not self.isWarp: #relion5
+            if not self.isWarp:  # relion5
                 converted_relion_df = self.convert_coordinates_merge()
                 self.assign_column(converted_relion_df, {coord: relion_column})
-            else: #warp2
+            else:  # warp2
                 self.assign_column(relion_df, {coord: relion_column})
-
 
         self.convert_shifts(relion_df)
         self.convert_angles_from_relion(relion_df)

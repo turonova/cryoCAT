@@ -4,11 +4,12 @@ import dash
 import pandas as pd
 from dash import dash_table
 import plotly.express as px
-from dash import html, dcc, ctx
+from dash import html, dcc
 import dash_bootstrap_components as dbc
 from dash import callback, Input, Output, State, html, dcc, ALL, ctx, no_update
 from cryocat.app.layout.tomoview import get_viewer_component, register_viewer_callbacks
 from cryocat.app.layout.tableview import get_table_component, register_table_callbacks
+from cryocat.app.layout.tableplot import register_table_plot_callbacks
 
 from cryocat.tango import TwistDescriptor
 from cryocat.cryomotl import Motl
@@ -543,6 +544,8 @@ register_table_callbacks("tabv-nn")
 register_table_callbacks("tabv-twist")
 register_table_callbacks("tabv-desc")
 
+register_table_plot_callbacks("tabv-motl-table-plot", "tabv-motl-global-data-store")
+
 
 @callback(
     Output("motl-display-div", "style"),
@@ -616,7 +619,7 @@ def compute_twist_vector(n_clicks, motl_df, symm_type, symm_value, param_valus, 
         symm = symm_type
 
     radius = twist_kwargs["nn_radius"]
-    
+
     global_twist["obj"] = TwistDescriptor(input_motl=pd.DataFrame(motl_df), symm=symm, **twist_kwargs)
 
     return "twist-tab", global_twist["obj"].df.to_dict("records"), radius

@@ -1,4 +1,8 @@
+from __future__ import annotations
 import numpy as np
+import pandas as pd
+import math
+import re
 import matplotlib.pyplot as plt
 from matplotlib import colors
 from matplotlib import gridspec
@@ -6,6 +10,310 @@ from matplotlib import cm
 import matplotlib.ticker as mticker
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from collections import defaultdict
+from matplotlib.colors import Normalize
+import plotly.express as px
+from dataclasses import dataclass, field, asdict
+from contextlib import contextmanager
+from copy import deepcopy
+from typing import Dict, List, Optional, Sequence, Tuple, Union
+import plotly.io as pio
+
+
+Color = str  # hex like "#1f77b4" or "rgb(…)"
+Colorscale = List[Tuple[float, Color]]  # [(0.0, "#..."), (1.0, "#...")]
+
+# ---------- Example usage --------------------
+# # 1) Set global defaults for the session
+# set_defaults(
+#     template="plotly_white",
+#     height=480,
+#     font_family="Inter, Arial, sans-serif",
+#     font_size=13,
+#     colorway="D3",                 # built-in qualitative palette by name
+#     colorscale="Viridis",          # built-in continuous scale by name
+#     extra_layout=dict(legend=dict(orientation="h", y=1.02))
+# )
+
+# # 2) Register custom palette/scale and use them by name
+# register_palette("PaletteX", ["#3b82f6", "#10b981", "#f59e0b", "#ef4444"])
+# register_colorscale("Monet", ["#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B96"])
+
+# set_defaults(colorway="PaletteX", colorscale="Monet")
+
+# # 3) Build figures
+# df = px.data.iris()
+# fig1 = px.scatter(df, x="sepal_width", y="sepal_length", color="species", **px_defaults())
+# fig2 = go.Figure()
+# fig2.add_scatter(x=df["sepal_width"], y=df["sepal_length"], mode="markers")
+# apply_defaults(fig2)  # apply to graph_objects figure
+
+# # 4) Temporary overrides
+# with use_defaults(height=700, colorway="Set3"):
+#     fig3 = px.histogram(df, x="sepal_length", nbins=20, **px_defaults())
+
+# # After the 'with', defaults revert automatically
+
+
+# ---------- Built-ins (from Plotly) ----------
+def _collect_builtin_palettes() -> Dict[str, List[Color]]:
+    q = px.colors.qualitative
+    names = [n for n in dir(q) if n[:1].isupper()]
+    return {n.lower(): getattr(q, n) for n in names}
+
+
+def _collect_builtin_colorscales() -> Dict[str, Colorscale]:
+    result: Dict[str, Colorscale] = {}
+    for mod in (px.colors.sequential, px.colors.diverging, px.colors.cyclical):
+        names = [n for n in dir(mod) if n[:1].isupper()]
+        for n in names:
+            seq = getattr(mod, n)
+            # Plotly accepts hex directly in colorscales; provide stops at endpoints.
+            # If seq is already a colorscale (list of [pos, color]) keep as-is.
+            if seq and isinstance(seq[0], (list, tuple)) and len(seq[0]) == 2 and isinstance(seq[0][0], (int, float)):
+                result[n.lower()] = [(float(p), c) for p, c in seq]
+            else:
+                k = len(seq) - 1 if len(seq) > 1 else 1
+                result[n.lower()] = [(i / k, c) for i, c in enumerate(seq)]
+    return result
+
+
+_BUILTIN_PALETTES = _collect_builtin_palettes()  # e.g. "plotly", "d3", "set3"
+_BUILTIN_SCALES = _collect_builtin_colorscales()  # e.g. "viridis", "plasma", "rdBu"
+
+# ---------- Registries (user-defined) ----------
+CUSTOM_PALETTES: Dict[str, List[Color]] = {}
+CUSTOM_SCALES: Dict[str, Colorscale] = {}
+
+
+def register_palette(name: str, colors: Sequence[Color]) -> None:
+    """Register a discrete palette (used for categorical colorway)."""
+    if not colors:
+        raise ValueError("Palette must contain at least one color.")
+    CUSTOM_PALETTES[name.lower()] = list(colors)
+
+
+def register_colorscale(name: str, hex_colors: Sequence[Color]) -> None:
+    """Register a continuous colorscale from a list of colors (stops spread evenly)."""
+    if not hex_colors:
+        raise ValueError("Colorscale must contain at least one color.")
+    k = len(hex_colors) - 1 if len(hex_colors) > 1 else 1
+    CUSTOM_SCALES[name.lower()] = [(i / k, c) for i, c in enumerate(hex_colors)]
+
+
+def resolve_palette(spec: Optional[Union[str, Sequence[Color]]]) -> List[Color]:
+    """Return a list of colors given a name or explicit sequence."""
+    if spec is None:
+        return _BUILTIN_PALETTES["plotly"]
+    if isinstance(spec, str):
+        key = spec.lower()
+        if key in CUSTOM_PALETTES:
+            return CUSTOM_PALETTES[key]
+        if key in _BUILTIN_PALETTES:
+            return _BUILTIN_PALETTES[key]
+        raise KeyError(f"Unknown palette '{spec}'.")
+    return list(spec)
+
+
+def resolve_colorscale(spec: Optional[Union[str, Colorscale, Sequence[Color]]]) -> Colorscale:
+    """Return a Plotly colorscale [(pos,color),…] from name or explicit input."""
+    if spec is None:
+        return _BUILTIN_SCALES["viridis"]
+    if isinstance(spec, str):
+        key = spec.lower()
+        if key in CUSTOM_SCALES:
+            return CUSTOM_SCALES[key]
+        if key in _BUILTIN_SCALES:
+            return _BUILTIN_SCALES[key]
+        raise KeyError(f"Unknown colorscale '{spec}'.")
+    # If user passed a list of colors, convert to evenly spaced stops
+    if spec and isinstance(spec[0], str):
+        hex_colors = list(spec)  # type: ignore
+        k = len(hex_colors) - 1 if len(hex_colors) > 1 else 1
+        return [(i / k, c) for i, c in enumerate(hex_colors)]
+    # Already a colorscale of (pos,color)
+    return [(float(p), c) for p, c in spec]  # type: ignore
+
+
+def _is_pair_list(obj) -> bool:
+    return isinstance(obj, (list, tuple)) and len(obj) > 0 and isinstance(obj[0], (list, tuple)) and len(obj[0]) == 2
+
+
+def _normalize_scale_for_sampling(spec: Union[str, Sequence[Color], Colorscale]) -> Union[str, Colorscale]:
+    """
+    Return either a string name (pass-through) or a colorscale with float positions.
+    This guarantees px.colors.sample_colorscale won't see string positions.
+    """
+    if isinstance(spec, str):
+        # Let Plotly handle known names like "Viridis" directly (safest path).
+        return spec
+
+    # List of hex -> evenly spaced stops
+    if isinstance(spec, (list, tuple)) and spec and isinstance(spec[0], str):
+        colors = list(spec)
+        k = len(colors) - 1 if len(colors) > 1 else 1
+        return [(i / k, str(c)) for i, c in enumerate(colors)]
+
+    # List of (pos, color) -> coerce pos to float, color to str
+    if _is_pair_list(spec):
+        return [(float(p), str(c)) for p, c in spec]  # <-- force float positions
+
+    raise TypeError("Invalid colorscale input.")
+
+
+def _pad_truncate(pal: Sequence[Color], n: Optional[int]) -> List[Color]:
+    if n is None:
+        return list(pal)
+    if n <= 0:
+        return []
+    k = max(len(pal), 1)
+    return (list(pal) * math.ceil(n / k))[:n]
+
+
+def resolve_colors_any(
+    spec: Optional[Union[str, Sequence[Color], Colorscale]] = None,
+    *,
+    color_type: str = "palette",  # "palette" or "colorscale"
+    n: Optional[int] = None,  # length when requesting a palette
+) -> Union[List[Color], Colorscale]:
+    color_type = color_type.lower()
+    if color_type not in {"palette", "colorscale"}:
+        raise ValueError("color_type must be 'palette' or 'colorscale'")
+
+    # Choose default source by requested output type
+    if spec is None:
+        spec = DEFAULTS.colorway if color_type == "palette" else DEFAULTS.colorscale
+
+    # Quick membership maps (case-insensitive) to disambiguate names
+    pal_names = {**{k: True for k in CUSTOM_PALETTES}, **{k: True for k in _BUILTIN_PALETTES}}
+    scale_names = {**{k: True for k in CUSTOM_SCALES}, **{k: True for k in _BUILTIN_SCALES}}
+
+    if color_type == "palette":
+        # If explicitly a palette (list of hex) — use it
+        if isinstance(spec, (list, tuple)) and spec and isinstance(spec[0], str):
+            return _pad_truncate(spec, n)
+
+        # If a known palette name
+        if isinstance(spec, str) and spec.lower() in pal_names:
+            return _pad_truncate(resolve_palette(spec), n)
+
+        # Otherwise treat as colorscale and sample n colors
+        cs = _normalize_scale_for_sampling(spec)  # string name OR numeric pairs
+        # Float sample points
+        num = n if n is not None else 10
+        t = [float(x) for x in (np.linspace(0, 1, num) if num > 1 else np.array([0.5]))]
+        rgb_list = px.colors.sample_colorscale(cs, t, colortype="tuple")
+        hex_colors = [
+            "#{:02x}{:02x}{:02x}".format(int(round(255 * r)), int(round(255 * g)), int(round(255 * b)))
+            for (r, g, b) in rgb_list
+        ]
+        return hex_colors
+
+    # color_type == "colorscale"
+    # If a known colorscale name
+    if isinstance(spec, str) and spec.lower() in scale_names:
+        return _normalize_scale_for_sampling(spec)  # keeps name or coerces pairs
+
+    # If already (pos,color) or list of hex, normalize to pairs with float positions
+    if isinstance(spec, (list, tuple)):
+        return _normalize_scale_for_sampling(spec)
+
+    # Palette name → convert to evenly spaced stops
+    pal = resolve_palette(spec)
+    k = len(pal)
+    if k <= 1:
+        c = pal[0] if k == 1 else "#000000"
+        return [(0.0, c), (1.0, c)]
+    return [(i / (k - 1), c) for i, c in enumerate(pal)]
+
+
+# ---------- Global defaults ----------
+@dataclass
+class Defaults:
+    template: str = "plotly_white"
+    height: int = 500
+    width: Optional[int] = None
+    showlegend: bool = True
+    margin: dict = field(default_factory=lambda: dict(l=60, r=20, t=40, b=50))
+    font_family: str = "Arial, sans-serif"
+    font_size: int = 14
+    colorway: Union[str, Sequence[Color]] = "Plotly"  # discrete palette name or list
+    colorscale: Union[str, Colorscale, Sequence[Color]] = "Viridis"  # continuous scale
+    extra_layout: dict = field(default_factory=dict)  # any other default layout
+
+    def to_layout_kwargs(self) -> dict:
+        """Convert defaults into fig.update_layout kwargs (resolving names)."""
+        kwargs = dict(
+            template=self.template,
+            height=self.height,
+            width=self.width,
+            showlegend=self.showlegend,
+            margin=self.margin,
+            font=dict(family=self.font_family, size=self.font_size),
+            colorway=resolve_palette(self.colorway),
+            coloraxis=dict(colorscale=resolve_colorscale(self.colorscale)),
+        )
+        kwargs.update(self.extra_layout)
+        return kwargs
+
+
+# The single source of truth
+DEFAULTS = Defaults()
+
+# Some colorschemes for start
+
+register_palette("Monet", ["#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B96"])
+register_colorscale("Monet", ["#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B96"])
+
+
+def set_defaults(**kwargs) -> None:
+    """Update global DEFAULTS. Nested 'extra_layout' is merged (shallow)."""
+    global DEFAULTS
+    d = deepcopy(asdict(DEFAULTS))
+    # merge
+    for k, v in kwargs.items():
+        if k == "extra_layout":
+            d[k].update(v or {})
+        else:
+            d[k] = v
+    DEFAULTS = Defaults(**d)
+
+
+@contextmanager
+def use_defaults(**overrides):
+    """Temporarily override DEFAULTS inside a 'with' block."""
+    global DEFAULTS
+    old = deepcopy(DEFAULTS)
+    try:
+        set_defaults(**overrides)
+        yield
+    finally:
+        DEFAULTS = old
+
+
+# ---------- Helpers to apply defaults ----------
+def apply_defaults(fig, **layout_overrides):
+    """Apply global defaults to an existing figure, with optional overrides."""
+    layout = DEFAULTS.to_layout_kwargs()
+    layout.update(layout_overrides or {})
+    fig.update_layout(**layout)
+    return fig
+
+
+def px_defaults(**overrides) -> dict:
+    """Kwargs to pass into Plotly Express functions."""
+    base = dict(
+        template=DEFAULTS.template,
+        height=DEFAULTS.height,
+        width=DEFAULTS.width,
+        color_discrete_sequence=resolve_palette(DEFAULTS.colorway),
+        color_continuous_scale=resolve_colorscale(DEFAULTS.colorscale),
+    )
+    base.update(overrides or {})
+    return base
+
+
+# ---------------- Old -> remove -------------
 
 
 def get_colors_from_palette(num_colors, pallete_name="tab10"):
@@ -48,6 +356,453 @@ def convert_color_scheme(num_colors, color_scheme=None):
         return get_colors_from_palette(num_colors, pallete_name=color_scheme)
     elif isinstance(color_scheme, list):
         return color_scheme[:num_colors]
+
+
+# ---------------- Basic plots ---------------
+
+
+class BaseBuilder:
+
+    def __init__(
+        self,
+        input_data,
+        input_data_id=None,
+        colors=None,
+        separate_graphs=False,
+        same_range_for_separate=True,
+        opacity=None,
+        grid_spec="column",
+    ):
+
+        input_data_id = self._format_input_data_id(input_data, input_data_id)
+
+        self.n_columns = len(input_data_id)
+
+        self.df = self._format_input_data(input_data, input_data_id)
+
+        # Set colors (accepts: None, palette name str, or list of hex)
+        self.colors = resolve_colors_any(colors, color_type="palette", n=self.n_columns)
+
+        # Set separation
+        self.separate_graphs = separate_graphs
+        self.same_range_for_separate = same_range_for_separate
+
+        # Parse grid
+        if self.separate_graphs:
+            self.rows, self.columns = self._parse_grid(grid_spec)
+
+        # Set basic default
+        if self.separate_graphs:
+            self.opacity = 1.0 if opacity is None else opacity
+            self.default_layout = dict(
+                template="plotly_white",
+                showlegend=False,
+                height=max(360, 250 * self.n_columns),
+                margin=dict(t=40, r=20, l=60, b=50),
+            )
+        else:
+            self.opacity = 0.65 if opacity is None else opacity
+            self.default_layout = dict(
+                template="plotly_white",
+                showlegend=True,
+                height=500,
+                margin=dict(t=40, r=20, l=60, b=50),
+            )
+
+        # init fig
+        self.fig = None
+
+    def _format_input_data_id(self, input_data, input_data_id):
+
+        if input_data_id is None:  # no axis names specified
+            if isinstance(input_data, pd.DataFrame):  # if dataframe, take all columns
+                input_data_id = input_data.columns
+            elif isinstance(input_data, np.ndarray):  # in ndarray name all axis x
+                n = 1 if input_data.ndim == 1 else input_data.shape[1]
+                input_data_id = ["Value"] * n
+            else:
+                raise TypeError("input_data must be a pandas DataFrame or a numpy ndarray.")
+
+        return input_data_id
+
+    def _format_input_data(self, input_data, input_data_id):
+
+        if isinstance(input_data, pd.DataFrame):
+            cols = [c for c in input_data_id if c in input_data.columns]
+            if not cols:
+                raise ValueError("None of the requested columns are present in the DataFrame.")
+            return input_data[cols].dropna()
+
+        elif isinstance(input_data, np.ndarray):
+            arr = np.asarray(input_data)
+            if len(input_data_id) != self.n_columns:
+                if len(input_data_id) == 1:  # if only one name was specified use it for all columns
+                    input_data_id = input_data_id[0] * self.n_columns
+                raise ValueError(
+                    f"Length of input_data_id ({len(input_data_id)}) must be 1 or equal number of columns ({self.n_columns})."
+                )
+
+            # Pandas handles 1D as a single-column DataFrame when columns has length 1
+            return pd.DataFrame(arr, columns=input_data_id).dropna()
+
+        else:
+            raise TypeError("input_data must be a pandas DataFrame or a numpy ndarray.")
+
+    def _parse_grid(self, spec):
+        s = str(spec).strip().lower()
+        if s in ("row", "rows"):  # 1 x N
+            return 1, self.n_columns
+        if s in ("column", "col", "columns"):  # N x 1
+            return self.n_columns, 1
+        if s in ("auto", "square"):  # near-square
+            r = math.ceil(math.sqrt(self.n_columns))
+            c = math.ceil(self.n_columns / r)
+            return r, c
+        m = re.match(r"^\s*(\d+)\s*[x×X]\s*(\d+)\s*$", s)
+        if m:
+            r, c = int(m.group(1)), int(m.group(2))
+            if r * c < self.n_columns:
+                raise ValueError(f"Grid {r}x{c} is too small for {self.n_columns} subplots.")
+            return r, c
+        raise ValueError("Grid spec must be 'row', 'column', 'AxB' (e.g. '3x2'), or 'auto'.")
+
+    def update_layout_settings(self, **layout_setup):
+        """Update self.default_layout with overrides, keeping old values."""
+        for key, value in layout_setup.items():
+            if key in self.default_layout and isinstance(self.default_layout[key], dict) and isinstance(value, dict):
+                # merge nested dict instead of overwriting
+                self.default_layout[key].update(value)
+            else:
+                self.default_layout[key] = value
+
+    def update_graph_layout(self, **layout_setup):
+
+        if self.fig:
+            if layout_setup:
+                self.fig.update_layout(**layout_setup)
+        else:
+            raise Warning("Figure object does not exist, call plot_graph first.")
+
+    def plot_graph(self, *args, **kwargs):
+
+        if self.separate_graphs:
+            self.fig = self.plot_subplots(*args, **kwargs)
+        else:
+            self.fig = self.plot_single(*args, **kwargs)
+
+        self.fig.update_layout(self.default_layout)
+        return self.fig
+
+    def plot_subplots(self, *args, **kwargs):
+        raise NotImplementedError("Implement in subclass")
+
+    def plot_single(self, *args, **kwargs):
+        raise NotImplementedError("Implement in subclass")
+
+    def build_trace(self, *args, **kwargs):
+        raise NotImplementedError("Implement in subclass")
+
+
+class HistBuilder(BaseBuilder):
+    def __init__(
+        self,
+        input_data,
+        input_data_id=None,
+        bins=20,
+        output_mode="count",
+        opacity=None,
+        colors=None,
+        separate_graphs=False,
+        same_range_for_separate=True,
+        grid_spec="column",
+    ):
+
+        super().__init__(
+            input_data,
+            input_data_id,
+            colors=colors,
+            separate_graphs=separate_graphs,
+            same_range_for_separate=same_range_for_separate,
+            opacity=opacity,
+            grid_spec=grid_spec,
+        )
+
+        if output_mode == "count":
+            self.plot_density = False
+        elif output_mode == "density":
+            self.plot_density = True
+        else:
+            raise ValueError(f"The output_mode {output_mode} is not supported. Choose 'count' or 'density' instead.")
+
+        self.bins = bins
+
+        self.update_layout_settings(**dict(barmode="overlay"))
+
+        if not self.separate_graphs:
+            self.update_layout_settings(
+                **dict(
+                    barmode="overlay", xaxis_title="Value", yaxis_title=("Density" if self.plot_density else "Count")
+                )
+            )
+
+    def _histnorm(self):
+        return "probability density" if self.plot_density else None
+
+    def _make_xbins(self, xmin, xmax):
+        if not np.isfinite(xmin) or not np.isfinite(xmax):
+            xmin, xmax = 0.0, 1.0
+        if np.isclose(xmin, xmax):
+            xmax = xmin + 1.0
+        size = (xmax - xmin) / max(int(self.bins), 1)
+        return dict(start=xmin, end=xmax, size=size)
+
+    def global_range(self):
+        gmin = self.df.min().min()
+        gmax = self.df.max().max()
+        return gmin, gmax
+
+    def plot_subplots(self):
+
+        fig = make_subplots(rows=self.rows, cols=self.columns, shared_xaxes=False)
+
+        if self.same_range_for_separate:
+            gmin, gmax = self.global_range()
+            x_range = (gmin, gmax)
+            fig.update_xaxes(range=x_range)
+
+        for k, ((name, series), color) in enumerate(zip(self.df.items(), self.colors), start=0):
+            if self.same_range_for_separate:
+                trace = self.build_trace(series.to_numpy(), name, color, x_range=x_range, opacity=1.0)
+            else:
+                col_min, col_max = series.min(), series.max()
+                trace = self.build_trace(series.to_numpy(), name, color, x_range=(col_min, col_max), opacity=1.0)
+
+            r = k // self.columns + 1
+            c = k % self.columns + 1
+            fig.add_trace(trace, row=r, col=c)
+            fig.update_xaxes(title_text=name, row=r, col=c)
+            fig.update_yaxes(title_text=("Density" if self.plot_density else "Count"), row=r, col=c)
+
+        return fig
+
+    def plot_single(self, opacity=0.65):
+
+        gmin, gmax = self.global_range()
+        x_range = (gmin, gmax)
+        fig = go.Figure()
+        for (name, series), color in zip(self.df.items(), self.colors):
+            fig.add_trace(self.build_trace(series.to_numpy(), name, color, x_range=x_range, opacity=opacity))
+
+        return fig
+
+    def build_trace(self, y, name, color, x_range=None, opacity=None):
+        # y: 1D numpy array or series
+        if x_range is not None:
+            xbins = self._make_xbins(x_range[0], x_range[1])
+            return go.Histogram(
+                x=y,
+                name=name,
+                marker_color=color,
+                opacity=(self.opacity if opacity is None else opacity),
+                histnorm=self._histnorm(),
+                xbins=xbins,
+                autobinx=False,
+                nbinsx=self.bins,
+            )
+        else:
+            return go.Histogram(
+                x=y,
+                name=name,
+                marker_color=color,
+                opacity=(self.opacity if opacity is None else opacity),
+                histnorm=self._histnorm(),
+                nbinsx=self.bins,
+            )
+
+
+class ScatterBuilder(BaseBuilder):
+    def __init__(
+        self,
+        input_data,
+        input_data_id=None,
+        second_axis_data=None,
+        second_axis_id=None,
+        line_mode="markers",
+        colors=None,
+        separate_graphs=False,
+        same_range_for_separate=True,
+        opacity=None,
+        grid_spec="column",
+    ):
+
+        def expand_data_frame(df):
+
+            if df.shape[1] == 1 and self.n_columns != 1:
+                col = df.columns[0]
+                vals = np.tile(df.to_numpy(copy=True), (1, self.n_columns))  # shape (N, x)
+                return pd.DataFrame(vals, columns=[col] * self.n_columns), True
+            else:
+                return df, False
+
+        super().__init__(
+            input_data,
+            input_data_id,
+            colors=colors,
+            separate_graphs=separate_graphs,
+            same_range_for_separate=same_range_for_separate,
+            opacity=opacity,
+            grid_spec=grid_spec,
+        )
+
+        if second_axis_data is not None:
+            self.y_id = self._format_input_data_id(second_axis_data, second_axis_id)
+            self.y_axis = self._format_input_data(second_axis_data, self.y_id)
+            self.y_axis, expanded = expand_data_frame(self.y_axis)
+            self.legend = self.df.columns
+            if not expanded and same_range_for_separate:
+                print(
+                    "The values of for all x and y axes are unique, same range does not make sense - changing it to False."
+                )
+                self.same_range_for_separate = False
+        else:
+            self.y_axis = self.df.copy()
+            self.df = pd.DataFrame(np.arange(1, len(self.df) + 1), columns=["x"])
+            self.df, expanded = expand_data_frame(self.df)
+            self.legend = self.y_axis.columns
+
+        self.mode = line_mode
+
+    def plot_subplots(self, *args, **kwargs):
+
+        fig = make_subplots(
+            rows=self.rows,
+            cols=self.columns,
+            shared_xaxes=self.same_range_for_separate,
+            shared_yaxes=self.same_range_for_separate,
+            vertical_spacing=0.09,
+        )
+
+        for k, ((name_x, series_x), (name_y, series_y), color, leg) in enumerate(
+            zip(self.df.items(), self.y_axis.items(), self.colors, self.legend), start=0
+        ):
+            r = k // self.columns + 1
+            c = k % self.columns + 1
+            fig.add_trace(self.build_trace(series_x, series_y, leg, color), row=r, col=c)
+            fig.update_xaxes(title_text=name_x, row=r, col=c)
+            fig.update_yaxes(title_text=name_y, row=r, col=c)
+
+        if self.same_range_for_separate:
+            x_min = self.df.min().min()
+            x_max = self.df.max().max()
+            y_min = self.y_axis.min().min()
+            y_max = self.y_axis.max().max()
+
+            fig.update_xaxes(range=[x_min, x_max], matches="x")  # updates ALL x-axes
+            fig.update_yaxes(range=[y_min, y_max], matches="y")  # updates ALL y-axes
+
+        return fig
+
+    def plot_single(self, *args, **kwargs):
+
+        fig = go.Figure()
+
+        for (name_x, series_x), (name_y, series_y), color, leg in zip(
+            self.df.items(), self.y_axis.items(), self.colors, self.legend
+        ):
+            fig.add_trace(self.build_trace(series_x, series_y, leg, color))
+            fig.update_xaxes(title_text=name_x)
+            fig.update_yaxes(title_text=name_y)
+
+        if self.n_columns > 1:
+            fig.update_xaxes(title_text="x")
+            fig.update_yaxes(title_text="Value")
+
+        return fig
+
+    def build_trace(self, x, y, name, color):
+        return go.Scatter(x=x, y=y, name=name, mode=self.mode, marker=dict(color=color, opacity=self.opacity))
+
+
+def plot_histogram(
+    input_data,
+    input_data_id,
+    bins=20,
+    separate_graphs=False,
+    output_mode="count",
+    same_range_for_separate=True,
+    colors=None,
+    opacity=None,
+    grid_spec="column",
+):
+
+    builder = HistBuilder(
+        input_data=input_data,
+        input_data_id=input_data_id,
+        bins=bins,
+        output_mode=output_mode,
+        separate_graphs=separate_graphs,
+        same_range_for_separate=same_range_for_separate,
+        opacity=opacity,
+        grid_spec=grid_spec,
+        colors=colors,
+    )
+
+    fig = builder.plot_graph()
+    return fig
+
+
+def plot_scatter2D(
+    input_data,
+    input_data_id,
+    second_axis_data=None,
+    second_axis_id=None,
+    separate_graphs=False,
+    same_range_for_separate=False,
+    colors=None,
+    opacity=None,
+    grid_spec="column",
+):
+
+    builder = ScatterBuilder(
+        input_data=input_data,
+        input_data_id=input_data_id,
+        second_axis_data=second_axis_data,
+        second_axis_id=second_axis_id,
+        colors=colors,
+        separate_graphs=separate_graphs,
+        same_range_for_separate=same_range_for_separate,
+        opacity=opacity,
+        line_mode="markers",
+        grid_spec=grid_spec,
+    )
+
+    fig = builder.plot_graph()
+    return fig
+
+
+def plot_line(
+    input_data,
+    input_data_id,
+    separate_graphs=False,
+    same_range_for_separate=False,
+    colors=None,
+    opacity=None,
+    grid_spec="column",
+):
+
+    builder = ScatterBuilder(
+        input_data=input_data,
+        input_data_id=input_data_id,
+        colors=colors,
+        separate_graphs=separate_graphs,
+        same_range_for_separate=same_range_for_separate,
+        opacity=opacity,
+        line_mode="lines",
+        grid_spec=grid_spec,
+    )
+
+    fig = builder.plot_graph()
+    return fig
 
 
 def convert_to_radial(coordinates, replace_nan=True):
@@ -602,3 +1357,101 @@ def plot_pca_summary(cumulative_variance, feature_importances, scatter_kwargs=No
     fig.update_yaxes(row=1, col=2, categoryorder="total ascending")
 
     return fig
+
+
+def plot_spherical_density(
+    data,
+    num_bins=10,
+    mode="density",
+    title="Spherical Histogram",
+    phi_edges=None,
+    theta_edges=None,
+    colorscale="Viridis",
+):
+    data = np.asarray(data)
+    normalized_data = data / np.linalg.norm(data, axis=1, keepdims=True)
+
+    # Convert to spherical coordinates
+    phi = np.arctan2(normalized_data[:, 1], normalized_data[:, 0])
+    theta = np.arccos(normalized_data[:, 2])
+
+    if phi_edges is None:
+        phi_edges = np.linspace(-np.pi, np.pi, num_bins + 1)
+    if theta_edges is None:
+        theta_edges = np.linspace(0, np.pi, num_bins + 1)
+
+    # Histogram: phi is x-axis (columns), theta is y-axis (rows)
+    H, _, _ = np.histogram2d(phi, theta, bins=[phi_edges, theta_edges])
+
+    # Digitize
+    phi_bin_idx = np.digitize(phi, phi_edges) - 1
+    theta_bin_idx = np.digitize(theta, theta_edges) - 1
+    phi_bin_idx = np.clip(phi_bin_idx, 0, num_bins - 1)
+    theta_bin_idx = np.clip(theta_bin_idx, 0, num_bins - 1)
+
+    # Map (theta_bin, phi_bin) to point indices
+    bin_to_indices = defaultdict(list)
+    for i, (pb, tb) in enumerate(zip(phi_bin_idx, theta_bin_idx)):
+        bin_to_indices[(pb, tb)].append(i)  # note: still key = (phi_bin, theta_bin)
+
+    # Bin centers
+    phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+    theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
+
+    # Plotting values
+    if mode == "density":
+        H_plot = H.T / H.max() if H.max() > 0 else H.T
+        colorbar_title = "Normalized Density"
+    elif mode == "count":
+        H_plot = H.T
+        colorbar_title = "Particle Count"
+    else:
+        raise ValueError("Mode must be 'density' or 'count'")
+
+    # Hover text
+    hover_text = []
+    bin_index = 0
+    norm = Normalize(vmin=H_plot.min(), vmax=H_plot.max())
+    for i in range(H_plot.shape[0]):  # theta rows
+        row = []
+        for j in range(H_plot.shape[1]):  # phi columns
+            val = H_plot[i, j]
+            row.append(f"Bin #{bin_index}<br>" f"Value: {int(val) if mode == 'count' else round(val, 3)}")
+            bin_index += 1
+        hover_text.append(row)
+
+    scale = resolve_colors_any(colorscale, color_type="colorscale")
+
+    # Plotly heatmap
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=H_plot,
+            x=phi_centers,
+            y=theta_centers,
+            colorscale=scale,
+            text=hover_text,
+            hoverinfo="text",
+            colorbar=dict(
+                title=colorbar_title,
+                titleside="right",
+                titlefont=dict(size=14),
+                tickfont=dict(size=12),
+                len=1.0,  # Make colorbar full height of the plot
+                y=0.5,  # Center it vertically
+                yanchor="middle",
+            ),
+        )
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="phi [radians]",
+        yaxis_title="theta [radians]",
+        width=400,
+        height=500,
+        margin=dict(t=40, b=40, l=60, r=60),
+    )
+
+    fig.show()
+
+    return H, bin_to_indices

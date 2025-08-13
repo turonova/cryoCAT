@@ -8,13 +8,14 @@ import pandas as pd
 import dash_bootstrap_components as dbc
 from cryocat import cryomotl
 from cryocat.app.apputils import make_axis_trace
+from cryocat import visplot
 
 
-def get_colorscale(colorscale_name):
-    if colorscale_name == "Monet":
-        return [[0.0, "#AEC684"], [0.25, "#4EACB6"], [0.5, "#C0A3BA"], [0.75, "#7D82AB"], [1.0, "#865B96"]]
-    else:
-        return colorscale_name  # use Plotly built-in name
+# def get_colorscale(colorscale_name):
+#     if colorscale_name == "Monet":
+#         return [[0.0, "#AEC684"], [0.25, "#4EACB6"], [0.5, "#C0A3BA"], [0.75, "#7D82AB"], [1.0, "#865B96"]]
+#     else:
+#         return colorscale_name  # use Plotly built-in name
 
 
 def get_viewer_component(prefix: str):
@@ -224,6 +225,8 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
             ]
             hovertemplate = "<br>".join(hover_lines) + "<extra></extra>"
 
+        scale = visplot.resolve_colorscale(colorscale)
+
         fig = go.Figure(
             go.Scatter3d(
                 x=coords[:, 0],
@@ -236,16 +239,32 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
                     size=marker_size or 5,
                     opacity=0.8,
                     color=color_vals,
-                    colorscale=get_colorscale(colorscale) or get_colorscale("Monet"),
+                    colorscale=scale,
                 ),
             )
+        )
+
+        # Calculate data ranges
+        x_range = coords[:, 0].max() - coords[:, 0].min()
+        y_range = coords[:, 1].max() - coords[:, 1].min()
+        z_range = coords[:, 2].max() - coords[:, 2].min()
+
+        # Avoid divide by zero (fallback to 1)
+        max_range = max(x_range, y_range, z_range) or 1
+
+        aspect_ratio = dict(
+            x=x_range / max_range,
+            y=y_range / max_range,
+            z=z_range / max_range,
         )
 
         fig.update_layout(
             # title=f"Tomo ID: {tomo} • Color by: {color_col or 'z'}",
             height=500,
             margin=dict(t=0, b=0, l=0, r=0),
-            scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
+            scene=dict(
+                xaxis_title="X", yaxis_title="Y", zaxis_title="Z", aspectmode="manual", aspectratio=aspect_ratio
+            ),
         )
 
         # graph = dcc.Graph(id=f"{prefix}-graph", figure=fig)

@@ -6,6 +6,7 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from cryocat import cryomotl
 from cryocat.app.apputils import save_output
+from cryocat.app.layout.tableplot import get_table_plot_component
 
 
 def get_table_component(prefix: str):
@@ -24,7 +25,25 @@ def get_table_component(prefix: str):
                                 color="primary",
                                 className="me-1",
                             ),
+                            dbc.Button(
+                                "Plot",
+                                id=f"{prefix}-plot-graphs-btn",
+                                color="primary",
+                                className="me-1",
+                                n_clicks=0,
+                            ),
                             # dbc.Button("Remove Selected Columns", id=f"{prefix}-remove-cols-btn", color="danger"),
+                            dbc.Offcanvas(
+                                [
+                                    get_table_plot_component(f"{prefix}-table-plot"),
+                                ],
+                                id=f"{prefix}-plot-graph-panel",
+                                title="Plotting options",
+                                placement="end",
+                                scrollable=True,
+                                style={"width": "800px"},
+                                is_open=False,
+                            ),
                         ],
                         className="d-flex justify-content-end",
                     ),
@@ -97,6 +116,14 @@ def get_table_component(prefix: str):
 def register_table_callbacks(prefix: str, csv_only=True):
 
     @callback(
+        Output(f"{prefix}-plot-graph-panel", "is_open", allow_duplicate=True),
+        Input(f"{prefix}-plot-graphs-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def open_offcanvas(n_clicks):
+        return True
+
+    @callback(
         Output(f"{prefix}-grid", "columnDefs", allow_duplicate=True),
         Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
         Input(f"{prefix}-global-data-store", "data"),
@@ -146,7 +173,7 @@ def register_table_callbacks(prefix: str, csv_only=True):
     #     if not rows:
     #         raise exceptions.PreventUpdate
     #     return rows, rows
-    
+
     @callback(
         Output(f"{prefix}-global-data-store", "data", allow_duplicate=True),
         Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
