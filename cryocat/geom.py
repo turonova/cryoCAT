@@ -2668,3 +2668,62 @@ def order_points_on_circle(points):
     ordered_points = points[sorted_indices]
 
     return ordered_points, sorted_indices
+
+
+def cartesian_to_spherical(coord, normalize=True):
+    """Convert Cartesian coordinates to spherical coordinates.
+
+    Parameters
+    ----------
+    coord : numpy.ndarray
+        A 2D array of shape (N, 3*K) where N is the number of points and K is the number of sets of 3D coordinates. Each set of 3D coordinates corresponds to a point in Cartesian space.
+
+    normalize : bool, optional
+        If True, the input Cartesian coordinates will be normalized before conversion. Default is True.
+
+    Returns
+    -------
+    phi : numpy.ndarray
+        A 1D array of azimuthal angles (in radians) of shape (M,) where M is the number of valid points after filtering out NaNs.
+
+    theta : numpy.ndarray
+        A 1D array of polar angles (in radians) of shape (M,) where M is the number of valid points after filtering out NaNs.
+
+    Raises
+    ------
+    ValueError
+        If the input `coord` does not have the shape (N, 3*K).
+
+    Notes
+    -----
+    The azimuthal angle phi is computed as the angle in the x-y plane from the positive x-axis, and the polar angle theta is computed from the positive z-axis. The function filters out any points that result in NaN values during the conversion process.
+    """
+
+    if coord.ndim != 2 or coord.shape[1] % 3 != 0:
+        raise ValueError("Input must have shape (N, 3*K).")
+
+    N, D = coord.shape
+    K = D // 3
+
+    # reshape into (N, K, 3)
+    vecs = coord.reshape(N, K, 3)
+
+    if normalize:
+        norms = np.linalg.norm(vecs, axis=2, keepdims=True)  # (N, K, 1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            vecs = vecs / norms
+
+    # spherical conversion
+    x = vecs[..., 0]
+    y = vecs[..., 1]
+    z = vecs[..., 2]
+
+    phi = np.arctan2(y, x)  # (N, K)
+    theta = np.arccos(np.clip(z, -1.0, 1.0))  # (N, K)
+
+    # remove rows with NaNs (across any K)
+    mask = ~np.isnan(phi).any(axis=1) & ~np.isnan(theta).any(axis=1)
+    phi = phi[mask]
+    theta = theta[mask]
+
+    return phi, theta

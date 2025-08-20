@@ -221,12 +221,21 @@ class NearestNeighbors:
 
         return nn_subset
 
-    def get_normalized_coord(self):
+    def get_normalized_coord(self, add_to_df=True):
+        # if normalized columns already exist, just return them
+        if all(col in self.df.columns for col in ["norm_nn_x", "norm_nn_y", "norm_nn_z"]):
+            return self.df[["norm_nn_x", "norm_nn_y", "norm_nn_z"]].to_numpy()
 
+        # otherwise compute them
         norm_coord = (
             self.df[["nn_coord_x", "nn_coord_y", "nn_coord_z"]].to_numpy()
             - self.df[["qp_coord_x", "qp_coord_y", "qp_coord_z"]].to_numpy()
         )
+
+        # if requested, add to dataframe
+        if add_to_df:
+            self.df[["norm_nn_x", "norm_nn_y", "norm_nn_z"]] = norm_coord
+
         return norm_coord
 
     def get_qp_rotations(self):
@@ -1148,7 +1157,7 @@ def plot_nn_rot_coord_df_plotly(
             marker=dict(size=marker_size),
             name="XY",
             text=df[desc],
-            showlegend=False
+            showlegend=False,
         ),
         row=1,
         col=1,

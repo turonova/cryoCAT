@@ -18,7 +18,8 @@ from contextlib import contextmanager
 from copy import deepcopy
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 import plotly.io as pio
-
+from scipy.stats import gaussian_kde
+from cryocat import geom
 
 Color = str  # hex like "#1f77b4" or "rgb(…)"
 Colorscale = List[Tuple[float, Color]]  # [(0.0, "#..."), (1.0, "#...")]
@@ -146,7 +147,9 @@ def _normalize_scale_for_sampling(spec: Union[str, Sequence[Color], Colorscale])
     """
     if isinstance(spec, str):
         # Let Plotly handle known names like "Viridis" directly (safest path).
-        return spec
+        # return spec
+        cs = resolve_colorscale(spec)  # -> [(pos, color), ...]
+        return [(float(p), str(c)) for p, c in cs]
 
     # List of hex -> evenly spaced stops
     if isinstance(spec, (list, tuple)) and spec and isinstance(spec[0], str):
@@ -265,6 +268,9 @@ DEFAULTS = Defaults()
 register_palette("Monet", ["#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B96"])
 register_colorscale("Monet", ["#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B96"])
 
+register_palette("MonetWhite", ["#FFFFFF", "#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B96"])
+register_colorscale("MonetWhite", ["#FFFFFF", "#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B96"])
+
 
 def set_defaults(**kwargs) -> None:
     """Update global DEFAULTS. Nested 'extra_layout' is merged (shallow)."""
@@ -358,6 +364,47 @@ def convert_color_scheme(num_colors, color_scheme=None):
         return color_scheme[:num_colors]
 
 
+# ---------------- Helpers for data formatting -------
+
+
+def format_input_data_id(input_data, input_data_id, default_name="Value"):
+
+    if input_data_id is None:  # no axis names specified
+        if isinstance(input_data, pd.DataFrame):  # if dataframe, take all columns
+            input_data_id = input_data.columns
+        elif isinstance(input_data, np.ndarray):  # in ndarray name all axis x
+            n = 1 if input_data.ndim == 1 else input_data.shape[1]
+            input_data_id = ["Value"] * n
+        else:
+            raise TypeError("input_data must be a pandas DataFrame or a numpy ndarray.")
+
+    return input_data_id
+
+
+def format_input_data(input_data, input_data_id, n_columns):
+
+    if isinstance(input_data, pd.DataFrame):
+        cols = [c for c in input_data_id if c in input_data.columns]
+        if not cols:
+            raise ValueError("None of the requested columns are present in the DataFrame.")
+        return input_data[cols].dropna().to_numpy(), cols
+
+    elif isinstance(input_data, np.ndarray):
+        arr = np.asarray(input_data)
+        if len(input_data_id) != n_columns:
+            if len(input_data_id) == 1:  # if only one name was specified use it for all columns
+                input_data_id = input_data_id[0] * n_columns
+            raise ValueError(
+                f"Length of input_data_id ({len(input_data_id)}) must be 1 or equal number of columns ({n_columns})."
+            )
+
+        # Pandas handles 1D as a single-column DataFrame when columns has length 1
+        return arr, input_data_id
+
+    else:
+        raise TypeError("input_data must be a pandas DataFrame or a numpy ndarray.")
+
+
 # ---------------- Basic plots ---------------
 
 
@@ -372,16 +419,20 @@ class BaseBuilder:
         same_range_for_separate=True,
         opacity=None,
         grid_spec="column",
+        color_type="palette",
     ):
 
-        input_data_id = self._format_input_data_id(input_data, input_data_id)
+        input_data_id = format_input_data_id(input_data, input_data_id)
 
         self.n_columns = len(input_data_id)
 
-        self.df = self._format_input_data(input_data, input_data_id)
+        self.x_axis, self.x_id = format_input_data(input_data, input_data_id, self.n_columns)
 
-        # Set colors (accepts: None, palette name str, or list of hex)
-        self.colors = resolve_colors_any(colors, color_type="palette", n=self.n_columns)
+        # Set colors
+        if color_type == "palette":
+            self.colors = resolve_colors_any(colors, color_type="palette", n=self.n_columns)
+        else:
+            self.colors = resolve_colors_any(colors, color_type="colorscale")
 
         # Set separation
         self.separate_graphs = separate_graphs
@@ -412,41 +463,24 @@ class BaseBuilder:
         # init fig
         self.fig = None
 
-    def _format_input_data_id(self, input_data, input_data_id):
+    def _expand_array(self, arr, arr_name):
+        a = np.asarray(arr)
+        if a.ndim == 1:
+            a = a.reshape(-1, 1)
 
-        if input_data_id is None:  # no axis names specified
-            if isinstance(input_data, pd.DataFrame):  # if dataframe, take all columns
-                input_data_id = input_data.columns
-            elif isinstance(input_data, np.ndarray):  # in ndarray name all axis x
-                n = 1 if input_data.ndim == 1 else input_data.shape[1]
-                input_data_id = ["Value"] * n
-            else:
-                raise TypeError("input_data must be a pandas DataFrame or a numpy ndarray.")
-
-        return input_data_id
-
-    def _format_input_data(self, input_data, input_data_id):
-
-        if isinstance(input_data, pd.DataFrame):
-            cols = [c for c in input_data_id if c in input_data.columns]
-            if not cols:
-                raise ValueError("None of the requested columns are present in the DataFrame.")
-            return input_data[cols].dropna()
-
-        elif isinstance(input_data, np.ndarray):
-            arr = np.asarray(input_data)
-            if len(input_data_id) != self.n_columns:
-                if len(input_data_id) == 1:  # if only one name was specified use it for all columns
-                    input_data_id = input_data_id[0] * self.n_columns
-                raise ValueError(
-                    f"Length of input_data_id ({len(input_data_id)}) must be 1 or equal number of columns ({self.n_columns})."
-                )
-
-            # Pandas handles 1D as a single-column DataFrame when columns has length 1
-            return pd.DataFrame(arr, columns=input_data_id).dropna()
-
+        if a.shape[1] == 1 and self.n_columns != 1:
+            a = np.tile(a, (1, self.n_columns))
+            return a, arr_name * a.shape[1], True
         else:
-            raise TypeError("input_data must be a pandas DataFrame or a numpy ndarray.")
+            return a, arr_name, False
+
+    def _expand_data_frame(self, df):
+        if df.shape[1] == 1 and self.n_columns != 1:
+            col = df.columns[0]
+            vals = np.tile(df.to_numpy(copy=True), (1, self.n_columns))  # (N, x)
+            return pd.DataFrame(vals, columns=[col] * self.n_columns), True
+        else:
+            return df, False
 
     def _parse_grid(self, spec):
         s = str(spec).strip().lower()
@@ -465,6 +499,75 @@ class BaseBuilder:
                 raise ValueError(f"Grid {r}x{c} is too small for {self.n_columns} subplots.")
             return r, c
         raise ValueError("Grid spec must be 'row', 'column', 'AxB' (e.g. '3x2'), or 'auto'.")
+
+    # ---- internals ----
+
+    @staticmethod
+    def _bins_from_range(range_list, nbins):
+
+        bins_list = []
+        for i, rng in enumerate(range_list):
+            start, end = rng
+            if np.isclose(start, end):
+                end = start + 1.0
+            size = (end - start) / max(1, int(nbins))
+            bins_list.append(dict(start=start, end=end, size=size))
+
+        return bins_list
+
+    def _set_axis_range(self, custom_range, arr):
+
+        # prefer custom ranges if given; otherwise use data-driven globals
+        if custom_range is not None:
+            return [self._validate_range(custom_range)] * self.n_columns
+        else:
+            if self.same_range_for_separate:
+                return [(arr.min(), arr.max())] * self.n_columns
+            else:
+                mins = arr.min(axis=0)
+                maxs = arr.max(axis=0)
+                return list(zip(mins, maxs))
+
+    @staticmethod
+    def _validate_range(r):
+        if r is None:
+            return None
+        if not (isinstance(r, (list, tuple)) and len(r) == 2):
+            raise ValueError("x_range/y_range must be a 2-tuple like (min, max).")
+        a, b = float(r[0]), float(r[1])
+        if not (np.isfinite(a) and np.isfinite(b)):
+            raise ValueError("x_range/y_range must be finite numbers.")
+        if np.isclose(a, b):
+            b = a + 1.0
+        lo, hi = (a, b) if a <= b else (b, a)
+        return (lo, hi)
+
+    def change_to_separate_graphs(self, message="", opacity=None, grid_spec="column"):
+
+        if message != "":
+            print(message)
+
+        self.separate_graphs = True
+        self.rows, self.columns = self._parse_grid(grid_spec)
+        self.opacity = 1.0 if opacity is None else opacity
+        self.update_layout_settings(**dict(showlegend=False, height=max(360, 250 * self.n_columns)))
+
+    def process_second_axis_data(self, second_axis_data, second_axis_id, x_id="x"):
+        if second_axis_data is not None:
+            self.y_id = format_input_data_id(second_axis_data, second_axis_id)
+            self.y_axis, _ = format_input_data(second_axis_data, self.y_id, self.n_columns)
+            self.y_axis, self.y_id, expanded = self._expand_array(self.y_axis, self.y_id)
+            self.legend = self.x_id
+
+        else:
+            # if no y given: y := original df; x := 1..N
+            self.y_axis = self.x_axis.copy()
+            self.y_id = self.x_id
+            self.x_axis = np.arange(1, len(self.x_axis) + 1)
+            self.x_axis, self.x_id, expanded = self._expand_array(self.x_axis, [x_id])
+            self.legend = self.y_id
+
+        return expanded
 
     def update_layout_settings(self, **layout_setup):
         """Update self.default_layout with overrides, keeping old values."""
@@ -509,11 +612,14 @@ class HistBuilder(BaseBuilder):
         input_data,
         input_data_id=None,
         bins=20,
-        output_mode="count",
+        hist_type="count",  # "count" | "sum" | "avg" | "min" | "max"
+        hist_norm="",  # "percent" | "probability" | "density" | "probability density"
         opacity=None,
         colors=None,
+        x_range=None,
         separate_graphs=False,
         same_range_for_separate=True,
+        same_scale=False,
         grid_spec="column",
     ):
 
@@ -525,99 +631,246 @@ class HistBuilder(BaseBuilder):
             same_range_for_separate=same_range_for_separate,
             opacity=opacity,
             grid_spec=grid_spec,
+            color_type="palette",
         )
 
-        if output_mode == "count":
-            self.plot_density = False
-        elif output_mode == "density":
-            self.plot_density = True
-        else:
-            raise ValueError(f"The output_mode {output_mode} is not supported. Choose 'count' or 'density' instead.")
-
-        self.bins = bins
+        self.hist_type = hist_type
+        self.hist_norm = hist_norm
+        self.y_axis_title = (
+            f"{self.hist_type.capitalize()} ({self.hist_norm})" if self.hist_norm else self.hist_type.capitalize()
+        )
+        self.nbinsx = bins
 
         self.update_layout_settings(**dict(barmode="overlay"))
 
         if not self.separate_graphs:
-            self.update_layout_settings(
-                **dict(
-                    barmode="overlay", xaxis_title="Value", yaxis_title=("Density" if self.plot_density else "Count")
-                )
-            )
+            self.update_layout_settings(**dict(barmode="overlay", xaxis_title="Value", yaxis_title=self.y_axis_title))
 
-    def _histnorm(self):
-        return "probability density" if self.plot_density else None
+        self.same_scale = same_scale
 
-    def _make_xbins(self, xmin, xmax):
-        if not np.isfinite(xmin) or not np.isfinite(xmax):
-            xmin, xmax = 0.0, 1.0
-        if np.isclose(xmin, xmax):
-            xmax = xmin + 1.0
-        size = (xmax - xmin) / max(int(self.bins), 1)
-        return dict(start=xmin, end=xmax, size=size)
+        self.x_range = self._set_axis_range(x_range, self.x_axis)
+        self.xbins = self._bins_from_range(self.x_range, self.nbinsx)
+        self.y_scale = self._set_scale()
 
-    def global_range(self):
-        gmin = self.df.min().min()
-        gmax = self.df.max().max()
-        return gmin, gmax
+    def _set_scale(self):
+
+        if self.same_scale and self.separate_graphs:
+            ymax = 0
+            for data, binspec in zip(self.x_axis.T, self.xbins):
+                # construct numpy bin edges
+                edges = np.arange(binspec["start"], binspec["end"] + binspec["size"], binspec["size"])
+                counts, _ = np.histogram(data, bins=edges)
+                ymax = max(ymax, counts.max())
+
+            return (0, ymax)
+        else:
+            return None
 
     def plot_subplots(self):
 
-        fig = make_subplots(rows=self.rows, cols=self.columns, shared_xaxes=False)
+        self.fig = make_subplots(
+            rows=self.rows,
+            cols=self.columns,
+            shared_xaxes=self.same_range_for_separate,
+            shared_yaxes=self.same_range_for_separate,
+        )
 
-        if self.same_range_for_separate:
-            gmin, gmax = self.global_range()
-            x_range = (gmin, gmax)
-            fig.update_xaxes(range=x_range)
+        for i, series in enumerate(self.x_axis.T, start=0):
 
-        for k, ((name, series), color) in enumerate(zip(self.df.items(), self.colors), start=0):
-            if self.same_range_for_separate:
-                trace = self.build_trace(series.to_numpy(), name, color, x_range=x_range, opacity=1.0)
-            else:
-                col_min, col_max = series.min(), series.max()
-                trace = self.build_trace(series.to_numpy(), name, color, x_range=(col_min, col_max), opacity=1.0)
+            trace = self.build_trace(series, self.x_id[i], self.colors[i], self.x_range[i], self.xbins[i])
 
-            r = k // self.columns + 1
-            c = k % self.columns + 1
-            fig.add_trace(trace, row=r, col=c)
-            fig.update_xaxes(title_text=name, row=r, col=c)
-            fig.update_yaxes(title_text=("Density" if self.plot_density else "Count"), row=r, col=c)
+            r = i // self.columns + 1
+            c = i % self.columns + 1
+            self.fig.add_trace(trace, row=r, col=c)
+            self.fig.update_xaxes(title_text=self.x_id[i], range=self.x_range[i], row=r, col=c)
+            self.fig.update_yaxes(title_text=self.y_axis_title, row=r, col=c)
+            if self.same_scale:
+                self.fig.update_yaxes(range=self.y_scale)
 
-        return fig
+        return self.fig
 
-    def plot_single(self, opacity=0.65):
+    def plot_single(self):
 
-        gmin, gmax = self.global_range()
-        x_range = (gmin, gmax)
-        fig = go.Figure()
-        for (name, series), color in zip(self.df.items(), self.colors):
-            fig.add_trace(self.build_trace(series.to_numpy(), name, color, x_range=x_range, opacity=opacity))
+        self.fig = go.Figure()
+        for i, series in enumerate(self.x_axis.T):
+            self.fig.add_trace(self.build_trace(series, self.x_id[i], self.colors[i], self.x_range[i], self.xbins[i]))
 
-        return fig
+        return self.fig
 
-    def build_trace(self, y, name, color, x_range=None, opacity=None):
-        # y: 1D numpy array or series
-        if x_range is not None:
-            xbins = self._make_xbins(x_range[0], x_range[1])
-            return go.Histogram(
-                x=y,
-                name=name,
-                marker_color=color,
-                opacity=(self.opacity if opacity is None else opacity),
-                histnorm=self._histnorm(),
-                xbins=xbins,
-                autobinx=False,
-                nbinsx=self.bins,
+    def build_trace(self, y, name, color, x_range, xbins):
+
+        return go.Histogram(
+            x=y,
+            name=name,
+            marker_color=color,
+            opacity=self.opacity,
+            histfunc=self.hist_type,
+            histnorm=self.hist_norm,
+            xbins=xbins,
+            autobinx=False,
+            nbinsx=self.nbinsx,
+        )
+
+
+class Hist2DBuilder(BaseBuilder):
+    def __init__(
+        self,
+        input_data,
+        input_data_id=None,
+        second_axis_data=None,
+        second_axis_id=None,
+        nbinsx=40,
+        nbinsy=40,
+        x_range=None,  # (xmin, xmax) or None
+        y_range=None,  # (ymin, ymax) or None
+        hist_type="count",
+        hist_norm=None,  # None | "percent" | "probability" | "density" | "probability density"
+        same_scale=False,
+        colors=None,
+        separate_graphs=False,
+        same_range_for_separate=True,
+        opacity=None,
+        grid_spec="column",
+    ):
+
+        super().__init__(
+            input_data,
+            input_data_id,
+            colors=colors,
+            separate_graphs=separate_graphs,
+            same_range_for_separate=same_range_for_separate,
+            opacity=opacity,
+            grid_spec=grid_spec,
+            color_type="colorscale",
+        )
+
+        expanded = self.process_second_axis_data(second_axis_data, second_axis_id)
+
+        if not expanded and self.n_columns > 1 and not separate_graphs:
+            self.change_to_separate_graphs(
+                "Warning: the overaly of multiple 2D histograms with different values for both x and y is not supported. "
+                "Switching separate_graphs to True.",
+                grid_spec=grid_spec,
             )
-        else:
-            return go.Histogram(
-                x=y,
-                name=name,
-                marker_color=color,
-                opacity=(self.opacity if opacity is None else opacity),
-                histnorm=self._histnorm(),
-                nbinsx=self.bins,
-            )
+
+        self.nbinsx = int(max(1, nbinsx))
+        self.nbinsy = int(max(1, nbinsy))
+        self.hist_norm = hist_norm
+        self.hist_type = hist_type
+        self.same_scale = same_scale
+
+        self.y_axis_title = (
+            f"{self.hist_type.capitalize()} ({self.hist_norm})" if self.hist_norm else self.hist_type.capitalize()
+        )
+
+        # prepare range
+        self.x_range = self._set_axis_range(x_range, self.x_axis)
+        self.y_range = self._set_axis_range(y_range, self.y_axis)
+
+        self.xbins = self._bins_from_range(self.x_range, self.nbinsx)
+        self.ybins = self._bins_from_range(self.y_range, self.nbinsy)
+
+        # set default colorbars
+        self.colorbar = dict(
+            len=1.0,
+            y=0.5,
+            yanchor="middle",
+            xanchor="left",
+            title=dict(text=self.y_axis_title, side="right"),
+            orientation="v",
+            thickness=12,
+            x=1.02,
+            lenmode="fraction",
+        )
+
+        self.trace_kwargs = dict(
+            nbinsx=self.nbinsx,
+            nbinsy=self.nbinsy,
+            histnorm=self.hist_norm,
+            histfunc=self.hist_type,
+            showscale=True,
+            colorbar=self.colorbar,
+            autobinx=False,
+            autobiny=False,
+            colorscale=self.colors,
+        )
+
+    # ---- internals ----
+
+    def _update_colorbar(self, subplot_idx):
+
+        subplot_idx = subplot_idx + 1
+        xax = "xaxis" if subplot_idx == 1 else f"xaxis{subplot_idx}"
+        yax = "yaxis" if subplot_idx == 1 else f"yaxis{subplot_idx}"
+        xd0, xd1 = self.fig.layout[xax].domain
+        yd0, yd1 = self.fig.layout[yax].domain
+        self.colorbar.update({"x": xd1 + 0.02, "y": (yd0 + yd1) / 2, "len": yd1 - yd0})
+
+    # ---- plotters ----
+    def plot_subplots(self, *args, **kwargs):
+        self.fig = make_subplots(
+            rows=self.rows,
+            cols=self.columns,
+            shared_xaxes=self.same_range_for_separate,
+            shared_yaxes=self.same_range_for_separate,
+            vertical_spacing=0.09,
+        )
+
+        if self.same_scale:
+            # One shared colorbar + common normalization across all subplots
+            self.fig.update_layout(coloraxis=dict(colorscale=self.colors, colorbar=self.colorbar))
+            self.prepare_trace_kwargs(showscale=False, coloraxis="coloraxis")
+
+        for i, (series_x, series_y) in enumerate(zip(self.x_axis.T, self.y_axis.T), start=0):
+            r = i // self.columns + 1
+            c = i % self.columns + 1
+            if not self.same_scale:
+                self._update_colorbar(i)
+
+            trace = self.build_trace(series_x, series_y, self.legend[i], self.xbins[i], self.ybins[i])
+            self.fig.add_trace(trace, row=r, col=c)
+            self.fig.update_xaxes(title_text=self.x_id[i], row=r, col=c)
+            self.fig.update_yaxes(title_text=self.y_id[i], row=r, col=c)
+
+        return self.fig
+
+    def plot_single(self, *args, **kwargs):
+        self.fig = go.Figure()
+
+        if self.n_columns > 1:
+            return None
+
+        self.fig.add_trace(
+            self.build_trace(self.x_axis.T[0], self.y_axis.T[0], self.legend[0], self.xbins[0], self.ybins[0])
+        )
+        self.fig.update_xaxes(title_text=self.x_id[0])
+        self.fig.update_yaxes(title_text=self.y_id[0])
+
+        return self.fig
+
+    def prepare_trace_kwargs(self, showscale=None, coloraxis=None, colorbar=None):
+
+        if coloraxis is not None:
+            self.trace_kwargs["coloraxis"] = coloraxis
+        if colorbar is not None:
+            self.trace_kwargs["colorbar"] = colorbar
+
+        if coloraxis is None:
+            self.trace_kwargs["colorscale"] = self.colors
+
+        if showscale is not None:
+            self.trace_kwargs["showscale"] = showscale
+
+    def build_trace(self, x, y, name, xbins, ybins):
+
+        return go.Histogram2d(
+            x=np.asarray(x),
+            y=np.asarray(y),
+            name=name,
+            xbins=xbins,
+            ybins=ybins,
+            **self.trace_kwargs,
+        )
 
 
 class ScatterBuilder(BaseBuilder):
@@ -628,21 +881,14 @@ class ScatterBuilder(BaseBuilder):
         second_axis_data=None,
         second_axis_id=None,
         line_mode="markers",
+        x_range=None,  # (xmin, xmax) or None
+        y_range=None,  # (ymin, ymax) or None
         colors=None,
         separate_graphs=False,
         same_range_for_separate=True,
         opacity=None,
         grid_spec="column",
     ):
-
-        def expand_data_frame(df):
-
-            if df.shape[1] == 1 and self.n_columns != 1:
-                col = df.columns[0]
-                vals = np.tile(df.to_numpy(copy=True), (1, self.n_columns))  # shape (N, x)
-                return pd.DataFrame(vals, columns=[col] * self.n_columns), True
-            else:
-                return df, False
 
         super().__init__(
             input_data,
@@ -652,29 +898,19 @@ class ScatterBuilder(BaseBuilder):
             same_range_for_separate=same_range_for_separate,
             opacity=opacity,
             grid_spec=grid_spec,
+            color_type="palette",
         )
 
-        if second_axis_data is not None:
-            self.y_id = self._format_input_data_id(second_axis_data, second_axis_id)
-            self.y_axis = self._format_input_data(second_axis_data, self.y_id)
-            self.y_axis, expanded = expand_data_frame(self.y_axis)
-            self.legend = self.df.columns
-            if not expanded and same_range_for_separate:
-                print(
-                    "The values of for all x and y axes are unique, same range does not make sense - changing it to False."
-                )
-                self.same_range_for_separate = False
-        else:
-            self.y_axis = self.df.copy()
-            self.df = pd.DataFrame(np.arange(1, len(self.df) + 1), columns=["x"])
-            self.df, expanded = expand_data_frame(self.df)
-            self.legend = self.y_axis.columns
+        expanded = self.process_second_axis_data(second_axis_data, second_axis_id)
 
         self.mode = line_mode
 
+        self.x_range = self._set_axis_range(x_range, self.x_axis)
+        self.y_range = self._set_axis_range(y_range, self.y_axis)
+
     def plot_subplots(self, *args, **kwargs):
 
-        fig = make_subplots(
+        self.fig = make_subplots(
             rows=self.rows,
             cols=self.columns,
             shared_xaxes=self.same_range_for_separate,
@@ -682,36 +918,24 @@ class ScatterBuilder(BaseBuilder):
             vertical_spacing=0.09,
         )
 
-        for k, ((name_x, series_x), (name_y, series_y), color, leg) in enumerate(
-            zip(self.df.items(), self.y_axis.items(), self.colors, self.legend), start=0
-        ):
-            r = k // self.columns + 1
-            c = k % self.columns + 1
-            fig.add_trace(self.build_trace(series_x, series_y, leg, color), row=r, col=c)
-            fig.update_xaxes(title_text=name_x, row=r, col=c)
-            fig.update_yaxes(title_text=name_y, row=r, col=c)
+        for i, (series_x, series_y) in enumerate(zip(self.x_axis.T, self.y_axis.T), start=0):
+            r = i // self.columns + 1
+            c = i % self.columns + 1
 
-        if self.same_range_for_separate:
-            x_min = self.df.min().min()
-            x_max = self.df.max().max()
-            y_min = self.y_axis.min().min()
-            y_max = self.y_axis.max().max()
+            self.fig.add_trace(self.build_trace(series_x, series_y, self.legend[i], self.colors[i]), row=r, col=c)
+            self.fig.update_xaxes(title_text=self.x_id[i], range=self.x_range[i], row=r, col=c)
+            self.fig.update_yaxes(title_text=self.y_id[i], range=self.y_range[i], row=r, col=c)
 
-            fig.update_xaxes(range=[x_min, x_max], matches="x")  # updates ALL x-axes
-            fig.update_yaxes(range=[y_min, y_max], matches="y")  # updates ALL y-axes
-
-        return fig
+        return self.fig
 
     def plot_single(self, *args, **kwargs):
 
         fig = go.Figure()
 
-        for (name_x, series_x), (name_y, series_y), color, leg in zip(
-            self.df.items(), self.y_axis.items(), self.colors, self.legend
-        ):
-            fig.add_trace(self.build_trace(series_x, series_y, leg, color))
-            fig.update_xaxes(title_text=name_x)
-            fig.update_yaxes(title_text=name_y)
+        for i, (series_x, series_y) in enumerate(zip(self.x_axis.T, self.y_axis.T)):
+            fig.add_trace(self.build_trace(series_x, series_y, self.legend[i], self.colors[i]))
+            fig.update_xaxes(title_text=self.x_id[i])
+            fig.update_yaxes(title_text=self.y_id[i])
 
         if self.n_columns > 1:
             fig.update_xaxes(title_text="x")
@@ -723,13 +947,180 @@ class ScatterBuilder(BaseBuilder):
         return go.Scatter(x=x, y=y, name=name, mode=self.mode, marker=dict(color=color, opacity=self.opacity))
 
 
+class KDEBuilder(Hist2DBuilder):
+    def __init__(
+        self,
+        input_data,
+        input_data_id=None,
+        second_axis_data=None,
+        second_axis_id=None,
+        nbinsx=200,
+        nbinsy=200,
+        x_range=None,  # (xmin, xmax) or None
+        y_range=None,  # (ymin, ymax) or None
+        hist_type="count",
+        hist_norm=None,  # None | "percent" | "probability" | "density" | "probability density"
+        same_scale=False,
+        colors=None,
+        # separate_graphs=False,
+        same_range_for_separate=True,
+        opacity=None,
+        grid_spec="column",
+    ):
+
+        super().__init__(
+            input_data,
+            input_data_id,
+            second_axis_data=second_axis_data,
+            second_axis_id=second_axis_id,
+            nbinsx=nbinsx,
+            nbinsy=nbinsy,
+            x_range=x_range,  # (xmin, xmax) or None
+            y_range=y_range,  # (ymin, ymax) or None
+            hist_type=hist_type,
+            hist_norm=hist_norm,  # None | "percent" | "probability" | "density" | "probability density"
+            same_scale=same_scale,
+            colors=colors,
+            separate_graphs=True,
+            same_range_for_separate=same_range_for_separate,
+            opacity=opacity,
+            grid_spec=grid_spec,
+        )
+
+    def padded_limits(self, v, frac=0.05, min_pad=0.0, bw=None, k_bw=3.0):
+        v = np.asarray(v, float)
+        vmin, vmax = np.nanmin(v), np.nanmax(v)
+        span = vmax - vmin
+        # pad from % of span, absolute floor, and (optional) k * bandwidth
+        pad = max(frac * span, min_pad, (k_bw * bw if bw is not None else 0.0))
+        if span == 0:  # all values equal → make a tiny window around it
+            pad = max(pad, 1.0 if min_pad == 0 else min_pad)
+        return vmin - pad, vmax + pad
+
+    def list_max(arr_list, same_scale=False):
+        if same_scale:
+            max_val = max(values)
+            return [max_val] * len(values)
+        else:
+            return values
+
+    def compute_kde(self, x_axis, y_axis):
+
+        x_axis = x_axis.ravel()
+        y_axis = y_axis.ravel()
+
+        kde = gaussian_kde(np.array([x_axis, y_axis]), bw_method="scott")
+
+        # per-dimension KDE bandwidth ≈ factor * std
+        bw_x = kde.factor * np.std(x_axis, ddof=1)
+        bw_y = kde.factor * np.std(y_axis, ddof=1)
+
+        # choose padding rules
+        x_lo, x_hi = self.padded_limits(x_axis, frac=0.05, min_pad=0.5, bw=bw_x, k_bw=3.0)
+        y_lo, y_hi = self.padded_limits(y_axis, frac=0.05, min_pad=0.05, bw=bw_y, k_bw=3.0)
+
+        xg = np.linspace(x_lo, x_hi, self.nbinsx)
+        yg = np.linspace(y_lo, y_hi, self.nbinsy)
+        X, Y = np.meshgrid(xg, yg)
+        zg = kde(np.vstack([X.ravel(), Y.ravel()])).reshape(self.nbinsy, self.nbinsx)
+
+        tol = 1e-4 * float(np.nanmax(zg))
+        zmax = float(np.nanmax(np.where(zg < tol, 0.0, zg)))
+
+        return xg, yg, zg, zmax, (x_lo, x_hi), (y_lo, y_hi)
+
+    def normalize_ranges(self, ranges):
+        if self.same_range_for_separate:
+            # unzip into separate min and max lists
+            mins, maxs = zip(*ranges)
+            global_min = min(mins)
+            global_max = max(maxs)
+            return [(global_min, global_max)] * len(ranges)
+        else:
+            return ranges
+
+    def plot_subplots(self, *args, **kwargs):
+
+        self.fig = make_subplots(
+            rows=self.rows,
+            cols=self.columns,
+            shared_xaxes=self.same_range_for_separate,
+            shared_yaxes=self.same_range_for_separate,
+            vertical_spacing=0.09,
+        )
+
+        xg, yg, zg, zm, x_ranges, y_ranges = [], [], [], [], [], []
+
+        for series_x, series_y in zip(self.x_axis.T, self.y_axis.T):
+
+            x_grid, y_grid, z_grid, zmax, xr, yr = self.compute_kde(series_x, series_y)
+            xg.append(x_grid)
+            yg.append(y_grid)
+            zg.append(z_grid)
+            zm.append(zmax)
+            x_ranges.append(xr)
+            y_ranges.append(yr)
+
+        if self.same_scale:
+            zmax_global = max(zm)
+            zm = [zmax_global] * len(zm)
+
+        x_ranges = self.normalize_ranges(x_ranges)
+        y_ranges = self.normalize_ranges(y_ranges)
+
+        for i in np.arange(len(xg)):
+            r = i // self.columns + 1
+            c = i % self.columns + 1
+
+            self._update_colorbar(i)
+
+            trace = self.build_trace(xg[i], yg[i], zg[i], zm[i])
+
+            self.fig.add_trace(trace, row=r, col=c)
+            self.fig.update_xaxes(title_text=self.x_id[i], row=r, col=c, range=x_ranges[i])
+            self.fig.update_yaxes(title_text=self.y_id[i], row=r, col=c, range=y_ranges[i])
+
+        return self.fig
+
+    def plot_single(self, *args, **kwargs):
+
+        if self.n_columns > 1:
+            return None
+
+        fig = go.Figure()
+
+        x_grid, y_grid, z_grid, zmax, _, _ = self.compute_kde(self.x_axis, self.y_axis)
+
+        fig.add_trace(self.build_trace(x_grid, y_grid, z_grid, zmax))
+        fig.update_xaxes(title_text=name_x)
+        fig.update_yaxes(title_text=name_y)
+
+        return fig
+
+    def build_trace(self, x_grid, y_grid, z_grid, zmax):
+
+        return go.Contour(
+            x=x_grid,
+            y=y_grid,
+            z=z_grid,
+            contours=dict(coloring="fill", showlines=False),
+            colorscale=self.colors,
+            colorbar=self.colorbar,
+            zauto=False,
+            zmin=0.0,
+            zmax=zmax,
+        )
+
+
 def plot_histogram(
     input_data,
     input_data_id,
     bins=20,
     separate_graphs=False,
-    output_mode="count",
+    hist_type="count",  # "count" | "sum" | "avg" | "min" | "max"
+    hist_norm="",
     same_range_for_separate=True,
+    same_scale=False,
     colors=None,
     opacity=None,
     grid_spec="column",
@@ -739,16 +1130,154 @@ def plot_histogram(
         input_data=input_data,
         input_data_id=input_data_id,
         bins=bins,
-        output_mode=output_mode,
+        hist_type=hist_type,
+        hist_norm=hist_norm,
         separate_graphs=separate_graphs,
         same_range_for_separate=same_range_for_separate,
         opacity=opacity,
+        same_scale=same_scale,
         grid_spec=grid_spec,
         colors=colors,
     )
 
     fig = builder.plot_graph()
     return fig
+
+
+def plot_histogram2D(
+    input_data,
+    input_data_id=None,
+    second_axis_data=None,
+    second_axis_id=None,
+    nbinsx=40,
+    nbinsy=40,
+    x_range=None,  # (xmin, xmax) or None
+    y_range=None,  # (ymin, ymax) or None
+    hist_type="count",
+    hist_norm=None,
+    same_scale=False,
+    colors=None,
+    separate_graphs=False,
+    same_range_for_separate=True,
+    opacity=None,
+    grid_spec="column",
+):
+    builder = Hist2DBuilder(
+        input_data=input_data,
+        input_data_id=input_data_id,
+        second_axis_data=second_axis_data,
+        second_axis_id=second_axis_id,
+        nbinsx=nbinsx,
+        nbinsy=nbinsy,
+        x_range=x_range,
+        y_range=y_range,
+        hist_type=hist_type,
+        hist_norm=hist_norm,
+        same_scale=same_scale,
+        colors=colors,
+        separate_graphs=separate_graphs,
+        same_range_for_separate=same_range_for_separate,
+        opacity=opacity,
+        grid_spec=grid_spec,
+    )
+
+    fig = builder.plot_graph()
+    return fig
+
+
+def plot_spherical_density_hist2d(
+    input_data,
+    input_data_id=None,
+    nbinsx=10,
+    nbinsy=10,
+    x_range=None,
+    y_range=None,
+    hist_type="count",
+    hist_norm="percent",
+    normalize_coord=True,
+    colors="Viridis",
+    same_scale=False,
+    same_range_for_separate=False,
+    grid_spec="column",
+):
+
+    if isinstance(input_data, pd.DataFrame):
+        if not input_data_id:
+            raise ValueError("When input_data is a DataFrame, input_data_id (ordered list of columns) is required.")
+        cols = [c for c in input_data_id if c in input_data.columns]
+        if len(cols) == 0 or (len(cols) % 3) != 0:
+            raise ValueError(f"Expected a multiple of 3 columns, got {len(cols)}.")
+        # drop rows with NaNs across the selected columns
+        input_data = input_data[cols].dropna().to_numpy(copy=True)
+
+    phi, theta = geom.cartesian_to_spherical(input_data, normalize=normalize_coord)
+
+    # Uniform bin edges (Histogram2d requires uniform start/end/size)
+    if x_range is None:
+        x_range = (-np.pi, np.pi)
+    if y_range is None:
+        y_range = (0, np.pi)
+
+    builder = Hist2DBuilder(
+        input_data=phi,
+        input_data_id=["phi"] * phi.shape[1],
+        second_axis_data=theta,
+        second_axis_id=["theta"] * theta.shape[1],
+        nbinsx=nbinsx,
+        nbinsy=nbinsy,
+        x_range=x_range,
+        y_range=y_range,
+        hist_type=hist_type,
+        hist_norm=hist_norm,
+        same_scale=same_scale,
+        colors=colors,
+        separate_graphs=True,
+        same_range_for_separate=same_range_for_separate,
+        opacity=1.0,
+        grid_spec=grid_spec,
+    )
+
+    fig = builder.plot_graph()
+
+    fig.update_layout(
+        xaxis_title="phi [radians]",
+        yaxis_title="theta [radians]",
+        # width=400,
+        # height=500,
+    )
+
+    # # Nice, compact hover
+    # # hovertemplate="φ=%{x:.3f}<br>θ=%{y:.3f}<br>z=%{z:.3g}<extra></extra>",
+    # fig.update_layout(
+    #     xaxis_title="phi [rad]",
+    #     yaxis_title="theta [rad]",
+    # )
+
+    # Sanity: require uniform spacing
+    # dphi = np.diff(x_range)
+    # dtheta = np.diff(y_range)
+    # if not (np.allclose(dphi, dphi[0]) and np.allclose(dtheta, dtheta[0])):
+    #     raise ValueError("Histogram2d needs uniform bin widths; provide evenly-spaced phi/theta edges.")
+
+    # # Bin params for Plotly
+    # xbins = dict(start=float(x_range[0]), end=float(x_range[-1]), size=float(dphi[0]))
+    # ybins = dict(start=float(y_range[0]), end=float(y_range[-1]), size=float(dtheta[0]))
+
+    # # Axis centers for labels (optional – purely cosmetic)
+    # phi_centers = 0.5 * (x_range[:-1] + x_range[1:])
+    # theta_centers = 0.5 * (y_range[:-1] + y_range[1:])
+
+    # # For return values & optional logic
+    # H, _, _ = np.histogram2d(phi, theta, bins=[x_range, y_range])
+
+    # # Map points to bins (phi_bin, theta_bin) like before
+    # phi_idx = np.clip(np.digitize(phi, x_range) - 1, 0, len(x_range) - 2)
+    # theta_idx = np.clip(np.digitize(theta, y_range) - 1, 0, len(y_range) - 2)
+    # bin_to_indices = defaultdict(list)
+    # for i, (pb, tb) in enumerate(zip(phi_idx, theta_idx)):
+    #     bin_to_indices[(pb, tb)].append(i)
+
+    return fig  # , H, bin_to_indices
 
 
 def plot_scatter2D(
@@ -758,6 +1287,8 @@ def plot_scatter2D(
     second_axis_id=None,
     separate_graphs=False,
     same_range_for_separate=False,
+    x_range=None,
+    y_range=None,
     colors=None,
     opacity=None,
     grid_spec="column",
@@ -771,6 +1302,8 @@ def plot_scatter2D(
         colors=colors,
         separate_graphs=separate_graphs,
         same_range_for_separate=same_range_for_separate,
+        x_range=x_range,
+        y_range=y_range,
         opacity=opacity,
         line_mode="markers",
         grid_spec=grid_spec,
@@ -1355,6 +1888,122 @@ def plot_pca_summary(cumulative_variance, feature_importances, scatter_kwargs=No
 
     fig.update_xaxes(tickangle=-30, row=1, col=2)
     fig.update_yaxes(row=1, col=2, categoryorder="total ascending")
+
+    return fig
+
+
+def plot_kde(
+    input_data,
+    input_data_id=None,
+    second_axis_data=None,
+    second_axis_id=None,
+    nbinsx=200,
+    nbinsy=200,
+    hist_type="count",
+    hist_norm=None,
+    colors=None,
+    opacity=None,
+    grid_spec="column",
+    same_range_for_separate=False,
+    same_scale=False,
+):
+
+    builder = KDEBuilder(
+        input_data,
+        input_data_id=input_data_id,
+        second_axis_data=second_axis_data,
+        second_axis_id=second_axis_id,
+        nbinsx=nbinsx,
+        nbinsy=nbinsy,
+        x_range=None,
+        y_range=None,
+        hist_type=hist_type,
+        hist_norm=hist_norm,
+        same_range_for_separate=same_range_for_separate,
+        same_scale=same_scale,
+        colors=colors,
+        opacity=opacity,
+        grid_spec="column",
+    )
+
+    fig = builder.plot_graph()
+
+    return fig
+
+
+def plot_kernel_density_estimation(input_data, input_data_id=None, nbinsx=200, nbinsy=200, colors=None):
+
+    def padded_limits(v, frac=0.05, min_pad=0.0, bw=None, k_bw=3.0):
+        v = np.asarray(v, float)
+        vmin, vmax = np.nanmin(v), np.nanmax(v)
+        span = vmax - vmin
+        # pad from % of span, absolute floor, and (optional) k * bandwidth
+        pad = max(frac * span, min_pad, (k_bw * bw if bw is not None else 0.0))
+        if span == 0:  # all values equal → make a tiny window around it
+            pad = max(pad, 1.0 if min_pad == 0 else min_pad)
+        return vmin - pad, vmax + pad
+
+    if isinstance(input_data, pd.DataFrame):
+        cols = [c for c in input_data_id if c in input_data.columns]
+        if len(cols) != 2:
+            raise ValueError(f"Expected exactly 2 columns, got {len(cols)}.")
+        input_data = input_data[cols].dropna().to_numpy(copy=True)
+    elif isinstance(input_data, np.ndarray):
+        if input_data.ndim != 2 or input_data.shape[1] != 2:
+            raise TypeError("Input_data must be a pandas DataFrame or a numpy ndarray with dimensions N,2.")
+
+    x_axis = input_data[:, 0]
+    y_axis = input_data[:, 1]
+
+    if input_data_id is not None:
+        x_id = input_data_id[0]
+        y_id = input_data_id[1]
+
+    kde = gaussian_kde(np.vstack([x_axis, y_axis]), bw_method="scott")
+    # per-dimension KDE bandwidth ≈ factor * std
+    bw_x = kde.factor * np.std(x_axis, ddof=1)
+    bw_y = kde.factor * np.std(y_axis, ddof=1)
+
+    # choose padding rules
+    x_lo, x_hi = padded_limits(x_axis, frac=0.05, min_pad=0.5, bw=bw_x, k_bw=3.0)
+    y_lo, y_hi = padded_limits(y_axis, frac=0.05, min_pad=0.05, bw=bw_y, k_bw=3.0)
+
+    nx = nbinsx
+    ny = nbinsy
+    xg = np.linspace(x_lo, x_hi, nx)
+    yg = np.linspace(y_lo, y_hi, ny)
+    X, Y = np.meshgrid(xg, yg)
+    Z = kde(np.vstack([X.ravel(), Y.ravel()])).reshape(ny, nx)
+
+    scale = resolve_colors_any(colors, color_type="colorscale")
+
+    tol = 1e-4 * float(np.nanmax(Z))
+    Z_plot = np.where(Z < tol, 0.0, Z)
+
+    fig = go.Figure(
+        go.Contour(
+            x=xg,
+            y=yg,
+            z=Z,
+            contours=dict(coloring="fill", showlines=False),
+            colorscale=scale,
+            colorbar=dict(title=dict(text="Density", side="right")),
+            zauto=False,
+            zmin=0.0,
+            zmax=float(np.nanmax(Z_plot)),
+        )
+    )
+
+    # lock axes to the padded limits (optional)
+    fig.update_xaxes(range=[x_lo, x_hi])
+    fig.update_yaxes(range=[y_lo, y_hi])
+
+    fig.update_layout(
+        xaxis_title=x_id,
+        yaxis_title=y_id,
+        width=600,
+        height=700,
+    )
 
     return fig
 

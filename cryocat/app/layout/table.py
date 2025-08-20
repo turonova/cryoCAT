@@ -546,8 +546,10 @@ register_table_callbacks("tabv-desc")
 
 register_table_plot_callbacks("tabv-motl-table-plot", "tabv-motl-global-data-store")
 register_table_plot_callbacks("tabv-motl-nn-table-plot", "tabv-motl-nn-global-data-store")
-register_table_plot_callbacks("tabv-nn-table-plot", "tabv-nn-global-data-store")
-register_table_plot_callbacks("tabv-twist-table-plot", "tabv-twist-global-data-store")
+register_table_plot_callbacks("tabv-nn-table-plot", "tabv-nn-global-data-store", special_graphs=["Spherical histogram"])
+register_table_plot_callbacks(
+    "tabv-twist-table-plot", "tabv-twist-global-data-store", special_graphs=["Spherical histogram"]
+)
 register_table_plot_callbacks("tabv-desc-table-plot", "tabv-desc-global-data-store")
 
 
