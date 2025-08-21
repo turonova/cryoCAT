@@ -363,7 +363,7 @@ def load_twist(upload_content):
         df = pd.read_csv(io.StringIO(decoded.decode("utf-8")))
         global_twist["obj"] = TwistDescriptor(input_twist=pd.DataFrame(df))
 
-        radius = int(np.ceil(df['euclidean_distance'].max()))
+        radius = int(np.ceil(df["euclidean_distance"].max()))
 
         return False, "twist-tab", df.to_dict("records"), radius
     except Exception as e:
@@ -431,6 +431,8 @@ def show_nn_motl_option(n_clicks, main_motl_df, nn_motl_df, use_single_motl, nn_
 
         nn_motl = Motl(pd.DataFrame(nn_motl_df))
         nn_stats = NearestNeighbors([main_motl, nn_motl], **nn_kwargs)
+
+    _ = nn_stats.get_normalized_coord(add_to_df=True)
 
     if nn_kwargs["nn_type"] == "closest_dist":
         info_string = f"Mean distance: {nn_stats.df['nn_dist'].mean():.3f}; Median distance: {nn_stats.df['nn_dist'].median():.3f}"

@@ -41,7 +41,7 @@ def get_table_component(prefix: str):
                                 title="Plotting options",
                                 placement="end",
                                 scrollable=True,
-                                style={"width": "800px"},
+                                style={"width": "1100px"},
                                 is_open=False,
                             ),
                         ],
