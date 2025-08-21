@@ -271,3 +271,18 @@ html, body {
     max-height: 200px; /* adjust as suits your layout */
     overflow-y: auto;
 }
+
+/* Blurred overlay with spinner */
+.blur-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(255,255,255,0.3); /* translucent veil */
+  backdrop-filter: blur(5px);        /* blur the background beneath */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
