@@ -4547,7 +4547,11 @@ class TestRelionMotlv5:
     def test_getpd(self):
         result = RelionMotlv5.read_in_tomograms(self, self.warp_tomo_path)
         print(result)
-    def test_write2(self):
+    def test_write_normal_warp(self):
+        pd.set_option('display.max_rows', None)
+        pd.set_option('display.max_columns', None)
+        pd.set_option("display.width", 2000)
+        pd.set_option("display.expand_frame_repr", False)
         motl5 = RelionMotlv5(
             input_particles = self.warp_particles_path,
             input_tomograms = self.warp_tomo_path,
@@ -4557,6 +4561,68 @@ class TestRelionMotlv5:
             output_path = "./test_data/motl_data/relion5/clean/warp2test.star",
             write_optics=True,
             optics_data= self.warp_particles_path,
+        )
+        #print(motl5.relion_df)
+        print(motl5.df)
+        #ok: tomo name ha solo il numero -> same as 4.0
+        #fixme:? particle name: e' progressivo generale, dovrebbe essere progressivo solo fino al tomo num uguale e poi resettarsi -> same as 4.0
+        #above: it comes from self.df["subtomo_id"]
+        #fixme:BUG optics group per qualche strana ragione tutto a 0 -> same as 4.0
+
+    def test_write_out_relion(self):
+        pd.set_option('display.max_rows', None)
+        pd.set_option('display.max_columns', None)
+        pd.set_option("display.width", 2000)
+        pd.set_option("display.expand_frame_repr", False)
+        motl5 = RelionMotlv5(
+            input_particles=self.relion_particles_path,
+            input_tomograms=self.relion_tomo_path,
+            pixel_size=1.0,
+        )
+        motl5.write_out(
+            output_path="./test_data/motl_data/relion5/clean/relion5test.star",
+            write_optics=True,
+            optics_data=self.relion_particles_path,
+        )
+        #print(motl5.relion_df)
+
+    def test_write_out_relion2warp(self):
+        motl5 = RelionMotlv5(
+            input_particles=self.relion_particles_path,
+            input_tomograms=self.relion_tomo_path,
+            pixel_size=1.0,
+        )
+        # test1: convert!
+        motl5.write_out(
+            output_path="./test_data/motl_data/relion5/clean/relion2warp.star",
+            write_optics=True,
+            optics_data=self.relion_particles_path,
+            convert=True
+        )
+
+    def test_write_out_warp2relion(self):
+        motl5 = RelionMotlv5(
+            input_particles=self.warp_particles_path,
+            input_tomograms=self.warp_tomo_path,
+            pixel_size=1.0,
+        )
+        motl5.write_out(
+            output_path="./test_data/motl_data/relion5/clean/warp2reliontest.star",
+            write_optics=True,
+            optics_data=self.warp_particles_path,
+            convert=True
+        )
+
+    def test_write_out_warp(self):
+        motl5 = RelionMotlv5(
+            input_particles=self.warp_particles_path,
+            input_tomograms=self.warp_tomo_path,
+            pixel_size=1.0,
+        )
+        motl5.write_out(
+            output_path="./test_data/motl_data/relion5/clean/warp2test.star",
+            write_optics=True,
+            optics_data=self.warp_particles_path
         )
 
     def test_readInWarpRelion(self):
@@ -4627,13 +4693,4 @@ class TestRelionMotlv5:
         assert not relion5motl_warp2.tomo_df.empty
         assert relion5motl_warp2.df.empty
 
-
-    def test_convert1(self):
-        motl5_relion = RelionMotlv5(
-            input_particles=self.relion_particles_path,
-            input_tomograms=self.relion_tomo_path,
-        )
-        # convert tests
-        convertedtowarp = motl5_relion.convert_coordinates_merge()
-        print(convertedtowarp)
 
