@@ -14,6 +14,14 @@
     --color13: #83BA99;
 }
 
+.hidden {
+  display: none !important;
+}
+
+.flex {
+  display: flex !important;
+}
+
 .label-dark {
   color: var(--color9);
 }

@@ -18,6 +18,8 @@ layout = html.Div(
     [
         dcc.Store(id="main-motl-data-store"),
         dcc.Store(id="nn-motl-data-store"),
+        dcc.Store(id="main-motl-extra-data-store"),  # storing stopgap|relion|dynamo_df for the main motl
+        dcc.Store(id="nn-motl-extra-data-store"),  # storing stopgap|relion|dynamo_df for the nn motl
         dcc.Store(id="tviewer-motl-data"),
         dcc.Store(id="tviewer-motl-index", data=0),
         dcc.Store(id="tviewer-motl-nn-data"),
@@ -34,6 +36,8 @@ layout = html.Div(
         dcc.Store(id="tviewer-desc-data"),
         dcc.Store(id="tviewer-desc-index", data=0),
         dcc.Store(id="twist-global-radius"),  # to store radius
+        dcc.Store(id="main-relion-optics-store"),  # storing optics data for relion main motl
+        dcc.Store(id="nn-relion-optics-store"),  # storing optics data for relion nn motl
         dcc.Store(id="main-relion5-tomos-store"),  # storing tomogram file content for relion5 main motl
         dcc.Store(id="nn-relion5-tomos-store"),  # storing tomogram file content for relion5 nn motl
         dcc.Store(id=f"kmeans-global-data-store"),  # storing k means data

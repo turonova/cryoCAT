@@ -19,17 +19,19 @@ def LabeledDropdown(id_, label, **dropdown_kwargs):
     )
 
 
-def InlineLabeledDropdown(id_, label, tooltip_text="", **dropdown_kwargs):
+def InlineLabeledDropdown(id_, label, default_visibility="flex", tooltip_text="", **dropdown_kwargs):
 
     if tooltip_text == "":
         tooltip_text = label
+
+    class_style = dropdown_kwargs.get("className", default_visibility)
 
     return html.Div(
         [
             dbc.Label(
                 label,
                 html_for=id_,
-                className="label-dark mb-0 me-2",  # right margin so it doesn’t stick to dropdown
+                className=f"label-dark mb-0 me-2",  # right margin so it doesn’t stick to dropdown
                 style={"whiteSpace": "nowrap"},  # keep label on one line
             ),
             dcc.Dropdown(
@@ -47,6 +49,8 @@ def InlineLabeledDropdown(id_, label, tooltip_text="", **dropdown_kwargs):
             # ),
         ],
         style={"display": "flex", "alignItems": "center", "marginBottom": "0.5rem"},  # horizontal alignment
+        className=class_style,
+        id=f"{id_}-topdiv",
     )
 
 
