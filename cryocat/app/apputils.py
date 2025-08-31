@@ -34,6 +34,7 @@ def save_motl(
     rln_binning=1,
     rln_pixel_size=1.0,
     rln_version=3.1,
+    rln_use_original=False,
 ):
 
     if not isinstance(data_to_save, pd.DataFrame):
@@ -41,7 +42,7 @@ def save_motl(
     else:
         df = data_to_save
 
-    status = f"File saved to {file_path}"
+    status = f"File saved to {file_path} as {motl_type}."
 
     if motl_type == "emmotl":
         m = EmMotl(df)
@@ -58,14 +59,11 @@ def save_motl(
         m.write_out(file_path)
     elif motl_type == "relion":
         if rln_optics:
+            optics_data = pd.DataFrame(rln_optics)
             write_optics = True
         else:
+            optics_data = None
             write_optics = False
-
-        if extra_df or rln_optics:
-            use_original_entries = True
-        else:
-            use_original_entries = False
 
         if rln_version == 5.0:
             if rln_tomos:
@@ -77,20 +75,16 @@ def save_motl(
                 input_tomograms=input_tomograms,
                 pixel_size=rln_pixel_size,
                 binning=rln_binning,
-                optics_data=rln_optics,
+                optics_data=optics_data,
             )
         else:
             m = RelionMotl(
-                df,
-                version=rln_version,
-                pixel_size=rln_pixel_size,
-                binning=rln_binning,
-                optics_data=rln_optics,
+                df, version=rln_version, pixel_size=rln_pixel_size, binning=rln_binning, optics_data=optics_data
             )
         m.relion_df = pd.DataFrame(extra_df)
 
         m.write_out(
-            file_path, write_optics=write_optics, use_original_entries=use_original_entries, optics_data=rln_optics
+            file_path, write_optics=write_optics, use_original_entries=rln_use_original, optics_data=optics_data
         )
 
     return status

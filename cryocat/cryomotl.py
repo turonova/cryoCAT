@@ -2895,8 +2895,8 @@ class RelionMotl(Motl):
             Whether to use the `self.optics_df` (True) as source or not. If set to True, the optics_data as well as
             version will be ignored. Defaults to True.
         optics_data : str, optional
-            The optics data specified either as a path to the starfile (it can also contain the particle list) or as
-            DataFrame. It is used only if "use_original_entries" is set to False. Defaults to None.
+            The optics data specified either as a path to the starfile (it can also contain the particle list), dictionary
+            or as DataFrame. It is used only if "use_original_entries" is set to False. Defaults to None.
         version : float, optional
             Relion version to be used for the DataFrame. It is used only if use_original_entries is set to False and
             the "optics_data" is a path to starfile. If not set, `self.version` will be used instead. Defaults to None.
@@ -2933,8 +2933,12 @@ class RelionMotl(Motl):
                     optics_df, _ = starfileio.Starfile.get_frame_and_comments(optics_data, "data_")
             elif isinstance(optics_data, dict):
                 optics_df = pd.DataFrame(optics_data)
+            elif isinstance(optics_data, pd.DataFrame):
+                optics_df = optics_data
             else:
-                raise UserInputError("Optics has to be specified as a dictionary or as a path to the starfile.")
+                raise UserInputError(
+                    "Optics has to be specified as a dictionary, pandas DataFrame or as a path to the starfile."
+                )
         else:
             # TODO add support for 3.0
             if version == 3.1:
@@ -3403,7 +3407,7 @@ class RelionMotl(Motl):
             The pixel size of the data. If not provided, the pixel size of the object instance (`self.pixel_size`)
             will be used. Defaults to None.
         optics_data : str, optional
-            A DataFrame containing optics data or a path to the starfile
+            A DataFrame or a dictionary containing optics data or a path to the starfile
             that should be used to fetch the optics from. See :meth:`cryocat.cryomotl.RelionMotl.prepare_optics_data`
             for more details. Used only if `write_optics` is True. If it is None and `write_optics` is True, then
             the attribute `self.optics_df` will be used. Defaults to None.
@@ -3778,9 +3782,7 @@ class RelionMotlv5(RelionMotl, Motl):
         """
         if self.check_isWarp():
             raise UserInputError("Motl is not in relion format.")
-        relion_df = pd.DataFrame(
-            data=np.zeros((self.df.shape[0], len(self.columns_v5))), columns=self.columns_v5
-        )
+        relion_df = pd.DataFrame(data=np.zeros((self.df.shape[0], len(self.columns_v5))), columns=self.columns_v5)
         merged_df = self.convert_coordinates_merge(input_df)
         for col in relion_df.columns:
             if col in merged_df.columns:
@@ -3789,7 +3791,6 @@ class RelionMotlv5(RelionMotl, Motl):
                 # from relion to warp, there are no columns misisng.
                 raise UserInputError(f"Missing column '{col}' during relion2warp conversion.")
         return relion_df
-
 
     def prepare_optics_data(self, use_original_entries=True, optics_data=None):
         if use_original_entries:
@@ -3804,12 +3805,16 @@ class RelionMotlv5(RelionMotl, Motl):
                 optics_data_fixed = starfileio.Starfile.fix_relion5_star(optics_data)
                 optics_df, _ = starfileio.Starfile.get_frame_and_comments(optics_data_fixed, "data_optics")
                 # cleanup tmp file
-                if os.path.exists(optics_data_fixed) and optics_data_fixed!=optics_data:
+                if os.path.exists(optics_data_fixed) and optics_data_fixed != optics_data:
                     os.remove(optics_data_fixed)
             elif isinstance(optics_data, dict):
                 optics_df = pd.DataFrame(optics_data)
+            elif isinstance(optics_data, pd.DataFrame):
+                optics_df = optics_data
             else:
-                raise UserInputError("Optics has to be specified as a dictionary or as a path to the starfile.")
+                raise UserInputError(
+                    "Optics has to be specified as a dictionary, path to the starfile or pandas DataFrame."
+                )
         else:
             optics_df = self.create_optics_group_v5()  # fixme
 
@@ -3948,15 +3953,15 @@ class RelionMotlv5(RelionMotl, Motl):
             for idx, row in self.df.iterrows():
                 tomo_name = f"TS_{int(row['tomo_id']):02d}"
                 size_x, size_y, size_z = self.tomo_df.loc[
-                    self.tomo_df["rlnTomoName"] == tomo_name,
-                    ["rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]
+                    self.tomo_df["rlnTomoName"] == tomo_name, ["rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]
                 ].values[0]
                 x = (row["x"] + row["shift_x"] - size_x / 2.0) * pixel_size
                 y = (row["y"] + row["shift_y"] - size_y / 2.0) * pixel_size
                 z = (row["z"] + row["shift_z"] - size_z / 2.0) * pixel_size
                 coords.append((x, y, z))
-            relion_df.loc[:,
-            ["rlnCenteredCoordinateXAngst", "rlnCenteredCoordinateYAngst", "rlnCenteredCoordinateZAngst"]] = coords
+            relion_df.loc[
+                :, ["rlnCenteredCoordinateXAngst", "rlnCenteredCoordinateYAngst", "rlnCenteredCoordinateZAngst"]
+            ] = coords
 
         relion_df = self.convert_angles_to_relion(relion_df)
         if not self.isWarp:  # only in relion
@@ -3984,7 +3989,7 @@ class RelionMotlv5(RelionMotl, Motl):
 
         if convert is True:
             if self.isWarp:
-                relion_df =  self.warp2relion(self.relion_df)
+                relion_df = self.warp2relion(self.relion_df)
             else:
                 relion_df = self.relion2warp(self.relion_df)
 

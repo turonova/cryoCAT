@@ -342,7 +342,7 @@ def get_sidebar():
 # Register callbacks for motl loads:
 register_motl_load_callbacks("main")
 register_motl_load_callbacks("nn")
-register_motl_save_callbacks("save-main", stored_outputs, "tabv-motl-global-data-store")
+register_motl_save_callbacks("save-main", stored_outputs, "tabv-motl-global-data-store", "main")
 
 
 @callback(
