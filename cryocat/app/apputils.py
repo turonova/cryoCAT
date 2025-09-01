@@ -15,13 +15,79 @@ import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 
 from cryocat.classutils import process_method_docstring
-from cryocat.cryomotl import Motl
+from cryocat.cryomotl import Motl, EmMotl, StopgapMotl, RelionMotl, RelionMotlv5, DynamoMotl
 
 # mport dash_html_components as html
 
 
 # def series_to_dash_list(series):
 #    return html.Ul([html.Li(f"{idx}: {val}") for idx, val in series.items()])
+
+
+def save_motl(
+    file_path,
+    data_to_save,
+    motl_type,
+    extra_df=None,
+    rln_optics=None,
+    rln_tomos=None,
+    rln_binning=1,
+    rln_pixel_size=1.0,
+    rln_version=3.1,
+    rln_use_original=False,
+):
+
+    if not isinstance(data_to_save, pd.DataFrame):
+        df = pd.DataFrame(data_to_save)
+    else:
+        df = data_to_save
+
+    status = f"File saved to {file_path} as {motl_type}."
+
+    if motl_type == "emmotl":
+        m = EmMotl(df)
+        m.write_out(file_path)
+    elif motl_type == "stopgap":
+        m = StopgapMotl(df)
+        if extra_df:
+            m.stopgap_df = pd.DataFrame(extra_df)
+        m.write_out(file_path)
+    elif motl_type == "dynamo":
+        m = DynamoMotl(df)
+        if extra_df:
+            m.dynamo_df = pd.DataFrame(extra_df)
+        m.write_out(file_path)
+    elif motl_type == "relion":
+        if rln_optics:
+            optics_data = pd.DataFrame(rln_optics)
+            write_optics = True
+        else:
+            optics_data = None
+            write_optics = False
+
+        if rln_version == 5.0:
+            if rln_tomos:
+                input_tomograms = pd.DataFrame(rln_tomos)
+            else:
+                return "Tomogram data needs to be provided for Relion 5 file type."
+            m = RelionMotlv5(
+                df,
+                input_tomograms=input_tomograms,
+                pixel_size=rln_pixel_size,
+                binning=rln_binning,
+                optics_data=optics_data,
+            )
+        else:
+            m = RelionMotl(
+                df, version=rln_version, pixel_size=rln_pixel_size, binning=rln_binning, optics_data=optics_data
+            )
+        m.relion_df = pd.DataFrame(extra_df)
+
+        m.write_out(
+            file_path, write_optics=write_optics, use_original_entries=rln_use_original, optics_data=optics_data
+        )
+
+    return status
 
 
 def save_output(file_path, data_to_save, csv_only=True):
@@ -273,10 +339,10 @@ def generate_kwargs(ids_dict, values):
         if id["p_type"] == "numpy.ndarray":
             new_kwargs[id["param"]] = parse_array_string(value)
 
-        elif value == 'True':
+        elif value == "True":
             new_kwargs[id["param"]] = True
 
-        elif value == 'False':
+        elif value == "False":
             new_kwargs[id["param"]] = False
 
         else:

@@ -14,6 +14,21 @@
     --color13: #83BA99;
 }
 
+/* following 2 prevent jitter for tooltips */
+/* Modern browsers */
+:root { scrollbar-gutter: stable; }
+
+/* Fallback for older browsers */
+html, body { overflow-y: scroll; }  /* always reserve space for the scrollbar */
+
+.hidden {
+  display: none !important;
+}
+
+.flex {
+  display: flex !important;
+}
+
 .label-dark {
   color: var(--color9);
 }

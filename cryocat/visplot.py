@@ -1239,12 +1239,12 @@ def plot_spherical_density_hist2d(
 
     fig = builder.plot_graph()
 
-    fig.update_layout(
-        xaxis_title="phi [radians]",
-        yaxis_title="theta [radians]",
-        # width=400,
-        # height=500,
-    )
+    # fig.update_layout(
+    #    xaxis_title="phi [radians]",
+    #    yaxis_title="theta [radians]",
+    # width=400,
+    # height=500,
+    # )
 
     # # Nice, compact hover
     # # hovertemplate="φ=%{x:.3f}<br>θ=%{y:.3f}<br>z=%{z:.3g}<extra></extra>",
