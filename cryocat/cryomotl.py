@@ -709,6 +709,7 @@ class Motl:
         if Motl.check_df_correct_format(input_motl):
             self.df = input_motl.copy()
             self.df.reset_index(inplace=True, drop=True)
+            self.df = self.df.apply(pd.to_numeric, errors="coerce")
             self.df = self.df.fillna(0.0)
         else:
             self.convert_to_motl(input_motl)
@@ -2550,7 +2551,8 @@ class RelionMotl(Motl):
             if self.version >= 3.1:
                 self.df[motl_column] = self.df[motl_column].values / self.pixel_size
 
-            self.df[motl_column].fillna(0, inplace=True)
+            # self.df[motl_column].fillna(0, inplace=True)
+            self.df.fillna({motl_column: 0.0}, inplace=True)
 
     def parse_tomo_id(self, relion_df):
         """The function parses the tomogram id from a Relion starfile. The function takes
