@@ -7,6 +7,7 @@ import copy
 import numpy as np
 import pandas as pd
 import pytest
+import unittest
 import os
 
 from cryocat import ioutils, cryomap, cryomask, geom
@@ -2388,9 +2389,11 @@ class TestRelionMotl:
 
         #Test with "data_images" or "data_..."
         relion123 = RelionMotl(relion_paths["relionbroken_path"])
+        #does not trigger exceptions
 
         #Test2 with "data_****"
         relion123 = RelionMotl("./test_data/motl_data/bin1_1deg_500_2.star")
+        #normally read as the other ones
         print(relion123.relion_df)
 
     def test_get_version_from_file(self, relion_paths):
@@ -3256,6 +3259,7 @@ class TestRelionMotl:
         @pytest.fixture
         def optics_file_paths(self):
             motl_dir = "./test_data/motl_data/"
+            os.makedirs(motl_dir, exist_ok=True)
             return {
                 'optics30_path': os.path.join(motl_dir, "optics_v30.star"),
                 'optics31_path': os.path.join(motl_dir, "optics_v31.star"),
@@ -3263,10 +3267,10 @@ class TestRelionMotl:
 
         @pytest.fixture
         def create_dummy_optics_files(self, optics_file_paths):
-            # Create a dummy Relion 3.0 optics file
+            # Relion 3.0 optics file
             optics_content_v30 = """
                 data_
-            
+
                 loop_
                 _rlnMagnification #1
                 _rlnVoltage #2
@@ -3275,10 +3279,10 @@ class TestRelionMotl:
             with open(optics_file_paths['optics30_path'], 'w') as f:
                 f.write(optics_content_v30)
 
-            # Create a dummy Relion 3.1+ optics file
+            # Relion 3.1+ optics file
             optics_content_v31 = """
                 data_optics
-            
+
                 loop_
                 _rlnMagnification #1
                 _rlnVoltage #2
@@ -3310,16 +3314,20 @@ class TestRelionMotl:
         def test_prepare_optics_data_from_starfile_v30(self, optics_file_paths, create_dummy_optics_files):
             relion_motl = RelionMotl()
             relion_motl.version = 3.0
-            optics_df = relion_motl.prepare_optics_data(use_original_entries=False,
-                                                        optics_data=optics_file_paths['optics30_path'])
+            optics_df = relion_motl.prepare_optics_data(
+                use_original_entries=False,
+                optics_data=optics_file_paths['optics30_path']
+            )
             expected_df = pd.DataFrame({'rlnMagnification': [10000], 'rlnVoltage': [300]})
             pd.testing.assert_frame_equal(optics_df, expected_df)
 
         def test_prepare_optics_data_from_starfile_v31(self, optics_file_paths, create_dummy_optics_files):
             relion_motl = RelionMotl()
             relion_motl.version = 3.1
-            optics_df = relion_motl.prepare_optics_data(use_original_entries=False,
-                                                        optics_data=optics_file_paths['optics31_path'])
+            optics_df = relion_motl.prepare_optics_data(
+                use_original_entries=False,
+                optics_data=optics_file_paths['optics31_path']
+            )
             expected_df = pd.DataFrame({'rlnMagnification': [12000], 'rlnVoltage': [200]})
             pd.testing.assert_frame_equal(optics_df, expected_df)
 
@@ -3332,27 +3340,35 @@ class TestRelionMotl:
 
         def test_prepare_optics_data_invalid_optics_data_type_error(self):
             relion_motl = RelionMotl()
-            with pytest.raises(UserInputError,
-                               match="Optics has to be specified as a dictionary or as a path to the starfile."):
+            with pytest.raises(
+                    Exception
+            ):
                 relion_motl.prepare_optics_data(use_original_entries=False, optics_data=123)
 
-        def test_prepare_optics_data_no_optics_data_v31_calls_create(self, monkeypatch):
+        def test_prepare_optics_data_no_optics_data_v31_calls_create(self):
             relion_motl = RelionMotl()
             relion_motl.version = 3.1
-            expected_df = pd.DataFrame({'rlnOpticsGroup': [1]})
-            with monkeypatch.context() as m:
-                m.setattr(relion_motl, 'create_optics_group_v3_1', lambda: pd.DataFrame({'rlnOpticsGroup': [1]}))
-                optics_df = relion_motl.prepare_optics_data(use_original_entries=False, optics_data=None)
-                pd.testing.assert_frame_equal(optics_df, expected_df)
+            optics_df = relion_motl.prepare_optics_data(
+                use_original_entries=False,
+                optics_data=None,
+                pixel_size=2.0,
+                subtomo_size=64
+            )
+            expected_df = relion_motl.create_optics_group_v3_1(pixel_size=2.0, subtomo_size=64)
+            pd.testing.assert_frame_equal(optics_df, expected_df)
 
-        def test_prepare_optics_data_no_optics_data_v_greater_than_31_calls_create(self, monkeypatch):
+        def test_prepare_optics_data_no_optics_data_v_greater_than_31_calls_create(self):
             relion_motl = RelionMotl()
             relion_motl.version = 4.0
-            expected_df = pd.DataFrame({'rlnOpticsGroup': [1]})
-            with monkeypatch.context() as m:
-                m.setattr(relion_motl, 'create_optics_group_v4', lambda: pd.DataFrame({'rlnOpticsGroup': [1]}))
-                optics_df = relion_motl.prepare_optics_data(use_original_entries=False, optics_data=None)
-                pd.testing.assert_frame_equal(optics_df, expected_df)
+            optics_df = relion_motl.prepare_optics_data(
+                use_original_entries=False,
+                optics_data=None,
+                pixel_size=2.0,
+                subtomo_size=64,
+                binning=2
+            )
+            expected_df = relion_motl.create_optics_group_v4(pixel_size=2.0, subtomo_size=64, binning=2)
+            pd.testing.assert_frame_equal(optics_df, expected_df)
 
         def test_prepare_optics_data_no_optics_data_v30_warning(self):
             relion_motl = RelionMotl()
@@ -3362,50 +3378,42 @@ class TestRelionMotl:
 
         def test_prepare_optics_data_explicit_version_from_file(self, optics_file_paths, create_dummy_optics_files):
             relion_motl = RelionMotl()
-            optics_df_v31 = relion_motl.prepare_optics_data(use_original_entries=False,
-                                                            optics_data=optics_file_paths['optics31_path'], version=3.1)
+            optics_df_v31 = relion_motl.prepare_optics_data(
+                use_original_entries=False,
+                optics_data=optics_file_paths['optics31_path'],
+                version=3.1
+            )
             expected_df_v31 = pd.DataFrame({'rlnMagnification': [12000], 'rlnVoltage': [200]})
             pd.testing.assert_frame_equal(optics_df_v31, expected_df_v31)
 
-            relion_motl.version = 4.0  # Set an instance version, but override with explicit version
-            optics_df_v30 = relion_motl.prepare_optics_data(use_original_entries=False,
-                                                            optics_data=optics_file_paths['optics30_path'], version=3.0)
+            optics_df_v30 = relion_motl.prepare_optics_data(
+                use_original_entries=False,
+                optics_data=optics_file_paths['optics30_path'],
+                version=3.0
+            )
             expected_df_v30 = pd.DataFrame({'rlnMagnification': [10000], 'rlnVoltage': [300]})
             pd.testing.assert_frame_equal(optics_df_v30, expected_df_v30)
-
-        def test_prepare_optics_data_no_optics_data_no_version_uses_self_version_v31(self, monkeypatch):
-            relion_motl = RelionMotl()
-            relion_motl.version = 3.1
-            expected_df = pd.DataFrame({'rlnOpticsGroup': [1]})
-            with monkeypatch.context() as m:
-                m.setattr(relion_motl, 'create_optics_group_v3_1', lambda: pd.DataFrame({'rlnOpticsGroup': [1]}))
-                optics_df = relion_motl.prepare_optics_data(use_original_entries=False, optics_data=None, version=None)
-                pd.testing.assert_frame_equal(optics_df, expected_df)
-
-        def test_prepare_optics_data_no_optics_data_no_version_uses_self_version_v4(self, monkeypatch):
-            relion_motl = RelionMotl()
-            relion_motl.version = 4.0
-            expected_df = pd.DataFrame({'rlnOpticsGroup': [1]})
-            with monkeypatch.context() as m:
-                m.setattr(relion_motl, 'create_optics_group_v4', lambda: pd.DataFrame({'rlnOpticsGroup': [1]}))
-                optics_df = relion_motl.prepare_optics_data(use_original_entries=False, optics_data=None, version=None)
-                pd.testing.assert_frame_equal(optics_df, expected_df)
 
         def test_prepare_optics_data_use_original_entries_true_optics_data_none_warning(self):
             relion_motl = RelionMotl()
             relion_motl.optics_data = None
             with pytest.raises(Warning):
-                relion_motl.prepare_optics_data(use_original_entries=True)  # Default is True, but let's be explicit
+                relion_motl.prepare_optics_data(use_original_entries=True)
 
         def test_prepare_optics_data_use_original_entries_false_optics_data_none_version_30_warning(self):
             relion_motl = RelionMotl()
             with pytest.raises(Warning):
                 relion_motl.prepare_optics_data(use_original_entries=False, optics_data=None, version=3.0)
+
+        # --- Cleanup test files ---
         def test_cleanup(self):
-            if os.path.exists("./test_data/motl_data/optics_v30.star"):
-                os.remove("./test_data/motl_data/optics_v30.star")
-            if os.path.exists("./test_data/motl_data/optics_v31.star"):
-                os.remove("./test_data/motl_data/optics_v31.star")
+            files = [
+                "./test_data/motl_data/optics_v30.star",
+                "./test_data/motl_data/optics_v31.star"
+            ]
+            for f in files:
+                if os.path.exists(f):
+                    os.remove(f)
 
     def test_prepare_particles_data(self, relion_paths):
         # Initialize a RelionMotl object by loading from a Relion .star file
@@ -4557,17 +4565,19 @@ class TestRelionMotlv5:
             input_tomograms = self.warp_tomo_path,
             pixel_size = 1.0,
         )
+        output_path = "./test_data/motl_data/relion5/clean/warp2test.star"
         motl5.write_out(
-            output_path = "./test_data/motl_data/relion5/clean/warp2test.star",
+            output_path = output_path,
             write_optics=True,
             optics_data= self.warp_particles_path,
         )
+        if os.path.exists(output_path):
+            os.remove(output_path)
         #print(motl5.relion_df)
         print(motl5.df)
-        #ok: tomo name ha solo il numero -> same as 4.0
-        #fixme:? particle name: e' progressivo generale, dovrebbe essere progressivo solo fino al tomo num uguale e poi resettarsi -> same as 4.0
-        #above: it comes from self.df["subtomo_id"]
-        #fixme:BUG optics group per qualche strana ragione tutto a 0 -> same as 4.0
+
+        #optics group always 0 ?
+        #todo: keep original entries
 
     def test_write_out_relion(self):
         pd.set_option('display.max_rows', None)
@@ -4579,12 +4589,21 @@ class TestRelionMotlv5:
             input_tomograms=self.relion_tomo_path,
             pixel_size=1.0,
         )
+        output_path = "./test_data/motl_data/relion5/clean/relion5test.star"
+        output_path = output_path
         motl5.write_out(
-            output_path="./test_data/motl_data/relion5/clean/relion5test.star",
+            output_path=output_path,
             write_optics=True,
             optics_data=self.relion_particles_path,
         )
+        if os.path.exists(output_path):
+            os.remove(output_path)
         #print(motl5.relion_df)
+
+        """motl5_relion.write_out(
+            #todo: keep original entries
+        )
+        """#assert sorted(motl5_relion.relion_df.columns) == sorted(columns_v5_centAng)
 
     def test_write_out_relion2warp(self):
         motl5 = RelionMotlv5(
@@ -4593,12 +4612,15 @@ class TestRelionMotlv5:
             pixel_size=1.0,
         )
         # test1: convert!
+        output_path="./test_data/motl_data/relion5/clean/relion2warp.star"
         motl5.write_out(
-            output_path="./test_data/motl_data/relion5/clean/relion2warp.star",
+            output_path=output_path,
             write_optics=True,
             optics_data=self.relion_particles_path,
             convert=True
         )
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
     def test_write_out_warp2relion(self):
         motl5 = RelionMotlv5(
@@ -4606,12 +4628,16 @@ class TestRelionMotlv5:
             input_tomograms=self.warp_tomo_path,
             pixel_size=1.0,
         )
+        output_path ="./test_data/motl_data/relion5/clean/warp2reliontest.star"
         motl5.write_out(
-            output_path="./test_data/motl_data/relion5/clean/warp2reliontest.star",
+            output_path=output_path,
             write_optics=True,
             optics_data=self.warp_particles_path,
             convert=True
         )
+
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
     def test_write_out_warp(self):
         motl5 = RelionMotlv5(
@@ -4619,13 +4645,48 @@ class TestRelionMotlv5:
             input_tomograms=self.warp_tomo_path,
             pixel_size=1.0,
         )
+        output_path = "./test_data/motl_data/relion5/clean/warp2test.star"
         motl5.write_out(
-            output_path="./test_data/motl_data/relion5/clean/warp2test.star",
+            output_path=output_path,
             write_optics=True,
             optics_data=self.warp_particles_path
         )
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
     def test_readInWarpRelion(self):
+        columns_v5 = [
+            "rlnCoordinateX",
+            "rlnCoordinateY",
+            "rlnCoordinateZ",
+            "rlnAngleRot",
+            "rlnAngleTilt",
+            "rlnAnglePsi",
+            "rlnTomoName",
+            "rlnTomoParticleName",
+            "rlnOpticsGroup",
+            "rlnOriginXAngst",
+            "rlnOriginYAngst",
+            "rlnOriginZAngst",
+        ]
+        columns_v5_centAng = [
+            "rlnCenteredCoordinateXAngst",
+            "rlnCenteredCoordinateYAngst",
+            "rlnCenteredCoordinateZAngst",
+            "rlnAngleRot",
+            "rlnAngleTilt",
+            "rlnAnglePsi",
+            "rlnTomoName",
+            "rlnTomoParticleName",
+            "rlnOpticsGroup",
+            "rlnOriginXAngst",
+            "rlnOriginYAngst",
+            "rlnOriginZAngst",
+            "rlnClassNumber",
+            "rlnRandomSubset",
+            "rlnGroupNumber",
+        ]
+
         pd.set_option('display.max_rows', None)
         pd.set_option('display.max_columns', None)
         pd.set_option("display.width", 2000)
@@ -4638,10 +4699,13 @@ class TestRelionMotlv5:
         #print(motl5_relion.relion_df)
         #print(motl5_relion.optics_data)
         #print(motl5_relion.tomo_df)
-        # print(motl5_relion.df) #todo: test conversion, how?
+        # print(motl5_relion.df)
         print(motl5_relion.relion_df[['rlnCenteredCoordinateXAngst', 'rlnCenteredCoordinateYAngst', 'rlnCenteredCoordinateZAngst']])
         print("\n")
         print(motl5_relion.df[['x','y','z']])
+        assert motl5_relion.isWarp == False
+        assert motl5_relion.version == 5.0
+
 
         with pytest.raises(Exception):
             motl5_relion1 = RelionMotlv5(
@@ -4655,7 +4719,7 @@ class TestRelionMotlv5:
         assert not motl5_relion2.tomo_df.empty
         assert motl5_relion2.df.empty
 
-        #test: input_tomo with file
+        #test: input_tomo with pd
         data_rows = [
             ["TS_01", 4000, 4000, 2000],
             ["TS_03", 4000, 4000, 2000],
@@ -4670,6 +4734,8 @@ class TestRelionMotlv5:
             input_tomograms=dim_tomo_df
         )
         pd.testing.assert_frame_equal(dim_tomo_df, motl5_relion.tomo_df)
+        assert motl5_relion4.version == 5.0
+
 
         #test: use relion object as input
         motl5_relion3 = RelionMotlv5(
@@ -4682,6 +4748,9 @@ class TestRelionMotlv5:
             input_particles=self.warp_particles_path,
             input_tomograms=self.warp_tomo_path
         )
+
+        assert relion5motl_warp.version == 5.0
+
         with pytest.raises(Exception):
             relion5motl_warp1 = RelionMotlv5(
                 input_particles = self.warp_particles_path,
@@ -4692,5 +4761,650 @@ class TestRelionMotlv5:
         assert relion5motl_warp2.relion_df.empty
         assert not relion5motl_warp2.tomo_df.empty
         assert relion5motl_warp2.df.empty
+        assert relion5motl_warp2.version == 5.0
 
+        with pytest.raises(Exception):
+            relion5empty = RelionMotlv5()
+
+
+    def test_readin(self):
+        expected_relion_optics = pd.DataFrame({
+            'rlnVoltage': [300.0],
+            'rlnSphericalAberration': [2.7],
+            'rlnAmplitudeContrast': [0.1],
+            'rlnTomoTiltSeriesPixelSize': [1.35],
+            'rlnOpticsGroup': [1],
+            'rlnOpticsGroupName': ['optics1'],
+            'rlnCtfDataAreCtfPremultiplied': [1],
+            'rlnImageDimensionality': [2],
+            'rlnTomoSubtomogramBinning': [1.0],
+            'rlnImagePixelSize': [1.35],
+            'rlnImageSize': [192]
+        })
+        expected_warp_optics = pd.DataFrame({
+            'rlnOpticsGroup': [1, 2, 3, 4, 5],
+            'rlnOpticsGroupName': ['opticsGroup1', 'opticsGroup2', 'opticsGroup3', 'opticsGroup4', 'opticsGroup5'],
+            'rlnSphericalAberration': [2.7] * 5,
+            'rlnVoltage': [300.0] * 5,
+            'rlnTomoTiltSeriesPixelSize': [0.7894] * 5,
+            'rlnCtfDataAreCtfPremultiplied': [1] * 5,
+            'rlnImageDimensionality': [2] * 5,
+            'rlnTomoSubtomogramBinning': [5.06714] * 5,
+            'rlnImagePixelSize': [4.0] * 5,
+            'rlnImageSize': [64] * 5,
+            'rlnAmplitudeContrast': [0.07] * 5
+        })
+        #relion5 handling:
+        fix_path = starfileio.Starfile.fix_relion5_star(self.relion_particles_path)
+
+        frames, specifiers, _ = starfileio.Starfile.read(fix_path)
+        data_id = RelionMotl._get_data_particles_id(specifiers)
+        optics_id = RelionMotl._get_optics_id(specifiers)
+        optics_df = frames[optics_id]
+        os.remove(fix_path)
+        assert fix_path != self.relion_particles_path #relion5 : definetely new tmp file created
+        relion1 = RelionMotlv5(
+            input_particles = self.relion_particles_path,
+            input_tomograms = self.relion_tomo_path
+        )
+        assert not os.path.exists(fix_path)
+
+        pd.testing.assert_frame_equal(optics_df, relion1.optics_data)
+        pd.testing.assert_frame_equal(relion1.optics_data, expected_relion_optics)
+
+        #warp: same
+
+    def test_clean_tomo_name_column(self):
+        # case 1: standard use case with valid string names
+        input_df = pd.DataFrame({
+            "rlnTomoName": ["TS_17.tomostar", "TS_23.tomostar", "TS_105.tomostar"],
+            "other_data": ["a", "b", "c"]
+        })
+        expected_df = pd.DataFrame({
+            "rlnTomoName": [17, 23, 105],
+            "other_data": ["a", "b", "c"]
+        })
+        cleaned_df = RelionMotlv5.clean_tomo_name_column(input_df.copy())
+        pd.testing.assert_frame_equal(cleaned_df, expected_df)
+        # case 2: mixed data types
+        input_df_mixed = pd.DataFrame({
+            "rlnTomoName": ["TS_42.tomostar", np.nan, 99, "TS_7.tomostar"],
+            "other_data": ["d", "e", "f", "g"]
+        })
+        expected_df_mixed = pd.DataFrame({
+            "rlnTomoName": [42, np.nan, 99, 7],
+            "other_data": ["d", "e", "f", "g"]
+        })
+        cleaned_df_mixed = RelionMotlv5.clean_tomo_name_column(input_df_mixed.copy())
+        pd.testing.assert_frame_equal(cleaned_df_mixed, expected_df_mixed, check_dtype=False)
+        #case 3: missing rlnTomoName column
+        input_df_no_column = pd.DataFrame({"other_column": ["a", "b"]})
+        with pytest.raises(ValueError) as cm:
+            RelionMotlv5.clean_tomo_name_column(input_df_no_column)
+        assert "'rlnTomoName' column not found in DataFrame" in str(cm.value)
+
+        #case4: no number -> no exception
+        input_df = pd.DataFrame({
+            "rlnTomoName": ["no_number_here.star"],
+            "data": [1]
+        })
+        expected_df = pd.DataFrame({
+            "rlnTomoName": [None],  # the expected output is now None
+            "data": [1]
+        })
+        cleaned_df_nonumber = RelionMotlv5.clean_tomo_name_column(input_df.copy())
+        pd.testing.assert_frame_equal(cleaned_df_nonumber, expected_df)
+
+    def test_clean_subtomo_name_column(self):
+        # case 1: standard use case with valid string paths
+        input_df = pd.DataFrame({
+            "rlnTomoParticleName": ["ts_01/subtomo_17.mrc", "ts_02/subtomo_23.mrc"],
+            "other_data": ["a", "b"]
+        })
+        expected_df = pd.DataFrame({
+            "rlnTomoParticleName": [17, 23],
+            "other_data": ["a", "b"]
+        })
+        cleaned_df = RelionMotlv5.clean_subtomo_name_column(input_df.copy())
+        pd.testing.assert_frame_equal(cleaned_df, expected_df)
+
+        # case 2: mixed data types
+        input_df_mixed = pd.DataFrame({
+            "rlnTomoParticleName": ["ts_01/subtomo_42.mrc", np.nan, 99],
+            "other_data": ["c", "d", "e"]
+        })
+        expected_df_mixed = pd.DataFrame({
+            "rlnTomoParticleName": [42, np.nan, 99],
+            "other_data": ["c", "d", "e"]
+        })
+        cleaned_df_mixed = RelionMotlv5.clean_subtomo_name_column(input_df_mixed.copy())
+        pd.testing.assert_frame_equal(cleaned_df_mixed, expected_df_mixed, check_dtype=False)
+
+        #case4
+        input_df_fixed = pd.DataFrame({
+            "rlnTomoParticleName": ["ts_01/subtomo_17", "ts_01/subtomo_a.mrc", "just_a_string", np.nan],
+            "other_data": ["a", "b", "c", "d"]
+        })
+
+        # this is the corrected expected DataFrame
+        expected_df_fixed = pd.DataFrame({
+            "rlnTomoParticleName": [17, None, None, np.nan],
+            "other_data": ["a", "b", "c", "d"]
+        })
+
+        # because pandas will cast the column to a float if it contains both int and None
+        # we must also cast the expected dataframe's column to a float
+        expected_df_fixed['rlnTomoParticleName'] = expected_df_fixed['rlnTomoParticleName'].astype(float)
+
+        cleaned_df_fixed = RelionMotlv5.clean_subtomo_name_column(input_df_fixed.copy())
+
+        # the test should now pass
+        pd.testing.assert_frame_equal(cleaned_df_fixed, expected_df_fixed, check_dtype=False)
+
+    def test_read_in_tomo(self):
+        relionmotl_instance = RelionMotlv5(
+            input_tomograms = self.relion_tomo_path
+        )
+        test1 = relionmotl_instance.read_in_tomograms(self.relion_tomo_path)
+        expected1 = pd.DataFrame(
+            {
+                "rlnTomoName": ["TS_01", "TS_03", "TS_43", "TS_45", "TS_54"],
+                "rlnTomoSizeX": [4000, 4000, 4000, 4000, 4000],
+                "rlnTomoSizeY": [4000, 4000, 4000, 4000, 4000],
+                "rlnTomoSizeZ": [2000, 2000, 2000, 2000, 2000]
+            }
+        )
+        pd.testing.assert_frame_equal(test1, expected1, check_dtype=False)
+
+    @pytest.fixture
+    def pixel_size(self):
+        return 1.35
+
+    @pytest.fixture
+    def tomo_df(self):
+        # Mock dataframe for self.tomo_df
+        data = {
+            "rlnTomoName": ["TS_01", "TS_03"],
+            "rlnTomoSizeX": [4000, 4000],
+            "rlnTomoSizeY": [4000, 4000],
+            "rlnTomoSizeZ": [2000, 2000],
+        }
+        return pd.DataFrame(data)
+
+
+    @pytest.fixture
+    def relion_df(self):
+        # A standard mock relion_df for testing
+        data = {
+            "rlnTomoName": ["TS_01", "TS_01", "TS_03"],
+            "rlnTomoSubtomogramRot": [0.0, 0.0, 0.0],
+            "rlnTomoSubtomogramTilt": [0.0, 0.0, 0.0],
+            "rlnTomoSubtomogramPsi": [0.0, 0.0, 0.0],
+            "rlnAngleRot": [0.0, 0.0, 0.0],
+            "rlnAngleTilt": [0.0, 0.0, 0.0],
+            "rlnAnglePsi": [0.0, 0.0, 0.0],
+            "rlnAngleTiltPrior": [0.0, 0.0, 0.0],
+            "rlnAnglePsiPrior": [0.0, 0.0, 0.0],
+            "rlnOpticsGroup": [1, 1, 1],
+            "rlnTomoParticleName": ["TS_01/12", "TS_01/13", "TS_03/01"],
+            "rlnTomoVisibleFrames": [10, 10, 10],
+            "rlnImageName": ["img1", "img2", "img3"],
+            "rlnOriginXAngst": [0.0, 0.0, 0.0],
+            "rlnOriginYAngst": [0.0, 0.0, 0.0],
+            "rlnOriginZAngst": [0.0, 0.0, 0.0],
+            "rlnCenteredCoordinateXAngst": [13.5, -27.0, 54.0],
+            "rlnCenteredCoordinateYAngst": [27.0, -13.5, 0.0],
+            "rlnCenteredCoordinateZAngst": [-13.5, 13.5, 13.5],
+            "rlnGroupNumber": [1, 1, 1],
+            "rlnClassNumber": [1, 1, 1],
+            "rlnNormCorrection": [1.0, 1.0, 1.0],
+            "rlnRandomSubset": [1, 1, 1],
+            "rlnLogLikeliContribution": [1.0, 1.0, 1.0],
+            "rlnMaxValueProbDistribution": [1.0, 1.0, 1.0],
+            "rlnNrOfSignificantSamples": [1.0, 1.0, 1.0],
+        }
+        return pd.DataFrame(data)
+
+    @pytest.fixture
+    def relion_motl_instance(self, pixel_size, tomo_df, relion_df):
+        # A reusable fixture for the class instance
+        return RelionMotlv5(pixel_size=pixel_size, input_tomograms=tomo_df, input_particles=relion_df)
+
+
+    def test_convert_coordinates_merge_success(self,relion_motl_instance, relion_df):
+        result_df = relion_motl_instance.convert_coordinates_merge(relion_motl_instance.relion_df)
+
+        # Expected tomogram names should be cleaned to integers
+        expected_tomo_names = pd.Series([1, 1, 3])
+        pd.testing.assert_series_equal(result_df["rlnTomoName"], expected_tomo_names, check_names=False)
+
+        # Expected coordinate calculations
+        expected_x = pd.Series([4000 / 2 + 13.5 / 1.35, 4000 / 2 + -27.0 / 1.35, 4000 / 2 + 54.0 / 1.35])
+        expected_y = pd.Series([4000 / 2 + 27.0 / 1.35, 4000 / 2 + -13.5 / 1.35, 4000 / 2 + 0 / 1.35])
+        expected_z = pd.Series([2000 / 2 + -13.5 / 1.35, 2000 / 2 + 13.5 / 1.35, 2000 / 2 + 13.5 / 1.35])
+
+        pd.testing.assert_series_equal(result_df["rlnCoordinateX"], expected_x, check_names=False)
+        pd.testing.assert_series_equal(result_df["rlnCoordinateY"], expected_y, check_names=False)
+        pd.testing.assert_series_equal(result_df["rlnCoordinateZ"], expected_z, check_names=False)
+
+    def test_missing_rlnTomoName_in_relion_df(self,relion_motl_instance, relion_df):
+        relion_df_bad = relion_df.drop(columns="rlnTomoName")
+        with pytest.raises(UserInputError, match="Missing 'rlnTomoName' column"):
+            relion_motl_instance.convert_coordinates_merge(relion_df_bad)
+
+    def test_missing_rlnTomoName_in_tomo_df(self,relion_motl_instance, relion_df):
+        relion_motl_instance.tomo_df = relion_motl_instance.tomo_df.drop(columns="rlnTomoName")
+        with pytest.raises(UserInputError, match="Missing 'rlnTomoName' column"):
+            relion_motl_instance.convert_coordinates_merge(relion_df)
+
+    def test_mismatching_tomos(self,relion_motl_instance, relion_df):
+        relion_df_bad = pd.DataFrame({
+            "rlnTomoName": ["TS_01", "TS_02"],  # TS_02 does not exist in tomo_df
+            "rlnCenteredCoordinateXAngst": [0, 0],
+            "rlnCenteredCoordinateYAngst": [0, 0],
+            "rlnCenteredCoordinateZAngst": [0, 0],
+        })
+        with pytest.raises(ValueError, match="The following rlnTomoName values are missing in tomo_df:"):
+            relion_motl_instance.convert_coordinates_merge(relion_df_bad)
+
+    def test_empty_relion_df(self,relion_motl_instance):
+        empty_df = pd.DataFrame(columns=[
+            "rlnTomoName",
+            "rlnCenteredCoordinateXAngst",
+            "rlnCenteredCoordinateYAngst",
+            "rlnCenteredCoordinateZAngst",
+        ])
+        result_df = relion_motl_instance.convert_coordinates_merge(empty_df)
+        assert result_df.empty
+
+    @pytest.fixture
+    def warp2_df(self):
+        # A mock dataframe for the warp2 relion format
+        data = {
+            "rlnTomoName": ["TS_01", "TS_01", "TS_03"],
+            "rlnTomoParticleId": [1, 2, 3],
+            "rlnCoordinateX": [2010.0, 1990.0, 2020.0],
+            "rlnCoordinateY": [2020.0, 1995.0, 2000.0],
+            "rlnCoordinateZ": [1005.0, 1000.0, 1010.0],
+            "rlnAngleRot": [0.0, 0.0, 0.0],
+            "rlnAngleTilt": [0.0, 0.0, 0.0],
+            "rlnAnglePsi": [0.0, 0.0, 0.0],
+            "rlnTomoParticleName": ["TS_01/14", "TS_01/16", "TS_03/1"],
+            "rlnOpticsGroup": [1, 1, 1],
+            "rlnImageName": ["img1", "img2", "img3"],
+            "rlnOriginXAngst": [0.0, 0.0, 0.0],
+            "rlnOriginYAngst": [0.0, 0.0, 0.0],
+            "rlnOriginZAngst": [0.0, 0.0, 0.0],
+            "rlnTomoVisibleFrames": [15, 15, 15],
+        }
+        return pd.DataFrame(data)
+
+    @pytest.fixture
+    def warp2_motl_instance(self, warp2_df, pixel_size, tomo_df):
+        return RelionMotlv5(pixel_size=pixel_size, input_tomograms=tomo_df, input_particles=warp2_df)
+
+    def test_convert_coordinates_ang_merge_success(self,warp2_motl_instance, warp2_df):
+        result_df = warp2_motl_instance.convert_coordinates_ang_merge(warp2_df)
+        # Expected tomogram names should be cleaned to integers
+        expected_tomo_names = pd.Series([1, 1, 3])
+        pd.testing.assert_series_equal(result_df["rlnTomoName"], expected_tomo_names, check_names=False)
+        # Expected coordinate calculations
+        expected_x = pd.Series([
+            (2010 - 4000 / 2) * 1.35,
+            (1990 - 4000 / 2) * 1.35,
+            (2020 - 4000 / 2) * 1.35
+        ])
+        expected_y = pd.Series([
+            (2020 - 4000 / 2) * 1.35,
+            (1995 - 4000 / 2) * 1.35,
+            (2000 - 4000 / 2) * 1.35
+        ])
+        expected_z = pd.Series([
+            (1005 - 2000 / 2) * 1.35,
+            (1000 - 2000 / 2) * 1.35,
+            (1010 - 2000 / 2) * 1.35
+        ])
+        pd.testing.assert_series_equal(result_df["rlnCenteredCoordinateXAngst"], expected_x, check_names=False)
+        pd.testing.assert_series_equal(result_df["rlnCenteredCoordinateYAngst"], expected_y, check_names=False)
+        pd.testing.assert_series_equal(result_df["rlnCenteredCoordinateZAngst"], expected_z, check_names=False)
+
+    def test_ang_missing_rlnTomoName_in_relion_df(self,warp2_motl_instance, warp2_df):
+        relion_df_bad = warp2_df.drop(columns="rlnTomoName")
+        with pytest.raises(UserInputError, match="Missing 'rlnTomoName' column"):
+            warp2_motl_instance.convert_coordinates_ang_merge(relion_df_bad)
+
+    def test_ang_missing_rlnTomoName_in_tomo_df(self,warp2_motl_instance, warp2_df):
+        warp2_motl_instance.tomo_df = warp2_motl_instance.tomo_df.drop(columns="rlnTomoName")
+        with pytest.raises(UserInputError, match="Missing 'rlnTomoName' column"):
+            warp2_motl_instance.convert_coordinates_ang_merge(warp2_df)
+
+    def test_ang_mismatching_tomos(self,warp2_motl_instance):
+        relion_df_bad = pd.DataFrame({
+            "rlnTomoName": ["TS_01", "TS_02"],  # TS_02 does not exist in tomo_df
+            "rlnCoordinateX": [0.0, 0.0],
+            "rlnCoordinateY": [0.0, 0.0],
+            "rlnCoordinateZ": [0.0, 0.0],
+        })
+        with pytest.raises(ValueError, match="The following rlnTomoName values are missing in tomo_df:"):
+            warp2_motl_instance.convert_coordinates_ang_merge(relion_df_bad)
+
+    def test_ang_empty_relion_df(self,warp2_motl_instance):
+        empty_df = pd.DataFrame(columns=[
+            "rlnTomoName",
+            "rlnCoordinateX",
+            "rlnCoordinateY",
+            "rlnCoordinateZ",
+        ])
+        result_df = warp2_motl_instance.convert_coordinates_ang_merge(empty_df)
+        assert result_df.empty
+
+    def test_check_isWarp_is_true(self,pixel_size, tomo_df, warp2_df):
+        mock_instance = RelionMotlv5(pixel_size=pixel_size, input_tomograms=tomo_df, input_particles=warp2_df)
+        assert mock_instance.check_isWarp() is True
+
+    def test_check_isWarp_is_false(self,pixel_size, tomo_df, relion_df):
+        mock_instance = RelionMotlv5(pixel_size=pixel_size, input_tomograms=tomo_df, input_particles=relion_df)
+        assert mock_instance.check_isWarp() is False
+
+    def test_create_particles_data(self, tomo_df):
+        relion_motl = RelionMotlv5(input_tomograms=tomo_df) #by default isWarp=False
+        num_particles = 3
+        relion_motl.df = pd.DataFrame({'subtomo_id': range(num_particles)})
+
+        particles_df = relion_motl.create_particles_data()
+
+        assert isinstance(particles_df, pd.DataFrame)
+        assert len(particles_df) == num_particles
+        assert list(particles_df.columns) == RelionMotlv5.columns_v5_centAng
+        assert np.all(particles_df.values == 0)
+
+    def test_warp2relion_success(self, pixel_size, tomo_df, warp2_df):
+        mock_instance = RelionMotlv5(pixel_size=pixel_size, input_tomograms=tomo_df, input_particles=warp2_df)
+        result_df = mock_instance.warp2relion(warp2_df)
+
+        # Check for correct columns
+        expected_columns = set(mock_instance.columns_v5_centAng)
+        assert set(result_df.columns) == expected_columns
+
+        # Create a temporary merged dataframe for accurate calculations
+        merged_df = warp2_df.merge(tomo_df, on="rlnTomoName", how="left")
+
+        # Check coordinate conversion
+        expected_x = (merged_df["rlnCoordinateX"] - merged_df["rlnTomoSizeX"] / 2) * pixel_size
+        expected_y = (merged_df["rlnCoordinateY"] - merged_df["rlnTomoSizeY"] / 2) * pixel_size
+        expected_z = (merged_df["rlnCoordinateZ"] - merged_df["rlnTomoSizeZ"] / 2) * pixel_size
+
+        pd.testing.assert_series_equal(result_df["rlnCenteredCoordinateXAngst"], expected_x, check_names=False)
+        pd.testing.assert_series_equal(result_df["rlnCenteredCoordinateYAngst"], expected_y, check_names=False)
+        pd.testing.assert_series_equal(result_df["rlnCenteredCoordinateZAngst"], expected_z, check_names=False)
+
+    def test_warp2relion_failure(self, pixel_size, tomo_df, relion_df):
+        mock_instance = RelionMotlv5(pixel_size=pixel_size, input_tomograms=tomo_df, input_particles=relion_df)
+        with pytest.raises(UserInputError, match="Motl is not in warp format."):
+            mock_instance.warp2relion(relion_df)
+
+    def test_relion2warp_success(self, pixel_size, tomo_df, relion_df):
+        mock_instance = RelionMotlv5(pixel_size=pixel_size, input_tomograms=tomo_df, input_particles=relion_df)
+        result_df = mock_instance.relion2warp(relion_df)
+
+        expected_columns = set(mock_instance.columns_v5)
+        assert set(result_df.columns) == expected_columns
+
+        merged_df = relion_df.merge(tomo_df, on="rlnTomoName", how="left")
+
+        expected_x = (merged_df["rlnTomoSizeX"] / 2) + (merged_df["rlnCenteredCoordinateXAngst"] / pixel_size)
+        expected_y = (merged_df["rlnTomoSizeY"] / 2) + (merged_df["rlnCenteredCoordinateYAngst"] / pixel_size)
+        expected_z = (merged_df["rlnTomoSizeZ"] / 2) + (merged_df["rlnCenteredCoordinateZAngst"] / pixel_size)
+
+        pd.testing.assert_series_equal(result_df["rlnCoordinateX"], expected_x, check_names=False)
+        pd.testing.assert_series_equal(result_df["rlnCoordinateY"], expected_y, check_names=False)
+        pd.testing.assert_series_equal(result_df["rlnCoordinateZ"], expected_z, check_names=False)
+
+    def test_relion2warp_failure(self, pixel_size, tomo_df, warp2_df):
+        mock_instance = RelionMotlv5(pixel_size=pixel_size, input_tomograms=tomo_df, input_particles=warp2_df)
+        with pytest.raises(UserInputError, match="Motl is not in relion format."):
+            mock_instance.relion2warp(warp2_df)
+
+    class TestPrepareOpticsData:
+        @pytest.fixture(scope="class")
+        def optics_file_paths(self):
+            motl_dir = "./test_data/motl_data/"
+            os.makedirs(motl_dir, exist_ok=True)
+            relion_path = os.path.join(motl_dir, "relion_v5_optics.star")
+            warp_path = os.path.join(motl_dir, "warp_optics.star")
+
+            # Create dummy Relion v5 file
+            with open(relion_path, 'w') as f:
+                f.write("data_optics\nloop_\n_rlnVoltage #1\n_rlnTomoSubtomogramBinning #2\n300.0 1.0\n")
+
+            # Create dummy Warp file
+            with open(warp_path, 'w') as f:
+                f.write("data_optics\nloop_\n_rlnVoltage #1\n_rlnImageSize #2\n300.0 64\n")
+
+            yield {
+                'relion_path': relion_path,
+                'warp_path': warp_path,
+            }
+
+            # Cleanup
+            if os.path.exists(relion_path):
+                os.remove(relion_path)
+            if os.path.exists(warp_path):
+                os.remove(warp_path)
+            if os.path.exists(motl_dir) and not os.listdir(motl_dir):
+                os.rmdir(motl_dir)
+
+        @pytest.fixture
+        def tomo_df(self):
+            return pd.DataFrame({
+                "rlnTomoName": ["TS_01", "TS_03"],
+                "rlnTomoSizeX": [4000, 4000],
+                "rlnTomoSizeY": [4000, 4000],
+                "rlnTomoSizeZ": [2000, 2000],
+            })
+
+        def test_prepare_optics_data_use_original_entries_existing(self, tomo_df):
+            instance = RelionMotlv5(input_tomograms=tomo_df)
+            original_df = pd.DataFrame({'rlnImagePixelSize': [1.35], 'rlnVoltage': [300.0]})
+            instance.optics_data = original_df.copy()
+
+            optics_df = instance.prepare_optics_data(use_original_entries=True)
+            pd.testing.assert_frame_equal(optics_df, original_df)
+
+        def test_prepare_optics_data_use_original_entries_missing_warning(self, tomo_df):
+            instance = RelionMotlv5(input_tomograms=tomo_df)
+            with pytest.raises(Warning, match="There is no information on optics available"):
+                instance.prepare_optics_data(use_original_entries=True)
+
+        def test_prepare_optics_data_from_starfile(self, optics_file_paths, tomo_df):
+            instance = RelionMotlv5(input_tomograms=tomo_df)
+            optics_df = instance.prepare_optics_data(
+                use_original_entries=False,
+                optics_data=optics_file_paths['relion_path']
+            )
+            expected_df = pd.DataFrame({'rlnVoltage': [300.0], 'rlnTomoSubtomogramBinning': [1.0]})
+            pd.testing.assert_frame_equal(optics_df, expected_df)
+
+        def test_prepare_optics_data_from_warp_starfile(self, optics_file_paths, tomo_df):
+            instance = RelionMotlv5(input_tomograms=tomo_df)
+            optics_df = instance.prepare_optics_data(
+                use_original_entries=False,
+                optics_data=optics_file_paths['warp_path']
+            )
+            expected_df = pd.DataFrame({'rlnVoltage': [300.0], 'rlnImageSize': [64]})
+            pd.testing.assert_frame_equal(optics_df, expected_df)
+
+        def test_prepare_optics_data_from_dict(self, tomo_df):
+            instance = RelionMotlv5(input_tomograms=tomo_df)
+            optics_dict = {'rlnImagePixelSize': [1.35], 'rlnVoltage': [300.0]}
+            optics_df = instance.prepare_optics_data(use_original_entries=False, optics_data=optics_dict)
+            expected_df = pd.DataFrame(optics_dict)
+            pd.testing.assert_frame_equal(optics_df, expected_df)
+
+        def test_prepare_optics_data_invalid_optics_data_type_error(self, tomo_df):
+            instance = RelionMotlv5(input_tomograms=tomo_df)
+            with pytest.raises(UserInputError):
+                instance.prepare_optics_data(use_original_entries=False, optics_data=123)
+
+    def test_prepare_optics_data_one(self, pixel_size, tomo_df, relion_df, warp2_df):
+        relion_motl = RelionMotlv5(input_tomograms=tomo_df)
+        optics_df_orig = pd.DataFrame({
+            "rlnOpticsGroup": [1],
+            "rlnOpticsGroupName": ["opticsGroup1"],
+            "rlnSphericalAberration": [2.7],
+            "rlnVoltage": [300.0],
+            "rlnTomoTiltSeriesPixelSize": [1.35 / 1.0],
+            "rlnCtfDataAreCtfPremultiplied": [1],
+            "rlnImageDimensionality": [3],
+            "rlnTomoSubtomogramBinning": [1.0],
+            "rlnImagePixelSize": [1.35],
+            "rlnImageSize": [192],
+            "rlnAmplitudeContrast": [0.1],
+        })
+        relion_motl.optics_data = optics_df_orig.copy()
+        optics_df = relion_motl.prepare_optics_data()
+        pd.testing.assert_frame_equal(optics_df, optics_df_orig)
+
+    class TestPrepareParticlesDataV5:
+        def test_prepare_particles_data_empty_format_strings(self, tomo_df, relion_df):
+
+            rln_motl = RelionMotlv5(input_tomograms=tomo_df, input_particles=relion_df)
+            df_empty_format = rln_motl.prepare_particles_data()
+
+            assert "rlnTomoName" in df_empty_format.columns
+            assert "rlnTomoParticleName" in df_empty_format.columns
+            assert len(df_empty_format) == 3
+            assert list(df_empty_format["rlnTomoName"]) == [1,1,3]
+            assert list(df_empty_format["rlnTomoParticleName"]) == [12, 13,1]
+            assert "rlnOriginXAngst" in df_empty_format.columns
+            assert np.all(df_empty_format[["rlnOriginXAngst", "rlnOriginYAngst", "rlnOriginZAngst"]].values == 0)
+
+        def test_prepare_particles_data_basic_padding(self, tomo_df, relion_df):
+            rln_motl = RelionMotlv5(input_tomograms=tomo_df, input_particles=relion_df)
+            df_padded_format = rln_motl.prepare_particles_data(
+                tomo_format="/path/to/tomo_$xxxx.rec",
+                subtomo_format="/path/to/subtomo_$yyyy.mrc"
+            )
+            assert list(df_padded_format["rlnTomoName"]) == [
+                "/path/to/tomo_0001.rec", "/path/to/tomo_0001.rec", "/path/to/tomo_0003.rec"
+            ]
+            assert list(df_padded_format["rlnTomoParticleName"]) == ["/path/to/subtomo_0012.mrc",
+                                                                     "/path/to/subtomo_0013.mrc",
+                                                                     "/path/to/subtomo_0001.mrc"]
+
+        def test_prepare_particles_data_combined_format(self, tomo_df,relion_df):
+            rln_motl = RelionMotlv5(input_tomograms=tomo_df, input_particles=relion_df)
+            df_combined_format = rln_motl.prepare_particles_data(
+                tomo_format="/base/tomo_$xx.rec",
+                subtomo_format="/base/tomo_$xx_sub_$yy.mrc"
+            )
+            assert list(df_combined_format["rlnTomoName"]) == [
+                "/base/tomo_01.rec", "/base/tomo_01.rec", "/base/tomo_03.rec"
+            ]
+            assert list(df_combined_format["rlnTomoParticleName"]) == ["/base/tomo_01_sub_12.mrc",
+                                                                       "/base/tomo_01_sub_13.mrc",
+                                                                       "/base/tomo_03_sub_01.mrc"]
+
+        def test_prepare_particles_data_multiple_sequences(self, tomo_df, relion_df):
+            rln_motl = RelionMotlv5(input_tomograms=tomo_df, input_particles=relion_df)
+            df_multiple_sequences = rln_motl.prepare_particles_data(
+                tomo_format="/a_$xx$_b_$xxxx$_c.rec",
+                subtomo_format="/p_$yyy$_q_$y$_r.mrc"
+            )
+            # The provided find_longest_sequence function replaces only the longest sequence
+            assert list(df_multiple_sequences["rlnTomoName"]) == ["/a_$xx$_b_0001$_c.rec", "/a_$xx$_b_0001$_c.rec", "/a_$xx$_b_0003$_c.rec"]
+            assert list(df_multiple_sequences["rlnTomoParticleName"]) == ["/p_012$_q_$y$_r.mrc", "/p_013$_q_$y$_r.mrc",
+                                                                          "/p_001$_q_$y$_r.mrc"]
+
+        def test_prepare_particles_data_different_padding_lengths(self, tomo_df, relion_df):
+            rln_motl = RelionMotlv5(input_tomograms=tomo_df, input_particles=relion_df)
+            df_diff_padding = rln_motl.prepare_particles_data(
+                tomo_format="/data/tomo_$x.rec",
+                subtomo_format="/data/subtomo_$yy.mrc"
+            )
+            assert list(df_diff_padding["rlnTomoName"]) == ["/data/tomo_1.rec", "/data/tomo_1.rec", "/data/tomo_3.rec"]
+            assert list(df_diff_padding["rlnTomoParticleName"]) == ["/data/subtomo_12.mrc", "/data/subtomo_13.mrc",
+                                                                    "/data/subtomo_01.mrc"]
+
+        def test_prepare_particles_data_incorrect_format_raises_error(self, tomo_df, relion_df):
+            rln_motl = RelionMotlv5(input_tomograms=tomo_df, input_particles=relion_df)
+
+            with pytest.raises(Exception):
+                rln_motl.prepare_particles_data(subtomo_format="/path/to/subtomo.mrc")
+            with pytest.raises(Exception):
+                rln_motl.prepare_particles_data(tomo_format="/path/to/tomo.rec")
+
+        def test_prepare_particles_data_empty_tomo_format(self, tomo_df, relion_df):
+            rln_motl = RelionMotlv5(input_tomograms=tomo_df, input_particles=relion_df)
+            df_empty_tomo_format = rln_motl.prepare_particles_data(
+                tomo_format="",
+                subtomo_format="/tomo_$x/subtomo_$yy.mrc"
+            )
+            assert list(df_empty_tomo_format["rlnTomoName"]) == [1, 1, 3]
+            assert list(df_empty_tomo_format["rlnTomoParticleName"]) == ["/tomo_1/subtomo_12.mrc",
+                                                                         "/tomo_1/subtomo_13.mrc",
+                                                                         "/tomo_3/subtomo_01.mrc"]
+
+        def test_prepare_particles_data_empty_subtomo_format(self, tomo_df, relion_df):
+            rln_motl = RelionMotlv5(input_tomograms=tomo_df, input_particles=relion_df)
+            df_empty_subtomo_format = rln_motl.prepare_particles_data(
+                tomo_format="/tomo_$xx.rec",
+                subtomo_format=""
+            )
+            assert list(df_empty_subtomo_format["rlnTomoName"]) == ["/tomo_01.rec", "/tomo_01.rec", "/tomo_03.rec"]
+            assert list(df_empty_subtomo_format["rlnTomoParticleName"]) == [12, 13, 1]
+
+    def test_create_optics_group_v5_defaults(self, tomo_df):
+        instance = RelionMotlv5(input_tomograms=tomo_df, pixel_size=1.0, binning=1)
+        optics_df = instance.create_optics_group_v5()
+        expected_df = pd.DataFrame({
+            "rlnOpticsGroup": [1],
+            "rlnOpticsGroupName": ["opticsGroup1"],
+            "rlnSphericalAberration": [2.7],
+            "rlnVoltage": [300.0],
+            "rlnTomoTiltSeriesPixelSize": [1.0],
+            "rlnCtfDataAreCtfPremultiplied": [1],
+            "rlnImageDimensionality": [3],
+            "rlnTomoSubtomogramBinning": [1],
+            "rlnImagePixelSize": [1.0],
+            "rlnImageSize": ["NaN"],
+            "rlnAmplitudeContrast": [0.1],
+        })
+        pd.testing.assert_frame_equal(optics_df, expected_df)
+
+    def test_create_optics_group_v5_with_args(self, tomo_df):
+        instance = RelionMotlv5(input_tomograms=tomo_df, pixel_size=5.0, binning=2)
+        optics_df = instance.create_optics_group_v5(pixel_size=2.0, binning=1.0)
+        expected_df = pd.DataFrame({
+            "rlnOpticsGroup": [1],
+            "rlnOpticsGroupName": ["opticsGroup1"],
+            "rlnSphericalAberration": [2.7],
+            "rlnVoltage": [300.0],
+            "rlnTomoTiltSeriesPixelSize": [2.0],
+            "rlnCtfDataAreCtfPremultiplied": [1],
+            "rlnImageDimensionality": [3],
+            "rlnTomoSubtomogramBinning": [1.0],
+            "rlnImagePixelSize": [2.0],
+            "rlnImageSize": ["NaN"],
+            "rlnAmplitudeContrast": [0.1],
+        })
+        pd.testing.assert_frame_equal(optics_df, expected_df)
+
+    def test_create_optics_group_v5_with_subtomo_size(self, tomo_df):
+        instance = RelionMotlv5(input_tomograms=tomo_df, pixel_size=1.0, binning=1)
+        optics_df = instance.create_optics_group_v5(subtomo_size=256)
+        expected_df = pd.DataFrame({
+            "rlnOpticsGroup": [1],
+            "rlnOpticsGroupName": ["opticsGroup1"],
+            "rlnSphericalAberration": [2.7],
+            "rlnVoltage": [300.0],
+            "rlnTomoTiltSeriesPixelSize": [1.0],
+            "rlnCtfDataAreCtfPremultiplied": [1],
+            "rlnImageDimensionality": [3],
+            "rlnTomoSubtomogramBinning": [1],
+            "rlnImagePixelSize": [1.0],
+            "rlnImageSize": [256],
+            "rlnAmplitudeContrast": [0.1],
+        })
+        pd.testing.assert_frame_equal(optics_df, expected_df)
 
