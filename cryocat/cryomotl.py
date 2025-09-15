@@ -2887,7 +2887,15 @@ class RelionMotl(Motl):
 
         return relion_df
 
-    def prepare_optics_data(self, use_original_entries=True, optics_data=None, version=None, subtomo_size=None, pixel_size=None, binning=None):
+    def prepare_optics_data(
+        self,
+        use_original_entries=True,
+        optics_data=None,
+        version=None,
+        subtomo_size=None,
+        pixel_size=None,
+        binning=None,
+    ):
         """The function prepares the optics data for relion DataFrame. It takes in a dictionary or starfile path as an
         argument, and returns a pandas DataFrame containing the optics information in version specific format.
 
@@ -2950,7 +2958,9 @@ class RelionMotl(Motl):
             if version == 3.1:
                 optics_df = self.create_optics_group_v3_1(pixel_size=pixel_size, subtomo_size=subtomo_size)
             elif version > 3.1:
-                optics_df = self.create_optics_group_v4(pixel_size=pixel_size, subtomo_size=subtomo_size, binning=binning)
+                optics_df = self.create_optics_group_v4(
+                    pixel_size=pixel_size, subtomo_size=subtomo_size, binning=binning
+                )
             else:
                 raise Warning(
                     f"There is no information on optics available - use optics_data argument to provide this information."
@@ -3447,7 +3457,9 @@ class RelionMotl(Motl):
         )
 
         if write_optics:
-            optics_df = self.prepare_optics_data(use_original_entries, optics_data, version, pixel_size, subtomo_size, binning)
+            optics_df = self.prepare_optics_data(
+                use_original_entries, optics_data, version, pixel_size, subtomo_size, binning
+            )
         else:
             optics_df = None
 
@@ -3510,9 +3522,8 @@ class RelionMotlv5(RelionMotl, Motl):
 
         if self.binning == 1.0:
             warnings.warn(
-                "'binning' parameter defaults to 1.0. "
-                "In RELION5, it is mandatory and should be explicitly set.",
-                UserWarning
+                "'binning' parameter defaults to 1.0. " "In RELION5, it is mandatory and should be explicitly set.",
+                UserWarning,
             )
 
         if input_tomograms is not None:
@@ -3585,9 +3596,11 @@ class RelionMotlv5(RelionMotl, Motl):
         if "rlnTomoName" not in df.columns:
             raise ValueError("'rlnTomoName' column not found in DataFrame")
         df["rlnTomoName"] = df["rlnTomoName"].apply(
-            lambda name: int(re.search(r"\d+", name).group())
-            if isinstance(name, str) and re.search(r"\d+", name) #must contain a number!
-            else None if isinstance(name, str) else name
+            lambda name: (
+                int(re.search(r"\d+", name).group())
+                if isinstance(name, str) and re.search(r"\d+", name)  # must contain a number!
+                else None if isinstance(name, str) else name
+            )
         )
 
         return df
@@ -3595,15 +3608,17 @@ class RelionMotlv5(RelionMotl, Motl):
     @staticmethod
     def clean_subtomo_name_column(df):
         df["rlnTomoParticleName"] = df["rlnTomoParticleName"].apply(
-            lambda name: int(re.search(r"\d+", name.split("/")[-1]).group())
-            if isinstance(name, str) and re.search(r"\d+", name.split("/")[-1])
-            else None if isinstance(name, str) else name
+            lambda name: (
+                int(re.search(r"\d+", name.split("/")[-1]).group())
+                if isinstance(name, str) and re.search(r"\d+", name.split("/")[-1])
+                else None if isinstance(name, str) else name
+            )
         )
 
         return df
 
     def read_in_tomograms(self, input_path):
-        #method not being used
+        # method not being used
         frames, specifiers, _ = starfileio.Starfile.read(input_path)
         if "data_global" in specifiers:
             data_id = specifiers.index("data_global")
@@ -3970,16 +3985,31 @@ class RelionMotlv5(RelionMotl, Motl):
             relion_df.loc[:, ["rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ"]] = self.get_coordinates()
         else:
             coords = []
-            pixel_size = float(self.df.get("pixel_size", self.pixel_size))  # in Å/voxel
+            pixel_size = float(self.df.get("pixel_size", self.pixel_size))  # Å/voxel
+
+            # Precompute the trailing numeric suffix of each rlnTomoName once
+            name_suffix_num = self.tomo_df["rlnTomoName"].astype(str).str.extract(r"(\d+)$", expand=False)
+            name_suffix_num = name_suffix_num.astype("Int64")  # nullable int
+
             for idx, row in self.df.iterrows():
-                tomo_name = f"TS_{int(row['tomo_id']):02d}"
-                size_x, size_y, size_z = self.tomo_df.loc[
-                    self.tomo_df["rlnTomoName"] == tomo_name, ["rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]
-                ].values[0]
+                # tomo_id might be float in the input; interpret it as an int index
+                tomo_num = int(float(row["tomo_id"]))
+
+                # rows whose rlnTomoName ends with that exact numeric suffix
+                matches = self.tomo_df[name_suffix_num == tomo_num]
+
+                if matches.empty:
+                    raise ValueError(
+                        f"No rlnTomoName ending with numeric suffix '{tomo_num}' found for tomo_id={row['tomo_id']}"
+                    )
+
+                size_x, size_y, size_z = matches.iloc[0][["rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]]
+
                 x = (row["x"] + row["shift_x"] - size_x / 2.0) * pixel_size
                 y = (row["y"] + row["shift_y"] - size_y / 2.0) * pixel_size
                 z = (row["z"] + row["shift_z"] - size_z / 2.0) * pixel_size
                 coords.append((x, y, z))
+
             relion_df.loc[
                 :, ["rlnCenteredCoordinateXAngst", "rlnCenteredCoordinateYAngst", "rlnCenteredCoordinateZAngst"]
             ] = coords
@@ -4635,7 +4665,8 @@ class ModMotl(Motl):
         df_to_write = self.mod_df.copy()
         imod.write_model_binary(df_to_write, output_path)
 
-#todo: relion5 conversion handling
+
+# todo: relion5 conversion handling
 def emmotl2relion(
     input_motl, output_motl_path=None, flip_handedness=False, tomo_dim=None, load_kwargs=None, write_kwargs=None
 ):
@@ -4687,6 +4718,7 @@ def emmotl2relion(
 
     return rln_motl
 
+
 def relion2emmotl(
     input_motl,
     output_motl_path=None,
@@ -4699,29 +4731,29 @@ def relion2emmotl(
 ):
     """Converts a RelionMotl to EmMotl format and optionally writes it to a file.
 
-        Parameters
-        ----------
-        input_motl : str or pandas.DataFrame or RelionMotl
-            Path to the input Relion MOTL file (e.g., a .star file) or an already loaded RelionMotl object.
-        output_motl_path : str, optional
-            If provided, the converted motl will be written to this path.
-        relion_version : float, optional
-            The version of the Relion file format. Required if `input_motl` is a file path.
-        pixel_size : float, optional
-            The pixel size of the data. Required if `input_motl` is a file path and a pixel size is not specified in the file's optics group.
-        binning : int, optional
-            The binning factor of the data, used for certain Relion file formats (e.g., v4.0).
-        update_coordinates : bool, default=False
-            If True, updates the coordinates in the DataFrame.
-        flip_handedness : bool, default=False
-            If True, flips the handedness of the coordinates.
-        tomo_dim : tuple of int, optional
-            Dimensions of the tomogram (required if `flip_handedness=True`).
-        Returns
-        -------
-        em_motl : EmMotl
-            The converted EmMotl object.
-        """
+    Parameters
+    ----------
+    input_motl : str or pandas.DataFrame or RelionMotl
+        Path to the input Relion MOTL file (e.g., a .star file) or an already loaded RelionMotl object.
+    output_motl_path : str, optional
+        If provided, the converted motl will be written to this path.
+    relion_version : float, optional
+        The version of the Relion file format. Required if `input_motl` is a file path.
+    pixel_size : float, optional
+        The pixel size of the data. Required if `input_motl` is a file path and a pixel size is not specified in the file's optics group.
+    binning : int, optional
+        The binning factor of the data, used for certain Relion file formats (e.g., v4.0).
+    update_coordinates : bool, default=False
+        If True, updates the coordinates in the DataFrame.
+    flip_handedness : bool, default=False
+        If True, flips the handedness of the coordinates.
+    tomo_dim : tuple of int, optional
+        Dimensions of the tomogram (required if `flip_handedness=True`).
+    Returns
+    -------
+    em_motl : EmMotl
+        The converted EmMotl object.
+    """
     rln_motl = RelionMotl(input_motl, version=relion_version, pixel_size=pixel_size, binning=binning)
 
     if flip_handedness:
@@ -4737,21 +4769,22 @@ def relion2emmotl(
 
     return em_motl
 
+
 def stopgap2emmotl(input_motl, output_motl_path=None, update_coordinates=False):
     """Converts a StopgapMotl to EmMotl format and optionally writes it to a file.
-        Parameters
-        ----------
-        input_motl : str or pandas.DataFrame or StopgapMotl
-            Path to the input STOPGAP MOTL file or an already loaded StopgapMotl object.
-        output_motl_path : str, optional
-            If provided, the converted motl will be written to this path.
-        update_coordinates : bool, default=False
-            If True, updates the coordinates in the DataFrame.
-        Returns
-        -------
-        em_motl : EmMotl
-            The converted EmMotl object.
-        """
+    Parameters
+    ----------
+    input_motl : str or pandas.DataFrame or StopgapMotl
+        Path to the input STOPGAP MOTL file or an already loaded StopgapMotl object.
+    output_motl_path : str, optional
+        If provided, the converted motl will be written to this path.
+    update_coordinates : bool, default=False
+        If True, updates the coordinates in the DataFrame.
+    Returns
+    -------
+    em_motl : EmMotl
+        The converted EmMotl object.
+    """
     sg_motl = StopgapMotl(input_motl)
     em_motl = EmMotl(sg_motl.df)
 
@@ -4766,21 +4799,21 @@ def stopgap2emmotl(input_motl, output_motl_path=None, update_coordinates=False):
 
 def emmotl2stopgap(input_motl, output_motl_path=None, update_coordinates=False, reset_index=False):
     """Converts an EmMotl to StopgapMotl format and optionally writes it to a file.
-        Parameters
-        ----------
-        input_motl : str or pandas.DataFrame or EmMotl
-            Path to the input EM MOTL file or an already loaded EmMotl object.
-        output_motl_path : str, optional
-            If provided, the converted motl will be written to this path.
-        update_coordinates : bool, default=False
-            If True, updates the coordinates in the DataFrame.
-        reset_index : bool, default=False
-            If True, the index of the DataFrame will be reset before writing out.
-        Returns
-        -------
-        sg_motl : StopgapMotl
-            The converted StopgapMotl object.
-        """
+    Parameters
+    ----------
+    input_motl : str or pandas.DataFrame or EmMotl
+        Path to the input EM MOTL file or an already loaded EmMotl object.
+    output_motl_path : str, optional
+        If provided, the converted motl will be written to this path.
+    update_coordinates : bool, default=False
+        If True, updates the coordinates in the DataFrame.
+    reset_index : bool, default=False
+        If True, the index of the DataFrame will be reset before writing out.
+    Returns
+    -------
+    sg_motl : StopgapMotl
+        The converted StopgapMotl object.
+    """
     motl = EmMotl(input_motl)
     sg_motl = StopgapMotl(motl.df)
 
@@ -4795,21 +4828,21 @@ def emmotl2stopgap(input_motl, output_motl_path=None, update_coordinates=False, 
 
 def relion2stopgap(input_motl, output_motl_path=None, update_coordinates=False, reset_index=False):
     """Converts a RelionMotl to StopgapMotl format and optionally writes it to a file.
-        Parameters
-        ----------
-        input_motl : str or pandas.DataFrame or RelionMotl
-            Path to the input Relion MOTL file or an already loaded RelionMotl object.
-        output_motl_path : str, optional
-            If provided, the converted motl will be written to this path.
-        update_coordinates : bool, default=False
-            If True, updates the coordinates in the DataFrame.
-        reset_index : bool, default=False
-            If True, the index of the DataFrame will be reset before writing out.
-        Returns
-        -------
-        sg_motl : StopgapMotl
-            The converted StopgapMotl object.
-        """
+    Parameters
+    ----------
+    input_motl : str or pandas.DataFrame or RelionMotl
+        Path to the input Relion MOTL file or an already loaded RelionMotl object.
+    output_motl_path : str, optional
+        If provided, the converted motl will be written to this path.
+    update_coordinates : bool, default=False
+        If True, updates the coordinates in the DataFrame.
+    reset_index : bool, default=False
+        If True, the index of the DataFrame will be reset before writing out.
+    Returns
+    -------
+    sg_motl : StopgapMotl
+        The converted StopgapMotl object.
+    """
     motl = RelionMotl(input_motl)
     sg_motl = StopgapMotl(motl.df)
 
