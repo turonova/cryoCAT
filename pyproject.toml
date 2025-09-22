@@ -30,6 +30,7 @@ dependencies = [
     "dash_bootstrap_components>=2.0",
     "dash_ag_grid>=31.3.1",
     "networkx>=3.1",
+    "numpydoc>=1.9",
 ]
 classifiers = [
     "Intended Audience :: Science/Research",

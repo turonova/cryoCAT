@@ -22,6 +22,15 @@ The documentation including tutorials and basic user guide can be found here: [c
     * scikit-learn (1.0.2)
     * lmfit (1.2.2)
     * h5py (3.10.0)
+    * numba (0.60.0)
+    * pyyaml (6.0.1)
+    * tqdm (4.66.1)
+    * plotly (5.24)
+    * dash (3.0.1)
+    * dash_bootstrap_components (2.0)
+    * dash_ag_grid (31.3.1)
+    * networkx (3.1)
+    * numpydoc (1.9)
       
 ## PIP
 
