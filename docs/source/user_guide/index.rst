@@ -9,10 +9,10 @@
    Tiltstack and Mdoc modules: Functions for preprocessing tilt-series <preprocessing_basics>
    Geometric conventions <geometric_conventions>
    Motl basics <motl_basics>
+   Motl advanced <motl_advanced>
    Maps basics <maps_basics>
    Masks basics <masks_basics>
    Wedge list basics <wedgelist_basics>
-
 
 ==========
 User guide
