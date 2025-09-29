@@ -11,6 +11,7 @@
    Lamellae analysis <lamellae_analysis/lamellae_analysis>
    Nearest neighbor analysis <nearest_neighbor_analysis/nearest_neighbor_analysis>
    Membrane thickness <membrane_thickness/measure_thickness_tutorial>
+   Structure of tutorial video for TANGO GUI <tango_tutorials/TANGO_tutorial_video_structure>
    TANGO on nuclear pore complexes <tango_tutorials/TANGO_NPC>
    TANGO on virus-like particles <tango_tutorials/TANGO_VLP>
 
