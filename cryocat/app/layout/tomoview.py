@@ -324,7 +324,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
     def show_detail_on_click(clickData, data, twist_data, radius):
         if not show_dual_graph or not clickData or not data:
             raise dash.exceptions.PreventUpdate
-
+        
         # Get index of clicked point from customdata
         clicked_row = clickData["points"][0]["customdata"]
         clicked_df = pd.DataFrame([clicked_row], columns=pd.DataFrame(data).columns)

@@ -1076,6 +1076,9 @@ class Descriptor:
         else:
             km_data, qp_ids = self.compute_pca(**pca_dict, feature_ids=feature_ids, nan_drop=nan_drop)
 
+        # sanity check:
+        print(f"Num clusters: {n_clusters}, {type(n_clusters)}")
+
         # Run k-means
         kmeans = KMeans(n_clusters=n_clusters, n_init="auto")
 
