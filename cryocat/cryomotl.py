@@ -3535,7 +3535,7 @@ class RelionMotlv5(RelionMotl, Motl):
         if input_tomograms is not None:
             # input tomograms can be a pd.dataframe, an array like, or a file
             if isinstance(input_tomograms, pd.DataFrame):
-                input_tomograms = input_tomograms.iloc[["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]]
+                input_tomograms = input_tomograms.loc[:, ["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]]
             self.tomo_df = ioutils.dimensions_load(input_tomograms, tomo_idx)
             self.tomo_df.columns = ["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]
             if input_particles is not None:
@@ -4050,9 +4050,9 @@ class RelionMotlv5(RelionMotl, Motl):
 
         if convert is True:
             if self.isWarp:
-                relion_df = self.warp2relion(relion_df) #fixme: is it self or not?
+                relion_df = self.warp2relion(relion_df) #fixme: mismatch at this point tomoName is int
             else:
-                relion_df = self.relion2warp(relion_df)
+                relion_df = self.relion2warp(relion_df) #fixme: as above
 
         return relion_df
 
@@ -4676,7 +4676,7 @@ class ModMotl(Motl):
         imod.write_model_binary(df_to_write, output_path)
 
 
-# todo: relion5 conversion handling
+
 def emmotl2relion(
     input_motl, relion_version, output_motl_path=None, flip_handedness=False, tomo_dim=None, load_kwargs=None, write_kwargs=None
 ):
@@ -4714,26 +4714,27 @@ def emmotl2relion(
         em_motl.flip_handedness(tomo_dimensions=tomo_dim)
 
     load_kwargs = load_kwargs or {}  # Ensure the argument is a dictionary
-    if relion_version < 5.0:
-        rln_motl = RelionMotl(em_motl.df, relion_version, **load_kwargs)
-    else:
-        #fixme: how to do it?
-        rln_motl = RelionMotlv5(input_particles=em_motl.df, input_tomograms=JESUS, **load_kwargs)
-    
     write_kwargs = write_kwargs or {}  # Ensure the argument is a dictionary
+    if relion_version < 5.0:
+        rln_motl = RelionMotl(input_motl=em_motl.df, version=relion_version, **load_kwargs)
+    else:
+        if "input_tomograms" not in load_kwargs:
+            raise UserInputError("For relion5 input_tomogram parameter is mandatory")
+        else:
+            rln_motl = RelionMotlv5(input_particles=em_motl.df, **load_kwargs)
+    
+
     if output_motl_path is not None:
-        rln_motl.write_out(
-            output_motl_path,
-            **write_kwargs,
-        )
+        rln_motl.write_out(output_motl_path, **write_kwargs,)
 
     return rln_motl
 
 
 def relion2emmotl(
     input_motl,
+    relion_version,
+    load_kwargs=None,
     output_motl_path=None,
-    relion_version=None,
     pixel_size=None,
     binning=None,
     update_coordinates=False,
@@ -4746,10 +4747,13 @@ def relion2emmotl(
     ----------
     input_motl : str or pandas.DataFrame or RelionMotl
         Path to the input Relion MOTL file (e.g., a .star file) or an already loaded RelionMotl object.
+    relion_version : float
+        The version of the Relion file format.
+    load_kwargs : dict, optional
+        Dictionary of keyword arguments passed to the `RelionMotl` or `RelionMotlv5` constructor.
+        See `RelionMotl.__init__` or `RelionMotlv5.__init__` for full list of accepted keys.
     output_motl_path : str, optional
         If provided, the converted motl will be written to this path.
-    relion_version : float, optional
-        The version of the Relion file format.
     pixel_size : float, optional
         The pixel size of the data. Required if `input_motl` is a file path and a pixel size is not specified in the file's optics group.
     binning : int, optional
@@ -4765,7 +4769,11 @@ def relion2emmotl(
     em_motl : EmMotl
         The converted EmMotl object.
     """
-    rln_motl = RelionMotl(input_motl, version=relion_version, pixel_size=pixel_size, binning=binning)
+    load_kwargs = load_kwargs or {}
+    if relion_version == 5.0:
+        rln_motl = RelionMotlv5(input_particles=input_motl, pixel_size=pixel_size, binning=binning, **load_kwargs)
+    else:
+        rln_motl = RelionMotl(input_motl, version=relion_version, pixel_size=pixel_size, binning=binning, **load_kwargs)
 
     if flip_handedness:
         rln_motl.flip_handedness(tomo_dimensions=tomo_dim)
@@ -4837,12 +4845,17 @@ def emmotl2stopgap(input_motl, output_motl_path=None, update_coordinates=False, 
     return sg_motl
 
 
-def relion2stopgap(input_motl, output_motl_path=None, update_coordinates=False, reset_index=False):
+def relion2stopgap(input_motl, relion_version, load_kwargs=None, output_motl_path=None, update_coordinates=False, reset_index=False):
     """Converts a RelionMotl to StopgapMotl format and optionally writes it to a file.
     Parameters
     ----------
     input_motl : str or pandas.DataFrame or RelionMotl
         Path to the input Relion MOTL file or an already loaded RelionMotl object.
+    relion_version : float
+        Version of the input Relion object.
+    load_kwargs : dict, optional
+        Dictionary of keyword arguments passed to the `RelionMotl` or `RelionMotlv5` constructor.
+        See `RelionMotl.__init__` or `RelionMotlv5.__init__` for full list of accepted keys.
     output_motl_path : str, optional
         If provided, the converted motl will be written to this path.
     update_coordinates : bool, default=False
@@ -4854,7 +4867,12 @@ def relion2stopgap(input_motl, output_motl_path=None, update_coordinates=False, 
     sg_motl : StopgapMotl
         The converted StopgapMotl object.
     """
-    motl = RelionMotl(input_motl)
+    load_kwargs = load_kwargs or {}
+    if relion_version == 5.0:
+        motl = RelionMotlv5(input_particles=input_motl, **load_kwargs)
+    else:
+        motl = RelionMotl(input_motl=input_motl, version=relion_version, **load_kwargs)
+
     sg_motl = StopgapMotl(motl.df)
 
     if update_coordinates:
@@ -4868,6 +4886,7 @@ def relion2stopgap(input_motl, output_motl_path=None, update_coordinates=False, 
 
 def stopgap2relion(
     input_motl,
+    relion_version,
     output_motl_path=None,
     flip_handedness=False,
     tomo_dim=None,
@@ -4880,6 +4899,8 @@ def stopgap2relion(
     ----------
     input_motl : str or pandas.Dataframe or EmMotl
         Path to the input Stopgap star file or an already loaded StopgapMotl object.
+    relion_version : float
+        Version of the desired relion object in output.
     output_motl_path : str, optional
         If provided, the converted motl will be written to this path.
     flip_handedness : bool, default=False
@@ -4887,8 +4908,8 @@ def stopgap2relion(
     tomo_dim : tuple of int, optional
         Dimensions of the tomogram (required if `flip_handedness=True`).
     load_kwargs : dict, optional
-        Dictionary of keyword arguments passed to the `RelionMotl` constructor.
-        See `RelionMotl.__init__` for full list of accepted keys, e.g.:
+        Dictionary of keyword arguments passed to the `RelionMotl` or `RelionMotlv5` constructor.
+        See `RelionMotl.__init__` or `RelionMotlv5.__init__` for full list of accepted keys, e.g.:
         `{"pixel_size": 2.3, "version": 3, "optics_data" : ...}`
     write_kwargs : dict, optional
         Dictionary of keyword arguments passed to `RelionMotl.write_out()`.
@@ -4905,9 +4926,17 @@ def stopgap2relion(
         sg_motl.flip_handedness(tomo_dimensions=tomo_dim)
 
     load_kwargs = load_kwargs or {}
-    rln_motl = RelionMotl(sg_motl.df, **load_kwargs)
-
     write_kwargs = write_kwargs or {}
+
+    if relion_version == 5.0:
+        if "input_tomograms" not in load_kwargs:
+            raise UserInputError("For relion5 input_tomogram parameter is mandatory")
+        else:
+            rln_motl = RelionMotlv5(input_particles=sg_motl.df, **load_kwargs)
+
+    else:
+        rln_motl = RelionMotl(input_motl=sg_motl.df, version=relion_version, **load_kwargs)
+
     if output_motl_path is not None:
         rln_motl.write_out(output_motl_path, **write_kwargs)
 

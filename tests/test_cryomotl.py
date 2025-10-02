@@ -301,7 +301,8 @@ def test_emmotl2relion():
     })
     em_motl = EmMotl(em_data)
     rln_motl = cryomotl.emmotl2relion(
-        input_motl=em_motl
+        input_motl=em_motl,
+        relion_version=3.0
     )
     assert isinstance(rln_motl, cryomotl.RelionMotl)
     #print(rln_motl.relion_df)
@@ -312,10 +313,10 @@ def test_emmotl2relion():
     rln_motl = cryomotl.emmotl2relion(
         input_motl=em_motl,
         output_motl_path=relion_written,
-        #load_kwargs={"pixel_size":1.0, "binning":1.0}
-        #load_kwargs={"version": 4.0}
+        relion_version=3.1,
+        write_kwargs={"write_optics": False}
     )
-    #fixme: Only once having written, and loaded the new written file, we can access
+
     #relion_df attribute correctly!
     rln_motl_written = RelionMotl(relion_written)
     print(rln_motl_written.relion_df)
@@ -323,8 +324,8 @@ def test_emmotl2relion():
     assert list(rln_motl_written.relion_df.columns) == RelionMotl.columns_v3_1 + ["ccSubtomoID"]
     assert isinstance(rln_motl_written, cryomotl.RelionMotl)
 
-    """if os.path.exists(relion_written):
-        os.remove(relion_written)"""
+    if os.path.exists(relion_written):
+        os.remove(relion_written)
 
 def test_relion2emmotl():
     relion="./test_data/motl_data/relion_3.1_optics2.star"
@@ -332,7 +333,8 @@ def test_relion2emmotl():
     rln = RelionMotl(input_motl=relion, version=3.1)
     em = cryomotl.relion2emmotl(
         input_motl=rln,
-        output_motl_path=written_em
+        output_motl_path=written_em,
+        relion_version=3.1
     )
     assert isinstance(em, EmMotl)
     print(em.df)
@@ -467,7 +469,7 @@ def test_emmotl2stopgap_basic(tmp_path):
 def test_relion2stopgap():
     relion3 = "./test_data/motl_data/relion_3.0.star"
     stopgap = "./test_data/motl_data/sg_from_relion.star"
-    sg = cryomotl.relion2stopgap(input_motl=relion3, output_motl_path=stopgap)
+    sg = cryomotl.relion2stopgap(input_motl=relion3, relion_version=3.0, output_motl_path=stopgap)
     sg1 = StopgapMotl(input_motl=stopgap)
     assert not list(sg.sg_df.columns) == StopgapMotl.columns
     assert list(sg1.sg_df.columns) == StopgapMotl.columns
@@ -481,7 +483,8 @@ def test_relion2stopgap_write():
     relion3written = "./test_data/motl_data/stopgap_written.star"
     sg = cryomotl.relion2stopgap(
         input_motl=relion3,
-        output_motl_path=relion3written
+        output_motl_path=relion3written,
+        relion_version=3.0
     )
     sg_written = StopgapMotl(relion3written)
     assert list(sg_written.sg_df.columns) == StopgapMotl.columns
@@ -493,7 +496,7 @@ def test_relion2stopgap_write():
 def test_stopgap2relion():
     sg = "./test_data/motl_data/class6_er_mr1_1_sg.star"
     #relion_optics = "./test_data/motl_data/relion_3.1_optics2.star"
-    relion = cryomotl.stopgap2relion(input_motl=sg)
+    relion = cryomotl.stopgap2relion(input_motl=sg, relion_version=3.1)
     #of course the same as before
     relion.relion_df = relion.create_relion_df(
         version=3.1,
@@ -508,7 +511,8 @@ def test_stopgap2relion_write():
     relion_written = "./test_data/motl_data/rln31_written.star"
     relion = cryomotl.stopgap2relion(
         input_motl=sg,
-        output_motl_path=relion_written
+        output_motl_path=relion_written,
+        relion_version=3.1
     )
     assert isinstance(relion, RelionMotl)
     assert list(relion.relion_df) == []
@@ -519,6 +523,9 @@ def test_stopgap2relion_write():
 
     if os.path.exists(relion_written):
         os.remove(relion_written)
+
+
+
 
 class TestMotl:
 
@@ -3761,7 +3768,7 @@ class TestRelionMotl:
         # Load the relion_3.0.star file using RelionMotl
         motl = RelionMotl(input_motl=relion_paths["relion30_path"], version=3.0)
         relion_df = motl.create_relion_df()
-        assert list(relion_df.columns) == motl.columns_v3_0
+        assert sorted(list(relion_df.columns)) == sorted(motl.columns_v3_0 + ["rlnGroupNumber"])
         expected_num_particles = 3
         assert len(relion_df) == expected_num_particles
 
@@ -4328,7 +4335,7 @@ class TestDynamoMotl:
         print(em_dynamo_motl1.dynamo_df)
 
         if os.path.exists("./test_data/motl_data/test_dynamo.tbl"):
-            os.remove("./test_data_motl_data/test_dynamo.tbl")
+            os.remove("./test_data/motl_data/test_dynamo.tbl")
 
     def test_convert_to_dynamo(self):
         #Create a dynamo using real - confirmed - dynamo df
@@ -4356,13 +4363,13 @@ class TestModMotl:
         assert not mod_df.empty
         assert all(col in mod_df.columns for col in ['object_id', 'x', 'y', 'z', 'mod_id', 'contour_id'])
         unique_mod_ids = mod_df["mod_id"].unique()
-        expected_ids = ["correct189", "correct111"]
+        expected_ids = ["correct189", "correct111", "empty089", "empty111"]
         assert all(uid in unique_mod_ids for uid in expected_ids)
         assert len(unique_mod_ids) == len(expected_ids)
 
 
 
-        test_file_path = "./test_data/motl_data/empty089.mod"
+        test_file_path = "./test_data/motl_data/modMotl/empty089.mod"
         mod_df = ModMotl.read_in(input_path=test_file_path)
         assert isinstance(mod_df, pd.DataFrame)
         assert not mod_df.empty
@@ -4542,9 +4549,9 @@ class TestModMotl:
         print(em_mod_motl1.mod_df)
         #print(em_mod_motl1.df)
 
-        """if os.path.exists(test_file_path + "test567.mod"):
+        if os.path.exists(test_file_path + "test567.mod"):
             os.remove(test_file_path + "test567.mod")
-        """
+
 
 class TestRelionMotlv5:
     warp_tomo_path = "./test_data/motl_data/relion5/clean/warp2_matching_tomograms.star"
