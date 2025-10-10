@@ -4049,10 +4049,11 @@ class RelionMotlv5(RelionMotl, Motl):
             relion_df = relion_df.drop(columns=["subtomo_id"])
 
         if convert is True:
+            self.tomo_df = RelionMotlv5.clean_tomo_name_column(self.tomo_df)
             if self.isWarp:
-                relion_df = self.warp2relion(relion_df) #fixme: mismatch at this point tomoName is int
+                relion_df = self.warp2relion(relion_df)
             else:
-                relion_df = self.relion2warp(relion_df) #fixme: as above
+                relion_df = self.relion2warp(relion_df)
 
         return relion_df
 
