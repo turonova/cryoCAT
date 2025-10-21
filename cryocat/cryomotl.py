@@ -3535,7 +3535,9 @@ class RelionMotlv5(RelionMotl, Motl):
         if input_tomograms is not None:
             # input tomograms can be a pd.dataframe, an array like, or a file
             if isinstance(input_tomograms, pd.DataFrame):
-                input_tomograms = input_tomograms.loc[:, ["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]]
+                input_tomograms = input_tomograms.loc[
+                    :, ["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]
+                ]
             self.tomo_df = ioutils.dimensions_load(input_tomograms, tomo_idx)
             self.tomo_df.columns = ["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]
             if input_particles is not None:
@@ -4677,9 +4679,14 @@ class ModMotl(Motl):
         imod.write_model_binary(df_to_write, output_path)
 
 
-
 def emmotl2relion(
-    input_motl, relion_version, output_motl_path=None, flip_handedness=False, tomo_dim=None, load_kwargs=None, write_kwargs=None
+    input_motl,
+    relion_version,
+    output_motl_path=None,
+    flip_handedness=False,
+    tomo_dim=None,
+    load_kwargs=None,
+    write_kwargs=None,
 ):
     """Converts an EmMotl to RelionMotl format and optionally writes it to file.
 
@@ -4723,10 +4730,12 @@ def emmotl2relion(
             raise UserInputError("For relion5 input_tomogram parameter is mandatory")
         else:
             rln_motl = RelionMotlv5(input_particles=em_motl.df, **load_kwargs)
-    
 
     if output_motl_path is not None:
-        rln_motl.write_out(output_motl_path, **write_kwargs,)
+        rln_motl.write_out(
+            output_motl_path,
+            **write_kwargs,
+        )
 
     return rln_motl
 
@@ -4765,6 +4774,7 @@ def relion2emmotl(
         If True, flips the handedness of the coordinates.
     tomo_dim : tuple of int, optional
         Dimensions of the tomogram (required if `flip_handedness=True`).
+
     Returns
     -------
     em_motl : EmMotl
@@ -4792,6 +4802,7 @@ def relion2emmotl(
 
 def stopgap2emmotl(input_motl, output_motl_path=None, update_coordinates=False):
     """Converts a StopgapMotl to EmMotl format and optionally writes it to a file.
+
     Parameters
     ----------
     input_motl : str or pandas.DataFrame or StopgapMotl
@@ -4800,6 +4811,7 @@ def stopgap2emmotl(input_motl, output_motl_path=None, update_coordinates=False):
         If provided, the converted motl will be written to this path.
     update_coordinates : bool, default=False
         If True, updates the coordinates in the DataFrame.
+
     Returns
     -------
     em_motl : EmMotl
@@ -4819,6 +4831,7 @@ def stopgap2emmotl(input_motl, output_motl_path=None, update_coordinates=False):
 
 def emmotl2stopgap(input_motl, output_motl_path=None, update_coordinates=False, reset_index=False):
     """Converts an EmMotl to StopgapMotl format and optionally writes it to a file.
+
     Parameters
     ----------
     input_motl : str or pandas.DataFrame or EmMotl
@@ -4829,6 +4842,7 @@ def emmotl2stopgap(input_motl, output_motl_path=None, update_coordinates=False, 
         If True, updates the coordinates in the DataFrame.
     reset_index : bool, default=False
         If True, the index of the DataFrame will be reset before writing out.
+
     Returns
     -------
     sg_motl : StopgapMotl
@@ -4846,8 +4860,11 @@ def emmotl2stopgap(input_motl, output_motl_path=None, update_coordinates=False, 
     return sg_motl
 
 
-def relion2stopgap(input_motl, relion_version, load_kwargs=None, output_motl_path=None, update_coordinates=False, reset_index=False):
+def relion2stopgap(
+    input_motl, relion_version, load_kwargs=None, output_motl_path=None, update_coordinates=False, reset_index=False
+):
     """Converts a RelionMotl to StopgapMotl format and optionally writes it to a file.
+
     Parameters
     ----------
     input_motl : str or pandas.DataFrame or RelionMotl
@@ -4863,6 +4880,7 @@ def relion2stopgap(input_motl, relion_version, load_kwargs=None, output_motl_pat
         If True, updates the coordinates in the DataFrame.
     reset_index : bool, default=False
         If True, the index of the DataFrame will be reset before writing out.
+
     Returns
     -------
     sg_motl : StopgapMotl
@@ -4916,6 +4934,7 @@ def stopgap2relion(
         Dictionary of keyword arguments passed to `RelionMotl.write_out()`.
         See `RelionMotl.write_out` for details, e.g.:
         `{"optics_data": ..., "optics_data": ...}`
+
     Returns
     ----------
     rln_motl : RelionMotl converted object.

@@ -327,25 +327,25 @@ def read_segmentation(segmentation_path: str, logger: logging.Logger = None) -> 
 def read_tomo(tomo_path: str, logger: logging.Logger = None) -> tuple[np.ndarray, float, tuple]:
     """
     Read tomogram data from MRC file and extract metadata.
-    
+
     Parameters
     ----------
     tomo_path : str
         Path to the MRC tomogram file
     logger : logging.Logger, optional
         Logger instance for status messages
-        
+
     Returns
     -------
     tomo : np.ndarray or None
         3D tomogram data array (ZYX order)
-    voxel_size : float or None  
+    voxel_size : float or None
         Voxel size in nanometers
     shape : tuple or None
         Shape of the tomogram array (ZYX order)
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    
+
     log_msg(f"Reading tomogram from {tomo_path}...")
     try:
         with mrcfile.mmap(str(tomo_path), mode="r", permissive=True) as mrc:
@@ -355,26 +355,23 @@ def read_tomo(tomo_path: str, logger: logging.Logger = None) -> tuple[np.ndarray
 
         log_msg(f"Tomogram voxel size: {tomo_voxel:.4f} nm")
         log_msg(f"Tomogram shape (ZYX): {tomo_shape}")
-        
+
         return tomo, tomo_voxel, tomo_shape
-        
+
     except Exception as e:
         log_msg(f"Error reading tomogram file: {e}")
         return None, None, None
 
 
 def validate_seg_tomo_compatibility(
-    segmentation_path: str, 
-    tomo_path: str, 
-    tolerance: float = 0.01,
-    logger: logging.Logger = None
+    segmentation_path: str, tomo_path: str, tolerance: float = 0.01, logger: logging.Logger = None
 ) -> tuple[bool, dict]:
     """
     Validate compatibility between segmentation and tomogram files.
-    
+
     Checks dimensions and voxel size compatibility between a segmentation
     MRC file and its corresponding tomogram for intensity profile analysis.
-    
+
     Parameters
     ----------
     segmentation_path : str
@@ -385,7 +382,7 @@ def validate_seg_tomo_compatibility(
         Tolerance for voxel size comparison (in nanometers)
     logger : logging.Logger, optional
         Logger instance for status messages
-        
+
     Returns
     -------
     compatible : bool
@@ -393,7 +390,7 @@ def validate_seg_tomo_compatibility(
     details : dict
         Dictionary containing compatibility details:
         - 'segmentation_shape': tuple of segmentation dimensions (ZYX)
-        - 'tomogram_shape': tuple of tomogram dimensions (ZYX) 
+        - 'tomogram_shape': tuple of tomogram dimensions (ZYX)
         - 'segmentation_voxel_size': float, voxel size in nm
         - 'tomogram_voxel_size': float, voxel size in nm
         - 'dimensions_match': bool, whether shapes are identical
@@ -401,41 +398,39 @@ def validate_seg_tomo_compatibility(
         - 'error': str, error message if validation failed
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    
+
     try:
         # Read segmentation metadata
         log_msg("Validating segmentation and tomogram compatibility...")
-        segmentation, seg_voxel_size, seg_origin, seg_shape = read_segmentation(
-            segmentation_path, logger=logger
-        )
-        
+        segmentation, seg_voxel_size, seg_origin, seg_shape = read_segmentation(segmentation_path, logger=logger)
+
         if segmentation is None:
-            return False, {'error': 'Failed to read segmentation file'}
-        
-        # Read tomogram metadata  
+            return False, {"error": "Failed to read segmentation file"}
+
+        # Read tomogram metadata
         tomo, tomo_voxel_size, tomo_shape = read_tomo(tomo_path, logger=logger)
-        
+
         if tomo is None:
-            return False, {'error': 'Failed to read tomogram file'}
-        
+            return False, {"error": "Failed to read tomogram file"}
+
         # Check dimensions
         dims_match = seg_shape == tomo_shape
-        
+
         # Check voxel size (within tolerance)
         voxel_size_match = abs(seg_voxel_size - tomo_voxel_size) < tolerance
-        
+
         # Compatibility requires both dimension and voxel size match
         compatible = dims_match and voxel_size_match
-        
+
         details = {
-            'segmentation_shape': seg_shape,
-            'tomogram_shape': tomo_shape,
-            'segmentation_voxel_size': seg_voxel_size,
-            'tomogram_voxel_size': tomo_voxel_size,
-            'dimensions_match': dims_match,
-            'voxel_sizes_match': voxel_size_match
+            "segmentation_shape": seg_shape,
+            "tomogram_shape": tomo_shape,
+            "segmentation_voxel_size": seg_voxel_size,
+            "tomogram_voxel_size": tomo_voxel_size,
+            "dimensions_match": dims_match,
+            "voxel_sizes_match": voxel_size_match,
         }
-        
+
         if compatible:
             log_msg("✓ Segmentation and tomogram are compatible")
             log_msg(f"  Dimensions: {seg_shape}")
@@ -447,14 +442,14 @@ def validate_seg_tomo_compatibility(
             if not voxel_size_match:
                 log_msg(f"  Voxel size mismatch: {seg_voxel_size:.4f} vs {tomo_voxel_size:.4f} nm")
                 log_msg(f"  Difference: {abs(seg_voxel_size - tomo_voxel_size):.4f} nm (tolerance: {tolerance:.4f} nm)")
-            
+
         return compatible, details
-        
+
     except Exception as e:
         error_msg = f"Error during compatibility check: {e}"
         log_msg(error_msg)
-        return False, {'error': error_msg}
-    
+        return False, {"error": error_msg}
+
 
 def generate_thickness_volume(
     points: np.ndarray,
@@ -462,7 +457,7 @@ def generate_thickness_volume(
     valid_mask: np.ndarray,
     segmentation: np.ndarray,
     voxel_size: float,
-    point_pairs: np.ndarray
+    point_pairs: np.ndarray,
 ) -> np.ndarray:
     """
     Create 3D volume where voxel values represent membrane thickness.
@@ -523,10 +518,7 @@ def generate_thickness_volume(
 
 
 def save_thickness_volume(
-    thickness_volume: np.ndarray,
-    output_path: str,
-    voxel_size: float,
-    origin: tuple = (0, 0, 0)
+    thickness_volume: np.ndarray, output_path: str, voxel_size: float, origin: tuple = (0, 0, 0)
 ) -> None:
     """
     Save thickness volume as MRC file with proper metadata.
@@ -576,7 +568,7 @@ def verify_and_save_outputs(
     origin: tuple,
     save_vertices_mrc: bool = False,
     save_vertices_xyz: bool = False,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
 ) -> bool:
     """
     Save surface analysis outputs in multiple formats.
@@ -618,7 +610,9 @@ def verify_and_save_outputs(
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
 
     log_msg(f"\nSaving outputs for {membrane_name}:")
-    log_msg(f"Vertices: {len(aligned_vertices)}, Surface 1: {np.sum(surface1_mask)}, Surface 2: {np.sum(surface2_mask)}")
+    log_msg(
+        f"Vertices: {len(aligned_vertices)}, Surface 1: {np.sum(surface1_mask)}, Surface 2: {np.sum(surface2_mask)}"
+    )
 
     try:
         # Scale vertices once for all uses
@@ -664,12 +658,7 @@ def verify_and_save_outputs(
     return True
 
 
-def save_vertices_mrc_helper(
-    vertex_volume: np.ndarray,
-    output_path: str,
-    voxel_size: float,
-    origin: tuple
-) -> None:
+def save_vertices_mrc_helper(vertex_volume: np.ndarray, output_path: str, voxel_size: float, origin: tuple) -> None:
     """
     Helper function to save vertex volume as MRC file.
 
@@ -691,9 +680,11 @@ def save_vertices_mrc_helper(
         mrc.header.origin.y = origin[1]
         mrc.header.origin.z = origin[2]
 
+
 #############################################
 # On stats
 #############################################
+
 
 def generate_matching_statistics(
     thickness_results: np.ndarray,
@@ -702,7 +693,7 @@ def generate_matching_statistics(
     points: np.ndarray,
     surface1_mask: np.ndarray,
     surface2_mask: np.ndarray,
-    voxel_size: float
+    voxel_size: float,
 ) -> dict:
     """
     Generate comprehensive statistics for thickness measurements.
@@ -813,31 +804,30 @@ def save_matching_statistics(stats: dict, output_path: str, logger: logging.Logg
 
         log_msg(f"Statistics saved to {output_path}")
 
+
 #############################################
 # Surface Processing Classes and Functions
 #############################################
-    
+
+
 def extract_surface_points(
-    segmentation: np.ndarray,
-    membrane_mask: np.ndarray,
-    mesh_sampling: int = 1,
-    logger: logging.Logger = None
+    segmentation: np.ndarray, membrane_mask: np.ndarray, mesh_sampling: int = 1, logger: logging.Logger = None
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Extract surface points and normals using marching cubes algorithm.
-    
+
     This function processes a binary membrane mask to identify surface voxels
     and compute their normal vectors. It uses the marching cubes algorithm
     from scikit-image to extract the surface mesh, then validates each
     vertex to ensure it lies on the true segmentation boundary.
-    
+
     The function performs the following steps:
     1. Applies marching cubes to extract surface mesh
     2. Converts vertex coordinates to integer voxel positions
     3. Validates each vertex using is_surface_point() function
     4. Removes duplicate vertices at the same position
     5. Returns validated vertices with corresponding normal vectors
-    
+
     Parameters
     ----------
     segmentation : np.ndarray
@@ -875,12 +865,14 @@ def extract_surface_points(
         aligned_vertices = []
         aligned_normals = []
         processed_positions = set()
-        
+
         for i in range(len(vertices_int)):
             vertex = vertices_int[i]
-            if (0 <= vertex[0] < membrane_mask.shape[0] and 
-                0 <= vertex[1] < membrane_mask.shape[1] and 
-                0 <= vertex[2] < membrane_mask.shape[2]):
+            if (
+                0 <= vertex[0] < membrane_mask.shape[0]
+                and 0 <= vertex[1] < membrane_mask.shape[1]
+                and 0 <= vertex[2] < membrane_mask.shape[2]
+            ):
                 pos_tuple = tuple(vertex)
                 if pos_tuple not in processed_positions:
                     if is_surface_point(vertex, membrane_mask):
@@ -891,7 +883,7 @@ def extract_surface_points(
         aligned_vertices = np.array(aligned_vertices)
         aligned_normals = np.array(aligned_normals)
         log_msg(f"Extracted {len(aligned_vertices)} surface points")
-        
+
         return aligned_vertices, aligned_normals
 
     except Exception as e:
@@ -919,27 +911,25 @@ def create_vertex_volume(aligned_vertices: np.ndarray, membrane_mask_shape: tupl
     vertex_volume = np.zeros(membrane_mask_shape)
     for vertex in aligned_vertices:
         x, y, z = vertex.astype(int)
-        if (0 <= x < vertex_volume.shape[0] and 
-            0 <= y < vertex_volume.shape[1] and 
-            0 <= z < vertex_volume.shape[2]):
+        if 0 <= x < vertex_volume.shape[0] and 0 <= y < vertex_volume.shape[1] and 0 <= z < vertex_volume.shape[2]:
             vertex_volume[x, y, z] = 1
     return vertex_volume
-    
+
 
 def is_surface_point(point: np.ndarray, segmentation: np.ndarray) -> bool:
     """
     Validate if a point is truly on the segmentation surface boundary.
-    
+
     This function determines whether a given voxel position lies on the
     surface of a binary segmentation by checking if it is inside the
     segmentation and has at least one immediate neighbor outside it.
-    
+
     The function uses a 6-connected neighborhood check (face neighbors only)
     to determine surface membership. A point is considered on the surface
     if it satisfies both conditions:
     1. The point itself is inside the segmentation (True/1)
     2. At least one of its 6 face neighbors is outside the segmentation (False/0)
-    
+
     Parameters
     ----------
     point : array-like
@@ -948,21 +938,21 @@ def is_surface_point(point: np.ndarray, segmentation: np.ndarray) -> bool:
         3D binary segmentation volume where True/1 indicates inside
         the segmentation and False/0 indicates outside. Shape should
         be (Z, Y, X) in voxel coordinates.
-    
+
     Returns
     -------
     bool
         True if the point is on the surface boundary, False otherwise.
         A point is on the surface if it's inside the segmentation and
         has at least one face neighbor outside the segmentation.
-    
+
     Raises
     ------
     IndexError
         If the point coordinates are outside the segmentation array bounds.
     ValueError
         If the segmentation array is not 3D or contains non-boolean values.
-    
+
     Notes
     -----
     - Uses 6-connected neighborhood (face neighbors only, not edge or corner)
@@ -993,11 +983,7 @@ def is_surface_point(point: np.ndarray, segmentation: np.ndarray) -> bool:
     return False
 
 
-def get_neighbor_surface_points(
-    vertex: np.ndarray,
-    segmentation: np.ndarray,
-    include_edges: bool = True
-) -> list:
+def get_neighbor_surface_points(vertex: np.ndarray, segmentation: np.ndarray, include_edges: bool = True) -> list:
     """
     Find neighboring surface points around a vertex.
 
@@ -1060,12 +1046,7 @@ def get_neighbor_surface_points(
     return points
 
 
-def interpolate_between_vertices(
-    v1: np.ndarray,
-    v2: np.ndarray,
-    segmentation: np.ndarray,
-    num_points: int = 1
-) -> list:
+def interpolate_between_vertices(v1: np.ndarray, v2: np.ndarray, segmentation: np.ndarray, num_points: int = 1) -> list:
     """
     Interpolate points between two vertices on the surface.
 
@@ -1102,11 +1083,7 @@ def interpolate_between_vertices(
     return points
 
 
-def find_surface_neighbors(
-    vertex: np.ndarray,
-    segmentation: np.ndarray,
-    include_edges: bool = True
-) -> list:
+def find_surface_neighbors(vertex: np.ndarray, segmentation: np.ndarray, include_edges: bool = True) -> list:
     """
     Find valid surface neighbors around a vertex.
 
@@ -1125,13 +1102,22 @@ def find_surface_neighbors(
         List of [x, y, z] coordinates for valid surface neighbors
     """
     x, y, z = vertex
-    face_neighbors = [[x+1,y,z], [x-1,y,z], [x,y+1,z], [x,y-1,z], [x,y,z+1], [x,y,z-1]]
-    
+    face_neighbors = [[x + 1, y, z], [x - 1, y, z], [x, y + 1, z], [x, y - 1, z], [x, y, z + 1], [x, y, z - 1]]
+
     if include_edges:
         edge_neighbors = [
-            [x+1,y+1,z], [x+1,y-1,z], [x-1,y+1,z], [x-1,y-1,z],
-            [x+1,y,z+1], [x+1,y,z-1], [x-1,y,z+1], [x-1,y,z-1],
-            [x,y+1,z+1], [x,y+1,z-1], [x,y-1,z+1], [x,y-1,z-1]
+            [x + 1, y + 1, z],
+            [x + 1, y - 1, z],
+            [x - 1, y + 1, z],
+            [x - 1, y - 1, z],
+            [x + 1, y, z + 1],
+            [x + 1, y, z - 1],
+            [x - 1, y, z + 1],
+            [x - 1, y, z - 1],
+            [x, y + 1, z + 1],
+            [x, y + 1, z - 1],
+            [x, y - 1, z + 1],
+            [x, y - 1, z - 1],
         ]
         neighbors_to_check = face_neighbors + edge_neighbors
     else:
@@ -1139,19 +1125,18 @@ def find_surface_neighbors(
 
     valid_neighbors = []
     for nx, ny, nz in neighbors_to_check:
-        if (0 <= nx < segmentation.shape[0] and 0 <= ny < segmentation.shape[1] and 
-            0 <= nz < segmentation.shape[2] and is_surface_point([nx, ny, nz], segmentation)):
+        if (
+            0 <= nx < segmentation.shape[0]
+            and 0 <= ny < segmentation.shape[1]
+            and 0 <= nz < segmentation.shape[2]
+            and is_surface_point([nx, ny, nz], segmentation)
+        ):
             valid_neighbors.append([nx, ny, nz])
-    
+
     return valid_neighbors
 
 
-def interpolate_between_points(
-    p1: np.ndarray,
-    p2: np.ndarray,
-    segmentation: np.ndarray,
-    num_points: int = 1
-) -> list:
+def interpolate_between_points(p1: np.ndarray, p2: np.ndarray, segmentation: np.ndarray, num_points: int = 1) -> list:
     """
     Interpolate points between two coordinates with surface validation.
 
@@ -1171,18 +1156,20 @@ def interpolate_between_points(
     """
     if num_points == 0:
         return []
-        
+
     interpolated = []
     for t in np.linspace(0, 1, num_points + 2)[1:-1]:
         interp_point = p1 + t * (p2 - p1)
         rounded_point = np.round(interp_point).astype(int)
-        
-        if (0 <= rounded_point[0] < segmentation.shape[0] and
-            0 <= rounded_point[1] < segmentation.shape[1] and
-            0 <= rounded_point[2] < segmentation.shape[2] and
-            is_surface_point(rounded_point, segmentation)):
+
+        if (
+            0 <= rounded_point[0] < segmentation.shape[0]
+            and 0 <= rounded_point[1] < segmentation.shape[1]
+            and 0 <= rounded_point[2] < segmentation.shape[2]
+            and is_surface_point(rounded_point, segmentation)
+        ):
             interpolated.append(rounded_point)
-    
+
     return interpolated
 
 
@@ -1192,25 +1179,26 @@ def interpolate_surface_points(
     segmentation: np.ndarray,
     interpolation_points: int = 1,
     include_edges: bool = True,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Increase surface point density through interpolation and neighbor addition.
-    
+
     This function enhances surface coverage by adding interpolated points
     between consecutive vertices and including neighboring surface points
     around each vertex. The resulting denser surface representation improves
     thickness measurement accuracy and coverage.
-    
+
     The function performs two types of point addition:
+
     1. **Interpolation**: Adds points between consecutive vertices along
        the surface using linear interpolation
     2. **Neighbor addition**: Includes valid surface neighbors around each
        vertex (6 face neighbors + 12 edge neighbors if include_edges=True)
-    
+
     All new points are validated using is_surface_point() to ensure they
     lie on the true segmentation boundary.
-    
+
     Parameters
     ----------
     vertices : np.ndarray
@@ -1249,7 +1237,7 @@ def interpolate_surface_points(
       then neighbor points
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    
+
     dense_vertices = []
     dense_normals = []
     processed_positions = set()
@@ -1276,7 +1264,7 @@ def interpolate_surface_points(
         if i < len(vertices) - 1:
             next_vertex = np.round(vertices[i + 1]).astype(int)
             interp_points = interpolate_between_points(vertex, next_vertex, segmentation, interpolation_points)
-            
+
             for point in interp_points:
                 point_tuple = tuple(point)
                 if point_tuple not in processed_positions:
@@ -1298,24 +1286,25 @@ def refine_mesh_normals(
     radius_hit: float = 10.0,
     batch_size: int = 2000,
     flip_normals: bool = True,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Refine surface normals and separate bilayer surfaces.
-    
+
     This function improves the quality of surface normal vectors and
     separates the bilayer membrane into inner and outer surfaces.
     It uses a voting-based approach to refine normals by averaging
     neighboring normals with distance-weighted contributions.
-    
+
     The function performs three main operations:
+
     1. **Normal refinement**: Uses weighted averaging of neighbor normals
        within a specified radius to smooth and improve normal quality
     2. **Normal orientation**: Ensures consistent normal orientation
        across the surface using minimum spanning tree propagation
     3. **Surface separation**: Separates the bilayer into two surfaces
        based on normal direction analysis using PCA
-    
+
     Parameters
     ----------
     vertices : np.ndarray
@@ -1380,10 +1369,10 @@ def refine_mesh_normals(
     # Initialize defaults first
     surface1_mask = np.zeros(len(vertices), dtype=bool)
     surface2_mask = np.zeros(len(vertices), dtype=bool)
-    
+
     # Get separation results
     temp_surf1, temp_surf2 = voter.separate_bilayer()
-    
+
     # Only update if separation was successful
     if temp_surf1 is not None and temp_surf2 is not None and len(temp_surf1) > 0:
         surface1_mask = temp_surf1
@@ -1395,7 +1384,6 @@ def refine_mesh_normals(
         refined_normals = -voter.refined_normals if flip_normals else voter.refined_normals
 
     return refined_normals, surface1_mask, surface2_mask
-
 
 
 class MeshNormalVoter:
@@ -1819,25 +1807,26 @@ def measure_thickness_gpu(
 ):
     """
     GPU-accelerated membrane thickness measurement with one-to-one point matching.
-    
+
     This function measures membrane thickness between two separated surfaces
     using CUDA-accelerated nearest neighbor search. It ensures each surface
     point is measured exactly once by implementing a one-to-one matching
     algorithm that prioritizes the shortest valid distances.
-    
+
     The function performs the following steps:
+
     1. **GPU preparation**: Transfers data to GPU memory and configures CUDA grid
     2. **Parallel search**: Uses CUDA kernel to find all possible matches for each
        source point within geometric constraints
     3. **CPU post-processing**: Processes matches on CPU to ensure one-to-one
        assignment and converts results to physical units
     4. **Validation**: Applies geometric constraints (max thickness, cone angle)
-    
+
     Geometric constraints ensure measurement quality:
     - **Maximum thickness**: Limits search to reasonable membrane thicknesses
     - **Cone angle**: Restricts search to a cone along the normal direction
     - **Surface separation**: Ensures points are on different surfaces
-    
+
     Parameters
     ----------
     points : ndarray
@@ -1871,14 +1860,14 @@ def measure_thickness_gpu(
         1D array of length N containing indices of matched points for each
         source point. For valid measurements, this gives the index of the
         corresponding point on the opposite surface.
-    
+
     Raises
     ------
     RuntimeError
         If CUDA is not available or GPU memory allocation fails.
     ValueError
         If input arrays have incompatible shapes or invalid parameters.
-    
+
     Notes
     -----
     - **GPU Requirements**: Requires CUDA-capable GPU with sufficient memory
@@ -2230,20 +2219,22 @@ def process_matches_cpu2cpu(flat_matches, n_points, voxel_size):
 
     return thickness_results, valid_mask, point_pairs
 
+
 #############################################
-# Intensity Profile Analysis Functions  
+# Intensity Profile Analysis Functions
 #############################################
 
 ## Utility Functions
 
+
 def normalize_tomogram(
-    tomo: np.ndarray, 
-    method: Literal['zscore', 'minmax', 'percentile', 'none'] = 'zscore',
-    logger: logging.Logger = None
+    tomo: np.ndarray,
+    method: Literal["zscore", "minmax", "percentile", "none"] = "zscore",
+    logger: logging.Logger = None,
 ) -> np.ndarray:
     """
     Normalize tomogram intensity values using various strategies.
-    
+
     Parameters
     ----------
     tomo : np.ndarray
@@ -2252,62 +2243,65 @@ def normalize_tomogram(
         Normalization method
     logger : logging.Logger, optional
         Logger instance for status messages
-        
+
     Returns
     -------
     np.ndarray
         Normalized tomogram
     """
-    if method == 'none':
+    if method == "none":
         return tomo.copy()
-    
+
     # Use only finite values for normalization
     values = tomo[np.isfinite(tomo)]
-    
+
     if len(values) == 0:
         warnings.warn("No valid values found for normalization")
         return tomo.copy()
-    
-    if method == 'zscore':
+
+    if method == "zscore":
         center = np.mean(values)
         scale = np.std(values, ddof=1)
         if scale == 0:
             warnings.warn("Standard deviation is zero, returning original tomogram")
             return tomo.copy()
         normalized = (tomo - center) / scale
-        
-    elif method == 'minmax':
+
+    elif method == "minmax":
         min_val = np.min(values)
         max_val = np.max(values)
         if max_val == min_val:
             warnings.warn("Min equals max, returning original tomogram")
             return tomo.copy()
         normalized = (tomo - min_val) / (max_val - min_val)
-        
-    elif method == 'percentile':
+
+    elif method == "percentile":
         p1 = np.percentile(values, 1)
         p99 = np.percentile(values, 99)
         if p99 == p1:
             warnings.warn("1st and 99th percentiles are equal, returning original tomogram")
             return tomo.copy()
         normalized = np.clip((tomo - p1) / (p99 - p1), 0, 1)
-        
+
     else:
         raise ValueError(f"Unknown normalization method: {method}")
-    
+
     return normalized
 
-def save_int_results(results: Dict,
-                thickness_csv: Path,
-                output_dir: Union[str, Path],
-                profiles: List[Dict],
-                save_cleaned_df: bool = True,
-                save_profiles: bool = True,
-                save_statistics: bool = True,
-                logger: logging.Logger = None) -> Dict[str, Path]:
+
+def save_int_results(
+    results: Dict,
+    thickness_csv: Path,
+    output_dir: Union[str, Path],
+    profiles: List[Dict],
+    save_cleaned_df: bool = True,
+    save_profiles: bool = True,
+    save_statistics: bool = True,
+    logger: logging.Logger = None,
+) -> Dict[str, Path]:
     """
     Save files related to intensity profiles pre- and post-filtering with feature data.
-    
+
     Parameters
     ----------
     results : Dict
@@ -2320,14 +2314,14 @@ def save_int_results(results: Dict,
         Original extracted intensity profiles from extract_intensity_profile().
         Each dict contains 'profile', 'p1', 'p2', 'start', 'end', 'midpoint'
     save_cleaned_df : bool, default True
-        Whether to save cleaned thickness DataFrame as "*_thickness_cleaned.csv"
+        Whether to save cleaned thickness DataFrame as "\*_thickness_cleaned.csv"
     save_profiles : bool, default True
         Whether to save intensity profiles (both original and cleaned)
     save_statistics : bool, default True
-        Whether to save filtering statistics as "*_filtering_stats.txt"
+        Whether to save filtering statistics as "\*_filtering_stats.txt"
     logger : logging.Logger, optional
         Logger instance for status messages
-        
+
     Returns
     -------
     Dict[str, Path]
@@ -2347,132 +2341,135 @@ def save_int_results(results: Dict,
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Generate base name for output files
     base_name = thickness_csv.stem
-    if base_name.endswith('_thickness') or base_name.endswith('_membrane_thickness'):
+    if base_name.endswith("_thickness") or base_name.endswith("_membrane_thickness"):
         # Remove existing suffix
-        for suffix in ['_thickness', '_membrane_thickness']:
+        for suffix in ["_thickness", "_membrane_thickness"]:
             if base_name.endswith(suffix):
-                base_name = base_name[:-len(suffix)]
+                base_name = base_name[: -len(suffix)]
                 break
-    
+
     saved_files = {}
-    
+
     # Save cleaned thickness DataFrame
-    if save_cleaned_df and results['filtered_thickness_df'] is not None:
+    if save_cleaned_df and results["filtered_thickness_df"] is not None:
         cleaned_path = output_dir / f"{base_name}_thickness_cleaned.csv"
-        results['filtered_thickness_df'].to_csv(cleaned_path, index=False)
-        saved_files['thickness_cleaned'] = cleaned_path
+        results["filtered_thickness_df"].to_csv(cleaned_path, index=False)
+        saved_files["thickness_cleaned"] = cleaned_path
         log_msg(f"Saved cleaned thickness DataFrame: {cleaned_path}")
-    
+
     # Save intensity profiles with feature data
     if save_profiles:
         import pickle
-        
+
         # Merge feature data with original profiles
         if profiles:
-            profiles_with_features = _merge_profile_features(
-                profiles, results, use_pass1_data=True, logger=logger
-            )
-            
+            profiles_with_features = _merge_profile_features(profiles, results, use_pass1_data=True, logger=logger)
+
             original_profiles_path = output_dir / f"{base_name}_int_profiles.pkl"
-            with open(original_profiles_path, 'wb') as f:
+            with open(original_profiles_path, "wb") as f:
                 pickle.dump(profiles_with_features, f)
-            saved_files['profiles_original'] = original_profiles_path
+            saved_files["profiles_original"] = original_profiles_path
             log_msg(f"Saved original intensity profiles with features: {original_profiles_path}")
-        
+
         # Proper index mapping for cleaned profiles
-        if results['filtered_profiles']:
+        if results["filtered_profiles"]:
             # Get indices of profiles that passed filtering
-            passing_indices = [i for i, result in enumerate(results['final_results']) if result['passes_filter']]
-            
-            log_msg(f"Mapping {len(results['filtered_profiles'])} cleaned profiles to {len(passing_indices)} passing indices")
-            
+            passing_indices = [i for i, result in enumerate(results["final_results"]) if result["passes_filter"]]
+
+            log_msg(
+                f"Mapping {len(results['filtered_profiles'])} cleaned profiles to {len(passing_indices)} passing indices"
+            )
+
             # Create cleaned profiles with features using correct mapping
             cleaned_profiles_with_features = _merge_profile_features(
-                results['filtered_profiles'], results, use_pass1_data=False, 
-                profile_indices=passing_indices, logger=logger
+                results["filtered_profiles"],
+                results,
+                use_pass1_data=False,
+                profile_indices=passing_indices,
+                logger=logger,
             )
-            
+
             cleaned_profiles_path = output_dir / f"{base_name}_int_profiles_cleaned.pkl"
-            with open(cleaned_profiles_path, 'wb') as f:
+            with open(cleaned_profiles_path, "wb") as f:
                 pickle.dump(cleaned_profiles_with_features, f)
-            saved_files['profiles_cleaned'] = cleaned_profiles_path
+            saved_files["profiles_cleaned"] = cleaned_profiles_path
             log_msg(f"Saved cleaned intensity profiles with features: {cleaned_profiles_path}")
-    
+
     # Save statistics
     if save_statistics:
         stats_path = output_dir / f"{base_name}_filtering_stats.txt"
-        
-        with open(stats_path, 'w') as f:
+
+        with open(stats_path, "w") as f:
             # Redirect print output to file
             import sys
             from io import StringIO
-            
+
             old_stdout = sys.stdout
             sys.stdout = mystdout = StringIO()
-            
+
             print_summary(results)
-            
+
             sys.stdout = old_stdout
             stats_content = mystdout.getvalue()
-            
+
             f.write(f"Filtering statistics for: {thickness_csv.name}\n")
             f.write("=" * 50 + "\n\n")
             f.write(stats_content)
-            
+
             # Add parameter information
             f.write("\n=== Processing Parameters ===\n")
-            params = results['parameters']
+            params = results["parameters"]
             f.write(f"Min SNR: {params['intensity_min_snr']}\n")
             f.write(f"Central max required: {params['intensity_central_max_required']}\n")
             f.write(f"Extension range: {params['intensity_extension_range']}\n")
-            
+
             # Add extraction information
             f.write(f"\n=== Extraction Information ===\n")
             f.write(f"Total extracted profiles: {len(profiles)}\n")
             f.write(f"Profiles after filtering: {len(results['filtered_profiles'])}\n")
-            
+
             f.write(f"\n=== Output Files ===\n")
             for file_type, file_path in saved_files.items():
                 f.write(f"{file_type}: {file_path.name}\n")
-        
-        saved_files['statistics'] = stats_path
+
+        saved_files["statistics"] = stats_path
         log_msg(f"Saved statistics: {stats_path}")
-    
+
     return saved_files
 
 
 def _merge_profile_features(
-    profiles: List[Dict], 
-    results: Dict, 
+    profiles: List[Dict],
+    results: Dict,
     use_pass1_data: bool = True,
     profile_indices: List[int] = None,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
 ) -> List[Dict]:
     """
     FIXED version with proper index mapping and missing data handling.
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    
+
     # Choose data source
     if use_pass1_data:
-        feature_data = results.get('pass1_candidates', [])
+        feature_data = results.get("pass1_candidates", [])
         data_source = "Pass 1 characterization"
     else:
-        feature_data = results.get('final_results', [])
+        feature_data = results.get("final_results", [])
         data_source = "Pass 2 filtering"
-    
+
     log_msg(f"Merging {data_source} feature data with {len(profiles)} profiles")
     log_msg(f"Available feature data entries: {len(feature_data)}")
-    
+
     enhanced_profiles = []
-    
+
     for i, profile in enumerate(profiles):
         # Create enhanced profile with original data
         enhanced_profile = profile.copy()
-        
+
         # FIXED: Proper index mapping
         if use_pass1_data:
             # Direct mapping for original profiles
@@ -2484,196 +2481,207 @@ def _merge_profile_features(
             else:
                 log_msg(f"Warning: No profile_indices provided for cleaned profile {i}")
                 feature_idx = i  # Fallback
-        
+
         # Initialize features dictionary
         features = {
-            'data_source': data_source,
-            'feature_index': feature_idx,
-            'has_features': False,
-            'minima1_position': np.nan,
-            'minima1_intensity': np.nan,
-            'minima2_position': np.nan,
-            'minima2_intensity': np.nan,
-            'central_max_position': np.nan,
-            'central_max_intensity': np.nan,
-            'separation_distance': np.nan,
-            'prominence_snr': np.nan,
-            'passes_filter': False,
-            'failure_reason': None,
-            'p1_projection': np.nan,
-            'p2_projection': np.nan,
-            'minima_between_points': False
+            "data_source": data_source,
+            "feature_index": feature_idx,
+            "has_features": False,
+            "minima1_position": np.nan,
+            "minima1_intensity": np.nan,
+            "minima2_position": np.nan,
+            "minima2_intensity": np.nan,
+            "central_max_position": np.nan,
+            "central_max_intensity": np.nan,
+            "separation_distance": np.nan,
+            "prominence_snr": np.nan,
+            "passes_filter": False,
+            "failure_reason": None,
+            "p1_projection": np.nan,
+            "p2_projection": np.nan,
+            "minima_between_points": False,
         }
-        
+
         # Extract feature data if available
         if feature_idx < len(feature_data):
             feature_result = feature_data[feature_idx]
-            features['has_features'] = True
-            
+            features["has_features"] = True
+
             # Extract minima positions and intensities
-            if 'minima_positions' in feature_result and feature_result['minima_positions']:
-                positions = feature_result['minima_positions']
-                depths = feature_result.get('minima_depths', [])
-                
+            if "minima_positions" in feature_result and feature_result["minima_positions"]:
+                positions = feature_result["minima_positions"]
+                depths = feature_result.get("minima_depths", [])
+
                 # Split into individual minima (position sorted)
                 if len(positions) >= 1:
-                    features['minima1_position'] = positions[0]
+                    features["minima1_position"] = positions[0]
                     if len(depths) >= 1:
-                        features['minima1_intensity'] = depths[0]
-                
+                        features["minima1_intensity"] = depths[0]
+
                 if len(positions) >= 2:
-                    features['minima2_position'] = positions[1]
+                    features["minima2_position"] = positions[1]
                     if len(depths) >= 2:
-                        features['minima2_intensity'] = depths[1]
-            
+                        features["minima2_intensity"] = depths[1]
+
             # FIXED: Extract separation distance with fallback calculation
-            if 'separation_distance' in feature_result and not np.isnan(feature_result['separation_distance']):
-                features['separation_distance'] = feature_result['separation_distance']
-            elif 'minima_positions' in feature_result and len(feature_result['minima_positions']) >= 2:
+            if "separation_distance" in feature_result and not np.isnan(feature_result["separation_distance"]):
+                features["separation_distance"] = feature_result["separation_distance"]
+            elif "minima_positions" in feature_result and len(feature_result["minima_positions"]) >= 2:
                 # Calculate from positions if missing
-                positions = feature_result['minima_positions']
-                features['separation_distance'] = abs(positions[1] - positions[0])
-            
+                positions = feature_result["minima_positions"]
+                features["separation_distance"] = abs(positions[1] - positions[0])
+
             # Extract other features
-            features.update({
-                'prominence_snr': feature_result.get('prominence_snr', np.nan),
-                'p1_projection': feature_result.get('p1_projection', np.nan),
-                'p2_projection': feature_result.get('p2_projection', np.nan),
-                'minima_between_points': feature_result.get('minima_between_points', False),
-                'failure_reason': feature_result.get('failure_reason', None)
-            })
-            
+            features.update(
+                {
+                    "prominence_snr": feature_result.get("prominence_snr", np.nan),
+                    "p1_projection": feature_result.get("p1_projection", np.nan),
+                    "p2_projection": feature_result.get("p2_projection", np.nan),
+                    "minima_between_points": feature_result.get("minima_between_points", False),
+                    "failure_reason": feature_result.get("failure_reason", None),
+                }
+            )
+
             # For Pass 1 data
             if use_pass1_data:
-                features['passes_filter'] = feature_result.get('is_candidate', False)
+                features["passes_filter"] = feature_result.get("is_candidate", False)
             else:
                 # For Pass 2 data - extract central maximum info
-                features.update({
-                    'passes_filter': feature_result.get('passes_filter', False),
-                    'has_dual_minima': feature_result.get('has_dual_minima', False),
-                    'has_central_maximum': feature_result.get('has_central_maximum', False),
-                    'sufficient_prominence': feature_result.get('sufficient_prominence', False),
-                    'central_max_position': feature_result.get('central_max_position', np.nan),
-                    'central_max_height': feature_result.get('central_max_height', np.nan)
-                })
-        
+                features.update(
+                    {
+                        "passes_filter": feature_result.get("passes_filter", False),
+                        "has_dual_minima": feature_result.get("has_dual_minima", False),
+                        "has_central_maximum": feature_result.get("has_central_maximum", False),
+                        "sufficient_prominence": feature_result.get("sufficient_prominence", False),
+                        "central_max_position": feature_result.get("central_max_position", np.nan),
+                        "central_max_height": feature_result.get("central_max_height", np.nan),
+                    }
+                )
+
         # Add features to profile
-        enhanced_profile['features'] = features
+        enhanced_profile["features"] = features
         enhanced_profiles.append(enhanced_profile)
-    
+
     # Summary statistics
-    has_features_count = sum(1 for p in enhanced_profiles if p['features']['has_features'])
-    has_minima_count = sum(1 for p in enhanced_profiles 
-                          if not np.isnan(p['features']['minima1_position']))
-    has_separation_count = sum(1 for p in enhanced_profiles 
-                              if not np.isnan(p['features']['separation_distance']))
-    has_snr_count = sum(1 for p in enhanced_profiles 
-                       if not np.isnan(p['features']['prominence_snr']))
-    has_central_max_count = sum(1 for p in enhanced_profiles 
-                               if not np.isnan(p['features']['central_max_position']))
-    
+    has_features_count = sum(1 for p in enhanced_profiles if p["features"]["has_features"])
+    has_minima_count = sum(1 for p in enhanced_profiles if not np.isnan(p["features"]["minima1_position"]))
+    has_separation_count = sum(1 for p in enhanced_profiles if not np.isnan(p["features"]["separation_distance"]))
+    has_snr_count = sum(1 for p in enhanced_profiles if not np.isnan(p["features"]["prominence_snr"]))
+    has_central_max_count = sum(1 for p in enhanced_profiles if not np.isnan(p["features"]["central_max_position"]))
+
     log_msg(f"  Profiles with feature data: {has_features_count}/{len(enhanced_profiles)}")
     log_msg(f"  Profiles with minima positions: {has_minima_count}/{len(enhanced_profiles)}")
     log_msg(f"  Profiles with separation distance: {has_separation_count}/{len(enhanced_profiles)}")
     log_msg(f"  Profiles with SNR data: {has_snr_count}/{len(enhanced_profiles)}")
     log_msg(f"  Profiles with central max position: {has_central_max_count}/{len(enhanced_profiles)}")
-    
+
     return enhanced_profiles
 
 
 def print_summary(results: Dict, logger: logging.Logger = None) -> None:
     """Print summary of filtering results."""
-    
+
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    stats = results['statistics']
-    params = results['parameters']
-    dataset_chars = results['dataset_characteristics']
-    
+    stats = results["statistics"]
+    params = results["parameters"]
+    dataset_chars = results["dataset_characteristics"]
+
     log_msg("=== Summary of intensity profiles post filtering ===")
     log_msg(f"Total profiles analyzed: {stats['total_profiles']:,}")
     log_msg(f"Candidate profiles found after step 1: {stats['pass1_candidates']:,}")
     log_msg(f"Profiles that passed criteria: {stats['profiles_passed']:,} ({stats['pass_rate']:.1%})")
     log_msg(f"Profiles excluded: {stats['profiles_failed']:,} ({1-stats['pass_rate']:.1%})")
-    
+
     log_msg("=== Characteristics of intensity profiles ===")
-    if not np.isnan(dataset_chars['median_separation']):
-        log_msg(f"Median separation of minima: {dataset_chars['median_separation']:.2f} ± {dataset_chars['separation_std']:.2f} voxels")
-    if not np.isnan(dataset_chars['median_prominence_snr']):
-        log_msg(f"Median SNR of minima: {dataset_chars['median_prominence_snr']:.1f}x (minima are {dataset_chars['median_prominence_snr']:.1f}x more pronounced than the baseline)")
-    
+    if not np.isnan(dataset_chars["median_separation"]):
+        log_msg(
+            f"Median separation of minima: {dataset_chars['median_separation']:.2f} ± {dataset_chars['separation_std']:.2f} voxels"
+        )
+    if not np.isnan(dataset_chars["median_prominence_snr"]):
+        log_msg(
+            f"Median SNR of minima: {dataset_chars['median_prominence_snr']:.1f}x (minima are {dataset_chars['median_prominence_snr']:.1f}x more pronounced than the baseline)"
+        )
+
     log_msg("=== Applied filtering criteria (user-defined) ===")
     # MODIFIED: Handle None SNR
-    if params['intensity_min_snr'] is not None:
-        log_msg(f"Required SNR of minima: {params['intensity_min_snr']:.1f}x (minima must be {params['intensity_min_snr']:.1f}x more pronounced than the baseline)")
+    if params["intensity_min_snr"] is not None:
+        log_msg(
+            f"Required SNR of minima: {params['intensity_min_snr']:.1f}x (minima must be {params['intensity_min_snr']:.1f}x more pronounced than the baseline)"
+        )
     else:
         log_msg(f"SNR filtering: DISABLED (position-based filtering only)")
-    
+
     # NEW: Show margin factor
-    if params.get('intensity_margin_factor', 0) > 0:
+    if params.get("intensity_margin_factor", 0) > 0:
         log_msg(f"Position margin: {params['intensity_margin_factor']*100:.0f}% of measurement span")
     else:
         log_msg(f"Position filtering: Exact (no margin)")
-    
+
     log_msg(f"Central max required: {params['intensity_central_max_required']}")
     log_msg(f"Extension range from midpoint: {params['intensity_extension_range']} voxels")
-    
+
     # Failure analysis
-    if stats['failure_analysis']:
+    if stats["failure_analysis"]:
         log_msg("=== Reasons for intensity profile exclusion ===")
-        for reason, count in stats['failure_analysis'].items():
-            percentage = count / stats['total_profiles'] * 100
+        for reason, count in stats["failure_analysis"].items():
+            percentage = count / stats["total_profiles"] * 100
             log_msg(f"  {reason}: {count:,} ({percentage:.1f}%)")
 
-    
     # Quality metrics
-    if 'quality_metrics' in stats and stats['quality_metrics']:
+    if "quality_metrics" in stats and stats["quality_metrics"]:
         log_msg("=== Quality metrics of included profiles ===")
-        
-        sep_stats = stats['quality_metrics']['separation_stats']
-        if not np.isnan(sep_stats['mean']):
+
+        sep_stats = stats["quality_metrics"]["separation_stats"]
+        if not np.isnan(sep_stats["mean"]):
             log_msg(f"Mean separation of minima: {sep_stats['mean']:.2f} ± {sep_stats['std']:.2f} voxels")
-            log_msg(f"  Median separation of minima: {sep_stats['median']:.2f}, Range: {sep_stats['range'][0]:.2f}-{sep_stats['range'][1]:.2f}")
-        
-        snr_stats = stats['quality_metrics']['prominence_snr_stats']
-        if not np.isnan(snr_stats['mean']):
+            log_msg(
+                f"  Median separation of minima: {sep_stats['median']:.2f}, Range: {sep_stats['range'][0]:.2f}-{sep_stats['range'][1]:.2f}"
+            )
+
+        snr_stats = stats["quality_metrics"]["prominence_snr_stats"]
+        if not np.isnan(snr_stats["mean"]):
             log_msg(f"Mean SNR of minima: {snr_stats['mean']:.1f} ± {snr_stats['std']:.1f}x")
-            log_msg(f"  Median SNR of minima: {snr_stats['median']:.1f}x, Q25-Q75: {snr_stats['quartiles'][0]:.1f}-{snr_stats['quartiles'][1]:.1f}x")
+            log_msg(
+                f"  Median SNR of minima: {snr_stats['median']:.1f}x, Q25-Q75: {snr_stats['quartiles'][0]:.1f}-{snr_stats['quartiles'][1]:.1f}x"
+            )
             log_msg(f"  (Minima are on average {snr_stats['mean']:.1f}x more pronounced than the baseline)")
 
+
 ## Intensity Profile Extraction
+
 
 def extract_intensity_profile(
     thickness_df: pd.DataFrame,
     tomo: np.ndarray,
     voxel_size: float = None,
     intensity_extension_voxels: int = 10,
-    intensity_normalize_method: Literal['zscore', 'minmax', 'percentile', 'none'] = 'zscore',
-    logger: logging.Logger = None
+    intensity_normalize_method: Literal["zscore", "minmax", "percentile", "none"] = "zscore",
+    logger: logging.Logger = None,
 ) -> List[Dict]:
     """
     Extract intensity profiles between paired membrane points with physical units.
-    
+
     This function computes intensity profiles along lines connecting matched
     surface points from thickness measurements. It extracts intensity values
     from the tomogram along vectors extending beyond the matched points,
     providing data for quality assessment and filtering of thickness measurements.
-    
+
     The function performs the following steps:
-    1. **Input validation**: Checks for required columns and valid coordinate pairs
-    2. **Tomogram normalization**: Applies specified normalization method
-    3. **Profile extraction**: Computes intensity values along each line using
-       linear interpolation
-    4. **Coordinate scaling**: Converts voxel coordinates to physical units
-    5. **Extension**: Extends profiles beyond matched points for better analysis
-    
+
+        1. **Input validation**: Checks for required columns and valid coordinate pairs
+        2. **Tomogram normalization**: Applies specified normalization method
+        3. **Profile extraction**: Computes intensity values along each line using linear interpolation
+        4. **Coordinate scaling**: Converts voxel coordinates to physical units
+        5. **Extension**: Extends profiles beyond matched points for better analysis
+
     Intensity profiles are essential for validating thickness measurements
     by detecting characteristic bilayer features (dual minima, central maximum).
-    
+
     Parameters
     ----------
     thickness_df : pd.DataFrame
         DataFrame containing paired point coordinates for thickness measurements.
-        Must have columns ['x1_voxel', 'y1_voxel', 'z1_voxel', 'x2_voxel', 
+        Must have columns ['x1_voxel', 'y1_voxel', 'z1_voxel', 'x2_voxel',
         'y2_voxel', 'z2_voxel'] with coordinates in voxel units. Invalid or
         NaN coordinate pairs are automatically filtered out.
     tomo : np.ndarray
@@ -2696,21 +2704,21 @@ def extract_intensity_profile(
         - 'none': Use original intensity values
     logger : logging.Logger, optional
         Logger instance for status messages
-        
+
     Returns
     -------
     List[Dict]
         List of profile dictionaries, one for each valid coordinate pair.
         Each dictionary contains:
-        
+
         **Core profile data:**
         - 'profile': np.ndarray of intensity values along the line
         - 'p1': np.ndarray, coordinates of first point (voxel units)
-        - 'p2': np.ndarray, coordinates of second point (voxel units)  
+        - 'p2': np.ndarray, coordinates of second point (voxel units)
         - 'midpoint': np.ndarray, midpoint coordinates (voxel units)
         - 'start': np.ndarray, extended start coordinates (voxel units)
         - 'end': np.ndarray, extended end coordinates (voxel units)
-        
+
         **Physical coordinates (if voxel_size provided):**
         - 'p1_nm': np.ndarray, first point in nanometers
         - 'p2_nm': np.ndarray, second point in nanometers
@@ -2718,7 +2726,7 @@ def extract_intensity_profile(
         - 'start_nm': np.ndarray, extended start in nanometers
         - 'end_nm': np.ndarray, extended end in nanometers
         - 'voxel_size': float, voxel size used for scaling
-        
+
     Raises
     ------
     ValueError
@@ -2727,7 +2735,7 @@ def extract_intensity_profile(
         If voxel_size is negative.
     IndexError
         If any coordinate pairs are outside tomogram bounds.
-    
+
     Notes
     -----
     - Profiles extend beyond the matched points by intensity_extension_voxels in both directions
@@ -2736,14 +2744,14 @@ def extract_intensity_profile(
     - Physical coordinates are computed by multiplying voxel coordinates by voxel_size
     - The function handles variable line lengths automatically
     - Processing time scales with the number of coordinate pairs and extension distance
-    
+
     Examples
     --------
     Extract profiles with physical units as a standalone function:
-    
+
     >>> profiles = extract_intensity_profile(
     ...     thickness_df=df,
-    ...     tomo=tomogram_array, 
+    ...     tomo=tomogram_array,
     ...     voxel_size=0.788,
     ...     intensity_extension_voxels=10,
     ...     intensity_normalize_method='zscore'
@@ -2752,77 +2760,77 @@ def extract_intensity_profile(
     >>> print(f"Physical distance: {np.linalg.norm(profiles[0]['p2_nm'] - profiles[0]['p1_nm']):.2f} nm")
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    
+
     # Normalize tomogram once
     log_msg(f"Normalizing tomogram using method: {intensity_normalize_method}")
     tomo_normalized = normalize_tomogram(tomo, method=intensity_normalize_method)
-    
+
     # Vectorized approach for better performance
-    required_cols = ['x1_voxel', 'y1_voxel', 'z1_voxel', 'x2_voxel', 'y2_voxel', 'z2_voxel']
-    
+    required_cols = ["x1_voxel", "y1_voxel", "z1_voxel", "x2_voxel", "y2_voxel", "z2_voxel"]
+
     # Check if all required columns exist
     missing_cols = set(required_cols) - set(thickness_df.columns)
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
-    
+
     log_msg(f"Extracting intensity profiles with extension of {intensity_extension_voxels} voxels")
     if voxel_size is not None:
         log_msg(f"Including physical coordinates with voxel size: {voxel_size:.4f} nm")
-    
+
     # Extract coordinate arrays
-    p1_coords = thickness_df[['x1_voxel', 'y1_voxel', 'z1_voxel']].values
-    p2_coords = thickness_df[['x2_voxel', 'y2_voxel', 'z2_voxel']].values
-    
+    p1_coords = thickness_df[["x1_voxel", "y1_voxel", "z1_voxel"]].values
+    p2_coords = thickness_df[["x2_voxel", "y2_voxel", "z2_voxel"]].values
+
     # Find valid pairs (no NaN values)
     valid_mask = ~(np.isnan(p1_coords).any(axis=1) | np.isnan(p2_coords).any(axis=1))
-    
+
     if not np.any(valid_mask):
         log_msg("Warning: No valid coordinate pairs found")
         return []
-    
+
     p1_coords = p1_coords[valid_mask]
     p2_coords = p2_coords[valid_mask]
-    
+
     log_msg(f"Processing {len(p1_coords)} valid coordinate pairs")
-    
+
     # Vectorized calculations
     directions = p2_coords - p1_coords
     lengths = np.linalg.norm(directions, axis=1)
-    
+
     # Filter out zero-length vectors
     nonzero_mask = lengths > 0
     if not np.any(nonzero_mask):
         log_msg("Warning: No non-zero length vectors found")
         return []
-    
+
     p1_coords = p1_coords[nonzero_mask]
     p2_coords = p2_coords[nonzero_mask]
     directions = directions[nonzero_mask]
     lengths = lengths[nonzero_mask]
-    
+
     # Normalize directions
     unit_vectors = directions / lengths[:, np.newaxis]
-    
+
     # Calculate midpoints, starts, and ends
     midpoints = (p1_coords + p2_coords) / 2.0
     starts = midpoints - unit_vectors * intensity_extension_voxels
     ends = midpoints + unit_vectors * intensity_extension_voxels
-    
+
     profiles = []
-    
+
     log_msg(f"Extracting intensity values for {len(p1_coords)} profiles...")
-    
+
     # Process each line individually (this part is hard to vectorize due to variable line lengths)
     for i in range(len(p1_coords)):
         num_points = int(np.ceil(2 * intensity_extension_voxels + lengths[i])) + 1
         line_points = np.linspace(starts[i], ends[i], num=num_points)
-        
+
         # Convert from XYZ to ZYX for scipy indexing
         coords_zyx = line_points[:, [2, 1, 0]].T
-        
+
         # Extract intensities
         intensities = map_coordinates(tomo_normalized, coords_zyx, order=1, mode="nearest")
-        
+
         profile_data = {
             "profile": intensities,
             "p1": p1_coords[i],
@@ -2831,25 +2839,29 @@ def extract_intensity_profile(
             "start": starts[i],
             "end": ends[i],
         }
-        
+
         # Add physical coordinates if voxel_size provided
         if voxel_size is not None:
-            profile_data.update({
-                "p1_nm": p1_coords[i] * voxel_size,
-                "p2_nm": p2_coords[i] * voxel_size,
-                "midpoint_nm": midpoints[i] * voxel_size,
-                "start_nm": starts[i] * voxel_size,
-                "end_nm": ends[i] * voxel_size,
-                "voxel_size": voxel_size
-            })
-        
+            profile_data.update(
+                {
+                    "p1_nm": p1_coords[i] * voxel_size,
+                    "p2_nm": p2_coords[i] * voxel_size,
+                    "midpoint_nm": midpoints[i] * voxel_size,
+                    "start_nm": starts[i] * voxel_size,
+                    "end_nm": ends[i] * voxel_size,
+                    "voxel_size": voxel_size,
+                }
+            )
+
         profiles.append(profile_data)
-    
+
     log_msg(f"Successfully extracted {len(profiles)} intensity profiles")
-    
+
     return profiles
 
+
 ## Intensity profile Filtering
+
 
 def filter_intensity_profiles(
     profiles: List[Dict],
@@ -2857,41 +2869,41 @@ def filter_intensity_profiles(
     intensity_min_snr: float = 0.2,
     intensity_central_max_required: bool = True,
     intensity_extension_range: Tuple[float, float] = (-10, 10),
-    intensity_margin_factor: float = 0.1,             
+    intensity_margin_factor: float = 0.1,
     require_both_minima_in_region: bool = True,
-    smooth_sigma: float = 0.0,               
+    smooth_sigma: float = 0.0,
     edge_fraction: float = 0.2,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
 ) -> Dict:
     """
     Filter intensity profiles using quality criteria and geometric constraints.
-    
+
     This function applies a two-pass filtering approach to validate intensity
     profiles and filter out low-quality thickness measurements. It uses both
     signal quality metrics and geometric constraints to ensure only reliable
     bilayer measurements are retained.
-    
+
     **Two-Pass Filtering Strategy:**
-    
+
     1. **Pass 1 - Characterization**: Identifies candidate profiles using
        loose criteria to establish dataset characteristics and statistics.
        This pass is used for analysis only, not for filtering.
-    
+
     2. **Pass 2 - Quality Filtering**: Applies strict criteria to filter
        profiles based on:
        - Dual minima detection (representing lipid headgroups)
        - Central maximum requirement (representing lipid tails)
        - Signal-to-noise ratio validation
        - Geometric position constraints
-    
+
     **Quality Criteria:**
-    
+
     - **Dual Minima**: Must detect at least two minima in the profile
     - **Central Maximum**: Must have a maximum between the two minima
     - **Signal Quality**: Minima must meet minimum SNR requirements
     - **Position Validation**: Minima must be positioned between matched points
     - **Geometric Constraints**: Optional margin for position flexibility
-    
+
     Parameters
     ----------
     profiles : List[Dict]
@@ -2945,35 +2957,35 @@ def filter_intensity_profiles(
     logger : logging.Logger, optional
         Logger instance for status messages. If None, prints to stdout.
         Used to report filtering progress and results.
-        
+
     Returns
     -------
     Dict
         Comprehensive filtering results containing:
-        
+
         **Core Results:**
         - 'pass1_candidates': List of Pass 1 characterization results
         - 'final_results': List of Pass 2 filtering results
         - 'filtered_profiles': List of profiles that passed filtering
         - 'filtered_thickness_df': DataFrame of filtered thickness data
-        
+
         **Statistics and Analysis:**
         - 'statistics': Comprehensive filtering statistics
         - 'dataset_characteristics': Dataset-wide feature characteristics
         - 'parameters': User-specified filtering parameters
-        
+
         **Statistics Details:**
         - 'total_profiles': Total number of profiles analyzed
         - 'profiles_passed': Number of profiles passing all criteria
         - 'pass_rate': Fraction of profiles passing filters
         - 'failure_analysis': Breakdown of failure reasons
         - 'quality_metrics': Statistical analysis of passed profiles
-        
+
         **Dataset Characteristics:**
         - 'median_separation': Typical distance between minima
         - 'median_prominence_snr': Typical signal quality
         - 'n_candidates': Number of Pass 1 candidates
-    
+
     Raises
     ------
     ValueError
@@ -2982,7 +2994,7 @@ def filter_intensity_profiles(
         If intensity_margin_factor is negative.
     RuntimeError
         If profile processing fails unexpectedly.
-    
+
     Notes
     -----
     **Filtering Logic:**
@@ -2990,24 +3002,24 @@ def filter_intensity_profiles(
     - Minima detection uses scipy.signal.find_peaks with prominence filtering
     - Position validation ensures minima fall within measurement constraints
     - SNR calculation uses edge regions for baseline noise estimation
-    
+
     **Performance Considerations:**
     - Processing time scales with number of profiles and profile length
     - Memory usage scales with profile count and feature data storage
     - Smoothing increases computation time but may improve feature detection
-    
+
     **Quality Trade-offs:**
     - Stricter SNR requirements improve quality but reduce coverage
     - Larger position margins increase coverage but may include lower quality data
     - Central maximum requirement ensures bilayer structure but may exclude valid cases
-    
+
     Examples
     --------
     Basic filtering with default parameters:
-    
+
     >>> from memthick import filter_intensity_profiles
     >>> import pandas as pd
-    >>> 
+    >>>
     >>> # Filter profiles with standard criteria
     >>> results = filter_intensity_profiles(
     ...     profiles=extracted_profiles,
@@ -3016,12 +3028,12 @@ def filter_intensity_profiles(
     ...     intensity_central_max_required=True,
     ...     intensity_extension_range=(-10, 10)
     ... )
-    >>> 
+    >>>
     >>> print(f"Profiles passed: {results['statistics']['profiles_passed']}")
     >>> print(f"Pass rate: {results['statistics']['pass_rate']:.1%}")
-    
+
     Custom filtering parameters:
-    
+
     >>> # More permissive filtering
     >>> results_permissive = filter_intensity_profiles(
     ...     profiles=extracted_profiles,
@@ -3031,7 +3043,7 @@ def filter_intensity_profiles(
     ...     intensity_margin_factor=0.2,  # 20% position margin
     ...     require_both_minima_in_region=False  # Only one minimum required
     ... )
-    
+
     >>> # Stricter filtering
     >>> results_strict = filter_intensity_profiles(
     ...     profiles=extracted_profiles,
@@ -3041,93 +3053,98 @@ def filter_intensity_profiles(
     ...     intensity_margin_factor=0.0,  # Exact position requirement
     ...     smooth_sigma=0.5  # Light smoothing
     ... )
-    
+
     Analyzing failure reasons:
-    
+
     >>> failure_analysis = results['statistics']['failure_analysis']
     >>> for reason, count in failure_analysis.items():
     ...     print(f"{reason}: {count} profiles")
-    
+
     Accessing quality metrics:
-    
+
     >>> quality_metrics = results['statistics']['quality_metrics']
     >>> snr_stats = quality_metrics['prominence_snr_stats']
     >>> print(f"Mean SNR: {snr_stats['mean']:.1f}x")
     >>> print(f"Median SNR: {snr_stats['median']:.1f}x")
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    
+
     # Get valid thickness data
-    
+
     if len(thickness_df) != len(profiles):
         warnings.warn(f"Thickness DF length ({len(thickness_df)}) != profiles length ({len(profiles)})")
         min_len = min(len(thickness_df), len(profiles))
         thickness_df = thickness_df.iloc[:min_len].copy()
         profiles = profiles[:min_len]
-    
+
     results = {
-        'pass1_candidates': [],
-        'dataset_characteristics': {},
-        'final_results': [],
-        'filtered_profiles': [],
-        'filtered_thickness_df': None,
-        'statistics': {},
-        'parameters': {
-            'intensity_min_snr': intensity_min_snr,
-            'intensity_central_max_required': intensity_central_max_required,
-            'intensity_extension_range': intensity_extension_range
-        }
+        "pass1_candidates": [],
+        "dataset_characteristics": {},
+        "final_results": [],
+        "filtered_profiles": [],
+        "filtered_thickness_df": None,
+        "statistics": {},
+        "parameters": {
+            "intensity_min_snr": intensity_min_snr,
+            "intensity_central_max_required": intensity_central_max_required,
+            "intensity_extension_range": intensity_extension_range,
+        },
     }
-    
+
     log_msg("=== Statistics of the extracted intensity profiles ===")
 
-    
     # Pass 1: Find candidates and calculate dataset characteristics
     pass1_results = _pass1_characterization(profiles, intensity_extension_range)
-    results['pass1_candidates'] = pass1_results
-    
+    results["pass1_candidates"] = pass1_results
+
     # Calculate dataset characteristics (for statistics only, not filtering)
     dataset_chars = _calculate_dataset_characteristics(pass1_results)
-    results['dataset_characteristics'] = dataset_chars
-    
+    results["dataset_characteristics"] = dataset_chars
+
     log_msg(f"Step 1: Found {len([r for r in pass1_results if r['is_candidate']])} candidate profiles")
-    log_msg(f"Median separation: {dataset_chars['median_separation']:.2f} ± {dataset_chars['separation_std']:.2f} voxels")
+    log_msg(
+        f"Median separation: {dataset_chars['median_separation']:.2f} ± {dataset_chars['separation_std']:.2f} voxels"
+    )
     log_msg(f"Median prominence SNR: {dataset_chars['median_prominence_snr']:.1f}x")
-    
-    log_msg("\n=== Apply filtering criteria: (1) two minima (with user-defined SNR compared to baseline) separated by max; (2) the min are positioned between the two matched points from which thickness was measured ===")
-    
+
+    log_msg(
+        "\n=== Apply filtering criteria: (1) two minima (with user-defined SNR compared to baseline) separated by max; (2) the min are positioned between the two matched points from which thickness was measured ==="
+    )
+
     # Pass 2: Apply filtering constraints
     final_results = _pass2_apply_filtering(
-        profiles, 
-        intensity_extension_range, 
+        profiles,
+        intensity_extension_range,
         intensity_min_snr,
         intensity_central_max_required,
         intensity_margin_factor,
         require_both_minima_in_region,
         smooth_sigma,
-        edge_fraction
+        edge_fraction,
     )
-    results['final_results'] = final_results
-    
+    results["final_results"] = final_results
+
     # Extract filtered profiles
-    passing_indices = [i for i, result in enumerate(final_results) if result['passes_filter']]
-    results['filtered_profiles'] = [profiles[i] for i in passing_indices]
-    
+    passing_indices = [i for i, result in enumerate(final_results) if result["passes_filter"]]
+    results["filtered_profiles"] = [profiles[i] for i in passing_indices]
+
     if passing_indices:
-        results['filtered_thickness_df'] = thickness_df.iloc[passing_indices].copy()
+        results["filtered_thickness_df"] = thickness_df.iloc[passing_indices].copy()
     else:
-        results['filtered_thickness_df'] = thickness_df.iloc[0:0].copy()
-    
-    log_msg(f"Step 2: {len(passing_indices)}/{len(profiles)} profiles passed the filtering criteria ({len(passing_indices)/len(profiles):.1%})")
-    
-    # Calculate comprehensive statistics
-    results['statistics'] = _calculate_statistics(
-        results, thickness_df, len(profiles)
+        results["filtered_thickness_df"] = thickness_df.iloc[0:0].copy()
+
+    log_msg(
+        f"Step 2: {len(passing_indices)}/{len(profiles)} profiles passed the filtering criteria ({len(passing_indices)/len(profiles):.1%})"
     )
-    
+
+    # Calculate comprehensive statistics
+    results["statistics"] = _calculate_statistics(results, thickness_df, len(profiles))
+
     return results
 
+
 ## Helper functions
+
 
 def _pass1_characterization(profiles: List[Dict], intensity_extension_range: Tuple[float, float]) -> List[Dict]:
     """
@@ -3167,95 +3184,93 @@ def _pass1_characterization(profiles: List[Dict], intensity_extension_range: Tup
     - Baseline noise is estimated from profile edges
     - No I/O or stateful side effects
     """
-    
+
     pass1_results = []
-    
+
     for i, prof in enumerate(profiles):
         result = {
-            'profile_index': i,
-            'is_candidate': False,
-            'minima_positions': [],
-            'minima_depths': [],
-            'separation_distance': np.nan,
-            'prominence_snr': np.nan,
-            'p1_projection': np.nan,
-            'p2_projection': np.nan,
-            'minima_between_points': False,
-            'failure_reason': None
+            "profile_index": i,
+            "is_candidate": False,
+            "minima_positions": [],
+            "minima_depths": [],
+            "separation_distance": np.nan,
+            "prominence_snr": np.nan,
+            "p1_projection": np.nan,
+            "p2_projection": np.nan,
+            "minima_between_points": False,
+            "failure_reason": None,
         }
-        
+
         # Extract profile data
         processed_data = _extract_profile_data(prof, intensity_extension_range)
         if processed_data is None:
-            result['failure_reason'] = 'invalid_profile_data'
+            result["failure_reason"] = "invalid_profile_data"
             pass1_results.append(result)
             continue
-            
+
         filtered_distances, filtered_intensities = processed_data
-        
+
         # Calculate basic properties
         intensity_range = np.max(filtered_intensities) - np.min(filtered_intensities)
-        
+
         if intensity_range == 0:
-            result['failure_reason'] = 'zero_intensity_range'
+            result["failure_reason"] = "zero_intensity_range"
             pass1_results.append(result)
             continue
-        
+
         # Calculate baseline
         baseline_noise = _calculate_baseline_noise(filtered_intensities)
         if baseline_noise == 0:
             baseline_noise = 1e-6  # Avoid division by zero
-        
+
         # Loose prominence for candidate detection (1.5x baseline noise)
         loose_prominence = 1.5 * baseline_noise
-        
+
         # Find minima
         minima_data = _find_minima_with_details(filtered_intensities, loose_prominence)
-        if len(minima_data['peaks']) < 2:
-            result['failure_reason'] = f'insufficient_minima_{len(minima_data["peaks"])}'
+        if len(minima_data["peaks"]) < 2:
+            result["failure_reason"] = f'insufficient_minima_{len(minima_data["peaks"])}'
             pass1_results.append(result)
             continue
-        
+
         # Take the two most prominent minima
-        if len(minima_data['peaks']) > 2:
-            top_indices = np.argsort(minima_data['prominences'])[-2:]
-            selected_peaks = minima_data['peaks'][top_indices]
-            selected_prominences = minima_data['prominences'][top_indices]
+        if len(minima_data["peaks"]) > 2:
+            top_indices = np.argsort(minima_data["prominences"])[-2:]
+            selected_peaks = minima_data["peaks"][top_indices]
+            selected_prominences = minima_data["prominences"][top_indices]
             # Sort by position
             sort_order = np.argsort(selected_peaks)
             selected_peaks = selected_peaks[sort_order]
             selected_prominences = selected_prominences[sort_order]
         else:
-            selected_peaks = minima_data['peaks']
-            selected_prominences = minima_data['prominences']
-        
+            selected_peaks = minima_data["peaks"]
+            selected_prominences = minima_data["prominences"]
+
         # Calculate features
-        result['minima_positions'] = [filtered_distances[p] for p in selected_peaks]
-        result['minima_depths'] = [filtered_intensities[p] for p in selected_peaks]
-        result['separation_distance'] = abs(result['minima_positions'][1] - result['minima_positions'][0])
-        
+        result["minima_positions"] = [filtered_distances[p] for p in selected_peaks]
+        result["minima_depths"] = [filtered_intensities[p] for p in selected_peaks]
+        result["separation_distance"] = abs(result["minima_positions"][1] - result["minima_positions"][0])
+
         # Calculate prominence SNR
         avg_prominence = np.mean(selected_prominences)
-        result['prominence_snr'] = avg_prominence / baseline_noise
-        
+        result["prominence_snr"] = avg_prominence / baseline_noise
+
         # Calculate p1 and p2 projections onto the profile line
         p1_proj, p2_proj = _calculate_point_projections(prof, intensity_extension_range)
-        result['p1_projection'] = p1_proj
-        result['p2_projection'] = p2_proj
-        
+        result["p1_projection"] = p1_proj
+        result["p2_projection"] = p2_proj
+
         # Check if minima fall between the matched points
         if not (np.isnan(p1_proj) or np.isnan(p2_proj)):
             min_proj = min(p1_proj, p2_proj)
             max_proj = max(p1_proj, p2_proj)
-            
-            minima_in_range = [
-                min_proj <= pos <= max_proj for pos in result['minima_positions']
-            ]
-            result['minima_between_points'] = all(minima_in_range)
-        
-        result['is_candidate'] = True
+
+            minima_in_range = [min_proj <= pos <= max_proj for pos in result["minima_positions"]]
+            result["minima_between_points"] = all(minima_in_range)
+
+        result["is_candidate"] = True
         pass1_results.append(result)
-    
+
     return pass1_results
 
 
@@ -3267,7 +3282,7 @@ def _pass2_apply_filtering(
     intensity_margin_factor: float = 0.1,
     require_both_minima_in_region: bool = True,
     smooth_sigma: float = 0.0,
-    edge_fraction: float = 0.2
+    edge_fraction: float = 0.2,
 ) -> List[Dict]:
     """
     Pass 2 filtering of intensity profiles using strict quality criteria.
@@ -3312,155 +3327,151 @@ def _pass2_apply_filtering(
     - Position checks use exact range or a margin-expanded range depending on
       intensity_margin_factor
     """
-    
+
     final_results = []
-    
+
     for i, prof in enumerate(profiles):
         result = {
-            'profile_index': i,
-            'passes_filter': False,
-            'has_dual_minima': False,
-            'has_central_maximum': False,
-            'minima_between_points': False,
-            'sufficient_prominence': False,
-            'minima_positions': [],
-            'minima_depths': [],
-            'separation_distance': np.nan,  # FIXED: Always initialize
-            'central_max_position': np.nan,
-            'central_max_height': np.nan,
-            'prominence_snr': np.nan,
-            'p1_projection': np.nan,
-            'p2_projection': np.nan,
-            'failure_reason': None
+            "profile_index": i,
+            "passes_filter": False,
+            "has_dual_minima": False,
+            "has_central_maximum": False,
+            "minima_between_points": False,
+            "sufficient_prominence": False,
+            "minima_positions": [],
+            "minima_depths": [],
+            "separation_distance": np.nan,  # FIXED: Always initialize
+            "central_max_position": np.nan,
+            "central_max_height": np.nan,
+            "prominence_snr": np.nan,
+            "p1_projection": np.nan,
+            "p2_projection": np.nan,
+            "failure_reason": None,
         }
-        
+
         # Extract profile data
         processed_data = _extract_profile_data(prof, intensity_extension_range)
         if processed_data is None:
-            result['failure_reason'] = 'invalid_profile_data'
+            result["failure_reason"] = "invalid_profile_data"
             final_results.append(result)
             continue
-            
+
         filtered_distances, filtered_intensities = processed_data
-        
+
         # Apply smoothing if requested
         if smooth_sigma > 0:
             filtered_intensities = gaussian_filter1d(filtered_intensities, sigma=smooth_sigma)
-        
+
         # Calculate baseline with configurable edge fraction
         baseline_noise = _calculate_baseline_noise(filtered_intensities, edge_fraction)
         if baseline_noise == 0:
-            result['failure_reason'] = 'zero_baseline_noise'
+            result["failure_reason"] = "zero_baseline_noise"
             final_results.append(result)
             continue
-        
+
         # Handle optional SNR filtering
         if intensity_min_snr is not None:
             # SNR filtering enabled (original behavior)
             prominence_threshold = intensity_min_snr * baseline_noise
             minima_data = _find_minima_with_details(filtered_intensities, prominence_threshold)
-            
-            if len(minima_data['peaks']) < 2:
-                result['failure_reason'] = f'insufficient_snr_min{len(minima_data["peaks"])}'
+
+            if len(minima_data["peaks"]) < 2:
+                result["failure_reason"] = f'insufficient_snr_min{len(minima_data["peaks"])}'
                 final_results.append(result)
                 continue
-                
+
             # Take two most prominent if more than 2
-            if len(minima_data['peaks']) > 2:
-                top_indices = np.argsort(minima_data['prominences'])[-2:]
-                selected_peaks = minima_data['peaks'][top_indices]
-                selected_prominences = minima_data['prominences'][top_indices]
+            if len(minima_data["peaks"]) > 2:
+                top_indices = np.argsort(minima_data["prominences"])[-2:]
+                selected_peaks = minima_data["peaks"][top_indices]
+                selected_prominences = minima_data["prominences"][top_indices]
                 selected_peaks = np.sort(selected_peaks)
-                sort_order = np.argsort(minima_data['peaks'][top_indices])
+                sort_order = np.argsort(minima_data["peaks"][top_indices])
                 selected_prominences = selected_prominences[sort_order]
             else:
-                selected_peaks = minima_data['peaks']
-                selected_prominences = minima_data['prominences']
-            
+                selected_peaks = minima_data["peaks"]
+                selected_prominences = minima_data["prominences"]
+
             # Calculate prominence SNR
             avg_prominence = np.mean(selected_prominences)
-            result['prominence_snr'] = avg_prominence / baseline_noise
-            result['sufficient_prominence'] = result['prominence_snr'] >= intensity_min_snr
-            
+            result["prominence_snr"] = avg_prominence / baseline_noise
+            result["sufficient_prominence"] = result["prominence_snr"] >= intensity_min_snr
+
         else:
             # SNR filtering disabled - simple minima detection
             inverted_intensities = -filtered_intensities
             peaks, _ = find_peaks(inverted_intensities, distance=3)
-            
+
             if len(peaks) < 2:
-                result['failure_reason'] = f'{len(peaks)}_minima_detected'
+                result["failure_reason"] = f"{len(peaks)}_minima_detected"
                 final_results.append(result)
                 continue
-            
+
             # Take the two deepest minima
             peak_intensities = filtered_intensities[peaks]
             deepest_indices = np.argsort(peak_intensities)[:2]
             selected_peaks = peaks[deepest_indices]
             selected_peaks = np.sort(selected_peaks)
-            
+
             # FIXED: Still calculate basic prominence for SNR even when disabled
             selected_prominences = []
             for peak in selected_peaks:
                 # Simple prominence calculation
                 prominence = abs(filtered_intensities[peak] - np.mean(filtered_intensities))
                 selected_prominences.append(prominence)
-            
+
             if len(selected_prominences) > 0:
                 avg_prominence = np.mean(selected_prominences)
-                result['prominence_snr'] = avg_prominence / baseline_noise
-            
-            result['sufficient_prominence'] = True  # Always pass when SNR disabled
-        
-        result['has_dual_minima'] = True
-        result['minima_positions'] = [filtered_distances[p] for p in selected_peaks]
-        result['minima_depths'] = [filtered_intensities[p] for p in selected_peaks]
-        
+                result["prominence_snr"] = avg_prominence / baseline_noise
+
+            result["sufficient_prominence"] = True  # Always pass when SNR disabled
+
+        result["has_dual_minima"] = True
+        result["minima_positions"] = [filtered_distances[p] for p in selected_peaks]
+        result["minima_depths"] = [filtered_intensities[p] for p in selected_peaks]
+
         # FIXED: Calculate separation distance
-        if len(result['minima_positions']) >= 2:
-            result['separation_distance'] = abs(result['minima_positions'][1] - result['minima_positions'][0])
-        
+        if len(result["minima_positions"]) >= 2:
+            result["separation_distance"] = abs(result["minima_positions"][1] - result["minima_positions"][0])
+
         # Calculate point projections
         p1_proj, p2_proj = _calculate_point_projections(prof, intensity_extension_range)
-        result['p1_projection'] = p1_proj
-        result['p2_projection'] = p2_proj
-        
+        result["p1_projection"] = p1_proj
+        result["p2_projection"] = p2_proj
+
         if np.isnan(p1_proj) or np.isnan(p2_proj):
-            result['failure_reason'] = 'invalid_point_projections'
+            result["failure_reason"] = "invalid_point_projections"
             final_results.append(result)
             continue
-        
+
         # Position constraints with optional margin
         min_proj = min(p1_proj, p2_proj)
         max_proj = max(p1_proj, p2_proj)
-        
+
         if intensity_margin_factor > 0:
             # Relaxed position checking with margin
             measurement_span = abs(max_proj - min_proj)
             margin = intensity_margin_factor * measurement_span
             extended_min = min_proj - margin
             extended_max = max_proj + margin
-            
-            minima_in_range = [
-                extended_min <= pos <= extended_max for pos in result['minima_positions']
-            ]
-            
+
+            minima_in_range = [extended_min <= pos <= extended_max for pos in result["minima_positions"]]
+
             if require_both_minima_in_region:
-                result['minima_between_points'] = all(minima_in_range)
-                if not result['minima_between_points']:
-                    result['failure_reason'] = 'minima_outside_extended_region'
+                result["minima_between_points"] = all(minima_in_range)
+                if not result["minima_between_points"]:
+                    result["failure_reason"] = "minima_outside_extended_region"
             else:
-                result['minima_between_points'] = any(minima_in_range)
-                if not result['minima_between_points']:
-                    result['failure_reason'] = 'no_minima_in_extended_region'
+                result["minima_between_points"] = any(minima_in_range)
+                if not result["minima_between_points"]:
+                    result["failure_reason"] = "no_minima_in_extended_region"
         else:
             # Exact position checking
-            minima_in_range = [
-                min_proj <= pos <= max_proj for pos in result['minima_positions']
-            ]
-            result['minima_between_points'] = all(minima_in_range)
-            if not result['minima_between_points']:
-                result['failure_reason'] = 'minima_outside_matched_points'
-        
+            minima_in_range = [min_proj <= pos <= max_proj for pos in result["minima_positions"]]
+            result["minima_between_points"] = all(minima_in_range)
+            if not result["minima_between_points"]:
+                result["failure_reason"] = "minima_outside_matched_points"
+
         # FIXED: Central maximum requirement
         if intensity_central_max_required:
             # Always try to find central maximum, regardless of SNR settings
@@ -3469,229 +3480,214 @@ def _pass2_apply_filtering(
             else:
                 # Use a minimal threshold when SNR is disabled
                 prominence_threshold = 0.1 * baseline_noise
-                
+
             maxima_data = _find_maxima_with_details(filtered_intensities, prominence_threshold)
-            
+
             min_pos_1, min_pos_2 = selected_peaks[0], selected_peaks[1]
-            central_maxima_mask = (maxima_data['peaks'] > min_pos_1) & (maxima_data['peaks'] < min_pos_2)
-            central_maxima = maxima_data['peaks'][central_maxima_mask]
-            
+            central_maxima_mask = (maxima_data["peaks"] > min_pos_1) & (maxima_data["peaks"] < min_pos_2)
+            central_maxima = maxima_data["peaks"][central_maxima_mask]
+
             if len(central_maxima) > 0:
-                central_prominences = maxima_data['prominences'][central_maxima_mask]
+                central_prominences = maxima_data["prominences"][central_maxima_mask]
                 best_central_idx = central_maxima[np.argmax(central_prominences)]
-                
-                result['has_central_maximum'] = True
-                result['central_max_position'] = filtered_distances[best_central_idx]
-                result['central_max_height'] = filtered_intensities[best_central_idx]
+
+                result["has_central_maximum"] = True
+                result["central_max_position"] = filtered_distances[best_central_idx]
+                result["central_max_height"] = filtered_intensities[best_central_idx]
             else:
-                result['has_central_maximum'] = False
-                result['failure_reason'] = 'no_central_maximum'
+                result["has_central_maximum"] = False
+                result["failure_reason"] = "no_central_maximum"
         else:
-            result['has_central_maximum'] = True  # Not required
-        
+            result["has_central_maximum"] = True  # Not required
+
         # Final decision
         passes_all_criteria = (
-            result['has_dual_minima'] and
-            result['has_central_maximum'] and
-            result['minima_between_points'] and
-            result['sufficient_prominence']
+            result["has_dual_minima"]
+            and result["has_central_maximum"]
+            and result["minima_between_points"]
+            and result["sufficient_prominence"]
         )
-        
-        result['passes_filter'] = passes_all_criteria
+
+        result["passes_filter"] = passes_all_criteria
         final_results.append(result)
-    
+
     return final_results
 
 
-def _extract_profile_data(prof: Dict, intensity_extension_range: Tuple[float, float]) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+def _extract_profile_data(
+    prof: Dict, intensity_extension_range: Tuple[float, float]
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Extract and validate profile data."""
-    
+
     try:
         p1, p2 = prof["p1"], prof["p2"]
         midpoint = prof["midpoint"]
         start, end = prof["start"], prof["end"]
         profile = prof["profile"]
-        
+
         # Calculate distances
         num_points = len(profile)
         line_points = np.linspace(start, end, num_points)
         direction = p2 - p1
         length = np.linalg.norm(direction)
-        
+
         if length == 0:
             return None
-            
+
         unit_dir = direction / length
         distances = np.dot(line_points - midpoint, unit_dir)
-        
+
         # Filter to extension range
         min_ext, max_ext = intensity_extension_range
         mask = (distances >= min_ext) & (distances <= max_ext)
         if not np.any(mask) or np.sum(mask) < 10:
             return None
-            
+
         filtered_distances = distances[mask]
         filtered_intensities = profile[mask]
-        
+
         return filtered_distances, filtered_intensities
-        
+
     except Exception:
         return None
 
 
 def _calculate_point_projections(prof: Dict, intensity_extension_range: Tuple[float, float]) -> Tuple[float, float]:
     """Calculate where p1 and p2 project onto the profile line."""
-    
+
     try:
         p1, p2 = prof["p1"], prof["p2"]
         midpoint = prof["midpoint"]
         direction = p2 - p1
         length = np.linalg.norm(direction)
-        
+
         if length == 0:
             return np.nan, np.nan
-            
+
         unit_dir = direction / length
-        
+
         # Project p1 and p2 onto the profile line (relative to midpoint)
         p1_projection = np.dot(p1 - midpoint, unit_dir)
         p2_projection = np.dot(p2 - midpoint, unit_dir)
-        
+
         return p1_projection, p2_projection
-        
+
     except Exception:
         return np.nan, np.nan
 
 
 def _calculate_baseline_noise(intensities: np.ndarray, edge_fraction: float = 0.2) -> float:
     """Calculate baseline noise from the start and end regions of the profile."""
-    
+
     # Use specified fraction of the profile as baseline regions
     profile_length = len(intensities)
     baseline_length = max(3, int(profile_length * edge_fraction))
-    
-    baseline_regions = np.concatenate([
-        intensities[:baseline_length],
-        intensities[-baseline_length:]
-    ])
-    
+
+    baseline_regions = np.concatenate([intensities[:baseline_length], intensities[-baseline_length:]])
+
     if len(baseline_regions) == 0:
         return 1.0  # Fallback
-    
+
     return np.std(baseline_regions)
 
 
 def _find_minima_with_details(intensities: np.ndarray, prominence: float) -> Dict:
     """Find minima with detailed information."""
-    
+
     inverted_intensities = -intensities
     peaks, properties = find_peaks(
-        inverted_intensities, 
-        prominence=prominence,
-        distance=3  # Minimum 3 points separation
+        inverted_intensities, prominence=prominence, distance=3  # Minimum 3 points separation
     )
-    
-    return {
-        'peaks': peaks,
-        'prominences': properties.get('prominences', np.array([])),
-        'properties': properties
-    }
+
+    return {"peaks": peaks, "prominences": properties.get("prominences", np.array([])), "properties": properties}
 
 
 def _find_maxima_with_details(intensities: np.ndarray, prominence: float) -> Dict:
     """Find maxima with detailed information."""
-    
-    peaks, properties = find_peaks(
-        intensities,
-        prominence=prominence,
-        distance=3
-    )
-    
-    return {
-        'peaks': peaks,
-        'prominences': properties.get('prominences', np.array([])),
-        'properties': properties
-    }
+
+    peaks, properties = find_peaks(intensities, prominence=prominence, distance=3)
+
+    return {"peaks": peaks, "prominences": properties.get("prominences", np.array([])), "properties": properties}
 
 
 def _calculate_dataset_characteristics(pass1_results: List[Dict]) -> Dict:
     """Calculate dataset characteristics from Pass 1 candidates (for statistics only)."""
-    
-    candidates = [r for r in pass1_results if r['is_candidate']]
-    
+
+    candidates = [r for r in pass1_results if r["is_candidate"]]
+
     if len(candidates) < 10:
         warnings.warn("Very few candidates found in Pass 1.")
         return {
-            'median_separation': np.nan,
-            'separation_std': np.nan,
-            'median_prominence_snr': np.nan,
-            'n_candidates': len(candidates)
+            "median_separation": np.nan,
+            "separation_std": np.nan,
+            "median_prominence_snr": np.nan,
+            "n_candidates": len(candidates),
         }
-    
+
     # Extract metrics
-    separations = [r['separation_distance'] for r in candidates if not np.isnan(r['separation_distance'])]
-    prominence_snrs = [r['prominence_snr'] for r in candidates if not np.isnan(r['prominence_snr'])]
-    
+    separations = [r["separation_distance"] for r in candidates if not np.isnan(r["separation_distance"])]
+    prominence_snrs = [r["prominence_snr"] for r in candidates if not np.isnan(r["prominence_snr"])]
+
     return {
-        'median_separation': np.median(separations) if separations else np.nan,
-        'separation_std': np.std(separations) if separations else np.nan,
-        'median_prominence_snr': np.median(prominence_snrs) if prominence_snrs else np.nan,
-        'n_candidates': len(candidates)
+        "median_separation": np.median(separations) if separations else np.nan,
+        "separation_std": np.std(separations) if separations else np.nan,
+        "median_prominence_snr": np.median(prominence_snrs) if prominence_snrs else np.nan,
+        "n_candidates": len(candidates),
     }
 
 
-def _calculate_statistics(
-    results: Dict,
-    thickness_df: pd.DataFrame,
-    total_profiles: int
-) -> Dict:
+def _calculate_statistics(results: Dict, thickness_df: pd.DataFrame, total_profiles: int) -> Dict:
     """Calculate comprehensive statistics for the intensity profiles."""
-    
-    final_results = results['final_results']
-    n_passed = sum(1 for r in final_results if r['passes_filter'])
+
+    final_results = results["final_results"]
+    n_passed = sum(1 for r in final_results if r["passes_filter"])
     n_failed = total_profiles - n_passed
-    
+
     stats = {
-        'total_profiles': total_profiles,
-        'profiles_passed': n_passed,
-        'profiles_failed': n_failed,
-        'pass_rate': n_passed / total_profiles if total_profiles > 0 else 0,
-        'pass1_candidates': results['dataset_characteristics']['n_candidates'],
-        'dataset_characteristics': results['dataset_characteristics'],
-        'failure_analysis': {},
-        'quality_metrics': {}
+        "total_profiles": total_profiles,
+        "profiles_passed": n_passed,
+        "profiles_failed": n_failed,
+        "pass_rate": n_passed / total_profiles if total_profiles > 0 else 0,
+        "pass1_candidates": results["dataset_characteristics"]["n_candidates"],
+        "dataset_characteristics": results["dataset_characteristics"],
+        "failure_analysis": {},
+        "quality_metrics": {},
     }
-    
+
     # Analyze failure reasons
     failure_counts = {}
     for result in final_results:
-        if not result['passes_filter'] and result['failure_reason']:
-            reason = result['failure_reason']
+        if not result["passes_filter"] and result["failure_reason"]:
+            reason = result["failure_reason"]
             failure_counts[reason] = failure_counts.get(reason, 0) + 1
-    
-    stats['failure_analysis'] = failure_counts
-    
+
+    stats["failure_analysis"] = failure_counts
+
     # Quality metrics for passed profiles
-    passed_results = [r for r in final_results if r['passes_filter']]
+    passed_results = [r for r in final_results if r["passes_filter"]]
     if passed_results:
-        separations = [r['minima_positions'][1] - r['minima_positions'][0] for r in passed_results if len(r['minima_positions']) == 2]
-        prominence_snrs = [r['prominence_snr'] for r in passed_results if not np.isnan(r['prominence_snr'])]
-        
-        stats['quality_metrics'] = {
-            'separation_stats': {
-                'mean': np.mean(separations) if separations else np.nan,
-                'std': np.std(separations) if separations else np.nan,
-                'median': np.median(separations) if separations else np.nan,
-                'range': (np.min(separations), np.max(separations)) if separations else (np.nan, np.nan)
+        separations = [
+            r["minima_positions"][1] - r["minima_positions"][0]
+            for r in passed_results
+            if len(r["minima_positions"]) == 2
+        ]
+        prominence_snrs = [r["prominence_snr"] for r in passed_results if not np.isnan(r["prominence_snr"])]
+
+        stats["quality_metrics"] = {
+            "separation_stats": {
+                "mean": np.mean(separations) if separations else np.nan,
+                "std": np.std(separations) if separations else np.nan,
+                "median": np.median(separations) if separations else np.nan,
+                "range": (np.min(separations), np.max(separations)) if separations else (np.nan, np.nan),
             },
-            'prominence_snr_stats': {
-                'mean': np.mean(prominence_snrs) if prominence_snrs else np.nan,
-                'std': np.std(prominence_snrs) if prominence_snrs else np.nan,
-                'median': np.median(prominence_snrs) if prominence_snrs else np.nan,
-                'quartiles': np.percentile(prominence_snrs, [25, 75]).tolist() if prominence_snrs else [np.nan, np.nan]
-            }
+            "prominence_snr_stats": {
+                "mean": np.mean(prominence_snrs) if prominence_snrs else np.nan,
+                "std": np.std(prominence_snrs) if prominence_snrs else np.nan,
+                "median": np.median(prominence_snrs) if prominence_snrs else np.nan,
+                "quartiles": np.percentile(prominence_snrs, [25, 75]).tolist() if prominence_snrs else [np.nan, np.nan],
+            },
         }
-    
+
     return stats
 
 
@@ -3699,11 +3695,9 @@ def _calculate_statistics(
 # Main Pipeline Functions
 #############################################
 
+
 def extract_and_validate_surface(
-    segmentation: np.ndarray,
-    membrane_mask: np.ndarray,
-    mesh_sampling: int,
-    logger: logging.Logger = None
+    segmentation: np.ndarray, membrane_mask: np.ndarray, mesh_sampling: int, logger: logging.Logger = None
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Extract and validate surface points using marching cubes.
@@ -3733,18 +3727,18 @@ def extract_and_validate_surface(
     Returns (None, None, None) if no valid surface points found.
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    
+
     log_msg(f"Extracting surface points with step size {mesh_sampling}...")
-    
+
     aligned_vertices, aligned_normals = extract_surface_points(
         segmentation, membrane_mask, mesh_sampling=mesh_sampling, logger=logger
     )
     vertex_volume = create_vertex_volume(aligned_vertices, membrane_mask.shape)
-    
+
     if aligned_vertices is None or len(aligned_vertices) == 0:
         log_msg("No surface points found")
         return None, None, None
-        
+
     log_msg(f"Extracted {len(aligned_vertices)} surface points")
     return aligned_vertices, aligned_normals, vertex_volume
 
@@ -3755,7 +3749,7 @@ def interpolate_surface_if_requested(
     membrane_mask: np.ndarray,
     interpolate: bool,
     interpolation_points: int,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Conditionally interpolate surface points for denser coverage.
@@ -3787,7 +3781,7 @@ def interpolate_surface_if_requested(
     Returns original arrays unchanged if interpolate=False.
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    
+
     if interpolate:
         log_msg(f"Interpolating surface points (before: {len(aligned_vertices)} vertices)")
         aligned_vertices, aligned_normals = interpolate_surface_points(
@@ -3801,7 +3795,7 @@ def interpolate_surface_if_requested(
         log_msg(f"After point interpolation: {len(aligned_vertices)} vertices")
     else:
         log_msg("Skipping point interpolation")
-        
+
     return aligned_vertices, aligned_normals
 
 
@@ -3812,7 +3806,7 @@ def refine_normals_and_separate_surfaces(
     radius_hit: float,
     batch_size: int,
     flip_normals: bool,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Conditionally refine normals and separate bilayer surfaces.
@@ -3849,7 +3843,7 @@ def refine_normals_and_separate_surfaces(
     Only modifies them if refinement succeeds.
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    
+
     # Initialize surface masks to default values
     surface1_mask = np.zeros(len(aligned_vertices), dtype=bool)
     surface2_mask = np.zeros(len(aligned_vertices), dtype=bool)
@@ -3885,14 +3879,12 @@ def refine_normals_and_separate_surfaces(
     else:
         log_msg("Skipping normal refinement (refine_normals=False)")
         refined_normals = aligned_normals
-        
+
     return refined_normals, surface1_mask, surface2_mask
 
 
 def update_vertex_volume_after_interpolation(
-    aligned_vertices: np.ndarray,
-    membrane_mask: np.ndarray,
-    logger: logging.Logger = None
+    aligned_vertices: np.ndarray, membrane_mask: np.ndarray, logger: logging.Logger = None
 ) -> np.ndarray:
     """
     Rebuild vertex volume to include interpolated points.
@@ -3917,17 +3909,15 @@ def update_vertex_volume_after_interpolation(
     Uses tqdm progress bar for large vertex sets.
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
-    
+
     log_msg("Updating vertex volume with interpolated points...")
     vertex_volume = np.zeros_like(membrane_mask)
-    
+
     for v in tqdm(aligned_vertices, desc="Updating vertex volume"):
         x, y, z = v.astype(int)
-        if (0 <= x < vertex_volume.shape[0] and 
-            0 <= y < vertex_volume.shape[1] and 
-            0 <= z < vertex_volume.shape[2]):
+        if 0 <= x < vertex_volume.shape[0] and 0 <= y < vertex_volume.shape[1] and 0 <= z < vertex_volume.shape[2]:
             vertex_volume[x, y, z] = 1
-            
+
     return vertex_volume
 
 
@@ -3945,7 +3935,7 @@ def process_membrane_segmentation(
     batch_size: int = 2000,
     save_vertices_mrc: bool = False,
     save_vertices_xyz: bool = False,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
 ) -> dict:
     """
     Process membrane segmentation to extract and refine surface points.
@@ -3991,7 +3981,7 @@ def process_membrane_segmentation(
     -----
     Processes each membrane label separately through the full pipeline:
     1. Surface extraction and validation
-    2. Optional point interpolation  
+    2. Optional point interpolation
     3. Optional normal refinement and surface separation
     4. Output file generation
     """
@@ -4027,7 +4017,7 @@ def process_membrane_segmentation(
     # Process each membrane type
     for membrane_name, label_value in membrane_labels.items():
         logger.info(f"\nProcessing {membrane_name} (label {label_value})")
-        
+
         membrane_mask = segmentation == label_value
         if not np.any(membrane_mask):
             logger.info(f"No voxels found for {membrane_name}")
@@ -4041,35 +4031,40 @@ def process_membrane_segmentation(
             if aligned_vertices is None:
                 continue
 
-            # STEP 2: Interpolate if requested  
+            # STEP 2: Interpolate if requested
             aligned_vertices, aligned_normals = interpolate_surface_if_requested(
-                aligned_vertices, aligned_normals, membrane_mask, 
-                interpolate, interpolation_points, logger
+                aligned_vertices, aligned_normals, membrane_mask, interpolate, interpolation_points, logger
             )
 
             # STEP 3: Refine normals and separate surfaces
             aligned_normals, surface1_mask, surface2_mask = refine_normals_and_separate_surfaces(
-                aligned_vertices, aligned_normals, refine_normals,
-                radius_hit, batch_size, flip_normals, logger
+                aligned_vertices, aligned_normals, refine_normals, radius_hit, batch_size, flip_normals, logger
             )
 
             # STEP 4: Update vertex volume if interpolation was done
             if interpolate:
-                vertex_volume = update_vertex_volume_after_interpolation(
-                    aligned_vertices, membrane_mask, logger
-                )
+                vertex_volume = update_vertex_volume_after_interpolation(aligned_vertices, membrane_mask, logger)
 
             logger.info(f"Final vertex count: {len(aligned_vertices)}")
 
             # STEP 5: Save outputs
             if len(aligned_vertices) > 0:
                 success = verify_and_save_outputs(
-                    aligned_vertices, aligned_normals, vertex_volume,
-                    surface1_mask, surface2_mask, membrane_name, base_name,
-                    output_dir, voxel_size, origin,
-                    save_vertices_mrc, save_vertices_xyz, logger
+                    aligned_vertices,
+                    aligned_normals,
+                    vertex_volume,
+                    surface1_mask,
+                    surface2_mask,
+                    membrane_name,
+                    base_name,
+                    output_dir,
+                    voxel_size,
+                    origin,
+                    save_vertices_mrc,
+                    save_vertices_xyz,
+                    logger,
                 )
-                
+
                 if success:
                     csv_output = os.path.join(output_dir, f"{base_name}_{membrane_name}_vertices_normals.csv")
                     output_files[membrane_name] = csv_output
@@ -4092,7 +4087,7 @@ def measure_membrane_thickness(
     direction: str = "1to2",
     use_gpu: bool = True,
     num_cpu_threads: int = None,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
 ) -> tuple[str, str]:
     """
     Measure membrane thickness between separated surface points.
@@ -4140,7 +4135,7 @@ def measure_membrane_thickness(
         raise FileNotFoundError(f"Segmentation file not found: {segmentation_path}")
     if not os.path.exists(input_csv):
         raise FileNotFoundError(f"Input CSV not found: {input_csv}")
-    
+
     # Validate and constrain parameters
     max_thickness = max(0.1, float(max_thickness))
     max_angle = np.clip(float(max_angle), 0.1, 45.0)
@@ -4236,58 +4231,76 @@ def measure_membrane_thickness(
     )
     save_matching_statistics(stats, stats_file, logger)
 
-
     # Create optimized thickness results - only valid measurements
     logger.info(f"\nCreating optimized thickness CSV with only valid measurements...")
-    
+
     # Get indices of valid measurements
     valid_indices = np.where(valid_mask)[0]
     matched_indices = point_pairs[valid_mask]
-    
+
     if len(valid_indices) == 0:
         logger.warning("No valid thickness measurements found!")
         # Create empty DataFrame with expected columns
-        thickness_df = pd.DataFrame(columns=[
-            'measurement_id', 'thickness_nm',
-            'point1_idx', 'x1_voxel', 'y1_voxel', 'z1_voxel', 
-            'x1_physical', 'y1_physical', 'z1_physical',
-            'normal1_x', 'normal1_y', 'normal1_z', 'surface1',
-            'point2_idx', 'x2_voxel', 'y2_voxel', 'z2_voxel',
-            'x2_physical', 'y2_physical', 'z2_physical', 
-            'normal2_x', 'normal2_y', 'normal2_z', 'surface2'
-        ])
+        thickness_df = pd.DataFrame(
+            columns=[
+                "measurement_id",
+                "thickness_nm",
+                "point1_idx",
+                "x1_voxel",
+                "y1_voxel",
+                "z1_voxel",
+                "x1_physical",
+                "y1_physical",
+                "z1_physical",
+                "normal1_x",
+                "normal1_y",
+                "normal1_z",
+                "surface1",
+                "point2_idx",
+                "x2_voxel",
+                "y2_voxel",
+                "z2_voxel",
+                "x2_physical",
+                "y2_physical",
+                "z2_physical",
+                "normal2_x",
+                "normal2_y",
+                "normal2_z",
+                "surface2",
+            ]
+        )
     else:
         # Create DataFrame with only valid measurements
-        thickness_df = pd.DataFrame({
-            'measurement_id': range(len(valid_indices)),
-            'thickness_nm': thickness_results[valid_mask],
-            
-            # Point 1 (source) information
-            'point1_idx': valid_indices,
-            'x1_voxel': df.loc[valid_indices, 'x_voxel'].values,
-            'y1_voxel': df.loc[valid_indices, 'y_voxel'].values,
-            'z1_voxel': df.loc[valid_indices, 'z_voxel'].values,
-            'x1_physical': df.loc[valid_indices, 'x_physical'].values,
-            'y1_physical': df.loc[valid_indices, 'y_physical'].values,
-            'z1_physical': df.loc[valid_indices, 'z_physical'].values,
-            'normal1_x': df.loc[valid_indices, 'normal_x'].values,
-            'normal1_y': df.loc[valid_indices, 'normal_y'].values,
-            'normal1_z': df.loc[valid_indices, 'normal_z'].values,
-            'surface1': df.loc[valid_indices, 'surface1'].values,
-            
-            # Point 2 (matched) information
-            'point2_idx': matched_indices,
-            'x2_voxel': df.loc[matched_indices, 'x_voxel'].values,
-            'y2_voxel': df.loc[matched_indices, 'y_voxel'].values,
-            'z2_voxel': df.loc[matched_indices, 'z_voxel'].values,
-            'x2_physical': df.loc[matched_indices, 'x_physical'].values,
-            'y2_physical': df.loc[matched_indices, 'y_physical'].values,
-            'z2_physical': df.loc[matched_indices, 'z_physical'].values,
-            'normal2_x': df.loc[matched_indices, 'normal_x'].values,
-            'normal2_y': df.loc[matched_indices, 'normal_y'].values,
-            'normal2_z': df.loc[matched_indices, 'normal_z'].values,
-            'surface2': df.loc[matched_indices, 'surface2'].values,
-        })
+        thickness_df = pd.DataFrame(
+            {
+                "measurement_id": range(len(valid_indices)),
+                "thickness_nm": thickness_results[valid_mask],
+                # Point 1 (source) information
+                "point1_idx": valid_indices,
+                "x1_voxel": df.loc[valid_indices, "x_voxel"].values,
+                "y1_voxel": df.loc[valid_indices, "y_voxel"].values,
+                "z1_voxel": df.loc[valid_indices, "z_voxel"].values,
+                "x1_physical": df.loc[valid_indices, "x_physical"].values,
+                "y1_physical": df.loc[valid_indices, "y_physical"].values,
+                "z1_physical": df.loc[valid_indices, "z_physical"].values,
+                "normal1_x": df.loc[valid_indices, "normal_x"].values,
+                "normal1_y": df.loc[valid_indices, "normal_y"].values,
+                "normal1_z": df.loc[valid_indices, "normal_z"].values,
+                "surface1": df.loc[valid_indices, "surface1"].values,
+                # Point 2 (matched) information
+                "point2_idx": matched_indices,
+                "x2_voxel": df.loc[matched_indices, "x_voxel"].values,
+                "y2_voxel": df.loc[matched_indices, "y_voxel"].values,
+                "z2_voxel": df.loc[matched_indices, "z_voxel"].values,
+                "x2_physical": df.loc[matched_indices, "x_physical"].values,
+                "y2_physical": df.loc[matched_indices, "y_physical"].values,
+                "z2_physical": df.loc[matched_indices, "z_physical"].values,
+                "normal2_x": df.loc[matched_indices, "normal_x"].values,
+                "normal2_y": df.loc[matched_indices, "normal_y"].values,
+                "normal2_z": df.loc[matched_indices, "normal_z"].values,
+                "surface2": df.loc[matched_indices, "surface2"].values,
+            }
+        )
 
     logger.info(f"Saving {len(thickness_df)} valid thickness measurements to {output_csv}")
     thickness_df.to_csv(output_csv, index=False)
@@ -4304,6 +4317,7 @@ def measure_membrane_thickness(
 
     return output_csv, stats_file
 
+
 def int_profiles_extract_clean(
     thickness_csv: Union[str, Path],
     tomo_path: Union[str, Path],
@@ -4312,7 +4326,7 @@ def int_profiles_extract_clean(
     intensity_central_max_required: bool = True,
     intensity_extension_voxels: int = 10,
     intensity_extension_range: Tuple[float, float] = (-10, 10),
-    intensity_normalize_method: Literal['zscore', 'minmax', 'percentile', 'none'] = 'zscore',
+    intensity_normalize_method: Literal["zscore", "minmax", "percentile", "none"] = "zscore",
     save_cleaned_df: bool = True,
     save_profiles: bool = True,
     save_statistics: bool = True,
@@ -4320,11 +4334,11 @@ def int_profiles_extract_clean(
     intensity_require_both_minima: bool = True,
     intensity_smooth_sigma: float = 0.0,
     intensity_edge_fraction: float = 0.2,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
 ) -> Dict:
     """
     Workflow for extracting intensity profiles, filtering, and saving results.
-    
+
     Parameters
     ----------
     thickness_csv : Union[str, Path]
@@ -4359,7 +4373,7 @@ def int_profiles_extract_clean(
         Fraction of profile edges for baseline calculation
     logger : logging.Logger, optional
         Logger instance for status messages
-        
+
     Returns
     -------
     Dict
@@ -4371,25 +4385,24 @@ def int_profiles_extract_clean(
         output_dir = os.path.dirname(thickness_csv)
     os.makedirs(output_dir, exist_ok=True)
 
-
     # Initialize logger if not provided
     if logger is None:
         logger = setup_logger(output_dir)
-    
+
     thickness_csv = Path(thickness_csv)
     tomogram_file = Path(tomo_path)
-    
+
     logger.info(f"\n{'='*60}")
     logger.info(f"Processing: {thickness_csv.name}")
     logger.info(f"Tomogram: {tomogram_file.name}")
     logger.info(f"{'='*60}")
-    
+
     # Load data
     logger.info("Loading thickness data...")
     thickness_df = pd.read_csv(thickness_csv)
-    
+
     logger.info("Loading tomogram...")
-    
+
     tomo, tomo_voxel, tomo_shape = read_tomo(tomo_path)
 
     logger.info("Extracting intensity profiles...")
@@ -4398,11 +4411,11 @@ def int_profiles_extract_clean(
         tomo=tomo,
         voxel_size=tomo_voxel,
         intensity_extension_voxels=intensity_extension_voxels,
-        intensity_normalize_method=intensity_normalize_method
+        intensity_normalize_method=intensity_normalize_method,
     )
-    
+
     logger.info(f"Extracted {len(profiles)} intensity profiles")
-    
+
     # Filter profiles
     logger.info("\nFiltering intensity profiles...")
     results = filter_intensity_profiles(
@@ -4415,12 +4428,12 @@ def int_profiles_extract_clean(
         require_both_minima_in_region=intensity_require_both_minima,
         smooth_sigma=intensity_smooth_sigma,
         edge_fraction=intensity_edge_fraction,
-        logger=logger
+        logger=logger,
     )
-    
+
     # Print summary
     print_summary(results)
-  
+
     # Save results
     logger.info(f"\nSaving results to: {output_dir}")
     saved_files = save_int_results(
@@ -4430,16 +4443,13 @@ def int_profiles_extract_clean(
         profiles=profiles,  # Pass the profiles directly
         save_cleaned_df=save_cleaned_df,
         save_profiles=save_profiles,
-        save_statistics=save_statistics
+        save_statistics=save_statistics,
     )
-    
+
     # Add file paths to results
-    results['saved_files'] = saved_files
-    results['input_files'] = {
-        'thickness_csv': thickness_csv,
-        'tomogram_file': tomogram_file
-    }
-    
+    results["saved_files"] = saved_files
+    results["input_files"] = {"thickness_csv": thickness_csv, "tomogram_file": tomogram_file}
+
     return results
 
 
@@ -4467,8 +4477,8 @@ def run_full_pipeline(
     tomo_path: str = None,
     intensity_extension_voxels: int = 10,
     intensity_extension_range: tuple = (-10, 10),
-    intensity_normalize_method: str = 'zscore',
-    intensity_min_snr: Optional[float] = 0.2,  
+    intensity_normalize_method: str = "zscore",
+    intensity_min_snr: Optional[float] = 0.2,
     intensity_central_max_required: bool = True,
     intensity_save_profiles: bool = True,
     intensity_save_statistics: bool = True,
@@ -4476,36 +4486,39 @@ def run_full_pipeline(
     intensity_margin_factor: float = 0.1,
     intensity_require_both_minima: bool = True,
     intensity_smooth_sigma: float = 0.0,
-    intensity_edge_fraction: float = 0.2
+    intensity_edge_fraction: float = 0.2,
 ) -> dict:
     """
     Execute complete membrane thickness analysis pipeline with optional intensity profiling.
-    
+
     This is the main entry point for comprehensive membrane analysis. The function
     orchestrates the entire workflow from surface extraction to thickness measurement
     and optional intensity profile analysis. It processes each membrane type separately
     and provides comprehensive output files for further analysis.
-    
+
     The pipeline consists of three main stages:
-    
+
     1. **Surface Processing** (process_membrane_segmentation):
+
        - Extract surface points using marching cubes algorithm
        - Optionally interpolate points for denser coverage
        - Refine normal vectors using neighbor averaging
        - Separate bilayer into inner/outer surfaces
-    
+
     2. **Thickness Measurement** (measure_membrane_thickness):
+
        - Match points between separated surfaces
        - Apply geometric constraints (max thickness, cone angle)
        - Generate thickness measurements with GPU acceleration
        - Create comprehensive output files
-    
+
     3. **Intensity Profiling** (optional, int_profiles_extract_clean):
+
        - Extract intensity profiles from tomogram
        - Filter profiles using quality criteria
        - Validate thickness measurements
        - Generate quality metrics and statistics
-    
+
     Parameters
     ----------
     segmentation_path : str
@@ -4520,7 +4533,7 @@ def run_full_pipeline(
         Direct specification of membrane labels as {name: value} pairs.
         Example: {"plasma_membrane": 1, "nuclear_envelope": 2}.
         Overrides config_path if both are provided.
-    
+
     **Surface Processing Parameters:**
     mesh_sampling : int, default 1
         Step size for marching cubes algorithm. Larger values reduce
@@ -4544,7 +4557,7 @@ def run_full_pipeline(
     flip_normals : bool, default True
         Whether to flip refined normals to point inward toward
         the membrane interior. Typically desired for bilayer analysis.
-    
+
     **Thickness Measurement Parameters:**
     max_thickness : float, default 8.0
         Maximum allowed thickness in nanometers. Typical membrane
@@ -4565,7 +4578,7 @@ def run_full_pipeline(
     save_thickness_mrc : bool, default False
         Whether to save thickness volume as MRC file where voxel values
         represent thickness measurements.
-    
+
     **Performance Parameters:**
     batch_size : int, default 2000
         Processing batch size for normal refinement. Larger batches
@@ -4576,7 +4589,7 @@ def run_full_pipeline(
     num_cpu_threads : int, optional
         Number of CPU threads for parallel processing. If None,
         uses all available cores.
-    
+
     **Intensity Profiling Parameters:**
     extract_intensity_profiles : bool, default True
         Whether to perform intensity profile analysis after thickness
@@ -4592,6 +4605,7 @@ def run_full_pipeline(
         Profiles are analyzed within this range around the midpoint.
     intensity_normalize_method : str, default 'zscore'
         Tomogram normalization method for intensity extraction:
+
         - 'zscore': Standardize to zero mean and unit variance
         - 'minmax': Scale to range [0, 1]
         - 'percentile': Clip to 1st-99th percentile range
@@ -4623,17 +4637,19 @@ def run_full_pipeline(
     Returns
     -------
     dict or None
-        Results dictionary with membrane names as keys and dictionaries 
+        Results dictionary with membrane names as keys and dictionaries
         containing analysis results. Returns None if pipeline fails.
-        
+
         Each membrane result dictionary contains:
+
         - 'input_csv': Path to vertices/normals CSV file
         - 'thickness_csv': Path to thickness measurements CSV file
         - 'stats_file': Path to thickness statistics log file
         - 'intensity_results': Dictionary with intensity analysis results
           (only if extract_intensity_profiles=True)
-        
+
         Intensity results include:
+
         - 'status': "completed", "skipped", or "failed"
         - 'analysis_results': Complete intensity analysis results
         - 'profiles_extracted': Number of profiles extracted
@@ -4653,29 +4669,32 @@ def run_full_pipeline(
     Notes
     -----
     **Performance Considerations:**
+
     - GPU acceleration provides 10-100x speedup for thickness measurement
     - Memory usage scales with surface complexity and batch size
     - Processing time scales with surface size and interpolation settings
-    
+
     **Output Files:**
-    - *_vertices_normals.csv: Surface point coordinates and normals
-    - *_thickness.csv: Thickness measurements with point pairs
-    - *_thickness_stats.log: Comprehensive measurement statistics
-    - *_int_profiles.pkl: Intensity profiles (if enabled)
-    - *_thickness_cleaned.csv: Filtered thickness data (if enabled)
-    
+
+    - \*_vertices_normals.csv: Surface point coordinates and normals
+    - \*_thickness.csv: Thickness measurements with point pairs
+    - \*_thickness_stats.log: Comprehensive measurement statistics
+    - \*_int_profiles.pkl: Intensity profiles (if enabled)
+    - \*_thickness_cleaned.csv: Filtered thickness data (if enabled)
+
     **Quality Control:**
+
     - Surface validation ensures only boundary points are used
     - Geometric constraints filter invalid thickness measurements
     - Intensity profiling provides automated quality assessment
     - Comprehensive logging tracks all processing steps
-    
+
     Examples
     --------
     Basic pipeline without intensity profiling:
-    
+
     >>> from memthick import run_full_pipeline
-    >>> 
+    >>>
     >>> results = run_full_pipeline(
     ...     segmentation_path="membrane_seg.mrc",
     ...     output_dir="analysis_results",
@@ -4685,12 +4704,12 @@ def run_full_pipeline(
     ...     max_thickness=6.0,
     ...     use_gpu=True
     ... )
-    >>> 
+    >>>
     >>> for membrane_name, result in results.items():
     ...     print(f"{membrane_name}: {result['thickness_csv']}")
-    
+
     Complete pipeline with intensity profiling:
-    
+
     >>> results_with_intensity = run_full_pipeline(
     ...     segmentation_path="membrane_seg.mrc",
     ...     output_dir="analysis_with_intensity",
@@ -4700,15 +4719,15 @@ def run_full_pipeline(
     ...     intensity_central_max_required=True,
     ...     intensity_margin_factor=0.1
     ... )
-    >>> 
+    >>>
     >>> # Check intensity profiling results
     >>> for membrane_name, result in results_with_intensity.items():
     ...     if 'intensity_results' in result:
     ...         int_results = result['intensity_results']
     ...         print(f"{membrane_name}: {int_results['profiles_filtered']} profiles passed")
-    
+
     Custom surface processing parameters:
-    
+
     >>> results_custom = run_full_pipeline(
     ...     segmentation_path="membrane_seg.mrc",
     ...     mesh_sampling=2,  # Faster processing
@@ -4718,21 +4737,21 @@ def run_full_pipeline(
     ...     save_vertices_mrc=True,  # Save vertex files
     ...     save_thickness_mrc=True   # Save thickness volume
     ... )
-    
-    Intensity profiling requires compatible tomogram file with matching 
+
+    Intensity profiling requires compatible tomogram file with matching
     dimensions and voxel size to the segmentation.
     """
     # Validate inputs and parameters early
     if not os.path.exists(segmentation_path):
         raise FileNotFoundError(f"Segmentation file not found: {segmentation_path}")
-    
+
     # Validate intensity profiling requirements
     if extract_intensity_profiles:
         if tomo_path is None:
             raise ValueError("tomo_path is required when extract_intensity_profiles=True")
         if not os.path.exists(tomo_path):
             raise FileNotFoundError(f"Tomogram file not found: {tomo_path}")
-    
+
     # Validate and set sensible defaults
     mesh_sampling = max(1, int(mesh_sampling))
     interpolation_points = max(0, int(interpolation_points))
@@ -4741,10 +4760,10 @@ def run_full_pipeline(
     max_thickness = max(0.1, float(max_thickness))
     max_angle = np.clip(float(max_angle), 0.1, 45.0)
     direction = direction if direction in ["1to2", "2to1"] else "1to2"
-    
+
     if config_path is not None and not os.path.exists(config_path):
         raise FileNotFoundError(f"Config file not found: {config_path}")
-    
+
     # Set output directory
     if output_dir is None:
         output_dir = os.path.dirname(segmentation_path)
@@ -4753,7 +4772,7 @@ def run_full_pipeline(
     # Initialize logger
     logger = setup_logger(output_dir)
     logger.info(f"Starting full membrane thickness analysis pipeline for {segmentation_path}")
-    
+
     if extract_intensity_profiles:
         logger.info(f"Intensity profiling enabled with tomogram: {tomo_path}")
 
@@ -4820,23 +4839,22 @@ def run_full_pipeline(
                 # Step 3: Optional intensity profiling
                 if extract_intensity_profiles:
                     logger.info(f"\nStep 3: Processing intensity profiles for {membrane_name}")
-                    
+
                     try:
                         # Validate segmentation-tomogram compatibility
                         compatible, details = validate_seg_tomo_compatibility(
-                            segmentation_path, tomo_path, 
-                            tolerance=intensity_tolerance, logger=logger
+                            segmentation_path, tomo_path, tolerance=intensity_tolerance, logger=logger
                         )
-                        
+
                         if not compatible:
                             logger.warning(f"Skipping intensity profiling for {membrane_name}: {details}")
                             results[membrane_name]["intensity_results"] = {
-                                "status": "skipped", 
+                                "status": "skipped",
                                 "reason": "incompatible_files",
-                                "details": details
+                                "details": details,
                             }
                             continue
-                        
+
                         # Run intensity profiling
                         intensity_results = int_profiles_extract_clean(
                             thickness_csv=thickness_csv,
@@ -4854,35 +4872,42 @@ def run_full_pipeline(
                             intensity_require_both_minima=intensity_require_both_minima,
                             intensity_smooth_sigma=intensity_smooth_sigma,
                             intensity_edge_fraction=intensity_edge_fraction,
-                            logger=logger
+                            logger=logger,
                         )
 
                         results[membrane_name]["intensity_results"] = {
-                            "status": "completed", 
+                            "status": "completed",
                             "analysis_results": intensity_results,
-                            "profiles_extracted": intensity_results.get('statistics', {}).get('total_profiles', 0),    # ← Use this
-                            "profiles_filtered": intensity_results.get('statistics', {}).get('profiles_passed', 0),   # ← Use this  
-                            "pass_rate": intensity_results.get('statistics', {}).get('pass_rate', 0.0)
+                            "profiles_extracted": intensity_results.get("statistics", {}).get(
+                                "total_profiles", 0
+                            ),  # ← Use this
+                            "profiles_filtered": intensity_results.get("statistics", {}).get(
+                                "profiles_passed", 0
+                            ),  # ← Use this
+                            "pass_rate": intensity_results.get("statistics", {}).get("pass_rate", 0.0),
                         }
-                        
+
                         logger.info(f"Intensity profiling for {membrane_name} completed successfully")
-                        logger.info(f"  Profiles extracted: {results[membrane_name]['intensity_results']['profiles_extracted']}")
-                        logger.info(f"  Profiles after filtering: {results[membrane_name]['intensity_results']['profiles_filtered']}")
-                        logger.info(f"  Filter pass rate: {results[membrane_name]['intensity_results']['pass_rate']:.1%}")
-                        
+                        logger.info(
+                            f"  Profiles extracted: {results[membrane_name]['intensity_results']['profiles_extracted']}"
+                        )
+                        logger.info(
+                            f"  Profiles after filtering: {results[membrane_name]['intensity_results']['profiles_filtered']}"
+                        )
+                        logger.info(
+                            f"  Filter pass rate: {results[membrane_name]['intensity_results']['pass_rate']:.1%}"
+                        )
+
                     except Exception as e:
                         logger.error(f"Error in intensity profiling for {membrane_name}: {e}")
-                        results[membrane_name]["intensity_results"] = {
-                            "status": "failed",
-                            "error": str(e)
-                        }
+                        results[membrane_name]["intensity_results"] = {"status": "failed", "error": str(e)}
 
         except Exception as e:
             logger.error(f"Error measuring thickness for {membrane_name}: {e}")
             traceback.print_exc()
 
     logger.info("\nFull pipeline completed!")
-    
+
     # Print summary
     if extract_intensity_profiles:
         logger.info("\n=== Intensity Profiling Summary ===")
@@ -4890,12 +4915,14 @@ def run_full_pipeline(
             if "intensity_results" in result:
                 status = result["intensity_results"]["status"]
                 if status == "completed":
-                    logger.info(f"{membrane_name}: ✓ Completed - {result['intensity_results']['profiles_filtered']} profiles passed filtering")
+                    logger.info(
+                        f"{membrane_name}: ✓ Completed - {result['intensity_results']['profiles_filtered']} profiles passed filtering"
+                    )
                 elif status == "skipped":
                     logger.info(f"{membrane_name}: ⚠ Skipped - {result['intensity_results']['reason']}")
                 elif status == "failed":
                     logger.info(f"{membrane_name}: ✗ Failed - {result['intensity_results']['error']}")
-    
+
     return results
 
 
@@ -4939,8 +4966,8 @@ def parse_arguments() -> argparse.Namespace:
         --thickness_csv thickness.csv --tomo_path tomo.mrc
     """
     parser = argparse.ArgumentParser(
-        description="Membrane Thickness Analysis Tool with Intensity Profiling", 
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        description="Membrane Thickness Analysis Tool with Intensity Profiling",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     # Main inputs
@@ -4959,8 +4986,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--interpolation_points", type=int, default=1, help="Number of points to interpolate between adjacent vertices"
     )
-    parser.add_argument("--refine_normals", action="store_true", default=True, help="Refine normals after running marching cubes")
-    #parser.add_argument("--flip_normals", action="store_true", default=True, help="Flip normals inward after refinement")
+    parser.add_argument(
+        "--refine_normals", action="store_true", default=True, help="Refine normals after running marching cubes"
+    )
+    # parser.add_argument("--flip_normals", action="store_true", default=True, help="Flip normals inward after refinement")
     parser.add_argument(
         "--radius_hit", type=float, default=10.0, help="Search radius for normal refinement (in voxels)"
     )
@@ -5000,56 +5029,65 @@ def parse_arguments() -> argparse.Namespace:
     # Intensity profiling options
     intensity_group = parser.add_argument_group("Intensity profiling options")
     intensity_group.add_argument(
-        "--extract_intensity", action="store_true",
-        help="Extract and filter intensity profiles after thickness measurement"
+        "--extract_intensity",
+        action="store_true",
+        help="Extract and filter intensity profiles after thickness measurement",
     )
     intensity_group.add_argument(
-        "--tomo_path", type=str,
-        help="Path to tomogram MRC file (required for intensity profiling)"
+        "--tomo_path", type=str, help="Path to tomogram MRC file (required for intensity profiling)"
     )
     intensity_group.add_argument(
-        "--intensity_extension_voxels", type=int, default=10,
-        help="Number of voxels to extend intensity profiles beyond matched points"
+        "--intensity_extension_voxels",
+        type=int,
+        default=10,
+        help="Number of voxels to extend intensity profiles beyond matched points",
     )
     intensity_group.add_argument(
-            "--intensity_extension_range",
-            nargs=2,               
-            type=float,     
-            metavar=("MIN", "MAX"),
-            default=(-10.0, 10.0),
-            help="Range for intensity filtering analysis as two numbers: MIN MAX (e.g., --intensity_extension_range -15 15)"
-        )
-    intensity_group.add_argument(
-        "--intensity_normalize_method", choices=['zscore', 'minmax', 'percentile', 'none'], 
-        default='zscore', help="Tomogram normalization method"
+        "--intensity_extension_range",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        default=(-10.0, 10.0),
+        help="Range for intensity filtering analysis as two numbers: MIN MAX (e.g., --intensity_extension_range -15 15)",
     )
     intensity_group.add_argument(
-        "--intensity_min_snr", type=float, default=0.2,
-        help="Minimum SNR for minima prominence in intensity filtering"
+        "--intensity_normalize_method",
+        choices=["zscore", "minmax", "percentile", "none"],
+        default="zscore",
+        help="Tomogram normalization method",
     )
     intensity_group.add_argument(
-        "--intensity_central_max_required", action="store_true", default=True,
-        help="Whether to require central maximum in intensity profiles"
+        "--intensity_min_snr", type=float, default=0.2, help="Minimum SNR for minima prominence in intensity filtering"
     )
     intensity_group.add_argument(
-        "--intensity_tolerance", type=float, default=0.01,
-        help="Tolerance for segmentation-tomogram compatibility check (nm)"
+        "--intensity_central_max_required",
+        action="store_true",
+        default=True,
+        help="Whether to require central maximum in intensity profiles",
     )
     intensity_group.add_argument(
-        "--intensity_margin_factor", type=float, default=0.1,
-        help="Allowed margin outside measurement region (0.0=exact, 0.3=30%% margin)"
+        "--intensity_tolerance",
+        type=float,
+        default=0.01,
+        help="Tolerance for segmentation-tomogram compatibility check (nm)",
     )
     intensity_group.add_argument(
-        "--intensity_require_both_minima", action="store_true", default=True,
-        help="Whether both minima must be in extended region"
+        "--intensity_margin_factor",
+        type=float,
+        default=0.1,
+        help="Allowed margin outside measurement region (0.0=exact, 0.3=30%% margin)",
     )
     intensity_group.add_argument(
-        "--intensity_smooth_sigma", type=float, default=0.0,
-        help="Gaussian smoothing parameter (0=no smoothing)"
+        "--intensity_require_both_minima",
+        action="store_true",
+        default=True,
+        help="Whether both minima must be in extended region",
     )
     intensity_group.add_argument(
-        "--intensity_edge_fraction", type=float, default=0.2,
-        help="Fraction of profile edges for baseline calculation"
+        "--intensity_smooth_sigma", type=float, default=0.0, help="Gaussian smoothing parameter (0=no smoothing)"
+    )
+    intensity_group.add_argument(
+        "--intensity_edge_fraction", type=float, default=0.2, help="Fraction of profile edges for baseline calculation"
     )
 
     # Hardware options
@@ -5097,12 +5135,12 @@ def main() -> None:
     if not os.path.exists(args.segmentation):
         print(f"Error: Segmentation file not found: {args.segmentation}")
         return
-    
+
     # Mode-specific validations
     if args.mode == "thickness" and not args.input_csv:
         print("Error: --input_csv is required with --mode=thickness")
         return
-        
+
     if args.mode == "thickness" and not os.path.exists(args.input_csv):
         print(f"Error: Input CSV not found: {args.input_csv}")
         return
@@ -5130,19 +5168,19 @@ def main() -> None:
         if not os.path.exists(args.tomo_path):
             print(f"Error: Tomogram file not found: {args.tomo_path}")
             return
-    
+
     # Validate parameter ranges
     if args.max_thickness <= 0:
         print("Error: max_thickness must be positive")
         return
-        
+
     if not (0.1 <= args.max_angle <= 45.0):
         print("Error: max_angle must be between 0.1 and 45.0 degrees")
         return
-    
+
     # Validate intensity SNR requirement
     intensity_min_snr = None
-    if hasattr(args, 'intensity_min_snr') and args.intensity_min_snr:
+    if hasattr(args, "intensity_min_snr") and args.intensity_min_snr:
         try:
             intensity_min_snr = float(args.intensity_min_snr)
         except ValueError:
@@ -5206,7 +5244,7 @@ def main() -> None:
             output_dir=args.output_dir,
             config_path=args.config,
             membrane_labels=membrane_labels,
-            mesh_sampling=args.mesh_sampling, 
+            mesh_sampling=args.mesh_sampling,
             interpolate=args.interpolate,
             interpolation_points=args.interpolation_points,
             refine_normals=True,
@@ -5247,7 +5285,7 @@ def main() -> None:
         print(f"Running intensity profiling analysis...")
         print(f"Thickness CSV: {args.thickness_csv}")
         print(f"Tomogram: {args.tomo_path}")
-        
+
         try:
             results = int_profiles_extract_clean(
                 thickness_csv=args.thickness_csv,
@@ -5266,17 +5304,19 @@ def main() -> None:
                 intensity_smooth_sigma=args.intensity_smooth_sigma,
                 intensity_edge_fraction=args.intensity_edge_fraction,
             )
-            
+
             print("Intensity profiling completed successfully!")
             print(f"Results saved to: {args.output_dir or os.path.dirname(args.thickness_csv)}")
-            
+
             # Print summary
-            if 'statistics' in results:
-                stats = results['statistics']
+            if "statistics" in results:
+                stats = results["statistics"]
                 print(f"\nSummary:")
                 print(f"  Total profiles: {stats.get('total_profiles', 0)}")
-                print(f"  Profiles passed filtering: {stats.get('profiles_passed', 0)} ({stats.get('pass_rate', 0):.1%})")
-                
+                print(
+                    f"  Profiles passed filtering: {stats.get('profiles_passed', 0)} ({stats.get('pass_rate', 0):.1%})"
+                )
+
         except Exception as e:
             print(f"Error in intensity profiling: {e}")
             return
