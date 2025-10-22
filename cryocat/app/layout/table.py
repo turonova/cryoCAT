@@ -600,11 +600,12 @@ def enable_twist_tab(data):
 
     return False
 
-
+# TODO: add loading spinner for this computation
 @callback(
     Output("table-tabs", "active_tab", allow_duplicate=True),
     Output("tabv-twist-global-data-store", "data"),
     Output("twist-global-radius", "data"),
+    Output("twist-status", "children"),  # this output controls the spinner
     Input("run-twist-btn", "n_clicks"),
     State("tabv-motl-global-data-store", "data"),
     State("symmetry-dropdown", "value"),
@@ -628,8 +629,7 @@ def compute_twist_vector(n_clicks, motl_df, symm_type, symm_value, param_valus, 
 
     global_twist["obj"] = TwistDescriptor(input_motl=pd.DataFrame(motl_df), symm=symm, **twist_kwargs)
 
-    return "twist-tab", global_twist["obj"].df.to_dict("records"), radius
-
+    return "twist-tab", global_twist["obj"].df.to_dict("records"), radius, ""
 
 @callback(
     Output("kmeans-x-axis", "options"),
