@@ -223,20 +223,38 @@ def get_sidebar():
                                             ),
                                         ],
                                     ),
-                                    dbc.Col(
-                                        dbc.Button(
-                                            "Compute twist",
-                                            id="run-twist-btn",
-                                            color="light",
-                                        ),
-                                        width=12,
-                                        className="d-grid gap-1 col-6 mx-auto mt-3",
+
+                                    # --- THE SPINNER SECTION --- #
+                                    html.Div(
+                                        [
+                                            dbc.Button(
+                                                "Compute twist",
+                                                id="run-twist-btn",
+                                                color="light",
+                                                className="d-grid gap-1 col-6 mx-auto mt-3",
+                                            ),
+                                            dcc.Loading(
+                                                id="twist-loading",
+                                                type="circle",
+                                                style={
+                                                    "position": "fixed",      # anchors to the viewport
+                                                    "top": "50%",             # vertically centered
+                                                    "left": "50%",            # horizontally centered
+                                                    "transform": "translate(-50%, -50%)",  # perfect alignment
+                                                    "zIndex": 2000,           # ensures it floats above other content
+                                                    "textAlign": "center",
+                                                },
+                                                color = "var(--color4)",
+                                                children=html.Div(
+                                                    id="twist-status",
+                                                    style={"minHeight": "2rem"}  # gives the spinner a visible area
+                                                ),
+                                            ),
+                                        ]
                                     ),
+                                    # --- END SPINNER SECTION --- #
                                 ],
-                                # className="align-items-center g-2 mb-2",
-                                # className="d-grid gap-1 col-6 mx-auto",
-                            ),  # g-2 adds spacing between cols,
-                            html.Div(id="twist-status", className="small", style={"marginTop": "0.5rem"}),
+                            ),
                         ],
                         title="Twist Descriptor Base",
                         item_id="sacc-twist",
