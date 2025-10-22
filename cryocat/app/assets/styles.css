@@ -291,17 +291,27 @@ html, body {
     overflow-y: auto;
 }
 
-/* Blurred overlay with spinner */
-.blur-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background: rgba(255,255,255,0.3); /* translucent veil */
-  backdrop-filter: blur(5px);        /* blur the background beneath */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 2000;
+.spinner-frame {
+  position: absolute;
+  width: 80px;
+  height: 80px;
+  transition: opacity 0.4s ease-in-out;
+}
+
+.frame1 {
+  animation: fade1 1s infinite alternate;
+}
+
+.frame2 {
+  animation: fade2 1s infinite alternate;
+}
+
+@keyframes fade1 {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes fade2 {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
 }
