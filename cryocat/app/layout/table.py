@@ -600,13 +600,33 @@ def enable_twist_tab(data):
 
     return False
 
-# TODO: add loading spinner for this computation
+@callback(
+    Output("custom-spinner", "style", allow_duplicate=True),
+    Output("spinner-trigger", "data"),
+    Input("run-twist-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def show_spinner(n):
+    if not n:
+        raise dash.exceptions.PreventUpdate
+    style = {
+        "position": "fixed",
+        "top": "50%",
+        "left": "50%",
+        "transform": "translate(-50%, -50%)",
+        "zIndex": "3000",
+        "textAlign": "center",
+        "display": "block",
+    }
+    return style, {"show": True}
+
 @callback(
     Output("table-tabs", "active_tab", allow_duplicate=True),
     Output("tabv-twist-global-data-store", "data"),
     Output("twist-global-radius", "data"),
-    Output("twist-status", "children"),  # this output controls the spinner
-    Input("run-twist-btn", "n_clicks"),
+    Output("custom-spinner", "style", allow_duplicate=True),
+    Output("dummy-output", "children"),
+    Input("spinner-trigger", "data"),
     State("tabv-motl-global-data-store", "data"),
     State("symmetry-dropdown", "value"),
     State("c-symmetry-value", "value"),
@@ -614,10 +634,12 @@ def enable_twist_tab(data):
     State({"type": "twist-forms-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "id"),
     prevent_initial_call=True,
 )
-def compute_twist_vector(n_clicks, motl_df, symm_type, symm_value, param_valus, param_ids):
+def compute_twist_vector(trigger, motl_df, symm_type, symm_value, param_values, param_ids):
+    if not trigger or "show" not in trigger:
+        raise dash.exceptions.PreventUpdate
 
-    twist_kwargs = generate_kwargs(param_ids, param_valus)
-
+    # heavy computation here
+    twist_kwargs = generate_kwargs(param_ids, param_values)
     if symm_type == "C":
         symm = symm_value
     elif symm_type == "None":
@@ -626,10 +648,62 @@ def compute_twist_vector(n_clicks, motl_df, symm_type, symm_value, param_valus, 
         symm = symm_type
 
     radius = twist_kwargs["nn_radius"]
-
     global_twist["obj"] = TwistDescriptor(input_motl=pd.DataFrame(motl_df), symm=symm, **twist_kwargs)
 
-    return "twist-tab", global_twist["obj"].df.to_dict("records"), radius, ""
+    # hide spinner after computation
+    hide_style = {"display": "none"}
+
+    return "twist-tab", global_twist["obj"].df.to_dict("records"), radius, hide_style, "Computation complete!"
+
+# TODO: fix output
+# @callback(
+#     Output("table-tabs", "active_tab", allow_duplicate=True),
+#     Output("tabv-twist-global-data-store", "data"),
+#     Output("twist-global-radius", "data"),
+#     Output("custom-spinner", "style"),  # control spinner visibility
+#     Output("dummy-output", "children"),
+#     Input("run-twist-btn", "n_clicks"),
+#     State("tabv-motl-global-data-store", "data"),
+#     State("symmetry-dropdown", "value"),
+#     State("c-symmetry-value", "value"),
+#     State({"type": "twist-forms-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "value"),
+#     State({"type": "twist-forms-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "id"),
+#     prevent_initial_call=True,
+# )
+# def compute_twist_vector(n_clicks, motl_df, symm_type, symm_value, param_values, param_ids):
+#     if not n_clicks:
+#         raise dash.exceptions.PreventUpdate
+
+#     # Show the spinner while computing
+#     spinner_style = {
+#         "position": "fixed",
+#         "top": "50%",
+#         "left": "50%",
+#         "transform": "translate(-50%, -50%)",
+#         "zIndex": "3000",
+#         "textAlign": "center",
+#         "display": "block",
+#     }
+
+#     # Perform computation
+#     twist_kwargs = generate_kwargs(param_ids, param_values)
+
+#     if symm_type == "C":
+#         symm = symm_value
+#     elif symm_type == "None":
+#         symm = None
+#     else:
+#         symm = symm_type
+
+#     radius = twist_kwargs["nn_radius"]
+
+#     # your twist computation
+#     global_twist["obj"] = TwistDescriptor(input_motl=pd.DataFrame(motl_df), symm=symm, **twist_kwargs)
+
+#     # Hide spinner after computation
+#     spinner_style["display"] = "none"
+
+#     return "twist-tab", global_twist["obj"].df.to_dict("records"), radius, spinner_style, "Computation complete!"
 
 @callback(
     Output("kmeans-x-axis", "options"),

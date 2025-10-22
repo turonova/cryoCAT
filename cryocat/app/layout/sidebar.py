@@ -233,23 +233,24 @@ def get_sidebar():
                                                 color="light",
                                                 className="d-grid gap-1 col-6 mx-auto mt-3",
                                             ),
-                                            dcc.Loading(
-                                                id="twist-loading",
-                                                type="circle",
+                                            html.Div(
+                                                id="custom-spinner",
+                                                children=[
+                                                    html.Img(src="../assets/twist_1.png", className="spinner-frame frame1"),
+                                                    html.Img(src="../assets/twist_2.png", className="spinner-frame frame2"),
+                                                ],
                                                 style={
-                                                    "position": "fixed",      # anchors to the viewport
-                                                    "top": "50%",             # vertically centered
-                                                    "left": "50%",            # horizontally centered
-                                                    "transform": "translate(-50%, -50%)",  # perfect alignment
-                                                    "zIndex": 2000,           # ensures it floats above other content
+                                                    "position": "fixed",
+                                                    "top": "50%",
+                                                    "left": "50%",
+                                                    "transform": "translate(-50%, -50%)",
+                                                    "zIndex": "3000",
                                                     "textAlign": "center",
+                                                    "display": "none",  # hidden by default
                                                 },
-                                                color = "var(--color4)",
-                                                children=html.Div(
-                                                    id="twist-status",
-                                                    style={"minHeight": "2rem"}  # gives the spinner a visible area
-                                                ),
                                             ),
+                                            html.Div(id="dummy-output", style={"display": "none"}),
+                                            dcc.Store(id="spinner-trigger", storage_type="memory")
                                         ]
                                     ),
                                     # --- END SPINNER SECTION --- #
