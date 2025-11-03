@@ -7,7 +7,21 @@ from numpydoc.docscrape import NumpyDocString
 
 
 def parse_allowed_types(input_string):
+    """Takes a string containing type descriptions (like from a docstring)
+    and extracts the supported types while filtering out types that cannot be used
+    on command line interfaces (like pandas dataframes).
 
+    Parameters
+    ----------
+    input_string : str
+        String containing type descriptions, typically from a function docstring.
+        Can contain multiple types separated by commas, "and", or "or".
+
+    Returns
+    -------
+    list of str
+        Sorted list of supported type names with unsupported types filtered out.
+    """
     # Define the words to filter out because they cannot be passed on command line
     unsupported_types = {"pandas", "dataframe", "pandas.dataframe"}
 
@@ -24,6 +38,19 @@ def parse_allowed_types(input_string):
 
 
 def parse_string_into_array(s):
+    """Convert the input string to different data types
+    in order: int, float, str. It returns a numpy array with the determined type.
+
+    Parameters
+    ----------
+    s : str
+        Comma-separated string of values to convert into an array.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array containing the converted values with automatically detected dtype.
+    """
     # Split the input string by commas
     values = s.split(",")
 
@@ -40,6 +67,22 @@ def parse_string_into_array(s):
 
 
 def parse_choices(input_string):
+    """Used to parse choice specifications from docstrings
+    that are enclosed in curly braces. It automatically detects the type of choices
+    (int, float, or str) and returns a list of converted values.
+
+    Parameters
+    ----------
+    input_string : str
+        String containing choice options, typically enclosed in curly braces.
+        Example: "{1, 2, 3}" or "{'a', 'b', 'c'}" or "{1.0, 2.0, 3.0}"
+
+    Returns
+    -------
+    list
+        List of choice values converted to the appropriate Python type.
+
+    """
     # Remove curly braces and split the string by comma
     s = input_string.strip("{}")
     elements = s.split(",")
@@ -55,7 +98,31 @@ def parse_choices(input_string):
 
 
 def parse_doc_param(doc_param):
+    """Extracts parameter information from docstring format and converts it
+    into components needed for creating argparse arguments.
 
+    Parameters
+    ----------
+    doc_param : tuple
+        A tuple from NumpyDocString containing parameter information.
+        Expected format: (name, type_description, description_lines)
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - param_name (str): Parameter name with "--" prefix
+        - help_desc (str): Help description text
+        - required_param (bool): Whether the parameter is required
+        - param_types (list): List of allowed types for the parameter
+        - default_value : Default value for optional parameters
+        - choices (list): List of valid choices for the parameter
+
+    Raises
+    ------
+    ValueError
+        If the parameter description format is not recognized.
+    """
     param_name = "--" + doc_param[0]
     help_desc = " ".join(doc_param[2])
     help_desc = replace_cross_references(help_desc)
@@ -81,7 +148,27 @@ def parse_doc_param(doc_param):
 
 
 def parse_input_types(input_value, allowed_types):
+    """Handles both single values and comma-separated arrays, automatically
+    detecting and converting to the appropriate data type. It supports int, float, str,
+    bool, and array-like types.
 
+    Parameters
+    ----------
+    input_value : str
+        The input value string to parse. Can be a single value or comma-separated values.
+    allowed_types : list
+        List of allowed type names for this parameter.
+
+    Returns
+    -------
+    various
+        The converted value, which can be a single value or numpy array depending on input.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If the input value cannot be converted to any of the allowed types.
+    """
     def check_single_value(value, spec_types=None):
 
         if spec_types is None:
@@ -128,7 +215,24 @@ def parse_input_types(input_value, allowed_types):
 
 
 def replace_cross_references(input_string):
+    """Cleans up docstring text by removing reStructuredText
+    cross-reference markers that are not needed for command-line help.
 
+    Parameters
+    ----------
+    input_string : str
+        Input string potentially containing cross-reference markers.
+
+    Returns
+    -------
+    str
+        Cleaned string with cross-reference markers removed.
+
+    Examples
+    --------
+    >>> replace_cross_references("See :meth:`other_function` for details")
+    'See `other_function` for details'
+    """
     if ":meth:" in input_string:
         input_string = input_string.replace(":meth:", "")
 
@@ -136,7 +240,29 @@ def replace_cross_references(input_string):
 
 
 def add_params_from_docstring(subparsers, function_name, function_path):
+    """Parses a function's numpy-style docstring and automatically
+    creates argparse arguments for each parameter described in the docstring.
+    It separates required and optional arguments into different groups.
 
+    Parameters
+    ----------
+    subparsers : argparse._SubParsersAction
+        The subparsers object to add the new parser to.
+    function_name : str
+        Name of the function/subcommand.
+    function_path : function
+        The actual function object whose docstring will be parsed.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    Relies on the function having a properly formatted numpy-style
+    docstring with a "Parameters" section. Each parameter should be documented
+    with its type, description, and optionally default values or choices.
+    """
     np_doc = NumpyDocString(function_path.__doc__)
     parser = subparsers.add_parser(
         function_name,
@@ -194,7 +320,21 @@ def add_params_from_docstring(subparsers, function_name, function_path):
 
 
 def parse_arguments(f_dict, description):
+    """Creates a main argument parser with subcommands based on the
+    provided function dictionary. It automatically generates help and argument
+    parsing based on the functions' docstrings.
 
+    Parameters
+    ----------
+    f_dict : dict
+        Dictionary mapping subcommand names to function objects.
+    description : str
+        Description for the main argument parser.
+
+    Returns
+    -------
+    None
+    """
     # Create the main parser
     parser = argparse.ArgumentParser(description=description)
 
@@ -215,7 +355,23 @@ def parse_arguments(f_dict, description):
 
 
 def wedge_list():
+    """Provides a command-line interface with subcommands for
+    generating wedge lists using different methods and formats. It supports
+    both Stopgap batch and regular Stopgap formats.
 
+    Subcommands
+    -----------
+    stopgap_batch : function
+        Create wedge lists in Stopgap batch format.
+    stopgap : function
+        Create wedge lists in regular Stopgap format.
+
+    Examples
+    --------
+    >>> wedge_list()  # Called from command line
+    # To get help: wedge_list --help
+    # To get help on specific subcommand: wedge_list stopgap --help
+    """
     f_dict = {"stopgap_batch": wedgeutils.create_wedge_list_sg_batch, "stopgap": wedgeutils.create_wedge_list_sg}
     description = (
         "Function to create wedge lists in different formats. For help on specific option run wedge_list option --help"
@@ -224,6 +380,20 @@ def wedge_list():
 
 
 def tm_ana():
+    """Provides a command-line interface for particle extraction
+    from template matching results.
+
+    Subcommands
+    -----------
+    extract_particles : function
+        Extract particles from template matching results.
+
+    Examples
+    --------
+    >>> tm_ana()  # Called from command line
+    # To get help: tm_ana --help
+    # To get help on specific subcommand: tm_ana extract_particles --help
+    """
     f_dict = {"extract_particles": tmana.scores_extract_particles}
     description = (
         "Function to extract particles from template matching. For help on specific option run wedge_list option --help"

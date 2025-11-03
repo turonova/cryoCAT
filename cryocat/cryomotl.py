@@ -111,7 +111,6 @@ class Motl:
         This method uses the `iloc` indexer to access the row by its integer position.
         """
 
-        # TODO: add tests
         # Does it make sense - could be also index of the frame or subtomo id
         return self.df.iloc[[row_number]]
 
@@ -1460,6 +1459,8 @@ class Motl:
             StopgapMotl(self.df).write_out(output_path)
         elif motl_type.lower() == "dynamo":
             DynamoMotl(self.df).write_out(output_path)
+        elif motl_type.lower() == "mod":
+            ModMotl(self.df).write_out(output_path)
         else:
             raise UserInputError(f"Provided motl file {output_path} has format that is currently not supported.")
 
@@ -4961,3 +4962,66 @@ def stopgap2relion(
         rln_motl.write_out(output_motl_path, **write_kwargs)
 
     return rln_motl
+
+
+def emmotl2mod(input_motl, output_motl_path=None, mod_prefix="", mod_suffix=".mod"):
+    """Converts an EmMotl to ModMotl format and optionally writes it to a .mod file.
+
+    Parameters
+    ----------
+    input_motl : str or pandas.DataFrame or EmMotl
+        Path to the input EM MOTL file or an already loaded EmMotl object.
+    output_mod_path : str, optional
+        If provided, the converted mod will be written to this path.
+    mod_prefix : str, default=""
+        Prefix for the mod file (used by ModMotl internally).
+    mod_suffix : str, default=".mod"
+        Suffix for the mod file (used by ModMotl internally).
+
+    Returns
+    -------
+    mod_motl : ModMotl
+        The converted ModMotl object.
+    """
+    em_motl = EmMotl(input_motl)
+
+    mod_motl = ModMotl(input_motl=em_motl.df, mod_prefix=mod_prefix, mod_suffix=mod_suffix)
+
+    if output_motl_path is not None:
+        mod_motl.write_out(output_motl_path)
+
+    return mod_motl
+
+
+def mod2emmotl(input_mod, output_motl_path=None, mod_prefix="", mod_suffix=".mod", update_coordinates=False):
+    """Converts a ModMotl to EmMotl format and optionally writes it to a file.
+
+    Parameters
+    ----------
+    input_mod : str or pandas.DataFrame or ModMotl
+        Path to the input IMOD .mod file or directory, or an already loaded ModMotl object.
+    output_motl_path : str, optional
+        If provided, the converted motl will be written to this path.
+    mod_prefix : str, default=""
+        Prefix for mod files when reading from directory.
+    mod_suffix : str, default=".mod"
+        Suffix for mod files when reading from directory.
+    update_coordinates : bool, default=False
+        If True, updates the coordinates in the DataFrame.
+
+    Returns
+    -------
+    em_motl : EmMotl
+        The converted EmMotl object.
+    """
+    mod_motl = ModMotl(input_motl=input_mod, mod_prefix=mod_prefix, mod_suffix=mod_suffix)
+
+    em_motl = EmMotl(mod_motl.df)
+
+    if update_coordinates:
+        em_motl.update_coordinates()
+
+    if output_motl_path is not None:
+        em_motl.write_out(output_motl_path)
+
+    return em_motl

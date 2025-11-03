@@ -8,7 +8,24 @@ from numpydoc.docscrape import NumpyDocString
 
 
 def filter_strings(input_list, filter_contains=None, filter_exclude=None):
+    """Filter a list of strings based on inclusion and exclusion criteria.
 
+    Parameters
+    ----------
+    input_list : list of str
+        The list of strings to filter.
+    filter_contains : str or list of str, optional
+        Substrings that must be present in the string for inclusion.
+        If None, no inclusion filtering is applied.
+    filter_exclude : str or list of str, optional
+        Substrings that must be absent from the string for inclusion.
+        If None, no exclusion filtering is applied.
+
+    Returns
+    -------
+    list of str
+        Filtered list of strings that meet the specified criteria.
+    """
     # Normalize filters to lists
     if filter_contains is None:
         filter_contains = []
@@ -32,8 +49,7 @@ def filter_strings(input_list, filter_contains=None, filter_exclude=None):
 
 
 def get_class_names_by_parent(parent_class_name: str, module_name: str, filter_contains=None, filter_exclude=None):
-    """
-    Get class names that are subclasses of a specified parent class in a given module.
+    """Get class names that are subclasses of a specified parent class in a given module.
 
     Parameters
     ----------
@@ -69,16 +85,34 @@ def get_class_names_by_parent(parent_class_name: str, module_name: str, filter_c
 
 
 def get_classes_from_names(class_names, module_name):
+    """Convert class names to actual class objects from a specified module.
 
-    module = importlib.import_module(module_name)
+    Parameters
+    ----------
+    class_names : str, type, or list of str/type
+        Class names as strings or actual class objects. If strings, they will be
+        looked up in the specified module. If class objects, they are returned as-is.
+    module_name : str
+        Name of the module where classes should be looked up (only used for string names).
 
+    Returns
+    -------
+    type or list of type
+        Class object(s) corresponding to the input names.
+    """
     if not isinstance(class_names, list):
         if isinstance(class_names, str):
+            module = importlib.import_module(module_name)
             return getattr(module, class_names)
         else:
             return class_names
 
-    return [name if isinstance(name, type) else getattr(module, name) for name in class_names]
+    if all(isinstance(name, type) for name in class_names): #list case
+        # All items are already class objects
+        return class_names
+    else:
+        module = importlib.import_module(module_name)
+        return [getattr(module, name) for name in class_names]
 
 
 def get_class_names_by_prefix(prefix):
@@ -110,7 +144,20 @@ def get_class_names_by_prefix(prefix):
 
 
 def parse_allowed_types(input_string):
+    """Parse a string of type descriptions into a list of allowed types.
 
+    Parameters
+    ----------
+    input_string : str
+        String containing type descriptions, typically from documentation.
+        Can be comma-separated or use 'and'/'or' conjunctions.
+
+    Returns
+    -------
+    list of str
+        Sorted list of allowed type names, with unsupported types filtered out.
+
+    """
     # Define the words to filter out because they cannot be passed on command line
     unsupported_types = {"pandas", "dataframe", "pandas.dataframe"}
 
@@ -127,6 +174,18 @@ def parse_allowed_types(input_string):
 
 
 def parse_string_into_array(s):
+    """Parse a comma-separated string into a numpy array with automatic type detection.
+
+    Parameters
+    ----------
+    s : str
+        Comma-separated string of values.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of values with automatically detected data type (int, float, or str).
+    """
     # Split the input string by commas
     values = s.split(",")
 
@@ -143,6 +202,20 @@ def parse_string_into_array(s):
 
 
 def parse_choices(input_string):
+    """Parse a choice specification from documentation into a list of possible values.
+
+    Parameters
+    ----------
+    input_string : str
+        String containing choice specification, typically in curly braces.
+        Example: '{1, 2, 3}' or '{"a", "b", "c"}'
+
+    Returns
+    -------
+    list
+        List of possible values with appropriate data type (int, float, or str).
+
+    """
     # Remove curly braces and split the string by comma
     s = input_string.strip("{}")
     elements = s.split(",")
@@ -158,7 +231,21 @@ def parse_choices(input_string):
 
 
 def parse_doc_param(doc_param, add_prefix=""):
+    """Parse a parameter from numpy-style documentation into a structured format.
 
+    Parameters
+    ----------
+    doc_param : tuple
+        Parameter tuple from NumpyDocString, typically (name, type_desc, description).
+    add_prefix : str, optional
+        Prefix to add to the parameter name.
+
+    Returns
+    -------
+    tuple
+        (param_name, help_desc, required_param, param_types, default_value, choices)
+
+    """
     param_name = add_prefix + doc_param[0]
     help_desc = " ".join(doc_param[2])
     help_desc = replace_cross_references(help_desc)
@@ -187,7 +274,19 @@ def parse_doc_param(doc_param, add_prefix=""):
 
 
 def replace_cross_references(input_string):
+    """Remove or replace cross-reference markers from documentation strings.
 
+    Parameters
+    ----------
+    input_string : str
+        Input string potentially containing cross-reference markers.
+
+    Returns
+    -------
+    str
+        String with cross-reference markers processed or removed.
+
+    """
     if ":meth:" in input_string:
         input_string = input_string.replace(":meth:", "")
 
@@ -195,9 +294,35 @@ def replace_cross_references(input_string):
 
 
 def process_method_docstring(path_to_method, method_name, pretty_print=False):
+    """Process a method's docstring and extract parameter information in structured format.
 
+    Parameters
+    ----------
+    path_to_method : module or class
+        The module or class containing the method.
+    method_name : str
+        Name of the method to process.
+    pretty_print : bool, optional
+        Whether to format parameter names for display (capitalize and replace underscores).
+
+    Returns
+    -------
+    dict
+        Dictionary mapping parameter names to their metadata. Each parameter's metadata
+        includes:
+        - desc: str - Parameter description
+        - required: bool - Whether the parameter is required
+        - types: list - Allowed parameter types
+        - default: any - Default value
+        - options: list - Available choices
+        - name: str - Original parameter name
+    """
     method_obj = inspect.getattr_static(path_to_method, method_name)
     docstring = inspect.getdoc(method_obj)
+
+    if not docstring: #if the docstring is empty
+        return {}
+
     np_doc = NumpyDocString(docstring)
 
     params_dict = {}

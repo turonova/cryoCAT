@@ -525,6 +525,18 @@ def test_stopgap2relion_write():
         os.remove(relion_written)
 
 
+def test_mod2emmotl():
+    file_path = "./test_data/motl_data/modMotl/"
+    emm = cryomotl.mod2emmotl(file_path, output_motl_path="./test_data/motl_data/test.em", mod_prefix="correct", mod_suffix=".mod")
+
+def test_emmotl2mod():
+    file_path = "./test_data/motl_data/test.em"
+    mod = cryomotl.emmotl2mod(file_path, output_motl_path="./test_data/motl_data/mod110.mod")
+
+
+
+
+
 
 
 class TestMotl:
@@ -2089,8 +2101,11 @@ class TestMotl:
         assert empty.__len__() == 0
 
     def test_getitem(self, get_sample_data1):
-        #TODO
-        pass
+        motl = Motl(get_sample_data1)
+        row_index = 2
+        row = motl.__getitem__(row_index)
+        expected_row = get_sample_data1.iloc[[row_index]]
+        pd.testing.assert_frame_equal(row, expected_row)
 
     def test_load(self):
         #emmotldf = EmMotl(input_motl="./test_data/au_1.em").df
@@ -4236,7 +4251,6 @@ class TestStopgapMotl:
         mod11 = StopgapMotl(input_motl=test_file_path + "test1_sg.star")
         # print(mod11.mod_df)
         print(mod11.df)
-        # fixme: the issue is when reloading?
         columns_to_compare = motl_df_sg.df.columns[
             ~(motl_df_sg.df.isna().all() | mod11.df.isna().all())
         ]
@@ -4552,6 +4566,16 @@ class TestModMotl:
         if os.path.exists(test_file_path + "test567.mod"):
             os.remove(test_file_path + "test567.mod")
 
+    def test_check_em2mod(self):
+        check = ModMotl("./test_data/motl_data/mod110.mod")
+        pd.set_option('display.max_rows', None)
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', None)
+        pd.set_option('display.max_colwidth', None)
+        print(check.df)
+        print(check.mod_df)
+
+
 
 class TestRelionMotlv5:
     warp_tomo_path = "./test_data/motl_data/relion5/clean/warp2_matching_tomograms.star"
@@ -4578,13 +4602,19 @@ class TestRelionMotlv5:
             write_optics=True,
             optics_data= self.warp_particles_path,
         )
-        if os.path.exists(output_path):
-            os.remove(output_path)
+
         #print(motl5.relion_df)
         print(motl5.df)
 
-        #optics group always 0 ?
-        #todo: keep original entries
+        motl5.write_out(
+            output_path = output_path,
+            use_original_entries=True,
+            write_optics=True,
+            optics_data=self.warp_particles_path
+        )
+
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
     def test_write_out_relion(self):
         pd.set_option('display.max_rows', None)

@@ -256,7 +256,29 @@ class ModelHeader(ImodHeader):
 
 
 def read_mod_files(input_path, file_prefix="", file_suffix=".mod"):
+    """
+    If input_path is a file, reads that single file. If input_path is a directory,
+    reads all files matching the prefix and suffix pattern and combines them.
 
+    Parameters
+    ----------
+    input_path : str
+        Path to a single .mod file or directory containing .mod files
+    file_prefix : str, optional
+        Prefix pattern for filtering files in directory
+    file_suffix : str, optional
+        Suffix pattern for filtering files in directory (default: ".mod")
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing coordinates and metadata from model files
+
+    Examples
+    --------
+    >>> df = read_mod_files("/path/to/single_file.mod")
+    >>> df = read_mod_files("/path/to/directory/", file_prefix="tomo_", file_suffix=".mod")
+    """
     if os.path.isfile(input_path):
         m_df = read_mod_file(input_path)
         mod_filename_no_ext = os.path.splitext(os.path.basename(input_path))[0] #get filename without the extension
@@ -282,7 +304,20 @@ def read_mod_files(input_path, file_prefix="", file_suffix=".mod"):
 
 
 def read_mod_file(file_path):
+    """Read a single IMOD binary model file and extract coordinate data.
 
+    Parses IMOD model file format to extract object contours and their 3D coordinates.
+
+    Parameters
+    ----------
+    file_path : str
+        Path to the .mod file to read
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with columns: object_id, contour_id, x, y, z, object_radius
+    """
     encoding = ioutils.get_file_encoding(file_path)
 
     with open(file_path, "rb") as f:
@@ -338,6 +373,29 @@ def read_mod_file(file_path):
 
 
 def write_model_binary(df, filename):
+    """
+    Converts a DataFrame of 3D coordinates into IMOD binary format for visualization
+    in IMOD or other compatible software.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame with columns: object_id, contour_id, x, y, z, object_radius
+    filename : str
+        Output filename for the .mod file
+
+    Examples
+    --------
+    >>> df = pd.DataFrame({
+    ...     'object_id': [1, 1, 1],
+    ...     'contour_id': [1, 1, 1],
+    ...     'x': [10.0, 20.0, 30.0],
+    ...     'y': [10.0, 20.0, 30.0],
+    ...     'z': [5.0, 5.0, 5.0],
+    ...     'object_radius': [3, 3, 3]
+    ... })
+    >>> write_model_binary(df, "output.mod")
+    """
     # Count the number of object IDs and contours
     num_objects = df["object_id"].nunique()
 

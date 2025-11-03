@@ -4,13 +4,38 @@ import json
 
 
 def parse_command(command_string, output_dict=None):
+    """Splits command string into tokens and identifies command, flags, and parameters.
+    Supports both -key value and -key=value formats.
 
+    Parameters
+    ----------
+    command_string : str
+        The command line string to parse
+    output_dict : str, optional
+        If provided, writes the parsed dictionary to this file
+
+    Returns
+    -------
+    dict
+        Dictionary with 'command' key and parameter key-value pairs
+
+    Examples
+    --------
+    >>> parse_command("program --input file.txt -o output")
+    {'command': 'program', '--input': 'file.txt', '-o': 'output'}
+
+    >>> parse_command("cmd --key=value -flag=123")
+    {'command': 'cmd', '--key': 'value', '-flag': '123'}
+    """
     # Split the string by one or more spaces
     tokens = re.split(r"\s+", command_string.strip())
+    #handle empty tokens?
+    if not tokens or tokens == [""]:
+        return {"command": ""}
 
     # Initialize the dictionary with the first word as "command"
     command_dict = {"command": tokens[0]}
-
+    current_key = None #init
     # Iterate through the tokens
     for token in tokens[1:]:
         if "=" in token:
@@ -37,12 +62,35 @@ def parse_command(command_string, output_dict=None):
 
 
 def parse_command_for_gui(command_string, output_dict=None):
+    """Similar to parse_command but formats parameter names for GUI display
+    by removing dashes and capitalizing.
 
+    Parameters
+    ----------
+    command_string : str
+        The command line string to parse
+    output_dict : str, optional
+        If provided, writes the parsed dictionary as JSON to this file
+
+    Returns
+    -------
+    dict
+        Dictionary with 'Command' key and formatted parameter structures
+
+    Examples
+    --------
+    >>> parse_command_for_gui("program --input file.txt")
+    {'Command': 'program', 'Input': {'value': 'file.txt', 'param': '--input', 'tooltip': ''}}
+    """
     # Split the string by one or more spaces
     tokens = re.split(r"\s+", command_string.strip())
 
+    if not tokens or tokens == [""]:
+        return {"Command": ""}
+
     # Initialize the dictionary with the first word as "command"
     command_dict = {"Command": tokens[0]}
+    current_key = None #init
 
     # Iterate through the tokens
     for token in tokens[1:]:
@@ -75,7 +123,26 @@ def parse_command_for_gui(command_string, output_dict=None):
 
 
 def process_cluster_params(script_file, cluster_params):
+    """Similar to parse_command but formats parameter names for GUI display
+    by removing dashes and capitalizing.
 
+    Parameters
+    ----------
+    command_string : str
+        The command line string to parse
+    output_dict : str, optional
+        If provided, writes the parsed dictionary as JSON to this file
+
+    Returns
+    -------
+    dict
+        Dictionary with 'Command' key and formatted parameter structures
+
+    Examples
+    --------
+    >>> parse_command_for_gui("program --input file.txt")
+    {'Command': 'program', 'Input': {'value': 'file.txt', 'param': '--input', 'tooltip': ''}}
+    """
     # Check if cluster_params are specified
     if cluster_params is not None:
         cluster_params = ioutils.dict_load(cluster_params)
@@ -88,6 +155,27 @@ def process_cluster_params(script_file, cluster_params):
 
 
 def parse_script_file(script_name):
+    """Extracts interpreter, SBATCH parameters, module loads, variable assignments,
+    and commands from a shell script file.
+
+    Parameters
+    ----------
+    script_name : str
+        Path to the shell script file to parse
+
+    Returns
+    -------
+    dict
+        Dictionary with keys: interpreter, sbatch_params, modules, values, coms_and_params
+
+    Examples
+    --------
+    >>> result = parse_script_file('script.sh')
+    >>> result['interpreter']
+    '#!/bin/bash'
+    >>> result['modules']
+    ['python/3.9', 'cuda']
+    """
     with open(script_name, "r") as file:
         lines = file.readlines()
 
@@ -145,7 +233,29 @@ def parse_script_file(script_name):
 
 
 def generate_python_command(function_dict, import_dict=None):
+    """Creates a python -c command string that calls a function with specified
+    parameters and optional imports.
 
+    Parameters
+    ----------
+    function_dict : dict
+        Dictionary with 'function' key and parameter key-value pairs
+    import_dict : dict, optional
+        Dictionary mapping modules to imports
+
+    Returns
+    -------
+    str
+        Python command line string
+
+    Examples
+    --------
+    >>> generate_python_command({'function': 'test', 'arg': 'value'})
+    'python -c "test(arg='value')"\n'
+
+    >>> generate_python_command({'function': 'func'}, {'numpy': 'array'})
+    'python -c "from numpy import array; func()"\n'
+    """
     command = 'python -c "'
 
     if import_dict:
@@ -164,12 +274,36 @@ def generate_python_command(function_dict, import_dict=None):
 
 
 def generate_interactive_command(input_dict):
+    """Creates a command string that uses heredoc syntax for interactive input.
+
+    Parameters
+    ----------
+    input_dict : dict
+        Dictionary with 'command' key and 'inputs' list
+
+    Returns
+    -------
+    str
+        Interactive command string with heredoc
+    """
     command = input_dict.get("command", "") + " << foo"
     params = "\n".join([f"{k}" for k in input_dict["inputs"]])
     return f"{command}\n{params}\nfoo\n"
 
 
 def generate_command_line(input_dict):
+    """Converts a dictionary of command parameters into a executable command string.
+
+    Parameters
+    ----------
+    input_dict : dict
+        Dictionary with 'command' key and parameter key-value pairs
+
+    Returns
+    -------
+    str
+        Formatted command line string
+    """
     command = input_dict.get("command", "")
     params = " ".join(
         [f"{k}={v}" if k.startswith("--") else f"{k} {v}" for k, v in input_dict.items() if k != "command"]
@@ -179,6 +313,26 @@ def generate_command_line(input_dict):
 
 
 def replace_command_in_script(script_file, input_dict):
+    """Searches for a command in a script file and replaces it with a new command
+    generated from the input dictionary.
+
+    Parameters
+    ----------
+    script_file : str
+        Path to the script file to modify
+    input_dict : dict
+        Dictionary with 'command' key and new parameters
+
+    Returns
+    -------
+    bool
+        True if command was found and replaced, False otherwise
+
+    Raises
+    ------
+    ValueError
+        If input dictionary doesn't have a 'command' key
+    """
     command_to_replace = input_dict.get("command")
     if not command_to_replace:
         raise ValueError("Input dictionary must have a 'command' key.")
@@ -214,7 +368,35 @@ def generate_script(
     p_type="cluster",
     p_variable="tomo_list",
 ):
+    """Creates a complete shell script with header, cluster parameters, module loads,
+    and commands. Supports both list and dictionary inputs for modules.
 
+    Parameters
+    ----------
+    script_name : str
+        Output path for the generated script
+    coms_and_params : list or str
+        List of command dictionaries or path to command dictionary file
+    script_header : str, optional
+        Script header/shebang line
+    cluster_params : str or dict, optional
+        Cluster parameters for SBATCH directives
+    module_loads : list or dict, optional
+        Modules to load in the script
+    template_script : str, optional
+        Not currently implemented
+    parallelize : bool, optional
+        Not currently implemented
+    p_type : str, optional
+        Not currently implemented
+    p_variable : str, optional
+        Not currently implemented
+
+    Raises
+    ------
+    ValueError
+        If module_loads is not a list or dictionary
+    """
     # Open the script_name file for writing
     with open(script_name, "w") as script_file:
 
