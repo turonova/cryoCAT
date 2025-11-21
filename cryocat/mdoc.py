@@ -177,6 +177,7 @@ class Mdoc:
 
             # separate first part of lines until a first occurrence of a line starting with "[ZValue"
             header = []  # list of header lines
+            section_id = None #init
             for line in lines:
                 if line.startswith("[ZValue"):
                     section_id = "ZValue"
@@ -187,6 +188,9 @@ class Mdoc:
                 # append only non-empty lines
                 if line.strip():
                     header.append(line.strip())
+
+            if section_id is None:
+                section_id = "ZValue"
 
             titles, project_info = Mdoc._parse_header(header)
 
@@ -244,11 +248,16 @@ class Mdoc:
         imgs["Removed"] = False
 
         # convert ZValues to int
-        temp_column = imgs.astype({section_id: int})
-        imgs[section_id] = temp_column[section_id]
+        try:
+            imgs[section_id] = pd.to_numeric(imgs[section_id], errors='coerce') #convert to numeric, coercing to naN
+            imgs[section_id] = imgs[section_id].astype('Int64')
+        except ValueError:
+            pass
+
 
         # convert TiltAngle to float
-        imgs["TiltAngle"] = imgs["TiltAngle"].astype(float)
+        if "TiltAngle" in imgs.columns:
+            imgs["TiltAngle"] = imgs["TiltAngle"].astype(float)
 
         return imgs
 

@@ -6,7 +6,7 @@ import numpy as np
 from cryocat.classutils import *
 
 
-class TestFilterStrings:\
+class TestFilterStrings:
 
     def test_basic_filtering(self):
         input_list = ["apple", "banana", "cherry", "date"]
