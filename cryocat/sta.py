@@ -522,6 +522,7 @@ def create_denovo_multiref_run(
         motl, output_file_base=output_motl_base + "_" + str(iteration_number), output_motl_type=output_motl_type
     )
 
+    #instead of calling conversion functions kind of the same is happening
 
 def evaluate_multirun_stability(input_motls, input_motl_type="stopgap"):
     """Evaluate how many particles ended up within the same class among all the classification runs. It is meant to be
@@ -702,6 +703,8 @@ def evaluate_classification(
         merged = pd.concat(
             [it, occupancy_df, subtomos_df], axis=1, keys=["Iteration", "Class occupancy", "Class changes"]
         )
+        merged.columns = [f'{col[0]}_{col[1]}' if col[1] else col[0]
+                          for col in merged.columns]
         merged.to_csv(output_file_stats, index=False)
 
     return occupancy, changing_subtomos

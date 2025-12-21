@@ -630,7 +630,7 @@ def register_motl_load_callbacks(prefix: str):
                         tomo_tmp_file.close()  # necessary on windows
                         rln_kwargs["input_tomograms"] = tomo_tmp_file_path
 
-            motl = Motl.load(tmp_file_path, motl_type, **rln_kwargs)
+            motl = Motl.load(tmp_file_path, motl_type, **rln_kwargs) #fixme, rln5
             extra_data = motl.relion_df.to_dict("records")
             relion_optics = motl.optics_data.to_dict("records")
 
