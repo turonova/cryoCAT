@@ -431,7 +431,7 @@ class Motl:
         else:
             return cleaned_motl
 
-    def clean_by_tomo_mask(self, tomo_list, tomo_masks, inplace=True, output_file=None):
+    def clean_by_tomo_mask(self, tomo_list, tomo_masks, inplace=True, boundary_type="center", box_size=None, output_file=None):
         """Removes particles from the motive list based on provided tomomgram masks.
 
         Parameters
@@ -445,6 +445,11 @@ class Motl:
         inplace : bool, default=True
             If true, the original instance of the motl is changed. If False, the instance of Motl is created and returned,
             the original motive list remains unchanged. Defaults to True.
+        boundary_type : {str, {"center", "whole"}
+            Specify whether only the center should be part of the mask ("center") or the whole
+            box ("whole"). In the latter case, the box_size have to be specified as well. Defaults to "center".
+        box_size : int, optional
+            Size of the subtomogram box. Required if `boundary_type` is set to "whole". Defaults to None.
         output_file : str, optional
             Path to save the cleaned motive list. If not provided, the motive list is not saved. Defaults to None.
 
@@ -477,33 +482,63 @@ class Motl:
         else:
             tomo_mask = cryomap.binarize(tomo_masks)
             requries_loading = False
+        
+        # Get type of bounds
+        if boundary_type == "whole":
+            if box_size:
+                boundary = ceil(box_size / 2)
+            else:
+                raise UserInputError("You need to specify box_size when boundary_type is set to 'whole'.")
+        elif boundary_type == "center":
+            boundary = 0
+        else:
+            raise UserInputError(f"Unknown type of boundaries: {boundary_type}")
+        
 
-        cleaned_motl = Motl.load(self)
+        cleaned_motl = Motl.load(self) # prepare the a copy of the motive list to be cleaned, so that the original one is not altered until the end of the function
 
         for i, t in enumerate(tomos):
             tm = self.get_motl_subset(t, reset_index=True)
             coords = tm.get_coordinates().astype(int)
+            coords_min = coords - boundary
+            coords_max = coords + boundary
+
             if requries_loading:
                 tomo_mask = cryomap.binarize(tomo_masks[i])
 
-            # Ensure coordinates are within the bounds of the mask array
-            within_bounds = (
-                (coords[:, 0] < tomo_mask.shape[0])
-                & (coords[:, 1] < tomo_mask.shape[1])
-                & (coords[:, 2] < tomo_mask.shape[2])
+
+            # Ensure coordinates are within the bounds of the mask array - if not, remove them
+            # Get binary mask
+            within_bounds = ((coords_min>0).all(axis=1)
+                & (coords_max[:, 0] < tomo_mask.shape[0])
+                & (coords_max[:, 1] < tomo_mask.shape[1])
+                & (coords_max[:, 2] < tomo_mask.shape[2])
             )
+            
+            out_of_bounds_indices = np.where(~within_bounds)[0] # Retrieve the indices of the False elements in the within_bounds mask
+            out_of_bounds_subtomo_ids = tm.df.loc[out_of_bounds_indices, "subtomo_id"].values 
+
+            # Filter the coords array and tm-particles to include only the in-bounds coordinates
             coords = coords[within_bounds]
+            coords_min = coords_min[within_bounds]
+            coords_max = coords_max[within_bounds]
+            tm.df = tm.df[within_bounds].reset_index(drop=True)
 
             # Filter out coordinates where the mask value is 0
-            mask_values = tomo_mask[coords[:, 0], coords[:, 1], coords[:, 2]]
+            mask_values_min = tomo_mask[coords_min[:, 0], coords_min[:, 1], coords_min[:, 2]]
+            mask_values_max = tomo_mask[coords_max[:, 0], coords_max[:, 1], coords_max[:, 2]]
+            #mask_values = tomo_mask[coords[:, 0], coords[:, 1], coords[:, 2]]
 
             # Get the indices of the filtered coordinates
-            idx_to_remove = np.where(mask_values == 0)[0]
+            idx_to_remove = np.where((mask_values_min == 0) | (mask_values_max == 0))[0]
             subtomo_idx = tm.df.loc[idx_to_remove, "subtomo_id"].values
+            #idx_to_remove = np.where(mask_values == 0)[0]
+            #subtomo_idx = tm.df.loc[idx_to_remove, "subtomo_id"].values
 
+            subtomo_idx = np.concatenate((subtomo_idx, out_of_bounds_subtomo_ids))
             cleaned_motl.remove_feature("subtomo_id", subtomo_idx)
 
-            print(f"Removed {str(idx_to_remove.shape[0])} particles from tomogram #{str(t)}")
+            print(f"Removed {str(subtomo_idx.shape[0])} particles from tomogram #{str(t)}")
 
         cleaned_motl.df.reset_index(inplace=True, drop=True)
 
