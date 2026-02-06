@@ -509,7 +509,7 @@ class Motl:
 
             # Ensure coordinates are within the bounds of the mask array - if not, remove them
             # Get binary mask
-            within_bounds = ((coords_min>0).all(axis=1)
+            within_bounds = ((coords_min>=0).all(axis=1)
                 & (coords_max[:, 0] < tomo_mask.shape[0])
                 & (coords_max[:, 1] < tomo_mask.shape[1])
                 & (coords_max[:, 2] < tomo_mask.shape[2])
