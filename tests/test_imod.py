@@ -7,7 +7,9 @@ import numpy as np
 from pathlib import Path
 from cryocat import imod
 
-
+test_data = str(Path(__file__).parent / "test_data")
+test_data_path = test_data + "/motl_data/modMotl/correct111.mod"
+test_data_dir = test_data + ("/motl_data/modMotl/")
 class TestImodHeaders:
     def test_model_header_creation(self):
         header = imod.ModelHeader()
@@ -168,7 +170,6 @@ class TestImodFileDetection:
                 os.unlink(temp_file)
 
     def test_read_single_real_mod_file(self):
-        test_data_path = "./test_data/motl_data/modMotl/correct111.mod"
         if not os.path.exists(test_data_path):
             pytest.skip(f"Real mod file not found: {test_data_path}")
 
@@ -227,7 +228,6 @@ class TestImodFileDetection:
                 assert len(combined_result) == len(test_data1) + len(test_data2)
 
     def test_read_mod_files_from_real_directory(self):
-        test_data_dir = "./test_data/motl_data/modMotl/"
         if not os.path.exists(test_data_dir):
             pytest.skip(f"Real mod directory not found: {test_data_dir}")
 

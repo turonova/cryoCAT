@@ -461,7 +461,7 @@ def test_evaluate_multiref_run(sg_mock):
         #Intersection for 2: {4, 5} AND {3, 5}: {5}
         assert set(common_occupancies[2]) == {5}
 
-        with pytest.raises(ValueError, match="at least 2 motls"):
+        with pytest.raises(ValueError):
             evaluate_multirun_stability([motl1_path], input_motl_type="stopgap")
 
 

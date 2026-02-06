@@ -14,11 +14,14 @@ from cryocat import ioutils, cryomap, cryomask, geom
 from cryocat.cryomotl import Motl, EmMotl, RelionMotl, RelionMotlv5, StopgapMotl, DynamoMotl, ModMotl, stopgap2emmotl, emmotl2stopgap
 from cryocat.exceptions import UserInputError
 from scipy.spatial.transform import Rotation as rot
+from pathlib import Path
+test_data = str(Path(__file__).parent / "test_data")
 
 
 @pytest.fixture
 def motl():
-    motl = Motl.load("./test_data/au_1.em")
+    #motl = Motl.load("./test_data/au_1.em")
+    motl = Motl.load(test_data + "/au_1.em")
     return motl
 
 @pytest.fixture
@@ -144,7 +147,7 @@ def check_emmotl(motl):
     assert all(dt == "float64" for dt in motl.df.dtypes.values)
 
 
-@pytest.mark.parametrize("m", ["./test_data/au_1.em", "./test_data/au_2.em"])
+@pytest.mark.parametrize("m", [test_data + "/au_1.em", test_data + "/au_2.em"])
 def test_read_from_emfile(m):
     motl = Motl.load(m)
     check_emmotl(motl)
@@ -160,8 +163,8 @@ def test_read_from_emfile_wrong(m):
 @pytest.mark.parametrize(
     "motl_list",
     [
-        ["./test_data/au_1.em", "./test_data/au_2.em"],
-        ["./test_data/au_1.em", "./test_data/au_1.em"],
+        [test_data + "/au_1.em", test_data + "/au_2.em"],
+        [test_data + "/au_1.em", test_data + "/au_1.em"],
     ],
 )
 def test_merge_and_renumber(motl_list):
@@ -173,7 +176,7 @@ def test_merge_and_renumber(motl_list):
 
 
 @pytest.mark.parametrize(
-    "motl_list", ["./test_data/au_1.em", [], (), "not_a_list", 42, ["./test_data/au_1.em", None]]
+    "motl_list", [test_data + "/au_1.em", [], (), "not_a_list", 42, [test_data + "/au_1.em", None]]
 )
 def test_merge_and_renumber_wrong(motl_list):
     with pytest.raises((ValueError, UserInputError)):
@@ -227,8 +230,8 @@ def test_split_by_feature_nonexistent_feature(sample_motl_data1):
 @pytest.mark.parametrize(
     "m, ref",
     [
-        ("./test_data/recenter/allmotl_sp_cl1_1.em", "./test_data/recenter/ref1.em"),
-        ("./test_data/recenter/allmotl_sp_cl1_2.em", "./test_data/recenter/ref2.em"),
+        (test_data + "/recenter/allmotl_sp_cl1_1.em", test_data + "/recenter/ref1.em"),
+        (test_data + "/recenter/allmotl_sp_cl1_2.em", test_data + "/recenter/ref2.em"),
     ],
 )
 def test_recenter_particles(m, ref):
@@ -242,29 +245,29 @@ def test_recenter_particles(m, ref):
     "m, shift, ref",
     [
         (
-            "./test_data/shift_positions/allmotl_sp_cl1_1.em",
+            test_data + "/shift_positions/allmotl_sp_cl1_1.em",
             [1, 2, 3],
-            "./test_data/shift_positions/ref1.em",
+            test_data + "/shift_positions/ref1.em",
         ),
         (
-            "./test_data/shift_positions/allmotl_sp_cl1_1.em",
+            test_data + "/shift_positions/allmotl_sp_cl1_1.em",
             [-10, 200, 3.5],
-            "./test_data/shift_positions/ref2.em",
+            test_data + "/shift_positions/ref2.em",
         ),
         (
-            "./test_data/shift_positions/allmotl_sp_cl1_1.em",
+            test_data + "/shift_positions/allmotl_sp_cl1_1.em",
             [0, 0, 0],
-            "./test_data/shift_positions/ref3.em",
+            test_data + "/shift_positions/ref3.em",
         ),
         (
-            "./test_data/shift_positions/allmotl_sp_cl1_1.em",
+            test_data + "/shift_positions/allmotl_sp_cl1_1.em",
             [1, 1, 1],
-            "./test_data/shift_positions/ref4.em",
+            test_data + "/shift_positions/ref4.em",
         ),
         (
-            "./test_data/shift_positions/allmotl_sp_cl1_5.em",
+            test_data + "/shift_positions/allmotl_sp_cl1_5.em",
             [-10, 10, 100],
-            "./test_data/shift_positions/ref5.em",
+            test_data + "/shift_positions/ref5.em",
         ),
     ],
 )
@@ -309,7 +312,7 @@ def test_emmotl2relion():
     assert list(rln_motl.relion_df.columns) == []
     #print(rln_motl.df)
 
-    relion_written = "./test_data/motl_data/relionfromem1.star"
+    relion_written = test_data + "/motl_data/relionfromem1.star"
     rln_motl = cryomotl.emmotl2relion(
         input_motl=em_motl,
         output_motl_path=relion_written,
@@ -328,8 +331,8 @@ def test_emmotl2relion():
         os.remove(relion_written)
 
 def test_relion2emmotl():
-    relion="./test_data/motl_data/relion_3.1_optics2.star"
-    written_em = "./test_data/motl_data/written.em"
+    relion=test_data + "/motl_data/relion_3.1_optics2.star"
+    written_em = test_data + "/motl_data/written.em"
     rln = RelionMotl(input_motl=relion, version=3.1)
     em = cryomotl.relion2emmotl(
         input_motl=rln,
@@ -404,7 +407,7 @@ def test_stopgap2emmotl_1(sample_stopgap_data, tmp_path):
     pd.testing.assert_frame_equal(em_motl.df, expected_em_data)
 
 def test_stopgap2emmotl_file():
-    tmp = "./test_data/motl_data/class6_er_mr1_1_sg.star"
+    tmp = test_data + "/motl_data/class6_er_mr1_1_sg.star"
     stopgap_motl = StopgapMotl(tmp)
     em_motl_c = cryomotl.stopgap2emmotl(tmp, update_coordinates=False)
     assert isinstance(em_motl_c, cryomotl.EmMotl)
@@ -467,8 +470,8 @@ def test_emmotl2stopgap_basic(tmp_path):
     pd.testing.assert_frame_equal(sg_motl.df, expected_sg_df)
 
 def test_relion2stopgap():
-    relion3 = "./test_data/motl_data/relion_3.0.star"
-    stopgap = "./test_data/motl_data/sg_from_relion.star"
+    relion3 = test_data + "/motl_data/relion_3.0.star"
+    stopgap = test_data + "/motl_data/sg_from_relion.star"
     sg = cryomotl.relion2stopgap(input_motl=relion3, relion_version=3.0, output_motl_path=stopgap)
     sg1 = StopgapMotl(input_motl=stopgap)
     assert not list(sg.sg_df.columns) == StopgapMotl.columns
@@ -479,8 +482,8 @@ def test_relion2stopgap():
         os.remove(stopgap)
 
 def test_relion2stopgap_write():
-    relion3= "./test_data/motl_data/relion_3.0.star"
-    relion3written = "./test_data/motl_data/stopgap_written.star"
+    relion3= test_data + "/motl_data/relion_3.0.star"
+    relion3written = test_data + "/motl_data/stopgap_written.star"
     sg = cryomotl.relion2stopgap(
         input_motl=relion3,
         output_motl_path=relion3written,
@@ -494,8 +497,8 @@ def test_relion2stopgap_write():
         os.remove(relion3written)
 
 def test_stopgap2relion():
-    sg = "./test_data/motl_data/class6_er_mr1_1_sg.star"
-    #relion_optics = "./test_data/motl_data/relion_3.1_optics2.star"
+    sg = test_data + "/motl_data/class6_er_mr1_1_sg.star"
+    #relion_optics = test_data + "/motl_data/relion_3.1_optics2.star"
     relion = cryomotl.stopgap2relion(input_motl=sg, relion_version=3.1)
     #of course the same as before
     relion.relion_df = relion.create_relion_df(
@@ -507,8 +510,8 @@ def test_stopgap2relion():
     assert list(relion.relion_df.columns) == RelionMotl.columns_v3_1
 
 def test_stopgap2relion_write():
-    sg = "./test_data/motl_data/class6_er_mr1_1_sg.star"
-    relion_written = "./test_data/motl_data/rln31_written.star"
+    sg = test_data + "/motl_data/class6_er_mr1_1_sg.star"
+    relion_written = test_data + "/motl_data/rln31_written.star"
     relion = cryomotl.stopgap2relion(
         input_motl=sg,
         output_motl_path=relion_written,
@@ -526,12 +529,12 @@ def test_stopgap2relion_write():
 
 
 def test_mod2emmotl():
-    file_path = "./test_data/motl_data/modMotl/"
-    emm = cryomotl.mod2emmotl(file_path, output_motl_path="./test_data/motl_data/test.em", mod_prefix="correct", mod_suffix=".mod")
+    file_path = test_data + "/motl_data/modMotl/"
+    emm = cryomotl.mod2emmotl(file_path, output_motl_path=test_data + "/motl_data/test.em", mod_prefix="correct", mod_suffix=".mod")
 
 def test_emmotl2mod():
-    file_path = "./test_data/motl_data/test.em"
-    mod = cryomotl.emmotl2mod(file_path, output_motl_path="./test_data/motl_data/mod110.mod")
+    file_path = test_data + "/motl_data/test.em"
+    mod = cryomotl.emmotl2mod(file_path, output_motl_path=test_data + "/motl_data/mod110.mod")
 
 
 
@@ -895,6 +898,96 @@ class TestMotl:
         # Test ValueError
         with pytest.raises(ValueError):
             motl.clean_by_tomo_mask([1, 2], [mask1])
+
+    def test_clean_by_tomo_mask_modes(self):
+        #1: particle near mask boundary
+        mask1 = np.ones((20, 20, 20), dtype=np.int8)
+        mask1[10:15, 10:15, 10:15] = 0  #hole from 10-14 (5x5x5 cube)
+
+        data1 = pd.DataFrame({
+            "tomo_id": [1, 1],
+            "x": [9, 14],  #1: center at 9 (safe), 2: center at 14 (not safe)
+            "y": [9, 14],
+            "z": [9, 14],
+            "score": [0.9, 0.8],
+            "subtomo_id": [1, 2],
+            "shift_x": [0, 0], "shift_y": [0, 0], "shift_z": [0, 0],
+            "geom1": [1, 1], "geom2": [2, 2], "object_id": [100, 200],
+            "subtomo_mean": [0.1, 0.2], "geom3": [3, 3], "geom4": [4, 4],
+            "geom5": [5, 5], "phi": [0, 10], "psi": [5, 15],
+            "theta": [10, 20], "class": [1, 2]
+        })
+
+        #center mode: 1 kept (center at 9=1), 2 removed (center at 14=0)
+        motl_center = Motl(data1.copy())
+        motl_center.clean_by_tomo_mask([1], [mask1], boundary_type="center")
+        assert motl_center.df.shape[0] == 1
+        assert motl_center.df["subtomo_id"].iloc[0] == 1
+        # in this case whole mode is more restrictive
+        #whole mode with box_size=4 (boundary=2):
+        # particle 1: center at 9, coords_max=11 -  mask[11,11,11]=0 (in hole!)
+        motl_whole = Motl(data1.copy())
+        motl_whole.clean_by_tomo_mask([1], [mask1], boundary_type="whole", box_size=4)
+        assert motl_whole.df.shape[0] == 0  #both removed
+
+        #number 2: particle that fits exactly within mask
+        mask2 = np.ones((30, 30, 30), dtype=np.int8)
+        mask2[0:10, 0:10, 0:10] = 0  #hole in corner
+
+        data2 = pd.DataFrame({
+            "tomo_id": [1],
+            "x": [15], "y": [15], "z": [15],  #center is far from hole
+            "score": [0.9], "subtomo_id": [1],
+            "shift_x": [0], "shift_y": [0], "shift_z": [0],
+            "geom1": [1], "geom2": [2], "object_id": [100],
+            "subtomo_mean": [0.1], "geom3": [3], "geom4": [4],
+            "geom5": [5], "phi": [0], "psi": [5], "theta": [10], "class": [1]
+        })
+        #kept in both modes
+        motl2_center = Motl(data2.copy())
+        motl2_center.clean_by_tomo_mask([1], [mask2], boundary_type="center")
+        assert motl2_center.df.shape[0] == 1
+        motl2_whole = Motl(data2.copy())
+        motl2_whole.clean_by_tomo_mask([1], [mask2], boundary_type="whole", box_size=8)
+        assert motl2_whole.df.shape[0] == 1
+
+        #particle at volume edge
+        mask3 = np.ones((25, 25, 25), dtype=np.int8)# No holes
+
+        data3 = pd.DataFrame({
+            "tomo_id": [1, 1],
+            "x": [24, 22],  #1: at edge (24), 2: near edge (22)
+            "y": [24, 22],
+            "z": [24, 22],
+            "score": [0.9, 0.8],
+            "subtomo_id": [1, 2],
+            "shift_x": [0, 0], "shift_y": [0, 0], "shift_z": [0, 0],
+            "geom1": [1, 1], "geom2": [2, 2], "object_id": [100, 200],
+            "subtomo_mean": [0.1, 0.2], "geom3": [3, 3], "geom4": [4, 4],
+            "geom5": [5, 5], "phi": [0, 10], "psi": [5, 15],
+            "theta": [10, 20], "class": [1, 2]
+        })
+
+        #center mode: both kept (centers at valid positions)
+        motl3_center = Motl(data3.copy())
+        motl3_center.clean_by_tomo_mask([1], [mask3], boundary_type="center")
+        assert motl3_center.df.shape[0] == 2
+
+        #whole mode with box_size=6 (boundary=3):
+        #particle 1: center at 24, coords_max=27  out of bounds (27 >= 25)
+        #particle 2: center at 22, coords_max=25  out of bounds (25 >= 25)
+        #should be removed!
+        motl3_whole = Motl(data3.copy())
+        motl3_whole.clean_by_tomo_mask([1], [mask3], boundary_type="whole", box_size=6)
+        assert motl3_whole.df.shape[0] == 0
+
+        #whole mode with box_size=2 (boundary=1):
+        #particle 1: center at 24, coords_max=25  out of bounds (25 >= 25)
+        #particle 2: center at 22, coords_max=23  valid!
+        motl3_whole_small = Motl(data3.copy())
+        motl3_whole_small.clean_by_tomo_mask([1], [mask3], boundary_type="whole", box_size=2)
+        assert motl3_whole_small.df.shape[0] == 1
+        assert motl3_whole_small.df["subtomo_id"].iloc[0] == 2
 
     def test_clean_by_otsu(self, sample_motl_data1):
         motl = Motl(copy.deepcopy(sample_motl_data1))
@@ -1601,7 +1694,7 @@ class TestMotl:
         motl = Motl(sample_motl_data1)
         temp_dir = "test_temp_dir"  # Define a temporary directory name
         try:
-            os.makedirs(temp_dir, exist_ok=True)  # Create the directory
+            os.makedirs(temp_dir, exist_ok=True)
             output_base = os.path.join(temp_dir, "test")
             motl.write_to_model_file("tomo_id", output_base, 5, binning=2.0)
 
@@ -1611,7 +1704,7 @@ class TestMotl:
             assert os.path.exists(f"{output_base}_tomo_id_2_model.txt")
             assert os.path.exists(f"{output_base}_tomo_id_2.mod")
 
-            # Verify content of text file (basic check)
+            # Verify content of text file
             with open(f"{output_base}_tomo_id_1_model.txt", "r") as f:
                 content = f.read()
                 assert "1\t1\t20.0\t20.0\t20.0\n2\t1\t22.0\t22.0\t22.0\n1\t1\t40.0\t40.0\t40.0\n" in content
@@ -2108,11 +2201,11 @@ class TestMotl:
         pd.testing.assert_frame_equal(row, expected_row)
 
     def test_load(self):
-        #emmotldf = EmMotl(input_motl="./test_data/au_1.em").df
-        relionmotldf = RelionMotl(input_motl="./test_data/motl_data/relion_3.0.star").df
-        #stopgapmotldf = StopgapMotl(input_motl="./test_data/motl_data/bin1_1deg_500.star").sg_df
-        #modmotldf = ModMotl(input_motl="./test_data/motl_data/modMotl/correct111.mod").mod_df
-        #dynamomotldf = DynamoMotl(input_motl="./test_data/motl_data/crop.tbl").dynamo_df
+        #emmotldf = EmMotl(input_motl=test_data + "/au_1.em").df
+        relionmotldf = RelionMotl(input_motl=test_data + "/motl_data/relion_3.0.star").df
+        #stopgapmotldf = StopgapMotl(input_motl=test_data + "/motl_data/bin1_1deg_500.star").sg_df
+        #modmotldf = ModMotl(input_motl=test_data + "/motl_data/modMotl/correct111.mod").mod_df
+        #dynamomotldf = DynamoMotl(input_motl=test_data + "/motl_data/crop.tbl").dynamo_df
 
 
 
@@ -2165,7 +2258,7 @@ class TestEmMotl:
         return pd.DataFrame(data)
 
 
-    @pytest.mark.parametrize("m", ["./test_data/au_1.em", "./test_data/au_2.em"])
+    @pytest.mark.parametrize("m", [test_data + "/au_1.em", test_data + "/au_2.em"])
     def test_read_from_emfile(self, m):
         motl = EmMotl(m)
         check_emmotl(motl)
@@ -2218,12 +2311,12 @@ class TestRelionMotl:
         print("cleanup")
 
         output_files_to_remove = [
-            "./test_data/motl_data/out_3_0.star",
-            "./test_data/motl_data/two_out_3_0.star",
-            "./test_data/motl_data/out_3_1.star",
-            "./test_data/motl_data/out_4_0.star",
-            "./test_data/motl_data/out_3_1_optics.star",
-            "./test_data/motl_data/out_4_0_optics.star"
+            test_data + "/motl_data/out_3_0.star",
+            test_data + "/motl_data/two_out_3_0.star",
+            test_data + "/motl_data/out_3_1.star",
+            test_data + "/motl_data/out_4_0.star",
+            test_data + "/motl_data/out_3_1_optics.star",
+            test_data + "/motl_data/out_4_0_optics.star"
         ]
         for file_path in output_files_to_remove:
             if os.path.exists(file_path):
@@ -2237,10 +2330,10 @@ class TestRelionMotl:
     @pytest.fixture(scope="class")
     def relion_paths(self):
         return {
-            "relion30_path": "./test_data/motl_data/relion_3.0.star",
-            "relion31_path": "./test_data/motl_data/relion_3.1_optics2.star",
-            "relion40_path": "./test_data/motl_data/relion_4.0.star",
-            "relionbroken_path": "./test_data/motl_data/bin1_1deg_500.star"
+            "relion30_path": test_data + "/motl_data/relion_3.0.star",
+            "relion31_path": test_data + "/motl_data/relion_3.1_optics2.star",
+            "relion40_path": test_data + "/motl_data/relion_4.0.star",
+            "relionbroken_path": test_data + "/motl_data/bin1_1deg_500.star"
         }
 
     def test_set_version_already_set(self):
@@ -2414,7 +2507,7 @@ class TestRelionMotl:
         #does not trigger exceptions
 
         #Test2 with "data_****"
-        relion123 = RelionMotl("./test_data/motl_data/bin1_1deg_500_2.star")
+        relion123 = RelionMotl(test_data + "/motl_data/bin1_1deg_500_2.star")
         #normally read as the other ones
         print(relion123.relion_df)
 
@@ -3280,7 +3373,7 @@ class TestRelionMotl:
     class TestPrepareOpticsData:
         @pytest.fixture
         def optics_file_paths(self):
-            motl_dir = "./test_data/motl_data/"
+            motl_dir = test_data + "/motl_data/"
             os.makedirs(motl_dir, exist_ok=True)
             return {
                 'optics30_path': os.path.join(motl_dir, "optics_v30.star"),
@@ -3430,8 +3523,8 @@ class TestRelionMotl:
         # --- Cleanup test files ---
         def test_cleanup(self):
             files = [
-                "./test_data/motl_data/optics_v30.star",
-                "./test_data/motl_data/optics_v31.star"
+                test_data + "/motl_data/optics_v30.star",
+                test_data + "/motl_data/optics_v31.star"
             ]
             for f in files:
                 if os.path.exists(f):
@@ -3832,10 +3925,10 @@ class TestRelionMotl:
         assert "subtomo_id" in motl.relion_df.columns
 
     def test_write_out(self, relion_paths):
-        output_path30 = "./test_data/motl_data/out_3_0.star"
-        two_output_path30 = "./test_data/motl_data/two_out_3_0.star"
-        output_path31 = "./test_data/motl_data/out_3_1.star"
-        output_path40 = "./test_data/motl_data/out_4_0.star"
+        output_path30 = test_data + "/motl_data/out_3_0.star"
+        two_output_path30 = test_data + "/motl_data/two_out_3_0.star"
+        output_path31 = test_data + "/motl_data/out_3_1.star"
+        output_path40 = test_data + "/motl_data/out_4_0.star"
         motl40 = RelionMotl(relion_paths["relion40_path"], binning=1.0)
         motl31 = RelionMotl(relion_paths["relion31_path"])
         motl30 = RelionMotl(relion_paths["relion30_path"])
@@ -3890,7 +3983,7 @@ class TestRelionMotl:
         assert list(loaded_motl40.relion_df.columns) == RelionMotl.columns_v4 + ["ccSubtomoID"]
 
         #Test write_optics=True
-        output_path31_2 = "./test_data/motl_data/out_3_1_optics.star"
+        output_path31_2 = test_data + "/motl_data/out_3_1_optics.star"
         motl31 = RelionMotl(relion_paths["relion31_path"])
         print("\n")
         print(motl31.optics_data)
@@ -3902,7 +3995,7 @@ class TestRelionMotl:
         )
         loaded_motl31_2 = RelionMotl(input_motl=output_path31_2, version=3.1)
 
-        output_path40_2 = "./test_data/motl_data/out_4_0_optics.star"
+        output_path40_2 = test_data + "/motl_data/out_4_0_optics.star"
         motl40 = RelionMotl(relion_paths["relion40_path"], binning=2.0)
         print(motl40.binning)
         #BINNING MUST BE SPECIFIED FOR WRITING 4.0 ! In general if reading a file
@@ -3917,7 +4010,7 @@ class TestRelionMotl:
 
         # Test if to keep original relion the dataframes are the same?
         motl31 = RelionMotl(relion_paths["relion31_path"])
-        output_path31_1 = "./test_data/motl_data/out_3_1_optics.star"
+        output_path31_1 = test_data + "/motl_data/out_3_1_optics.star"
         motl31.write_out(
             output_path=output_path31_1,
             write_optics=True,
@@ -3991,7 +4084,7 @@ class TestStopgapMotl:
         pd.testing.assert_frame_equal(StopgapMotl.read_in(str(star_path)), sample_stopgap_data)
 
         #read real file
-        stopgap_motl = StopgapMotl("./test_data/motl_data/class6_er_mr1_1_sg.star")
+        stopgap_motl = StopgapMotl(test_data + "/motl_data/class6_er_mr1_1_sg.star")
         assert list(stopgap_motl.sg_df.columns) == StopgapMotl.columns
         print(stopgap_motl.sg_df)
 
@@ -4241,7 +4334,7 @@ class TestStopgapMotl:
         pd.set_option('display.max_rows', None)  # Print all rows
         pd.set_option('display.max_columns', None)  # Print all columns
 
-        test_file_path = "./test_data/motl_data/"
+        test_file_path = test_data + "/motl_data/"
         motl_df_sg = StopgapMotl(motl_df)
         print("\n")
         print(motl_df_sg.df)
@@ -4267,7 +4360,7 @@ class TestDynamoMotl:
         pd.set_option('display.max_rows', None)  # Print all rows
         pd.set_option('display.max_columns', None)  # Print all columns
 
-        pathfile = "./test_data/motl_data/b4_motl_CR_tm_topbott_clean600_1_dynamo.tbl"
+        pathfile = test_data + "/motl_data/b4_motl_CR_tm_topbott_clean600_1_dynamo.tbl"
         test1 = DynamoMotl(pathfile)
         print(test1.df)
         #print(test1.dynamo_df)
@@ -4276,7 +4369,7 @@ class TestDynamoMotl:
         with pytest.raises(Exception):
             excp = DynamoMotl("test")
 
-        pathfile = "./test_data/motl_data/bin1.6_SG_j013_afterM_24k_subtomos_MN_Dyn_v2.tbl"
+        pathfile = test_data + "/motl_data/bin1.6_SG_j013_afterM_24k_subtomos_MN_Dyn_v2.tbl"
         test2 = DynamoMotl(pathfile)
         print(test2.df)
 
@@ -4284,7 +4377,7 @@ class TestDynamoMotl:
 
 
     def test_read_in(self):
-        pathfile = "./test_data/motl_data/b4_motl_CR_tm_topbott_clean600_1_dynamo.tbl"
+        pathfile = test_data + "/motl_data/b4_motl_CR_tm_topbott_clean600_1_dynamo.tbl"
         expected3_entries = [
             [1, 1, 1, 1.0651, 1.1602, 0.6847, 144.13, -79.159, -180.0, 0.1593, 0, 0, 0, -50.01, 43.99, 0, 0, 0, 0, 2, 2,
              1, 0, 507, 548, 167],
@@ -4297,7 +4390,7 @@ class TestDynamoMotl:
         pd.testing.assert_frame_equal(pd.DataFrame(expected3_entries), rows_subset)
 
     def test_convert_to_motl(self):
-        pathfile = "./test_data/motl_data/b4_motl_CR_tm_topbott_clean600_1_dynamo.tbl"
+        pathfile = test_data + "/motl_data/b4_motl_CR_tm_topbott_clean600_1_dynamo.tbl"
         dynamo_motl = DynamoMotl(pathfile)
         dynamo_df = dynamo_motl.dynamo_df
         motl_df = dynamo_motl.df
@@ -4337,32 +4430,32 @@ class TestDynamoMotl:
 
     def test_write_out(self):
         # Test using a real EM file pandas dataframe as input
-        em_motl_test = EmMotl(input_motl="./test_data/au_1.em")
+        em_motl_test = EmMotl(input_motl=test_data + "/au_1.em")
         em_dynamo_motl = DynamoMotl(input_motl=em_motl_test.df)
         print("\n")
         # (em_mod_motl.df)
         assert em_dynamo_motl.dynamo_df.empty
-        em_dynamo_motl.write_out(output_path="./test_data/motl_data/test_dynamo.tbl")
-        em_dynamo_motl1 = DynamoMotl(input_motl="./test_data/motl_data/test_dynamo.tbl")
+        em_dynamo_motl.write_out(output_path=test_data + "/motl_data/test_dynamo.tbl")
+        em_dynamo_motl1 = DynamoMotl(input_motl=test_data + "/motl_data/test_dynamo.tbl")
         pd.set_option('display.max_rows', None)  # Print all rows
         pd.set_option('display.max_columns', None)  # Print all columns
         print(em_dynamo_motl1.dynamo_df)
 
-        if os.path.exists("./test_data/motl_data/test_dynamo.tbl"):
-            os.remove("./test_data/motl_data/test_dynamo.tbl")
+        if os.path.exists(test_data + "/motl_data/test_dynamo.tbl"):
+            os.remove(test_data + "/motl_data/test_dynamo.tbl")
 
     def test_convert_to_dynamo(self):
         #Create a dynamo using real - confirmed - dynamo df
         #and then try to create the same object with dynamo.df
-        dynamo_test = DynamoMotl(input_motl="./test_data/motl_data/crop.tbl")
+        dynamo_test = DynamoMotl(input_motl=test_data + "/motl_data/crop.tbl")
         dynamo_test_reconvert = DynamoMotl(input_motl=dynamo_test.df)
-        dynamo_test_reconvert.write_out(output_path="./test_data/motl_data/crop2.tbl")
-        if os.path.exists("./test_data/motl_data/crop2.tbl"):
-            os.remove("./test_data/motl_data/crop2.tbl")
+        dynamo_test_reconvert.write_out(output_path=test_data + "/motl_data/crop2.tbl")
+        if os.path.exists(test_data + "/motl_data/crop2.tbl"):
+            os.remove(test_data + "/motl_data/crop2.tbl")
 
 class TestModMotl:
     def test_init(self):
-        test_file_path = "./test_data/motl_data/modMotl/"
+        test_file_path = test_data + "/motl_data/modMotl/"
         mod_df = ModMotl(input_motl=test_file_path)
         """pd.set_option('display.max_rows', None)  # Print all rows
         pd.set_option('display.max_columns', None)  # Print all columns"""
@@ -4371,7 +4464,7 @@ class TestModMotl:
         print(mod_df.mod_df)
 
     def test_read_in_valid_file(self):
-        test_file_path = "./test_data/motl_data/modMotl/"
+        test_file_path = test_data + "/motl_data/modMotl/"
         mod_df = ModMotl.read_in(input_path=test_file_path)
         assert isinstance(mod_df, pd.DataFrame)
         assert not mod_df.empty
@@ -4383,7 +4476,7 @@ class TestModMotl:
 
 
 
-        test_file_path = "./test_data/motl_data/modMotl/empty089.mod"
+        test_file_path = test_data + "/motl_data/modMotl/empty089.mod"
         mod_df = ModMotl.read_in(input_path=test_file_path)
         assert isinstance(mod_df, pd.DataFrame)
         assert not mod_df.empty
@@ -4504,7 +4597,7 @@ class TestModMotl:
         pd.set_option('display.max_rows', None)  # Print all rows
         pd.set_option('display.max_columns', None)  # Print all columns
 
-        test_file_path = "./test_data/motl_data/modMotl/"
+        test_file_path = test_data + "/motl_data/modMotl/"
         mod_motl = ModMotl(test_file_path)
         mod_motl.write_out(output_path=test_file_path + "test999.mod")
         mod = ModMotl(test_file_path + "test999.mod")
@@ -4525,13 +4618,13 @@ class TestModMotl:
             "mod_id": ["669", "669", "669"]
         })
         mod = ModMotl(input_motl=input_df_test_single)
-        mod.write_out(output_path="./test_data/motl_data/test669.mod")
-        mod1 = ModMotl(input_motl="./test_data/motl_data/test669.mod")
+        mod.write_out(output_path=test_data + "/motl_data/test669.mod")
+        mod1 = ModMotl(input_motl=test_data + "/motl_data/test669.mod")
 
         pd.testing.assert_frame_equal(mod.mod_df, mod1.mod_df, check_dtype=False)
         pd.testing.assert_frame_equal(mod.df, mod1.df, check_dtype=False)
-        if os.path.exists("./test_data/motl_data/test669.mod"):
-            os.remove("./test_data/motl_data/test669.mod")
+        if os.path.exists(test_data + "/motl_data/test669.mod"):
+            os.remove(test_data + "/motl_data/test669.mod")
 
         #create a ModMotl using a Motl df
         motl_df_mod = ModMotl(motl_df)
@@ -4553,7 +4646,7 @@ class TestModMotl:
 
 
         #Test using a real EM file pandas dataframe as input
-        em_motl_test = EmMotl(input_motl = "./test_data/au_1.em")
+        em_motl_test = EmMotl(input_motl = test_data + "/au_1.em")
         em_mod_motl = ModMotl(input_motl = em_motl_test.df)
         print("\n")
         #(em_mod_motl.df)
@@ -4567,7 +4660,7 @@ class TestModMotl:
             os.remove(test_file_path + "test567.mod")
 
     def test_check_em2mod(self):
-        check = ModMotl("./test_data/motl_data/mod110.mod")
+        check = ModMotl(test_data + "/motl_data/mod110.mod")
         pd.set_option('display.max_rows', None)
         pd.set_option('display.max_columns', None)
         pd.set_option('display.width', None)
@@ -4578,10 +4671,10 @@ class TestModMotl:
 
 
 class TestRelionMotlv5:
-    warp_tomo_path = "./test_data/motl_data/relion5/clean/warp2_matching_tomograms.star"
+    warp_tomo_path = test_data + "/motl_data/relion5/clean/warp2_matching_tomograms.star"
     warp_particles_path = "test_data/motl_data/relion5/clean/warp2_particles_matching.star"
-    relion_tomo_path = "./test_data/motl_data/relion5/clean/R5_tutorial_run_tomograms.star"
-    relion_particles_path = "./test_data/motl_data/relion5/clean/R5_tutorial_run_data.star"
+    relion_tomo_path = test_data + "/motl_data/relion5/clean/R5_tutorial_run_tomograms.star"
+    relion_particles_path = test_data + "/motl_data/relion5/clean/R5_tutorial_run_data.star"
 
     def test_getpd(self):
         result = RelionMotlv5.read_in_tomograms(self, self.warp_tomo_path)
@@ -4596,7 +4689,7 @@ class TestRelionMotlv5:
             input_tomograms = self.warp_tomo_path,
             pixel_size = 1.0,
         )
-        output_path = "./test_data/motl_data/relion5/clean/warp2test.star"
+        output_path = test_data + "/motl_data/relion5/clean/warp2test.star"
         motl5.write_out(
             output_path = output_path,
             write_optics=True,
@@ -4626,7 +4719,7 @@ class TestRelionMotlv5:
             input_tomograms=self.relion_tomo_path,
             pixel_size=1.0,
         )
-        output_path = "./test_data/motl_data/relion5/clean/relion5test.star"
+        output_path = test_data + "/motl_data/relion5/clean/relion5test.star"
         output_path = output_path
         motl5.write_out(
             output_path=output_path,
@@ -4649,7 +4742,7 @@ class TestRelionMotlv5:
             pixel_size=1.0,
         )
         # test1: convert!
-        output_path="./test_data/motl_data/relion5/clean/relion2warp.star"
+        output_path=test_data + "/motl_data/relion5/clean/relion2warp.star"
         motl5.write_out(
             output_path=output_path,
             write_optics=True,
@@ -4665,7 +4758,7 @@ class TestRelionMotlv5:
             input_tomograms=self.warp_tomo_path,
             pixel_size=1.0,
         )
-        output_path ="./test_data/motl_data/relion5/clean/warp2reliontest.star"
+        output_path =test_data + "/motl_data/relion5/clean/warp2reliontest.star"
         motl5.write_out(
             output_path=output_path,
             write_optics=True,
@@ -4682,7 +4775,7 @@ class TestRelionMotlv5:
             input_tomograms=self.warp_tomo_path,
             pixel_size=1.0,
         )
-        output_path = "./test_data/motl_data/relion5/clean/warp2test.star"
+        output_path = test_data + "/motl_data/relion5/clean/warp2test.star"
         motl5.write_out(
             output_path=output_path,
             write_optics=True,
@@ -5205,7 +5298,7 @@ class TestRelionMotlv5:
     class TestPrepareOpticsData:
         @pytest.fixture(scope="class")
         def optics_file_paths(self):
-            motl_dir = "./test_data/motl_data/"
+            motl_dir = test_data + "/motl_data/"
             os.makedirs(motl_dir, exist_ok=True)
             relion_path = os.path.join(motl_dir, "relion_v5_optics.star")
             warp_path = os.path.join(motl_dir, "warp_optics.star")
