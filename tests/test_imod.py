@@ -9,7 +9,7 @@ from cryocat import imod
 
 test_data = str(Path(__file__).parent / "test_data")
 test_data_path = test_data + "/motl_data/modMotl/correct111.mod"
-test_data_dir = test_data + ("/motl_data/modMotl/")
+test_data_dir = test_data + "/motl_data/modMotl/"
 class TestImodHeaders:
     def test_model_header_creation(self):
         header = imod.ModelHeader()

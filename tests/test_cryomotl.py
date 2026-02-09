@@ -153,7 +153,7 @@ def test_read_from_emfile(m):
     check_emmotl(motl)
 
 
-@pytest.mark.parametrize("m", ["./tests/test_data/col_missing.em", "./tests/test_data/extra_col.em"])
+@pytest.mark.parametrize("m", [test_data + "/col_missing.em", test_data + "/extra_col.em"])
 # TODO did not manage to write out corrupted em file '/test/na_values.em', '/test/bad_values.em'
 def test_read_from_emfile_wrong(m):
     with pytest.raises(UserInputError):

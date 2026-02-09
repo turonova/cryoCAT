@@ -7,17 +7,18 @@ from cryocat import cryomask
 from cryocat import cryomap
 from scipy.spatial.distance import cdist
 from scipy.spatial.transform import Rotation as R
+from pathlib import Path
 
-
+test_data = Path(__file__).parent / "test_data"
 @pytest.fixture
 def shape():
-    shape = SamplePoints.load_shapes("./test_data/point_clouds/c10x10.csv")
+    shape = SamplePoints.load_shapes(str(test_data / "point_clouds" / "c10x10.csv"))
     return shape
 
 
 @pytest.fixture
 def motl():
-    motl = cryomotl.Motl.load("./test_data/point_clouds/motl_c10x10.em")
+    motl = cryomotl.Motl.load(str(test_data / "point_clouds" / "motl_c10x10.em"))
     return motl
 
 
@@ -218,6 +219,6 @@ def test_mask_clean_all_out(motl, r=2):
 def test_marker_from_centroid(box=10, sper_rad=2, cent_size=1):
     sperical_mask = cryomask.spherical_mask(box, radius=sper_rad)
     mask = SamplePoints.marker_from_centroid(sperical_mask, centroid_mark_size=cent_size)
-    ground_truth = cryomap.read("./tests/test_data/point_clouds/sphere_centroid_marker_10x10.mrc")
+    ground_truth = cryomap.read(str(test_data / "point_clouds" / "sphere_centroid_marker_10x10.mrc"))
     liken = mask == ground_truth
     assert liken.all()
