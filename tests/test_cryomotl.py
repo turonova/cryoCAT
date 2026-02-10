@@ -4672,7 +4672,7 @@ class TestModMotl:
 
 class TestRelionMotlv5:
     warp_tomo_path = test_data + "/motl_data/relion5/clean/warp2_matching_tomograms.star"
-    warp_particles_path = "test_data/motl_data/relion5/clean/warp2_particles_matching.star"
+    warp_particles_path = test_data + "/motl_data/relion5/clean/warp2_particles_matching.star"
     relion_tomo_path = test_data + "/motl_data/relion5/clean/R5_tutorial_run_tomograms.star"
     relion_particles_path = test_data + "/motl_data/relion5/clean/R5_tutorial_run_data.star"
 
