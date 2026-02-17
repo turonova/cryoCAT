@@ -489,7 +489,7 @@ def create_denovo_multiref_run(
     >>> # The alignment motl will have same number of particles as the input_motl, the reference motls will have
     >>> # number_of_classes * class_occupancy (16 000) particles each.
     >>> create_denovo_multiref_run(
-    ... "/path/to/relion_1.star", number_of_classes=8, output_motl_base="stopgap_dn",
+    ... "/path/to/relion_1.star", number_of_classes=8, output_motl_base="/path/to/stopgap_dn",
     ... input_motl_type="relion", class_occupancy = 2000, iteration_number=4, number_of_runs=2,
     ... output_motl_type="stopgap"
     ... )
