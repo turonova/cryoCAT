@@ -891,7 +891,7 @@ def normals_to_euler_angles(input_normals, output_order="zxz"):
     normals = normals / np.linalg.norm(normals, axis=1)[:, np.newaxis]
     theta = np.degrees(np.arctan2(np.sqrt(normals[:, 0] ** 2 + normals[:, 1] ** 2), normals[:, 2]))
 
-    psi = 90 + np.degrees(np.arctan2(normals[:, 1], normals[:, 0]))
+    psi = np.degrees(np.arctan2(normals[:, 0], -normals[:, 1])) #90 + np.degrees(np.arctan2(normals[:, 1], normals[:, 0]))
     b_idx = np.where(np.arctan2(normals[:, 1], normals[:, 0]) == 0)
     psi[b_idx] = 0
 
