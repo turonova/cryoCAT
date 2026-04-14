@@ -7,10 +7,11 @@ sys.path.append(".")
 import pytest
 from cryocat.cryomask import *
 from cryocat.cryomap import read
-
+from pathlib import Path
 # sys.path.append(".")
-gen_dir = "./test_data/masks/"
-temp_dir = "./test_data/temp/"
+test_data = str(Path(__file__).parent / "test_data")
+gen_dir = test_data + "/masks/"
+temp_dir = test_data + "/temp/"
 
 
 @pytest.fixture

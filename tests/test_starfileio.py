@@ -3,11 +3,12 @@ import pandas as pd
 import pytest
 
 from cryocat import starfileio as sf
+from pathlib import Path
 
-
+test_data = Path(__file__).parent / "test_data"
 @pytest.fixture
 def relion_optics():
-    relion_sf = sf.Starfile("./test_data/relion_3.1_optics.star")
+    relion_sf = sf.Starfile(str(test_data / "relion_3.1_optics.star"))
     return relion_sf
 
 
@@ -25,7 +26,7 @@ def test_relion_optics(relion_optics):
     )
 
 def test_relion5_star_fix():
-    path = "test_data/motl_data/relion5/clean/warp2_particles_matching3.star"
-    output_path = "./test_data/motl_data/relion5/clean/warp2_particles_matching_clean.star"
-    sf.Starfile.fix_relion5_star(path, output_path)
+    path = str(test_data / "motl_data" / "relion5" / "clean" / "warp2_particles_matching.star")
+    #output_path = str(test_data / "motl_data" / "relion5" / "clean" / "warp2_particles_matching_clean.star")
+    print(sf.Starfile.fix_relion5_star(path))
     #no exception!

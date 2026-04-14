@@ -323,12 +323,12 @@ class TestMdocWithFiles:
         #todo
         pass
 
+test_data = Path(__file__).parent / "test_data"
 @pytest.fixture
 def mdoc_file():
-    return str(Path("./test_data/frames_mdoc/TS_019_0000_8.0.mrc.mdoc"))
+    return str(test_data / "frames_mdoc" / "TS_019_0000_8.0.mrc.mdoc")
 
 
 @pytest.fixture
 def mdoc_directory():
-    mdoc_path = Path("./test_data/frames_mdoc")
-    return str(mdoc_path)
+    return str(test_data / "frames_mdoc")
