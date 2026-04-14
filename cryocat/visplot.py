@@ -1698,7 +1698,7 @@ def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stab
         show_legend = True
 
     # Create subplots
-    fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(20, 10))
+    fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(20, 10), dpi=300)
 
     for i in range(n_rows):  # number of rows
         for j in range(n_cols):  # number of columns
