@@ -1459,7 +1459,7 @@ class TwistDescriptor(Descriptor):
         phi_nn = t_nn.df["nn_angles_phi"].to_numpy()
         subtomo_qp = t_nn.df["qp_subtomo_id"].to_numpy()
         subtomo_nn = t_nn.df["nn_subtomo_id"].to_numpy()
-        tomo_idx = t_nn.df["tomo_id"].to_numpy()
+        tomo_idx = t_nn.df[t_nn.feature_id].to_numpy() 
 
         if symm is not None:
             ang_scores = geom.angular_score_for_c_symmetry(
@@ -1476,7 +1476,7 @@ class TwistDescriptor(Descriptor):
         if symm is None:
             twist_df = pd.DataFrame(
                 data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_qp, phi_nn)),
-                columns=["qp_id", "nn_id", "tomo_id"]
+                columns=["qp_id", "nn_id", t_nn.feature_id] 
                 + TwistDescriptor.get_mixed_feature_ids()
                 + ["qp_inplane", "nn_inplane"],
             )
@@ -1484,7 +1484,7 @@ class TwistDescriptor(Descriptor):
         else:
             twist_df = pd.DataFrame(
                 data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_qp, phi_nn, ang_scores)),
-                columns=["qp_id", "nn_id", "tomo_id"]
+                columns=["qp_id", "nn_id", t_nn.feature_id] 
                 + TwistDescriptor.get_mixed_feature_ids()
                 + ["qp_inplane", "nn_inplane", "angular_score"],
             )
@@ -1754,6 +1754,7 @@ class TwistDescriptor(Descriptor):
 
         return weighted_data
 
+    # TODO: change for general feature_id from t_nn object
     def get_qp_twist_desc(self, query_particle, tomo_id=None):
         """Get twist descriptor for a specific query particle from a twist dataframe.
 

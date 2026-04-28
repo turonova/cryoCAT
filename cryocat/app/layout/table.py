@@ -635,6 +635,7 @@ def show_spinner(n):
     prevent_initial_call=True,
 )
 def compute_twist_vector(trigger, motl_df, symm_type, symm_value, param_values, param_ids):
+
     if not trigger or "show" not in trigger:
         raise dash.exceptions.PreventUpdate
 
