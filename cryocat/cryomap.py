@@ -451,26 +451,25 @@ def read(input_map, transpose=True, data_type=None):
     return data
 
 
-def write(data_to_write, file_name, transpose=True, data_type=None, overwrite=True):
+def write(data_to_write, file_name, transpose=True, data_type=None, voxel_size=1.0, overwrite=True):
     """Write data to a specified file in a given format.
 
     Parameters
     ----------
     data_to_write : numpy.ndarray
         The data array to be written to the file. It can be of any shape and type.
-
     file_name : str
         The name of the file to which the data will be written. The file extension must be
         one of the following: '.mrc', '.rec', or '.em'.
-
     transpose : bool, default=True
         If True (default), the data will be transposed before writing. The transposition
         will change the order of the axes to (2, 1, 0). Default is True.
-
     data_type : type, optional
         If specified, the data will be cast to this type before writing. If None (default),
         the original data type will be used.
-
+    voxel_size: float, default=1.0
+        The size of the voxels to store in the header of the MRC files. Note that .em files do not store such
+        in the header and this value is therefore ignored. Defaults to 1.0.
     overwrite : bool, default=True
         If True (default), existing files will be overwritten. If False, an error will be
         raised if the file already exists. Default is True.
@@ -497,7 +496,7 @@ def write(data_to_write, file_name, transpose=True, data_type=None, overwrite=Tr
         data_to_write = data_to_write.astype(np.float32)
 
     if file_name.endswith(".mrc") or file_name.endswith(".rec"):
-        mrcfile.write(name=file_name, data=data_to_write, overwrite=overwrite)
+        mrcfile.write(name=file_name, data=data_to_write, overwrite=overwrite, voxel_size=voxel_size)
     elif file_name.endswith(".em"):
         emfile.write(file_name, data=data_to_write, overwrite=overwrite)
     else:
@@ -541,7 +540,7 @@ def invert_contrast(input_map, output_name=None):
     return inverted_map
 
 
-def em2mrc(map_name, invert=False, overwrite=True, output_name=None):
+def em2mrc(map_name, invert=False, overwrite=True, voxel_size=1.0, output_name=None):
     """Convert a file in EM format to MRC format.
 
     Parameters
@@ -552,6 +551,8 @@ def em2mrc(map_name, invert=False, overwrite=True, output_name=None):
         If True, the data will be inverted (multiplied by -1). Default is False.
     overwrite : bool, default=True
         If True, allows overwriting of the output file if it already exists. Default is True.
+    voxel_size: float, default=1.0
+        The size of the voxels to store in the header of the MRC files. Defaults to 1.0.
     output_name : str, optional
         The name of the output MRC file. If None, the output name will be derived from `map_name` by replacing the
         last two characters with 'mrc'.
@@ -580,7 +581,7 @@ def em2mrc(map_name, invert=False, overwrite=True, output_name=None):
         output_name = map_name[:-2] + "mrc"
     elif not output_name.endswith(".mrc"):
         raise ValueError(f"Specified output file name must end with .mrc")
-    write(data_to_write, output_name, overwrite=overwrite)
+    write(data_to_write, output_name, overwrite=overwrite, voxel_size=voxel_size)
 
 
 def mrc2em(map_name, invert=False, overwrite=True, output_name=None):
@@ -868,6 +869,7 @@ def crop(input_map, new_size, output_file=None, crop_coord=None):
 
     vs, ve, _, _ = get_start_end_indices(crop_coord, input_map.shape, new_size)
 
+    # print(vs[0], ve[0], vs[1], ve[1], vs[2], ve[2])
     cropped_volume = input_map[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
 
     if output_file is not None:
