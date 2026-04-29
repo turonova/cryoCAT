@@ -66,6 +66,7 @@ class NearestNeighbors:
             self.df = None
             return
 
+        self.feature_id = feature_id 
         motl_list = []
         single_motl = False
         if not isinstance(input_data, list):
@@ -182,7 +183,6 @@ class NearestNeighbors:
 
         # self.motls = motl_list
         self.features = features
-        self.feature_id = feature_id
         # self.feature_id = feature_id
 
     def drop_symmetric_duplicates(self):
@@ -206,17 +206,21 @@ class NearestNeighbors:
 
     def get_unique_values(self):
         return self.features
-
+    
     def get_nn_subset(self, motl_values, feature_values):
         nn_subset = NearestNeighbors()
+        nn_subset.feature_id = self.feature_id
+
         if not isinstance(motl_values, list):
             motl_values = [motl_values]
         if not isinstance(feature_values, list):
             feature_values = [feature_values]
 
         nn_subset.df = self.df[
-            (self.df["motl_id"].isin(motl_values)) & (self.df[self.feature_id].isin(feature_values))
+            (self.df["motl_id"].isin(motl_values)) &
+            (self.df[self.feature_id].isin(feature_values))
         ].copy()
+
         nn_subset.features = feature_values
 
         return nn_subset
