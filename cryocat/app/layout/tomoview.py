@@ -122,52 +122,51 @@ def get_viewer_component(prefix: str):
     )
 
 
-def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="full", detailed_table=None):
+def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="full", detailed_table=None, tabs_id="table-tabs"):
 
     if detailed_table == None:
         detailed_table = f"{prefix}-data"
 
-    @callback(
-        Output(f"{prefix}-graph-menu", "style"),
-        Input("table-tabs", "active_tab"),
-        State(f"{prefix}-graph-menu", "style"),
-    )
-    def toggle_visibility(active_tab, current_style):
-        if current_style is None:
-            current_style = {}
+    if tabs_id is not None:
+        @callback(
+            Output(f"{prefix}-graph-menu", "style"),
+            Input(tabs_id, "active_tab"),
+            State(f"{prefix}-graph-menu", "style"),
+        )
+        def toggle_visibility(active_tab, current_style):
+            if current_style is None:
+                current_style = {}
 
-        updated_style = current_style.copy()
+            updated_style = current_style.copy()
 
-        if active_tab in ["motl-tab", "twist-tab", "nn-motl-tab", "cluster-tab"]:
-            updated_style["display"] = "flex"
-        else:
-            updated_style["display"] = "none"
+            if active_tab in ["motl-tab", "twist-tab", "nn-motl-tab", "cluster-tab"]:
+                updated_style["display"] = "flex"
+            else:
+                updated_style["display"] = "none"
 
-        return updated_style
+            return updated_style
 
     @callback(
         Output(f"{prefix}-index", "data"),
         Input(f"{prefix}-prev", "n_clicks"),
         Input(f"{prefix}-next", "n_clicks"),
-        Input(f"motl-data-store", "data"),
+        Input(f"{prefix}-data", "data"),
         State(f"{prefix}-index", "data"),
-        State(f"{prefix}-data", "data"),
         prevent_initial_call=True,
     )
-    def update_index(prev, next_, motl_data, current_index, data):
-        print(data)
+    def update_index(prev, next_, data, current_index):
         if not data:
             raise exceptions.PreventUpdate
 
         tomo_ids = sorted({row["tomo_id"] for row in data})
         n = len(tomo_ids)
 
-        ctx = callback_context.triggered_id
-        if ctx == f"{prefix}-prev":
+        ctx_id = callback_context.triggered_id
+        if ctx_id == f"{prefix}-prev":
             return (current_index - 1) % n
-        if ctx == f"{prefix}-next":
+        if ctx_id == f"{prefix}-next":
             return (current_index + 1) % n
-        return current_index
+        return 0
 
     @callback(
         Output(f"{prefix}-color-dropdown", "options"),
