@@ -4136,9 +4136,8 @@ class RelionMotlv5(RelionMotl, Motl):
 
 class StopgapMotl(Motl):
     pairs = {
-        "subtomo_id": "subtomo_num",
+        "subtomo_id": "object",
         "tomo_id": "tomo_num",
-        "object_id": "object",
         "x": "orig_x",
         "y": "orig_y",
         "z": "orig_z",
@@ -4270,7 +4269,7 @@ class StopgapMotl(Motl):
                 self.df["subtomo_id"] = subtomo_id_num
 
     @staticmethod
-    def convert_to_sg_motl(motl_df, reset_index=False):
+    def convert_to_sg_motl(motl_df, reset_index=True):
         """Converts a given motl DataFrame to a Stopgap DataFrame.
 
         Parameters
@@ -4285,7 +4284,18 @@ class StopgapMotl(Motl):
         pandas.DataFrame
             The converted Stopgap DataFrame.
 
+        Notes
+        -----
+        In STOPGAP motls, all entries must have unique motl_idx but can share 
+        subtomo_nums if they are represented in the same extracted subtomogram. This 
+        method assigns them both the the entry's position in the list.
+
         """
+
+        if not reset_index:
+            warnings.warn(
+                "Setting reset_index to False is deprecated, motl_idx is always reset."
+            )
 
         stopgap_df = pd.DataFrame(data=np.zeros((motl_df.shape[0], 16)), columns=StopgapMotl.columns)
 
@@ -4294,37 +4304,12 @@ class StopgapMotl(Motl):
 
         stopgap_df.loc[motl_df["subtomo_id"].mod(2).eq(0), "halfset"] = "A"
         stopgap_df.loc[motl_df["subtomo_id"].mod(2).eq(1), "halfset"] = "B"
-        stopgap_df["motl_idx"] = stopgap_df["subtomo_num"]
-
-        stopgap_df = StopgapMotl.sg_df_reset_index(stopgap_df, reset_index)
-
-        return stopgap_df
-
-    @staticmethod
-    def sg_df_reset_index(stopgap_df, reset_index=False):
-        """Resets the "motl_idx" of a stopgap DataFrame to sequence from 1 to the length of the particle list if
-        reset_index is True.
-
-        Parameters
-        ----------
-        stopgap_df : pandas.DataFrame
-            The DataFrame to set the "motl_idx" of.
-        reset_index : bool, default=False
-            Whether to set the "motl_idx" to a sequence from 1 to the length of the particle list or leave the
-            original values. Defaults to False.
-
-        Returns
-        -------
-        pandas.DataFrame
-            The DataFrame with the "motl_idx" either reset to the sequence from 1 to the length of the particle
-            list or original values.
-
-        """
-
-        if reset_index:
-            stopgap_df["motl_idx"] = range(1, stopgap_df.shape[0] + 1)
+        
+        stopgap_df["motl_idx"]    = range(1, len(stopgap_df) + 1)
+        stopgap_df["subtomo_num"] = range(1, len(stopgap_df) + 1)
 
         return stopgap_df
+
 
     def write_out(self, output_path, update_coord=False, reset_index=False):
         """Writes the StopgapMotl object to a star file unless the extesions of the file is .em in which case it writes
