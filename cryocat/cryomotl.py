@@ -8,6 +8,7 @@ import re
 import warnings
 import copy
 import warnings
+import re
 
 from cryocat.exceptions import UserInputError
 from cryocat import cryomap
@@ -2223,7 +2224,7 @@ class RelionMotl(Motl):
         "rlnClassNumber",
     ]
 
-    def __init__(self, input_motl=None, version=None, pixel_size=None, binning=None, optics_data=None):
+    def __init__(self, input_motl=None, version=None, pixel_size=None, binning=None, optics_data=None, tomo_format="", subtomo_format=""):
         super().__init__()
         self.version = version
         self.pixel_size = pixel_size
@@ -2251,7 +2252,7 @@ class RelionMotl(Motl):
                 self.check_df_type(input_motl)
             elif isinstance(input_motl, str):
                 relion_df, data_version, optics_df = self.read_in(input_motl)
-                self.convert_to_motl(relion_df, data_version, optics_df)
+                self.convert_to_motl(relion_df, data_version, optics_df, tomo_format, subtomo_format)
             else:
                 raise UserInputError(
                     f"Provided input_motl is neither DataFrame nor path to the motl file: {input_motl}."
@@ -2596,7 +2597,7 @@ class RelionMotl(Motl):
             # self.df[motl_column].fillna(0, inplace=True)
             self.df.fillna({motl_column: 0.0}, inplace=True)
 
-    def parse_tomo_id(self, relion_df):
+    def parse_tomo_id(self, relion_df, tomo_format=""):
         """The function parses the tomogram id from a Relion starfile. The function takes
         in a pandas.DataFrame in relion format and looks for the `rlnMicrographName` (for Relion 3.1 and lower) column
         or for the `rlnTomoName` (for Relion 4.0 and higher) column and tries to parse the tomogram id for each
@@ -2607,24 +2608,43 @@ class RelionMotl(Motl):
         ----------
         relion_df : pandas.DataFrame
             The DataFrame in Relion format containing the tilt-series or micrographs.
+        tomo_format : str, default=""
+            Custom pattern to extract the tomogram ID (e.g., "$xxxx"). If empty, robust automated parsing is used.
+            See :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for detailed syntax and examples.
 
         Warnings
         --------
         Due to lack of format in relion starfiles it is possible that this function will fail. Currently, following
         formats are expected:
 
-        - Relion 3.1 and lower for "rlnMicrographName": first number in the last entry (/path/tomoID_pixelSize.mrc)
-        - Relion 3.1 and lower for "rlnImageName": first number in the last entry (/path/tomoID_subtomoID_pixelSize.mrc)
-        - Relion 4.0 and higher for "rlnTomoName": first number in the last entry (TS_tomoID)
-        - Relion 4.0 and higher for "rlnTomoParticleName": first number in the first entry (TS_tomoID/subtomoID)
+        - Relion 5.1, 3.1 and lower for "rlnMicrographName": first number in the last entry (/path/tomoID_pixelSize.mrc)
+        - Relion 5.1, 3.1 and lower for "rlnImageName": first number in the last entry (/path/tomoID_subtomoID_pixelSize.mrc)
+        - Relion 4.0 for "rlnTomoName": first number in the last entry (TS_tomoID)
+        - Relion 4.0 for "rlnTomoParticleName": first number in the first entry (TS_tomoID/subtomoID)
 
         Notes
         -----
         TODO: Add custom format specifier.
-
+        See Also
+        --------
+        :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data`
+            Provides comprehensive examples and explains the syntax for `tomo_format` and `subtomo_format`.
         """
+        if tomo_format != "":
+            seqs = re.findall(r"\$x+", tomo_format)
+            if not seqs:
+                raise ValueError(f"The format {tomo_format} does not contain any sequence of $ followed by x.")
+            target_seq = sorted(seqs, key=len)[-1]
+            pattern = re.escape(tomo_format).replace(re.escape(target_seq), r"(\d+)")
+            pattern = re.sub(r"\\\$[xy]+", r"\\d+", pattern)
+            col_name = self.tomo_id_name if self.tomo_id_name in relion_df.columns else self.subtomo_id_name
+            tomo_idx = []
+            for name in relion_df[col_name]:
+                match = re.search(pattern, str(name))
+                tomo_idx.append(float(match.group(1)) if match else np.nan)
+            self.df["tomo_id"] = tomo_idx
 
-        if self.tomo_id_name in relion_df.columns:
+        elif self.tomo_id_name in relion_df.columns:
             micrograph_names = relion_df[self.tomo_id_name].tolist()
 
             if all(isinstance(i, (int, float)) for i in micrograph_names):
@@ -2634,13 +2654,14 @@ class RelionMotl(Motl):
                 tomo_idx = []
 
                 for j in tomo_names:
-                    tomo_idx.append(float(re.search(r"\d+", j).group()))
+                    clean_name = re.sub(r"(_[0-9\.]+A(?:px)?)?\.[a-zA-Z0-9]+$", "", str(j).strip(), flags=re.IGNORECASE)
+                    numbers = re.findall(r"\d+", clean_name)
+                    tomo_idx.append(float(numbers[-1]))
 
             self.df["tomo_id"] = tomo_idx
 
-        # in case there is no migrograph name fetch tomo id from subtomo path
         elif self.subtomo_id_name in relion_df.columns:
-            if self.version <= 3.1:
+            if self.version <= 3.1 or self.version == 5.1:
                 tomo_position = -1
             else:
                 tomo_position = 0
@@ -2653,11 +2674,13 @@ class RelionMotl(Motl):
                 tomo_idx = []
 
                 for j in tomo_names:
-                    tomo_idx.append(float(re.findall(r"\d+", j)[0]))
+                    clean_name = re.sub(r"(_[0-9\.]+A(?:px)?)?\.[a-zA-Z0-9]+$", "", str(j).strip(), flags=re.IGNORECASE)
+                    numbers = re.findall(r"\d+", clean_name)
+                    tomo_idx.append(float(numbers[-2] if len(numbers) >= 2 else numbers[-1]))
 
             self.df["tomo_id"] = tomo_idx
 
-    def parse_subtomo_id(self, relion_df):
+    def parse_subtomo_id(self, relion_df, subtomo_format=""):
         """The function parses the subtomogram id from a Relion starfile. The function takes
         in a pandas.DataFrame in relion format and looks for the `rlnImageName` (for Relion 3.1 and lower) column
         or for the `rlnTomoParticleName` (for Relion 4.0 and higher) column and tries to parse the subtomogram id for each
@@ -2668,6 +2691,9 @@ class RelionMotl(Motl):
         ----------
         relion_df : pandas.DataFrame
             The DataFrame in Relion format containing the subtomogram numbers.
+        subtomo_format : str, default=""
+            Custom pattern to extract the subtomogram ID (e.g., "$yyyy"). If empty, robust automated parsing is used.
+            See :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for detailed syntax and examples.
 
         Notes
         -----
@@ -2689,9 +2715,25 @@ class RelionMotl(Motl):
         -------
         None
 
+        See Also
+        --------
+        :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data`
+            Provides comprehensive examples and explains the syntax for `tomo_format` and `subtomo_format`.
         """
+        if subtomo_format != "" and self.subtomo_id_name in relion_df.columns:
+            seqs = re.findall(r"\$y+", subtomo_format)
+            if not seqs:
+                raise ValueError(f"The format {subtomo_format} does not contain any sequence of $ followed by y.")
+
+            target_seq = sorted(seqs, key=len)[-1]
+            pattern = re.escape(subtomo_format).replace(re.escape(target_seq), r"(\d+)")
+            pattern = re.sub(r"\\\$[xy]+", r"\\d+", pattern)
+            subtomo_idx = []
+            for name in relion_df[self.subtomo_id_name]:
+                match = re.search(pattern, str(name))
+                subtomo_idx.append(float(match.group(1)) if match else np.nan)
         # parsing out subtomo number
-        if self.subtomo_id_name in relion_df.columns:
+        elif self.subtomo_id_name in relion_df.columns:
             image_names = relion_df[self.subtomo_id_name].tolist()
 
             # Note: following will fail if the subtomos are named differently for each row - once with string, once with
@@ -2703,10 +2745,13 @@ class RelionMotl(Motl):
                 subtomo_idx = []
 
                 for j in subtomo_names:
-                    if self.version >= 4.0:
+                    if self.version != 5.1 and self.version >= 4.0 and re.match(r"^\d+$", j):
                         subtomo_idx.append(float(j))
                     else:
-                        subtomo_idx.append(float(re.findall(r"\d+", j)[1]))
+                        clean_name = re.sub(r"(_[0-9\.]+A(?:px)?)?\.[a-zA-Z0-9]+$", "", str(j).strip(),
+                                            flags=re.IGNORECASE)
+                        numbers = re.findall(r"\d+", clean_name)
+                        subtomo_idx.append(float(numbers[-1]))
 
         # Check if the subtomo_idx are unique and if not store them at geom3 and renumber particles
         self.df["geom3"] = subtomo_idx
@@ -2730,7 +2775,7 @@ class RelionMotl(Motl):
 
             self.df["subtomo_id"] = subtomo_id_num
 
-    def convert_to_motl(self, relion_df, version=None, optics_df=None):
+    def convert_to_motl(self, relion_df, version=None, optics_df=None, tomo_format="", subtomo_format=""):
         """The function converts a DataFrame in relion format into a motl DataFrame.
 
         Parameters
@@ -2741,6 +2786,9 @@ class RelionMotl(Motl):
             Version of Relion DataFrame. Defaults to None.
         optics_df : pandas.DataFrame, optional
             DataFrame with optics data. Defaults to None
+        subtomo_format : string
+
+        tomo_format: string
 
         Notes
         -----
@@ -2770,14 +2818,15 @@ class RelionMotl(Motl):
         self.convert_shifts(relion_df)
         self.convert_angles_from_relion(relion_df)
 
-        self.parse_tomo_id(relion_df)
-        self.parse_subtomo_id(relion_df)
+        self.parse_tomo_id(relion_df, tomo_format)
+        self.parse_subtomo_id(relion_df, subtomo_format)
 
         self.assign_column(relion_df, {"class": "rlnClassNumber"})  # getting class number
         self.assign_column(
             relion_df, {"score": "rlnMaxValueProbDistribution"}
         )  # getting the max value contribution per distribution - not really same as CCC but has similar indications
-
+        if "rlnHelicalTubeID" in relion_df.columns:
+            self.df["object_id"] = relion_df["rlnHelicalTubeID"].values
         # store the idx of the original data - useful for writing out
         self.relion_df["ccSubtomoID"] = self.df["subtomo_id"]
 
@@ -3323,8 +3372,8 @@ class RelionMotl(Motl):
             :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
         use_original_entries : bool, default=False
             Determine whether to use (True) the original entries stored in `self.relion_df` or not (False). If True, all
-            relion entries that are not used in motl (e.g. rlnCtfImage) are fetched from the original relion dataframe.
-            Coordinates, rotations, classes etc. will be updated. Defaults to False.
+            relion entries that are not used in motl (e.g., rlnCtfImage, rlnHelicalTubeID) are fetched from the original
+            relion dataframe. Coordinates, rotations, classes etc. will be updated. Defaults to False.
         keep_all_entries: bool, default=False
             Used only if use_original_entries is True. If True, it will keep all the entries as they were loaded including
             coordinates, rotations and classes. Essentially, it should be set to True only if some selection on particles
@@ -3334,7 +3383,8 @@ class RelionMotl(Motl):
             will be used. Defaults to None.
         add_object_id : bool, default=False
             Whether to add "object_id" from `self.df` to the DataFrame. If True, the column will be named
-            "ccObjectName". Defaults to False.
+            "ccObjectName". This is particularly useful for exporting fields mapped during loading,
+            such as "rlnHelicalTubeID". Defaults to False.
         add_subunit_id : bool, default=False
             Whether to add "subunit_id" from `self.df` to the DataFrame. If True, the column will be named
             "ccSubunitName". Defaults to False.
@@ -3443,8 +3493,8 @@ class RelionMotl(Motl):
             :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
         use_original_entries : bool, default=False
             Determine whether to use (True) the original entries stored in `self.relion_df` or not (False). If True, all
-            relion entries that are not used in motl (e.g. rlnCtfImage) are fetched from the original relion dataframe.
-            Coordinates, rotations, classes etc. will be updated. Defaults to False.
+            relion entries that are not used in motl (e.g., rlnCtfImage, rlnHelicalTubeID) are fetched from the original
+            relion dataframe. Coordinates, rotations, classes etc. will be updated. Defaults to False.
         keep_all_entries: bool, default=False
             Used only if use_original_entries is True. If True, it will keep all the entries as they were loaded including
             coordinates, rotations and classes. Essentially, it should be set to True only if some selection on particles
@@ -3453,8 +3503,9 @@ class RelionMotl(Motl):
             Specify the version and thereby the format of the DataFrame. If not provided the
             value from `self.version` will be used. Defaults to None.
         add_object_id : bool, default=False
-            Whether to add "object_id" from `self.df` to the DataFrame. If True,
-            the column will be named "ccObjectName". Defaults to False.
+            Whether to add "object_id" from `self.df` to the DataFrame. If True, the column will be named
+            "ccObjectName". This is particularly useful for exporting fields mapped during loading,
+            such as "rlnHelicalTubeID". Defaults to False.
         add_subunit_id : bool, default=False
             Whether to add "subunit_id" from `self.df` to the DataFrame. If True,
             the column will be named "ccSubunitName". Defaults to False.
@@ -3546,7 +3597,7 @@ class RelionMotlv5(RelionMotl, Motl):
     ]
 
     def __init__(
-        self, input_particles=None, input_tomograms=None, tomo_idx=None, pixel_size=None, binning=1.0, optics_data=None
+        self, input_particles=None, input_tomograms=None, tomo_idx=None, pixel_size=None, binning=1.0, optics_data=None, tomo_format="", subtomo_format=""
     ):
         Motl.__init__(self, motl_df=None)
 
@@ -3579,10 +3630,9 @@ class RelionMotlv5(RelionMotl, Motl):
             if input_particles is not None:
                 if isinstance(input_particles, str):  # star file
                     relion_df, optics_data = self.read_in(input_particles)
-                    self.convert_to_motl(relion_df, optics_data)
+                    self.convert_to_motl(relion_df, optics_data, tomo_format, subtomo_format)
                 elif isinstance(input_particles, pd.DataFrame):
-                    if isinstance(input_particles, pd.DataFrame):
-                        self.check_df_type(input_particles)
+                    self.check_df_type(input_particles)
                 # allow to specify tomo_data and particles_data - but only latter is used?
                 elif isinstance(input_particles, RelionMotlv5):
                     self.df = input_particles.df.copy()
@@ -3641,26 +3691,23 @@ class RelionMotlv5(RelionMotl, Motl):
         """
         if "rlnTomoName" not in df.columns:
             raise ValueError("'rlnTomoName' column not found in DataFrame")
-        df["rlnTomoName"] = df["rlnTomoName"].apply(
-            lambda name: (
-                int(re.search(r"\d+", name).group())
-                if isinstance(name, str) and re.search(r"\d+", name)  # must contain a number!
-                else None if isinstance(name, str) else name
-            )
-        )
 
+        def extract_tomo_id(name):
+            if not isinstance(name, str): return name
+            numbers = re.findall(r"\d+", re.sub(r"\.[a-zA-Z0-9]+$", "", str(name)))
+            return int(numbers[-1]) if numbers else None
+
+        df["rlnTomoName"] = df["rlnTomoName"].apply(extract_tomo_id)
         return df
 
     @staticmethod
     def clean_subtomo_name_column(df):
-        df["rlnTomoParticleName"] = df["rlnTomoParticleName"].apply(
-            lambda name: (
-                int(re.search(r"\d+", name.split("/")[-1]).group())
-                if isinstance(name, str) and re.search(r"\d+", name.split("/")[-1])
-                else None if isinstance(name, str) else name
-            )
-        )
+        def extract_subtomo_id(name):
+            if not isinstance(name, str): return name
+            numbers = re.findall(r"\d+", str(name).split("/")[-1])
+            return int(numbers[-1]) if numbers else None
 
+        df["rlnTomoParticleName"] = df["rlnTomoParticleName"].apply(extract_subtomo_id)
         return df
 
     def read_in_tomograms(self, input_path):
@@ -3677,7 +3724,7 @@ class RelionMotlv5(RelionMotl, Motl):
 
         return tomo_df
 
-    def convert_to_motl(self, relion_df, optics_df=None):
+    def convert_to_motl(self, relion_df, optics_df=None, tomo_format="", subtomo_format=""):
         """The function converts a DataFrame in relion format into a motl DataFrame.
 
         Parameters
@@ -3718,8 +3765,8 @@ class RelionMotlv5(RelionMotl, Motl):
         self.convert_shifts(relion_df)
         self.convert_angles_from_relion(relion_df)
 
-        self.parse_tomo_id(relion_df)
-        self.parse_subtomo_id(relion_df)  # missing in warp2
+        self.parse_tomo_id(relion_df, tomo_format)
+        self.parse_subtomo_id(relion_df, subtomo_format)  # missing in warp2
 
         # missing in warp2
         self.assign_column(relion_df, {"class": "rlnClassNumber"})  # getting class number
@@ -3875,14 +3922,7 @@ class RelionMotlv5(RelionMotl, Motl):
         return relion_df
 
     def prepare_optics_data(self, use_original_entries=True, optics_data=None, pixel_size=None, subtomo_size=None):
-        if use_original_entries:
-            if self.optics_data is not None:
-                optics_df = self.optics_data
-            else:
-                raise Warning(
-                    f"There is no information on optics available - use optics_data argument to provide this information."
-                )
-        elif optics_data is not None:
+        if optics_data is not None:
             if isinstance(optics_data, str):
                 optics_data_fixed = starfileio.Starfile.fix_relion5_star(optics_data)
                 optics_df, _ = starfileio.Starfile.get_frame_and_comments(optics_data_fixed, "data_optics")
@@ -3896,6 +3936,13 @@ class RelionMotlv5(RelionMotl, Motl):
             else:
                 raise UserInputError(
                     "Optics has to be specified as a dictionary, path to the starfile or pandas DataFrame."
+                )
+        elif use_original_entries:
+            if self.optics_data is not None:
+                optics_df = self.optics_data
+            else:
+                raise Warning(
+                    f"There is no information on optics available - use optics_data argument to provide this information."
                 )
         else:
             optics_df = self.create_optics_group_v5(pixel_size=pixel_size, subtomo_size=subtomo_size)
@@ -4036,8 +4083,8 @@ class RelionMotlv5(RelionMotl, Motl):
             coords = []
 
             # Precompute the trailing numeric suffix of each rlnTomoName once
-            name_suffix_num = self.tomo_df["rlnTomoName"].astype(str).str.extract(r"(\d+)$", expand=False)
-            name_suffix_num = name_suffix_num.astype("Int64")  # nullable int
+            cleaned_tomo_df = RelionMotlv5.clean_tomo_name_column(self.tomo_df.copy())
+            name_suffix_num = cleaned_tomo_df["rlnTomoName"].astype("Int64")  # nullable int
 
             for idx, row in self.df.iterrows():
                 # tomo_id might be float in the input; interpret it as an int index
