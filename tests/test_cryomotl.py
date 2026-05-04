@@ -11,7 +11,7 @@ import unittest
 import os
 
 from cryocat import ioutils, cryomap, cryomask, geom
-from cryocat.cryomotl import Motl, EmMotl, RelionMotl, RelionMotlv5, StopgapMotl, DynamoMotl, ModMotl, stopgap2emmotl, emmotl2stopgap
+from cryocat.cryomotl import Motl, EmMotl, RelionMotl, RelionMotlv5, RelionMotlv5_1, StopgapMotl, DynamoMotl, ModMotl, stopgap2emmotl, emmotl2stopgap
 from cryocat.exceptions import UserInputError
 from scipy.spatial.transform import Rotation as rot
 from pathlib import Path
@@ -2333,6 +2333,7 @@ class TestRelionMotl:
             "relion30_path": test_data + "/motl_data/relion_3.0.star",
             "relion31_path": test_data + "/motl_data/relion_3.1_optics2.star",
             "relion40_path": test_data + "/motl_data/relion_4.0.star",
+            "relion51_path": test_data + "/motl_data/relion5_1/run_it025_data.star",
             "relionbroken_path": test_data + "/motl_data/bin1_1deg_500.star"
         }
 
@@ -2346,6 +2347,7 @@ class TestRelionMotl:
         motl.set_version(pd.DataFrame(), version=3.0)
         assert motl.version == 3.1 #Should not be changed: default is 3.1 and after set
         #It can't be changed!
+
 
     def test_set_version_from_dataframe_v4(self):
         df = pd.DataFrame({"rlnTomoName": [1]})
@@ -2510,6 +2512,10 @@ class TestRelionMotl:
         relion123 = RelionMotl(test_data + "/motl_data/bin1_1deg_500_2.star")
         #normally read as the other ones
         print(relion123.relion_df)
+
+        #test with relion5.1 file
+        relion_motl_v51 = RelionMotlv5_1(relion_paths['relion51_path'])
+        assert relion_motl_v51.version == 5.1
 
     def test_get_version_from_file(self, relion_paths):
         frames3_0, spec3_0, _ = starfileio.Starfile.read(relion_paths['relion30_path'])
@@ -5692,3 +5698,4 @@ class TestRelionMotlv5:
             "rlnAmplitudeContrast": [0.1],
         })
         pd.testing.assert_frame_equal(optics_df, expected_df)
+
