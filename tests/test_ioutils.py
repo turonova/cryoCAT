@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from cryocat import ioutils
-from cryocat.ioutils import *
+from cryocat.utils import ioutils
+from cryocat.utils.ioutils import *
 import tempfile
 import pytest
 import os
@@ -27,7 +27,7 @@ def create_temp_file_with_encoding(content, encoding):
     [
         ("hello", "utf-8", "utf-8"),
         ("¦", "iso-8859-1", "iso-8859-1"),
-        #("…", "windows-1252", "windows-1252"), #fixme: doesn't recognize it
+        # ("…", "windows-1252", "windows-1252"), #fixme: doesn't recognize it
     ],
 )
 def test_get_file_encoding_valid(content, encoding, expected_encoding):
@@ -4221,3 +4221,150 @@ def test_relion_ctffind4_read():
     file_path = Path(__file__).parent / "test_data" / "dc02t01_ctf.star"
     result = ioutils.defocus_load(input_data=str(file_path), file_type="relion_ctffind4")
     print(result)
+
+
+# ── df_load ───────────────────────────────────────────────────────────────────
+
+
+def test_df_load_passthrough_dataframe():
+    df = pd.DataFrame({"a": [1, 2, 3], "b": [4.0, 5.0, 6.0]})
+    result = df_load(df)
+    pd.testing.assert_frame_equal(result, df)
+
+
+def test_df_load_from_csv(tmp_path):
+    csv_file = tmp_path / "data.csv"
+    expected = pd.DataFrame({"x": [1, 2], "y": [3, 4]})
+    expected.to_csv(csv_file, index=False)
+    result = df_load(str(csv_file))
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_df_load_from_array_with_header():
+    arr = np.array([[1, 2, 3], [4, 5, 6]])
+    result = df_load(arr, header=["a", "b", "c"])
+    assert list(result.columns) == ["a", "b", "c"]
+    assert result.shape == (2, 3)
+    np.testing.assert_array_equal(result.values, arr)
+
+
+def test_df_load_from_array_no_header():
+    arr = np.array([[1, 2], [3, 4], [5, 6]])
+    result = df_load(arr)
+    assert list(result.columns) == [0, 1]
+    assert result.shape == (3, 2)
+    np.testing.assert_array_equal(result.values, arr)
+
+
+def test_df_load_from_1d_array_with_header():
+    arr = np.array([10, 20, 30])
+    result = df_load(arr, header=["values"])
+    assert list(result.columns) == ["values"]
+    assert result.shape == (3, 1)
+    np.testing.assert_array_equal(result.values.flatten(), arr)
+
+
+def test_df_load_from_1d_array_no_header():
+    arr = np.array([1, 2, 3])
+    result = df_load(arr)
+    assert result.shape == (3, 1)
+    assert list(result.columns) == [0]
+
+
+def test_df_load_header_length_mismatch():
+    arr = np.array([[1, 2, 3], [4, 5, 6]])
+    with pytest.raises(ValueError):
+        df_load(arr, header=["a", "b"])
+
+
+def test_df_load_invalid_type():
+    with pytest.raises(ValueError):
+        df_load(42)
+    with pytest.raises(ValueError):
+        df_load([1, 2, 3])
+
+
+# ---------------------------------------------------------------------------
+# fsc_read / fsc_write
+# ---------------------------------------------------------------------------
+
+
+def test_fsc_write_read_csv_roundtrip(tmp_path):
+    x = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+    y = np.array([0.9, 0.8, 0.7, 0.4, 0.2])
+    path = str(tmp_path / "fsc.csv")
+
+    ioutils.fsc_write(path, x, y)
+    assert os.path.exists(path)
+
+    df = ioutils.fsc_read(path)
+    np.testing.assert_allclose(df["x"].values, x)
+    np.testing.assert_allclose(df["fsc"].values, y)
+
+
+def test_fsc_write_read_xml_roundtrip(tmp_path):
+    x = np.array([0.01, 0.02, 0.03])
+    y = np.array([0.95, 0.70, 0.30])
+    path = str(tmp_path / "fsc.xml")
+
+    ioutils.fsc_write(path, x, y, pixel_size=2.0)
+    assert os.path.exists(path)
+
+    df = ioutils.fsc_read(path)
+    np.testing.assert_allclose(df["x"].values, x, atol=1e-6)
+    np.testing.assert_allclose(df["uncorrected_fsc"].values, y, atol=1e-6)
+
+
+def test_fsc_write_xml_axis_label(tmp_path):
+    import xml.etree.ElementTree as _ET
+
+    x = np.array([0.01, 0.02])
+    y = np.array([0.9, 0.7])
+
+    xml_with_px = str(tmp_path / "fsc_px.xml")
+    ioutils.fsc_write(xml_with_px, x, y, pixel_size=2.0)
+    assert _ET.parse(xml_with_px).getroot().attrib["xaxis"] == "Resolution (1/A)"
+
+    xml_no_px = str(tmp_path / "fsc_no_px.xml")
+    ioutils.fsc_write(xml_no_px, x, y)
+    assert _ET.parse(xml_no_px).getroot().attrib["xaxis"] == "Fourier shell"
+
+
+def test_fsc_read_txt(tmp_path):
+    fsc_vals = np.array([0.99, 0.95, 0.85, 0.60, 0.30])
+    txt_path = str(tmp_path / "fsc.txt")
+    np.savetxt(txt_path, fsc_vals)
+
+    pixel_size = 2.0
+    box_size = 10
+    df = ioutils.fsc_read(txt_path, pixel_size=pixel_size, box_size=box_size)
+
+    assert len(df) == len(fsc_vals)
+    np.testing.assert_allclose(df["uncorrected_fsc"].values, fsc_vals)
+    expected_x = np.arange(1, len(fsc_vals) + 1) / (box_size * pixel_size)
+    np.testing.assert_allclose(df["x"].values, expected_x)
+
+
+@pytest.mark.parametrize(
+    "pixel_size, box_size",
+    [
+        (None, None),
+        (2.0, None),
+        (None, 10),
+    ],
+)
+def test_fsc_read_txt_missing_params(tmp_path, pixel_size, box_size):
+    txt_path = str(tmp_path / "fsc.txt")
+    np.savetxt(txt_path, [0.9, 0.8])
+    with pytest.raises(ValueError, match="pixel_size and box_size are required"):
+        ioutils.fsc_read(txt_path, pixel_size=pixel_size, box_size=box_size)
+
+
+def test_fsc_read_unsupported_extension(tmp_path):
+    with pytest.raises(ValueError, match="Unsupported FSC file format"):
+        ioutils.fsc_read(str(tmp_path / "fsc.npz"))
+
+
+def test_fsc_write_unsupported_extension(tmp_path):
+    with pytest.raises(ValueError, match="Unsupported FSC output format"):
+        ioutils.fsc_write(str(tmp_path / "fsc.txt"), [0.1], [0.9])

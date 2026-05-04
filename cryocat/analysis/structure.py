@@ -3,15 +3,15 @@ import pandas as pd
 import warnings
 import decimal
 import os
-from cryocat import cryomotl
-from cryocat import cryomap
-from cryocat import cryomask
-from cryocat import geom
-from cryocat import mathutils
-from cryocat import ribana
-from cryocat import nnana
-from cryocat import ioutils
-from cryocat import quadric
+from cryocat.core import cryomotl
+from cryocat.core import cryomap
+from cryocat.core import cryomask
+from cryocat.utils import geom
+from cryocat.utils import mathutils
+from cryocat.analysis import ribana
+from cryocat.analysis import nnana
+from cryocat.utils import ioutils
+from cryocat.core import quadric
 from scipy.spatial.transform import Rotation as srot
 
 

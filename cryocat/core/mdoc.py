@@ -2,7 +2,7 @@ import pandas as pd
 from copy import deepcopy
 from os import path
 import warnings
-from cryocat import ioutils
+from cryocat.utils import ioutils
 from pathlib import PureWindowsPath
 
 

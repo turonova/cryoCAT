@@ -4,7 +4,7 @@ import os
 import json
 import re
 
-from cryocat.scriptutils import *
+from cryocat.utils.scriptutils import *
 
 
 class TestParseCommand:

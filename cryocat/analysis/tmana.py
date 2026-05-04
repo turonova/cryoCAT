@@ -7,11 +7,11 @@ import warnings
 from skimage import measure
 from skimage import morphology
 
-from cryocat import cryomap
-from cryocat import geom
-from cryocat import ioutils
-from cryocat import cryomotl
-from cryocat import cryomask
+from cryocat.core import cryomap
+from cryocat.utils import geom
+from cryocat.utils import ioutils
+from cryocat.core import cryomotl
+from cryocat.core import cryomask
 
 from lmfit import models
 import skimage

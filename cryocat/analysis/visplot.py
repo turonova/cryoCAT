@@ -19,7 +19,7 @@ from copy import deepcopy
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 import plotly.io as pio
 from scipy.stats import gaussian_kde
-from cryocat import geom
+from cryocat.utils import geom
 
 Color = str  # hex like "#1f77b4" or "rgb(…)"
 Colorscale = List[Tuple[float, Color]]  # [(0.0, "#..."), (1.0, "#...")]
@@ -2104,3 +2104,91 @@ def plot_spherical_density(
     fig.show()
 
     return H, bin_to_indices
+
+
+def plot_fsc(input_data, pixel_size=None, box_size=None, output_path=None):
+    """Plot a Fourier Shell Correlation (FSC) curve using Plotly.
+
+    Parameters
+    ----------
+    input_data : str or pandas.DataFrame
+        Data source. Accepted formats:
+
+        ``.csv``
+            Must contain a column ``x`` and one or more of
+            ``uncorrected_fsc``, ``corrected_fsc``, ``mean_phase_fsc``.
+        ``.xml``
+            ChimeraX-compatible FSC XML (``<coordinate><x>``/``<y>``).
+        ``.txt``
+            Single-column file of FSC values.  Requires *pixel_size* and
+            *box_size* to compute the x-axis.
+        :class:`pandas.DataFrame`
+            Same column convention as ``.csv``.
+
+    pixel_size : float, optional
+        Pixel size in Angstroms.  Used to label the x-axis ``1/Å`` and
+        required when *input_data* is a ``.txt`` file.
+    box_size : int, optional
+        Box edge length in voxels.  Required when *input_data* is a
+        ``.txt`` file.
+    output_path : str, optional
+        File path for saving the figure.  ``.html`` produces an interactive
+        Plotly file; any other extension uses ``fig.write_image()`` (requires
+        the *kaleido* package).
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    from cryocat.utils import ioutils
+
+    if isinstance(input_data, str):
+        df = ioutils.fsc_read(input_data, pixel_size=pixel_size, box_size=box_size)
+    else:
+        df = input_data
+
+    fsc_cols = {
+        "uncorrected_fsc": ("Uncorrected FSC", "#1f77b4"),
+        "corrected_fsc": ("Corrected FSC", "#2ca02c"),
+        "mean_phase_fsc": ("Mean phase-randomised FSC", "#d62728"),
+    }
+
+    fig = go.Figure()
+    for col, (label, color) in fsc_cols.items():
+        if col in df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df["x"],
+                    y=df[col],
+                    mode="lines",
+                    name=label,
+                    line=dict(color=color),
+                )
+            )
+
+    fig.add_hline(y=0.5, line_dash="dash", line_color="grey", line_width=1,
+                  annotation_text="0.5", annotation_position="right")
+    fig.add_hline(y=0.143, line_dash="dash", line_color="grey", line_width=1,
+                  annotation_text="0.143", annotation_position="right")
+    fig.add_hline(y=0, line_color="black", line_width=0.75)
+
+    visible = [c for c in fsc_cols if c in df.columns]
+    y_min = float(df[visible].min().min())
+    x_label = "Resolution (1/Å)" if pixel_size is not None else "Fourier shell"
+
+    fig.update_layout(
+        title="Fourier Shell Correlation",
+        xaxis_title=x_label,
+        yaxis_title="Correlation Coefficient",
+        yaxis=dict(range=[min(-0.1, y_min - 0.05), 1.05]),
+        legend=dict(x=0.55, y=0.95),
+        template="plotly_white",
+    )
+
+    if output_path is not None:
+        if output_path.endswith(".html"):
+            fig.write_html(output_path)
+        else:
+            fig.write_image(output_path)
+
+    return fig

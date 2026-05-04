@@ -1,8 +1,8 @@
 import argparse
 import numpy as np
 import re
-from cryocat import wedgeutils
-from cryocat import tmana
+from cryocat.utils import wedgeutils
+from cryocat.analysis import tmana
 from numpydoc.docscrape import NumpyDocString
 
 

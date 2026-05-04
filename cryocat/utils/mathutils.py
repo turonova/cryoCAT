@@ -246,3 +246,33 @@ def compute_frequency_array(shape, pixel_size):
         )
     )
     return np.sqrt(np.sum(freqs**2, axis=0))
+
+
+def randomize_phases(vol, fourier_cutoff):
+    """Return a real-space map with phases randomized beyond fourier_cutoff Fourier pixels.
+
+    Phases of the input volume's Fourier transform are replaced by a random
+    permutation of the original phases at all shells with radial pixel distance
+    >= *fourier_cutoff*.  Amplitudes are preserved exactly.
+
+    Parameters
+    ----------
+    vol : ndarray
+        3-D real-space volume.
+    fourier_cutoff : int
+        Radial threshold in Fourier pixels.  Phases at shells with distance
+        >= this value are randomly permuted.
+
+    Returns
+    -------
+    ndarray
+        Real-space volume (float64) with randomized high-frequency phases.
+    """
+    ft = np.fft.fftshift(np.fft.fftn(vol))
+    amp = np.abs(ft)
+    phase = np.angle(ft)
+    dist = compute_frequency_array(vol.shape, 1) * vol.shape[0]
+    pr_phase = phase.copy()
+    idx = np.where(dist >= fourier_cutoff)
+    pr_phase[idx] = np.random.permutation(phase[idx])
+    return np.fft.ifftn(np.fft.ifftshift(amp * np.exp(1j * pr_phase))).real

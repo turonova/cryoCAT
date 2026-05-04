@@ -2,10 +2,10 @@ import os
 
 import numpy as np
 import pandas as pd
-from cryocat import ioutils
-from cryocat import starfileio
-from cryocat import cryomask
-from cryocat import cryomap
+from cryocat.utils import ioutils
+from cryocat.utils import starfileio
+from cryocat.core import cryomask
+from cryocat.core import cryomap
 import emfile
 import math
 

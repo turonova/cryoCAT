@@ -9,15 +9,15 @@ import warnings
 import copy
 import warnings
 
-from cryocat.exceptions import UserInputError
-from cryocat import cryomap
-from cryocat import geom
-from cryocat import starfileio
-from cryocat import cryomask
-from cryocat import mathutils
-from cryocat import ioutils
-from cryocat import nnana
-from cryocat import imod
+from cryocat.utils.exceptions import UserInputError
+from cryocat.core import cryomap
+from cryocat.utils import geom
+from cryocat.utils import starfileio
+from cryocat.core import cryomask
+from cryocat.utils import mathutils
+from cryocat.utils import ioutils
+from cryocat.analysis import nnana
+from cryocat.utils import imod
 
 from math import ceil
 from matplotlib import pyplot as plt
@@ -226,6 +226,7 @@ class Motl:
         angles_rot = rot.from_euler("zxz", angles, degrees=True)
         final_rotation = angles_rot * rotation
         angles = final_rotation.as_euler("zxz", degrees=True)
+        self.df[["phi", "theta", "psi"]] = self.df[["phi", "theta", "psi"]].astype(float)
         self.df.loc[:, ["phi", "theta", "psi"]] = angles
 
     def assign_column(self, input_df, column_pairs):
@@ -445,7 +446,7 @@ class Motl:
         inplace : bool, default=True
             If true, the original instance of the motl is changed. If False, the instance of Motl is created and returned,
             the original motive list remains unchanged. Defaults to True.
-        boundary_type : {str, {"center", "whole"}
+        boundary_type : {"center", "whole"}
             Specify whether only the center should be part of the mask ("center") or the whole
             box ("whole"). In the latter case, the box_size have to be specified as well. Defaults to "center".
         box_size : int, optional
@@ -854,7 +855,7 @@ class Motl:
         if tomo_dimensions is not None:
             dims = ioutils.dimensions_load(tomo_dimensions)
             if dims.shape == (1, 3):
-                z_dim = float(dims["z"]) + 1
+                z_dim = float(dims["z"].iloc[0]) + 1
                 self.df.loc[:, "z"] = z_dim - self.df.loc[:, "z"]
             else:
                 tomos = dims["tomo_id"].unique()
@@ -4288,6 +4289,7 @@ class StopgapMotl(Motl):
         """
 
         stopgap_df = pd.DataFrame(data=np.zeros((motl_df.shape[0], 16)), columns=StopgapMotl.columns)
+        stopgap_df["halfset"] = ""
 
         for em_key, star_key in StopgapMotl.pairs.items():
             stopgap_df[star_key] = motl_df[em_key]

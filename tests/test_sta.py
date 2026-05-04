@@ -2,16 +2,15 @@ import tempfile
 import os
 import pandas as pd
 import pytest
-from cryocat.sta import *
-from cryocat import *
+from cryocat.analysis.sta import *
 import pytest
 import pandas as pd
 import numpy as np
-from cryocat import cryomotl
+from cryocat.core import cryomotl
 import tempfile
 import os
 
-from cryomotl import StopgapMotl
+from cryocat.core.cryomotl import StopgapMotl
 
 
 @pytest.fixture

@@ -4,37 +4,34 @@
 Modules
 =======
 
-.. currentmodule:: cryocat
-
-
 .. autosummary::
     :toctree: generated/
     :template: module_class
     :nosignatures:
 
-    cryomotl
-    
+    cryocat.core.cryomotl
+
 
 .. autosummary::
     :toctree: generated/
     :template: module
     :nosignatures:
 
-    cryomap
-    cryomask
-    geom
-    ioutils
-    mathutils
-    mdoc
-    memthick
-    nnana
-    pana
-    ribana
-    sta
-    starfileio
-    structure
-    tango
-    tiltstack
-    tmana
-    visplot
-    wedgeutils
+    cryocat.core.cryomap
+    cryocat.core.cryomask
+    cryocat.core.mdoc
+    cryocat.core.tiltstack
+    cryocat.utils.geom
+    cryocat.utils.ioutils
+    cryocat.utils.mathutils
+    cryocat.utils.starfileio
+    cryocat.utils.wedgeutils
+    cryocat.analysis.memthick
+    cryocat.analysis.nnana
+    cryocat.analysis.pana
+    cryocat.analysis.ribana
+    cryocat.analysis.sta
+    cryocat.analysis.structure
+    cryocat.analysis.tango
+    cryocat.analysis.tmana
+    cryocat.analysis.visplot

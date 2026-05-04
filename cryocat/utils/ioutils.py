@@ -4,11 +4,11 @@ import json
 from copy import deepcopy
 import re
 import os
-from cryocat import starfileio as sf, starfileio
-from cryocat import mdoc
+from cryocat.utils import starfileio as sf, starfileio
+from cryocat.core import mdoc
 import xml.etree.ElementTree as ET
 
-from cryocat.exceptions import UserInputError
+from cryocat.utils.exceptions import UserInputError
 
 
 def get_file_encoding(file_path):
@@ -592,7 +592,7 @@ def ctffind4_read(file_path):
 
     """
     rows_to_skip = get_number_of_lines_with_character(file_path, "#")
-    ctf = pd.read_csv(file_path, skiprows=rows_to_skip, header=None, dtype=np.float32, delim_whitespace=True)
+    ctf = pd.read_csv(file_path, skiprows=rows_to_skip, header=None, dtype=np.float32, sep=r"\s+", engine="python")
     converted_ctf = ctf.iloc[:, 1:5].copy()
     converted_ctf.loc[:, converted_ctf.columns[0:2]] *= 10e-5
     converted_ctf.columns = ["defocus1", "defocus2", "astigmatism", "phase_shift"]
@@ -649,7 +649,7 @@ def one_value_per_line_read(file_path, data_type=np.float32):
         raise ValueError("The input file does not exist")
 
     try:
-        data_df = pd.read_csv(file_path, header=None, dtype=data_type, delim_whitespace=True)
+        data_df = pd.read_csv(file_path, header=None, dtype=data_type, sep=r"\s+", engine="python")
         if data_df.empty:
             raise ValueError("The input file is empty or contains no valid data.")
     except pd.errors.EmptyDataError:
@@ -910,7 +910,7 @@ def dimensions_load(input_dims, tomo_idx=None):
             dimensions = df
         else:
             if os.path.isfile(input_dims):
-                dimensions = pd.read_csv(input_dims, sep="\s+", header=None, dtype=float)
+                dimensions = pd.read_csv(input_dims, sep=r"\s+", header=None, dtype=float, engine="python")
             else:
                 raise ValueError(f"The file at the path {input_dims} does not exist.")
     elif isinstance(input_dims, list):
@@ -978,7 +978,7 @@ def z_shift_load(input_shift):
             z_shift = pd.DataFrame([com_file_d["SHIFT"][1]])
         else:
             if os.path.isfile(input_shift):
-                z_shift = pd.read_csv(input_shift, sep="\s+", header=None, dtype=float)
+                z_shift = pd.read_csv(input_shift, sep=r"\s+", header=None, dtype=float, engine="python")
             else:
                 raise ValueError(f"File {input_shift} does not exist.")
     elif isinstance(input_shift, (float, int)):
@@ -1183,6 +1183,77 @@ def dict_load(input_data):
     return dict_data
 
 
+def df_load(input_data, header=None):
+    """Load data into a pandas DataFrame from various input types.
+
+    Parameters
+    ----------
+    input_data : pandas.DataFrame, str, or numpy.ndarray
+        The data to load. Can be:
+
+        - ``pandas.DataFrame``: returned as-is.
+        - ``str``: path to a CSV file that will be read with :func:`pandas.read_csv`.
+        - ``numpy.ndarray``: converted to a DataFrame using the optional *header*.
+    header : list of str, optional
+        Column names to assign when *input_data* is a ``numpy.ndarray``. The
+        length must match the number of columns (or the length of a 1-D array).
+        If ``None``, the DataFrame is returned without column names (integer
+        index columns). Ignored for DataFrame and CSV inputs. Defaults to None.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame representation of the input data.
+
+    Raises
+    ------
+    ValueError
+        If *input_data* is not a DataFrame, a string path, or a NumPy array.
+    ValueError
+        If *header* is provided and its length does not match the number of
+        columns in the array.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> df_load(pd.DataFrame({"a": [1, 2]}))
+       a
+    0  1
+    1  2
+
+    >>> df_load("data.csv")  # doctest: +SKIP
+    ...
+
+    >>> df_load(np.array([[1, 2], [3, 4]]), header=["x", "y"])
+       x  y
+    0  1  2
+    1  3  4
+    """
+
+    if isinstance(input_data, pd.DataFrame):
+        return input_data
+
+    if isinstance(input_data, str):
+        return pd.read_csv(input_data)
+
+    if isinstance(input_data, np.ndarray):
+        arr = input_data if input_data.ndim == 2 else input_data.reshape(-1, 1)
+        if header is not None:
+            if len(header) != arr.shape[1]:
+                raise ValueError(
+                    f"header length ({len(header)}) does not match number of "
+                    f"array columns ({arr.shape[1]})."
+                )
+            return pd.DataFrame(arr, columns=header)
+        return pd.DataFrame(arr)
+
+    raise ValueError(
+        "input_data must be a pandas.DataFrame, a path string to a CSV file, "
+        "or a numpy.ndarray."
+    )
+
+
 def indices_load(input_data, numbered_from_1=True):
     """Load indices from a specified input source.
 
@@ -1303,7 +1374,7 @@ def defocus_remove_file_entries(
             sf.Starfile.remove_lines(
                 input_file,
                 lines_to_remove,
-                output_file=output_file,
+                output_path=output_file,
                 data_specifier="data_",
                 number_columns=True,
             )
@@ -1311,3 +1382,104 @@ def defocus_remove_file_entries(
             _ = remove_lines(input_file, lines_to_remove, start_str_to_skip=["#"], output_file=output_file)
         else:
             print(f"The defocus filetype {file_type} is not supported and thus will not be cleaned.")
+
+
+def fsc_read(input_path, pixel_size=None, box_size=None):
+    """Read an FSC curve from a CSV, XML, or TXT file into a DataFrame.
+
+    Parameters
+    ----------
+    input_path : str
+        Path to the FSC file.  Supported extensions:
+
+        ``.csv``
+            Must contain a column ``x`` and at least one FSC column
+            (e.g. ``uncorrected_fsc``, ``corrected_fsc``).
+        ``.xml``
+            ChimeraX-compatible FSC XML with ``<coordinate><x>`` /
+            ``<y>`` children.  Data are loaded as columns ``x`` and
+            ``uncorrected_fsc``.
+        ``.txt``
+            Single-column file with one FSC value per line.  Requires
+            *pixel_size* and *box_size* to compute the ``x`` column
+            (spatial frequency in 1/Å).
+
+    pixel_size : float, optional
+        Pixel size in Angstroms.  Required for ``.txt`` input.
+    box_size : int, optional
+        Box edge length in voxels.  Required for ``.txt`` input.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with column ``x`` and one or more FSC columns.
+
+    Raises
+    ------
+    ValueError
+        If the extension is unsupported, or if *pixel_size* / *box_size*
+        are missing for a ``.txt`` file.
+    """
+    if input_path.endswith(".csv"):
+        return pd.read_csv(input_path)
+    elif input_path.endswith(".xml"):
+        root = ET.parse(input_path).getroot()
+        xs, ys = [], []
+        for coord in root.findall("coordinate"):
+            xs.append(float(coord.find("x").text))
+            ys.append(float(coord.find("y").text))
+        return pd.DataFrame({"x": xs, "uncorrected_fsc": ys})
+    elif input_path.endswith(".txt"):
+        if pixel_size is None or box_size is None:
+            raise ValueError("pixel_size and box_size are required for .txt FSC files.")
+        fsc_vals = np.loadtxt(input_path)
+        shells = np.arange(1, len(fsc_vals) + 1)
+        return pd.DataFrame({"x": shells / (int(box_size) * float(pixel_size)), "uncorrected_fsc": fsc_vals})
+    else:
+        raise ValueError(f"Unsupported FSC file format: {input_path!r}. Use .csv, .xml, or .txt.")
+
+
+def fsc_write(output_path, x_vals, y_vals, pixel_size=None):
+    """Write an FSC curve to a CSV or ChimeraX-compatible XML file.
+
+    Parameters
+    ----------
+    output_path : str
+        Destination file path.  Extension selects format:
+
+        ``.csv``
+            Two-column comma-separated file with columns ``x`` and ``fsc``.
+        ``.xml``
+            ChimeraX-compatible XML with ``<fsc>`` root containing
+            ``<coordinate><x>``/``<y>`` children.
+
+    x_vals : array-like
+        X-axis values (Fourier shell index or spatial frequency in 1/Å).
+    y_vals : array-like
+        FSC correlation values.
+    pixel_size : float, optional
+        When provided, the XML ``xaxis`` attribute is set to
+        ``"Resolution (1/A)"``; otherwise ``"Fourier shell"``.
+
+    Raises
+    ------
+    ValueError
+        If the extension is neither ``.csv`` nor ``.xml``.
+    """
+    if output_path.endswith(".csv"):
+        pd.DataFrame({"x": x_vals, "fsc": y_vals}).to_csv(output_path, index=False)
+    elif output_path.endswith(".xml"):
+        xaxis = "Resolution (1/A)" if pixel_size else "Fourier shell"
+        root = ET.Element(
+            "fsc",
+            title="CryoCAT masked-corrected FSC",
+            xaxis=xaxis,
+            yaxis="Correlation Coefficient",
+        )
+        for x, y in zip(x_vals, y_vals):
+            coord = ET.SubElement(root, "coordinate")
+            ET.SubElement(coord, "x").text = f"{x:.6f}"
+            ET.SubElement(coord, "y").text = f"{y:.6f}"
+        ET.ElementTree(root).write(output_path, encoding="utf-8", xml_declaration=True)
+    else:
+        raise ValueError(f"Unsupported FSC output format: {output_path!r}. Use .csv or .xml.")

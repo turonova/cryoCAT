@@ -11,8 +11,8 @@ from cryocat.app.layout.tomoview import get_viewer_component, register_viewer_ca
 from cryocat.app.layout.tableview import get_table_component, register_table_callbacks
 from cryocat.app.layout.tableplot import register_table_plot_callbacks
 
-from cryocat.tango import TwistDescriptor
-from cryocat.cryomotl import Motl
+from cryocat.analysis.tango import TwistDescriptor
+from cryocat.core.cryomotl import Motl
 from cryocat.app.globalvars import global_twist
 from cryocat.app.apputils import generate_kwargs
 

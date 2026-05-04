@@ -5,7 +5,7 @@ import pandas as pd
 import struct
 import numpy as np
 from pathlib import Path
-from cryocat import imod
+from cryocat.utils import imod
 
 test_data = str(Path(__file__).parent / "test_data")
 test_data_path = test_data + "/motl_data/modMotl/correct111.mod"

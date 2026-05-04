@@ -1,5 +1,5 @@
 import re
-from cryocat import ioutils
+from cryocat.utils import ioutils
 import json
 
 

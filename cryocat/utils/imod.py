@@ -3,7 +3,7 @@ import os
 import re
 import pandas as pd
 from dataclasses import dataclass
-from cryocat import ioutils
+from cryocat.utils import ioutils
 
 
 @dataclass

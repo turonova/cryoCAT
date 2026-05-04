@@ -9,9 +9,9 @@ from dash import html, dcc
 from dash import Input, Output, State, callback, no_update
 import pandas as pd
 import dash_bootstrap_components as dbc
-from cryocat.cryomotl import Motl
-from cryocat.ioutils import dimensions_load
-from cryocat.classutils import get_class_names_by_parent
+from cryocat.core.cryomotl import Motl
+from cryocat.utils.ioutils import dimensions_load
+from cryocat.utils.classutils import get_class_names_by_parent
 from cryocat.app.globalvars import tomo_ids
 from cryocat.app.apputils import get_print_out, save_output, save_motl
 from cryocat.app.layout.customel import InlineLabeledDropdown, InlineInputForm
@@ -205,6 +205,250 @@ def get_motl_save_component(prefix: str):
             ),
         ]
     )
+
+
+def get_motl_simple_save_component(prefix: str):
+    """Simplified save dialog: output type + optional Relion settings + filename only."""
+    return html.Div(
+        [
+            dbc.Button("Save motl", id=f"{prefix}-save-output-btn", color="light", style={"width": "100%"}),
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(dbc.ModalTitle("Save motl")),
+                    dbc.ModalBody(
+                        html.Div(
+                            [
+                                InlineLabeledDropdown(
+                                    id_=f"{prefix}-data-save-type-dropdown",
+                                    options=motl_types,
+                                    label="Output type:",
+                                    multi=False,
+                                    placeholder="Output type",
+                                ),
+                                InlineLabeledDropdown(
+                                    id_=f"{prefix}-save-motl-relion-version-dropdown",
+                                    label="Version:",
+                                    default_visibility="hidden",
+                                    options=relion_versions,
+                                ),
+                                html.Div(
+                                    id=f"{prefix}-save-motl-relion-options",
+                                    className="hidden",
+                                    style={"flex": "1", "alignItems": "center"},
+                                    children=[
+                                        InlineInputForm(
+                                            id_=f"{prefix}-save-motl-relion-pixelsize",
+                                            type="number",
+                                            placeholder="Pixel size",
+                                            min=1.0,
+                                            step=1,
+                                            label="Pixel size (A):",
+                                            style={"width": "35%", "marginRight": "10px"},
+                                        ),
+                                        InlineInputForm(
+                                            id_=f"{prefix}-save-motl-relion-binning",
+                                            type="number",
+                                            placeholder="Binning",
+                                            min=1.0,
+                                            step=1,
+                                            label="Binning:",
+                                            style={"width": "35%", "marginRight": "10px"},
+                                        ),
+                                        dbc.Tooltip(
+                                            "Use the original input particle list entries where possible.",
+                                            target=f"{prefix}-save-motl-relion-original-entries",
+                                        ),
+                                        dbc.Checkbox(
+                                            id=f"{prefix}-save-motl-relion-original-entries",
+                                            label="Use original entries",
+                                            value=False,
+                                            inputStyle={"marginRight": "5px"},
+                                            className="sidebar-checklist",
+                                            labelStyle={"color": "var(--color9)"},
+                                            disabled=True,
+                                            style={"width": "30%"},
+                                        ),
+                                    ],
+                                ),
+                                html.Div(
+                                    [
+                                        html.Div(
+                                            "Currently no tomogram file loaded",
+                                            id=f"{prefix}-save-relion-tomos-loaded",
+                                            className="hidden",
+                                            style={"marginRight": "10px", "color": "var(--color9)"},
+                                        ),
+                                        dcc.Upload(
+                                            id=f"{prefix}-save-relion-tomos-input",
+                                            children=[
+                                                dbc.Button(
+                                                    "Upload tomogram file",
+                                                    id=f"{prefix}-save-relion-tomos-input-btn",
+                                                ),
+                                            ],
+                                            multiple=False,
+                                            className="hidden",
+                                        ),
+                                    ],
+                                    style={
+                                        "display": "flex",
+                                        "alignItems": "center",
+                                        "marginBottom": "0.5rem",
+                                        "width": "100%",
+                                        "justifyContent": "space-between",
+                                    },
+                                ),
+                                InlineInputForm(
+                                    id_=f"{prefix}-save-path-input",
+                                    label="Filename:",
+                                    type="text",
+                                    placeholder="Filename (including its path)",
+                                ),
+                            ]
+                        )
+                    ),
+                    dbc.ModalFooter(
+                        html.Div(
+                            style={"display": "flex", "justifyContent": "space-between",
+                                   "alignItems": "center", "width": "100%"},
+                            children=[
+                                html.H5("", id=f"{prefix}-status-label", style={"margin": 0}),
+                                dbc.Button("Save", id=f"{prefix}-save-output-file", className="ms-auto", n_clicks=0),
+                            ],
+                        )
+                    ),
+                ],
+                id=f"{prefix}-save-output-modal",
+                is_open=False,
+            ),
+        ]
+    )
+
+
+def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connected_input_motl_prefix: str):
+    """Callbacks for the simplified save dialog (no class/column selection)."""
+
+    @callback(
+        Output(f"{prefix}-save-output-modal", "is_open", allow_duplicate=True),
+        Input(f"{prefix}-save-output-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def open_modal(_):
+        return True
+
+    @callback(
+        Output(f"{prefix}-save-motl-relion-version-dropdown", "value", allow_duplicate=True),
+        Output(f"{prefix}-save-motl-relion-version-dropdown-topdiv", "className", allow_duplicate=True),
+        Output(f"{prefix}-save-motl-relion-options", "className", allow_duplicate=True),
+        Input(f"{prefix}-data-save-type-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def toggle_relion_version(motl_type):
+        if motl_type == "relion":
+            return 3.0, "flex", "hidden"
+        return 3.0, "hidden", "hidden"
+
+    @callback(
+        Output(f"{prefix}-relion5-tomos-store", "data", allow_duplicate=True),
+        Output(f"{prefix}-relion5-tomos-filename", "data", allow_duplicate=True),
+        Input(f"{prefix}-save-relion-tomos-input", "contents"),
+        State(f"{prefix}-save-relion-tomos-input", "filename"),
+        prevent_initial_call=True,
+    )
+    def load_tomos(contents, filename):
+        if contents is None:
+            return no_update, no_update
+        content_type, content_string = contents.split(",")
+        decoded = base64.b64decode(content_string)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[-1]) as tmp:
+            tmp.write(decoded)
+            tmp_path = tmp.name
+        rln_tomos = dimensions_load(tmp_path)
+        os.remove(tmp_path)
+        return rln_tomos.to_dict("records"), filename
+
+    @callback(
+        Output(f"{prefix}-save-motl-relion-options", "className", allow_duplicate=True),
+        Output(f"{prefix}-save-relion-tomos-loaded", "className", allow_duplicate=True),
+        Output(f"{prefix}-save-relion-tomos-loaded", "children", allow_duplicate=True),
+        Output(f"{prefix}-save-relion-tomos-input", "className", allow_duplicate=True),
+        Output(f"{prefix}-save-relion-tomos-input-btn", "children"),
+        Output(f"{prefix}-save-motl-relion-original-entries", "disabled"),
+        Output(f"{prefix}-save-motl-relion-original-entries", "value"),
+        Input(f"{prefix}-save-motl-relion-version-dropdown", "value"),
+        Input(f"{prefix}-relion5-tomos-store", "data"),
+        State(f"{connected_input_motl_prefix}-motl-data-type", "data"),
+        State(f"{prefix}-relion5-tomos-filename", "data"),
+        State(f"{connected_input_motl_prefix}-relion5-tomos-store", "data"),
+        State(f"{connected_input_motl_prefix}-relion5-tomos-filename", "data"),
+        prevent_initial_call=True,
+    )
+    def toggle_relion_version_options(
+        relion_version, rln_tomos, input_motl_type, rln_tomos_name, rln_tomos_orig, rln_tomos_name_orig
+    ):
+        button_title = "Upload a tomogram file for Relion5"
+
+        if input_motl_type == "relion" and relion_version in [3.0, 3.1, 4.0]:
+            disable_original = (False, False)
+        elif input_motl_type == "relion5" and relion_version == 5.0:
+            disable_original = (False, False)
+        else:
+            disable_original = (True, False)
+
+        if relion_version in [3.0, 3.1]:
+            return "hidden", "hidden", "", "hidden", button_title, *disable_original
+        elif relion_version == 4.0:
+            return "flex", "hidden", "", "hidden", button_title, *disable_original
+        else:
+            status = "Currently no tomogram file loaded"
+            if rln_tomos:
+                status = f"Currently loaded: {rln_tomos_name}"
+                button_title = "Upload a different tomogram file"
+            elif input_motl_type == "relion5" and rln_tomos_orig:
+                status = f"Currently loaded: {rln_tomos_name_orig}"
+                button_title = "Upload a different tomogram file"
+            return "flex", "flex", status, "flex", button_title, *disable_original
+
+    @callback(
+        Output(f"{prefix}-status-label", "children", allow_duplicate=True),
+        Output(f"{prefix}-save-output-modal", "is_open", allow_duplicate=True),
+        Input(f"{prefix}-save-output-file", "n_clicks"),
+        State(f"{prefix}-save-path-input", "value"),
+        State(f"{prefix}-data-save-type-dropdown", "value"),
+        State(f"{prefix}-relion5-tomos-store", "data"),
+        State(f"{connected_input_motl_prefix}-motl-extra-data-store", "data"),
+        State(f"{connected_input_motl_prefix}-relion-optics-store", "data"),
+        State(f"{connected_input_motl_prefix}-relion5-tomos-store", "data"),
+        State(f"{prefix}-save-motl-relion-binning", "value"),
+        State(f"{prefix}-save-motl-relion-pixelsize", "value"),
+        State(f"{prefix}-save-motl-relion-version-dropdown", "value"),
+        State(f"{prefix}-save-motl-relion-original-entries", "value"),
+        State(data_store_id, "data"),
+        prevent_initial_call=True,
+    )
+    def save_data(
+        n_clicks, file_path, motl_type, relion_tomos, extra_df_data, relion_optics,
+        relion_tomos_orig, relion_binning, relion_pixel_size, relion_version, relion_use_original,
+        data_to_save,
+    ):
+        from cryocat.app.apputils import save_motl as _save_motl
+        if not n_clicks or not file_path or not motl_type or not data_to_save:
+            return no_update, no_update
+
+        rln_tomos = relion_tomos or relion_tomos_orig
+        status = _save_motl(
+            file_path=file_path,
+            data_to_save=data_to_save,
+            motl_type=motl_type,
+            extra_df=extra_df_data,
+            rln_optics=relion_optics,
+            rln_tomos=rln_tomos,
+            rln_binning=relion_binning,
+            rln_pixel_size=relion_pixel_size,
+            rln_version=relion_version,
+            rln_use_original=relion_use_original,
+        )
+        return status, False
 
 
 def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id, connected_input_motl_prefix):

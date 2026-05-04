@@ -13,18 +13,18 @@ from cryocat.app.layout.motlio import get_motl_save_component, register_motl_sav
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
-from cryocat.classutils import get_class_names_by_parent, get_classes_from_names
-from cryocat.cryomotl import Motl
-from cryocat.nnana import NearestNeighbors
-from cryocat.tango import TwistDescriptor, Descriptor, CustomDescriptor
-from cryocat.nnana import plot_nn_rot_coord_df_plotly
+from cryocat.utils.classutils import get_class_names_by_parent, get_classes_from_names
+from cryocat.core.cryomotl import Motl
+from cryocat.analysis.nnana import NearestNeighbors
+from cryocat.analysis.tango import TwistDescriptor, Descriptor, CustomDescriptor
+from cryocat.analysis.nnana import plot_nn_rot_coord_df_plotly
 
 from cryocat.app.globalvars import global_twist
 from cryocat.app.apputils import generate_form_from_docstring, generate_kwargs
 
-descriptors = get_class_names_by_parent("Descriptor", "cryocat.tango")
-features = get_class_names_by_parent("Feature", "cryocat.tango")
-supports = get_class_names_by_parent("Support", "cryocat.tango")
+descriptors = get_class_names_by_parent("Descriptor", "cryocat.analysis.tango")
+features = get_class_names_by_parent("Feature", "cryocat.analysis.tango")
+supports = get_class_names_by_parent("Support", "cryocat.analysis.tango")
 feat_desc_map = Descriptor.build_feature_descriptor_map(features, descriptors)
 desc_feat_map = Descriptor.build_descriptor_feature_map(descriptors, features)
 
@@ -106,7 +106,7 @@ def get_sidebar():
                                             exclude_params=[
                                                 "input_data",
                                             ],
-                                            module_path="cryocat.nnana",
+                                            module_path="cryocat.analysis.nnana",
                                         ),
                                     ),
                                     dbc.Col(
@@ -644,12 +644,12 @@ def process_selection(
         support = twist_df
     else:
         support_kwargs = generate_kwargs(supp_ids, supp_values)
-        supp_class = get_classes_from_names(selected_support, "cryocat.tango")
+        supp_class = get_classes_from_names(selected_support, "cryocat.analysis.tango")
         support = supp_class(TwistDescriptor(input_twist=twist_df), **support_kwargs).support.df
 
     if selected_desc != "CustomDescriptor" and not selected_features:
         desc_kwargs = generate_kwargs(desc_ids, desc_values)
-        desc = get_classes_from_names(selected_desc, "cryocat.tango")
+        desc = get_classes_from_names(selected_desc, "cryocat.analysis.tango")
         desc = desc(support, **desc_kwargs)
         table_data = desc.desc.to_dict("records")
     else:

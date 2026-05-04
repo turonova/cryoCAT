@@ -1,7 +1,8 @@
 import shutil
 import tempfile
 import warnings
-from cryocat import starfileio, cryomotl
+from cryocat.utils import starfileio
+from cryocat.core import cryomotl
 import mrcfile
 import copy
 import numpy as np
@@ -10,9 +11,10 @@ import pytest
 import unittest
 import os
 
-from cryocat import ioutils, cryomap, cryomask, geom
-from cryocat.cryomotl import Motl, EmMotl, RelionMotl, RelionMotlv5, StopgapMotl, DynamoMotl, ModMotl, stopgap2emmotl, emmotl2stopgap
-from cryocat.exceptions import UserInputError
+from cryocat.utils import ioutils, geom
+from cryocat.core import cryomap, cryomask
+from cryocat.core.cryomotl import Motl, EmMotl, RelionMotl, RelionMotlv5, StopgapMotl, DynamoMotl, ModMotl, stopgap2emmotl, emmotl2stopgap
+from cryocat.utils.exceptions import UserInputError
 from scipy.spatial.transform import Rotation as rot
 from pathlib import Path
 test_data = str(Path(__file__).parent / "test_data")

@@ -1,4 +1,4 @@
-from cryocat.mathutils import *
+from cryocat.utils.mathutils import *
 import numpy as np
 import pytest
 from skimage import filters, data, io, color
@@ -201,3 +201,38 @@ def test_compute_frequency_array():
     freqs = compute_frequency_array(shape, pixel_size)
     np.testing.assert_allclose(freqs, expected_magnitudes, rtol=1e-6)
     assert np.allclose(freqs, np.flip(freqs))
+
+
+def test_randomize_phases():
+    np.random.seed(42)
+    box = 16
+    vol = np.random.rand(box, box, box).astype(np.float64)
+    fourier_cutoff = 4
+
+    result = randomize_phases(vol, fourier_cutoff)
+
+    # output shape and real-valued type are preserved
+    assert result.shape == vol.shape
+    assert np.isrealobj(result)
+
+    # randomization changes the volume
+    assert not np.allclose(result, vol)
+
+    # phases strictly below the cutoff are unchanged
+    ft_orig = np.fft.fftshift(np.fft.fftn(vol))
+    ft_rand = np.fft.fftshift(np.fft.fftn(result))
+    dist = compute_frequency_array(vol.shape, 1) * box
+    low_mask = dist < fourier_cutoff
+    np.testing.assert_allclose(
+        np.angle(ft_orig[low_mask]),
+        np.angle(ft_rand[low_mask]),
+        atol=1e-10,
+    )
+
+    # cutoff beyond all frequencies → no phases randomized → round-trip identity
+    result_identity = randomize_phases(vol, fourier_cutoff=100)
+    np.testing.assert_allclose(result_identity, vol, atol=1e-10)
+
+    # constant volume: all high-freq components are zero → permuting zero phases → same output
+    const_vol = np.ones((8, 8, 8)) * 2.5
+    np.testing.assert_allclose(randomize_phases(const_vol, fourier_cutoff=2), const_vol, atol=1e-10)

@@ -1,12 +1,12 @@
 import sys, os, random, math
 from matplotlib import pyplot as plt
 
-from cryocat.cryomotl import Motl
+from cryocat.core.cryomotl import Motl
 
 sys.path.append(".")
 import pytest
-from cryocat.cryomask import *
-from cryocat.cryomap import read
+from cryocat.core.cryomask import *
+from cryocat.core.cryomap import read
 from pathlib import Path
 # sys.path.append(".")
 test_data = str(Path(__file__).parent / "test_data")
@@ -97,27 +97,27 @@ def test_ellipsoid_mask(ref_masks, gaussian, gaussian_outwards):
 def test_map_tight_mask(ref_masks):
     mtmsm0 = map_tight_mask(ref_masks["sm0.em"])
     assert np.allclose(mtmsm0, ref_masks["mtmsm0.em"], atol=1e-8)
-    mtmsmtmsm0_3 = map_tight_mask(ref_masks["smtmsm0_3.em"], output_name=f"{gen_dir}mtmsmtmsm0_3.em")
+    mtmsmtmsm0_3 = map_tight_mask(ref_masks["smtmsm0_3.em"], output_path=f"{gen_dir}mtmsmtmsm0_3.em")
     assert np.allclose(mtmsmtmsm0_3, ref_masks["mtmsmtmsm0_3.em"], atol=1e-8)
     mtmmmtmcm25_t10d7_t40d4g25 = map_tight_mask(
-        ref_masks["mmtmcm25_t10d7.em"], 0.4, 3, 0.25, output_name=f"{gen_dir}mtmcm25_t40d4g25.em"
+        ref_masks["mmtmcm25_t10d7.em"], 0.4, 3, 0.25, output_path=f"{gen_dir}mtmcm25_t40d4g25.em"
     )
     assert np.allclose(mtmmmtmcm25_t10d7_t40d4g25, ref_masks["mtmmmtmcm25_t10d7_t40d4g25.em"], atol=1e-8)
     mtmum_t30d2g20r310040022 = map_tight_mask(
-        ref_masks["um.em"], 0.3, 2, 0.2, (3.1, 0.4, 2.2), output_name=f"{gen_dir}mtmum_t30d2g20r310040022.em"
+        ref_masks["um.em"], 0.3, 2, 0.2, (3.1, 0.4, 2.2), output_path=f"{gen_dir}mtmum_t30d2g20r310040022.em"
     )
     assert np.allclose(mtmum_t30d2g20r310040022, ref_masks["mtmum_t30d2g20r310040022.em"], atol=1e-8)
 
 
 def test_molmap_tight_mask(ref_masks):
     mmtmcm25o_g34F = molmap_tight_mask(
-        ref_masks["cm25o.em"], gaussian=0.34, gaussian_outwards=False, output_name=f"{gen_dir}mmtmcm25o_g34F.em"
+        ref_masks["cm25o.em"], gaussian=0.34, gaussian_outwards=False, output_path=f"{gen_dir}mmtmcm25o_g34F.em"
     )
     assert np.allclose(mmtmcm25o_g34F, ref_masks["mmtmcm25o_g34F.em"], atol=1e-8)
-    mmtmcm25_t10d7 = molmap_tight_mask(ref_masks["cm25.em"], 10, 7, output_name=f"{gen_dir}mmtmcm25_t10d7.em")
+    mmtmcm25_t10d7 = molmap_tight_mask(ref_masks["cm25.em"], 10, 7, output_path=f"{gen_dir}mmtmcm25_t10d7.em")
     assert np.allclose(mmtmcm25_t10d7, ref_masks["mmtmcm25_t10d7.em"], atol=1e-8)
     mmtmmtmsm0_t5d2r111222333 = molmap_tight_mask(
-        ref_masks["mtmsm0.em"], 0.05, 2, angles=(1.11, 2.22, 3.33), output_name=f"{gen_dir}mmtmmtmsm0_t5d2r111222333.em"
+        ref_masks["mtmsm0.em"], 0.05, 2, angles=(1.11, 2.22, 3.33), output_path=f"{gen_dir}mmtmmtmsm0_t5d2r111222333.em"
     )
     assert np.allclose(mmtmmtmsm0_t5d2r111222333, ref_masks["mmtmmtmsm0_t5d2r111222333.em"], atol=1e-8)
 
@@ -382,10 +382,10 @@ def test_intersection():
 
     # If an output file name is given, check if it's written (optional)
     # If you want to validate the file output, you can check the file itself.
-    output_name = "test_output_mask.mrc"
-    result_with_output = intersection(mask_list, output_name)
-    if os.path.exists(output_name):
-        os.remove(output_name)
+    output_path = "test_output_mask.mrc"
+    result_with_output = intersection(mask_list, output_path)
+    if os.path.exists(output_path):
+        os.remove(output_path)
 
 
 def test_intersection_expected():
@@ -710,7 +710,7 @@ def test_fill_hollow_mask(tmp_path):
     # 5. Output File
     hollow_cube_file = create_sample_map_file(tmp_path, hollow_cube, "hollow_cube.em")
     output_file = tmp_path / "filled_cube.em"
-    fill_hollow_mask(hollow_cube_file, output_name=str(output_file))
+    fill_hollow_mask(hollow_cube_file, output_path=str(output_file))
     assert os.path.exists(output_file), "Output file was not created"
     filled_cube_from_file = cryomap.read(str(output_file))
     assert np.array_equal(filled_cube_from_file, expected_filled_cube), "Output file content is incorrect"

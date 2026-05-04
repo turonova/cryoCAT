@@ -6,13 +6,12 @@ import numpy as np
 from numpy import fft
 from scipy.ndimage import affine_transform
 from scipy.spatial.transform import Rotation as srot
-from scipy.interpolate import interp1d
-import re
-from cryocat import cryomask
+from cryocat.core import cryomask
+from cryocat.utils import mathutils, ioutils
 from skimage import transform
 
 
-def scale(input_map, scaling_factor, output_name=None):
+def scale(input_map, scaling_factor, output_path=None):
     """
     Scales an input map by a given scaling factor.
 
@@ -22,7 +21,7 @@ def scale(input_map, scaling_factor, output_name=None):
         The input map to be scaled passed as a numpy.ndarray or as the path to its file.
     scaling_factor : float
         The factor by which to scale the input map (a value grater than one indicates upscaling, between 0 and downscaling). If the scaling factor is greater than 1, anti-aliasing is turned off.
-    output_name : str, optional
+    output_path : str, optional
         The name of the output file to which to write the scaled map. If not provided, the scaled map will not be saved.
 
     Returns
@@ -49,8 +48,8 @@ def scale(input_map, scaling_factor, output_name=None):
     if scaled_map.dtype == np.float64:
         scaled_map = scaled_map.astype(np.float32)
 
-    if output_name is not None:
-        write(scaled_map, output_name)
+    if output_path is not None:
+        write(scaled_map, output_path)
 
     return scaled_map
 
@@ -205,7 +204,7 @@ def bandpass(
     pixel_size=None,
     lp_gaussian=3,
     hp_gaussian=2,
-    output_name=None,
+    output_path=None,
 ):
     """Apply a bandpass filter to an input map using specified low-pass and high-pass filter parameters.
 
@@ -227,7 +226,7 @@ def bandpass(
         Width of the Gaussian falloff for the low-pass filter. Default is 3.
     hp_gaussian : int, default=2
         Width of the Gaussian falloff for the high-pass filter. Default is 2.
-    output_name : str, optional
+    output_path : str, optional
         Filename to save the filtered output. If not provided, the filtered map is not saved. Default is None.
 
     Returns
@@ -278,13 +277,13 @@ def bandpass(
     #     gaussian=hp_gaussian,
     # )
 
-    if output_name is not None:
-        write(bandpass_filtered, output_name, data_type=np.single)
+    if output_path is not None:
+        write(bandpass_filtered, output_path, data_type=np.single)
 
     return bandpass_filtered
 
 
-def lowpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=None, gaussian=3, output_name=None):
+def lowpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=None, gaussian=3, output_path=None):
     """Apply a lowpass filter to a given input map using Fourier transform methods.
 
     Parameters
@@ -299,7 +298,7 @@ def lowpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=N
         The size of each pixel/voxel in the input map in Angstroms.
     gaussian : int, default=3
         Width of the Gaussian falloff for the low-pass filter. Default is 3.
-    output_name : str, optional
+    output_path : str, optional
         The file name to save the filtered map. If not provided, the map is not saved. Default is None.
 
     Returns
@@ -329,13 +328,13 @@ def lowpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=N
     # Apply filter
     filtered_map = np.real(fft.ifftn(fft.fftn(input_map) * lowpass_filter))
 
-    if output_name is not None:
-        write(filtered_map, output_name, data_type=np.single)
+    if output_path is not None:
+        write(filtered_map, output_path, data_type=np.single)
 
     return filtered_map
 
 
-def highpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=None, gaussian=2, output_name=None):
+def highpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=None, gaussian=2, output_path=None):
     """Apply a highpass filter to a given input map using Fourier transform methods.
 
     Parameters
@@ -350,7 +349,7 @@ def highpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=
         The size of each pixel/voxel in the input map in Angstroms. Default is None.
     gaussian : int, default=2
         The width of the Gaussian fall-off in pixels/voxels. Default is 2.
-    output_name : str, optional
+    output_path : str, optional
         The filename to save the filtered output. If None, the filtered map is not saved. Default is None.
 
     Returns
@@ -377,8 +376,8 @@ def highpass(input_map, fourier_pixels=None, target_resolution=None, pixel_size=
     # Apply filter
     filtered_map = np.real(fft.ifftn(fft.fftn(input_map) * highpass_filter))
 
-    if output_name is not None:
-        write(filtered_map, output_name, data_type=np.single)
+    if output_path is not None:
+        write(filtered_map, output_path, data_type=np.single)
 
     return filtered_map
 
@@ -503,14 +502,14 @@ def write(data_to_write, file_name, transpose=True, data_type=None, voxel_size=1
         raise ValueError("The output file name", file_name, "has to end with .mrc, .rec or .em!")
 
 
-def invert_contrast(input_map, output_name=None):
+def invert_contrast(input_map, output_path=None):
     """Invert the contrast of an input volume map.
 
     Parameters
     ----------
     input_map : str or numpy.ndarray
         The path to the input volume map file or the volume map data itself.
-    output_name : str, optional
+    output_path : str, optional
         The name of the output file where the inverted volume map will be saved.
         If not provided, the output will not be saved to a file.
 
@@ -529,18 +528,18 @@ def invert_contrast(input_map, output_name=None):
     input_map = read(input_map)
     inverted_map = input_map * (-1)
 
-    if output_name is not None:
+    if output_path is not None:
         if inverted_map.dtype == np.float64:
             data_type = np.single
         else:
             data_type = inverted_map.dtype
 
-        write(inverted_map, output_name, data_type=data_type)
+        write(inverted_map, output_path, data_type=data_type)
 
     return inverted_map
 
 
-def em2mrc(map_name, invert=False, overwrite=True, voxel_size=1.0, output_name=None):
+def em2mrc(map_name, invert=False, overwrite=True, voxel_size=1.0, output_path=None):
     """Convert a file in EM format to MRC format.
 
     Parameters
@@ -553,7 +552,7 @@ def em2mrc(map_name, invert=False, overwrite=True, voxel_size=1.0, output_name=N
         If True, allows overwriting of the output file if it already exists. Default is True.
     voxel_size: float, default=1.0
         The size of the voxels to store in the header of the MRC files. Defaults to 1.0.
-    output_name : str, optional
+    output_path : str, optional
         The name of the output MRC file. If None, the output name will be derived from `map_name` by replacing the
         last two characters with 'mrc'.
 
@@ -577,14 +576,14 @@ def em2mrc(map_name, invert=False, overwrite=True, voxel_size=1.0, output_name=N
     if invert:
         data_to_write = data_to_write * (-1)
 
-    if output_name is None:
-        output_name = map_name[:-2] + "mrc"
-    elif not output_name.endswith(".mrc"):
+    if output_path is None:
+        output_path = map_name[:-2] + "mrc"
+    elif not output_path.endswith(".mrc"):
         raise ValueError(f"Specified output file name must end with .mrc")
-    write(data_to_write, output_name, overwrite=overwrite, voxel_size=voxel_size)
+    write(data_to_write, output_path, overwrite=overwrite, voxel_size=voxel_size)
 
 
-def mrc2em(map_name, invert=False, overwrite=True, output_name=None):
+def mrc2em(map_name, invert=False, overwrite=True, output_path=None):
     """Convert a file in MRC format to EM format.
 
     map_name : str
@@ -593,7 +592,7 @@ def mrc2em(map_name, invert=False, overwrite=True, output_name=None):
         If True, the data will be inverted (multiplied by -1). Default is False.
     overwrite : bool, default=True
         If True, allows overwriting of the output file if it already exists. Default is True.
-    output_name : str, optional
+    output_path : str, optional
         The name of the output EM file. If None, the output name will be derived from `map_name` by replacing the
         last three characters with 'em'.
 
@@ -618,15 +617,15 @@ def mrc2em(map_name, invert=False, overwrite=True, output_name=None):
     if invert:
         data_to_write = data_to_write * (-1)
 
-    if output_name is None:
-        output_name = map_name[:-3] + "em"
-    elif not output_name.endswith(".em"):
-        raise ValueError(f"Specified output_name is not .em file")
+    if output_path is None:
+        output_path = map_name[:-3] + "em"
+    elif not output_path.endswith(".em"):
+        raise ValueError(f"Specified output_path is not .em file")
 
-    write(data_to_write, output_name, overwrite=overwrite)
+    write(data_to_write, output_path, overwrite=overwrite)
 
 
-def write_hdf5(map_name, labels=None, weight=None, output_name=None):
+def write_hdf5(map_name, labels=None, weight=None, output_path=None):
     """Write data to an HDF5 file.
 
     Parameters
@@ -639,7 +638,7 @@ def write_hdf5(map_name, labels=None, weight=None, output_name=None):
     weight : str, optional
         The name of the input file containing the weights to be written. If provided, the weights will be stored in
         the HDF5 file. Default is None.
-    output_name : str, optional
+    output_path : str, optional
         The name of the output HDF5 file. If not provided, the output file will be named by replacing the last three
         characters of `map_name` with 'hdf5'. Default is None.
 
@@ -661,15 +660,15 @@ def write_hdf5(map_name, labels=None, weight=None, output_name=None):
             raise ValueError(f"Input file is not either .em either .mrc file")
     data_to_write = read(map_name)
 
-    if output_name is None:
+    if output_path is None:
         if map_name.endswith(".mrc"):
-            output_name = map_name[:-3] + "hdf5"
+            output_path = map_name[:-3] + "hdf5"
         elif map_name.endswith(".em"):
-            output_name = map_name[:-2] + "hdf5"
-    elif not output_name.endswith(".mrc") and not output_name.endswith(".em"):
+            output_path = map_name[:-2] + "hdf5"
+    elif not output_path.endswith(".mrc") and not output_path.endswith(".em"):
         raise ValueError("Output file path must be .mrc or .em extension")
 
-    f = h5py.File(output_name, "w")
+    f = h5py.File(output_path, "w")
 
     f.create_dataset("raw", data=data_to_write)
 
@@ -759,7 +758,7 @@ def rotate(
     transpose_rotation=False,
     degrees=True,
     spline_order=3,
-    output_name=None,
+    output_path=None,
 ):
     """Rotate a 3D input map using a specified rotation matrix or rotation angles.
 
@@ -788,7 +787,7 @@ def rotate(
     spline_order : int, default=3
         The order of the spline used for interpolation. Default is 3.
 
-    output_name : str, optional
+    output_path : str, optional
         If specified, the rotated structure will be written to this file. Default is None.
 
     Returns
@@ -828,8 +827,8 @@ def rotate(
     rot_struct = np.empty(input_map.shape)
     affine_transform(input=input_map, output=rot_struct, matrix=final_matrix, order=spline_order)
 
-    if output_name is not None:
-        write(rot_struct, output_name, data_type=np.single)
+    if output_path is not None:
+        write(rot_struct, output_path, data_type=np.single)
 
     return rot_struct
 
@@ -914,7 +913,7 @@ def shift(map, delta):
     return shifted_map
 
 
-def shift2(input_map, delta, output_name=None):
+def shift2(input_map, delta, output_path=None):
     """
     Shifts an input map by a specified delta.
 
@@ -924,7 +923,7 @@ def shift2(input_map, delta, output_name=None):
         The input map to be shifted. If a string is provided, it is assumed to be a filename from which to read the map.
     delta : array_like
         The shift to apply to the input map. Must be of length 3.
-    output_name : str, optional
+    output_path : str, optional
         If provided, the shifted map will be written to a file with this name. The data type of the output will be np.single.
 
     Returns
@@ -945,8 +944,8 @@ def shift2(input_map, delta, output_name=None):
     shifted_map = np.empty(input_map.shape)
     affine_transform(input=input_map, output=shifted_map, matrix=T, mode="grid-wrap")
 
-    if output_name is not None:
-        write(shifted_map, output_name, data_type=np.single)
+    if output_path is not None:
+        write(shifted_map, output_path, data_type=np.single)
 
     return shifted_map
 
@@ -1294,7 +1293,7 @@ def deconvolve(
     highpass_nyquist,
     phase_flipped=False,
     phaseshift=0,
-    output_name=None,
+    output_path=None,
 ):
     """Deconvolution adapted from MATLAB script tom_deconv_tomo by D. Tegunov (https://github.com/dtegunov/tom_deconv).
     Example for usage: deconvolve(my_map, 3.42, 6, 1.1, 1, 0.02, false, 0)
@@ -1317,7 +1316,7 @@ def deconvolve(
         whether the data are already phase-flipped. Default is False.
     phaseshift : int
         CTF phase shift in degrees (e. g. from a phase plate). Default is 0.
-    output_name : str
+    output_path : str
         Name of the output file for the deconvolved tomogram. Default is None (tomogram will be not written).
 
     Returns
@@ -1371,14 +1370,12 @@ def deconvolve(
     r = np.fft.ifftshift(r)
 
     x = np.arange(0, 1, 1 / interp_dim)
-    ramp_interp = interp1d(x, wiener, fill_value="extrapolate")
-
-    ramp = ramp_interp(r.flatten()).reshape(r.shape)
+    ramp = np.interp(r.flatten(), x, wiener).reshape(r.shape)
     # Perform deconvolution
     deconvolved_map = np.real(np.fft.ifftn(np.fft.fftn(input_map) * ramp))
 
-    if output_name is not None:
-        write(deconvolved_map, output_name, data_type=np.single)
+    if output_path is not None:
+        write(deconvolved_map, output_path, data_type=np.single)
 
     return deconvolved_map
 
@@ -1431,7 +1428,7 @@ def compute_ctf_1d(length, pixel_size, voltage, cs, defocus, amplitude, phaseshi
     return ctf
 
 
-def trim(input_map, trim_start, trim_end, output_name=None):
+def trim(input_map, trim_start, trim_end, output_path=None):
     """
     Trims a 3D map to a specified range.
 
@@ -1443,7 +1440,7 @@ def trim(input_map, trim_start, trim_end, output_name=None):
         The starting coordinates for the trim. Must be a 3-element array-like object.
     trim_end : array_like
         The ending coordinates for the trim. Must be a 3-element array-like object.
-    output_name : str, optional
+    output_path : str, optional
         If provided, the trimmed map will be written to a file with this name. The file will be written in single precision float format.
 
     Returns
@@ -1468,13 +1465,13 @@ def trim(input_map, trim_start, trim_end, output_name=None):
 
     output_map = output_map[ts[0] : te[0], ts[1] : te[1], ts[2] : te[2]]
 
-    if output_name is not None:
-        write(output_map, output_name, data_type=np.single)
+    if output_path is not None:
+        write(output_map, output_path, data_type=np.single)
 
     return output_map
 
 
-def flip(input_map, axis="z", output_name=None):
+def flip(input_map, axis="z", output_path=None):
     """
     Function to flip a given input map along specified axis.
 
@@ -1484,7 +1481,7 @@ def flip(input_map, axis="z", output_name=None):
         The input map to be flipped.
     axis : str, optional
         The axis along which to flip the input map. Default is "z".
-    output_name : str, optional
+    output_path : str, optional
         The name of the output file. If not provided, the function will return the flipped map.
 
     Returns
@@ -1508,8 +1505,8 @@ def flip(input_map, axis="z", output_name=None):
     if "x" in axis.lower():
         output_map = np.flip(output_map, 0)
 
-    if output_name is not None:
-        write(output_map, output_name, data_type=np.single)
+    if output_path is not None:
+        write(output_map, output_path, data_type=np.single)
 
     return output_map
 
@@ -1673,3 +1670,141 @@ def symmetrize_volume(vol, symmetry):
     sym_vol = np.divide(rotated_sum, nfold)
 
     return sym_vol
+
+
+def calculate_masked_fsc(
+    half_map_a,
+    half_map_b,
+    pixel_size=None,
+    mask=None,
+    n_repeats=10,
+    fourier_cutoff=None,
+    output_path=None,
+):
+    """
+    Calculate phase-randomisation corrected FSC between two half-maps.
+
+    Implements the masked-corrected FSC procedure of Chen et al. (2013,
+    Ultramicroscopy 142:18-25): phases of the *unmasked* half-maps are
+    randomised beyond ``fourier_cutoff``, the mask is applied in real space
+    after the inverse FFT, and the resulting noise-floor FSC is used to
+    correct the masked FSC.
+
+    Parameters
+    ----------
+    half_map_a : str or ndarray
+        First half-map: file path or 3-D numpy array.
+    half_map_b : str or ndarray
+        Second half-map: file path or 3-D numpy array.
+    pixel_size : float, optional
+        Pixel size in Angstroms. When given, the x-axis is expressed as
+        spatial frequency in 1/Å; otherwise the Fourier shell index is used.
+    mask : str or ndarray, optional
+        Real-space mask.  A box-filling mask of ones is used when None.
+    n_repeats : int, optional
+        Number of phase-randomisation repeats (default 10).  Set to 0 or
+        None to skip phase-randomisation correction.
+    fourier_cutoff : int, optional
+        Shell index beyond which phases are randomised.  Determined from
+        box size automatically when None (box//10 for box<100, box//15 for
+        box<210, 15 otherwise).
+    output_path : str, optional
+        File path for saving results.  Extension selects format:
+        ``.csv`` – comma-separated table; ``.xml`` – ChimeraX-compatible XML.
+        The best available FSC column (corrected or uncorrected) is written.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: ``x``, ``uncorrected_fsc`` and, when phase randomisation
+        is performed, ``corrected_fsc`` and ``mean_phase_fsc``.
+
+    Raises
+    ------
+    ValueError
+        If half-map shapes do not match, volumes are not cubic 3-D arrays,
+        the mask shape differs from the half-maps, or an unsupported output
+        extension is provided.
+    """
+    map_a = read(half_map_a) if isinstance(half_map_a, str) else np.asarray(half_map_a)
+    map_b = read(half_map_b) if isinstance(half_map_b, str) else np.asarray(half_map_b)
+
+    if map_a.shape != map_b.shape:
+        raise ValueError("Half-maps must have the same shape.")
+    if map_a.ndim != 3 or len(set(map_a.shape)) != 1:
+        raise ValueError("Only cubic 3-D volumes are supported.")
+
+    box = map_a.shape[0]
+    max_shell = box // 2
+
+    if mask is None:
+        fsc_mask = np.ones(map_a.shape, dtype=np.float32)
+    else:
+        fsc_mask = read(mask) if isinstance(mask, str) else np.asarray(mask)
+        if fsc_mask.shape != map_a.shape:
+            raise ValueError("Mask shape does not match half-map shape.")
+
+    # Radial distance in Fourier pixels using existing mathutils function
+    dist = mathutils.compute_frequency_array(map_a.shape, 1) * box
+    shell_masks = [(dist >= r - 1) & (dist < r) for r in range(1, max_shell + 1)]
+
+    def _fsc_compute(ft_a, ft_b):
+        cross = ft_a * np.conj(ft_b)
+        pwr_a = (ft_a * np.conj(ft_a)).real
+        pwr_b = (ft_b * np.conj(ft_b)).real
+        fsc = np.zeros(max_shell)
+        for i, smask in enumerate(shell_masks):
+            num = np.sum(cross[smask]).real
+            denom = np.sqrt(np.sum(pwr_a[smask]) * np.sum(pwr_b[smask]))
+            fsc[i] = num / denom if denom > 0 else np.nan
+        return fsc
+
+    mft_a = np.fft.fftshift(np.fft.fftn(map_a * fsc_mask))
+    mft_b = np.fft.fftshift(np.fft.fftn(map_b * fsc_mask))
+    full_fsc = _fsc_compute(mft_a, mft_b)
+
+    shells = np.arange(1, max_shell + 1)
+    x_vals = shells / (box * float(pixel_size)) if pixel_size is not None else shells.astype(float)
+
+    result = {"x": x_vals, "uncorrected_fsc": full_fsc}
+
+    if n_repeats:
+        if fourier_cutoff is None:
+            if box < 100:
+                fourier_cutoff = int(np.floor(box / 10))
+            elif box < 210:
+                fourier_cutoff = int(np.floor(box / 15))
+            else:
+                fourier_cutoff = 15
+
+        pr_fsc_runs = np.zeros((n_repeats, max_shell))
+        mean_pr_fsc = np.zeros(max_shell)
+
+        for n in range(n_repeats):
+            pr_a = mathutils.randomize_phases(map_a, fourier_cutoff) * fsc_mask
+            pr_b = mathutils.randomize_phases(map_b, fourier_cutoff) * fsc_mask
+            rp_fsc = _fsc_compute(
+                np.fft.fftshift(np.fft.fftn(pr_a)),
+                np.fft.fftshift(np.fft.fftn(pr_b)),
+            )
+            mean_pr_fsc += rp_fsc
+            denom = 1.0 - rp_fsc
+            with np.errstate(invalid="ignore", divide="ignore"):
+                pr_fsc_runs[n] = np.where(denom != 0, (full_fsc - rp_fsc) / denom, np.nan)
+
+        mean_pr_fsc /= n_repeats
+        corr_fsc = np.nanmean(pr_fsc_runs, axis=0)
+        corr_fsc[:fourier_cutoff] = full_fsc[:fourier_cutoff]
+
+        result["corrected_fsc"] = corr_fsc
+        result["mean_phase_fsc"] = mean_pr_fsc
+
+    import pandas as pd
+
+    df = pd.DataFrame(result)
+
+    if output_path is not None:
+        y_col = "corrected_fsc" if "corrected_fsc" in df.columns else "uncorrected_fsc"
+        ioutils.fsc_write(output_path, df["x"].values, df[y_col].values, pixel_size)
+
+    return df

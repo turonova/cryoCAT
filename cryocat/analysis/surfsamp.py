@@ -8,11 +8,11 @@ from scipy.spatial import ConvexHull
 from scipy.spatial import KDTree
 import warnings
 
-from cryocat import geom
-from cryocat import cryomap
-from cryocat import cryomotl
-from cryocat import cryomask
-from cryocat import tgeometry as tg
+from cryocat.utils import geom
+from cryocat.core import cryomap
+from cryocat.core import cryomotl
+from cryocat.core import cryomask
+from cryocat.utils import tgeometry as tg
 
 
 class SamplePoints:
@@ -533,37 +533,39 @@ class SamplePoints:
         """
         # get convexhull
         hull = ConvexHull(mask_points)
-        faces = hull.equations
 
         # find indices of surface that were belongs to top or bottom
         if rm_faces == 0:
             updated_area = hull.area
         else:
+            z_coords = mask_points[:, 2]
+            z_max = np.max(z_coords)
+            z_min = np.min(z_coords)
+
+            def flat_face_area(z_val):
+                pts_xy = mask_points[np.isclose(z_coords, z_val), :2]
+                if len(pts_xy) < 3:
+                    return None
+                try:
+                    return ConvexHull(pts_xy).volume  # in 2D, .volume gives area
+                except Exception:
+                    return None
+
             if rm_faces == 1:
-                tb_faces = [
-                    i for i, num in enumerate(faces) if sum(num[0:3] == [1, 0, 0]) == 3
-                ]
+                area_to_remove = flat_face_area(z_max)
             elif rm_faces == -1:
-                tb_faces = [
-                    i for i, num in enumerate(faces) if sum(num[0:3] == [-1, 0, 0]) == 3
-                ]
+                area_to_remove = flat_face_area(z_min)
             elif rm_faces == 2:
-                tb_faces = [
-                    i
-                    for i, num in enumerate(faces)
-                    if sum(abs(num[0:3]) == [1, 0, 0]) == 3
-                ]
-            if tb_faces == []:
+                top = flat_face_area(z_max)
+                bot = flat_face_area(z_min)
+                if top is None and bot is None:
+                    area_to_remove = None
+                else:
+                    area_to_remove = (top or 0) + (bot or 0)
+
+            if area_to_remove is None:
                 raise ValueError("The target top/bottom surfaces doesn't exist")
-            all_faces_points_in = hull.simplices  # indices of points for surface
-            tb_faces_points_in = all_faces_points_in[tb_faces]
-            face_points_coord = [
-                [mask_points[j] for j in i] for i in tb_faces_points_in
-            ]
-            face_points_array = np.asarray(face_points_coord)
-            tb_areas = geom.area_triangle(face_points_array)
-            total_tb_area = sum(tb_areas)
-            updated_area = hull.area - total_tb_area
+            updated_area = hull.area - area_to_remove
 
         return updated_area
 

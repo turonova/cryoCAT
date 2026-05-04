@@ -9,7 +9,7 @@ authors = [
 ]
 description = "Contextual Analysis Tools for CryoET"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.23",
     "pandas>=1.5",

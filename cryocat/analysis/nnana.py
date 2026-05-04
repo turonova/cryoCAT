@@ -1,9 +1,9 @@
 import numpy as np
 import pandas as pd
-from cryocat import cryomotl
-from cryocat import cryomap
+from cryocat.core import cryomotl
+from cryocat.core import cryomap
 from scipy.spatial.transform import Rotation as srot
-from cryocat import geom
+from cryocat.utils import geom
 import seaborn as sns
 import sklearn.neighbors as sn
 import matplotlib.pyplot as plt
@@ -704,45 +704,34 @@ def filter_nn_radial_stats(input_stats, binary_mask):
     the statistics for each group defined by the 'qp_subtomo_id' column.
     """
 
-    def filter_group(group, dx, dy, dz, boolean_mask):
-        # Cast x, y, z columns to integers and adjust coordinates
-        group["x_int"] = (group["coord_rx"] + dx).astype(int)
-        group["y_int"] = (group["coord_ry"] + dy).astype(int)
-        group["z_int"] = (group["coord_rz"] + dz).astype(int)
-
-        # Ensure the coordinates are within the range of the boolean mask
-        group = group[
-            (group["x_int"] >= 0)
-            & (group["x_int"] < 2 * dx)
-            & (group["y_int"] >= 0)
-            & (group["y_int"] < 2 * dy)
-            & (group["z_int"] >= 0)
-            & (group["z_int"] < 2 * dz)
-        ]
-
-        # Apply the boolean mask to filter rows
-        mask_values = boolean_mask[group["x_int"], group["y_int"], group["z_int"]]
-        final_group = group[mask_values]
-
-        # Drop the temporary integer columns
-        final_group = final_group.drop(columns=["x_int", "y_int", "z_int"])
-
-        return final_group
-
     # Prepare the mask
-    boolean_mask = cryomap.read(binary_mask)
+    if isinstance(binary_mask, np.ndarray):
+        boolean_mask = binary_mask
+    else:
+        boolean_mask = cryomap.read(binary_mask)
     boolean_mask = np.where(boolean_mask < 0.5, False, True)
     dx, dy, dz = np.asarray(boolean_mask.shape) // 2
 
-    # Get copy of the stats
+    # Get copy of the stats and compute integer coordinates
     nn_stats = input_stats.copy()
+    nn_stats["x_int"] = (nn_stats["coord_rx"] + dx).astype(int)
+    nn_stats["y_int"] = (nn_stats["coord_ry"] + dy).astype(int)
+    nn_stats["z_int"] = (nn_stats["coord_rz"] + dz).astype(int)
 
-    # Apply the filter_group function to each group
-    result_df = (
-        nn_stats.groupby("qp_subtomo_id")
-        .apply(lambda group: filter_group(group, dx, dy, dz, boolean_mask))
-        .reset_index(drop=True)
+    # Filter to rows whose relative coordinates fall within the mask bounds
+    in_bounds = (
+        (nn_stats["x_int"] >= 0)
+        & (nn_stats["x_int"] < 2 * dx)
+        & (nn_stats["y_int"] >= 0)
+        & (nn_stats["y_int"] < 2 * dy)
+        & (nn_stats["z_int"] >= 0)
+        & (nn_stats["z_int"] < 2 * dz)
     )
+    nn_stats = nn_stats[in_bounds]
+
+    # Apply the boolean mask and drop temporary columns
+    mask_values = boolean_mask[nn_stats["x_int"], nn_stats["y_int"], nn_stats["z_int"]]
+    result_df = nn_stats[mask_values].drop(columns=["x_int", "y_int", "z_int"]).reset_index(drop=True)
 
     return result_df
 

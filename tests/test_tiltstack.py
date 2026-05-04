@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
-from cryocat.ioutils import fileformat_replace_pattern
-from cryocat.tiltstack import *
+from cryocat.utils.ioutils import fileformat_replace_pattern
+from cryocat.core.tiltstack import *
 from pathlib import Path
 import pytest
 import mrcfile

@@ -21,13 +21,13 @@ from scipy.spatial import Delaunay
 
 import sklearn.neighbors as sn
 
-from cryocat import geom
-from cryocat import nnana
-from cryocat import cryomotl
-from cryocat import cryomap
-from cryocat.geom import Matrix
-from cryocat.classutils import get_classes_from_names, get_class_names_by_parent
-from cryocat import visplot
+from cryocat.utils import geom
+from cryocat.analysis import nnana
+from cryocat.core import cryomotl
+from cryocat.core import cryomap
+from cryocat.utils.geom import Matrix
+from cryocat.utils.classutils import get_classes_from_names, get_class_names_by_parent
+from cryocat.analysis import visplot
 import pandas as pd
 import plotly.graph_objects as go
 

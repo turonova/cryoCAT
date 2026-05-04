@@ -2,7 +2,7 @@
 
 .. currentmodule:: {{ module }}
 
-.. automodule:: {{ objname }}
+.. automodule:: {{ fullname }}
 
 
    {% block classes %}

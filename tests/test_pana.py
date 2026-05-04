@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import os
 from glob import glob
-from cryocat import pana
+from cryocat.analysis import pana
 import pytest
 from pathlib import Path
 
@@ -20,7 +20,7 @@ def test_create_subtomograms(mocker, csv_file):
     subvolume_sh = np.ones((64, 64, 64))
     angles = [1, 2, 3]
 
-    mocker.patch("cryocat.pana.cut_the_best_subtomo", return_value=(subvolume_sh, angles))
+    mocker.patch("cryocat.analysis.pana.cut_the_best_subtomo", return_value=(subvolume_sh, angles))
     mocker.patch("pandas.DataFrame.to_csv")
 
     df = pana.create_subtomograms_for_tm(str(csv_file), str(parent_path))

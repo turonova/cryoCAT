@@ -1,9 +1,8 @@
 import numpy as np
 import pandas as pd
-import cryocat
-from cryocat import cryomotl
+from cryocat.core import cryomotl
 from scipy.spatial.transform import Rotation as srot
-from cryocat import geom
+from cryocat.utils import geom
 import seaborn as sns
 from scipy.spatial import KDTree
 import sklearn.neighbors as sn

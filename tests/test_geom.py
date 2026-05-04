@@ -1,4 +1,4 @@
-from cryocat.geom import *
+from cryocat.utils.geom import *
 
 import numpy as np
 

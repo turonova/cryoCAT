@@ -3,7 +3,7 @@ import sys
 from unittest.mock import patch, MagicMock
 import numpy as np
 
-from cryocat.classutils import *
+from cryocat.utils.classutils import *
 
 
 class TestFilterStrings:

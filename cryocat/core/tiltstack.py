@@ -1,8 +1,9 @@
 import os
 import re
 import numpy as np
-from cryocat import cryomap
-from cryocat import ioutils
+from cryocat.core import cryomap
+from cryocat.utils import ioutils
+from scipy.interpolate import interp1d
 from skimage.transform import downscale_local_mean
 from skimage import exposure
 
@@ -602,7 +603,7 @@ def deconvolve(
         r = np.fft.ifftshift(r)
 
         x = np.arange(0, 1, 1 / interp_dim)
-        ramp_interp = cryomap.interp1d(x, wiener, fill_value="extrapolate")
+        ramp_interp = interp1d(x, wiener, fill_value="extrapolate")
 
         ramp = ramp_interp(r.flatten()).reshape(r.shape)
         # Perform deconvolution

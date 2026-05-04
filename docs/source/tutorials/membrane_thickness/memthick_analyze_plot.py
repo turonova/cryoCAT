@@ -9,8 +9,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
-from cryocat import cryomotl
-from cryocat import geom
+from cryocat.core import cryomotl
+from cryocat.utils import geom
 
 # =============================================================================
 # DATA CONTAINER CLASSES

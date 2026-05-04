@@ -6,16 +6,16 @@ import os
 import numpy as np
 import json
 
-from dash import html, dcc, ctx
+import dash
+from dash import html, dcc, ctx, ALL
 from dash import Input, Output, State, callback, no_update
 import pandas as pd
 import dash_bootstrap_components as dbc
-from cryocat import visplot
-from cryocat.cryomotl import Motl
-from cryocat.classutils import get_class_names_by_parent
+from cryocat.analysis import visplot
+from cryocat.core.cryomotl import Motl
+from cryocat.utils.classutils import get_class_names_by_parent
 from cryocat.app.globalvars import tomo_ids
 from cryocat.app.apputils import get_print_out, save_output
-from uuid import uuid4
 from cryocat.app.layout.customel import LabeledDropdown, InlineLabeledDropdown, InlineInputForm
 
 # motl_types = [{"label": name, "value": name} for name in get_class_names_by_parent("Motl", "cryocat.cryomotl")]
@@ -284,10 +284,30 @@ def get_table_plot_component(prefix: str):
                                     ),
                                 ]
                             ),
+                            dbc.Row(
+                                dbc.Col(
+                                    dbc.RadioItems(
+                                        id=f"{prefix}-selection-mode",
+                                        options=[
+                                            {"label": "Replace selection", "value": "replace"},
+                                            {"label": "Add to selection", "value": "add"},
+                                            {"label": "Subtract from selection", "value": "subtract"},
+                                        ],
+                                        value="replace",
+                                        inline=True,
+                                        className="sidebar-checklist",
+                                        labelStyle={"color": "var(--color9)", "marginRight": "1rem"},
+                                    ),
+                                    width=12,
+                                ),
+                                style={"marginTop": "0.5rem"},
+                            ),
                         ],
                         style={"display": "none"},
                     ),
                     html.Div(id=f"{prefix}-graph-area", children=[]),
+                    dcc.Store(id=f"{prefix}-graph-meta-store", data={}),
+                    dcc.Store(id=f"{prefix}-graph-counter", data=0),
                     dbc.Modal(
                         [
                             dbc.ModalHeader(dbc.ModalTitle("Wrong inputs")),
@@ -306,7 +326,7 @@ def get_table_plot_component(prefix: str):
     )
 
 
-def register_table_plot_callbacks(prefix: str, connected_store_id, special_graphs=None):
+def register_table_plot_callbacks(prefix: str, connected_store_id, special_graphs=None, table_grid_id=None):
 
     graph_options = [
         "Line plot",
@@ -434,6 +454,8 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
     @callback(
         Output(f"{prefix}-graph-area", "children"),
         Output(f"{prefix}-modal-text-area", "children"),
+        Output(f"{prefix}-graph-meta-store", "data"),
+        Output(f"{prefix}-graph-counter", "data"),
         Input(f"{prefix}-plot-graph-btn", "n_clicks"),
         Input(f"{prefix}-clear-graph-btn", "n_clicks"),
         State(f"{prefix}-graph-options-dropdown", "value"),
@@ -454,6 +476,8 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
         State(f"{prefix}-same-range", "value"),
         State(f"{prefix}-plot-grid-dropdown", "value"),
         State(f"{prefix}-plot-color-palette-dropdown", "value"),
+        State(f"{prefix}-graph-meta-store", "data"),
+        State(f"{prefix}-graph-counter", "data"),
         prevent_initial_call=True,
     )
     def plot_graphs(
@@ -477,13 +501,15 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
         same_range,
         grid_spec,
         colorscale,
+        graph_meta,
+        graph_counter,
     ):
 
         trigger_id = ctx.triggered_id
         input_data = pd.DataFrame(data)
 
         if trigger_id == f"{prefix}-clear-graph-btn":
-            return [], []
+            return [], [], {}, 0
         elif trigger_id == f"{prefix}-plot-graph-btn":
 
             x_selected = len(x_values) if x_values else 0
@@ -492,6 +518,8 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                 return (
                     graph_area,
                     f"Number of columns for X axis is {x_selected}. At least 1 column needs to be selected.",
+                    no_update,
+                    no_update,
                 )
 
             fig = None
@@ -595,6 +623,8 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                         "\n\nThe number of selected columns for Y axis has to match the number of "
                         "columns for X axis. Alternatively, only one column can be selected to "
                         "be used as Y axis for all columns in X.",
+                        no_update,
+                        no_update,
                     )
 
                 if y_selected == 0 or x_selected == 0:
@@ -603,6 +633,8 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                         f"Number of columns for X axis is {x_selected} "
                         f"and number of columns for Y axis is {y_selected}."
                         "\n\nAt least one column has to be selected for both X and Y axis.",
+                        no_update,
+                        no_update,
                     )
 
                 fig = visplot.plot_scatter2D(
@@ -618,9 +650,21 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                 )
 
             if fig is not None:
-                return graph_area + [dcc.Graph(id=str(uuid4()), figure=fig)], []
+                # Plotly only fires selectedData for traces that have markers.
+                # Add tiny invisible markers to line-only traces so selection works.
+                for trace in fig.data:
+                    if getattr(trace, "mode", None) == "lines":
+                        trace.update(mode="lines+markers", marker=dict(size=6, opacity=0.01))
+                fig.update_layout(dragmode="select")
+                graph_meta = graph_meta or {}
+                graph_meta[str(graph_counter)] = {"type": graph_type, "x_cols": x_values}
+                new_graph = dcc.Graph(
+                    id={"type": f"{prefix}-graph", "index": graph_counter},
+                    figure=fig,
+                )
+                return graph_area + [new_graph], [], graph_meta, graph_counter + 1
 
-        return no_update
+        return no_update, no_update, no_update, no_update
 
     @callback(
         Output(f"{prefix}-modal-main", "is_open"),
@@ -640,3 +684,62 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
             return False
 
         return False
+
+    if table_grid_id is not None:
+
+        @callback(
+            Output(table_grid_id, "selectedRows"),
+            Input({"type": f"{prefix}-graph", "index": ALL}, "clickData"),
+            Input({"type": f"{prefix}-graph", "index": ALL}, "selectedData"),
+            State(f"{prefix}-graph-meta-store", "data"),
+            State(table_grid_id, "rowData"),
+            State(f"{prefix}-selection-mode", "value"),
+            State(table_grid_id, "selectedRows"),
+            prevent_initial_call=True,
+        )
+        def sync_graph_selection(_click_list, _sel_list, graph_meta, row_data, sel_mode, current_selected):
+            triggered = ctx.triggered_id
+            if not isinstance(triggered, dict) or not row_data or not graph_meta:
+                raise dash.exceptions.PreventUpdate
+
+            data_value = ctx.triggered[0]["value"] if ctx.triggered else None
+            if not data_value or not data_value.get("points"):
+                raise dash.exceptions.PreventUpdate
+
+            graph_idx = triggered.get("index")
+            meta_entry = graph_meta.get(str(graph_idx))
+            if meta_entry is None:
+                raise dash.exceptions.PreventUpdate
+
+            n = len(row_data)
+            points = data_value["points"]
+
+            if meta_entry["type"] == "Histogram":
+                indices = []
+                for p in points:
+                    indices.extend(p.get("pointNumbers", []))
+            else:
+                indices = [p["pointIndex"] for p in points if "pointIndex" in p]
+
+            new_rows = [row_data[i] for i in indices if 0 <= i < n]
+            if not new_rows and sel_mode != "subtract":
+                raise dash.exceptions.PreventUpdate
+
+            if sel_mode == "replace":
+                return new_rows
+
+            current = current_selected or []
+
+            if sel_mode == "add":
+                existing_keys = {json.dumps(r, sort_keys=True) for r in current}
+                merged = list(current)
+                for r in new_rows:
+                    if json.dumps(r, sort_keys=True) not in existing_keys:
+                        merged.append(r)
+                return merged
+
+            if sel_mode == "subtract":
+                remove_keys = {json.dumps(r, sort_keys=True) for r in new_rows}
+                return [r for r in current if json.dumps(r, sort_keys=True) not in remove_keys]
+
+            return new_rows

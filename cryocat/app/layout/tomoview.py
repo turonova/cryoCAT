@@ -6,9 +6,9 @@ from dash import Input, Output, State, callback, exceptions, callback_context, c
 import plotly.graph_objects as go
 import pandas as pd
 import dash_bootstrap_components as dbc
-from cryocat import cryomotl
+from cryocat.core import cryomotl
 from cryocat.app.apputils import make_axis_trace
-from cryocat import visplot
+from cryocat.analysis import visplot
 
 
 # def get_colorscale(colorscale_name):
@@ -312,93 +312,79 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
 
         raise exceptions.PreventUpdate
 
-    @callback(
-        Output(f"{prefix}-graph2-container", "children"),
-        Input(f"{prefix}-graph", "clickData"),
-        State(f"{prefix}-data", "data"),
-        State(f"{detailed_table}", "data"),
-        State("twist-global-radius", "data"),
-        prevent_initial_call=True,
-    )
-    def show_detail_on_click(clickData, data, twist_data, radius):
-        if not show_dual_graph or not clickData or not data:
-            raise dash.exceptions.PreventUpdate
-        
-        # Get index of clicked point from customdata
-        clicked_row = clickData["points"][0]["customdata"]
-        clicked_df = pd.DataFrame([clicked_row], columns=pd.DataFrame(data).columns)
+    if show_dual_graph:
 
-        subtomo_index = clicked_df.columns.get_loc("subtomo_id")  # Find its position
-        subtomo_id = clicked_row[subtomo_index]  # Get the actual value
+        @callback(
+            Output(f"{prefix}-graph2-container", "children"),
+            Input(f"{prefix}-graph", "clickData"),
+            State(f"{prefix}-data", "data"),
+            State(f"{detailed_table}", "data"),
+            State("twist-global-radius", "data"),
+            prevent_initial_call=True,
+        )
+        def show_detail_on_click(clickData, data, twist_data, radius):
+            if not clickData or not data:
+                raise dash.exceptions.PreventUpdate
 
-        qp_df = pd.DataFrame(twist_data)
-        qp_df = qp_df[qp_df["qp_id"] == subtomo_id]
+            # Get index of clicked point from customdata
+            clicked_row = clickData["points"][0]["customdata"]
+            clicked_df = pd.DataFrame([clicked_row], columns=pd.DataFrame(data).columns)
 
-        if qp_df.empty:
-            raise exceptions.PreventUpdate
+            subtomo_index = clicked_df.columns.get_loc("subtomo_id")
+            subtomo_id = clicked_row[subtomo_index]
 
-        # ax_limit = qp_df[["twist_x", "twist_y", "twist_z"]].abs().to_numpy().max()
-        ax_limit = radius
+            qp_df = pd.DataFrame(twist_data)
+            qp_df = qp_df[qp_df["qp_id"] == subtomo_id]
 
-        fig = go.Figure()
+            if qp_df.empty:
+                raise exceptions.PreventUpdate
 
-        # Add all related points (with uniform color)
-        fig.add_trace(
-            go.Scatter3d(
-                x=qp_df["twist_x"],
-                y=qp_df["twist_y"],
-                z=qp_df["twist_z"],
-                mode="markers",
-                marker=dict(
-                    size=3,
-                    color="#83BA99",  # Uniform color for all data points
-                    opacity=0.8,
-                ),
-                name="Neighbor Points",
+            ax_limit = radius
+
+            fig = go.Figure()
+
+            fig.add_trace(
+                go.Scatter3d(
+                    x=qp_df["twist_x"],
+                    y=qp_df["twist_y"],
+                    z=qp_df["twist_z"],
+                    mode="markers",
+                    marker=dict(size=3, color="#83BA99", opacity=0.8),
+                    name="Neighbor Points",
+                )
             )
-        )
 
-        # Add the central point at origin (0,0,0) with a different color
-        fig.add_trace(
-            go.Scatter3d(
-                x=[0],
-                y=[0],
-                z=[0],
-                mode="markers",
-                marker=dict(
-                    size=6,
-                    color="orange",  # Central clicked point
-                ),
-                name="Clicked Point",
+            fig.add_trace(
+                go.Scatter3d(
+                    x=[0], y=[0], z=[0],
+                    mode="markers",
+                    marker=dict(size=6, color="orange"),
+                    name="Clicked Point",
+                )
             )
-        )
 
-        make_axis_trace(fig, length=5)
+            make_axis_trace(fig, length=5)
 
-        # Calculate data ranges
-        x_range = qp_df["twist_x"].max() - qp_df["twist_x"].min()
-        y_range = qp_df["twist_y"].max() - qp_df["twist_y"].min()
-        z_range = qp_df["twist_z"].max() - qp_df["twist_z"].min()
+            x_range = qp_df["twist_x"].max() - qp_df["twist_x"].min()
+            y_range = qp_df["twist_y"].max() - qp_df["twist_y"].min()
+            z_range = qp_df["twist_z"].max() - qp_df["twist_z"].min()
+            max_range = max(x_range, y_range, z_range) or 1
+            aspect_ratio = dict(
+                x=x_range / max_range,
+                y=y_range / max_range,
+                z=z_range / max_range,
+            )
 
-        # Avoid divide by zero (fallback to 1)
-        max_range = max(x_range, y_range, z_range) or 1
+            fig.update_layout(
+                margin=dict(t=0, b=0, l=0, r=0),
+                scene=dict(
+                    xaxis=dict(title="X", range=[-ax_limit, ax_limit]),
+                    yaxis=dict(title="Y", range=[-ax_limit, ax_limit]),
+                    zaxis=dict(title="Z", range=[-ax_limit, ax_limit]),
+                    aspectmode="manual",
+                    aspectratio=aspect_ratio,
+                ),
+                showlegend=False,
+            )
 
-        aspect_ratio = dict(
-            x=x_range / max_range,
-            y=y_range / max_range,
-            z=z_range / max_range,
-        )
-
-        fig.update_layout(
-            margin=dict(t=0, b=0, l=0, r=0),
-            scene=dict(
-                xaxis=dict(title="X", range=[-ax_limit, ax_limit]),
-                yaxis=dict(title="Y", range=[-ax_limit, ax_limit]),
-                zaxis=dict(title="Z", range=[-ax_limit, ax_limit]),
-                aspectmode="manual",
-                aspectratio=aspect_ratio,
-            ),
-            showlegend=False,
-        )
-
-        return dcc.Graph(id=f"{prefix}-detail-graph", figure=fig)
+            return dcc.Graph(id=f"{prefix}-detail-graph", figure=fig)

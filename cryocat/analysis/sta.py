@@ -1,10 +1,10 @@
 import numpy as np
 import pandas as pd
-from cryocat import cryomotl
-from cryocat import geom
-from cryocat import mathutils
-from cryocat import visplot
-from cryocat import ioutils
+from cryocat.core import cryomotl
+from cryocat.utils import geom
+from cryocat.utils import mathutils
+from cryocat.analysis import visplot
+from cryocat.utils import ioutils
 
 
 def get_stable_particles(motl_base_name, start_it, end_it, motl_type="emmotl"):

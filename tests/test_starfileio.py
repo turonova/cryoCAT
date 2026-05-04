@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cryocat import starfileio as sf
+from cryocat.utils import starfileio as sf
 from pathlib import Path
 
 test_data = Path(__file__).parent / "test_data"

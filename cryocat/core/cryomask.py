@@ -1,11 +1,12 @@
 import numpy as np
 import re
 import math
-from cryocat import cryomap
-from cryocat import cryomotl
-from cryocat import ioutils
+from cryocat.core import cryomap
+from cryocat.core import cryomotl
+from cryocat.utils import ioutils
 from skimage import filters
 from scipy import ndimage
+from scipy.spatial.transform import Rotation as srot
 from skimage import measure
 import pandas as pd
 import decimal
@@ -135,14 +136,14 @@ def add_gaussian(input_mask, sigma):
         return filters.gaussian(input_mask, sigma=sigma)
 
 
-def write_out(input_mask, output_name):
+def write_out(input_mask, output_path):
     """Writes out the input mask to a file.
 
     Parameters
     ----------
     input_mask : numpy.ndarray
         3D array with the input mask to be written out.
-    output_name : str
+    output_path : str
         The name of the output file.
 
     Returns
@@ -155,8 +156,8 @@ def write_out(input_mask, output_name):
     >>> write_out(input_mask, "output_mask.em")
     """
 
-    if output_name is not None:
-        cryomap.write(input_mask, output_name, data_type=np.single)
+    if output_path is not None:
+        cryomap.write(input_mask, output_path, data_type=np.single)
 
 
 def rotate(input_mask, angles):
@@ -183,7 +184,7 @@ def rotate(input_mask, angles):
         return cryomap.rotate(input_mask, rotation_angles=angles)
 
 
-def postprocess(input_mask, gaussian, angles, output_name):
+def postprocess(input_mask, gaussian, angles, output_path):
     """Applies set of postprocessing steps to the input_mask. It can smooth the mask by applying Gaussian blur, it
     can rotate it by Euler angles defined in degrees in zxz convention and write it out if output path is specified.
 
@@ -195,7 +196,7 @@ def postprocess(input_mask, gaussian, angles, output_name):
         Sigma value of the Gaussian blur to be added. If set to 0.0, the Gaussian is not applied.
     angles : numpy.ndarray
         Euler angles in degrees in zxz convention. If all angles are 0.0, the mask is not rotated.
-    output_name : str
+    output_path : str
         Name the output file to write the mask into. If None, the mask will not be written out.
 
     Returns
@@ -211,19 +212,19 @@ def postprocess(input_mask, gaussian, angles, output_name):
 
     mask = add_gaussian(input_mask, gaussian)
     mask = rotate(mask, angles)
-    write_out(mask, output_name)
+    write_out(mask, output_path)
 
     return mask
 
 
-def union(mask_list, output_name=None):
+def union(mask_list, output_path=None):
     """Calculate the union of multiple masks. The final values are clipped to 0.0 and 1.0.
 
     Parameters
     ----------
     mask_list : list
         A list of masks (loaded or specified by their paths, or combination of both).
-    output_name : str, optional
+    output_path : str, optional
         The name of the output file. If provided, the final mask is written out. Defaults to None.
 
     Returns
@@ -241,19 +242,19 @@ def union(mask_list, output_name=None):
 
     final_mask = np.clip(final_mask, 0.0, 1.0)
 
-    write_out(final_mask, output_name)
+    write_out(final_mask, output_path)
 
     return final_mask
 
 
-def intersection(mask_list, output_name=None):
+def intersection(mask_list, output_path=None):
     """Calculate the intersection of multiple masks. The final values are clipped to 0.0 and 1.0.
 
     Parameters
     ----------
     mask_list : list
         A list of masks (loaded or specified by their paths, or combination of both).
-    output_name : str, optional
+    output_path : str, optional
         The name of the output file. If provided, the final mask is written out. Defaults to None.
 
     Returns
@@ -269,12 +270,12 @@ def intersection(mask_list, output_name=None):
         final_mask *= mask
 
     final_mask = np.clip(final_mask, 0.0, 1.0)
-    write_out(final_mask, output_name)
+    write_out(final_mask, output_path)
 
     return final_mask
 
 
-def subtraction(mask_list, output_name=None):
+def subtraction(mask_list, output_path=None):
     """Calculate the subtraction of multiple masks. The subtraction follows the
     order in the list, i.e., the second mask is subtracted from the first one, the third one from the result of the
     first subtraction etc. The final values are clipped to 0.0 and 1.0.
@@ -283,7 +284,7 @@ def subtraction(mask_list, output_name=None):
     ----------
     mask_list : list
         A list of masks (loaded or specified by their paths, or combination of both).
-    output_name : str, optional
+    output_path : str, optional
         The name of the output file. If provided, the final mask is written out. Defaults to None.
 
     Returns
@@ -299,12 +300,12 @@ def subtraction(mask_list, output_name=None):
         final_mask -= mask
 
     final_mask = np.clip(final_mask, 0.0, 1.0)
-    write_out(final_mask, output_name)
+    write_out(final_mask, output_path)
 
     return final_mask
 
 
-def difference(mask_list, output_name=None):
+def difference(mask_list, output_path=None):
     """Calculate the difference between multiple masks. The function first compute the union of all the masks in the
     list and then their intersection which is then substracted from the union. The final values are clipped
     to 0.0 and 1.0.
@@ -313,7 +314,7 @@ def difference(mask_list, output_name=None):
     ----------
     mask_list : list
         A list of masks (loaded or specified by their paths, or combination of both).
-    output_name : str, optional
+    output_path : str, optional
         The name of the output file. If provided, the final mask is written out. Defaults to None.
 
     Returns
@@ -323,7 +324,7 @@ def difference(mask_list, output_name=None):
 
     Examples
     --------
-        difference([mask1, 'mask2.em', 'mask3.mrc'], output_name='output.mrc')
+        difference([mask1, 'mask2.em', 'mask3.mrc'], output_path='output.mrc')
 
     """
 
@@ -332,12 +333,12 @@ def difference(mask_list, output_name=None):
 
     final_mask = union_mask - inter_mask
     final_mask = np.clip(final_mask, 0.0, 1.0)
-    write_out(final_mask, output_name)
+    write_out(final_mask, output_path)
 
     return final_mask
 
 
-def spherical_shell_mask(mask_size, shell_thickness, radius=None, center=None, gaussian=0.0, output_name=None):
+def spherical_shell_mask(mask_size, shell_thickness, radius=None, center=None, gaussian=0.0, output_path=None):
     """Generate a spherical shell mask within a 3D volume.
 
     Parameters
@@ -352,7 +353,7 @@ def spherical_shell_mask(mask_size, shell_thickness, radius=None, center=None, g
         Center of the sphere in the mask. If None, it defaults to the center of the mask_size.
     gaussian : float, default=0.0
         Standard deviation for Gaussian smoothing to be applied to the shell mask. Defaults to 0.0 (no smoothing).
-    output_name : str, optional
+    output_path : str, optional
         Name of the output file to save the mask. If None, the mask is not saved.
 
     Returns
@@ -378,12 +379,12 @@ def spherical_shell_mask(mask_size, shell_thickness, radius=None, center=None, g
 
     shell_mask = sp1 - sp2
 
-    shell_mask = postprocess(shell_mask, gaussian, np.asarray([0, 0, 0]), output_name)
+    shell_mask = postprocess(shell_mask, gaussian, np.asarray([0, 0, 0]), output_path)
 
     return shell_mask
 
 
-def spherical_mask(mask_size, radius=None, center=None, gaussian=0.0, gaussian_outwards=True, output_name=None):
+def spherical_mask(mask_size, radius=None, center=None, gaussian=0.0, gaussian_outwards=True, output_path=None):
     """Creates a spherical mask with the specified radius, center and box size. The values range from 0.0 to 1.0.
     Additionally, the mask can be blurred by applying Gaussian specified by its sigma value.
 
@@ -402,7 +403,7 @@ def spherical_mask(mask_size, radius=None, center=None, gaussian=0.0, gaussian_o
     gaussian_outwards : bool, default=True
         Determines if the blur will be done outwards from the sphere surface (True) or if it will be centered around
         the sphere surface (False). The latter is consistent with Dynamo convention. Defaults to True.
-    output_name : str, optional
+    output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out.
         Defaults to None.
 
@@ -437,7 +438,7 @@ def spherical_mask(mask_size, radius=None, center=None, gaussian=0.0, gaussian_o
     mask[mask > 0] = 1
     mask[center[0], center[1], center[2]] = 1
 
-    mask = postprocess(mask, gaussian, np.asarray([0, 0, 0]), output_name)
+    mask = postprocess(mask, gaussian, np.asarray([0, 0, 0]), output_path)
 
     return mask
 
@@ -450,7 +451,7 @@ def cylindrical_mask(
     gaussian=0,
     gaussian_outwards=True,
     angles=None,
-    output_name=None,
+    output_path=None,
 ):
     """Creates a cylindrical mask with the specified radius, height, center and box size. The values range from 0.0 to 1.0.
     Additionally, the mask can be blurred by applying Gaussian specified by its sigma value and/or
@@ -477,7 +478,7 @@ def cylindrical_mask(
     angles : numpy.ndarray, optional
         1D array defining the rotation of the mask specified as three Euler angles in degrees in
         zxz convention. If all angles are zero, no rotation is applied. Defaults to None.
-    output_name : str, optional
+    output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out.
         Defaults to None.
 
@@ -521,7 +522,7 @@ def cylindrical_mask(
     mask = np.zeros(mask_size)
     mask[:, :, center[2] - height : center[2] + height + 1] = np.tile(mask_xy[:, :, None], (1, 1, height * 2 + 1))
 
-    mask = postprocess(mask, gaussian, angles, output_name)
+    mask = postprocess(mask, gaussian, angles, output_path)
 
     return mask
 
@@ -530,45 +531,43 @@ def cylindrical_mask_from_points(
         marker2,
         mask_size,
         pixel_size=1,
-        chimera_origin_idx=[0,0,0],
+        chimera_origin_idx=(0, 0, 0),
         radius=None,
         height=None,
         gaussian=0,
         gaussian_outwards=True,
-        output_name=None,
+        output_path=None,
 ):
-    """Creates a cylindrical mask with given parameters, with center in the middle of the two given points and the rotation
-    based on the vector from these points.
+    """Creates a cylindrical mask whose center lies midway between two marker points and whose
+    orientation follows the vector connecting them.
 
     Parameters
     ----------
+    marker1 : array-like
+        3D coordinates (x, y, z) of the first marker point in Angstroms (ChimeraX coordinate space).
+    marker2 : array-like
+        3D coordinates (x, y, z) of the second marker point in Angstroms (ChimeraX coordinate space).
     mask_size : array-like
         Specifies the dimensions of the box for the mask. Type is `int`.
-    pixel_size: float, optional
-        Pixel size used in ChimeraX for the map on which the markers of interest were defined.
-    chimera_origin_idx: array-like, optional
-        The placement of data array in ChimeraX coordinate space; change is needed when 'center' option was used for the masked map.
+    pixel_size : float, optional
+        Pixel size used in ChimeraX for the map on which the markers were defined. Defaults to 1.
+    chimera_origin_idx : array-like, optional
+        The placement of the data array in ChimeraX coordinate space; needs to be set when the
+        'center' option was used for the masked map. Defaults to (0, 0, 0).
     radius : int, optional
-        Defines the radius of the cylinder base in voxels. If not specified half of the smallest
-        dimensions in (x,y) is used as the radius. Defaults to None.
+        Defines the radius of the cylinder base in voxels. If not specified, half of the smallest
+        dimension in (x, y) is used. Defaults to None.
     height : int, optional
-        Defines the height of the cylinder in voxels. If not specified the dimension z
-        is used as the height. Defaults to None.
-    center : array-like, optional
-        Specify the center of the mask within the box. If not specified, the mask is placed in the center of the box
-        (e.g. for box size of 64 the center will be at (32, 32, 32) when numbered from 0). Type is `int`. Defaults to None.
+        Defines the height of the cylinder in voxels. If not specified, the z dimension is used.
+        Defaults to None.
     gaussian : float, default=0.0
         Defines the sigma of the Gaussian blur. If set to 0 no blur is applied. Defaults to 0.
     gaussian_outwards : bool, default=True
-        Determines if the blur will be done outwards from the mask surface (True) or if it will be centered around the
-        mask surface (False). The latter is consistent with Dynamo convention. Defaults to True.
-    angles : numpy.ndarray, optional
-        1D array defining the rotation of the mask specified as three Euler angles in degrees in
-        zxz convention. If all angles are zero, no rotation is applied. Defaults to None.
-    output_name : str, optional
+        Determines if the blur will be done outwards from the mask surface (True) or centered around
+        the mask surface (False). The latter is consistent with Dynamo convention. Defaults to True.
+    output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out.
         Defaults to None.
-
 
     Returns
     -------
@@ -602,7 +601,7 @@ def cylindrical_mask_from_points(
     rot_shifted = cryomap.recenter(rot_mask, new_center=center)
     rot_shifted = cryomap.recenter(rot_mask, center)
     
-    write_out(rot_shifted, output_name=output_name)
+    write_out(rot_shifted, output_path=output_path)
 
     return rot_shifted
 
@@ -662,7 +661,7 @@ def get_correct_format(input_value, reference_size=None):
     return size_correct_format
 
 
-def ellipsoid_shell_mask(mask_size, shell_thickness, radii, center=None, gaussian=0.0, angles=None, output_name=None):
+def ellipsoid_shell_mask(mask_size, shell_thickness, radii, center=None, gaussian=0.0, angles=None, output_path=None):
     """Generates a binary mask of an ellipsoid shell within a given mask size.
 
     Parameters
@@ -679,7 +678,7 @@ def ellipsoid_shell_mask(mask_size, shell_thickness, radii, center=None, gaussia
         Standard deviation of the Gaussian blur to apply to the shell mask. Defaults to 0.0 (no blur).
     angles : array_like, optional
         Angles for rotating the ellipsoid around each axis (in degrees). Defaults to None.
-    output_name : str, optional
+    output_path : str, optional
         If provided, the function will save the mask to a file with this name. Defaults to None.
 
     Returns
@@ -707,7 +706,7 @@ def ellipsoid_shell_mask(mask_size, shell_thickness, radii, center=None, gaussia
 
     shell_mask = e1 & ~e2
 
-    shell_mask = postprocess(shell_mask, gaussian, angles, output_name)
+    shell_mask = postprocess(shell_mask, gaussian, angles, output_path)
 
     return shell_mask
 
@@ -717,7 +716,7 @@ def ellipsoid_mask(
     radii=None,
     center=None,
     gaussian=0,
-    output_name=None,
+    output_path=None,
     angles=None,
     gaussian_outwards=True,
 ):
@@ -743,7 +742,7 @@ def ellipsoid_mask(
     angles : numpy.ndarray, optional
         1D array defining the rotation of the mask specified as three Euler angles in degrees in
         zxz convention. If all angles are zero, no rotation is applied. Defaults to None.
-    output_name : str, optional
+    output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out.
         Defaults to None.
 
@@ -796,7 +795,7 @@ def ellipsoid_mask(
 
     mask = distance <= 1
 
-    mask = postprocess(mask, gaussian, angles, output_name)
+    mask = postprocess(mask, gaussian, angles, output_path)
 
     return mask
 
@@ -846,7 +845,7 @@ def molmap_tight_mask(
     gaussian=0,
     gaussian_outwards=True,
     angles=None,
-    output_name=None,
+    output_path=None,
 ):
     """Creates a tight mask for the density created with molmap function in Chimera(X). The mask is the same shape as
     the input map, but has values from 0.0 to 1.0. Additionally, the mask can be blurred by applying Gaussian specified
@@ -870,7 +869,7 @@ def molmap_tight_mask(
     angles : numpy.ndarray, optional
         Defines the rotation of the mask specified as three Euler angles in degrees in
         zxz convention. If all angles are zero, no rotation is applied. Defaults to None.
-    output_name : str, optional
+    output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out. Defaults to None.
 
     Returns
@@ -894,7 +893,7 @@ def molmap_tight_mask(
     else:
         mask = ndimage.binary_dilation(model, iterations=dilation_size)
 
-    mask = postprocess(mask, gaussian, angles, output_name)
+    mask = postprocess(mask, gaussian, angles, output_path)
 
     return mask
 
@@ -907,7 +906,7 @@ def map_tight_mask(
     gaussian_outwards=True,
     angles=None,
     n_regions=1,
-    output_name=None,
+    output_path=None,
 ):
     """Creates a tight mask for the map coming from STA/SPA (i.e., with some noise around it). The mask is the same shape as
     the input map at given threshold. It has values from 0.0 to 1.0. Additionally, the mask can be blurred by
@@ -937,7 +936,7 @@ def map_tight_mask(
         Determines how many connected regions should be part of the mask. After the input map is thresholded, the
         connected regions are labeled and "n" largerst regions (in terms of number of voxels) are returned as the mask.
         Defaults to 1.
-    output_name : str, optional
+    output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out. Defaults to None.
 
     Returns
@@ -982,7 +981,7 @@ def map_tight_mask(
     if dilation_size > 0:
         mask = ndimage.binary_dilation(mask, iterations=dilation_size)
 
-    mask = postprocess(mask, gaussian, angles, output_name)
+    mask = postprocess(mask, gaussian, angles, output_path)
 
     return mask
 
@@ -1063,7 +1062,7 @@ def get_mass_center(input_mask):
     return mask_center.astype(int)
 
 
-def shrink_full_mask(input_mask, shrink_factor, output_name=None):
+def shrink_full_mask(input_mask, shrink_factor, output_path=None):
     """Takes in a 3D binary mask and shrinks it by the specified shrink factor. The function first fills in all of
     the holes within each slice of the mask, then shrinks it by removing the outermost layer of voxels from each slice.
     The function returns a new shrunken binary mask.
@@ -1074,7 +1073,7 @@ def shrink_full_mask(input_mask, shrink_factor, output_name=None):
         Input mask specified either by its path or already loaded as 3D numpy.ndarray.
     shrink_factor : int
         Defines how much the mask should be shrunken (in voxels).
-    output_name : str, optional
+    output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out. Defaults to None.
 
 
@@ -1122,19 +1121,19 @@ def shrink_full_mask(input_mask, shrink_factor, output_name=None):
     filled_mask = morphology.binary_opening(filled_mask, footprint=np.ones((2, 2, 2)))
     filled_mask = morphology.binary_closing(filled_mask)
 
-    write_out(filled_mask, output_name)
+    write_out(filled_mask, output_path)
 
     return filled_mask
 
 
-def fill_hollow_mask(input_mask, output_name=None, apply_opening_closing=True, footprint=None):
+def fill_hollow_mask(input_mask, output_path=None, apply_opening_closing=True, footprint=None):
     """Takes in a binary mask and returns the same mask with all holes filled in.
 
     Parameters
     ----------
     input_mask : str or numpy.ndarray
         Input mask specified either by its path or already loaded as 3D numpy.ndarray.
-    output_name : str, optional
+    output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out. Defaults to None.
     apply_opening_closing : bool, default=True
         If True the morphological operations of opening and closing will be applied as post-processing step.
@@ -1178,13 +1177,13 @@ def fill_hollow_mask(input_mask, output_name=None, apply_opening_closing=True, f
     filled_mask = np.where(filled_mask > 0, 1, 0)
 
     if apply_opening_closing:
-        if not footprint:
+        if footprint is None:
             footprint = np.ones((2, 2, 2))
 
         filled_mask = morphology.binary_opening(filled_mask, footprint=footprint)
         filled_mask = morphology.binary_closing(filled_mask)
 
-    write_out(filled_mask, output_name)
+    write_out(filled_mask, output_path)
 
     return filled_mask
 

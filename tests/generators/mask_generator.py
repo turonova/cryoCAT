@@ -3,7 +3,7 @@ sys.path.append('.')
 
 gen_dir = './tests/test_data/masks/'
 
-from cryocat.cryomask import *
+from cryocat.core.cryomask import *
 
 sm0 = spherical_mask(
     [4, 6, 8],

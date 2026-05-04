@@ -1,12 +1,12 @@
 import sys
 from io import StringIO
 
-from cryocat.cryomotl import Motl
+from cryocat.core.cryomotl import Motl
 
-from cryocat.cryomask import get_correct_format
+from cryocat.core.cryomask import get_correct_format
 from matplotlib import pyplot as plt
 from scipy.fft import fftn, ifftn, fftshift
-from cryocat.cryomap import *
+from cryocat.core.cryomap import *
 import pytest
 import numpy as np
 import os
@@ -232,7 +232,7 @@ def test_invert_contrast(tmp_path):
     # Read the original map
     original_map = read(input_file)
     # Invert contrast and save to a new file
-    inverted_map = invert_contrast(input_file, output_name=output_file)
+    inverted_map = invert_contrast(input_file, output_path=output_file)
     # Read the saved inverted map
     saved_inverted_map = read(output_file)
 
@@ -254,7 +254,7 @@ def test_em2mrc():
     input_file = str(Path(__file__).parent / "test_data" / "au_1.em")
     output_file = str(Path(__file__).parent / "test_data" / "au_12.mrc")
 
-    em2mrc(input_file, output_name=output_file)
+    em2mrc(input_file, output_path=output_file)
     assert os.path.exists(output_file), "Output file was not created"
 
     input_data = read(input_file)
@@ -288,7 +288,7 @@ def test_mrc2em():
     input_file = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
     output_file = str(Path(__file__).parent / "test_data" / "tilt_stack1.em")
 
-    mrc2em(input_file, output_name=output_file)
+    mrc2em(input_file, output_path=output_file)
     assert os.path.exists(output_file)
     input_data = read(input_file)
     output_data = read(output_file)
@@ -339,7 +339,7 @@ def write_hdf5():
     assert np.allclose(converted_data, original_data), "Data values mismatch between MRC and HDF5."
     hdf5_file.unlink()
 
-    write_hdf5(str(mrc_file), output_name=str(hdf5_file1))
+    write_hdf5(str(mrc_file), output_path=str(hdf5_file1))
     assert hdf5_file1.exists()
     hdf5_file1.unlink()
 
@@ -722,10 +722,10 @@ def test_trim():
     trimmed = trim(input_map_inf, [2, 2, 2], [3, 3, 3])
     assert np.isinf(trimmed[0, 0, 0])
 
-    output_name = str(Path(__file__).parent / "test_output.mrc")
-    trimmed = trim(input_map, [1, 1, 1], [3, 3, 3], output_name)
-    assert os.path.exists(output_name)
-    os.remove(output_name)
+    output_path = str(Path(__file__).parent / "test_output.mrc")
+    trimmed = trim(input_map, [1, 1, 1], [3, 3, 3], output_path)
+    assert os.path.exists(output_path)
+    os.remove(output_path)
 
 
 def test_flip():
@@ -735,22 +735,22 @@ def test_flip():
     original_data = read(input_filename)
 
     # Test flipping along x-axis
-    flipped_x = flip(input_filename, axis="x", output_name=output_filename)
+    flipped_x = flip(input_filename, axis="x", output_path=output_filename)
     expected_x = np.flip(original_data, 0)
     np.testing.assert_array_equal(flipped_x, expected_x)
 
     # Test flipping along y-axis
-    flipped_y = flip(input_filename, axis="y", output_name=output_filename)
+    flipped_y = flip(input_filename, axis="y", output_path=output_filename)
     expected_y = np.flip(original_data, 1)
     np.testing.assert_array_equal(flipped_y, expected_y)
 
     # Test flipping along z-axis
-    flipped_z = flip(input_filename, axis="z", output_name=output_filename)
+    flipped_z = flip(input_filename, axis="z", output_path=output_filename)
     expected_z = np.flip(original_data, 2)
     np.testing.assert_array_equal(flipped_z, expected_z)
 
     # Test flipping along multiple axes
-    flipped_xy = flip(input_filename, axis="xy", output_name=output_filename)
+    flipped_xy = flip(input_filename, axis="xy", output_path=output_filename)
     expected_xy = np.flip(original_data, (0, 1))
     np.testing.assert_array_equal(flipped_xy, expected_xy)
 
@@ -884,7 +884,7 @@ def test_flcf_changes_with_todo():
 
 
 @pytest.mark.parametrize(
-    "input_map, lp_fourier_pixels, hp_fourier_pixels, lp_target_resolution, hp_target_resolution, pixel_size, lp_gaussian, hp_gaussian, output_name, expect_exception, expected_output",
+    "input_map, lp_fourier_pixels, hp_fourier_pixels, lp_target_resolution, hp_target_resolution, pixel_size, lp_gaussian, hp_gaussian, output_path, expect_exception, expected_output",
     [
         # sinusoidal input → check fourier effect
         (
@@ -935,7 +935,7 @@ def test_bandpass(
     pixel_size,
     lp_gaussian,
     hp_gaussian,
-    output_name,
+    output_path,
     expect_exception,
     expected_output,
 ):
@@ -954,7 +954,7 @@ def test_bandpass(
                 pixel_size=pixel_size,
                 lp_gaussian=lp_gaussian,
                 hp_gaussian=hp_gaussian,
-                output_name=output_name,
+                output_path=output_path,
             )
     else:
         result = bandpass(
@@ -966,7 +966,7 @@ def test_bandpass(
             pixel_size=pixel_size,
             lp_gaussian=lp_gaussian,
             hp_gaussian=hp_gaussian,
-            output_name=output_name,
+            output_path=output_path,
         )
 
         # check if the output is a numpy array
@@ -984,19 +984,19 @@ def test_bandpass(
                 assert np.any(filtered_fft < original_fft), "filter did not attenuate frequencies"
 
         # if an output file is specified, check that it was created
-        if output_name:
-            assert os.path.exists(output_name), f"output file {output_name} was not created"
+        if output_path:
+            assert os.path.exists(output_path), f"output file {output_path} was not created"
 
             # optional: read and compare saved output
-            saved_output = read(output_name)
+            saved_output = read(output_path)
             np.testing.assert_allclose(result, saved_output, atol=1e-5)
 
             # cleanup: remove file after test
-            os.remove(output_name)
+            os.remove(output_path)
 
 
 @pytest.mark.parametrize(
-    "input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output",
+    "input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_path, expected_output",
     [
         (np.ones((32, 32, 32)), None, 10, 1.5, 3, None, np.ones((32, 32, 32))),
         (
@@ -1012,7 +1012,7 @@ def test_bandpass(
         (str(Path(__file__).parent / "test_data" / "tilt_stack.mrc"), 50, None, 1.5, 3, "output_map.mrc", None),
     ],
 )
-def test_lowpass(input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output):
+def test_lowpass(input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_path, expected_output):
     if isinstance(input_map, str):
         input_map = read(input_map)
 
@@ -1022,17 +1022,17 @@ def test_lowpass(input_map, fourier_pixels, target_resolution, pixel_size, gauss
         target_resolution=target_resolution,
         pixel_size=pixel_size,
         gaussian=gaussian,
-        output_name=output_name,
+        output_path=output_path,
     )
 
     assert result.shape == input_map.shape, f"Expected output shape {input_map.shape}, but got {result.shape}"
     assert isinstance(result, np.ndarray), "The result should be a numpy array"
-    if output_name and os.path.exists(output_name):
-        os.remove(output_name)
+    if output_path and os.path.exists(output_path):
+        os.remove(output_path)
 
 
 @pytest.mark.parametrize(
-    "input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output",
+    "input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_path, expected_output",
     [
         (np.ones((32, 32, 32)), None, 10, 1.5, 3, None, np.ones((32, 32, 32))),
         (
@@ -1056,7 +1056,7 @@ def test_lowpass(input_map, fourier_pixels, target_resolution, pixel_size, gauss
         ),
     ],
 )
-def test_highpass(input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_name, expected_output):
+def test_highpass(input_map, fourier_pixels, target_resolution, pixel_size, gaussian, output_path, expected_output):
     # Se l'input è un file, lo carico
     if isinstance(input_map, str):
         input_map = read(input_map)
@@ -1067,16 +1067,16 @@ def test_highpass(input_map, fourier_pixels, target_resolution, pixel_size, gaus
         target_resolution=target_resolution,
         pixel_size=pixel_size,
         gaussian=gaussian,
-        output_name=output_name,
+        output_path=output_path,
     )
 
     assert result.shape == input_map.shape, f"Expected output shape {input_map.shape}, but got {result.shape}"
     assert isinstance(result, np.ndarray), "The result should be a numpy array"
 
-    if output_name:
-        assert output_name.endswith(".mrc"), "Expected file to have '.mrc' extension"
-        if os.path.exists(output_name):
-            os.remove(output_name)
+    if output_path:
+        assert output_path.endswith(".mrc"), "Expected file to have '.mrc' extension"
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
 
 def test_get_cross_slices():
@@ -1201,3 +1201,137 @@ def test_place_object_placement_and_color(sample_motl_data):
     # Check placement and color for the first object
     print(f"Result at [1, 1, 1]: {result[1, 1, 1]}")
     assert result[1, 1, 1] == 0.0  # Changed assertion to match actual output
+
+
+# ---------------------------------------------------------------------------
+# calculate_masked_fsc
+# ---------------------------------------------------------------------------
+
+
+def test_calculate_masked_fsc_identical_maps():
+    np.random.seed(0)
+    box = 16
+    vol = np.random.rand(box, box, box).astype(np.float32)
+
+    df = calculate_masked_fsc(vol, vol, n_repeats=0)
+
+    assert isinstance(df, pd.DataFrame)
+    assert set(df.columns) >= {"x", "uncorrected_fsc"}
+    assert len(df) == box // 2
+    np.testing.assert_allclose(df["uncorrected_fsc"].values, 1.0, atol=1e-6)
+
+
+def test_calculate_masked_fsc_uncorrelated_maps():
+    np.random.seed(1)
+    box = 32
+    vol_a = np.random.rand(box, box, box)
+    vol_b = np.random.rand(box, box, box)
+
+    df = calculate_masked_fsc(vol_a, vol_b, n_repeats=0)
+
+    assert len(df) == box // 2
+    # uncorrelated random noise → mean FSC close to zero
+    assert abs(np.nanmean(df["uncorrected_fsc"].values)) < 0.2
+
+
+def test_calculate_masked_fsc_output_shape():
+    for box in (10, 16, 20):
+        vol = np.random.rand(box, box, box)
+        df = calculate_masked_fsc(vol, vol, n_repeats=0)
+        assert len(df) == box // 2
+
+
+def test_calculate_masked_fsc_with_phase_randomization():
+    np.random.seed(2)
+    box = 16
+    vol = np.random.rand(box, box, box).astype(np.float32)
+    fourier_cutoff = 2
+
+    df = calculate_masked_fsc(vol, vol, n_repeats=3, fourier_cutoff=fourier_cutoff)
+
+    assert "corrected_fsc" in df.columns
+    assert "mean_phase_fsc" in df.columns
+    # shells below fourier_cutoff are copied directly from uncorrected FSC
+    np.testing.assert_allclose(
+        df["corrected_fsc"].values[:fourier_cutoff],
+        df["uncorrected_fsc"].values[:fourier_cutoff],
+        atol=1e-10,
+    )
+
+
+def test_calculate_masked_fsc_x_axis_shells(tmp_path):
+    box = 16
+    vol = np.random.rand(box, box, box)
+
+    df_shells = calculate_masked_fsc(vol, vol, pixel_size=None, n_repeats=0)
+    np.testing.assert_allclose(df_shells["x"].values, np.arange(1, box // 2 + 1, dtype=float))
+
+
+def test_calculate_masked_fsc_x_axis_frequency():
+    box = 16
+    pixel_size = 2.0
+    vol = np.random.rand(box, box, box)
+
+    df = calculate_masked_fsc(vol, vol, pixel_size=pixel_size, n_repeats=0)
+    expected_x = np.arange(1, box // 2 + 1) / (box * pixel_size)
+    np.testing.assert_allclose(df["x"].values, expected_x)
+
+
+def test_calculate_masked_fsc_ones_mask_unchanged():
+    np.random.seed(3)
+    box = 16
+    vol = np.random.rand(box, box, box).astype(np.float32)
+    mask = np.ones((box, box, box), dtype=np.float32)
+
+    df_no_mask = calculate_masked_fsc(vol, vol, n_repeats=0)
+    df_with_mask = calculate_masked_fsc(vol, vol, mask=mask, n_repeats=0)
+
+    np.testing.assert_allclose(
+        df_no_mask["uncorrected_fsc"].values,
+        df_with_mask["uncorrected_fsc"].values,
+        atol=1e-6,
+    )
+
+
+def test_calculate_masked_fsc_csv_output(tmp_path):
+    box = 16
+    vol = np.random.rand(box, box, box)
+    output_path = str(tmp_path / "fsc.csv")
+
+    df = calculate_masked_fsc(vol, vol, n_repeats=0, output_path=output_path)
+    assert os.path.exists(output_path)
+
+    loaded = pd.read_csv(output_path)
+    assert "x" in loaded.columns
+    assert len(loaded) == box // 2
+
+
+def test_calculate_masked_fsc_xml_output(tmp_path):
+    box = 16
+    vol = np.random.rand(box, box, box)
+    output_path = str(tmp_path / "fsc.xml")
+
+    calculate_masked_fsc(vol, vol, pixel_size=2.0, n_repeats=0, output_path=output_path)
+    assert os.path.exists(output_path)
+
+    import xml.etree.ElementTree as ET
+    root = ET.parse(output_path).getroot()
+    assert root.tag == "fsc"
+    assert len(root.findall("coordinate")) == box // 2
+
+
+@pytest.mark.parametrize(
+    "error_case, map_a, map_b, extra_kwargs",
+    [
+        ("shape_mismatch", np.zeros((8, 8, 8)), np.zeros((8, 8, 10)), {}),
+        ("not_cubic", np.zeros((8, 8, 10)), np.zeros((8, 8, 10)), {}),
+        ("mask_shape", np.zeros((8, 8, 8)), np.zeros((8, 8, 8)), {"mask": np.zeros((10, 10, 10))}),
+        ("bad_extension", np.zeros((8, 8, 8)), np.zeros((8, 8, 8)), {"output_path": "fsc.npz"}),
+    ],
+)
+def test_calculate_masked_fsc_errors(error_case, map_a, map_b, extra_kwargs, tmp_path):
+    kwargs = dict(extra_kwargs)
+    if "output_path" in kwargs:
+        kwargs["output_path"] = str(tmp_path / kwargs["output_path"])
+    with pytest.raises(ValueError):
+        calculate_masked_fsc(map_a, map_b, n_repeats=0, **kwargs)

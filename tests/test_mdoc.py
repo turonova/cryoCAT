@@ -4,7 +4,7 @@ import tempfile
 import os
 from pathlib import Path
 import numpy as np
-from cryocat import mdoc
+from cryocat.core import mdoc
 
 
 class TestMdoc:

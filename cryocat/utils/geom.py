@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation as srot
-from cryocat.exceptions import UserInputError
+from cryocat.utils.exceptions import UserInputError
 import matplotlib.pyplot as plt
 import os
 import math

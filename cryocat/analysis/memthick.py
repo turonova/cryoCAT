@@ -192,7 +192,7 @@ Command Line - Intensity profile-based thickness results filtering:
         --intensity_margin_factor 0.1 \
 
 Python Module - Full pipeline with automated results filtering - RECOMMENDED:
-    from cryocat import memthick
+    from cryocat.analysis import memthick
     results = memthick.run_full_pipeline(
         segmentation_path="membrane_seg.mrc",
         output_dir=output_dir,
@@ -209,7 +209,7 @@ Python Module - Full pipeline with automated results filtering - RECOMMENDED:
     )
 
 Python Module - Intensity profile-based thickness results filtering:
-    from cryocat import memthick
+    from cryocat.analysis import memthick
     results = memthick.int_profiles_extract_clean(
         thickness_csv="membrane_thickness.csv",
         output_dir=output_dir,

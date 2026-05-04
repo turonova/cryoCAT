@@ -17,10 +17,10 @@ from dash import callback, Input, Output, State, html, dcc, ALL, ctx, no_update
 from dash.dash_table.Format import Format, Scheme
 
 from cryocat.app.apputils import format_columns
-from cryocat.cryomotl import Motl  # or wherever your Motl class lives
-from cryocat.nnana import get_nn_stats, plot_nn_rot_coord_df_plotly
-from cryocat.visplot import plot_orientational_distribution
-from cryocat.tango import TwistDescriptor, FeatureCatalog
+from cryocat.core.cryomotl import Motl
+from cryocat.analysis.nnana import get_nn_stats, plot_nn_rot_coord_df_plotly
+from cryocat.analysis.visplot import plot_orientational_distribution
+from cryocat.analysis.tango import TwistDescriptor, FeatureCatalog
 
 global_motl = {"obj": None}
 global_twist = {"obj": None}

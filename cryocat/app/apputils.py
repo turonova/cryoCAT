@@ -14,8 +14,8 @@ import dash_bootstrap_components as dbc
 
 import plotly.graph_objects as go
 
-from cryocat.classutils import process_method_docstring
-from cryocat.cryomotl import Motl, EmMotl, StopgapMotl, RelionMotl, RelionMotlv5, DynamoMotl
+from cryocat.utils.classutils import process_method_docstring
+from cryocat.core.cryomotl import Motl, EmMotl, StopgapMotl, RelionMotl, RelionMotlv5, DynamoMotl
 
 # mport dash_html_components as html
 
@@ -117,7 +117,7 @@ def save_output(file_path, data_to_save, csv_only=True):
     return status
 
 
-def get_class_by_name(class_name: str, module_path="cryocat.tango"):
+def get_class_by_name(class_name: str, module_path="cryocat.analysis.tango"):
     module = importlib.import_module(module_path)
     cls = getattr(module, class_name, None)
     if cls is None:
@@ -209,7 +209,7 @@ def generate_form_from_untyped_init(cls_name, exclude_params=None):
     return inputs
 
 
-def generate_form_from_docstring(cls_name, id_type, id_name, exclude_params=None, module_path="cryocat.tango"):
+def generate_form_from_docstring(cls_name, id_type, id_name, exclude_params=None, module_path="cryocat.analysis.tango"):
 
     def correct_form(value):
 
@@ -356,3 +356,89 @@ def get_relevant_features(desc_name, all_features):
     avail_features = [s for s in all_features if not s.endswith(desc_name)]
 
     return avail_features
+
+
+def get_motl_operation_methods():
+    """Return dropdown options for all public Motl instance methods that have documented parameters."""
+    from cryocat.core.cryomotl import Motl
+
+    options = []
+    for name, _ in sorted(inspect.getmembers(Motl, predicate=inspect.isfunction)):
+        if name.startswith("_"):
+            continue
+        try:
+            sig = inspect.signature(getattr(Motl, name))
+        except (ValueError, TypeError):
+            continue
+        params = list(sig.parameters.keys())
+        if not params or params[0] != "self":
+            continue  # skip static methods
+        label = name.replace("_", " ").capitalize()
+        options.append({"label": label, "value": name})
+    return options
+
+
+def generate_motl_op_form(method_name):
+    """Generate Dash form elements for a Motl method based on its NumPy-style docstring."""
+    from cryocat.core.cryomotl import Motl
+
+    params_dict = process_method_docstring(Motl, method_name, pretty_print=True)
+
+    if not params_dict:
+        return [html.Div("No parameters required.", style={"fontSize": "0.85rem", "color": "var(--color9)", "padding": "2px 0"})]
+
+    label_style = {"width": "45%", "display": "flex", "alignItems": "center", "boxSizing": "border-box", "paddingRight": "4px"}
+    input_style = {"width": "55%"}
+    row_style = {"display": "flex", "flexDirection": "row", "marginBottom": "0.25rem", "width": "100%", "alignItems": "center"}
+
+    forms = []
+    for key, value in params_dict.items():
+        raw_name = value["name"]
+
+        # Docstrings often use "name: type" (no spaces) which NumpyDocString
+        # absorbs into the name field with an empty type string.  Split it out.
+        if ":" in raw_name:
+            actual_name, embedded_type = [s.strip() for s in raw_name.split(":", 1)]
+        else:
+            actual_name, embedded_type = raw_name, ""
+
+        raw_types = value.get("types")
+        if isinstance(raw_types, type):
+            p_type = raw_types.__name__
+        elif raw_types:
+            p_type = raw_types[0]
+        else:
+            p_type = embedded_type if embedded_type else "str"
+        form_id = {"type": "me-op-param", "param": actual_name, "p_type": p_type}
+
+        if value["options"]:
+            inp = dcc.Dropdown(id=form_id, options=value["options"], multi=False,
+                               value=value["options"][0], style={"width": "100%"})
+        elif p_type == "bool":
+            inp = dcc.Dropdown(id=form_id, options=["True", "False"],
+                               value=str(value["default"]), style={"width": "100%"})
+        elif p_type in ("float", "int"):
+            inp = dcc.Input(type="number", value=value["default"], id=form_id, style={"width": "100%"})
+        elif p_type == "numpy.ndarray":
+            inp = dcc.Input(type="text", value="", placeholder="e.g. 1,2,3", id=form_id, style={"width": "100%"})
+        else:
+            default_str = str(value["default"]) if value["default"] is not None else ""
+            placeholder = "" if value["required"] else "Optional"
+            inp = dcc.Input(type="text", value=default_str, placeholder=placeholder,
+                            id=form_id, style={"width": "100%"})
+
+        label_id = f"me-op-lbl-{actual_name}"
+        row = html.Div(
+            [
+                html.Div(
+                    [html.Label(key, id=label_id, style={"fontSize": "0.85rem", "margin": 0}),
+                     dbc.Tooltip(value["desc"], target=label_id, placement="right")],
+                    style=label_style,
+                ),
+                html.Div(inp, style=input_style),
+            ],
+            style=row_style,
+        )
+        forms.append(row)
+
+    return forms

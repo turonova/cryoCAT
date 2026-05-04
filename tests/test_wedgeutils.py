@@ -1,5 +1,5 @@
-from cryocat.wedgeutils import *
-from cryocat.ioutils import *
+from cryocat.utils.wedgeutils import *
+from cryocat.utils.ioutils import *
 import numpy as np
 import pytest
 from pathlib import Path

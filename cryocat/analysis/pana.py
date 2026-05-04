@@ -2,17 +2,17 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 import seaborn as sns
-from cryocat import cryomap
-from cryocat import geom
-from cryocat import ioutils
-from cryocat import cryomotl
-from cryocat import tmana
-from cryocat import mathutils
-from cryocat import wedgeutils
+from cryocat.core import cryomap
+from cryocat.utils import geom
+from cryocat.utils import ioutils
+from cryocat.core import cryomotl
+from cryocat.analysis import tmana
+from cryocat.utils import mathutils
+from cryocat.utils import wedgeutils
 from scipy.spatial.transform import Rotation as srot
 import re
 from pathlib import Path
-from cryocat import cryomask
+from cryocat.core import cryomask
 import os
 from skimage import measure
 from skimage import morphology
@@ -935,6 +935,7 @@ def create_subtomograms_for_tm(template_list, parent_folder_path):
     """
 
     temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df["Tomo map"] = temp_df["Tomo map"].astype(object)
     unique_entries = temp_df.groupby(["Structure", "Motl", "Tomogram", "Boxsize"]).groups
     entry_indices = list(unique_entries.values())
 
