@@ -2851,9 +2851,9 @@ class TestRelionMotl:
     def test_parse_tomo_id_relion_30_from_rlnImageName(self):
         data = {
             'rlnImageName': [
-                '/path/tomo7_sub1_1.mrc',
-                '/another/tomo8_sub2_2.mrc',
-                '/yet/another/tomo9_sub3_3.mrc'
+                '/path/tomo7_sub1_1A.mrc',
+                '/another/tomo8_sub2_2A.mrc',
+                '/yet/another/tomo9_sub3_3A.mrc'
             ]
         }
         relion_df = pd.DataFrame(data)
@@ -2873,9 +2873,9 @@ class TestRelionMotl:
     def test_parse_tomo_id_relion_40_from_rlnTomoParticleName(self):
         data = {
             'rlnTomoParticleName': [
-                'TS_10/particle1',
-                'TS_11/particle2',
-                'TS_12/particle3'
+                'TS_10/1',
+                'TS_11/2',
+                'TS_12/3'
             ]
         }
         relion_df = pd.DataFrame(data)
@@ -2895,9 +2895,9 @@ class TestRelionMotl:
     def test_parse_subtomo_id_relion_30_unique(self):
         data = {
             'rlnImageName': [
-                '/path/tomo1_1_1.mrc',
-                '/another/tomo1_2_1.mrc',
-                '/yet/another/tomo1_3_1.mrc'
+                '/path/tomo1_1_1A.mrc',
+                '/another/tomo1_2_1A.mrc',
+                '/yet/another/tomo1_3_1A.mrc'
             ]
         }
         relion_df = pd.DataFrame(data)
@@ -2943,9 +2943,9 @@ class TestRelionMotl:
     def test_parse_subtomo_id_relion_30_non_unique(self):
         data = {
             'rlnImageName': [
-                '/path/tomo1_1_1.mrc',
-                '/another/tomo1_1_1.mrc',
-                '/yet/another/tomo1_2_1.mrc'
+                '/path/tomo1_1_1A.mrc',
+                '/another/tomo1_1_1A.mrc',
+                '/yet/another/tomo1_2_1A.mrc'
             ]
         }
         relion_df = pd.DataFrame(data)
@@ -2991,12 +2991,12 @@ class TestRelionMotl:
     def test_parse_subtomo_id_with_half_sets(self):
         data = {
             'rlnImageName': [
-                '/path/tomo1_1_1.mrc',
-                '/another/tomo1_2_1.mrc',
-                '/yet/another/tomo1_3_1.mrc',
-                '/another/tomo1_1_1.mrc',
-                '/yet/another/tomo1_2_1.mrc',
-                '/path/tomo1_4_1.mrc'
+                '/path/tomo1_1_1A.mrc',
+                '/another/tomo1_2_1A.mrc',
+                '/yet/another/tomo1_3_1A.mrc',
+                '/another/tomo1_1_1A.mrc',
+                '/yet/another/tomo1_2_1A.mrc',
+                '/path/tomo1_4_1A.mrc'
             ],
             'rlnRandomSubset': [1, 2, 1, 2, 1, 2]
         }
@@ -3030,10 +3030,10 @@ class TestRelionMotl:
         # Let's try with unique IDs and half-sets
         data_hs_unique = {
             'rlnImageName': [
-                '/path/tomo1_1_1.mrc',
-                '/another/tomo1_2_1.mrc',
-                '/yet/another/tomo1_3_1.mrc',
-                '/another/tomo1_4_1.mrc'
+                '/path/tomo1_1_1A.mrc',
+                '/another/tomo1_2_1A.mrc',
+                '/yet/another/tomo1_3_1A.mrc',
+                '/another/tomo1_4_1A.mrc'
             ],
             'rlnRandomSubset': [1, 2, 1, 2]
         }
@@ -4047,6 +4047,163 @@ class TestRelionMotl:
             "ccSubtomoID"
         ]
 
+    def test_parse_tomo_id_new(self):
+        motl = RelionMotl()
+        motl.tomo_id_name = "rlnMicrographName"
+        motl.df = pd.DataFrame(index=range(4))
+
+        test_names = [
+            "/STORAGE/huxing/ribo/f29wt1/warpfull2/mrc/reconstruction/0002_12.23Apx.mrc",
+            "TS_017",
+            "0002_12.23Apx.mrc",
+            "021.tomostar"
+        ]
+
+        relion_df = pd.DataFrame({motl.tomo_id_name: test_names})
+        motl.parse_tomo_id(relion_df)
+
+        expected_tomo_ids = [2.0, 17.0, 2.0, 21.0]
+        assert motl.df["tomo_id"].tolist() == expected_tomo_ids
+
+    def test_parse_tomo_id_fallback(self):
+        motl = RelionMotl()
+        motl.tomo_id_name = "missing_column"
+        motl.subtomo_id_name = "rlnImageName"
+        motl.version = 3.1
+        motl.df = pd.DataFrame(index=range(3))
+
+        test_names = [
+            "../warp/mrc/subtomo/01006/01006_0000000_ctf_5.36A.mrc ",
+            "../warp_tiltseries/subtomo_pentamers_bin2_20260313/021/021_0000001_4.83A.mrc",
+            "../mrc/subtomo_sgbin2_39k/0002/0002_0000065_2.45A.mrc"
+        ]
+
+        relion_df = pd.DataFrame({motl.subtomo_id_name: test_names})
+        motl.parse_tomo_id(relion_df)
+
+        expected_tomo_ids = [1006.0, 21.0, 2.0]
+        assert motl.df["tomo_id"].tolist() == expected_tomo_ids
+
+    def test_parse_subtomo_id_new(self):
+        motl = RelionMotl()
+        motl.subtomo_id_name = "rlnImageName"
+        motl.version = 3.1
+        motl.df = pd.DataFrame(index=range(3))
+
+        test_names = [
+            "../warp_tiltseries/subtomo_pentamers_bin2_20260313/021/021_0000001_4.83A.mrc",
+            "../mrc/subtomo_sgbin2_39k/0002/0002_0000066_2.45A.mrc",
+            "../warp_tiltseries/subtomo_pentamers_bin2_20260313/021/021_0000003_ctf_4.83A.mrc"
+        ]
+
+        relion_df = pd.DataFrame({motl.subtomo_id_name: test_names})
+        motl.parse_subtomo_id(relion_df)
+
+        expected_subtomo_ids = [1.0, 66.0, 3.0]
+
+        assert motl.df["subtomo_id"].tolist() == expected_subtomo_ids
+        assert motl.df["geom3"].tolist() == expected_subtomo_ids
+
+    def test_parse_tomo_id_custom_format(self):
+        motl = RelionMotl()
+        motl.tomo_id_name = "rlnMicrographName"
+        motl.df = pd.DataFrame(index=range(2))
+
+        relion_df = pd.DataFrame({
+            "rlnMicrographName": ["pos01_TS0017.mrc", "pos01_TS0042.mrc"]
+        })
+        motl.parse_tomo_id(relion_df, tomo_format="pos01_TS$xxxx.mrc")
+        assert motl.df["tomo_id"].tolist() == [17.0, 42.0]
+
+        relion_df_mixed = pd.DataFrame({
+            "rlnMicrographName": ["tomo_0017_sub_123.mrc", "tomo_0042_sub_456.mrc"]
+        })
+        motl.parse_tomo_id(relion_df_mixed, tomo_format="tomo_$xxxx_sub_$yyy.mrc")
+        assert motl.df["tomo_id"].tolist() == [17.0, 42.0]
+
+    def test_parse_subtomo_id_custom_format(self):
+        motl = RelionMotl()
+        motl.subtomo_id_name = "rlnImageName"
+        motl.df = pd.DataFrame(index=range(2))
+
+        relion_df = pd.DataFrame({
+            "rlnImageName": ["tomo_0017_sub_0123.mrc", "tomo_0042_sub_0456.mrc"]
+        })
+
+        motl.parse_subtomo_id(relion_df, subtomo_format="tomo_$xxxx_sub_$yyyy.mrc")
+
+        expected_ids = [123.0, 456.0]
+        assert motl.df["subtomo_id"].tolist() == expected_ids
+        assert motl.df["geom3"].tolist() == expected_ids
+
+    def test_parse_id_custom_format_exceptions(self):
+        motl = RelionMotl()
+        motl.tomo_id_name = "rlnMicrographName"
+        motl.subtomo_id_name = "rlnImageName"
+        motl.df = pd.DataFrame(index=range(1))
+
+        relion_df = pd.DataFrame({
+            "rlnMicrographName": ["dummy.mrc"],
+            "rlnImageName": ["dummy.mrc"]
+        })
+
+        with pytest.raises(ValueError, match=r"does not contain any sequence of \$ followed by x"):
+            motl.parse_tomo_id(relion_df, tomo_format="pos01_TS$yyyy.mrc")
+
+        with pytest.raises(ValueError, match=r"does not contain any sequence of \$ followed by y"):
+            motl.parse_subtomo_id(relion_df, subtomo_format="pos01_TS$xxxx.mrc")
+
+    def test_parse_tomo_id_complex_paths(self):
+        motl = RelionMotl()
+        motl.tomo_id_name = "rlnMicrographName"
+        motl.subtomo_id_name = "rlnImageName"
+
+        relion_df_custom = pd.DataFrame({
+            "rlnMicrographName": [
+                "../mrc/subtomo_sgbin2_39k/0002/0002_0000066_2.45A.mrc",
+                "STORAGE/huxing/ribo/f29wt1/warpfull2/mrc/reconstruction/pos01_0005_12.23Apx.mrc"
+            ]
+        })
+
+        motl.df = pd.DataFrame(index=range(1))
+        motl.parse_tomo_id(relion_df_custom.iloc[[0]],
+                           tomo_format="../mrc/subtomo_sgbin2_39k/$xxxx/$xxxx_$yyyy_2.45A.mrc")
+        assert motl.df.loc[0, "tomo_id"] == 2.0
+
+        motl.df = pd.DataFrame(index=range(1))
+        motl.parse_tomo_id(relion_df_custom.iloc[[1]],
+                           tomo_format="STORAGE/huxing/ribo/f29wt1/warpfull2/mrc/reconstruction/pos01_$xxxx_12.23Apx.mrc")
+        assert motl.df.loc[0, "tomo_id"] == 5.0
+
+        motl.df = pd.DataFrame(index=range(1))
+        motl.parse_tomo_id(relion_df_custom.iloc[[1]])
+        assert motl.df.loc[0, "tomo_id"] == 5.0
+
+        relion_df_sub = pd.DataFrame({
+            "rlnImageName": ["../warp_tiltseries/subtomo_pentamers_bin2_20260313/021/021_0000003_ctf_4.83A.mrc"]
+        })
+        motl.tomo_id_name = "missing_col"
+        motl.df = pd.DataFrame(index=range(1))
+        motl.parse_tomo_id(relion_df_sub)
+        assert motl.df.loc[0, "tomo_id"] == 21.0
+
+    def test_parse_subtomo_id_complex_paths(self):
+        motl = RelionMotl()
+        motl.subtomo_id_name = "rlnImageName"
+
+        relion_df = pd.DataFrame({
+            "rlnImageName": ["../warp_tiltseries/subtomo_pentamers_bin2_20260313/021/021_0000003_ctf_4.83A.mrc"]
+        })
+
+        motl.df = pd.DataFrame(index=range(1))
+        motl.parse_subtomo_id(relion_df,
+                              subtomo_format="../warp_tiltseries/subtomo_pentamers_bin2_20260313/$xxx/$xxx_$yyyyyyy_ctf_4.83A.mrc")
+        assert motl.df.loc[0, "subtomo_id"] == 3.0
+
+        motl.df = pd.DataFrame(index=range(1))
+        motl.parse_subtomo_id(relion_df)
+        assert motl.df.loc[0, "subtomo_id"] == 3.0
+
 class TestStopgapMotl:
     @pytest.fixture
     def sample_stopgap_data(self):
@@ -4669,8 +4826,6 @@ class TestModMotl:
         pd.set_option('display.max_colwidth', None)
         print(check.df)
         print(check.mod_df)
-
-
 
 class TestRelionMotlv5:
     warp_tomo_path = test_data + "/motl_data/relion5/clean/warp2_matching_tomograms.star"
@@ -5539,4 +5694,3 @@ class TestRelionMotlv5:
             "rlnAmplitudeContrast": [0.1],
         })
         pd.testing.assert_frame_equal(optics_df, expected_df)
-
