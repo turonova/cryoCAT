@@ -7,30 +7,30 @@ The documentation including tutorials and basic user guide can be found here: [c
 
 ## Environment
 * OS independent
-* Requires Python 3.9 or higher
+* Requires Python 3.12 or higher
 
 ## Current dependencies
 * To take advantage of all the functions within the package following modules should be installed (in brackets tested versions):
-    * scipy (1.9.1)
-    * numpy (1.23.4)
-    * pandas (1.5.3)
-    * scikit-image (0.20.0)
+    * numpy (2.4.4)
+    * pandas (3.0.2)
+    * matplotlib (3.10.9)
+    * scipy (1.17.1)
+    * scikit-image (0.26.0)
     * emfile (0.3.0)
-    * mrcfile (1.4.3)
-    * matplotlib (3.6.2)
-    * seaborn (0.12.1)
-    * scikit-learn (1.0.2)
-    * lmfit (1.2.2)
-    * h5py (3.10.0)
-    * numba (0.60.0)
-    * pyyaml (6.0.1)
-    * tqdm (4.66.1)
+    * mrcfile (1.5.4)
+    * seaborn (0.13.2)
+    * scikit-learn (1.8.0)
+    * lmfit (1.3.4)
+    * h5py (3.16.0)
+    * numba (0.65.1)
+    * pyyaml (6.0.3)
+    * tqdm (4.67.3)
     * plotly (5.24)
-    * dash (3.0.1)
-    * dash_bootstrap_components (2.0)
-    * dash_ag_grid (31.3.1)
-    * networkx (3.1)
-    * numpydoc (1.9)
+    * dash (4.1.0)
+    * dash_bootstrap_components (2.0.4)
+    * dash_ag_grid (35.2.0)
+    * networkx (3.6.1)
+    * numpydoc (1.10)
       
 ## PIP
 
