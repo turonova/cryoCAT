@@ -31,6 +31,7 @@ _RELION_VERSIONS = [
 
 # ── Modal builders ─────────────────────────────────────────────────────────────
 
+
 def _csv_save_modal(prefix):
     return dbc.Modal(
         [
@@ -199,6 +200,7 @@ def _overwrite_confirm_modal(prefix):
 
 # ── Component ──────────────────────────────────────────────────────────────────
 
+
 def get_table_component(prefix: str, connected_motl_prefix=None):
     motl_mode = connected_motl_prefix is not None
 
@@ -300,6 +302,7 @@ def get_table_component(prefix: str, connected_motl_prefix=None):
 
 
 # ── Callbacks ──────────────────────────────────────────────────────────────────
+
 
 def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=None, slot_idx=None, max_motls=None):
 
@@ -414,42 +417,110 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
         df = pd.DataFrame(data)
         filter_columns = list(df.select_dtypes(include="number").columns)
         col_components = []
-        divFlex = {"display": "flex", "align-content": "stretch", "justifyContent": "flex-end"}
-        labelFlex = {"flexShrink": 0}
-        slideFlex = {"width": "100%", "padding": "0", "margin": "0", "height": "16px"}
+        divFlex = {"display": "flex", "flexDirection": "row", "alignItems": "center"}
+        labelFlex = {
+            "flexShrink": 0,
+            "fontSize": "10px",
+            "fontWeight": "600",
+            "color": "var(--color10)",
+            "whiteSpace": "nowrap",
+            "marginRight": "4px",
+            "marginLeft": "6px",
+            "marginTop": "-10px",
+        }
+        slideFlex = {"flex": "1", "minWidth": "0", "padding": "0", "marginTop": "-10px"}
+
+        inputStyle = {
+            "width": "52px",
+            "flexShrink": 0,
+            "marginTop": "-10px",
+        }
 
         for col in filter_columns:
-            if df[col].max() == df[col].min():
+            col_min = df[col].min()
+            col_max = df[col].max()
+            if col_min == col_max or pd.isna(col_min) or pd.isna(col_max):
                 continue
-            min_val = df[col].min()
-            max_val = df[col].max()
+            min_val = float(col_min)
+            max_val = float(col_max)
+            is_int_col = pd.api.types.is_integer_dtype(df[col])
+            step = 1.0 if is_int_col else ((max_val - min_val) / 100 or 1.0)
             col_components.append(
                 dbc.Col(
                     html.Div(
                         [
                             html.Div(f"{col}:", style=labelFlex),
+                            dcc.Input(
+                                id={"type": f"{prefix}-filter-min", "column": col},
+                                type="number",
+                                value=min_val,
+                                debounce=True,
+                                className="filter-range-input",
+                                style=inputStyle,
+                            ),
                             html.Div(
                                 dcc.RangeSlider(
                                     id={"type": f"{prefix}-filter-slider", "column": col},
                                     min=min_val,
                                     max=max_val,
-                                    step=(max_val - min_val) / 100 or 1,
+                                    step=step,
                                     value=[min_val, max_val],
-                                    tooltip={"placement": "right"},
+                                    tooltip={"placement": "top"},
                                     marks=None,
                                     allowCross=False,
                                 ),
                                 style=slideFlex,
+                                className="filter-slider-wrapper",
+                            ),
+                            dcc.Input(
+                                id={"type": f"{prefix}-filter-max", "column": col},
+                                type="number",
+                                value=max_val,
+                                debounce=True,
+                                className="filter-range-input",
+                                style=inputStyle,
                             ),
                         ],
                         style=divFlex,
                     ),
                     width=3,
-                    style={"marginBottom": "0.5rem"},
                 )
             )
 
-        return [dbc.Row(col_components[i : i + 4], className="g-1") for i in range(0, len(col_components), 4)]
+        return [dbc.Row(col_components, className="gx-1 gy-0")]
+
+    @callback(
+        Output({"type": f"{prefix}-filter-slider", "column": MATCH}, "value", allow_duplicate=True),
+        Output({"type": f"{prefix}-filter-min", "column": MATCH}, "value", allow_duplicate=True),
+        Output({"type": f"{prefix}-filter-max", "column": MATCH}, "value", allow_duplicate=True),
+        Input({"type": f"{prefix}-filter-slider", "column": MATCH}, "value"),
+        Input({"type": f"{prefix}-filter-min", "column": MATCH}, "value"),
+        Input({"type": f"{prefix}-filter-max", "column": MATCH}, "value"),
+        State({"type": f"{prefix}-filter-slider", "column": MATCH}, "min"),
+        State({"type": f"{prefix}-filter-slider", "column": MATCH}, "max"),
+        prevent_initial_call=True,
+    )
+    def sync_filter_controls(slider_val, min_input, max_input, slider_min, slider_max):
+        triggered = ctx.triggered_id
+        if triggered is None or slider_val is None:
+            raise exceptions.PreventUpdate
+
+        ttype = triggered.get("type", "") if isinstance(triggered, dict) else ""
+
+        if f"{prefix}-filter-slider" in ttype:
+            return no_update, slider_val[0], slider_val[1]
+        elif f"{prefix}-filter-min" in ttype:
+            if min_input is None:
+                raise exceptions.PreventUpdate
+            clamped = float(max(slider_min, min(min_input, slider_val[1])))
+            return [clamped, slider_val[1]], clamped, no_update
+        elif f"{prefix}-filter-max" in ttype:
+            if max_input is None:
+                raise exceptions.PreventUpdate
+            clamped = float(min(slider_max, max(max_input, slider_val[0])))
+            return [slider_val[0], clamped], no_update, clamped
+
+        raise exceptions.PreventUpdate
 
     @callback(
         Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
@@ -555,8 +626,12 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
             prevent_initial_call=True,
         )
         def toggle_rln_version_options(
-            rln_version, rln_tomos, input_motl_type, rln_tomos_name,
-            rln_tomos_orig, rln_tomos_name_orig,
+            rln_version,
+            rln_tomos,
+            input_motl_type,
+            rln_tomos_name,
+            rln_tomos_orig,
+            rln_tomos_name_orig,
         ):
             btn_title = "Upload a tomogram file for Relion5"
             if input_motl_type == "relion" and rln_version in [3.0, 3.1, 4.0]:
@@ -586,10 +661,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
             Output(f"{prefix}-save-modal", "is_open", allow_duplicate=True),
             Output(f"{prefix}-save-status-label", "children", allow_duplicate=True),
             Output(f"{prefix}-last-save-params-store", "data"),
-            *(
-                [Output("motls-registry", "data", allow_duplicate=True)]
-                if _update_registry_on_save else []
-            ),
+            *([Output("motls-registry", "data", allow_duplicate=True)] if _update_registry_on_save else []),
             Input(f"{prefix}-save-file", "n_clicks"),
             State(f"{prefix}-save-path", "value"),
             State(f"{prefix}-save-type-dropdown", "value"),
@@ -602,21 +674,41 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
             State(f"{prefix}-save-rln-version-dropdown", "value"),
             State(f"{prefix}-save-rln-use-original", "value"),
             State(f"{prefix}-global-data-store", "data"),
-            *(
-                [State("motls-registry", "data")]
-                if _update_registry_on_save else []
-            ),
+            *([State("motls-registry", "data")] if _update_registry_on_save else []),
             prevent_initial_call=True,
         )
         def save_as(*args):
             if _update_registry_on_save:
-                (n_clicks, path, motl_type, rln5_tomos, extra_df, rln_optics,
-                 rln5_tomos_orig, rln_binning, rln_pixelsize, rln_version,
-                 use_original, data, registry) = args
+                (
+                    n_clicks,
+                    path,
+                    motl_type,
+                    rln5_tomos,
+                    extra_df,
+                    rln_optics,
+                    rln5_tomos_orig,
+                    rln_binning,
+                    rln_pixelsize,
+                    rln_version,
+                    use_original,
+                    data,
+                    registry,
+                ) = args
             else:
-                (n_clicks, path, motl_type, rln5_tomos, extra_df, rln_optics,
-                 rln5_tomos_orig, rln_binning, rln_pixelsize, rln_version,
-                 use_original, data) = args
+                (
+                    n_clicks,
+                    path,
+                    motl_type,
+                    rln5_tomos,
+                    extra_df,
+                    rln_optics,
+                    rln5_tomos_orig,
+                    rln_binning,
+                    rln_pixelsize,
+                    rln_version,
+                    use_original,
+                    data,
+                ) = args
                 registry = None
 
             if not path or not motl_type or not data:
@@ -680,7 +772,14 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
             prevent_initial_call=True,
         )
         def do_overwrite_save(
-            _yes, _no, params, rln5_tomos, extra_df, rln_optics, rln5_tomos_orig, data,
+            _yes,
+            _no,
+            params,
+            rln5_tomos,
+            extra_df,
+            rln_optics,
+            rln5_tomos_orig,
+            data,
         ):
             if ctx.triggered_id == f"{prefix}-overwrite-no-btn":
                 return False
@@ -714,8 +813,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
                 State("motls-registry", "data"),
                 prevent_initial_call=True,
             )
-            def create_from_selected(n_clicks, selected_rows, motl_type, registry,
-                                     _si=slot_idx, _mm=max_motls):
+            def create_from_selected(n_clicks, selected_rows, motl_type, registry, _si=slot_idx, _mm=max_motls):
                 if not n_clicks or not selected_rows:
                     raise exceptions.PreventUpdate
 

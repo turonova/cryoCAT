@@ -1200,7 +1200,7 @@ class Descriptor:
         desc_name = self.__class__.__name__.replace("Descriptor", "")
         avail_features = FeatureCatalog().get_all_classes(filter_contains=desc_name)
         avail_features = [s for s in avail_features if s.endswith(desc_name)]
-        all_cls_feats = get_classes_from_names(avail_features, "cryocat.tango")
+        all_cls_feats = get_classes_from_names(avail_features, "cryocat.analysis.tango")
 
         new_desc_df = pd.DataFrame(self.df["qp_id"].unique(), columns=["qp_id"])
 
@@ -3387,7 +3387,7 @@ class SupportCatalog(Catalog):
 
         This class is a catalog for managing TANGO support classes.
         """
-        self.module_name = "cryocat.tango"
+        self.module_name = "cryocat.analysis.tango"
         self.parent_class_name = "Support"
 
 
@@ -3397,7 +3397,7 @@ class FeatureCatalog(Catalog):
         """Initialize a FeatureCatalog object.
         This class is a catalog for managing TANGO feature classes.
         """
-        self.module_name = "cryocat.tango"
+        self.module_name = "cryocat.analysis.tango"
         self.parent_class_name = "Feature"
 
 
@@ -3407,7 +3407,7 @@ class FilterCatalog(Catalog):
         """Initialize a FilterCatalog object.
         This class is a catalog for managing TANGO filter classes.
         """
-        self.module_name = "cryocat.tango"
+        self.module_name = "cryocat.analysis.tango"
         self.parent_class_name = "Filter"
 
 
@@ -3459,7 +3459,7 @@ class CustomDescriptor(Descriptor):
 
         computed_desc = {"TwistDescriptor": TwistDescriptor(input_twist=support_df, build_unique_desc=False)}
 
-        descriptors = get_class_names_by_parent("Descriptor", "cryocat.tango")
+        descriptors = get_class_names_by_parent("Descriptor", "cryocat.analysis.tango")
         feat_desc_map = Descriptor.build_feature_descriptor_map(feature_list, descriptors)
 
         add_kwargs = {}
@@ -3467,7 +3467,7 @@ class CustomDescriptor(Descriptor):
         for f, f_kwargs in zip(feature_list, feature_kwargs):
             desc = feat_desc_map[f]
             if desc not in computed_desc.keys():
-                desc_cls = get_classes_from_names(desc, "cryocat.tango")
+                desc_cls = get_classes_from_names(desc, "cryocat.analysis.tango")
                 computed_desc[desc] = desc_cls(support_df, **f_kwargs, build_unique_desc=False)
 
             add_kwargs[f] = computed_desc[desc]
@@ -3500,10 +3500,10 @@ class CustomDescriptor(Descriptor):
             A data frame with the custom descriptor values.
         """
 
-        feature_cls_list = get_classes_from_names(feature_list, "cryocat.tango")
+        feature_cls_list = get_classes_from_names(feature_list, "cryocat.analysis.tango")
 
         if support_class is not None:
-            support_class = get_classes_from_names(support_class, "cryocat.tango")
+            support_class = get_classes_from_names(support_class, "cryocat.analysis.tango")
             support_df = support_class(TwistDescriptor(input_twist=self.df), **support_kwargs).support.df
         else:
             support_df = self.df

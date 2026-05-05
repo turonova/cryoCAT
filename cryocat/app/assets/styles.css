@@ -75,7 +75,7 @@ html, body { overflow-y: scroll; }  /* always reserve space for the scrollbar */
 }
 .accordion-item {
     background-color: var(--color6);
-    color: var(--color11);
+    color: var(--color10);
     border: none;
 }
 
@@ -88,7 +88,7 @@ h6, .h6, h5, .h5, h4, .h4, h3, .h3, h2, .h2, h1, .h1 {
 }
 
 label {
-  color: var(--color11);
+  color: var(--color10);
 }
 
 input[type="text"],
@@ -289,6 +289,70 @@ html, body {
 .scrollable-dropdown .dropdown-menu {
     max-height: 200px; /* adjust as suits your layout */
     overflow-y: auto;
+}
+
+/* ── Compact filter range sliders ─────────────────────────────────────────── */
+
+/* Allow tooltip/input to escape the track div without being clipped */
+.rc-slider {
+    overflow: visible !important;
+    padding-top: 3px !important;
+    padding-bottom: 3px !important;
+}
+
+/* Tooltip bubble */
+.rc-slider-tooltip {
+    padding: 2px 0 !important;
+    z-index: 10 !important;
+}
+.rc-slider-tooltip-inner {
+    min-height: unset !important;
+    height: 18px !important;
+    font-size: 10px !important;
+    padding: 0 5px !important;
+    line-height: 18px !important;
+    border-radius: 3px !important;
+}
+
+/* Editable number inputs inside the tooltip */
+.rc-slider-tooltip-inner input[type="number"],
+.rc-slider-tooltip input[type="number"] {
+    height: 18px !important;
+    width: 54px !important;
+    font-size: 10px !important;
+    padding: 0 3px !important;
+    line-height: 18px !important;
+    box-sizing: border-box !important;
+    background-color: var(--color11);
+    border: 1px solid var(--color6);
+    border-radius: 2px;
+    margin: 0 !important;
+}
+
+/* Hide built-in RangeSlider inputs inside filter sliders (replaced by explicit inputs) */
+.filter-slider-wrapper .dash-slider-container input[type="number"] {
+    display: none !important;
+}
+
+/* Reduce gap between inputs and slider track */
+.dash-slider-container {
+    gap: 2px !important;
+    align-items: center !important;
+}
+
+/* Explicit filter min/max inputs */
+.filter-range-input {
+    height: 18px !important;
+    width: 52px !important;
+    font-size: 10px !important;
+    padding: 0 3px !important;
+    line-height: 18px !important;
+    box-sizing: border-box !important;
+    background-color: var(--color11);
+    border: 1px solid var(--color6);
+    border-radius: 2px;
+    margin-left: 2px !important;
+    margin-right: 2px !important;
 }
 
 .spinner-frame {
