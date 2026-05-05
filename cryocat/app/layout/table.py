@@ -94,7 +94,7 @@ def get_motl_table():
                     dbc.Col(html.Div(id="file-status")),
                 ],
             ),
-            get_table_component("tabv-motl"),
+            get_table_component("tabv-motl", connected_motl_prefix="main", show_create_from_selected=False),
             get_viewer_component("tviewer-motl"),
         ],
     )
@@ -114,7 +114,7 @@ def get_nn_motl_table():
                     dbc.Col(html.Div(id="motl-nn-file-status")),
                 ],
             ),
-            get_table_component("tabv-motl-nn"),
+            get_table_component("tabv-motl-nn", connected_motl_prefix="nn", show_create_from_selected=False),
             get_viewer_component("tviewer-motl-nn"),
         ],
     )
@@ -538,19 +538,19 @@ register_viewer_callbacks("tviewer-desc", show_dual_graph=False, hover_info=["su
 register_viewer_callbacks("tviewer-kmeans", show_dual_graph=False, hover_info=["subtomo_id", "class"])
 register_viewer_callbacks("tviewer-proximity", show_dual_graph=False, hover_info=["subtomo_id", "class"])
 
-register_table_callbacks("tabv-motl", csv_only=False)
-register_table_callbacks("tabv-motl-nn", csv_only=False)
+register_table_callbacks("tabv-motl", csv_only=False, connected_motl_prefix="main")
+register_table_callbacks("tabv-motl-nn", csv_only=False, connected_motl_prefix="nn")
 register_table_callbacks("tabv-nn")
 register_table_callbacks("tabv-twist")
 register_table_callbacks("tabv-desc")
 
-register_table_plot_callbacks("tabv-motl-table-plot", "tabv-motl-global-data-store")
-register_table_plot_callbacks("tabv-motl-nn-table-plot", "tabv-motl-nn-global-data-store")
-register_table_plot_callbacks("tabv-nn-table-plot", "tabv-nn-global-data-store", special_graphs=["Spherical histogram"])
+register_table_plot_callbacks("tabv-motl-table-plot", "tabv-motl-global-data-store", table_grid_id="tabv-motl-grid")
+register_table_plot_callbacks("tabv-motl-nn-table-plot", "tabv-motl-nn-global-data-store", table_grid_id="tabv-motl-nn-grid")
+register_table_plot_callbacks("tabv-nn-table-plot", "tabv-nn-global-data-store", special_graphs=["Spherical histogram"], table_grid_id="tabv-nn-grid")
 register_table_plot_callbacks(
-    "tabv-twist-table-plot", "tabv-twist-global-data-store", special_graphs=["Spherical histogram"]
+    "tabv-twist-table-plot", "tabv-twist-global-data-store", special_graphs=["Spherical histogram"], table_grid_id="tabv-twist-grid"
 )
-register_table_plot_callbacks("tabv-desc-table-plot", "tabv-desc-global-data-store")
+register_table_plot_callbacks("tabv-desc-table-plot", "tabv-desc-global-data-store", table_grid_id="tabv-desc-grid")
 
 
 @callback(

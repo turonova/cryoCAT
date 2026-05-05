@@ -201,7 +201,7 @@ def _overwrite_confirm_modal(prefix):
 # ── Component ──────────────────────────────────────────────────────────────────
 
 
-def get_table_component(prefix: str, connected_motl_prefix=None):
+def get_table_component(prefix: str, connected_motl_prefix=None, show_create_from_selected=True):
     motl_mode = connected_motl_prefix is not None
 
     button_children = [
@@ -212,13 +212,16 @@ def get_table_component(prefix: str, connected_motl_prefix=None):
         button_children += [
             dbc.Button("Save As", id=f"{prefix}-save-btn", color="primary", className="me-1"),
             dbc.Button("Save", id=f"{prefix}-save-overwrite-btn", color="secondary", className="me-1"),
-            dbc.Button(
-                "Create new from selected",
-                id=f"{prefix}-create-from-selected-btn",
-                color="secondary",
-                className="me-1",
-            ),
         ]
+        if show_create_from_selected:
+            button_children += [
+                dbc.Button(
+                    "Create new from selected",
+                    id=f"{prefix}-create-from-selected-btn",
+                    color="secondary",
+                    className="me-1",
+                ),
+            ]
 
     button_children += [
         dbc.Button("Save as CSV", id=f"{prefix}-save-csv-btn", color="primary", className="me-1"),
