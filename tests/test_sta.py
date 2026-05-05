@@ -96,6 +96,51 @@ def test_get_motl_extension():
         assert "unsupported" in str(e).lower()
 
 
+def test_get_motl_filename():
+    assert get_motl_filename("run_", 1, "stopgap") == "run_1.star"
+    assert get_motl_filename("run_", 10, "emmotl") == "run_10.em"
+
+    assert get_motl_filename("run_it", 1, "relion") == "run_it001_data.star"
+    assert get_motl_filename("run_it", 12, "relion5") == "run_it012_data.star"
+    assert get_motl_filename("run_it", 999, "relion5_1") == "run_it999_data.star"
+
+
+def test_get_class_occupancy_relion():
+    df1 = pd.DataFrame({
+        'rlnCoordinateX': [100.0, 200.0],
+        'rlnCoordinateY': [100.0, 200.0],
+        'rlnCoordinateZ': [100.0, 200.0],
+        'rlnAngleRot': [0.0, 0.0],
+        'rlnAngleTilt': [0.0, 0.0],
+        'rlnAnglePsi': [0.0, 0.0],
+        'rlnImageName': ['000001@1.mrc', '000002@1.mrc'],
+        'rlnMicrographName': ['1.mrc', '1.mrc'],
+        'rlnClassNumber': [1, 2]
+    })
+    df2 = pd.DataFrame({
+        'rlnCoordinateX': [100.0, 200.0],
+        'rlnCoordinateY': [100.0, 200.0],
+        'rlnCoordinateZ': [100.0, 200.0],
+        'rlnAngleRot': [0.0, 0.0],
+        'rlnAngleTilt': [0.0, 0.0],
+        'rlnAnglePsi': [0.0, 0.0],
+        'rlnImageName': ['000001@1.mrc', '000002@1.mrc'],
+        'rlnMicrographName': ['1.mrc', '1.mrc'],
+        'rlnClassNumber': [1, 1]
+    })
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = os.path.join(tmpdir, "run_it")
+        rm1 = cryomotl.RelionMotl(df1)
+        rm2 = cryomotl.RelionMotl(df2)
+        rm1.write_out(f"{base_path}001_data.star")
+        rm2.write_out(f"{base_path}002_data.star")
+        occupancy = get_class_occupancy(base_path, 1, 2, motl_type="relion")
+        expected = {
+            1: [1, 2],
+            2: [1, 0]
+        }
+        assert occupancy == expected
+
 def test_compute_alignment_statistics(sg_mock):
     with tempfile.TemporaryDirectory() as tmpdir:
         motl_base = os.path.join(tmpdir, "motl_")

@@ -7,7 +7,7 @@ from cryocat.analysis import visplot
 from cryocat.utils import ioutils
 
 
-def get_stable_particles(motl_base_name, start_it, end_it, motl_type="emmotl"):
+def get_stable_particles(motl_base_name, start_it, end_it, motl_type="emmotl", load_kwargs=None):
     """Load and analyze particle data across multiple iterations to identify stable particles, i.e. particles that do
     not change their class.
 
@@ -20,9 +20,12 @@ def get_stable_particles(motl_base_name, start_it, end_it, motl_type="emmotl"):
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
         Type of the input motl. Defaults to "stopgap".
-
+    load_kwargs : dict, optional
+        Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
+        Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
     Returns
     -------
     list
@@ -36,11 +39,11 @@ def get_stable_particles(motl_base_name, start_it, end_it, motl_type="emmotl"):
     iteration is printed.
     """
 
-    motl_ext = get_motl_extension(motl_type)
-
+    load_kwargs = load_kwargs or {}
     dfs = []
     for i in np.arange(start_it, end_it + 1):
-        m = cryomotl.Motl.load(motl_base_name + str(i) + motl_ext, motl_type=motl_type)
+        filename = get_motl_filename(motl_base_name, i, motl_type)
+        m = cryomotl.Motl.load(filename, motl_type=motl_type, **load_kwargs)
         dfs.append(m.df)
 
     # Merge the dataframes on 's_id' column
@@ -71,6 +74,7 @@ def evaluate_alignment(
     labels=None,
     graph_title="Alignment stability",
     graph_output_file=None,
+    load_kwargs=None
 ):
     """Evaluate alignment stability for specified motls and iterations.
 
@@ -104,6 +108,10 @@ def evaluate_alignment(
         Title of the graph. Used only if plot_values is True. Defaults to "Alignment stability".
     graph_output_file  : str, optional
         Output file for the graph. Used only if plot_values is True. If None no file will be written out. Defaults to None.
+    load_kwargs : dict, optional
+        Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
+        Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
 
     Returns
     -------
@@ -178,6 +186,7 @@ def evaluate_alignment(
             filter_rows = filter_rows * len(motl_base_names)
 
     stats_dfs = []
+    load_kwargs = load_kwargs or {}
     for i, m in enumerate(motl_base_names):
         if write_out_stats:
             stats_file_name = m + f"as_{str(i+1)}.csv"
@@ -192,6 +201,7 @@ def evaluate_alignment(
                 filter_rows=filter_rows[i],
                 filter_column=filter_columns[i],
                 output_file=stats_file_name,
+                load_kwargs=load_kwargs
             )
         )
 
@@ -210,7 +220,7 @@ def get_motl_extension(motl_type):
 
     Parameters
     ----------
-    motl_type : str (emmotl|relion|stopgap)
+    motl_type : str (emmotl|relion|relion5|relion5_1|stopgap)
         The type of motl file.
 
     Returns
@@ -224,13 +234,12 @@ def get_motl_extension(motl_type):
         If the motl type is not supported.
     """
 
-    if motl_type == "stopgap" or motl_type == "relion":
+    if motl_type in ["stopgap", "relion", "relion5", "relion5_1"]:
         motl_ext = ".star"
     elif motl_type == "emmotl":
         motl_ext = ".em"
     else:
-        raise ValueError(f"The motl type {motl_type} is not cyrrently supported.")
-
+        raise ValueError(f"The motl type {motl_type} is not currently supported.")
     return motl_ext
 
 
@@ -242,6 +251,7 @@ def compute_alignment_statistics(
     filter_rows=None,
     filter_column="subtomo_id",
     output_file=None,
+    load_kwargs=None
 ):
     """Compute alignment statistics for specified motls and iterations. Pairs of (current motl, subsequent motl) are
     evaluated for differences in cone angles, in-plane angles, change in positions of particles and root mean square
@@ -257,7 +267,7 @@ def compute_alignment_statistics(
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
         Type of the input motl. Defaults to "stopgap".
     filter_rows : array-like, optional
         Rows to filter. Only rows that are within the filter_rows will be kept. Defaults to None which means no filtering.
@@ -266,6 +276,10 @@ def compute_alignment_statistics(
         this parameter will not be used. Defaults to "subtomo_id".
     output_file : str, optional
         Output file for the statistics. If None no file will be written out. Defaults to None.
+    load_kwargs : dict, optional
+        Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
+        Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
 
     Returns
     -------
@@ -290,7 +304,6 @@ def compute_alignment_statistics(
     ... )
     """
 
-    motl_ext = get_motl_extension(motl_type)
 
     stats_df = pd.DataFrame(
         columns=[
@@ -314,8 +327,10 @@ def compute_alignment_statistics(
 
     # load motls
     motls = []
+    load_kwargs = load_kwargs or {}
     for i in np.arange(start_it, end_it + 1):
-        m = cryomotl.Motl.load(motl_base_name + str(i) + motl_ext, motl_type=motl_type)
+        filename = get_motl_filename(motl_base_name, i, motl_type)
+        m = cryomotl.Motl.load(filename, motl_type=motl_type, **load_kwargs)
         if filter_rows is not None:
             m.df = m.df[m.df[filter_column].isin(filter_rows)]
         motls.append(m)
@@ -355,7 +370,7 @@ def write_out_motl(input_motl, output_file_base, output_motl_type):
         Input motl file to be written out.
     output_file_base : str
         Base name for the output file.
-    output_motl_type : str (emfile|relion|stopgap)
+    output_motl_type : str (emfile|relion|relion5|relion5_1|stopgap)
         Type of the output motl file.
 
     Raises
@@ -373,6 +388,12 @@ def write_out_motl(input_motl, output_file_base, output_motl_type):
         final_motl.write_out(output_file_base + ".star", reset_index=True)
     elif output_motl_type == "relion":
         final_motl = cryomotl.RelionMotl(input_motl.df)
+        final_motl.write_out(output_file_base + ".star")
+    elif output_motl_type == "relion5":
+        final_motl = cryomotl.RelionMotlv5(input_motl.df)
+        final_motl.write_out(output_file_base + ".star")
+    elif output_motl_type == "relion5_1":
+        final_motl = cryomotl.RelionMotlv5_1(input_motl.df)
         final_motl.write_out(output_file_base + ".star")
     elif output_motl_type == "emfile":
         final_motl = cryomotl.EmMotl(input_motl.df)
@@ -404,7 +425,7 @@ def create_multiref_run(
         Base path for the output motl files. The final name will be created as output_motl_base_mr#runID_iterationNumber
         where runID is from 1 to number_of_runs and iterationNumber is iteration_number. The extension will be determined
         based on the output_motl_type.
-    input_motl_type : str (emmotl|stopgap|relion), default="emmotl"
+    input_motl_type : str (emmotl|stopgap|relion|relion5|relion5_1), default="emmotl"
         Type of the input motl file. Defaults to "emmotl".
     iteration_number : int, default=1
         Iteration number to be used in the output name creation. Defaults to 1.
@@ -466,7 +487,7 @@ def create_denovo_multiref_run(
         Base path for the output motl files. The final name will be created as output_motl_base_ref_mr#runID_iterationNumber
         where runID is from 1 to number_of_runs and iterationNumber is iteration_number. The alignment motl will be named
         output_motl_base_iterationNumber. In both cases, the extension will be determined based on the output_motl_type.
-    input_motl_type : str (emmotl|stopgap|relion), default="emmotl"
+    input_motl_type : str (emmotl|stopgap|relion|relion5|relion5_1), default="emmotl"
         Type of the input motl file. Defaults to "emmotl".
     class_occupancy : int, optional
         Number of particles per class for the reference averaging motls. If None, the number is determined as 1/10
@@ -533,7 +554,7 @@ def evaluate_multirun_stability(input_motls, input_motl_type="stopgap"):
     ----------
     input_motls: list
         List of input motl files. At least two are required.
-    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
         Type of the input motl. Defaults to "stopgap".
 
     Returns
@@ -571,7 +592,7 @@ def evaluate_multirun_stability(input_motls, input_motl_type="stopgap"):
     return common_occupancies
 
 
-def get_subtomos_class_stability(motl_base_name, start_it, end_it, motl_type="stopgap"):
+def get_subtomos_class_stability(motl_base_name, start_it, end_it, motl_type="stopgap", load_kwargs=None):
     """Calculate the class stability of subtomograms over iterations.
 
     Parameters
@@ -583,8 +604,12 @@ def get_subtomos_class_stability(motl_base_name, start_it, end_it, motl_type="st
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
         Type of the input motl. Defaults to "stopgap".
+    load_kwargs : dict, optional
+        Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
+        Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
 
     Returns
     -------
@@ -598,11 +623,11 @@ def get_subtomos_class_stability(motl_base_name, start_it, end_it, motl_type="st
     only once.
     """
 
-    motl_ext = get_motl_extension(motl_type)
-
     dfs = []
+    load_kwargs = load_kwargs or {}
     for i in np.arange(start_it, end_it + 1):
-        m = cryomotl.Motl.load(motl_base_name + str(i) + motl_ext, motl_type=motl_type)
+        filename = get_motl_filename(motl_base_name, i, motl_type)
+        m = cryomotl.Motl.load(filename, motl_type=motl_type, **load_kwargs)
         dfs.append(m.df)
 
     # Concatenate the list of DataFrames into a single DataFrame
@@ -627,6 +652,7 @@ def evaluate_classification(
     output_file_stats=None,
     plot_results=False,
     output_file_graphs=None,
+    load_kwargs=None
 ):
     """Get the occupancy of each class over the iterations and the class stability of subtomograms over iterations.
 
@@ -639,7 +665,7 @@ def evaluate_classification(
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
         Type of the input motl. Defaults to "stopgap".
     output_file_stats : str, optional
         Name of the file into which the results will be written out. If None, no results will be written out. Defaults
@@ -649,7 +675,10 @@ def evaluate_classification(
     output_file_graphs: str, optional
         Name of the file into which the plotted graphs will be written out. If None, the graphs will not be written out.
         If plot_results is False, this parameter is unused. Defaults to None.
-
+    load_kwargs : dict, optional
+        Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
+        Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
     Returns
     -------
     occupancy : dict
@@ -658,11 +687,11 @@ def evaluate_classification(
         A dictionary containing the number of different subtomogram IDs for each class over iterations.
     """
 
-    motl_ext = get_motl_extension(motl_type)
-
     dfs = []
+    load_kwargs = load_kwargs or {}
     for i in np.arange(start_it, end_it + 1):
-        m = cryomotl.Motl.load(motl_base_name + str(i) + motl_ext, motl_type=motl_type)
+        filename = get_motl_filename(motl_base_name, i, motl_type)
+        m = cryomotl.Motl.load(filename, motl_type=motl_type, **load_kwargs)
         dfs.append(m.df)
 
     # Create a dictionary to store the occupancy of each class per dataframe
@@ -710,7 +739,7 @@ def evaluate_classification(
     return occupancy, changing_subtomos
 
 
-def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap"):
+def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap", load_kwargs=None):
     """Get the occupancy of each class over the iterations.
 
     Parameters
@@ -722,8 +751,12 @@ def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap"):
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion), default="stopgap"
+    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
         Type of the input motl. Defaults to "stopgap".
+    load_kwargs : dict, optional
+        Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
+        Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
 
     Returns
     -------
@@ -736,12 +769,11 @@ def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap"):
     use :meth:`cryocat.sta.evaluate_classification` which gives both occupancy and stability and reads in all the motls
     only once.
     """
-
-    motl_ext = get_motl_extension(motl_type)
-
+    load_kwargs = load_kwargs or {}
     dfs = []
     for i in np.arange(start_it, end_it + 1):
-        m = cryomotl.Motl.load(motl_base_name + str(i) + motl_ext, motl_type=motl_type)
+        filename = get_motl_filename(motl_base_name, i, motl_type)
+        m = cryomotl.Motl.load(filename, motl_type=motl_type, **load_kwargs)
         dfs.append(m.df)
 
     # Create a dictionary to store the occupancy of each class per dataframe
@@ -753,3 +785,10 @@ def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap"):
             occupancy[c][i] = len(df[df["class"] == c])
 
     return occupancy
+
+def get_motl_filename(motl_base_name, iteration, motl_type):
+    if "relion" in motl_type:
+        return f"{motl_base_name}{str(iteration).zfill(3)}_data.star"
+    else:
+        motl_ext = get_motl_extension(motl_type)
+        return f"{motl_base_name}{iteration}{motl_ext}"

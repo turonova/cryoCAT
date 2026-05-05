@@ -1343,8 +1343,12 @@ class Motl:
             return RelionMotl(input_motl, **kwargs)  # kwargs: version, pixel_size, binning, optics_data
         elif motl_type == "relion5":
             return RelionMotlv5(
-                input_motl, **kwargs
+                input_motl, version=5.0, **kwargs
             )  # kwargs: input_tomograms, tomo_idx, pixel_size, binning, optics_data
+        elif motl_type == "relion5_1":
+            return RelionMotlv5_1(
+                input_motl, **kwargs
+            )   # kwargs : input_tomograms, tomo_idx, pixel_size, binning, optics_data
         elif motl_type == "stopgap":
             return StopgapMotl(input_motl)
         elif motl_type == "dynamo":
@@ -2225,6 +2229,25 @@ class RelionMotl(Motl):
         "rlnClassNumber",
     ]
 
+    columns_v5_1 = [
+        "rlnCoordinateX",
+        "rlnCoordinateY",
+        "rlnCoordinateZ",
+        "rlnAngleRot",
+        "rlnAngleTilt",
+        "rlnAnglePsi",
+        "rlnMicrographName",
+        "rlnImageName",
+        "rlnPixelSize",
+        "rlnOpticsGroup",
+        "rlnGroupNumber",
+        "rlnOriginXAngst",
+        "rlnOriginYAngst",
+        "rlnOriginZAngst",
+        "rlnClassNumber",
+        "rlnRandomSubset",
+    ]
+
     def __init__(self, input_motl=None, version=None, pixel_size=None, binning=None, optics_data=None, tomo_format="", subtomo_format=""):
         super().__init__()
         self.version = version
@@ -2265,7 +2288,7 @@ class RelionMotl(Motl):
             self.set_pixel_size()
 
         self.set_version_specific_names()
-        if self.version >= 4.0 and binning is None:
+        if self.version >= 4.0 and self.version != 5.1 and binning is None:
             raise UserInputError("Binning parameter must be specified for this Relion version")
 
     def set_pixel_size(self):
@@ -2372,7 +2395,7 @@ class RelionMotl(Motl):
         """
 
         # pixel size is already set, do not try to get it from the data
-        if self.version is not None:
+        if self.version is not None: #should be always the case with 5.1
             return
 
         if version is not None:
@@ -2472,7 +2495,10 @@ class RelionMotl(Motl):
 
         frames, specifiers, _ = starfileio.Starfile.read(input_path)
 
-        version = RelionMotl.get_version_from_file(frames, specifiers)
+        if self.version is None: #if it was passed by argument then why to do it?
+            version = RelionMotl.get_version_from_file(frames, specifiers)
+        else:
+            version = self.version
 
         data_id = RelionMotl._get_data_particles_id(specifiers)
         optics_id = RelionMotl._get_optics_id(specifiers)
@@ -2661,6 +2687,7 @@ class RelionMotl(Motl):
 
             self.df["tomo_id"] = tomo_idx
 
+        # in case there is no migrograph name fetch tomo id from subtomo path
         elif self.subtomo_id_name in relion_df.columns:
             if self.version <= 3.1 or self.version == 5.1:
                 tomo_position = -1
@@ -2935,7 +2962,7 @@ class RelionMotl(Motl):
             subtomo_id_name = "rlnImageName"
             shifts_id_names = ["rlnOriginX", "rlnOriginY", "rlnOriginZ"]
             data_spec = "data_"
-        elif version == 3.1:
+        elif version == 3.1 or version == 5.1:
             tomo_id_name = "rlnMicrographName"
             subtomo_id_name = "rlnImageName"
             shifts_id_names = ["rlnOriginXAngst", "rlnOriginYAngst", "rlnOriginZAngst"]
@@ -3598,12 +3625,12 @@ class RelionMotlv5(RelionMotl, Motl):
     ]
 
     def __init__(
-        self, input_particles=None, input_tomograms=None, tomo_idx=None, pixel_size=None, binning=1.0, optics_data=None, tomo_format="", subtomo_format=""
+        self, input_particles=None, input_tomograms=None, tomo_idx=None, pixel_size=None, binning=1.0, optics_data=None, tomo_format="", subtomo_format="", version=None
     ):
         Motl.__init__(self, motl_df=None)
 
         self.isWarp = False
-        self.version = 5.0
+        self.version = version if version is not None else 5.0
         self.binning = binning
         self.pixel_size = pixel_size
         self.optics_data = optics_data
@@ -4084,8 +4111,8 @@ class RelionMotlv5(RelionMotl, Motl):
             coords = []
 
             # Precompute the trailing numeric suffix of each rlnTomoName once
-            cleaned_tomo_df = RelionMotlv5.clean_tomo_name_column(self.tomo_df.copy())
-            name_suffix_num = cleaned_tomo_df["rlnTomoName"].astype("Int64")  # nullable int
+            name_suffix_num = self.tomo_df["rlnTomoName"].astype(str).str.extract(r"(\d+)$", expand=False)
+            name_suffix_num = name_suffix_num.astype("Int64")  # nullable int
 
             for idx, row in self.df.iterrows():
                 # tomo_id might be float in the input; interpret it as an int index
@@ -4181,6 +4208,31 @@ class RelionMotlv5(RelionMotl, Motl):
 
         starfileio.Starfile.write(frames, output_path, specifiers=specifiers)
 
+class RelionMotlv5_1:
+    def __new__(
+            cls, input_particles = None, input_tomograms = None, tomo_idx = None, pixel_size = None, binning = None, optics_data = None
+    ):
+        if input_tomograms is None: #single file mode
+            if input_particles is not None:
+                    return RelionMotl(
+                        input_motl=input_particles,
+                        pixel_size=pixel_size,
+                        optics_data=optics_data,
+                        binning=binning,
+                        version=5.1)
+            else:
+                raise UserInputError(
+                    f"RELION5.1 objects can be created either with a single standard .star file either with the format introduced in 5.0 version"
+                )
+        else: #tomo_mode (2 files)
+            return RelionMotlv5(
+                input_particles=input_particles,
+                input_tomograms=input_tomograms,
+                optics_data=optics_data,
+                version=5.1,
+                binning=binning,
+                tomo_idx=tomo_idx
+            )
 
 class StopgapMotl(Motl):
     pairs = {
@@ -4811,11 +4863,12 @@ def emmotl2relion(
     if relion_version < 5.0:
         rln_motl = RelionMotl(input_motl=em_motl.df, version=relion_version, **load_kwargs)
     else:
-        if "input_tomograms" not in load_kwargs:
-            raise UserInputError("For relion5 input_tomogram parameter is mandatory")
+        if relion_version == 5.0:
+            rln_motl = RelionMotlv5(input_particles=em_motl.df, version=relion_version, **load_kwargs)
+        elif relion_version == 5.1:
+            rln_motl = RelionMotlv5_1(input_particles=em_motl.df, **load_kwargs)
         else:
-            rln_motl = RelionMotlv5(input_particles=em_motl.df, **load_kwargs)
-
+            raise UserInputError("Not yet supported relion version")
     if output_motl_path is not None:
         rln_motl.write_out(
             output_motl_path,
@@ -4866,8 +4919,13 @@ def relion2emmotl(
         The converted EmMotl object.
     """
     load_kwargs = load_kwargs or {}
-    if relion_version == 5.0:
-        rln_motl = RelionMotlv5(input_particles=input_motl, pixel_size=pixel_size, binning=binning, **load_kwargs)
+    if relion_version >= 5.0:
+        if relion_version == 5.0:
+            rln_motl = RelionMotlv5(input_particles=input_motl, pixel_size=pixel_size, binning=binning, **load_kwargs)
+        elif relion_version == 5.1:
+            rln_motl = RelionMotlv5_1(input_particles=input_motl, pixel_size=pixel_size, binning=binning, **load_kwargs)
+        else:
+            raise UserInputError("Not yet supported relion version")
     else:
         rln_motl = RelionMotl(input_motl, version=relion_version, pixel_size=pixel_size, binning=binning, **load_kwargs)
 
@@ -4972,8 +5030,11 @@ def relion2stopgap(
         The converted StopgapMotl object.
     """
     load_kwargs = load_kwargs or {}
-    if relion_version == 5.0:
-        motl = RelionMotlv5(input_particles=input_motl, **load_kwargs)
+    if relion_version >= 5.0:
+        if relion_version == 5.0:
+            motl = RelionMotlv5(input_particles=input_motl, version=relion_version, **load_kwargs)
+        elif relion_version == 5.1:
+            motl = RelionMotlv5_1(input_particles=input_motl, **load_kwargs)
     else:
         motl = RelionMotl(input_motl=input_motl, version=relion_version, **load_kwargs)
 
@@ -5032,12 +5093,11 @@ def stopgap2relion(
 
     load_kwargs = load_kwargs or {}
     write_kwargs = write_kwargs or {}
-
-    if relion_version == 5.0:
-        if "input_tomograms" not in load_kwargs:
-            raise UserInputError("For relion5 input_tomogram parameter is mandatory")
-        else:
-            rln_motl = RelionMotlv5(input_particles=sg_motl.df, **load_kwargs)
+    if relion_version >= 5.0:
+        if relion_version == 5.0:
+            rln_motl = RelionMotlv5(input_particles=sg_motl.df, version=relion_version, **load_kwargs)
+        elif relion_version == 5.1:
+            rln_motl = RelionMotlv5_1(input_particles=sg_motl.df, **load_kwargs)
 
     else:
         rln_motl = RelionMotl(input_motl=sg_motl.df, version=relion_version, **load_kwargs)
