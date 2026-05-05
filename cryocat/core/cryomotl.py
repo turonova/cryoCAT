@@ -433,7 +433,9 @@ class Motl:
         else:
             return cleaned_motl
 
-    def clean_by_tomo_mask(self, tomo_list, tomo_masks, inplace=True, boundary_type="center", box_size=None, output_file=None):
+    def clean_by_tomo_mask(
+        self, tomo_list, tomo_masks, inplace=True, boundary_type="center", box_size=None, output_file=None
+    ):
         """Removes particles from the motive list based on provided tomomgram masks.
 
         Parameters
@@ -484,7 +486,7 @@ class Motl:
         else:
             tomo_mask = cryomap.binarize(tomo_masks)
             requries_loading = False
-        
+
         # Get type of bounds
         if boundary_type == "whole":
             if box_size:
@@ -495,9 +497,10 @@ class Motl:
             boundary = 0
         else:
             raise UserInputError(f"Unknown type of boundaries: {boundary_type}")
-        
 
-        cleaned_motl = Motl.load(self) # prepare the a copy of the motive list to be cleaned, so that the original one is not altered until the end of the function
+        cleaned_motl = Motl.load(
+            self
+        )  # prepare the a copy of the motive list to be cleaned, so that the original one is not altered until the end of the function
 
         for i, t in enumerate(tomos):
             tm = self.get_motl_subset(t, reset_index=True)
@@ -508,17 +511,19 @@ class Motl:
             if requries_loading:
                 tomo_mask = cryomap.binarize(tomo_masks[i])
 
-
             # Ensure coordinates are within the bounds of the mask array - if not, remove them
             # Get binary mask
-            within_bounds = ((coords_min>=0).all(axis=1)
+            within_bounds = (
+                (coords_min >= 0).all(axis=1)
                 & (coords_max[:, 0] < tomo_mask.shape[0])
                 & (coords_max[:, 1] < tomo_mask.shape[1])
                 & (coords_max[:, 2] < tomo_mask.shape[2])
             )
-            
-            out_of_bounds_indices = np.where(~within_bounds)[0] # Retrieve the indices of the False elements in the within_bounds mask
-            out_of_bounds_subtomo_ids = tm.df.loc[out_of_bounds_indices, "subtomo_id"].values 
+
+            out_of_bounds_indices = np.where(~within_bounds)[
+                0
+            ]  # Retrieve the indices of the False elements in the within_bounds mask
+            out_of_bounds_subtomo_ids = tm.df.loc[out_of_bounds_indices, "subtomo_id"].values
 
             # Filter the coords array and tm-particles to include only the in-bounds coordinates
             coords = coords[within_bounds]
@@ -529,13 +534,13 @@ class Motl:
             # Filter out coordinates where the mask value is 0
             mask_values_min = tomo_mask[coords_min[:, 0], coords_min[:, 1], coords_min[:, 2]]
             mask_values_max = tomo_mask[coords_max[:, 0], coords_max[:, 1], coords_max[:, 2]]
-            #mask_values = tomo_mask[coords[:, 0], coords[:, 1], coords[:, 2]]
+            # mask_values = tomo_mask[coords[:, 0], coords[:, 1], coords[:, 2]]
 
             # Get the indices of the filtered coordinates
             idx_to_remove = np.where((mask_values_min == 0) | (mask_values_max == 0))[0]
             subtomo_idx = tm.df.loc[idx_to_remove, "subtomo_id"].values
-            #idx_to_remove = np.where(mask_values == 0)[0]
-            #subtomo_idx = tm.df.loc[idx_to_remove, "subtomo_id"].values
+            # idx_to_remove = np.where(mask_values == 0)[0]
+            # subtomo_idx = tm.df.loc[idx_to_remove, "subtomo_id"].values
 
             subtomo_idx = np.concatenate((subtomo_idx, out_of_bounds_subtomo_ids))
             cleaned_motl.remove_feature("subtomo_id", subtomo_idx)
@@ -1348,7 +1353,7 @@ class Motl:
         elif motl_type == "relion5_1":
             return RelionMotlv5_1(
                 input_motl, **kwargs
-            )   # kwargs : input_tomograms, tomo_idx, pixel_size, binning, optics_data
+            )  # kwargs : input_tomograms, tomo_idx, pixel_size, binning, optics_data
         elif motl_type == "stopgap":
             return StopgapMotl(input_motl)
         elif motl_type == "dynamo":
@@ -2248,7 +2253,16 @@ class RelionMotl(Motl):
         "rlnRandomSubset",
     ]
 
-    def __init__(self, input_motl=None, version=None, pixel_size=None, binning=None, optics_data=None, tomo_format="", subtomo_format=""):
+    def __init__(
+        self,
+        input_motl=None,
+        version=None,
+        pixel_size=None,
+        binning=None,
+        optics_data=None,
+        tomo_format="",
+        subtomo_format="",
+    ):
         super().__init__()
         self.version = version
         self.pixel_size = pixel_size
@@ -2395,7 +2409,7 @@ class RelionMotl(Motl):
         """
 
         # pixel size is already set, do not try to get it from the data
-        if self.version is not None: #should be always the case with 5.1
+        if self.version is not None:  # should be always the case with 5.1
             return
 
         if version is not None:
@@ -2495,7 +2509,7 @@ class RelionMotl(Motl):
 
         frames, specifiers, _ = starfileio.Starfile.read(input_path)
 
-        if self.version is None: #if it was passed by argument then why to do it?
+        if self.version is None:  # if it was passed by argument then why to do it?
             version = RelionMotl.get_version_from_file(frames, specifiers)
         else:
             version = self.version
@@ -2652,6 +2666,7 @@ class RelionMotl(Motl):
         Notes
         -----
         TODO: Add custom format specifier.
+
         See Also
         --------
         :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data`
@@ -2776,8 +2791,9 @@ class RelionMotl(Motl):
                     if self.version != 5.1 and self.version >= 4.0 and re.match(r"^\d+$", j):
                         subtomo_idx.append(float(j))
                     else:
-                        clean_name = re.sub(r"(_[0-9\.]+A(?:px)?)?\.[a-zA-Z0-9]+$", "", str(j).strip(),
-                                            flags=re.IGNORECASE)
+                        clean_name = re.sub(
+                            r"(_[0-9\.]+A(?:px)?)?\.[a-zA-Z0-9]+$", "", str(j).strip(), flags=re.IGNORECASE
+                        )
                         numbers = re.findall(r"\d+", clean_name)
                         subtomo_idx.append(float(numbers[-1]))
 
@@ -3625,7 +3641,16 @@ class RelionMotlv5(RelionMotl, Motl):
     ]
 
     def __init__(
-        self, input_particles=None, input_tomograms=None, tomo_idx=None, pixel_size=None, binning=1.0, optics_data=None, tomo_format="", subtomo_format="", version=None
+        self,
+        input_particles=None,
+        input_tomograms=None,
+        tomo_idx=None,
+        pixel_size=None,
+        binning=1.0,
+        optics_data=None,
+        tomo_format="",
+        subtomo_format="",
+        version=None,
     ):
         Motl.__init__(self, motl_df=None)
 
@@ -3721,7 +3746,8 @@ class RelionMotlv5(RelionMotl, Motl):
             raise ValueError("'rlnTomoName' column not found in DataFrame")
 
         def extract_tomo_id(name):
-            if not isinstance(name, str): return name
+            if not isinstance(name, str):
+                return name
             numbers = re.findall(r"\d+", re.sub(r"\.[a-zA-Z0-9]+$", "", str(name)))
             return int(numbers[-1]) if numbers else None
 
@@ -3731,7 +3757,8 @@ class RelionMotlv5(RelionMotl, Motl):
     @staticmethod
     def clean_subtomo_name_column(df):
         def extract_subtomo_id(name):
-            if not isinstance(name, str): return name
+            if not isinstance(name, str):
+                return name
             numbers = re.findall(r"\d+", str(name).split("/")[-1])
             return int(numbers[-1]) if numbers else None
 
@@ -4208,31 +4235,34 @@ class RelionMotlv5(RelionMotl, Motl):
 
         starfileio.Starfile.write(frames, output_path, specifiers=specifiers)
 
+
 class RelionMotlv5_1:
     def __new__(
-            cls, input_particles = None, input_tomograms = None, tomo_idx = None, pixel_size = None, binning = None, optics_data = None
+        cls, input_particles=None, input_tomograms=None, tomo_idx=None, pixel_size=None, binning=None, optics_data=None
     ):
-        if input_tomograms is None: #single file mode
+        if input_tomograms is None:  # single file mode
             if input_particles is not None:
-                    return RelionMotl(
-                        input_motl=input_particles,
-                        pixel_size=pixel_size,
-                        optics_data=optics_data,
-                        binning=binning,
-                        version=5.1)
+                return RelionMotl(
+                    input_motl=input_particles,
+                    pixel_size=pixel_size,
+                    optics_data=optics_data,
+                    binning=binning,
+                    version=5.1,
+                )
             else:
                 raise UserInputError(
                     f"RELION5.1 objects can be created either with a single standard .star file either with the format introduced in 5.0 version"
                 )
-        else: #tomo_mode (2 files)
+        else:  # tomo_mode (2 files)
             return RelionMotlv5(
                 input_particles=input_particles,
                 input_tomograms=input_tomograms,
                 optics_data=optics_data,
                 version=5.1,
                 binning=binning,
-                tomo_idx=tomo_idx
+                tomo_idx=tomo_idx,
             )
+
 
 class StopgapMotl(Motl):
     pairs = {
