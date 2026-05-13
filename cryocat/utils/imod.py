@@ -8,6 +8,27 @@ from cryocat.utils import ioutils
 
 @dataclass
 class ImodHeader:
+    """Base class for all IMOD binary-format header types.
+
+    Provides helpers for locating a 4-byte magic string in a file and reading
+    a typed header block.  Concrete subclasses supply ``header_format`` (a
+    :mod:`struct` format string) and implement ``from_bytes`` / ``to_bytes``.
+
+    Attributes
+    ----------
+    name : str
+        4-byte (or longer) magic string that identifies the chunk type.
+    header_format : str
+        ``struct`` format string used to pack/unpack the fixed-size header.
+    encoding : str
+        Byte encoding for string fields (default ``'utf-8'``).
+
+    References
+    ----------
+    IMOD binary specification:
+    https://bio3d.colorado.edu/imod/betaDoc/binspec.html
+    """
+
     # based on information here https://bio3d.colorado.edu/imod/betaDoc/binspec.html
     # there is discrepancy of 4 bytes somewhere in that description though
     name: str = "IMODv1.2"
@@ -16,6 +37,26 @@ class ImodHeader:
 
     @staticmethod
     def check_sequence(file_handler, control_sequence, encoding):
+        """Scan forward in *file_handler* until *control_sequence* is found.
+
+        Reads the file in 4-byte chunks.  When a chunk matches the encoded
+        *control_sequence* the file position is rewound to the start of that
+        chunk and the position is returned.
+
+        Parameters
+        ----------
+        file_handler : file-like object
+            Open binary file positioned anywhere.
+        control_sequence : str
+            The 4-byte string to search for (e.g. ``"IMOD"``).
+        encoding : str
+            Encoding used to convert *control_sequence* to bytes.
+
+        Returns
+        -------
+        int
+            File offset of the first matching chunk, or ``-1`` if not found.
+        """
         control_bytes = bytes(control_sequence.encode(encoding))
         buffer_size = 4
         buffer = file_handler.read(buffer_size)
@@ -35,6 +76,24 @@ class ImodHeader:
 
     @classmethod
     def read_from_file(cls, file_handler, encoding):
+        """Locate and parse this header type from *file_handler*.
+
+        Uses :meth:`check_sequence` to find the magic string, then reads and
+        unpacks exactly ``struct.calcsize(header_format)`` bytes.
+
+        Parameters
+        ----------
+        file_handler : file-like object
+            Open binary file.  The read position is advanced past the header.
+        encoding : str
+            Encoding used for string fields.
+
+        Returns
+        -------
+        ImodHeader subclass instance or None
+            A fully populated header instance, or ``None`` when the magic
+            string is not found in the file.
+        """
         header = cls(encoding=encoding)
         file_position = ImodHeader.check_sequence(file_handler, header.name[0:4], encoding=encoding)
 
@@ -49,6 +108,22 @@ class ImodHeader:
 
 @dataclass
 class ContourHeader(ImodHeader):
+    """IMOD ``CONT`` chunk header describing one contour within an object.
+
+    Attributes
+    ----------
+    name : str
+        Magic string ``"CONT"``.
+    psize : int
+        Number of points in this contour.
+    flags : int
+        Contour flags bitfield.
+    time : int
+        Time index for 4-D models.
+    surf : int
+        Surface index this contour belongs to.
+    """
+
     name: str = "CONT"
     psize: int = 0
     flags: int = 0
@@ -58,6 +133,13 @@ class ContourHeader(ImodHeader):
     header_format = ">4s iiii"
 
     def to_bytes(self):
+        """Serialise this header to a packed byte string.
+
+        Returns
+        -------
+        bytes
+            Binary representation of the header in big-endian format.
+        """
         values = (
             self.name.encode(self.encoding),
             self.psize,
@@ -69,6 +151,19 @@ class ContourHeader(ImodHeader):
 
     @classmethod
     def from_bytes(cls, data, encoding):
+        """Deserialise a :class:`ContourHeader` from a packed byte string.
+
+        Parameters
+        ----------
+        data : bytes
+            Raw bytes of exactly ``struct.calcsize(header_format)`` length.
+        encoding : str
+            Encoding used to decode the ``name`` field.
+
+        Returns
+        -------
+        ContourHeader
+        """
         values = struct.unpack(cls.header_format, data)
         return cls(
             name=values[0].decode(encoding).rstrip("\0"),
@@ -81,6 +176,49 @@ class ContourHeader(ImodHeader):
 
 @dataclass
 class ObjectHeader(ImodHeader):
+    """IMOD ``OBJT`` chunk header describing one model object.
+
+    Attributes
+    ----------
+    name : str
+        Object name (up to 64 characters, padded to 64 bytes).
+    extra_data : str
+        Reserved extra data (68 bytes).
+    contsize : int
+        Number of contours in this object.
+    flags : int
+        Object flags bitfield.
+    axis : int
+        Axis for scattered objects.
+    drawmode : int
+        Drawing mode flag.
+    red, green, blue : float
+        Diffuse colour components in ``[0, 1]``.
+    pdrawsize : int
+        Point draw size (sphere radius in pixels).
+    symbol : int
+        Point symbol: 0 = circle, 1 = none, 2 = square, 3 = triangle,
+        4 = star.
+    symsize : int
+        Symbol size in pixels.
+    linewidth2 : int
+        Line width in 2-D view.
+    linewidth : int
+        Line width in 3-D view.
+    linesty : int
+        Line style (0 = solid).
+    symflags : int
+        Symbol flags.
+    sympad : int
+        Padding byte.
+    trans : int
+        Transparency (0–255).
+    meshsize : int
+        Number of meshes.
+    surfsize : int
+        Number of surfaces.
+    """
+
     name: str = "OBJT"
     extra_data: str = ""
     contsize: int = 0
@@ -106,6 +244,13 @@ class ObjectHeader(ImodHeader):
     header_format = ">64s 68s i I ii fff i BBBBBBBB ii"
 
     def to_bytes(self):
+        """Serialise this header to a packed byte string.
+
+        Returns
+        -------
+        bytes
+            Binary representation of the header in big-endian format.
+        """
         values = (
             self.name.encode(self.encoding),
             self.extra_data.encode(self.encoding),
@@ -132,6 +277,19 @@ class ObjectHeader(ImodHeader):
 
     @classmethod
     def from_bytes(cls, data, encoding):
+        """Deserialise an :class:`ObjectHeader` from a packed byte string.
+
+        Parameters
+        ----------
+        data : bytes
+            Raw bytes of exactly ``struct.calcsize(header_format)`` length.
+        encoding : str
+            Encoding used to decode the ``name`` field.
+
+        Returns
+        -------
+        ObjectHeader
+        """
         values = struct.unpack(cls.header_format, data)
         return cls(
             name=values[0].decode(encoding).rstrip("\0"),
@@ -158,6 +316,48 @@ class ObjectHeader(ImodHeader):
 
 @dataclass
 class ModelHeader(ImodHeader):
+    """IMOD top-level model header (``IMOD`` chunk).
+
+    Attributes
+    ----------
+    name : str
+        Model name / version string (up to 128 characters).
+    xmax, ymax, zmax : int
+        Tomogram dimensions in voxels.
+    objsize : int
+        Number of objects in the model.
+    flags : int
+        Model flags bitfield.
+    drawmode : int
+        Drawing mode flag.
+    mousemode : int
+        Mouse interaction mode.
+    blacklevel, whitelevel : int
+        Contrast window.
+    xoffset, yoffset, zoffset : float
+        Origin offsets.
+    xscale, yscale, zscale : float
+        Voxel scale factors.
+    object : int
+        Index of the currently selected object.
+    contour : int
+        Index of the currently selected contour.
+    point : int
+        Index of the currently selected point.
+    res : int
+        Minimum number of pixels between points when drawing.
+    thresh : int
+        Threshold level for autosegmentation.
+    pixsize : float
+        Size of one pixel/voxel in *units*.
+    units : int
+        Unit code: 0 = pixels, -6 = µm, -9 = nm, -10 = Å, etc.
+    csum : int
+        Checksum (used for autosave only).
+    alpha, beta, gamma : float
+        Rotation angles for the model reference frame.
+    """
+
     name: str = "IMOD-NewModel"
     xmax: int = 4096
     ymax: int = 4096
@@ -190,6 +390,13 @@ class ModelHeader(ImodHeader):
     header_format = ">128s iiii I iiii fff fff iiiii f ii fff"
 
     def to_bytes(self):
+        """Serialise this header to a packed byte string.
+
+        Returns
+        -------
+        bytes
+            Binary representation of the header in big-endian format.
+        """
         values = (
             self.name.encode(self.encoding),
             self.xmax,
@@ -223,6 +430,19 @@ class ModelHeader(ImodHeader):
 
     @classmethod
     def from_bytes(cls, data, encoding):
+        """Deserialise a :class:`ModelHeader` from a packed byte string.
+
+        Parameters
+        ----------
+        data : bytes
+            Raw bytes of exactly ``struct.calcsize(header_format)`` length.
+        encoding : str
+            Encoding used to decode the ``name`` field.
+
+        Returns
+        -------
+        ModelHeader
+        """
         values = struct.unpack(cls.header_format, data)
         return cls(
             name=values[0].decode(encoding).rstrip("\0"),
@@ -373,16 +593,19 @@ def read_mod_file(file_path):
 
 
 def write_model_binary(df, filename):
-    """
-    Converts a DataFrame of 3D coordinates into IMOD binary format for visualization
-    in IMOD or other compatible software.
+    """Write a DataFrame of 3-D coordinates as an IMOD binary ``.mod`` file.
 
     Parameters
     ----------
     df : pandas.DataFrame
-        DataFrame with columns: object_id, contour_id, x, y, z, object_radius
+        Coordinate table with columns ``object_id``, ``contour_id``,
+        ``x``, ``y``, ``z``, and optionally ``object_radius``.
     filename : str
-        Output filename for the .mod file
+        Output path for the ``.mod`` file.
+
+    Returns
+    -------
+    None
 
     Examples
     --------

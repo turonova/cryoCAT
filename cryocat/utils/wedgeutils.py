@@ -69,24 +69,24 @@ def create_wedge_list_sg(
         The ID of the tomogram.
     tomo_dim : str or array-like
         The path to the tomogram dimensions file or dimensions specified as array-like variable. See
-        :meth:`cryocat.ioutils.dimensions_load` for more information on formatting.
+        :meth:`cryocat.utils.ioutils.dimensions_load` for more information on formatting.
     pixel_size : float
         The pixel size of the tomogram/tilt series.
     tlt_file : str or array-like
         The path to the file containing information on tilts (tlt, mdoc, xml) or tilt angles specified as array-like
-        variable. See :meth:`cryocat.ioutils.tlt_load` for more information on formatting.
+        variable. See :meth:`cryocat.utils.ioutils.tlt_load` for more information on formatting.
     z_shift : str or array-like or int or float, default=0.0
         The path to the file containing information on z-shift (txt, com) or z-shift specified as array-like, pandas
-        DataFrame, int or float. See :meth:`cryocat.ioutils.z_shift_load` for more information on formatting.
+        DataFrame, int or float. See :meth:`cryocat.utils.ioutils.z_shift_load` for more information on formatting.
     ctf_file : str or pandas.DataFrame or array-like, optional
         Either the path to the file with defocus values - either in gctf (star), ctffind4 (txt) or warp (xml) format or
         array like structure of size Nx5 (N is number of tilts), or pandas.DataFrame. See
-        :meth:`cryocat.ioutils.defocus_load` for more information on formatting.
+        :meth:`cryocat.utils.ioutils.defocus_load` for more information on formatting.
     ctf_file_type : str, {"gctf", "ctffind4", "warp"}
         The type of the CTF file with defocus values. It can be either "gctf", "ctffind4", "warp", defaults to "gctf".
     dose_file : str or array-like, optional
         The path to the file containing information on corrected dose (csv, mdoc, txt, xml) or the corrected
-        dose specified as array-like variable. See :meth:`cryocat.ioutils.total_dose_load` for more information on
+        dose specified as array-like variable. See :meth:`cryocat.utils.ioutils.total_dose_load` for more information on
         formatting.
     voltage : float, default=300.0
         The voltage of the microscope, defaults to 300.0.
@@ -101,8 +101,8 @@ def create_wedge_list_sg(
 
     See also
     --------
-    :meth:`cryocat.ioutils.tlt_load`, :meth:`cryocat.ioutils.z_shift_load`, :meth:`cryocat.ioutils.defocus_load`,
-    :meth:`cryocat.ioutils.total_dose_load`
+    :meth:`cryocat.utils.ioutils.tlt_load`, :meth:`cryocat.utils.ioutils.z_shift_load`, :meth:`cryocat.utils.ioutils.defocus_load`,
+    :meth:`cryocat.utils.ioutils.total_dose_load`
 
     Returns
     -------
@@ -191,31 +191,31 @@ def create_wedge_list_sg_batch(
         otherwise STOPGAP will not accept it.
     tlt_file_format : str
         The format describing name of the input files (including the path) with tilt angles. See `Notes` below for more
-        information. See :meth:`cryocat.ioutils.tlt_load` for more information on allowed input files (tlt, mdoc,
+        information. See :meth:`cryocat.utils.ioutils.tlt_load` for more information on allowed input files (tlt, mdoc,
         xml).
     tomo_dim : array-like, optional
-        Tomogram dimensions specified as array-like variable. See :meth:`cryocat.ioutils.dimensions_load` for more
+        Tomogram dimensions specified as array-like variable. See :meth:`cryocat.utils.ioutils.dimensions_load` for more
         information on formatting. Defaults to None but either tomo_dim or tomo_dim_file_format has to be specified.
     tomo_dim_file_format : str, optional
         The format describing name of the input files (including the path) with tomogram dimensions. See `Notes` below
-        for more information. See :meth:`cryocat.ioutils.dimensions_load` for more information on allowed input files
+        for more information. See :meth:`cryocat.utils.ioutils.dimensions_load` for more information on allowed input files
         (txt, com). Defaults to None but either tomo_dim or tomo_dim_file_format has to be specified.
     z_shift : array-like or dataframe or int or float, default=0.0
-        Z-shift specified as array-like, pandas DataFrame, int or float. See :meth:`cryocat.ioutils.z_shift_load`
+        Z-shift specified as array-like, pandas DataFrame, int or float. See :meth:`cryocat.utils.ioutils.z_shift_load`
         for more information on input types. Defaults to 0.0.
     z_shift_file_format : str, optional
         The format describing name of the input files (including the path) with z-shift. See `Notes` below for more
-        information. See :meth:`cryocat.ioutils.z_shift_load` for more information on allowed input files (com, txt).
+        information. See :meth:`cryocat.utils.ioutils.z_shift_load` for more information on allowed input files (com, txt).
         Defaults to None.
     ctf_file_format : str, optional
         The format describing name of the input files (including the path) with defocus values. See `Notes` below for more
         information. Supported formats are gctf (star file), ctffind4 (txt file) and warp (xml file). Defaults to None.
-        See :meth:`cryocat.ioutils.defocus_load` on more information of file formats.
+        See :meth:`cryocat.utils.ioutils.defocus_load` on more information of file formats.
     ctf_file_type : str, {"gctf", "ctffind4", "warp"}
         The type of the CTF file with defocus values. It can be either "gctf", "ctffind4", or "warp", defaults to "gctf".
     dose_file_format : str or array-like, optional
         The format describing name of the input files (including the path) with corrected dose. See `Notes` below for more
-        information. See :meth:`cryocat.ioutils.total_dose_load` for more information on allowed input files
+        information. See :meth:`cryocat.utils.ioutils.total_dose_load` for more information on allowed input files
         (txt, mdoc, xml). Defaults to None.
     voltage : float, default=300.0
         The voltage of the microscope, defaults to 300.0.
@@ -238,8 +238,8 @@ def create_wedge_list_sg_batch(
 
     See also
     --------
-    :meth:`cryocat.ioutils.tlt_load`, :meth:`cryocat.ioutils.z_shift_load`, :meth:`cryocat.ioutils.defocus_load`,
-    :meth:`cryocat.ioutils.total_dose_load`
+    :meth:`cryocat.utils.ioutils.tlt_load`, :meth:`cryocat.utils.ioutils.z_shift_load`, :meth:`cryocat.utils.ioutils.defocus_load`,
+    :meth:`cryocat.utils.ioutils.total_dose_load`
 
     Notes
     -----
@@ -335,10 +335,10 @@ def create_wedge_list_em_batch(
     ----------
     tomo_list : str or array-like
         The path to the file containing list of tomograms (txt) or tomogram/tilt series numbers specified as array-like
-        variable. See :meth:`cryocat.ioutils.tlt_load` for more information on formatting.
+        variable. See :meth:`cryocat.utils.ioutils.tlt_load` for more information on formatting.
     tlt_file_format : str
         The format describing name of the input files (including the path) with tilt angles. See `Notes` below for more
-        information. See :meth:`cryocat.ioutils.tlt_load` for more information on allowed input files (tlt, mdoc,
+        information. See :meth:`cryocat.utils.ioutils.tlt_load` for more information on allowed input files (tlt, mdoc,
         xml).
     output_file : str, optional
         The path to the output file, by default None. If None, the output is not written out.
@@ -350,7 +350,7 @@ def create_wedge_list_em_batch(
 
     See also
     --------
-    :meth:`cryocat.ioutils.tlt_load`
+    :meth:`cryocat.utils.ioutils.tlt_load`
 
     Notes
     -----
@@ -514,7 +514,33 @@ def wedge_list_sg_to_em(input_path, output_path, write_out=True):
 
 
 def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape="wedge", output_path=None):
+    """Create a missing-wedge mask for each tomogram listed in ``tomo_list``.
 
+    Parameters
+    ----------
+    wg_list_star_df : pandas.DataFrame
+        Wedge-list star file loaded as a DataFrame; must contain columns
+        ``tomo_num`` and ``tilt_angle``.
+    tomo_list : str or array-like
+        Path to a ``.tlt`` file or an integer array of tomogram IDs.
+    box_size : int or sequence of int
+        Side length(s) of the cubic (or non-cubic) output mask volume.
+    shape : str, default='wedge'
+        Mask geometry.  Currently ``'wedge'`` and ``'sph_wedge'`` are
+        supported.
+    output_path : str, optional
+        If given, the mask is written to this file path.
+
+    Returns
+    -------
+    numpy.ndarray
+        The last generated wedge mask as a 3-D binary array (float32).
+
+    Raises
+    ------
+    ValueError
+        If ``wg_list_star_df`` is not a :class:`pandas.DataFrame`.
+    """
     if not isinstance(wg_list_star_df, pd.DataFrame):
         raise ValueError("Provided wg_list_star_df is not a pandas DataFrame!")
     tomograms = ioutils.tlt_load(tomo_list).astype(int)
@@ -546,7 +572,28 @@ def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape="wedge", output_p
 
 
 def apply_wedge_mask(wedge_mask, in_map, rotation_zxz=None, output_path=None):
+    """Apply a wedge mask to a volume in Fourier space.
 
+    Reads ``in_map``, optionally rotates it by ``rotation_zxz``, applies the
+    wedge mask in Fourier space, and returns the filtered real-valued volume.
+
+    Parameters
+    ----------
+    wedge_mask : str
+        Path to the wedge mask volume.
+    in_map : str
+        Path to the input volume to be filtered.
+    rotation_zxz : array-like of float, optional
+        zxz Euler angles (degrees) used to rotate the map before masking.
+        When ``None`` no rotation is applied.
+    output_path : str, optional
+        If given, the filtered volume is written to this path.
+
+    Returns
+    -------
+    numpy.ndarray
+        Filtered volume as a real-valued float32 array.
+    """
     rot_map = cryomask.rotate(cryomap.read(in_map), rotation_zxz)
 
     ft_map = np.fft.fftshift(np.fft.fftn((rot_map)))

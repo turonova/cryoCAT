@@ -1,4 +1,11 @@
 class MotlException(Exception):
+    """Base exception class for the cryoCAT motl module.
+
+    Parameters
+    ----------
+    *args : object
+        Optional message string as the first positional argument.
+    """
 
     def __init__(self, *args):
         if args:
@@ -14,6 +21,10 @@ class MotlException(Exception):
 
 
 class UserInputError(MotlException):
+    """Exception raised when the user provides invalid input.
+
+    Inherits from :class:`MotlException`.
+    """
 
     def __str__(self):
         if self.message:
@@ -23,6 +34,10 @@ class UserInputError(MotlException):
 
 
 class ProcessError(MotlException):
+    """Exception raised when an internal processing step fails.
+
+    Inherits from :class:`MotlException`.
+    """
 
     def __str__(self):
         if self.message:

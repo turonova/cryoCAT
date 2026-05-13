@@ -33,6 +33,8 @@ def save_motl(
     rln_tomos=None,
     rln_binning=1,
     rln_pixel_size=1.0,
+    rln_tomo_format="",
+    rln_subtomo_format="",
     rln_version=3.1,
     rln_use_original=False,
 ):
@@ -69,13 +71,17 @@ def save_motl(
             if rln_tomos:
                 input_tomograms = pd.DataFrame(rln_tomos)
             else:
-                return "Tomogram data needs to be provided for Relion 5 file type."
+                return "Tomogram data needs to be provided for Relion 5.0 file type."
             m = RelionMotlv5(
                 df,
                 input_tomograms=input_tomograms,
                 pixel_size=rln_pixel_size,
                 binning=rln_binning,
                 optics_data=optics_data,
+            )
+        elif rln_version == 5.1:
+            m = RelionMotl(
+                df, version=5.1, pixel_size=rln_pixel_size, binning=rln_binning, optics_data=optics_data
             )
         else:
             m = RelionMotl(
@@ -84,7 +90,12 @@ def save_motl(
         m.relion_df = pd.DataFrame(extra_df)
 
         m.write_out(
-            file_path, write_optics=write_optics, use_original_entries=rln_use_original, optics_data=optics_data
+            file_path,
+            write_optics=write_optics,
+            use_original_entries=rln_use_original,
+            optics_data=optics_data,
+            tomo_format=rln_tomo_format or "",
+            subtomo_format=rln_subtomo_format or "",
         )
 
     return status

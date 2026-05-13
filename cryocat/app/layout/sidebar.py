@@ -343,7 +343,7 @@ def get_sidebar():
                     className="custom-radius-button",
                     style={"width": "100%"},
                 ),
-                style={"padding": "2rem"},
+                style={"padding": "0.5rem 2rem 2rem"},
             ),
         ],
         className="sidebar",

@@ -379,3 +379,8 @@ html, body {
   0% { opacity: 0; }
   100% { opacity: 1; }
 }
+
+.graph-settings-modal .modal-dialog {
+    margin-left: 2rem;
+    margin-right: auto;
+}

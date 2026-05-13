@@ -2727,3 +2727,158 @@ def cartesian_to_spherical(coord, normalize=True):
     theta = theta[mask]
 
     return phi, theta
+
+
+# =============================================================================
+# Triangle mesh sampling and point-in-triangle test
+# =============================================================================
+
+
+def _triangle_mesh_vertices(opp_vertex, v1, v2):
+    """Compute the four corners of a parallelogram mesh from three triangle vertices.
+
+    Given the vertex opposite to the shortest edge (``v1``–``v2``) and the
+    two endpoints of that edge, the fourth corner is constructed so that the
+    four points form a parallelogram.
+
+    Parameters
+    ----------
+    opp_vertex : numpy.ndarray, shape (3,)
+        The triangle vertex opposite to the edge ``v1``–``v2``.
+    v1 : numpy.ndarray, shape (3,)
+        First endpoint of the reference edge.
+    v2 : numpy.ndarray, shape (3,)
+        Second endpoint of the reference edge.
+
+    Returns
+    -------
+    numpy.ndarray, shape (4, 3)
+        Four corners ``[v1, fourth_vertex, v2, opp_vertex]`` forming a
+        parallelogram in 3-D space.
+    """
+    fourth_vertex = opp_vertex + (v1 - v2)
+    return np.array((v1, fourth_vertex, v2, opp_vertex))
+
+
+def sample_triangle(vertices, sampling_distance):
+    """Sample a triangle into a regular grid of 3-D points.
+
+    The function identifies the shortest edge of the triangle, constructs a
+    parallelogram mesh around that edge, and samples both directions at the
+    given spacing.  If the shortest edge is already shorter than
+    ``sampling_distance`` the original three vertices are returned unchanged.
+
+    Parameters
+    ----------
+    vertices : numpy.ndarray, shape (3, 3)
+        The three triangle vertices; each row is ``[x, y, z]``.
+    sampling_distance : float
+        Desired spacing between sample points.
+
+    Returns
+    -------
+    numpy.ndarray, shape (N, 3)
+        Grid of sampled 3-D points covering the triangle face, or the
+        original three vertices when the triangle is too small to subdivide.
+    """
+    d01 = np.linalg.norm(vertices[0] - vertices[1])
+    d02 = np.linalg.norm(vertices[0] - vertices[2])
+    d12 = np.linalg.norm(vertices[1] - vertices[2])
+
+    if d01 <= d02 and d01 <= d12:
+        min_dist = d01
+        mesh_corners = _triangle_mesh_vertices(vertices[2], vertices[0], vertices[1])
+    elif d02 <= d12:
+        min_dist = d02
+        mesh_corners = _triangle_mesh_vertices(vertices[1], vertices[0], vertices[2])
+    else:
+        min_dist = d12
+        mesh_corners = _triangle_mesh_vertices(vertices[0], vertices[1], vertices[2])
+
+    if min_dist < sampling_distance:
+        return vertices
+
+    n_long = round(np.linalg.norm(mesh_corners[0] - mesh_corners[1]) / sampling_distance)
+    first_parallel = np.linspace(mesh_corners[0], mesh_corners[1], n_long)
+    second_parallel = np.linspace(mesh_corners[2], mesh_corners[3], n_long)
+
+    n_short = round(np.linalg.norm(first_parallel[0] - second_parallel[0]) / sampling_distance)
+
+    mesh_points = [np.linspace(first_parallel[i], second_parallel[i], n_short)
+                   for i in range(len(first_parallel))]
+    return np.concatenate(mesh_points, axis=0)
+
+
+def _barycentric_coords(triangle, point):
+    """Compute barycentric coordinates of a point with respect to a triangle.
+
+    Projects the triangle onto the plane that discards the dominant axis of
+    the surface normal, then solves for the three barycentric weights.
+
+    Parameters
+    ----------
+    triangle : numpy.ndarray, shape (3, 3)
+        Triangle vertices; each row is ``[x, y, z]``.
+    point : numpy.ndarray, shape (3,)
+        Query point in 3-D space.
+
+    Returns
+    -------
+    b : numpy.ndarray, shape (3,)
+        Barycentric coordinates ``[b0, b1, b2]``.  Returns ``[-1, -1, -1]``
+        if the triangle has zero area.
+    """
+    from math import fabs
+
+    normal = np.cross(triangle[1] - triangle[0], triangle[2] - triangle[1])
+    abs_n = [fabs(normal[0]), fabs(normal[1]), fabs(normal[2])]
+
+    if abs_n[0] >= abs_n[1] and abs_n[0] >= abs_n[2]:
+        c1, c2 = 1, 2
+    elif abs_n[1] >= abs_n[2]:
+        c1, c2 = 2, 0
+    else:
+        c1, c2 = 0, 1
+
+    u = np.array([triangle[0][c1] - triangle[2][c1],
+                  triangle[1][c1] - triangle[2][c1],
+                  point[c1] - triangle[0][c1],
+                  point[c1] - triangle[2][c1]])
+    v = np.array([triangle[0][c2] - triangle[2][c2],
+                  triangle[1][c2] - triangle[2][c2],
+                  point[c2] - triangle[0][c2],
+                  point[c2] - triangle[2][c2]])
+
+    denom = v[0] * u[1] - v[1] * u[0]
+    if denom == 0.0:
+        return np.array([-1.0, -1.0, -1.0])
+
+    inv = 1.0 / denom
+    b = np.zeros(3)
+    b[0] = (v[3] * u[1] - v[1] * u[3]) * inv
+    b[1] = (v[0] * u[2] - v[2] * u[0]) * inv
+    b[2] = 1.0 - b[0] - b[1]
+    return b
+
+
+def point_inside_triangle(point, triangle):
+    """Test whether a 3-D point lies inside a triangle.
+
+    Uses barycentric coordinates: the point is inside if all three weights
+    are in ``[-0.0001, 1.0001]`` (a small tolerance for floating-point
+    boundary cases).
+
+    Parameters
+    ----------
+    point : numpy.ndarray, shape (3,)
+        Query point.
+    triangle : numpy.ndarray, shape (3, 3)
+        Triangle vertices.
+
+    Returns
+    -------
+    bool
+        ``True`` if the point is inside (or on the boundary of) the triangle.
+    """
+    b = _barycentric_coords(triangle, point)
+    return bool(np.all(b >= -0.0001) and np.all(b <= 1.0001))

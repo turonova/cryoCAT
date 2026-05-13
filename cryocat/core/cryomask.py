@@ -68,7 +68,7 @@ def generate_mask(mask_shape, mask_size=None, mask_expansion=4):
     Parameters
     ----------
     mask_shape : str
-        A string that specifies the shape and dimensions of the mask. See :meth:`cryocat.cryomask.parse_shape_string`
+        A string that specifies the shape and dimensions of the mask. See :meth:`cryocat.core.cryomask.parse_shape_string`
         for more information on correct formatting.
     mask_size : int, optional
         The size of the mask array. If None, it is automatically determined based on the maximum dimension in `specs`
@@ -419,7 +419,7 @@ def spherical_mask(mask_size, radius=None, center=None, gaussian=0.0, gaussian_o
 
     See Also
     --------
-    :meth:`cryocat.cryomask.get_correct_format` :
+    :meth:`cryocat.core.cryomask.get_correct_format` :
         For more information on formatting the inputs.
 
     """
@@ -495,7 +495,7 @@ def cylindrical_mask(
 
     See Also
     --------
-    :meth:`cryocat.cryomask.get_correct_format` :
+    :meth:`cryocat.core.cryomask.get_correct_format` :
         For more information on formatting the inputs.
 
     """
@@ -758,7 +758,7 @@ def ellipsoid_mask(
 
     See Also
     --------
-    :meth:`cryocat.cryomask.get_correct_format` :
+    :meth:`cryocat.core.cryomask.get_correct_format` :
         For more information on formatting the inputs.
 
     """
@@ -1251,7 +1251,7 @@ def tomogram_shell_mask(
         Path to the input motive list file or existing motive list.
     tomo_dim : str or array-like
         Path to the file specifying dimension for the tomograms or array with dimensions in case they are identical
-        for all tomograms. See :meth:`cryocat.ioutils.dimensions_load` for more information on formatting.
+        for all tomograms. See :meth:`cryocat.utils.ioutils.dimensions_load` for more information on formatting.
     shell_size : int
         Size of the shell to be applied in the mask.
     radius_offset : float, default=0.0

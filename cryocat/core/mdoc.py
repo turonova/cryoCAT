@@ -10,6 +10,23 @@ class Mdoc:
     """Class for reading, writing, and manipulating Mdoc files."""
 
     def __init__(self, file_path=None, titles=None, project_info=None, imgs=None, section_id="ZValue"):
+        """
+        Parameters
+        ----------
+        file_path : str, optional
+            Path to an existing ``.mdoc`` file to read.  When supplied and the
+            file exists, all other arguments are ignored.
+        titles : list of str, optional
+            Header title lines (without the surrounding ``[`` ``]`` brackets).
+        project_info : dict, optional
+            Key–value pairs from the mdoc header (e.g. ``PixelSpacing``,
+            ``Voltage``).
+        imgs : pandas.DataFrame, optional
+            Per-image metadata; one row per tilt image.
+        section_id : str, default='ZValue'
+            Column name used as the section identifier (``'ZValue'`` or
+            ``'FrameSet'``).
+        """
         if file_path and path.isfile(file_path):
             self.file_path = file_path
             self.titles, self.project_info, self.imgs, self.section_id = self._read_mdoc(file_path)
@@ -20,6 +37,22 @@ class Mdoc:
             self.section_id = section_id
 
     def write(self, out_path=None, overwrite=False, removed=False):
+        """Write the Mdoc data to a file.
+
+        Parameters
+        ----------
+        out_path : str, optional
+            Output file path.  Defaults to ``self.file_path`` when ``None``.
+        overwrite : bool, default=False
+            Allow overwriting an existing file.
+        removed : bool, default=False
+            When ``True``, images marked as removed are also written out.
+
+        Raises
+        ------
+        FileExistsError
+            If the output file already exists and ``overwrite`` is ``False``.
+        """
         if not out_path:
             out_path = self.file_path
         if path.isfile(out_path) and not overwrite:
@@ -44,17 +77,51 @@ class Mdoc:
                     f.write("\n")
 
     def add_field(self, field_name, field_value):
+        """Add or overwrite a column in the per-image DataFrame.
+
+        Parameters
+        ----------
+        field_name : str
+            Column name to add or update.
+        field_value : scalar or array-like
+            Value(s) to assign; broadcast rules follow pandas conventions.
+        """
         self.imgs[field_name] = field_value
 
     def sort_by_tilt(self, reset_z_value=False):
+        """Sort images by tilt angle in ascending order.
+
+        Parameters
+        ----------
+        reset_z_value : bool, default=False
+            When ``True``, the ``ZValue`` column is reset to a sequential
+            integer range after sorting.
+        """
         self.imgs = self.imgs.sort_values(by="TiltAngle")
         if reset_z_value:
             self.imgs["ZValue"] = range(self.imgs.shape[0])
 
     def remove_image(self, index):
+        """Mark a single image as removed.
+
+        Parameters
+        ----------
+        index : int
+            DataFrame index of the image to mark.
+        """
         self.imgs.loc[index, "Removed"] = True
 
     def remove_images(self, indices, kept_only=True):
+        """Mark multiple images as removed.
+
+        Parameters
+        ----------
+        indices : array-like of int
+            Positional indices (within the kept or full image list) to mark.
+        kept_only : bool, default=True
+            When ``True``, ``indices`` are interpreted relative to the
+            currently kept (non-removed) images only.
+        """
         if kept_only:
             kept_indices = self.kept_images().index
         else:
@@ -64,53 +131,197 @@ class Mdoc:
             self.remove_image(index)
 
     def removed_images(self):
+        """Return the subset of images that have been marked as removed.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Rows from ``self.imgs`` where ``Removed`` is ``True``.
+        """
         return self.imgs[self.imgs["Removed"] == True]
 
     def kept_images(self):
+        """Return the subset of images that have not been removed.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Rows from ``self.imgs`` where ``Removed`` is ``False``.
+        """
         return self.imgs[self.imgs["Removed"] == False]
 
     def keep_images(self, indices):
+        """Mark multiple images as kept (un-remove them).
+
+        Parameters
+        ----------
+        indices : array-like of int
+            DataFrame indices of images to un-remove.
+        """
         self.imgs.loc[indices, "Removed"] = False
 
     def reset_images(self):
+        """Mark all images as kept by clearing the ``Removed`` flag."""
         self.imgs["Removed"] = False
 
     def keep_image(self, index):
+        """Mark a single image as kept (un-remove it).
+
+        Parameters
+        ----------
+        index : int
+            DataFrame index of the image to un-remove.
+        """
         self.keep_images([index])
 
     def get_image(self, index):
+        """Return a single image row by its DataFrame index.
+
+        Parameters
+        ----------
+        index : int
+            DataFrame index of the image.
+
+        Returns
+        -------
+        pandas.Series
+            The image row.
+        """
         return self.imgs.loc[index]
 
     def get_images(self, indices):
+        """Return multiple image rows by their DataFrame indices.
+
+        Parameters
+        ----------
+        indices : array-like of int
+            DataFrame indices of the images to retrieve.
+
+        Returns
+        -------
+        pandas.DataFrame
+            The selected rows.
+        """
         return self.imgs.loc[indices]
 
     def get_image_by_zvalue(self, zvalue):
+        """Return the image row(s) with a specific ZValue.
+
+        Parameters
+        ----------
+        zvalue : int
+            The ZValue to look up.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Matching image row(s).
+        """
         return self.imgs[self.imgs["ZValue"] == zvalue]
 
     def get_images_by_zvalues(self, zvalues):
+        """Return image rows matching any of the given ZValues.
+
+        Parameters
+        ----------
+        zvalues : array-like of int
+            ZValues to include.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Matching image rows.
+        """
         return self.imgs[self.imgs["ZValue"].isin(zvalues)]
 
     def get_image_by_zvalue_range(self, zvalue_min, zvalue_max):
+        """Return image rows whose ZValue falls within ``[zvalue_min, zvalue_max]``.
+
+        Parameters
+        ----------
+        zvalue_min : int
+            Lower bound (inclusive).
+        zvalue_max : int
+            Upper bound (inclusive).
+
+        Returns
+        -------
+        pandas.DataFrame
+            Matching image rows.
+        """
         return self.imgs[(self.imgs["ZValue"] >= zvalue_min) & (self.imgs["ZValue"] <= zvalue_max)]
 
     def get_images_by_zvalue_ranges(self, zvalue_ranges):
+        """Return image rows matching any of the given ZValue ranges.
+
+        Parameters
+        ----------
+        zvalue_ranges : list of tuple of int
+            Each element is ``(zvalue_min, zvalue_max)`` (both inclusive).
+
+        Returns
+        -------
+        pandas.DataFrame
+            Concatenated rows from all matching ranges (index reset).
+        """
         imgs = pd.DataFrame(columns=self.imgs.columns)
         for zvalue_min, zvalue_max in zvalue_ranges:
             imgs = pd.concat([imgs, self.get_image_by_zvalue_range(zvalue_min, zvalue_max)], ignore_index=True)
         return imgs
 
     def get_image_feature(self, feature):
+        """Return a single column from the image DataFrame.
+
+        Parameters
+        ----------
+        feature : str
+            Column name.
+
+        Returns
+        -------
+        pandas.Series
+            The requested column.
+        """
         return self.imgs[feature]
 
     def get_image_features(self, features):
+        """Return multiple columns from the image DataFrame.
+
+        Parameters
+        ----------
+        features : list of str
+            Column names to return.
+
+        Returns
+        -------
+        pandas.DataFrame
+            The selected columns.
+        """
         return self.imgs[features]
 
     def reorder_images(self, indices):
+        """Reorder the image DataFrame to the given index order.
+
+        Parameters
+        ----------
+        indices : array-like of int
+            New row order specified as DataFrame index values.
+        """
         self.imgs = self.imgs.reindex(indices)
         self.imgs.reset_index(drop=True, inplace=True)
 
     def change_frame_path(self, new_path=None):
+        """Update the ``SubFramePath`` column to use a new directory.
 
+        Strips the existing directory from each path (keeping only the
+        filename) and optionally prepends ``new_path``.
+
+        Parameters
+        ----------
+        new_path : str, optional
+            New directory to prepend to each frame filename.  When ``None``
+            or empty, paths are reduced to filenames only.
+        """
         def add_new_path(file_name):
             return path.join(new_path, file_name)
 
@@ -120,11 +331,32 @@ class Mdoc:
             self.imgs["SubFramePath"] = self.imgs["SubFramePath"].apply(add_new_path)
 
     def update_pixel_size(self, new_pixel_size):
+        """Update the pixel size in both the project info and per-image data.
+
+        Parameters
+        ----------
+        new_pixel_size : float
+            New pixel spacing value to write into ``PixelSpacing``.
+        """
         self.project_info["PixelSpacing"] = new_pixel_size
         self.imgs["PixelSpacing"] = new_pixel_size
 
     def convert_section_type(self, new_section_id="FrameSet"):
+        """Convert the mdoc section type between ``ZValue`` and ``FrameSet``.
 
+        Renames the section-ID column, rebuilds the project-info header, and
+        updates ``self.section_id`` and ``self.titles`` accordingly.
+
+        Parameters
+        ----------
+        new_section_id : str, default='FrameSet'
+            Target section type; must be ``'ZValue'`` or ``'FrameSet'``.
+
+        Raises
+        ------
+        ValueError
+            If ``new_section_id`` is neither ``'ZValue'`` nor ``'FrameSet'``.
+        """
         if self.section_id == new_section_id:
             warnings.warn("The new section id is the same as the existing one - no changes were made.")
             return
@@ -273,7 +505,24 @@ class Mdoc:
 
 
 def remove_images(input_mdoc, idx_to_remove, numbered_from_1=True, output_file=None):
+    """Remove images from an mdoc file by index.
 
+    Parameters
+    ----------
+    input_mdoc : str
+        Path to the input ``.mdoc`` file.
+    idx_to_remove : str or array-like of int
+        Indices of images to remove, or a path to a file containing them.
+    numbered_from_1 : bool, default=True
+        When ``True``, indices are treated as 1-based.
+    output_file : str, optional
+        If given, the modified mdoc is written to this path.
+
+    Returns
+    -------
+    Mdoc
+        The modified :class:`Mdoc` object.
+    """
     mdoc = Mdoc(input_mdoc)
     idx_to_remove_final = ioutils.indices_load(idx_to_remove, numbered_from_1=numbered_from_1)
     if idx_to_remove_final is not None:
@@ -286,7 +535,20 @@ def remove_images(input_mdoc, idx_to_remove, numbered_from_1=True, output_file=N
 
 
 def get_tilt_angles(input_mdoc, output_file=None):
+    """Extract tilt angles from an mdoc file.
 
+    Parameters
+    ----------
+    input_mdoc : str
+        Path to the ``.mdoc`` file.
+    output_file : str, optional
+        If given, tilt angles are written as a single-column CSV to this path.
+
+    Returns
+    -------
+    numpy.ndarray
+        1-D array of tilt angles in degrees.
+    """
     mdoc = Mdoc(input_mdoc)
 
     if output_file:
@@ -296,7 +558,23 @@ def get_tilt_angles(input_mdoc, output_file=None):
 
 
 def sort_mdoc_by_tilt_angles(input_mdoc, reset_z_value=False, output_file=None):
+    """Sort an mdoc file by tilt angle.
 
+    Parameters
+    ----------
+    input_mdoc : str
+        Path to the ``.mdoc`` file.
+    reset_z_value : bool, default=False
+        When ``True``, the ``ZValue`` column is reset to a sequential range
+        after sorting.
+    output_file : str, optional
+        If given, the sorted mdoc is written to this path.
+
+    Returns
+    -------
+    Mdoc
+        The sorted :class:`Mdoc` object.
+    """
     mdoc = Mdoc(input_mdoc)
     mdoc.sort_by_tilt(reset_z_value=reset_z_value)
 
@@ -307,7 +585,29 @@ def sort_mdoc_by_tilt_angles(input_mdoc, reset_z_value=False, output_file=None):
 
 
 def split_mdoc_file(input_mdoc, new_id=None, output_folder=None):
+    """Split an mdoc file into one :class:`Mdoc` object per image.
 
+    Parameters
+    ----------
+    input_mdoc : str or Mdoc
+        Path to the ``.mdoc`` file or an already-loaded :class:`Mdoc`.
+    new_id : str, optional
+        When given, the section type is converted to ``new_id`` before
+        splitting (e.g. ``'FrameSet'``).
+    output_folder : str, optional
+        If given, each per-image mdoc is written to this directory, named
+        after the ``SubFramePath`` basename with a ``.mdoc`` extension.
+
+    Returns
+    -------
+    list of Mdoc
+        One :class:`Mdoc` per image, in the original order.
+
+    Raises
+    ------
+    ValueError
+        If ``input_mdoc`` is neither a ``str`` nor a :class:`Mdoc`.
+    """
     if isinstance(input_mdoc, str):
         full_mdoc = Mdoc(input_mdoc)
     elif isinstance(input_mdoc, Mdoc):
@@ -338,7 +638,30 @@ def split_mdoc_file(input_mdoc, new_id=None, output_folder=None):
 
 
 def merge_mdoc_files(mdoc_path, new_id=None, reorder=True, stripFramePath=False, output_file=None):
+    """Merge multiple mdoc files matching a path prefix into a single :class:`Mdoc`.
 
+    Discovers all ``*.mdoc`` files in the same directory that share the
+    given prefix, reads them in order, and concatenates their image data.
+
+    Parameters
+    ----------
+    mdoc_path : str
+        Prefix path used to discover sibling ``.mdoc`` files (directory +
+        filename prefix).
+    new_id : str, optional
+        When given, the merged mdoc's section type is converted to this ID.
+    reorder : bool, default=True
+        When ``True``, images are sorted by tilt angle and ZValues are reset.
+    stripFramePath : bool, default=False
+        When ``True``, directory information is stripped from ``SubFramePath``.
+    output_file : str, optional
+        If given, the merged mdoc is written to this path.
+
+    Returns
+    -------
+    Mdoc
+        The merged :class:`Mdoc` object.
+    """
     dir_only, prefix = path.split(mdoc_path)
     list_of_mdocs = ioutils.get_files_prefix_suffix(dir_path=dir_only, prefix=prefix, suffix=".mdoc")
 

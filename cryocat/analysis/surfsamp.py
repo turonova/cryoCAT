@@ -12,7 +12,6 @@ from cryocat.utils import geom
 from cryocat.core import cryomap
 from cryocat.core import cryomotl
 from cryocat.core import cryomask
-from cryocat.utils import tgeometry as tg
 
 
 class SamplePoints:
@@ -109,7 +108,7 @@ class SamplePoints:
         path : str
             The destination path for the output file.
         input_dict : dict, optional
-            A dictionary with keys from :attr:`cryocat.cryomotl.Motl.motl_columns` and new values to be assigned.
+            A dictionary with keys from :attr:`cryocat.core.cryomotl.Motl.motl_columns` and new values to be assigned.
             Coordinates and angles are derived from the class. Subtomograms are sequentially ordered starting from 1, and the class is set to 1 by default. All other fields will assign 0 if not specified in this dictionay
 
         Returns
@@ -464,11 +463,11 @@ class SamplePoints:
 
         for i in range(len(hull.simplices)):
             tp = hull.points[hull.simplices[i, :]]
-            mp = tg.get_mesh(tp, sampling_distance)
+            mp = geom.sample_triangle(tp, sampling_distance)
             n_tp = hull.equations[i][0:3]
 
             for p in mp:
-                if tg.point_inside_triangle(p, tp):
+                if geom.point_inside_triangle(p, tp):
                     tri_points.append(p)
                     normals.append(n_tp)
 

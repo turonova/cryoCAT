@@ -30,14 +30,43 @@ from scipy.spatial.transform import Rotation as rot
 
 
 class Motl:
+    """Base class for particle motive lists (motls).
+
+    Stores per-particle metadata (coordinates, orientations, scores, class
+    labels, etc.) in a :class:`pandas.DataFrame` with a fixed 20-column
+    schema (:attr:`motl_columns`).  Subclasses implement format-specific I/O
+    (EM, RELION star, Stopgap, Dynamo, IMOD mod).
+
+    Parameters
+    ----------
+    motl_df : pandas.DataFrame, optional
+        Pre-built motl DataFrame.  Must conform to :attr:`motl_columns`.
+        When ``None`` an empty DataFrame is created.
+
+    Raises
+    ------
+    ValueError
+        If ``motl_df`` is provided but does not have the correct format.
+
+    Examples
+    --------
+    Load a motl from an EM file::
+
+        motl = Motl.load(‘path_to_em_file’)
+
+    Clean by Otsu threshold and save::
+
+        motl.clean_by_otsu(4, histogram_bin=20).write_out(‘output.em’)
+    """
+
     # Motl module example usage
     #
     # Initialize a Motl instance from an emfile
-    #   `motl = Motl.load(’path_to_em_file’)`
+    #   `motl = Motl.load(‘path_to_em_file’)`
     # Run clean_by_otsu and write the result to a new file
-    #   `motl.clean_by_otsu(4, histogram_bin=20).write_to_emfile('path_to_output_em_file')`
+    #   `motl.clean_by_otsu(4, histogram_bin=20).write_to_emfile(‘path_to_output_em_file’)`
     # Run class_consistency on multiple Motl instances
-    #   `motl_intersect, motl_bad, cl_overlap = Motl.class_consistency(Motl.load('emfile1', 'emfile2', 'emfile3'))`
+    #   `motl_intersect, motl_bad, cl_overlap = Motl.class_consistency(Motl.load(‘emfile1’, ‘emfile2’, ‘emfile3’))`
     motl_columns = [
         "score",
         "geom1",
@@ -71,7 +100,14 @@ class Motl:
             self.df = Motl.create_empty_motl_df()
 
     def __str__(self):
+        """Return a human-readable summary of the motl.
 
+        Returns
+        -------
+        str
+            Counts of particles, tomograms, objects, and classes, or
+            ``'Motive list is empty.'`` when ``self.df`` is ``None``.
+        """
         if self.df is not None:
             descr = (
                 f"Number of particles: {self.df.shape[0]}\n"
@@ -441,7 +477,7 @@ class Motl:
         Parameters
         ----------
         tomo_list : str, array-like, or int
-            Tomogram indices specifying the masks provided. See :meth:`cryocat.ioutils.tlt_load` for more information
+            Tomogram indices specifying the masks provided. See :meth:`cryocat.utils.ioutils.tlt_load` for more information
             on formatting.
         tomo_masks : list, array-like or str
             List of paths to tomogram masks list of np.ndarrays with the masks loaded. If a single path/np.ndarray is
@@ -684,7 +720,7 @@ class Motl:
 
     @staticmethod
     def create_empty_motl_df():
-        """Creates an empty DataFrame with the columns defined in :attr:`cryocat.cryomotl.Motl.motl_columns`.
+        """Creates an empty DataFrame with the columns defined in :attr:`cryocat.core.cryomotl.Motl.motl_columns`.
 
         Parameters
         ----------
@@ -693,7 +729,7 @@ class Motl:
         Returns
         -------
         pandas.DataFrame
-            An empty DataFrame with the columns defined in :attr:`cryocat.cryomotl.Motl.motl_columns`.
+            An empty DataFrame with the columns defined in :attr:`cryocat.core.cryomotl.Motl.motl_columns`.
 
         """
 
@@ -763,7 +799,7 @@ class Motl:
         Parameters
         ----------
         input_dict : dict
-            Dictionary with keys from :attr:`cryocat.cryomotl.Motl.motl_columns` and new values to be
+            Dictionary with keys from :attr:`cryocat.core.cryomotl.Motl.motl_columns` and new values to be
             assigned. Three special keys are allowed: coord (which will assign values to x, y, z columns), angles
             (which will assign values to phi, theta, psi), and shifts (which will assign values to shift_x, shift_y,
             shift_z).
@@ -836,7 +872,7 @@ class Motl:
         ----------
         tomo_dimensions : str or pandas.DataFrame or array-like, optional
             Dimensions of tomograms in the motl. If not provided, only the orientation is changed. For specification on
-            tomo_dimensions format see :meth:`cryocat.ioutils.dimensions_load`. Defaults to None.
+            tomo_dimensions format see :meth:`cryocat.utils.ioutils.dimensions_load`. Defaults to None.
 
         Notes
         -----
@@ -960,6 +996,12 @@ class Motl:
         return rotations
 
     def make_angles_canonical(self):
+        """Convert Euler angles to their canonical zxz representation in-place.
+
+        Passes the current angles through a scipy ``Rotation`` round-trip to
+        ensure all phi/theta/psi values lie within the canonical ranges
+        produced by :meth:`scipy.spatial.transform.Rotation.as_euler`.
+        """
         angles = self.get_angles()
         rotations = rot.from_euler("zxz", angles, degrees=True)
         converted_angles = rotations.as_euler("zxz", degrees=True)
@@ -988,7 +1030,7 @@ class Motl:
 
         Notes
         -----
-        TODO: Move the geometry specific computation to the :mod:`cryocat.geom`.
+        TODO: Move the geometry specific computation to the :mod:`cryocat.utils.geom`.
 
         """
 
@@ -1226,7 +1268,7 @@ class Motl:
 
         Notes
         -----
-        TODO: Move the geometry specific computation to the :mod:`cryocat.geom`.
+        TODO: Move the geometry specific computation to the :mod:`cryocat.utils.geom`.
 
         """
         coord1 = self.get_coordinates()[idx, :]
@@ -1847,7 +1889,7 @@ class Motl:
         Parameters
         ----------
         input_motl: Motl or str or Pandas.DataFrame
-            Input motl to apply the recentering to (see :meth:`cryocat.cryomotl.Motl.load` for more details on format)
+            Input motl to apply the recentering to (see :meth:`cryocat.core.cryomotl.Motl.load` for more details on format)
         input_mask : str
             Binary mask specified either as a file path or ndarray. The box size of the mask
             should correspond to the box size of the reference on which the mask was placed.
@@ -2082,6 +2124,22 @@ class Motl:
 
 
 class EmMotl(Motl):
+    """Motl subclass for the EM file format used by STOPGAP / TOM / Dynamo.
+
+    Parameters
+    ----------
+    input_motl : EmMotl or pandas.DataFrame or str or Path, optional
+        Source data.  Accepts an existing :class:`EmMotl`, a correctly
+        formatted DataFrame, or a path to an ``.em`` file.
+    header : dict, optional
+        EM file header metadata.  Defaults to an empty dict.
+
+    Raises
+    ------
+    UserInputError
+        If ``input_motl`` is of an unsupported type.
+    """
+
     def __init__(self, input_motl=None, header=None):
         if input_motl is not None:
             if isinstance(input_motl, EmMotl):
@@ -2179,6 +2237,34 @@ class EmMotl(Motl):
 
 
 class RelionMotl(Motl):
+    """Motl subclass for RELION STAR file format (versions 3.0 through 5.1).
+
+    Parameters
+    ----------
+    input_motl : RelionMotl or pandas.DataFrame or str, optional
+        Source data.  Accepts an existing :class:`RelionMotl`, a correctly
+        formatted DataFrame, or a path to a ``.star`` file.
+    version : float, optional
+        RELION version (e.g. ``3.1``, ``4.0``).  Inferred from the file when
+        ``None``.
+    pixel_size : float, optional
+        Voxel size in Ångströms.  Read from the star file when ``None``.
+    binning : float, optional
+        Binning factor applied to the coordinates.  Required for version ≥ 4.0.
+    optics_data : pandas.DataFrame, optional
+        Pre-loaded optics group data.
+    tomo_format : str, default=''
+        Format string for parsing tomogram names.
+    subtomo_format : str, default=''
+        Format string for parsing subtomogram names.
+
+    Raises
+    ------
+    UserInputError
+        If ``input_motl`` is of an unsupported type, or if ``binning`` is not
+        provided for RELION version ≥ 4.0.
+    """
+
     default_version = 3.1
     columns_v3_0 = [
         "rlnMicrographName",
@@ -2500,7 +2586,7 @@ class RelionMotl(Motl):
         frames : pandas.DataFrame
             Pandas.DataFrame containing the particle list in relion format.
         version : float
-            The version extracted from the starfile. See meth:`cryocat.cryomotl.RelionMotl.get_version_from_file` for
+            The version extracted from the starfile. See meth:`cryocat.core.cryomotl.RelionMotl.get_version_from_file` for
             more info.
         optics_df : pandas.DataFrame or None
             Pandas.DataFrame containing optics if available, otherwise None.
@@ -2651,7 +2737,7 @@ class RelionMotl(Motl):
             The DataFrame in Relion format containing the tilt-series or micrographs.
         tomo_format : str, default=""
             Custom pattern to extract the tomogram ID (e.g., "$xxxx"). If empty, robust automated parsing is used.
-            See :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for detailed syntax and examples.
+            See :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for detailed syntax and examples.
 
         Warnings
         --------
@@ -2669,7 +2755,7 @@ class RelionMotl(Motl):
 
         See Also
         --------
-        :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data`
+        :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data`
             Provides comprehensive examples and explains the syntax for `tomo_format` and `subtomo_format`.
         """
         if tomo_format != "":
@@ -2736,7 +2822,7 @@ class RelionMotl(Motl):
             The DataFrame in Relion format containing the subtomogram numbers.
         subtomo_format : str, default=""
             Custom pattern to extract the subtomogram ID (e.g., "$yyyy"). If empty, robust automated parsing is used.
-            See :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for detailed syntax and examples.
+            See :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for detailed syntax and examples.
 
         Notes
         -----
@@ -2760,7 +2846,7 @@ class RelionMotl(Motl):
 
         See Also
         --------
-        :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data`
+        :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data`
             Provides comprehensive examples and explains the syntax for `tomo_format` and `subtomo_format`.
         """
         if subtomo_format != "" and self.subtomo_id_name in relion_df.columns:
@@ -3410,10 +3496,10 @@ class RelionMotl(Motl):
         ----------
         tomo_format : str, default=""
             Format of the tomo name output format. See
-            :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
+            :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
         subtomo_format : str, default=""
             Format of the subtomogram name output format. See
-            :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
+            :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
         use_original_entries : bool, default=False
             Determine whether to use (True) the original entries stored in `self.relion_df` or not (False). If True, all
             relion entries that are not used in motl (e.g., rlnCtfImage, rlnHelicalTubeID) are fetched from the original
@@ -3448,7 +3534,7 @@ class RelionMotl(Motl):
 
         See Also
         --------
-        :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data`
+        :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data`
             Provides more info tomo_format and subtomo_format.
         """
 
@@ -3531,10 +3617,10 @@ class RelionMotl(Motl):
             Whether to include optics data in the starfile or not. Defaults to True.
         tomo_format : str, default=""
             Format of the tomo name output format. See
-            :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
+            :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
         subtomo_format : str, default=""
             Format of the subtomogram name output format. See
-            :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
+            :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
         use_original_entries : bool, default=False
             Determine whether to use (True) the original entries stored in `self.relion_df` or not (False). If True, all
             relion entries that are not used in motl (e.g., rlnCtfImage, rlnHelicalTubeID) are fetched from the original
@@ -3561,7 +3647,7 @@ class RelionMotl(Motl):
             will be used. Defaults to None.
         optics_data : str, optional
             A DataFrame or a dictionary containing optics data or a path to the starfile
-            that should be used to fetch the optics from. See :meth:`cryocat.cryomotl.RelionMotl.prepare_optics_data`
+            that should be used to fetch the optics from. See :meth:`cryocat.core.cryomotl.RelionMotl.prepare_optics_data`
             for more details. Used only if `write_optics` is True. If it is None and `write_optics` is True, then
             the attribute `self.optics_df` will be used. Defaults to None.
         subtomo_size : int, optional
@@ -3574,9 +3660,9 @@ class RelionMotl(Motl):
 
         See Also
         --------
-        :meth:`cryocat.cryomotl.RelionMotl.prepare_particles_data`
+        :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data`
             Provides more information tomo_format and subtomo_format.
-        :meth:`cryocat.cryomotl.RelionMotl.prepare_optics_data`
+        :meth:`cryocat.core.cryomotl.RelionMotl.prepare_optics_data`
             Provide more information on optics_data inputs.
 
         """
@@ -3606,6 +3692,33 @@ class RelionMotl(Motl):
 
 
 class RelionMotlv5(RelionMotl, Motl):
+    """Motl subclass for RELION 5.0 two-file STAR format (particles + tomograms).
+
+    Uses separate ``particles.star`` and ``tomograms.star`` files, and
+    supports both WarpTools and native RELION 5 coordinate conventions.
+
+    Parameters
+    ----------
+    input_particles : str or pandas.DataFrame, optional
+        Path to the particles star file or a pre-loaded DataFrame.
+    input_tomograms : str or pandas.DataFrame, optional
+        Path to the tomograms star file or a pre-loaded dimensions table.
+    tomo_idx : str or array-like, optional
+        Subset of tomogram IDs to load.
+    pixel_size : float, optional
+        Voxel size in Ångströms.
+    binning : float, default=1.0
+        Binning factor.  Should always be set explicitly for RELION 5.
+    optics_data : pandas.DataFrame, optional
+        Pre-loaded optics group data.
+    tomo_format : str, default=''
+        Format string for tomogram name parsing.
+    subtomo_format : str, default=''
+        Format string for subtomogram name parsing.
+    version : float, optional
+        Override the RELION version (default ``5.0``).
+    """
+
     # warp2
     columns_v5 = [
         "rlnCoordinateX",
@@ -3713,6 +3826,23 @@ class RelionMotlv5(RelionMotl, Motl):
         self.set_pixel_size()
 
     def read_in(self, input_path):
+        """Read a RELION 5.0 particles star file.
+
+        Parameters
+        ----------
+        input_path : str
+            Path to the particles ``.star`` file.  The file is pre-processed
+            by :meth:`~cryocat.utils.starfileio.Starfile.fix_relion5_star`
+            before parsing.
+
+        Returns
+        -------
+        particles_df : pandas.DataFrame
+            The ``data_particles`` frame.
+        optics_df : pandas.DataFrame or None
+            The ``data_optics`` frame, or ``None`` when optics data were
+            already loaded.
+        """
         fixed_path = starfileio.Starfile.fix_relion5_star(input_path)
         frames, specifiers, _ = starfileio.Starfile.read(fixed_path)
         data_id = RelionMotl._get_data_particles_id(specifiers)
@@ -3756,6 +3886,22 @@ class RelionMotlv5(RelionMotl, Motl):
 
     @staticmethod
     def clean_subtomo_name_column(df):
+        """Extract the numeric subtomogram ID from the ``rlnTomoParticleName`` column.
+
+        Parses names like ``'Tomograms/TS_17/Particles/TS_17_42.mrc'`` and
+        keeps only the trailing integer (``42``).
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            Must contain the ``rlnTomoParticleName`` column.
+
+        Returns
+        -------
+        pandas.DataFrame
+            The same DataFrame with ``rlnTomoParticleName`` replaced by
+            integer subtomogram IDs.
+        """
         def extract_subtomo_id(name):
             if not isinstance(name, str):
                 return name
@@ -3766,6 +3912,25 @@ class RelionMotlv5(RelionMotl, Motl):
         return df
 
     def read_in_tomograms(self, input_path):
+        """Read tomogram dimensions from a WarpTools / RELION 5 global star file.
+
+        Parameters
+        ----------
+        input_path : str
+            Path to a star file containing a ``data_global`` block with
+            columns ``rlnTomoName``, ``rlnTomoSizeX/Y/Z``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Tomogram dimension table with columns
+            ``['rlnTomoName', 'rlnTomoSizeX', 'rlnTomoSizeY', 'rlnTomoSizeZ']``.
+
+        Raises
+        ------
+        UserInputError
+            If the star file does not contain a ``data_global`` block.
+        """
         # method not being used
         frames, specifiers, _ = starfileio.Starfile.read(input_path)
         if "data_global" in specifiers:
@@ -3836,6 +4001,31 @@ class RelionMotlv5(RelionMotl, Motl):
         self.update_coordinates()
 
     def convert_coordinates_merge(self, relion_df):
+        """Convert RELION 5 centered Ångström coordinates to pixel coordinates.
+
+        Merges tomogram dimensions from ``self.tomo_df`` and computes
+        ``rlnCoordinateX/Y/Z`` as ``tomo_size/2 + centered_coord/pixel_size``.
+
+        Parameters
+        ----------
+        relion_df : pandas.DataFrame
+            Particles DataFrame containing ``rlnCenteredCoordinateXAngst``,
+            ``rlnCenteredCoordinateYAngst``, ``rlnCenteredCoordinateZAngst``,
+            and ``rlnTomoName``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Merged DataFrame with added ``rlnCoordinateX/Y/Z`` columns and
+            cleaned ``rlnTomoName`` / ``rlnTomoParticleName`` columns.
+
+        Raises
+        ------
+        UserInputError
+            If ``rlnTomoName`` is missing from either DataFrame.
+        ValueError
+            If any tomogram in ``relion_df`` has no match in ``self.tomo_df``.
+        """
         # convert new relion system into old one
         if "rlnTomoName" not in relion_df.columns or "rlnTomoName" not in self.tomo_df.columns:
             raise UserInputError("Missing 'rlnTomoName' column to merge tomogram info.")
@@ -3867,6 +4057,31 @@ class RelionMotlv5(RelionMotl, Motl):
             return merged_df
 
     def convert_coordinates_ang_merge(self, relion_df):
+        """Convert pixel coordinates to RELION 5 centered Ångström coordinates.
+
+        Merges tomogram dimensions from ``self.tomo_df`` and computes
+        ``rlnCenteredCoordinateXAngst/YAngst/ZAngst`` as
+        ``(coord - tomo_size/2) * pixel_size``.
+
+        Parameters
+        ----------
+        relion_df : pandas.DataFrame
+            Particles DataFrame containing ``rlnCoordinateX/Y/Z`` and
+            ``rlnTomoName``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Merged DataFrame with added ``rlnCenteredCoordinateXAngst/YAngst/ZAngst``
+            columns and cleaned name columns.
+
+        Raises
+        ------
+        UserInputError
+            If ``rlnTomoName`` is missing from either DataFrame.
+        ValueError
+            If any tomogram in ``relion_df`` has no match in ``self.tomo_df``.
+        """
         # convert old system into relion new system
         if "rlnTomoName" not in relion_df.columns or "rlnTomoName" not in self.tomo_df.columns:
             raise UserInputError("Missing 'rlnTomoName' column to merge tomogram info.")
@@ -3899,6 +4114,16 @@ class RelionMotlv5(RelionMotl, Motl):
             return merged_df
 
     def check_isWarp(self):
+        """Detect whether ``self.relion_df`` originates from WarpTools.
+
+        Sets ``self.isWarp`` to ``True`` when all required WarpTools columns
+        are present, ``False`` otherwise.
+
+        Returns
+        -------
+        bool
+            ``True`` if the loaded star file is in WarpTools format.
+        """
         warp_columns = [
             "rlnTomoName",
             "rlnTomoParticleId",
@@ -3926,6 +4151,18 @@ class RelionMotlv5(RelionMotl, Motl):
         return self.isWarp
 
     def create_particles_data(self):
+        """Allocate an empty particles DataFrame with the correct RELION 5 columns.
+
+        The column set depends on ``self.isWarp``: WarpTools files use
+        :attr:`columns_v5`; native RELION 5 files use
+        :attr:`columns_v5_centAng`.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Zero-filled DataFrame with shape ``(N, ncols)`` where ``N`` is the
+            number of particles in ``self.df``.
+        """
         if self.isWarp:
             relion_df = pd.DataFrame(data=np.zeros((self.df.shape[0], len(self.columns_v5))), columns=self.columns_v5)
         else:
@@ -3977,6 +4214,35 @@ class RelionMotlv5(RelionMotl, Motl):
         return relion_df
 
     def prepare_optics_data(self, use_original_entries=True, optics_data=None, pixel_size=None, subtomo_size=None):
+        """Resolve and return the optics group DataFrame for writing.
+
+        Parameters
+        ----------
+        use_original_entries : bool, default=True
+            When ``True`` and ``optics_data`` is ``None``, ``self.optics_data``
+            is returned unchanged.
+        optics_data : str or dict or pandas.DataFrame, optional
+            Override optics source.  A ``str`` is interpreted as a path to a
+            star file; a ``dict`` is converted to a DataFrame.
+        pixel_size : float, optional
+            Pixel size passed to :meth:`create_optics_group_v5` when building
+            a fresh optics group.
+        subtomo_size : int, optional
+            Subtomogram box size passed to :meth:`create_optics_group_v5`.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Optics group DataFrame ready for writing.
+
+        Raises
+        ------
+        UserInputError
+            If ``optics_data`` is of an unsupported type.
+        Warning
+            If no optics information is available and ``use_original_entries``
+            is ``True``.
+        """
         if optics_data is not None:
             if isinstance(optics_data, str):
                 optics_data_fixed = starfileio.Starfile.fix_relion5_star(optics_data)
@@ -4005,6 +4271,27 @@ class RelionMotlv5(RelionMotl, Motl):
         return optics_df
 
     def prepare_particles_data(self, tomo_format="", subtomo_format=""):
+        """Build the particles DataFrame from ``self.df`` using RELION 5 columns.
+
+        Formats tomogram and subtomogram name columns according to optional
+        format strings, assigns group numbers, and zeros out shift columns.
+
+        Parameters
+        ----------
+        tomo_format : str, default=''
+            Format string for ``rlnTomoName``.  Use ``$x…x`` placeholders
+            (number of ``x`` characters sets zero-padding width).  An empty
+            string stores the raw integer ``tomo_id``.
+        subtomo_format : str, default=''
+            Format string for ``rlnTomoParticleName``.  Supports ``$y…y`` for
+            subtomo ID and ``$x…x`` for tomo ID.  An empty string stores the
+            raw integer ``subtomo_id``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Particles DataFrame with the appropriate RELION 5 column schema.
+        """
         def find_longest_sequence(test_string, test_letter, raise_error=True):
             pattern = f"\$(?:{test_letter})+"
             findings = sorted(re.findall(pattern, test_string), key=len)
@@ -4076,6 +4363,24 @@ class RelionMotlv5(RelionMotl, Motl):
         return relion_df
 
     def create_optics_group_v5(self, pixel_size=None, subtomo_size=None, binning=None):
+        """Build a default RELION 5 optics group DataFrame.
+
+        Parameters
+        ----------
+        pixel_size : float, optional
+            Binned pixel size in Ångströms.  Defaults to ``self.pixel_size``.
+        subtomo_size : int, optional
+            Subtomogram box size in pixels.  Stored as ``rlnImageSize``.
+            Defaults to ``'NaN'``.
+        binning : float, optional
+            Binning factor used to derive the unbinned pixel size.
+            Defaults to ``self.binning``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Single-row optics DataFrame with standard RELION 5 columns.
+        """
         pixel_size = pixel_size if pixel_size is not None else self.pixel_size
         binning = binning if binning is not None else self.binning
         subtomo_size = subtomo_size if subtomo_size is not None else "NaN"
@@ -4111,6 +4416,39 @@ class RelionMotlv5(RelionMotl, Motl):
         adapt_object_attr=False,
         convert=False,
     ):
+        """Build a RELION 5 particles DataFrame from ``self.df``.
+
+        Parameters
+        ----------
+        use_original_entries : bool, default=False
+            When ``True``, reconstruct from ``self.relion_df`` instead of
+            recomputing all columns from ``self.df``.
+        tomo_format : str, default=''
+            Format string for tomogram names (see :meth:`prepare_particles_data`).
+        subtomo_format : str, default=''
+            Format string for subtomogram names.
+        keep_all_entries : bool, default=False
+            When ``True`` and ``use_original_entries`` is ``True``, return all
+            original columns without dropping ``subtomo_id``.
+        add_object_id : bool, default=False
+            Add a ``ccObjectName`` column from ``self.df['object_id']``.
+        add_subunit_id : bool, default=False
+            Add a ``ccSubunitName`` column from ``self.df['geom2']``.
+        binning : float, optional
+            Override ``self.binning`` for coordinate scaling.
+        pixel_size : float, optional
+            Override ``self.pixel_size`` for coordinate scaling.
+        adapt_object_attr : bool, default=False
+            When ``True``, store the resulting DataFrame in ``self.relion_df``.
+        convert : bool, default=False
+            When ``True``, convert between WarpTools and RELION 5 coordinate
+            systems before returning.
+
+        Returns
+        -------
+        pandas.DataFrame
+            RELION 5 particles DataFrame ready for writing.
+        """
         if binning is None:
             binning = self.binning
 
@@ -4213,6 +4551,37 @@ class RelionMotlv5(RelionMotl, Motl):
         subtomo_size=None,
         convert=False,
     ):
+        """Write the motl to a RELION 5 ``.star`` file.
+
+        Parameters
+        ----------
+        output_path : str
+            Destination ``.star`` file path.
+        write_optics : bool, default=True
+            Include the ``data_optics`` block in the output file.
+        tomo_format : str, default=''
+            Format string for ``rlnTomoName`` column values.
+        subtomo_format : str, default=''
+            Format string for ``rlnTomoParticleName`` column values.
+        use_original_entries : bool, default=False
+            Reconstruct from ``self.relion_df`` rather than from ``self.df``.
+        keep_all_entries : bool, default=False
+            Retain all original columns when ``use_original_entries`` is ``True``.
+        add_object_id : bool, default=False
+            Append a ``ccObjectName`` column.
+        add_subunit_id : bool, default=False
+            Append a ``ccSubunitName`` column.
+        binning : float, optional
+            Coordinate scaling factor override.
+        pixel_size : float, optional
+            Pixel size override in Ångströms.
+        optics_data : str or dict or pandas.DataFrame, optional
+            Override optics source (see :meth:`prepare_optics_data`).
+        subtomo_size : int, optional
+            Subtomogram box size for a freshly generated optics group.
+        convert : bool, default=False
+            Convert between WarpTools and RELION 5 coordinate systems.
+        """
         relion_df = self.create_relion_df(
             use_original_entries=use_original_entries,
             keep_all_entries=keep_all_entries,
@@ -4237,6 +4606,40 @@ class RelionMotlv5(RelionMotl, Motl):
 
 
 class RelionMotlv5_1:
+    """Factory class that dispatches to the correct RELION 5.1 backend.
+
+    When ``input_tomograms`` is ``None`` a single standard ``.star`` file is
+    assumed and a :class:`RelionMotl` (version 5.1) is returned.  When
+    ``input_tomograms`` is provided the two-file RELION 5.0 format is assumed
+    and a :class:`RelionMotlv5` (version 5.1) is returned.
+
+    Parameters
+    ----------
+    input_particles : str, optional
+        Path to the particles star file.
+    input_tomograms : str or pandas.DataFrame, optional
+        Path to the tomograms star file.  ``None`` selects single-file mode.
+    tomo_idx : str or array-like, optional
+        Subset of tomogram IDs to load.
+    pixel_size : float, optional
+        Voxel size in Ångströms.
+    binning : float, optional
+        Binning factor.
+    optics_data : pandas.DataFrame, optional
+        Pre-loaded optics group data.
+
+    Returns
+    -------
+    RelionMotl or RelionMotlv5
+        The appropriate subclass instance for the given inputs.
+
+    Raises
+    ------
+    UserInputError
+        If ``input_tomograms`` is ``None`` and ``input_particles`` is also
+        ``None``.
+    """
+
     def __new__(
         cls, input_particles=None, input_tomograms=None, tomo_idx=None, pixel_size=None, binning=None, optics_data=None
     ):
@@ -4265,6 +4668,24 @@ class RelionMotlv5_1:
 
 
 class StopgapMotl(Motl):
+    """Motl subclass for the STOPGAP motivelist format.
+
+    Reads and writes the STOPGAP-specific column names (e.g. ``subtomo_num``,
+    ``tomo_num``) and maps them to the standard :attr:`~Motl.motl_columns`
+    schema.
+
+    Parameters
+    ----------
+    input_motl : StopgapMotl or pandas.DataFrame or str, optional
+        Source data.  Accepts an existing :class:`StopgapMotl`, a correctly
+        formatted DataFrame, or a path to a STOPGAP ``.star`` file.
+
+    Raises
+    ------
+    UserInputError
+        If ``input_motl`` is of an unsupported type.
+    """
+
     pairs = {
         "subtomo_id": "subtomo_num",
         "tomo_id": "tomo_num",
@@ -4476,7 +4897,7 @@ class StopgapMotl(Motl):
 
         See Also
         --------
-        :meth:`cryocat.cryomotl.StopgapMotl.sg_df_reset_index`
+        :meth:`cryocat.core.cryomotl.StopgapMotl.sg_df_reset_index`
             Provides more details on index reseting.
 
         Examples
@@ -4498,6 +4919,23 @@ class StopgapMotl(Motl):
 
 
 class DynamoMotl(Motl):
+    """Motl subclass for the Dynamo table (``.tbl``) format.
+
+    Reads and writes Dynamo's space-separated 35-column table, mapping the
+    relevant columns to the standard :attr:`~Motl.motl_columns` schema.
+
+    Parameters
+    ----------
+    input_motl : DynamoMotl or pandas.DataFrame or str, optional
+        Source data.  Accepts an existing :class:`DynamoMotl`, a correctly
+        formatted DataFrame, or a path to a Dynamo ``.tbl`` file.
+
+    Raises
+    ------
+    UserInputError
+        If ``input_motl`` is of an unsupported type.
+    """
+
     def __init__(self, input_motl=None):
         super().__init__()
         self.dynamo_df = pd.DataFrame()
@@ -4588,13 +5026,17 @@ class DynamoMotl(Motl):
 
     @staticmethod
     def convert_to_dynamo_motl(motl_df):
-        """Converts a standard MOTL DataFrame to a Dynamo-style MOTL DataFrame.
+        """Convert a standard motl DataFrame to a 35-column Dynamo table.
 
-        This method modifies the `dynamo_df` attribute of the object.
+        Parameters
+        ----------
+        motl_df : pandas.DataFrame
+            Source DataFrame with standard :attr:`~Motl.motl_columns` columns.
 
         Returns
         -------
-        dynamo_df: pd DataFrame
+        pandas.DataFrame
+            35-column Dynamo-format table with integer column indices.
         """
         dynamo_df = pd.DataFrame(index=motl_df.index, columns=range(35))
         dynamo_df[:] = 0
@@ -4643,6 +5085,28 @@ class DynamoMotl(Motl):
 
 
 class ModMotl(Motl):
+    """Motl subclass for IMOD model (``.mod``) files.
+
+    Reads one or more IMOD binary model files and maps contour points to the
+    standard :attr:`~Motl.motl_columns` schema.
+
+    Parameters
+    ----------
+    input_motl : ModMotl or pandas.DataFrame or str, optional
+        Source data.  Accepts an existing :class:`ModMotl`, a correctly
+        formatted DataFrame, or a path to a ``.mod`` file (or directory
+        containing ``.mod`` files).
+    mod_prefix : str, default=''
+        Filename prefix filter when ``input_motl`` is a directory.
+    mod_suffix : str, default='.mod'
+        Filename suffix filter when ``input_motl`` is a directory.
+
+    Raises
+    ------
+    UserInputError
+        If ``input_motl`` is of an unsupported type.
+    """
+
     columns = ["object_id", "contour_id", "x", "y", "z", "object_radius", "mod_id"]
 
     def __init__(self, input_motl=None, mod_prefix="", mod_suffix=".mod"):

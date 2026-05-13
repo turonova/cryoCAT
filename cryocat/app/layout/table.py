@@ -349,6 +349,52 @@ def get_cluster_table():
     )
 
 
+def _scalar(v):
+    if v is None:
+        return None
+    try:
+        if hasattr(v, "__len__"):
+            v = v[0] if len(v) > 0 else None
+        return float(v) if v is not None else None
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _format_relion_params(params):
+    if not params:
+        return ""
+    parts = [f"Relion {params.get('version', '')}"]
+    ps = _scalar(params.get("pixel_size"))
+    bn = _scalar(params.get("binning"))
+    if ps is not None:
+        parts.append(f"pixel size: {ps:.4g} Å")
+    if bn is not None:
+        parts.append(f"binning: {bn:.4g}")
+    if params.get("tomo_format"):
+        parts.append(f"tomo format: {params['tomo_format']}")
+    if params.get("subtomo_format"):
+        parts.append(f"subtomo format: {params['subtomo_format']}")
+    return "  |  ".join(parts)
+
+
+@callback(
+    Output("main-relion-params-inline", "children"),
+    Input("main-relion-params-store", "data"),
+)
+def update_main_relion_params_display(params):
+    return _format_relion_params(params)
+
+
+@callback(
+    Output("nn-relion-params-inline", "children"),
+    Input("nn-relion-params-store", "data"),
+)
+def update_nn_relion_params_display(params):
+    return _format_relion_params(params)
+
+
+
+
 # Load motl into table view and tviewer - happens upond loading the motl
 @callback(
     Output("tviewer-motl-data", "data", allow_duplicate=True),

@@ -60,6 +60,10 @@ def get_colormap_color(cmap, val):
 
 
 class Particle:
+    """Single rigid-body particle with rotation, position, and optional identifiers.
+
+    See :meth:`__init__` for parameter details.
+    """
 
     # TODO: include check for unit quaternions and range of Euler angles
 
@@ -504,6 +508,10 @@ class Particle:
 
 
 class SymmParticle(Particle):
+    """Particle subclass that additionally encodes point-group symmetry.
+
+    See :meth:`__init__` for parameter details.
+    """
 
     def __init__(self, rotation, position, tomo_id=None, motl_fid=None, particle_id=None, symm=None, custom_rot=None):
         """
@@ -568,7 +576,7 @@ class SymmParticle(Particle):
                 platonic = True
             elif symm.startswith("c"):
                 self.category = int(re.findall(r"\d+", symm)[-1])
-                vertices = self.category
+                vertices = geom.n_gon_points(self.category)
 
         elif isinstance(symm, (int, float)):
             self.category = int(symm)
@@ -666,7 +674,7 @@ class SymmParticle(Particle):
 
             return 1 - sim_measure / max_val
 
-    @classmethod
+    @staticmethod
     def equip_symmetry(input_particle: Particle, symm, custom_rot=None):
         """
         Equip an existing particle object with symmetry information.
@@ -775,6 +783,11 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
 
 
 class Descriptor:
+    """Base class for TANGO descriptors.
+
+    Stores per-particle descriptor data in ``self.df`` and optionally a
+    condensed representation in ``self.desc``.
+    """
 
     def __init__(self):
         """
@@ -836,7 +849,8 @@ class Descriptor:
                 continue  # skip invalid entries
             base = desc[: -len("Descriptor")]
             matches = [b for b in feat_list if b.endswith(base)]
-            result[desc] = matches
+            if matches:
+                result[desc] = matches
         return result
 
     @staticmethod
@@ -1217,6 +1231,10 @@ class Descriptor:
 
 
 class TwistDescriptor(Descriptor):
+    """Descriptor based on local twist (relative rotation + position) between NN pairs.
+
+    See :meth:`__init__` for parameter details.
+    """
 
     def __init__(
         self,
@@ -1252,7 +1270,7 @@ class TwistDescriptor(Descriptor):
             be incorrectly grouped together. Default is "tomo_id".
         symm : int or str, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
-            values see :class:`cryocat.tango.SymmParticle`. Default is None.
+            values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
         remove_qp : bool, default=False
             Specifies whether to remove the query point during the nearest neighbor analysis. The parameter is relevant
             only if two motls are specified and it can happen that the nearest point is identical to the query point or
@@ -1440,7 +1458,7 @@ class TwistDescriptor(Descriptor):
             Contains nearest neighbors data for a single tomogram.
         symm : int or str, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
-            values see :class:`cryocat.tango.SymmParticle`. Default is None.
+            values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
         symm_max_value : float, optional
             Maximum dissimilarity for symmetry. Default is None.
         symm_category : str, optional
@@ -1501,7 +1519,7 @@ class TwistDescriptor(Descriptor):
             The path to the input Motl file or Motl object to be loaded.
         symm : int or str, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
-            values see :class:`cryocat.tango.SymmParticle`. Default is None.
+            values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
 
         Returns
         -------
@@ -1544,7 +1562,7 @@ class TwistDescriptor(Descriptor):
             be incorrectly grouped together. Default is "tomo_id".
         symm : int or str, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
-            values see :class:`cryocat.tango.SymmParticle`. Default is None.
+            values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
         remove_qp : bool, optional
             If True, the query point is removed from the nearest neighbors in the DataFrame. Default is None.
         remove_duplicates : bool, default=False
@@ -1963,6 +1981,7 @@ class TwistDescriptor(Descriptor):
 
 
 class Filter:
+    """Base class for filtering operations on twist descriptors."""
 
     def __init__(self):
         """Initialize a Filter object.
@@ -2060,6 +2079,7 @@ class AngularScoreNN(Filter):
 
 
 class Support:
+    """Base class for geometric support regions used to filter twist descriptors."""
 
     def __init__(self):
         """Initialize a Support object.
@@ -2395,6 +2415,13 @@ class Cylinder(Support):
 
 
 class Feature:
+    """Base class for computing scalar features from twist descriptor DataFrames.
+
+    Parameters
+    ----------
+    desc_df : pandas.DataFrame
+        Twist descriptor DataFrame (typically ``TwistDescriptor.df``).
+    """
 
     def __init__(self, desc_df):
         """Initialize a Feature object.
@@ -2403,10 +2430,32 @@ class Feature:
         self.df = desc_df
 
     def compute(self):
+        """Compute the feature.
+
+        Subclasses must override this method.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Per-particle feature values.
+        """
         pass
 
     def compute_stats(self, column_name):
+        """Compute per-query-particle summary statistics for a single column.
 
+        Parameters
+        ----------
+        column_name : str
+            Column in ``self.df`` over which to compute statistics.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per unique ``qp_id`` with columns
+            ``[qp_id, <ClassName>Mean, <ClassName>Median, <ClassName>Std, <ClassName>Var]``.
+            Returns an empty DataFrame if ``self.df`` is empty.
+        """
         if self.df.empty:
             print("The descriptor is empty")
             return pd.DataFrame()
@@ -3352,6 +3401,7 @@ class AlphaComplexDescriptor(Descriptor):
 
 
 class Catalog:
+    """Base class for TANGO catalogs that enumerate available subclasses."""
 
     def __init__(self):
         """Initialize a Catalog object.
@@ -3412,6 +3462,21 @@ class FilterCatalog(Catalog):
 
 
 class CustomDescriptor(Descriptor):
+    """Descriptor built from an existing twist DataFrame with user-specified features and support.
+
+    Parameters
+    ----------
+    twist_df : pandas.DataFrame
+        Pre-computed twist descriptor DataFrame.
+    feature_list : list of str, optional
+        Names of :class:`Feature` subclasses to compute.
+    feature_kwargs : dict, optional
+        Keyword arguments forwarded to each feature constructor.
+    support_class : str, optional
+        Name of a :class:`Support` subclass used to filter the descriptor.
+    support_kwargs : dict, optional
+        Keyword arguments forwarded to the support constructor.
+    """
 
     def __init__(self, twist_df, feature_list=None, feature_kwargs=None, support_class=None, support_kwargs=None):
         """Initialize a CustomDescriptor object.

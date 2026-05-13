@@ -11,12 +11,14 @@ from dash import html, dcc, ctx, ALL
 from dash import Input, Output, State, callback, no_update
 import pandas as pd
 import dash_bootstrap_components as dbc
+import plotly.graph_objects as go
 from cryocat.analysis import visplot
 from cryocat.core.cryomotl import Motl
 from cryocat.utils.classutils import get_class_names_by_parent
 from cryocat.app.globalvars import tomo_ids
 from cryocat.app.apputils import get_print_out, save_output
 from cryocat.app.layout.customel import LabeledDropdown, InlineLabeledDropdown, InlineInputForm
+from cryocat.app.layout.graphsettings import apply_settings_to_figure, get_graph_settings_button
 
 # motl_types = [{"label": name, "value": name} for name in get_class_names_by_parent("Motl", "cryocat.cryomotl")]
 
@@ -258,29 +260,29 @@ def get_table_plot_component(prefix: str):
                             dbc.Row(
                                 [
                                     dbc.Col(
-                                        [
-                                            dbc.Button(
-                                                "Plot",
-                                                id=f"{prefix}-plot-graph-btn",
-                                                color="light",
-                                                style={"width": "100%"},
-                                                n_clicks=0,
-                                            ),
-                                        ],
-                                        width=6,
+                                        dbc.Button(
+                                            "Plot",
+                                            id=f"{prefix}-plot-graph-btn",
+                                            color="light",
+                                            style={"width": "100%"},
+                                            n_clicks=0,
+                                        ),
+                                        width=4,
                                     ),
                                     dbc.Col(
-                                        [
-                                            dbc.Button(
-                                                "Clear plot(s)",
-                                                id=f"{prefix}-clear-graph-btn",
-                                                color="light",
-                                                style={"width": "100%"},
-                                                n_clicks=0,
-                                                disabled=True,
-                                            ),
-                                        ],
-                                        width=6,
+                                        dbc.Button(
+                                            "Clear plot(s)",
+                                            id=f"{prefix}-clear-graph-btn",
+                                            color="light",
+                                            style={"width": "100%"},
+                                            n_clicks=0,
+                                            disabled=True,
+                                        ),
+                                        width=4,
+                                    ),
+                                    dbc.Col(
+                                        get_graph_settings_button(prefix),
+                                        width=4,
                                     ),
                                 ]
                             ),
@@ -419,6 +421,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
         Output(f"{prefix}-plot-grid-dropdown", "disabled"),
         Output(f"{prefix}-histogram2D-same-scale", "disabled"),
         Input(f"{prefix}-plot-separately", "value"),
+        prevent_initial_call=True,
     )
     def toggle_separate_options(plot_separately):
 
@@ -478,6 +481,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
         State(f"{prefix}-plot-color-palette-dropdown", "value"),
         State(f"{prefix}-graph-meta-store", "data"),
         State(f"{prefix}-graph-counter", "data"),
+        State("graph-settings-store", "data"),
         prevent_initial_call=True,
     )
     def plot_graphs(
@@ -503,10 +507,11 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
         colorscale,
         graph_meta,
         graph_counter,
+        settings,
     ):
 
         trigger_id = ctx.triggered_id
-        input_data = pd.DataFrame(data)
+        input_data = pd.DataFrame(data) if data else pd.DataFrame()
 
         if trigger_id == f"{prefix}-clear-graph-btn":
             return [], [], {}, 0
@@ -522,6 +527,8 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     no_update,
                 )
 
+            effective_colorscale = colorscale or (settings.get("discrete_palette") if settings else None)
+
             fig = None
             if graph_type == "Histogram":
 
@@ -533,7 +540,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     hist_type=h_type.lower(),
                     hist_norm=h_norm.lower(),
                     same_range_for_separate=same_range,
-                    colors=colorscale,
+                    colors=effective_colorscale,
                     opacity=None,
                     grid_spec=grid_spec,
                 )
@@ -550,7 +557,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     nbinsx=h2D_binsx,
                     nbinsy=h2D_binsy,
                     same_range_for_separate=same_range,
-                    colors=colorscale,
+                    colors=effective_colorscale,
                     opacity=None,
                     grid_spec=grid_spec,
                     same_scale=h2D_same_scale,
@@ -565,7 +572,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     nbinsy=h2D_binsy,
                     hist_type=h2D_type.lower(),
                     hist_norm=h2D_norm.lower(),
-                    colors=colorscale,
+                    colors=effective_colorscale,
                     opacity=None,
                     grid_spec=grid_spec,
                     same_range_for_separate=same_range,
@@ -586,7 +593,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     hist_type=h2D_type.lower(),
                     hist_norm=h2D_norm.lower(),
                     normalize_coord=True,
-                    colors=colorscale,
+                    colors=effective_colorscale,
                     same_scale=h2D_same_scale,
                     same_range_for_separate=same_range,
                     grid_spec=grid_spec,
@@ -597,7 +604,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     input_data_id=x_values,
                     separate_graphs=plot_separately,
                     same_range_for_separate=same_range,
-                    colors=colorscale,
+                    colors=effective_colorscale,
                     opacity=None,
                     grid_spec=grid_spec,
                 )
@@ -607,7 +614,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     input_data_id=x_values,
                     separate_graphs=plot_separately,
                     same_range_for_separate=same_range,
-                    colors=colorscale,
+                    colors=effective_colorscale,
                     opacity=None,
                     grid_spec=grid_spec,
                 )
@@ -644,7 +651,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     second_axis_id=y_values,
                     separate_graphs=plot_separately,
                     same_range_for_separate=same_range,
-                    colors=colorscale,
+                    colors=effective_colorscale,
                     opacity=None,
                     grid_spec=grid_spec,
                 )
@@ -656,6 +663,11 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     if getattr(trace, "mode", None) == "lines":
                         trace.update(mode="lines+markers", marker=dict(size=6, opacity=0.01))
                 fig.update_layout(dragmode="select")
+                # Apply global graph settings to the new figure
+                if settings:
+                    fig_dict = fig.to_dict()
+                    apply_settings_to_figure(fig_dict, settings)
+                    fig = go.Figure(fig_dict)
                 graph_meta = graph_meta or {}
                 graph_meta[str(graph_counter)] = {"type": graph_type, "x_cols": x_values}
                 new_graph = dcc.Graph(
@@ -684,6 +696,18 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
             return False
 
         return False
+
+    @callback(
+        Output({"type": f"{prefix}-graph", "index": ALL}, "figure"),
+        Input("graph-settings-store", "data"),
+        State({"type": f"{prefix}-graph", "index": ALL}, "figure"),
+        prevent_initial_call=True,
+    )
+    def apply_settings_to_existing_graphs(settings, all_figures):
+        import copy
+        if not settings or not all_figures:
+            return [no_update] * len(all_figures)
+        return [apply_settings_to_figure(copy.deepcopy(fig), settings) for fig in all_figures]
 
     if table_grid_id is not None:
 

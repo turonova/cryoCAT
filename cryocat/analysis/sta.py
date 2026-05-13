@@ -619,7 +619,7 @@ def get_subtomos_class_stability(motl_base_name, start_it, end_it, motl_type="st
     Notes
     -----
     Loading of many motls can take some time. If you also want to compute occupancy of classes it is recommended to
-    use :meth:`cryocat.sta.evaluate_classification` which gives both occupancy and stability and reads in all the motls
+    use :meth:`cryocat.analysis.sta.evaluate_classification` which gives both occupancy and stability and reads in all the motls
     only once.
     """
 
@@ -766,7 +766,7 @@ def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap", l
     Notes
     -----
     Loading of many motls can take some time. If you also want to compute stability of classes it is recommended to
-    use :meth:`cryocat.sta.evaluate_classification` which gives both occupancy and stability and reads in all the motls
+    use :meth:`cryocat.analysis.sta.evaluate_classification` which gives both occupancy and stability and reads in all the motls
     only once.
     """
     load_kwargs = load_kwargs or {}
@@ -787,6 +787,30 @@ def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap", l
     return occupancy
 
 def get_motl_filename(motl_base_name, iteration, motl_type):
+    """Construct the full filename for a motl file given a base name, iteration, and type.
+
+    For Relion-type motls the iteration number is zero-padded to three digits
+    and the suffix ``_data.star`` is appended.  For all other types the
+    extension is determined by :func:`get_motl_extension`.
+
+    Parameters
+    ----------
+    motl_base_name : str
+        Base name for the motl file, without the iteration number or extension.
+        For example, for ``motl_shift_3.em`` the base name is ``motl_shift_``.
+    iteration : int
+        Iteration number to embed in the filename.
+    motl_type : str
+        Type of the motl file (e.g. ``'emmotl'``, ``'stopgap'``, ``'relion'``,
+        ``'relion5'``, ``'relion5_1'``).  Any value containing ``'relion'``
+        triggers zero-padded three-digit formatting.
+
+    Returns
+    -------
+    str
+        Full filename constructed from ``motl_base_name``, ``iteration``, and
+        the appropriate extension or suffix for the given ``motl_type``.
+    """
     if "relion" in motl_type:
         return f"{motl_base_name}{str(iteration).zfill(3)}_data.star"
     else:

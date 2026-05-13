@@ -25,7 +25,8 @@ _RELION_VERSIONS = [
     {"label": "Version 3.0", "value": 3.0},
     {"label": "Version 3.1", "value": 3.1},
     {"label": "Version 4.x", "value": 4.0},
-    {"label": "Version 5.x", "value": 5.0},
+    {"label": "Version 5.0", "value": 5.0},
+    {"label": "Version 5.1", "value": 5.1},
 ]
 
 
@@ -260,18 +261,26 @@ def get_table_component(prefix: str, connected_motl_prefix=None, show_create_fro
             dcc.Store(id=f"{prefix}-last-save-params-store"),
         ]
 
+    button_row_children = []
+    if motl_mode:
+        button_row_children.append(
+            dbc.Col(
+                html.Div(
+                    id=f"{connected_motl_prefix}-relion-params-inline",
+                    style={"fontSize": "0.7rem", "color": "var(--color9)", "whiteSpace": "nowrap"},
+                ),
+                width="auto",
+                className="d-flex align-items-center",
+            )
+        )
+    button_row_children.append(
+        dbc.Col(button_children, className="d-flex justify-content-end flex-wrap gap-1")
+    )
+
     return html.Div(
         id=f"{prefix}-table-container",
         children=[
-            dbc.Row(
-                [
-                    dbc.Col(
-                        button_children,
-                        className="d-flex justify-content-end",
-                    ),
-                ],
-                className="mb-2",
-            ),
+            dbc.Row(button_row_children, className="mb-2"),
             dag.AgGrid(
                 id=f"{prefix}-grid",
                 columnDefs=[],
@@ -639,16 +648,16 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
             btn_title = "Upload a tomogram file for Relion5"
             if input_motl_type == "relion" and rln_version in [3.0, 3.1, 4.0]:
                 disable_orig = (False, False)
-            elif input_motl_type == "relion5" and rln_version == 5.0:
+            elif input_motl_type in ["relion5", "relion5_1"] and rln_version in [5.0, 5.1]:
                 disable_orig = (False, False)
             else:
                 disable_orig = (True, False)
 
             if rln_version in [3.0, 3.1]:
                 return "hidden", "hidden", "", "hidden", btn_title, *disable_orig
-            elif rln_version == 4.0:
+            elif rln_version in [4.0, 5.1]:  # pixel/binning but no tomos
                 return "flex", "hidden", "", "hidden", btn_title, *disable_orig
-            else:
+            else:  # 5.0 — needs tomos
                 status = "Currently no tomogram file loaded"
                 if rln_tomos:
                     status = f"Currently loaded: {rln_tomos_name}"

@@ -40,12 +40,12 @@ def rotate_image(image, alpha, fill_mode="constant", fill_value=0.0):
         nD NumPy array representing the image to rotate.
     alpha : float
         Angle of rotation in degrees. Positive values rotate counterclockwise.
-    fill_mode : {'constant', 'edge', 'symmetric', 'reflect', 'wrap'}, optional
+    fill_mode : {'constant', 'edge', 'symmetric', 'reflect', 'wrap'}, default='constant'
         Points outside the boundaries of the input are filled according to the
-        given mode. Default is 'constant'.
-    fill_value : float, optional
+        given mode.
+    fill_value : float, default=0.0
         Value used to fill points outside the boundaries when `fill_mode`
-        is 'constant'. Default is 0.0.
+        is 'constant'.
 
     Returns
     -------
@@ -65,12 +65,11 @@ def _ctf(defocus, pshift, famp, cs, evk, f):
 
         Parameters
         ----------
-        defocus : array_like
-            Defocus values (in :math:`\mu\mathrm{m}`) for each tilt.
-            Shape is '(len(defocus), 1)'.
-        pshift : array_like
-            Phase shift values (in degrees) for each tilt. 0 if no phase shift is added.
-            Shape is '(len(pshift), 1)'.
+        defocus : array_like, shape (N, 1)
+            Defocus values (in :math:`\mu\mathrm{m}`) for each of the N tilts.
+        pshift : array_like, shape (N, 1)
+            Phase shift values (in degrees) for each tilt. Pass zeros if no
+            phase plate is used.
         famp : float
             Amplitude contrast (typically between 0.0 and 0.2).
         cs : float
@@ -78,24 +77,27 @@ def _ctf(defocus, pshift, famp, cs, evk, f):
         evk : float
             Accelerating voltage (in kV).
         f : ndarray
-            1D spatial frequency magnitude array (in :math:`\mathrm{\AA}^{-1}`) at which to evaluate the CTF.
-            Must be 1D, as other shapes cannot be broadcasted with defocus /
-            phase shift array of shape (len(defocus), 1).
+            1D spatial frequency magnitude array (in :math:`\mathrm{\AA}^{-1}`)
+            at which to evaluate the CTF.  Must be 1D so it broadcasts correctly
+            against the ``(N, 1)`` defocus/pshift arrays.
 
         Returns
         -------
-        ctf : ndarray
-            The computed 1D CTF curve evaluated at each tilt as a function of
-            frequency array `f`. Shape is '(len(defocus), len(f))'.
+        ctf : ndarray, shape (N, len(f))
+            CTF evaluated at each tilt (row) and each frequency (column).
 
         Notes
         -----
         - The output combines both sine and cosine components weighted by
           phase and amplitude contrast:
-    .. math::
-       \mathrm{CTF}(f) = \sqrt{1 - f_\mathrm{amp}^2} \, \sin(\chi(f)) + f_\mathrm{amp} \, \cos(\chi(f))
-           where :math:`\chi(f)` is the aberration phase function.
-        - this output is of radial symmetry
+
+          .. math::
+
+              \mathrm{CTF}(f) = \sqrt{1 - f_\mathrm{amp}^2} \, \sin(\chi(f)) + f_\mathrm{amp} \, \cos(\chi(f))
+
+          where :math:`\chi(f)` is the aberration phase function.
+
+        - The output has radial symmetry.
     """
 
     defocus = defocus * 1.0e4  # convert defocus distance from μm to Å
@@ -143,15 +145,21 @@ def generate_ctf(wl, slice_idx, slice_weight, binning):
     Parameters
     ----------
     wl : pandas.DataFrame
-        Wedge list dataframe containing metadata and microscope parameters
-        for one tomogram.
-    slice_idx : array-like of int
-        Indices of the frequency components (aka. points in fourier space)
-        to which the CTF filter should be applied.
+        Wedge list dataframe for one tomogram.  Required columns:
+        ``"tomo_x"``, ``"tomo_y"``, ``"tomo_z"`` (tomogram dimensions in voxels),
+        ``"pixelsize"`` (unbinned pixel size in Å), ``"defocus"`` (in μm),
+        ``"amp_contrast"``, ``"cs"`` (spherical aberration in mm),
+        ``"voltage"`` (in kV).  An optional ``"pshift"`` column (phase shift
+        in degrees) defaults to zeros when absent.
+    slice_idx : list of tuple of ndarray
+        Per-tilt active voxel indices in Fourier space, as returned by
+        :func:`generate_wedgemask_slices_template`.  Each element is a tuple
+        of three 1-D index arrays ``(z, y, x)`` from ``np.nonzero``.
     slice_weight : ndarray
-        A 3D array representing the frequency domain weighting (missing wedge +
-        bandpass) of each tilt.
-        The shape is assumed to be (depth, height, width) or (zyx).
+        3D array of normalised frequency-domain weights (missing wedge and
+        bandpass combined), shape ``(depth, height, width)`` / ``(z, y, x)``.
+        Applied as a final multiplicative factor after the per-tilt CTF
+        accumulation.
     binning : int or float
         The binning factor of the tomogram. Used to scale the pixel size.
 
@@ -244,16 +252,18 @@ def generate_exposure(wedgelist, slice_idx, slice_weight, binning):
         - "exposure": float, cumulative electron exposure per tilt (in \mathrm{e^- / \AA^2})
         - "pixelsize": float, unbinned pixel size (in :math:`\mathrm{\AA}`)
 
-    slice_idx : list of numpy.ndarray
-        Indices of the frequency components (aka. points in fourier space)
-        to which the exposure filter should be applied.
+    slice_idx : list of tuple of ndarray
+        Per-tilt active voxel indices in Fourier space, as returned by
+        :func:`generate_wedgemask_slices_template`.  Each element is a tuple
+        of three 1-D index arrays ``(z, y, x)`` from ``np.nonzero``.
 
     slice_weight : numpy.ndarray
-        A 3D array representing the frequency domain weighting (missing wedge +
-        bandpass) of each tilt.
-        The shape is assumed to be (depth, height, width) or (zyx).
+        3D array of normalised frequency-domain weights (missing wedge and
+        bandpass combined), shape ``(depth, height, width)`` / ``(z, y, x)``.
+        Applied as a final multiplicative factor after the per-tilt exposure
+        accumulation.
 
-    binning : int
+    binning : int or float
         The binning factor of the tomogram. Used to scale the pixel size.
 
     Returns
@@ -420,7 +430,7 @@ def generate_wedgemask_slices_tile(wedgelist, tile_filter):
         aka. a cube shape.
         The array itself is not used for its values, only its shape.
 
-     Returns
+    Returns
     -------
     wedge_slices : ndarray
         A binary 3D mask of the same shape as `tile_filter` with 1s at all voxels
@@ -503,8 +513,8 @@ def generate_wedge_masks(
     tomo_number : int
         The tomogram number to select from the wedge list.
 
-    binning : int, optional
-        Binning factor used in tomogram. Default is 1 (no binning).
+    binning : int, default=1
+        Binning factor used in tomogram.
 
     low_pass_filter : int, optional
         If provided, applies a low-pass filter in Fourier space with the given cutoff
@@ -514,11 +524,11 @@ def generate_wedge_masks(
         If provided, applies a high-pass filter in Fourier space with the given cutoff
         in Fourier pixels.
 
-    ctf_weighting : bool, optional
-        If True, applies CTF weighting. Default is False.
+    ctf_weighting : bool, default=False
+        If True, applies CTF weighting.
 
-    exposure_weighting : bool, optional
-        If True, applies exposure weighting. Default is False.
+    exposure_weighting : bool, default=False
+        If True, applies exposure weighting.
 
     output_template : str, optional
         Path to save the resulting template wedge mask. Can use `create_wedge_names`
@@ -693,7 +703,7 @@ def create_wedge_names(wedge_path, tomo_number, boxsize, binning, filter=None):
         Size of the subtomogram box in voxels.
     binning : int
         Binning level applied to the tomogram.
-    filter : int, optional, default=boxsize // 2
+    filter : int, optional
         Size of the filter applied during processing.
 
     Returns
@@ -761,16 +771,18 @@ def create_output_folder_path(folder_path, structure_name, folder_spec):
         The path to the peak analysis base folder.
     structure_name : str
         The name of the structure.
-    folder_spec : int or else
-        Information about the output folder. If int (should be an index from the
-        template list csv), the output folder name will be 'id_<folder_spec>_results'.
-        If not int, the output folder name will be '<folder_spec>'.
+    folder_spec : int or str
+        When an int (a row index from the template list CSV), the folder name
+        is ``id_<folder_spec>_results``.  When a string, it is used directly
+        as the folder name.
 
     Returns
     -------
     output_path : str
-        The full path to the output folder. Should be either 'id_<folder_spec>_results'
-        or '<folder_spec>'.
+        Full path to the output folder, with a trailing slash.
+        Pattern: ``<folder_path>/<structure_name>/id_<folder_spec>_results/``
+        when `folder_spec` is an int, or ``<folder_path>/<structure_name>/<folder_spec>/``
+        otherwise.
     """
 
     if isinstance(folder_spec, int):
@@ -870,8 +882,9 @@ def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
     """Extract the highest-scoring subtomogram from a tomogram.
 
     Loads a tomogram and its corresponding particle motive list, identifies the entry
-    with the highest score, and extracts the aligned subtomogram around that
-    position. Optionally writes the result to a file.
+    with the highest score, extracts the subtomogram at that position, and applies
+    the stored shift correction.  Rotation is not applied.
+    Optionally writes the result to a file.
 
     Parameters
     ----------
@@ -1035,8 +1048,8 @@ def compute_sharp_mask_overlap(template_list, indices, angle_list_path, parent_f
         Path to the directory containing angle list files used for rotation.
     parent_folder_path : str
         Base directory where folders for all structures are.
-    angles_order : str, optional
-        The rotation order used to interpret the Euler angles (default is "zxz").
+    angles_order : str, default='zxz'
+        The rotation order used to interpret the Euler angles.
     """
 
     temp_df = pd.read_csv(template_list, index_col=0)
@@ -1088,9 +1101,8 @@ def check_existing_tight_mask_values(template_list, indices, parent_folder_path,
         Base directory where structure folders are located.
     angle_list_path : str
         Path to the directory containing rotation angle list files.
-    angles_order : str, optional
+    angles_order : str, default='zxz'
         Rotation order to interpret the Euler angles when computing overlaps.
-        Default is "zxz".
     """
 
     temp_df = pd.read_csv(template_list, index_col=0)
@@ -1154,9 +1166,9 @@ def compute_dist_maps_voxels(template_list, indices, parent_folder_path, morph_f
         Row indices in `template_list` to process.
     parent_folder_path : str
         Base directory where structure folders are located.
-    morph_footprint : tuple of int, optional
+    morph_footprint : tuple of int, default=(2, 2, 2)
         Size of the structuring element used for binary opening during morphological
-        processing of labeled regions. Default is (2, 2, 2).
+        processing of labeled regions.
 
     Notes
     -----
@@ -1377,18 +1389,20 @@ def analyze_rotations(
     output_file : str, optional
         Base path for saving output CSV and EM maps. If None, results are not
         written to disk.
-    cc_radius : int, optional
+    cc_radius : int, default=3
         Radius (in voxels) of the spherical mask applied to compute masked
-        cross-correlation. Default is 3.
+        cross-correlation.
     angular_offset : float or array-like of shape (3,), optional
         Euler angles (degrees) to offset all input angles before matching.
     starting_angle : float or array-like of shape (3,), optional
-        Euler angles (degrees) representing the reference orientation from which angular
-        distances will be calculated. Default is (0, 0, 0).
-    c_symmetry : int, optional
-        C symmetry of the structure. Default is 1 (no symmetry).
-    angles_order : {"zxz", ...}, optional
-        Euler angle convention used for rotations. Default is "zxz".
+        Reference orientation of the template (Euler angles in degrees).
+        Applied as a base rotation right-multiplied onto every input angle
+        before matching, and used as the reference when computing angular
+        distances in ``res_table``.  Defaults to ``(0, 0, 0)``.
+    c_symmetry : int, default=1
+        C symmetry of the structure.
+    angles_order : str, default='zxz'
+        Euler angle convention used for rotations.
 
     Returns
     -------
@@ -1405,8 +1419,9 @@ def analyze_rotations(
     final_ccc_map : ndarray
         3D array of the maximum CCC values observed across all rotations.
     final_angles_map : ndarray
-        3D array of rotation indices (of angle rotation list) corresponding to the
-        highest CCC at each voxel.
+        3D array of 1-based rotation indices into the angle list, recording
+        which rotation produced the highest CCC at each voxel.
+        Voxels that were never updated retain their initial value of ``-1``.
     final_ccc_map_masked : ndarray
         Masked CCC map showing only the central area of final_ccc_map.
 
@@ -1588,9 +1603,9 @@ def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_fol
     parent_folder_path : str or path-like
         Root folder containing all structure subfolders, templates, tomograms,
         and masks referenced in `template_list`.
-    cc_radius_tol : float, optional
+    cc_radius_tol : int, default=10
         Radius (in voxels) of the spherical mask used for computing local
-        cross-correlation scores in `analyze_rotations`. Default is 10.
+        cross-correlation scores in `analyze_rotations`.
 
     Notes
     -------
@@ -1698,15 +1713,15 @@ def run_angle_analysis(
         Directory path containing wedge mask files.
     parent_folder_path : str
         Root directory containing structure and template data.
-    angular_range : int, optional
-        Number of degrees to test in the rotation range. Default is 359, meaning
-        all integer angles from 0 to 358 will be analyzed. 359 makes a full circle.
-    write_output : bool, optional
+    angular_range : int, default=359
+        Number of degrees to test in the rotation range. 359 means all integer
+        angles from 0 to 358 are analyzed, covering a full circle.
+    write_output : bool, default=False
         If True, saves the computed angular analysis results and histograms
-        as CSV files in the corresponding output directory. Default is False.
-    cc_radius_tol : int, optional
+        as CSV files in the corresponding output directory.
+    cc_radius_tol : int, default=10
         Radius (in voxels) of the spherical mask applied to the cross-correlation
-        map when evaluating local correlation. Default is 10.
+        map when evaluating local correlation.
 
     Notes
     -----
@@ -2212,7 +2227,9 @@ def plot_scores_and_peaks(peak_files, plot_title=None, output_file=None):
 
     This function visualizes peak data from a list of files or arrays by generating
     heatmaps for three orthogonal 2D slices (X, Y, Z) centered at the main peak.
-    All peaks are normalized to the same value range based on the first peak file.
+    The peak center and the color-scale maximum (vmax) are determined from the
+    first entry in `peak_files` and reused for all subsequent entries; the
+    color-scale minimum (vmin) is the data minimum of each entry independently.
 
     Parameters
     ----------
@@ -2302,7 +2319,7 @@ def compute_peak_shapes(template_list, indices, parent_folder_path):
     Notes
     -----
     - Only rows marked as 'Done == True' in the template list are processed.
-    - Structures named '"membrane"' are skipped.
+    - Structures named ``'membrane'`` are skipped.
     - peak shapes are measured using `tmana.evaluate_scores_map` with
       three thresholding methods:
       triangle, Gaussian, and hard threshold.

@@ -44,6 +44,8 @@ layout = html.Div(
         dcc.Store(id="nn-relion5-tomos-store"),  # storing tomogram file content for relion5 nn motl
         dcc.Store(id="main-relion5-tomos-filename"),  # storing tomogram file name for relion5 main motl
         dcc.Store(id="nn-relion5-tomos-filename"),  # storing tomogram file name for relion5 nn motl
+        dcc.Store(id="main-relion-params-store"),  # relion loading params (pixel_size, binning, formats)
+        dcc.Store(id="nn-relion-params-store"),  # relion loading params for nn motl
         dcc.Store(id="save-main-relion5-tomos-store"),  # storing tomogram file content for saving output
         dcc.Store(id="save-main-relion5-tomos-filename"),  # storing tomogram file name for relion5 for saving output
         dcc.Store(id=f"kmeans-global-data-store"),  # storing k means data
@@ -65,8 +67,38 @@ layout = html.Div(
         # dcc.Interval(id="log-check", interval=1000, n_intervals=0),
         dcc.Store(id="log-index", data=0),
         dcc.Store(id="log-content", data=""),
+        dcc.Store(id="log-save-path-store"),
         dbc.Offcanvas(
-            html.Pre(id="log-output"),
+            [
+                html.Div(
+                    [
+                        dbc.Button("Save", id="log-save-btn", color="secondary", size="sm", className="me-1"),
+                        dbc.Button("Save As", id="log-save-as-btn", color="primary", size="sm"),
+                        html.Span(id="log-save-status",
+                                  style={"marginLeft": "0.75rem", "fontSize": "0.8rem", "color": "grey"}),
+                    ],
+                    style={"display": "flex", "alignItems": "center", "marginBottom": "0.5rem"},
+                ),
+                html.Hr(style={"margin": "0.5rem 0"}),
+                html.Pre(id="log-output"),
+                dbc.Modal(
+                    [
+                        dbc.ModalHeader(dbc.ModalTitle("Save Log As")),
+                        dbc.ModalBody(
+                            dbc.Input(id="log-save-path-input", type="text",
+                                      placeholder="Full path including extension (e.g. /path/log.txt)"),
+                        ),
+                        dbc.ModalFooter([
+                            html.Span(id="log-saveas-status",
+                                      style={"marginRight": "auto", "fontSize": "0.8rem", "color": "grey"}),
+                            dbc.Button("Save", id="log-saveas-confirm-btn", color="primary"),
+                        ]),
+                    ],
+                    id="log-save-as-modal",
+                    is_open=False,
+                    centered=True,
+                ),
+            ],
             id="log-panel",
             title="Log Output",
             placement="end",
@@ -83,7 +115,6 @@ layout = html.Div(
     Output("log-output", "children"),
     Output("log-index", "data"),
     Output("log-panel", "is_open"),
-    # Input("log-check", "n_intervals"),
     Input("open-log-btn", "n_clicks"),
     State("log-index", "data"),
     State("log-panel", "is_open"),
@@ -101,3 +132,55 @@ def update_log(open_clicks, last_index, is_open):
         return new_logs, new_index, True
 
     raise dash.exceptions.PreventUpdate
+
+
+@callback(
+    Output("log-save-as-modal", "is_open"),
+    Input("log-save-as-btn", "n_clicks"),
+    Input("log-save-btn", "n_clicks"),
+    State("log-save-path-store", "data"),
+    prevent_initial_call=True,
+)
+def open_log_save_as(_, _2, saved_path):
+    if ctx.triggered_id == "log-save-as-btn":
+        return True
+    if ctx.triggered_id == "log-save-btn" and not saved_path:
+        return True
+    return no_update
+
+
+@callback(
+    Output("log-save-as-modal", "is_open", allow_duplicate=True),
+    Output("log-saveas-status", "children"),
+    Output("log-save-path-store", "data"),
+    Output("log-save-status", "children"),
+    Input("log-saveas-confirm-btn", "n_clicks"),
+    State("log-save-path-input", "value"),
+    prevent_initial_call=True,
+)
+def confirm_log_save_as(_, path):
+    if not path:
+        return no_update, "Specify a filename.", no_update, no_update
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(dash_logger.get_all_logs())
+        return False, "Saved.", path, f"Saved to {path}"
+    except Exception as e:
+        return no_update, str(e), no_update, no_update
+
+
+@callback(
+    Output("log-save-status", "children", allow_duplicate=True),
+    Input("log-save-btn", "n_clicks"),
+    State("log-save-path-store", "data"),
+    prevent_initial_call=True,
+)
+def save_log(_, path):
+    if not path:
+        return no_update
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(dash_logger.get_all_logs())
+        return f"Saved to {path}"
+    except Exception as e:
+        return str(e)

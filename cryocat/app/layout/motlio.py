@@ -30,7 +30,8 @@ relion_versions = [
     {"label": "Version 3.0", "value": 3.0},
     {"label": "Version 3.1", "value": 3.1},
     {"label": "Version 4.x", "value": 4.0},
-    {"label": "Version 5.x", "value": 5.0},
+    {"label": "Version 5.0", "value": 5.0},
+    {"label": "Version 5.1", "value": 5.1},
 ]
 
 
@@ -114,8 +115,7 @@ def get_motl_save_component(prefix: str):
                                                 id_=f"{prefix}-save-motl-relion-pixelsize",
                                                 type="number",
                                                 placeholder="Pixel size",
-                                                min=1.0,
-                                                step=1,
+                                                step=0.001,
                                                 label="Pixel size (A):",
                                                 style={"width": "35%", "marginRight": "10px"},
                                             ),
@@ -123,9 +123,22 @@ def get_motl_save_component(prefix: str):
                                                 id_=f"{prefix}-save-motl-relion-binning",
                                                 type="number",
                                                 placeholder="Binning",
-                                                min=1.0,
-                                                step=1,
+                                                step=0.001,
                                                 label="Binning:",
+                                                style={"width": "35%", "marginRight": "10px"},
+                                            ),
+                                            InlineInputForm(
+                                                id_=f"{prefix}-save-motl-relion-tomoformat",
+                                                type="text",
+                                                placeholder="Optional",
+                                                label="Tomo format:",
+                                                style={"width": "35%", "marginRight": "10px"},
+                                            ),
+                                            InlineInputForm(
+                                                id_=f"{prefix}-save-motl-relion-subtomoformat",
+                                                type="text",
+                                                placeholder="Optional",
+                                                label="Subtomo format:",
                                                 style={"width": "35%", "marginRight": "10px"},
                                             ),
                                             dbc.Tooltip(
@@ -136,7 +149,7 @@ def get_motl_save_component(prefix: str):
                                             dbc.Checkbox(
                                                 id=f"{prefix}-save-motl-relion-original-entries",
                                                 label="Use original entries",
-                                                value=False,  # unchecked
+                                                value=False,
                                                 inputStyle={"marginRight": "5px"},
                                                 className="sidebar-checklist",
                                                 labelStyle={"color": "var(--color9)"},
@@ -240,8 +253,7 @@ def get_motl_simple_save_component(prefix: str):
                                             id_=f"{prefix}-save-motl-relion-pixelsize",
                                             type="number",
                                             placeholder="Pixel size",
-                                            min=1.0,
-                                            step=1,
+                                            step=0.001,
                                             label="Pixel size (A):",
                                             style={"width": "35%", "marginRight": "10px"},
                                         ),
@@ -249,9 +261,22 @@ def get_motl_simple_save_component(prefix: str):
                                             id_=f"{prefix}-save-motl-relion-binning",
                                             type="number",
                                             placeholder="Binning",
-                                            min=1.0,
-                                            step=1,
+                                            step=0.001,
                                             label="Binning:",
+                                            style={"width": "35%", "marginRight": "10px"},
+                                        ),
+                                        InlineInputForm(
+                                            id_=f"{prefix}-save-motl-relion-tomoformat",
+                                            type="text",
+                                            placeholder="Optional",
+                                            label="Tomo format:",
+                                            style={"width": "35%", "marginRight": "10px"},
+                                        ),
+                                        InlineInputForm(
+                                            id_=f"{prefix}-save-motl-relion-subtomoformat",
+                                            type="text",
+                                            placeholder="Optional",
+                                            label="Subtomo format:",
                                             style={"width": "35%", "marginRight": "10px"},
                                         ),
                                         dbc.Tooltip(
@@ -345,7 +370,7 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
     )
     def toggle_relion_version(motl_type):
         if motl_type == "relion":
-            return 3.0, "flex", "hidden"
+            return 3.0, "flex", "flex"
         return 3.0, "hidden", "hidden"
 
     @callback(
@@ -390,16 +415,12 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
 
         if input_motl_type == "relion" and relion_version in [3.0, 3.1, 4.0]:
             disable_original = (False, False)
-        elif input_motl_type == "relion5" and relion_version == 5.0:
+        elif input_motl_type in ["relion5", "relion5_1"] and relion_version in [5.0, 5.1]:
             disable_original = (False, False)
         else:
             disable_original = (True, False)
 
-        if relion_version in [3.0, 3.1]:
-            return "hidden", "hidden", "", "hidden", button_title, *disable_original
-        elif relion_version == 4.0:
-            return "flex", "hidden", "", "hidden", button_title, *disable_original
-        else:
+        if relion_version == 5.0:  # needs tomos
             status = "Currently no tomogram file loaded"
             if rln_tomos:
                 status = f"Currently loaded: {rln_tomos_name}"
@@ -408,6 +429,8 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
                 status = f"Currently loaded: {rln_tomos_name_orig}"
                 button_title = "Upload a different tomogram file"
             return "flex", "flex", status, "flex", button_title, *disable_original
+        else:  # all other versions — show options but hide tomos
+            return "flex", "hidden", "", "hidden", button_title, *disable_original
 
     @callback(
         Output(f"{prefix}-status-label", "children", allow_duplicate=True),
@@ -421,6 +444,8 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
         State(f"{connected_input_motl_prefix}-relion5-tomos-store", "data"),
         State(f"{prefix}-save-motl-relion-binning", "value"),
         State(f"{prefix}-save-motl-relion-pixelsize", "value"),
+        State(f"{prefix}-save-motl-relion-tomoformat", "value"),
+        State(f"{prefix}-save-motl-relion-subtomoformat", "value"),
         State(f"{prefix}-save-motl-relion-version-dropdown", "value"),
         State(f"{prefix}-save-motl-relion-original-entries", "value"),
         State(data_store_id, "data"),
@@ -428,8 +453,8 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
     )
     def save_data(
         n_clicks, file_path, motl_type, relion_tomos, extra_df_data, relion_optics,
-        relion_tomos_orig, relion_binning, relion_pixel_size, relion_version, relion_use_original,
-        data_to_save,
+        relion_tomos_orig, relion_binning, relion_pixel_size, relion_tomo_format,
+        relion_subtomo_format, relion_version, relion_use_original, data_to_save,
     ):
         from cryocat.app.apputils import save_motl as _save_motl
         if not n_clicks or not file_path or not motl_type or not data_to_save:
@@ -445,6 +470,8 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
             rln_tomos=rln_tomos,
             rln_binning=relion_binning,
             rln_pixel_size=relion_pixel_size,
+            rln_tomo_format=relion_tomo_format,
+            rln_subtomo_format=relion_subtomo_format,
             rln_version=relion_version,
             rln_use_original=relion_use_original,
         )
@@ -508,9 +535,8 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
         prevent_initial_call=True,
     )
     def display_options_motl_type(motl_type):
-
         if motl_type == "relion":
-            return 3.0, "flex", "hidden"
+            return 3.0, "flex", "flex"
         else:
             return 3.0, "hidden", "hidden"
 
@@ -556,33 +582,26 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
     def display_options_relion_version(
         relion_version, rln_tomos, input_motl_type, rln_tomos_name, rln_tomos_orig, rln_tomos_name_orig
     ):
-
         button_title = "Upload a tomogram file for Relion5"
 
         if input_motl_type == "relion" and relion_version in [3.0, 3.1, 4.0]:
             disable_original_entries = (False, False)
-        elif input_motl_type == "relion5" and relion_version == 5.0:
+        elif input_motl_type in ["relion5", "relion5_1"] and relion_version in [5.0, 5.1]:
             disable_original_entries = (False, False)
         else:
             disable_original_entries = (True, False)
 
-        if relion_version == 3.0 or relion_version == 3.1:
-            return "hidden", "hidden", "", "hidden", button_title, *disable_original_entries
-        elif relion_version == 4.0:
-            return "flex", "hidden", "", "hidden", button_title, *disable_original_entries
-        else:
-            show_loaded = "flex"
+        if relion_version == 5.0:  # needs tomos
             status = "Currently no tomogram file loaded"
-
             if rln_tomos:
                 status = f"Currently loaded: {rln_tomos_name}"
                 button_title = "Upload a different tomogram file"
-
             elif input_motl_type == "relion5" and rln_tomos_orig:
                 status = f"Currently loaded: {rln_tomos_name_orig}"
                 button_title = "Upload a different tomogram file"
-
-            return "flex", show_loaded, status, "flex", button_title, *disable_original_entries
+            return "flex", "flex", status, "flex", button_title, *disable_original_entries
+        else:  # all other versions — show options, hide tomos
+            return "flex", "hidden", "", "hidden", button_title, *disable_original_entries
 
     @callback(
         Output(f"{prefix}-status-label", "children", allow_duplicate=True),
@@ -600,6 +619,8 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
         State(f"{connected_input_motl_prefix}-relion5-tomos-store", "data"),
         State(f"{prefix}-save-motl-relion-binning", "value"),
         State(f"{prefix}-save-motl-relion-pixelsize", "value"),
+        State(f"{prefix}-save-motl-relion-tomoformat", "value"),
+        State(f"{prefix}-save-motl-relion-subtomoformat", "value"),
         State(f"{prefix}-save-motl-relion-version-dropdown", "value"),
         State(f"{prefix}-save-motl-relion-original-entries", "value"),
         store_states,
@@ -620,6 +641,8 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
         relion_tomos_orig,
         relion_binning,
         relion_pixel_size,
+        relion_tomo_format,
+        relion_subtomo_format,
         relion_version,
         relion_use_original,
         *store_states,
@@ -678,6 +701,8 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
             rln_tomos=rln_tomos,
             rln_binning=relion_binning,
             rln_pixel_size=relion_pixel_size,
+            rln_tomo_format=relion_tomo_format,
+            rln_subtomo_format=relion_subtomo_format,
             rln_version=relion_version,
             rln_use_original=relion_use_original,
         )
@@ -686,6 +711,9 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
 
 
 def get_motl_load_component(prefix: str, display_option="block"):
+    tooltip_text = "If not provided, it will be read from the starfile; if provided, the value from this form will be used."
+    lbl_style = {"fontSize": "0.85rem", "marginBottom": "2px"}
+
     return html.Div(
         id=f"{prefix}-motl-container",
         style={"marginTop": "1rem", "display": display_option},
@@ -695,7 +723,6 @@ def get_motl_load_component(prefix: str, display_option="block"):
                     dbc.Col(
                         html.Div(
                             "Motl type: ",
-                            # className="text-left text-muted mb-2",
                             style={"fontStyle": "bold", "fontSize": "1.3rem", "fontColor": "var(--color11)"},
                         ),
                         width=4,
@@ -707,12 +734,7 @@ def get_motl_load_component(prefix: str, display_option="block"):
                             options=motl_types,
                             multi=False,
                             value="emmotl",
-                            style={
-                                "width": "100%",
-                                # "height": "20px",  # reduce height
-                                # "fontSize": "1.3rem",  # smaller font
-                                "padding": "0",  # reduce padding
-                            },
+                            style={"width": "100%", "padding": "0"},
                         ),
                         width=8,
                     ),
@@ -721,64 +743,108 @@ def get_motl_load_component(prefix: str, display_option="block"):
             dbc.Row(
                 dcc.Dropdown(
                     id=f"{prefix}-motl-relion-version-dropdown",
-                    options=["Version 3.0", "Version 3.1", "Version 4.x", "Version 5.x"],
+                    options=["Version 3.0", "Version 3.1", "Version 4.x", "Version 5.0", "Version 5.1"],
                 ),
                 style={"marginTop": "1rem"},
                 className="hidden",
                 id=f"{prefix}-motl-relion-version",
             ),
-            dbc.Row(
-                [
+            html.Div(
+                id=f"{prefix}-motl-relion-options",
+                className="hidden",
+                style={"marginTop": "0.5rem"},
+                children=[
                     dbc.Row(
                         [
                             dbc.Col(
-                                dbc.Input(
-                                    id=f"{prefix}-motl-relion-pixelsize",
-                                    type="number",
-                                    placeholder="Pixel size",
-                                    min=1.0,
-                                    step=1,
-                                ),
+                                [
+                                    html.Label("Pixel size (Å):", id=f"{prefix}-rln-pixelsize-lbl", style=lbl_style),
+                                    dbc.Tooltip(tooltip_text, target=f"{prefix}-rln-pixelsize-lbl"),
+                                    dbc.Input(
+                                        id=f"{prefix}-motl-relion-pixelsize",
+                                        type="number",
+                                        placeholder="Optional",
+                                        step=0.001,
+                                    ),
+                                ],
                                 width=6,
                             ),
                             dbc.Col(
-                                dbc.Input(
-                                    id=f"{prefix}-motl-relion-binning",
-                                    type="number",
-                                    placeholder="Binning",
-                                    min=1.0,
-                                    step=1,
-                                ),
+                                [
+                                    html.Label("Binning:", id=f"{prefix}-rln-binning-lbl", style=lbl_style),
+                                    dbc.Tooltip(tooltip_text, target=f"{prefix}-rln-binning-lbl"),
+                                    dbc.Input(
+                                        id=f"{prefix}-motl-relion-binning",
+                                        type="number",
+                                        placeholder="Optional",
+                                        step=0.001,
+                                    ),
+                                ],
                                 width=6,
                             ),
                         ],
+                        className="mb-2",
                     ),
                     dbc.Row(
                         [
                             dbc.Col(
-                                dcc.Upload(
-                                    id=f"{prefix}-tomos-upload",
-                                    children=dbc.Col(
-                                        dbc.Button(
-                                            f"Upload {prefix} tomogram file (if any)",
-                                            color="light",
-                                        ),
-                                        width=12,
-                                        className="d-grid gap-1 col-6 mx-auto mt-3 mb-3",
+                                [
+                                    html.Label("Tomo format:", id=f"{prefix}-rln-tomoformat-lbl", style=lbl_style),
+                                    dbc.Tooltip(
+                                        "Pattern matching the path in the starfile where $xxx marks the tomo ID "
+                                        "(longest $x+ group is captured as the ID). Leave empty for auto-detection. "
+                                        "Example: 'TS_$xxxx' parses 'TS_0042' → tomo ID 42.",
+                                        target=f"{prefix}-rln-tomoformat-lbl",
                                     ),
-                                    multiple=False,
-                                ),
-                                width=12,
+                                    dbc.Input(
+                                        id=f"{prefix}-motl-relion-tomoformat",
+                                        type="text",
+                                        placeholder="Optional, e.g. TS_$xxxx",
+                                    ),
+                                ],
+                                width=6,
                             ),
-                            dbc.Col(html.Div(id=f"{prefix}-tomo-load-status"), width=12),
+                            dbc.Col(
+                                [
+                                    html.Label("Subtomo format:", id=f"{prefix}-rln-subtomoformat-lbl", style=lbl_style),
+                                    dbc.Tooltip(
+                                        "Pattern matching the path in the starfile where $yyy marks the subtomo ID "
+                                        "(longest $y+ group is captured as the ID). $xxx groups match tomo IDs and are ignored. "
+                                        "Leave empty for auto-detection. "
+                                        "Example: '$xxxx/$yyy.mrc' parses '0042/007.mrc' → subtomo ID 7.",
+                                        target=f"{prefix}-rln-subtomoformat-lbl",
+                                    ),
+                                    dbc.Input(
+                                        id=f"{prefix}-motl-relion-subtomoformat",
+                                        type="text",
+                                        placeholder="Optional, e.g. $xxxx/$yyy.mrc",
+                                    ),
+                                ],
+                                width=6,
+                            ),
                         ],
-                        style={"display": "none"},
-                        id=f"{prefix}-motl-relion-tomos-display",
+                        className="mb-2",
                     ),
                 ],
-                style={"marginTop": "1rem"},
+            ),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        dcc.Upload(
+                            id=f"{prefix}-tomos-upload",
+                            children=dbc.Col(
+                                dbc.Button("Upload tomogram file", color="light"),
+                                width=12,
+                                className="d-grid gap-1 col-6 mx-auto mt-1 mb-1",
+                            ),
+                            multiple=False,
+                        ),
+                        width=12,
+                    ),
+                    dbc.Col(html.Div(id=f"{prefix}-tomo-load-status"), width=12),
+                ],
                 className="hidden",
-                id=f"{prefix}-motl-relion-options",
+                id=f"{prefix}-motl-relion-tomos-display",
             ),
             dbc.Row(
                 dcc.Upload(
@@ -822,16 +888,20 @@ def register_motl_load_callbacks(prefix: str):
         Output(f"{prefix}-relion-optics-store", "data", allow_duplicate=True),
         Output(f"{prefix}-relion5-tomos-store", "data", allow_duplicate=True),
         Output(f"{prefix}-motl-data-type", "data"),
+        Output(f"{prefix}-relion-params-store", "data"),
         Input(f"{prefix}-motl-upload", "contents"),
         State(f"{prefix}-motl-upload", "filename"),
         State(f"{prefix}-motl-dropdown", "value"),
         State(f"{prefix}-motl-relion-version-dropdown", "value"),
         State(f"{prefix}-motl-relion-pixelsize", "value"),
         State(f"{prefix}-motl-relion-binning", "value"),
+        State(f"{prefix}-motl-relion-tomoformat", "value"),
+        State(f"{prefix}-motl-relion-subtomoformat", "value"),
         State(f"{prefix}-relion5-tomos-store", "data"),
         prevent_initial_call=True,
     )
-    def load_motl(upload_content, filename, motl_type, rln_version, rln_pixelsize, rln_binning, rln_tomos):
+    def load_motl(upload_content, filename, motl_type, rln_version, rln_pixelsize, rln_binning,
+                  rln_tomoformat, rln_subtomoformat, rln_tomos):
 
         _, content_string = upload_content.split(",")
         decoded = base64.b64decode(content_string)
@@ -844,37 +914,47 @@ def register_motl_load_callbacks(prefix: str):
         extra_data = None
         relion_optics = None
         relion_tomos = None
+        relion_params = None
 
         if motl_type != "relion":
-
             motl = Motl.load(tmp_file_path, motl_type)
-
             if motl_type == "stopgap":
                 extra_data = motl.stopgap_df.to_dict("records")
             elif motl_type == "dynamo":
                 extra_data = motl.dynamo_df.to_dict("records")
         else:
+            rln_kwargs = {}
+
             if rln_version == "Version 3.0":
-                rln_kwargs = {"version": 3.0}
+                rln_kwargs["version"] = 3.0
             elif rln_version == "Version 3.1":
-                rln_kwargs = {"version": 3.1}
+                rln_kwargs["version"] = 3.1
             elif rln_version == "Version 4.x":
-                rln_kwargs = {"version": 4.0, "pixel_size": rln_pixelsize, "binning": rln_binning}
-            else:
-
-                rln_kwargs = {"pixel_size": rln_pixelsize, "binning": rln_binning}
+                rln_kwargs["version"] = 4.0
+            elif rln_version == "Version 5.0":
                 motl_type = "relion5"
+            elif rln_version == "Version 5.1":
+                motl_type = "relion5_1"
 
-                if rln_tomos:
-                    with tempfile.NamedTemporaryFile(
-                        delete=False, suffix=os.path.splitext(filename)[-1], mode="w", encoding="utf-8", newline="\n"
-                    ) as tomo_tmp_file:
-                        tomo_tmp_file.write(rln_tomos)
-                        tomo_tmp_file_path = tomo_tmp_file.name
-                        tomo_tmp_file.close()  # necessary on windows
-                        rln_kwargs["input_tomograms"] = tomo_tmp_file_path
+            if rln_pixelsize:
+                rln_kwargs["pixel_size"] = rln_pixelsize
+            if rln_binning:
+                rln_kwargs["binning"] = rln_binning
+            if rln_tomoformat:
+                rln_kwargs["tomo_format"] = rln_tomoformat
+            if rln_subtomoformat:
+                rln_kwargs["subtomo_format"] = rln_subtomoformat
 
-            motl = Motl.load(tmp_file_path, motl_type, **rln_kwargs) #fixme, rln5
+            if motl_type == "relion5" and rln_tomos:
+                with tempfile.NamedTemporaryFile(
+                    delete=False, suffix=os.path.splitext(filename)[-1], mode="w", encoding="utf-8", newline="\n"
+                ) as tomo_tmp_file:
+                    tomo_tmp_file.write(rln_tomos)
+                    tomo_tmp_file_path = tomo_tmp_file.name
+                    tomo_tmp_file.close()
+                rln_kwargs["input_tomograms"] = tomo_tmp_file_path
+
+            motl = Motl.load(tmp_file_path, motl_type, **rln_kwargs)
             extra_data = motl.relion_df.to_dict("records")
             relion_optics = motl.optics_data.to_dict("records")
 
@@ -883,15 +963,33 @@ def register_motl_load_callbacks(prefix: str):
                 if rln_tomos:
                     os.remove(tomo_tmp_file_path)
 
+            relion_params = {
+                "version": rln_version,
+                "pixel_size": getattr(motl, "pixel_size", None),
+                "binning": getattr(motl, "binning", None),
+                "tomo_format": rln_tomoformat or "",
+                "subtomo_format": rln_subtomoformat or "",
+            }
+
         os.remove(tmp_file_path)
 
         global tomo_ids
         tomo_ids = motl.get_unique_values("tomo_id")
 
-        file_status = f"Loaded {filename};   " + get_print_out(motl)
+        # Log the equivalent cryoCAT load command
+        if motl_type not in ("relion", "relion5", "relion5_1"):
+            dash_logger.write(f'motl = Motl.load("{filename}", "{motl_type}")', source="cryocat")
+        else:
+            kwargs_str = ", ".join(f"{k}={v!r}" for k, v in rln_kwargs.items())
+            cmd = f'motl = Motl.load("{filename}", "{motl_type}"'
+            if kwargs_str:
+                cmd += f", {kwargs_str}"
+            cmd += ")"
+            dash_logger.write(cmd, source="cryocat")
+
         table_data = motl.df.to_dict("records")
 
-        return table_data, extra_data, relion_optics, relion_tomos, motl_type
+        return table_data, extra_data, relion_optics, relion_tomos, motl_type, relion_params
 
     @callback(
         Output(f"{prefix}-motl-relion-version-dropdown", "value", allow_duplicate=True),
@@ -901,9 +999,8 @@ def register_motl_load_callbacks(prefix: str):
         prevent_initial_call=True,
     )
     def display_options_motl_type(motl_type):
-
         if motl_type == "relion":
-            return "Version 3.0", "flex", "hidden"
+            return "Version 3.0", "flex", "flex"
         else:
             return "Version 3.0", "hidden", "hidden"
 
@@ -914,10 +1011,7 @@ def register_motl_load_callbacks(prefix: str):
         prevent_initial_call=True,
     )
     def display_options_relion_version(relion_version):
-
-        if relion_version == "Version 3.0" or relion_version == "Version 3.1":
-            return "hidden", "hidden"
-        elif relion_version == "Version 4.x":
-            return "flex", "hidden"
-        else:
+        if relion_version == "Version 5.0":
             return "flex", "flex"
+        else:
+            return "flex", "hidden"
