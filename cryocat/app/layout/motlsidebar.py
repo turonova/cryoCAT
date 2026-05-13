@@ -65,15 +65,28 @@ def get_motl_editor_sidebar():
                                 html.Div(id="me-op-func-form", style={"marginBottom": "0.5rem"}),
                                 html.Div(
                                     [
-                                        dbc.Button("Apply", id="me-op-apply-btn", color="primary", size="sm",
-                                                   className="me-1", style={"width": "48%"}),
-                                        dbc.Button("Undo", id="me-op-undo-btn", color="secondary", size="sm",
-                                                   style={"width": "48%"}),
+                                        dbc.Button(
+                                            "Apply",
+                                            id="me-op-apply-btn",
+                                            color="primary",
+                                            size="sm",
+                                            className="me-1",
+                                            style={"width": "48%"},
+                                        ),
+                                        dbc.Button(
+                                            "Undo",
+                                            id="me-op-undo-btn",
+                                            color="secondary",
+                                            size="sm",
+                                            style={"width": "48%"},
+                                        ),
                                     ],
                                     style={"display": "flex", "marginBottom": "0.5rem"},
                                 ),
-                                html.Div(id="me-op-status",
-                                         style={"fontSize": "0.85rem", "color": "var(--color9)", "wordBreak": "break-word"}),
+                                html.Div(
+                                    id="me-op-status",
+                                    style={"fontSize": "0.85rem", "color": "var(--color9)", "wordBreak": "break-word"},
+                                ),
                             ],
                             title="Single Motl Operations",
                             item_id="me-sidebar-singlemotl",
@@ -425,7 +438,11 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
             f"result = motl_slot{selected[0]+1}[motl_slot{selected[0]+1}['{match_col}'].isin(common_vals)]",
             source="cryocat",
         )
-        return result.to_dict("records"), label, f"Found {len(result)} rows with common '{match_col}' across {len(dfs)} motls."
+        return (
+            result.to_dict("records"),
+            label,
+            f"Found {len(result)} rows with common '{match_col}' across {len(dfs)} motls.",
+        )
 
     # Find rows whose value in the selected column appears in exactly one motl.
     @callback(
@@ -451,9 +468,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         all_val_sets = [set(df[match_col]) for df in dfs]
         common = all_val_sets[0].intersection(*all_val_sets[1:])
         unique_vals = set().union(*all_val_sets) - common
-        result = pd.concat(
-            [df[df[match_col].isin(unique_vals)] for df in dfs], ignore_index=True
-        )
+        result = pd.concat([df[df[match_col].isin(unique_vals)] for df in dfs], ignore_index=True)
         label = f"Unique rows ({len(result)} particles)"
         slot_names = [f"motl_slot{s+1}" for s in selected if all_data[s]]
         dash_logger.write(
@@ -463,7 +478,11 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
             f"result = pd.concat([m[m['{match_col}'].isin(unique_vals)] for m in [{', '.join(slot_names)}]])",
             source="cryocat",
         )
-        return result.to_dict("records"), label, f"Found {len(result)} rows with unique '{match_col}' across {len(dfs)} motls."
+        return (
+            result.to_dict("records"),
+            label,
+            f"Found {len(result)} rows with unique '{match_col}' across {len(dfs)} motls.",
+        )
 
     # Generate form when a method is selected from the dropdown.
     @callback(
