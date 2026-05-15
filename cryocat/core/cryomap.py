@@ -539,12 +539,12 @@ def invert_contrast(input_map, output_path=None):
     return inverted_map
 
 
-def em2mrc(map_name, invert=False, overwrite=True, voxel_size=1.0, output_path=None):
+def em2mrc(input_map, invert=False, overwrite=True, voxel_size=1.0, output_path=None):
     """Convert a file in EM format to MRC format.
 
     Parameters
     ----------
-    map_name : str
+    input_map : str
         The name of the input map file to be converted.
     invert : bool, default=False
         If True, the data will be inverted (multiplied by -1). Default is False.
@@ -553,7 +553,7 @@ def em2mrc(map_name, invert=False, overwrite=True, voxel_size=1.0, output_path=N
     voxel_size: float, default=1.0
         The size of the voxels to store in the header of the MRC files. Defaults to 1.0.
     output_path : str, optional
-        The name of the output MRC file. If None, the output name will be derived from `map_name` by replacing the
+        The name of the output MRC file. If None, the output name will be derived from `input_map` by replacing the
         last two characters with 'mrc'.
 
     Returns
@@ -564,36 +564,36 @@ def em2mrc(map_name, invert=False, overwrite=True, voxel_size=1.0, output_path=N
     Raises
     -------
     ValueError
-        If input map_name is not a valid .em file path
+        If input input_map is not a valid .em file path
 
     """
-    if not isinstance(map_name, str):
+    if not isinstance(input_map, str):
         raise ValueError(f"Input file must be a string, valid path")
-    elif not map_name.endswith(".em"):
+    elif not input_map.endswith(".em"):
         raise ValueError(f"Provided path must be .em file")
-    data_to_write = read(map_name)
+    data_to_write = read(input_map)
 
     if invert:
         data_to_write = data_to_write * (-1)
 
     if output_path is None:
-        output_path = map_name[:-2] + "mrc"
+        output_path = input_map[:-2] + "mrc"
     elif not output_path.endswith(".mrc"):
         raise ValueError(f"Specified output file name must end with .mrc")
     write(data_to_write, output_path, overwrite=overwrite, voxel_size=voxel_size)
 
 
-def mrc2em(map_name, invert=False, overwrite=True, output_path=None):
+def mrc2em(input_map, invert=False, overwrite=True, output_path=None):
     """Convert a file in MRC format to EM format.
 
-    map_name : str
+    input_map : str
         The name of the input map file to be converted.
     invert : bool, default=False
         If True, the data will be inverted (multiplied by -1). Default is False.
     overwrite : bool, default=True
         If True, allows overwriting of the output file if it already exists. Default is True.
     output_path : str, optional
-        The name of the output EM file. If None, the output name will be derived from `map_name` by replacing the
+        The name of the output EM file. If None, the output name will be derived from `input_map` by replacing the
         last three characters with 'em'.
 
     Returns
@@ -607,30 +607,30 @@ def mrc2em(map_name, invert=False, overwrite=True, output_path=None):
         If the provided file name does not end with .em extension.
 
     """
-    if not isinstance(map_name, str):
+    if not isinstance(input_map, str):
         raise ValueError(f"Input is not a string")
     else:
-        if not map_name.endswith(".mrc"):
+        if not input_map.endswith(".mrc"):
             raise ValueError(f"Input file is not .mrc file")
-    data_to_write = read(map_name)
+    data_to_write = read(input_map)
 
     if invert:
         data_to_write = data_to_write * (-1)
 
     if output_path is None:
-        output_path = map_name[:-3] + "em"
+        output_path = input_map[:-3] + "em"
     elif not output_path.endswith(".em"):
         raise ValueError(f"Specified output_path is not .em file")
 
     write(data_to_write, output_path, overwrite=overwrite)
 
 
-def write_hdf5(map_name, labels=None, weight=None, output_path=None):
+def write_hdf5(input_map, labels=None, weight=None, output_path=None):
     """Write data to an HDF5 file.
 
     Parameters
     ----------
-    map_name : str
+    input_map : str
         The name of the input file containing the data to be written.
     labels : str, optional
         The name of the input file containing the labels to be written. If provided,
@@ -640,7 +640,7 @@ def write_hdf5(map_name, labels=None, weight=None, output_path=None):
         the HDF5 file. Default is None.
     output_path : str, optional
         The name of the output HDF5 file. If not provided, the output file will be named by replacing the last three
-        characters of `map_name` with 'hdf5'. Default is None.
+        characters of `input_map` with 'hdf5'. Default is None.
 
     Returns
     -------
@@ -653,18 +653,18 @@ def write_hdf5(map_name, labels=None, weight=None, output_path=None):
         If the provided file name does not end with .em or .mrc extension.
 
     """
-    if not isinstance(map_name, str):
+    if not isinstance(input_map, str):
         raise ValueError(f"Input is not a string")
     else:
-        if not map_name.endswith(".mrc") and not map_name.endswith(".em"):
+        if not input_map.endswith(".mrc") and not input_map.endswith(".em"):
             raise ValueError(f"Input file is not either .em either .mrc file")
-    data_to_write = read(map_name)
+    data_to_write = read(input_map)
 
     if output_path is None:
-        if map_name.endswith(".mrc"):
-            output_path = map_name[:-3] + "hdf5"
-        elif map_name.endswith(".em"):
-            output_path = map_name[:-2] + "hdf5"
+        if input_map.endswith(".mrc"):
+            output_path = input_map[:-3] + "hdf5"
+        elif input_map.endswith(".em"):
+            output_path = input_map[:-2] + "hdf5"
     elif not output_path.endswith(".mrc") and not output_path.endswith(".em"):
         raise ValueError("Output file path must be .mrc or .em extension")
 
