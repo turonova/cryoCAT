@@ -78,7 +78,7 @@ def test_create_wedge_list_sg():
         pixel_size = pixel_size,
         tlt_file = tlt_file,
         ctf_file = ctf_file,
-        output_file= str(wedge_output / "wedge_list_017_1.star")
+        output_path= str(wedge_output / "wedge_list_017_1.star")
     )
     #check if output file and given file are equal
     # tlt_angle column from dataframe is float32, but in output file type is float64
@@ -101,7 +101,7 @@ def test_create_wedge_list_sg():
         tlt_file = tlt_file,
         ctf_file = ctf_file,
         z_shift = 100.0,
-        output_file= str(wedge_output / "wedge_list_018_1.star")
+        output_path= str(wedge_output / "wedge_list_018_1.star")
     )
     # check if given em file and output are the same
     assert compare_star_files(str(wedge_output / "wedge_list_018_1.star"), str(wedge_output / "wedge_list_018.star"))
@@ -121,7 +121,7 @@ def test_create_wedge_list_sg_batch():
     tomo_dim_file_format = directory / "TS_$xxx" / "tilt.com"
     z_shift_file_format = directory / "TS_$xxx" / "tilt.com"
     ctf_file_format = directory / "TS_$xxx" / "$xxx_gctf.star"
-    output_file = directory / "wedgeutils_data" / "wedge_list_1.star"
+    output_path = directory / "wedgeutils_data" / "wedge_list_1.star"
     df17_18 = create_wedge_list_sg_batch(
         tomo_list = str(tomo_list),
         pixel_size = pixel_size,
@@ -129,13 +129,13 @@ def test_create_wedge_list_sg_batch():
         tomo_dim_file_format = str(tomo_dim_file_format),
         z_shift_file_format = str(z_shift_file_format),
         ctf_file_format = str(ctf_file_format),
-        output_file = str(output_file)
+        output_path = str(output_path)
     )
-    assert compare_star_files(str(output_file), str(wedgeutils_datad / "wedge_list.star"))
+    assert compare_star_files(str(output_path), str(wedgeutils_datad / "wedge_list.star"))
     # check if returned pd is equal to given file
     assert compare_pd_and_star(df17_18, str(wedgeutils_datad / "wedge_list.star"))
-    if os.path.exists(str(output_file)):
-        os.remove(str(output_file))
+    if os.path.exists(str(output_path)):
+        os.remove(str(output_path))
 
     #case2: testing if not passing either tomo_dim_file_format / tomo_dim raises and exception
     with pytest.raises(ValueError):
@@ -205,7 +205,7 @@ def test_create_wedge_list_em_batch():
     df_17 = create_wedge_list_em_batch(
         tomo_list=str(tomograms),
         tlt_file_format=tlt_file_format,
-        output_file=str(wedgeutils_datad / "wedge_list_1.em")
+        output_path=str(wedgeutils_datad / "wedge_list_1.em")
     )
     emfile1 = emfile.read(str(wedgeutils_datad / "wedge_list_1.em"))[1]  # Get the data part
     emfile2 = emfile.read(str(wedgeutils_datad / "wedge_list.em"))[1]
@@ -285,9 +285,9 @@ def test_create_wg_mask():
     mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size_array)
     assert mask.shape == tuple(box_size_array), f"Forma errata: {mask.shape}"
 
-    output_file = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_mask.em")
-    mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size, output_path=str(output_file))
-    assert os.path.exists(output_file)
+    output_path = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_mask.em")
+    mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size, output_path=str(output_path))
+    assert os.path.exists(output_path)
 
     with pytest.raises(ValueError):
         create_wg_mask(12345, sample_tomo_list, box_size)
@@ -298,8 +298,8 @@ def test_create_wg_mask():
     with pytest.raises(ValueError):
         create_wg_mask(sample_wedge_list, sample_tomo_list, [64, 64])
 
-    """if os.path.exists(output_file):
-        os.remove(output_file)"""
+    """if os.path.exists(output_path):
+        os.remove(output_path)"""
 
 
 def create_sample_map_file(tmp_path, data, filename):
@@ -324,12 +324,12 @@ def test_apply_wedge_mask(tmp_path):
     assert isinstance(result_map_rot, np.ndarray), "Rotated map is not a numpy array"
     assert result_map_rot.shape == in_map_data.shape, f"Expected rotated map shape {in_map_data.shape}, but got {result_map_rot.shape}"
 
-    output_file = tmp_path / "output_map.em"
-    result_map_with_output = apply_wedge_mask(wedge_mask_path, in_map_path, output_path=str(output_file))
+    output_path = tmp_path / "output_map.em"
+    result_map_with_output = apply_wedge_mask(wedge_mask_path, in_map_path, output_path=str(output_path))
 
-    assert os.path.exists(output_file), f"Output file {output_file} was not created"
+    assert os.path.exists(output_path), f"Output file {output_path} was not created"
 
-    output_map = cryomap.read(str(output_file))
+    output_map = cryomap.read(str(output_path))
     assert isinstance(output_map, np.ndarray), "Output file does not contain a valid numpy array"
 
     with pytest.raises(FileNotFoundError):

@@ -187,14 +187,14 @@ def test_compute_alignment_statistics(sg_mock):
         assert stats_df['plane_var'].iloc[0] >= 0
 
         #3:output file
-        output_file = os.path.join(tmpdir, "alignment_stats.csv")
+        output_path = os.path.join(tmpdir, "alignment_stats.csv")
         stats_with_output = compute_alignment_statistics(
             motl_base, 1, 2,
             motl_type="stopgap",
-            output_file=output_file
+            output_path=output_path
         )
-        assert os.path.exists(output_file)
-        loaded_stats = pd.read_csv(output_file)
+        assert os.path.exists(output_path)
+        loaded_stats = pd.read_csv(output_path)
         pd.testing.assert_frame_equal(stats_with_output, loaded_stats, check_dtype=False)
 
 

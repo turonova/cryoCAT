@@ -709,10 +709,10 @@ def test_fill_hollow_mask(tmp_path):
 
     # 5. Output File
     hollow_cube_file = create_sample_map_file(tmp_path, hollow_cube, "hollow_cube.em")
-    output_file = tmp_path / "filled_cube.em"
-    fill_hollow_mask(hollow_cube_file, output_path=str(output_file))
-    assert os.path.exists(output_file), "Output file was not created"
-    filled_cube_from_file = cryomap.read(str(output_file))
+    output_path = tmp_path / "filled_cube.em"
+    fill_hollow_mask(hollow_cube_file, output_path=str(output_path))
+    assert os.path.exists(output_path), "Output file was not created"
+    filled_cube_from_file = cryomap.read(str(output_path))
     assert np.array_equal(filled_cube_from_file, expected_filled_cube), "Output file content is incorrect"
 
     # 6. input from file

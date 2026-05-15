@@ -2207,7 +2207,7 @@ def create_projection(coord, projection_type="stereo", split_into_hemispheres=Tr
 
 
 def plot_polar_nn_distances(
-    coordinates, distances, max_radius=None, marker_size=3, colormap="viridis_r", graph_title=None, output_file=None
+    coordinates, distances, max_radius=None, marker_size=3, colormap="viridis_r", graph_title=None, output_path=None
 ):
     """Plot nearest-neighbour distances in polar (stereographic) projection.
 
@@ -2229,7 +2229,7 @@ def plot_polar_nn_distances(
         Matplotlib colormap name.
     graph_title : str, optional
         Figure suptitle.
-    output_file : str, optional
+    output_path : str, optional
         Path for saving the figure.
     """
     coord_sorted = coordinates[coordinates[:, 2].argsort()]
@@ -2265,8 +2265,8 @@ def plot_polar_nn_distances(
         fig.suptitle(graph_title)
     plt.show()
 
-    if output_file is not None:
-        fig.savefig(output_file, dpi=fig.dpi)
+    if output_path is not None:
+        fig.savefig(output_path, dpi=fig.dpi)
 
 
 def fill_wedge(r1, r2, theta1, theta2, theta_step, **kargs):
@@ -2341,7 +2341,7 @@ def plot_orientational_distribution(
     radius_bin=33,
     max_radius=None,
     colormap="viridis_r",
-    output_file=None,
+    output_path=None,
     show=True,
 ):
     """Plot the orientational distribution of unit vectors as a polar histogram.
@@ -2364,7 +2364,7 @@ def plot_orientational_distribution(
         Maximum projected radius.  Defaults to the data maximum.
     colormap : str, default="viridis_r"
         Matplotlib colormap name.
-    output_file : str, optional
+    output_path : str, optional
         Path for saving the figure.
     show : bool, default=True
         Call :func:`matplotlib.pyplot.show`.
@@ -2423,14 +2423,14 @@ def plot_orientational_distribution(
     if show:
         plt.show()
 
-    if output_file is not None:
-        fig.savefig(output_file, dpi=fig.dpi)
+    if output_path is not None:
+        fig.savefig(output_path, dpi=fig.dpi)
 
     return fig
 
 
 def plot_class_occupancy(
-    occupancy_dic, color_scheme=None, ax=None, show_legend=True, graph_title=None, output_file=None
+    occupancy_dic, color_scheme=None, ax=None, show_legend=True, graph_title=None, output_path=None
 ):
     """Plot per-class particle counts over alignment iterations.
 
@@ -2447,7 +2447,7 @@ def plot_class_occupancy(
         Display the class legend.
     graph_title : str, optional
         Axes title.  Defaults to ``"Class occupancy progress"``.
-    output_file : str, optional
+    output_path : str, optional
         Path for saving the figure (only when *ax* was not provided).
     """
     ax_provided = True
@@ -2477,12 +2477,12 @@ def plot_class_occupancy(
         plt.tight_layout()
         plt.show()
 
-    if output_file is not None and not ax_provided:
-        fig.savefig(output_file, dpi=fig.dpi)
+    if output_path is not None and not ax_provided:
+        fig.savefig(output_path, dpi=fig.dpi)
 
 
 def plot_class_stability(
-    subtomo_changes, color_scheme=None, ax=None, show_legend=True, graph_title=None, output_file=None
+    subtomo_changes, color_scheme=None, ax=None, show_legend=True, graph_title=None, output_path=None
 ):
     """Plot the number of particles that changed class at each iteration.
 
@@ -2498,7 +2498,7 @@ def plot_class_stability(
         Display the class legend.
     graph_title : str, optional
         Axes title.  Defaults to ``"Stability of classes"``.
-    output_file : str, optional
+    output_path : str, optional
         Path for saving the figure (only when *ax* was not provided).
     """
     ax_provided = True
@@ -2529,12 +2529,12 @@ def plot_class_stability(
         plt.tight_layout()
         plt.show()
 
-    if output_file is not None and not ax_provided:
-        fig.savefig(output_file, dpi=fig.dpi)
+    if output_path is not None and not ax_provided:
+        fig.savefig(output_path, dpi=fig.dpi)
 
 
 def plot_classification_convergence(
-    occupancy_dic, subtomo_changes_dic, color_scheme=None, graph_title=None, output_file=None
+    occupancy_dic, subtomo_changes_dic, color_scheme=None, graph_title=None, output_path=None
 ):
     """Plot class occupancy and class stability side by side.
 
@@ -2550,7 +2550,7 @@ def plot_classification_convergence(
         Colormap name or explicit list of colors.
     graph_title : str, optional
         Overall figure suptitle.
-    output_file : str, optional
+    output_path : str, optional
         Path for saving the figure.
     """
     # Create subplots
@@ -2568,11 +2568,11 @@ def plot_classification_convergence(
 
     plt.show()
 
-    if output_file is not None:
-        fig.savefig(output_file, dpi=fig.dpi)
+    if output_path is not None:
+        fig.savefig(output_path, dpi=fig.dpi)
 
 
-def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stability", output_file=None):
+def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stability", output_path=None):
     """Plot per-parameter alignment statistics over iterations.
 
     Creates a 3×4 grid of line plots, one panel per DataFrame column.  Each
@@ -2588,7 +2588,7 @@ def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stab
         with the legend hidden.
     graph_title : str, default="Alignment stability"
         Figure suptitle.
-    output_file : str, optional
+    output_path : str, optional
         Path for saving the figure.
     """
     x_axis = np.arange(input_dfs[0].shape[0])
@@ -2624,8 +2624,8 @@ def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stab
     fig.suptitle(graph_title)
     plt.show()
 
-    if output_file is not None:
-        fig.savefig(output_file, dpi=fig.dpi)
+    if output_path is not None:
+        fig.savefig(output_path, dpi=fig.dpi)
 
 
 def scatter_with_histogram(
@@ -2639,7 +2639,7 @@ def scatter_with_histogram(
     edges_y=None,
     axis_title_x=None,
     axis_title_y=None,
-    output_file=None,
+    output_path=None,
 ):
     """Scatter plot with marginal histograms on the top and right.
 
@@ -2666,7 +2666,7 @@ def scatter_with_histogram(
         X-axis label for the scatter panel.
     axis_title_y : str, optional
         Y-axis label for the scatter panel.
-    output_file : str, optional
+    output_path : str, optional
         Path for saving the figure.
     """
     if not bins_x:
@@ -2755,8 +2755,8 @@ def scatter_with_histogram(
     ax_histy.set_xlabel("Count")
     ax_histy.yaxis.set_tick_params(labelleft=False)  # Hide y labels
 
-    if output_file is not None:
-        fig.savefig(output_file, dpi=fig.dpi)
+    if output_path is not None:
+        fig.savefig(output_path, dpi=fig.dpi)
 
     plt.show()
 

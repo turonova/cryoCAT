@@ -919,7 +919,7 @@ class PleomorphicSurface:
     """
 
     @staticmethod
-    def get_parametric_description(input_motl, feature_id="object_id", output_file=None):
+    def get_parametric_description(input_motl, feature_id="object_id", output_path=None):
         """Fit an ellipsoid to each group of particles and return the parameters.
 
         Parameters
@@ -928,7 +928,7 @@ class PleomorphicSurface:
             Input particle list.
         feature_id : str, default='object_id'
             Column used to group particles (one ellipsoid per unique value).
-        output_file : str, optional
+        output_path : str, optional
             Path for saving the parameter table as a CSV.
 
         Returns
@@ -960,8 +960,8 @@ class PleomorphicSurface:
 
         el_params_all.reset_index(drop=True, inplace=True)
 
-        if output_file is not None:
-            el_params_all.to_csv(output_file, index=False)
+        if output_path is not None:
+            el_params_all.to_csv(output_path, index=False)
 
         return el_params_all
 
@@ -1046,7 +1046,7 @@ class PleomorphicSurface:
         tomo_dim,
         shell_size,
         feature_id="object_id",
-        output_file=None,
+        output_path=None,
         radius_offset=0.0,
         motl_radius_id="geom5",
     ):
@@ -1068,7 +1068,7 @@ class PleomorphicSurface:
             Thickness of the spherical shell used for the mask.
         feature_id : str, default='object_id'
             Column to write the assigned object identifier into.
-        output_file : str, optional
+        output_path : str, optional
             Path to save the assigned motl.
         radius_offset : float, default=0.0
             Additional offset added to the object radius when building the
@@ -1106,8 +1106,8 @@ class PleomorphicSurface:
 
         assigned_motl_df.reset_index(drop=True, inplace=True)
         assigned_motl = cryomotl.Motl(assigned_motl_df)
-        if output_file is not None:
-            assigned_motl.write_out(output_file)
+        if output_path is not None:
+            assigned_motl.write_out(output_path)
         return assigned_motl
 
     @staticmethod
@@ -1116,7 +1116,7 @@ class PleomorphicSurface:
         parametric_surface,
         surface_type="ellipsoid",
         feature_id="object_id",
-        output_file=None,
+        output_path=None,
         store_id="geom4",
     ):
         """Compute the signed distance from each particle to its assigned surface.
@@ -1131,7 +1131,7 @@ class PleomorphicSurface:
             Quadric surface type forwarded to :class:`quadric.QuadricsM`.
         feature_id : str, default='object_id'
             Column used to match particles to surface objects.
-        output_file : str, optional
+        output_path : str, optional
             Path to save the result.
         store_id : str, default='geom4'
             Column that receives the distance values.
@@ -1154,8 +1154,8 @@ class PleomorphicSurface:
 
         assigned_motl = cryomotl.Motl(assigned_motl_df)
         assigned_motl.df.reset_index(drop=True, inplace=True)
-        if output_file is not None:
-            assigned_motl.write_out(output_file)
+        if output_path is not None:
+            assigned_motl.write_out(output_path)
         return assigned_motl
 
     @staticmethod
@@ -1164,7 +1164,7 @@ class PleomorphicSurface:
         parametric_surface,
         surface_type="ellipsoid",
         feature_id="object_id",
-        output_file=None,
+        output_path=None,
         unassigned_value=None,
     ):
         """Assign each particle to the nearest surface centre.
@@ -1184,7 +1184,7 @@ class PleomorphicSurface:
             stored for downstream compatibility).
         feature_id : str, default='object_id'
             Column that receives the assigned surface identifier.
-        output_file : str, optional
+        output_path : str, optional
             Path to save the result.
         unassigned_value : scalar, optional
             When provided, only particles whose current ``feature_id`` equals
@@ -1234,8 +1234,8 @@ class PleomorphicSurface:
             assigned_motl = cryomotl.Motl(assigned_motl_df)
 
         assigned_motl.df.reset_index(drop=True, inplace=True)
-        if output_file is not None:
-            assigned_motl.write_out(output_file)
+        if output_path is not None:
+            assigned_motl.write_out(output_path)
         return assigned_motl
 
     @staticmethod
@@ -1243,7 +1243,7 @@ class PleomorphicSurface:
         input_motl,
         parametric_surface,
         feature_id="object_id",
-        output_file=None,
+        output_path=None,
         keep_unassigned=True,
     ):
         """Assign each particle to the surface it points toward (ray casting).
@@ -1262,7 +1262,7 @@ class PleomorphicSurface:
             Surface parameter table; see :meth:`load_parametric_surface`.
         feature_id : str, default='object_id'
             Column that receives the assigned surface identifier.
-        output_file : str, optional
+        output_path : str, optional
             Path to save the result.
         keep_unassigned : bool, default=True
             When ``False``, particles with ``feature_id == -1`` are removed.
@@ -1318,8 +1318,8 @@ class PleomorphicSurface:
         assigned_motl_df.reset_index(drop=True, inplace=True)
         assigned_motl = cryomotl.Motl(assigned_motl_df)
         print(f"{unassigned} particles did not have any intersection or were inside.")
-        if output_file is not None:
-            assigned_motl.write_out(output_file)
+        if output_path is not None:
+            assigned_motl.write_out(output_path)
         return assigned_motl
 
     @staticmethod
@@ -1367,7 +1367,7 @@ class PleomorphicSurface:
         return intersection_points
 
     @staticmethod
-    def compute_normals(input_motl, surface_params, feature_id="object_id", store_id="geom4", output_file=None):
+    def compute_normals(input_motl, surface_params, feature_id="object_id", store_id="geom4", output_path=None):
         """Compute the angle between each particle's orientation and the surface normal.
 
         The surface normal at a particle's position is approximated as the
@@ -1385,7 +1385,7 @@ class PleomorphicSurface:
             Column used to match particles to surfaces.
         store_id : str, default='geom4'
             Column that receives the angle values (degrees).
-        output_file : str, optional
+        output_path : str, optional
             Path to save the result.
 
         Returns
@@ -1409,8 +1409,8 @@ class PleomorphicSurface:
 
         assigned_motl_df.index = in_motl.df.index
         assigned_motl = cryomotl.Motl(assigned_motl_df)
-        if output_file is not None:
-            assigned_motl.write_out(output_file)
+        if output_path is not None:
+            assigned_motl.write_out(output_path)
         return assigned_motl
 
     @staticmethod
@@ -1421,7 +1421,7 @@ class PleomorphicSurface:
         surface_params=None,
         normals_id="geom4",
         threshold=None,
-        output_file=None,
+        output_path=None,
     ):
         """Remove particles whose orientation deviates too far from the surface normal.
 
@@ -1447,7 +1447,7 @@ class PleomorphicSurface:
         threshold : float, optional
             Maximum allowed angle (degrees).  Defaults to one standard
             deviation of the distribution.
-        output_file : str, optional
+        output_path : str, optional
             Path to save the cleaned motl.
 
         Returns
@@ -1461,7 +1461,7 @@ class PleomorphicSurface:
 
         if compute_normals:
             in_motl = PleomorphicSurface.compute_normals(
-                in_motl, surface_params, feature_id=feature_id, store_id=normals_id, output_file=None
+                in_motl, surface_params, feature_id=feature_id, store_id=normals_id, output_path=None
             )
 
         diff_angles = in_motl.df[normals_id].values
@@ -1480,12 +1480,12 @@ class PleomorphicSurface:
             f"{orig_number - in_motl.df.shape[0]} particles "
             f"({((orig_number - in_motl.df.shape[0]) / orig_number * 100):.2f}%) were removed from the list."
         )
-        if output_file is not None:
-            in_motl.write_out(output_file)
+        if output_path is not None:
+            in_motl.write_out(output_path)
         return in_motl
 
     @staticmethod
-    def clean_by_radius(input_motl, feature_id="object_id", threshold=None, output_file=None):
+    def clean_by_radius(input_motl, feature_id="object_id", threshold=None, output_path=None):
         """Remove particles that lie too far from the mean ellipsoid radius.
 
         For each surface group the mean radius ``(rx+ry+rz)/3`` and the
@@ -1503,7 +1503,7 @@ class PleomorphicSurface:
         threshold : float, optional
             Half-width of the allowed distance band.  Defaults to one
             standard deviation.
-        output_file : str, optional
+        output_path : str, optional
             Path to save the cleaned motl.
 
         Returns
@@ -1537,8 +1537,8 @@ class PleomorphicSurface:
             f"{in_motl.df.shape[0] - cleaned_motl.df.shape[0]} particles "
             f"({((in_motl.df.shape[0] - cleaned_motl.df.shape[0]) / in_motl.df.shape[0] * 100):.2f}%) were removed."
         )
-        if output_file is not None:
-            cleaned_motl.write_out(output_file)
+        if output_path is not None:
+            cleaned_motl.write_out(output_path)
         return cleaned_motl
 
     @staticmethod

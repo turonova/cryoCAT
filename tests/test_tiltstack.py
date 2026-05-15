@@ -27,7 +27,7 @@ def test_crop():
         tilt_stack=tilt_stack_path,
         new_width=180,
         new_height=150,
-        output_file=tilt_stack_1_path
+        output_path=tilt_stack_1_path
     )
     #when crop is being called, output_order defines returned np.array shape (in this case it's default)
     assert cropped_tilt_1.shape[0] == 180, "Width of the cropped data is incorrect."
@@ -69,7 +69,7 @@ def test_crop():
             tilt_stack = tilt_stack_path,
             new_width=ts_original.width + 10,
             new_height=ts_original.height + 10,
-            output_file=tilt_stack_1_path
+            output_path=tilt_stack_1_path
         )
     #case5: there is no kind of validating data: input could be xyz but my mistake input_order might be zyx, what happens?
 
@@ -85,7 +85,7 @@ def test_sort_tilts_by_angle():
     sorted_stack = sort_tilts_by_angle(
         tilt_stack = tilt_stack_path,
         input_tilts= tilt_angles,
-        output_file=tilt_stack_1_path
+        output_path=tilt_stack_1_path
     )
     print(type(sorted_stack))
     #Visual result confirms the stack is being rearranged considering given iput tilts
@@ -108,7 +108,7 @@ def test_remove_tilts():
     ind = [1]
     result = remove_tilts(
         tilt_stack = tilt_stack_path,
-        output_file=tilt_stack_1_path,
+        output_path=tilt_stack_1_path,
         idx_to_remove=ind
     )
     #output order is by default xyz
@@ -118,14 +118,14 @@ def test_remove_tilts():
     with pytest.raises(IndexError):
         result = remove_tilts(
             tilt_stack = tilt_stack_path,
-            output_file=tilt_stack_1_path,
+            output_path=tilt_stack_1_path,
             idx_to_remove=ind
         )
     #interesting case: all tilts removed: normal execution with empty stack returned
     ind = [1,2,3,4]
     result = remove_tilts(
         tilt_stack = tilt_stack_path,
-        output_file=tilt_stack_2_path,
+        output_path=tilt_stack_2_path,
         idx_to_remove=ind
     )
     assert result.shape[2] == 0 #ts_ntilts - len(ind)
@@ -134,7 +134,7 @@ def test_remove_tilts():
         ind=[]
         result = remove_tilts(
             tilt_stack = tilt_stack_path,
-            output_file=tilt_stack_1_path,
+            output_path=tilt_stack_1_path,
             idx_to_remove=ind
         )
         assert result.shape[2] == ts_ntilts
@@ -150,7 +150,7 @@ def test_bin():
     binned_stack = bin(
         tilt_stack = tilt_stack_path,
         binning_factor= 2,
-        output_file=tilt_stack_1_path
+        output_path=tilt_stack_1_path
     )
     #returned binned_stack has x,y,z. constructor builds automatically z y x
     assert binned_stack.shape == (ts.data.shape[2]//2, ts.data.shape[1]//2, ts.data.shape[0])
@@ -160,7 +160,7 @@ def test_bin():
         binned_stack = bin(
             tilt_stack = tilt_stack_path,
             binning_factor= 0.5,
-            output_file=tilt_stack_1_path
+            output_path=tilt_stack_1_path
         )
 
 def test_calculate_total_dose_batch():
@@ -269,7 +269,7 @@ def test_dose_filter():
         tilt_stack = tilt_stack_path,
         pixel_size = pixel_size,
         total_dose=dose,
-        output_file=outputfile
+        output_path=outputfile
     )
     if os.path.exists(outputfile):
         os.remove(outputfile)
@@ -282,7 +282,7 @@ def remove1tiltfortesting():
     removed = str(Path(__file__).parent / "test_data" / "test_minus1_split.mrc")
     _ = remove_tilts(
         tilt_stack=toberemoved,
-        output_file=removed,
+        output_path=removed,
         idx_to_remove=[2]
     )
 def test_split_stack_even_odd():
@@ -330,7 +330,7 @@ def test_merge():
     create_files_for_merging_test()
     res = merge(
         file_path_pattern=dir_pattern,
-        output_file=output_pattern
+        output_path=output_pattern
     )
     ts1path = str(Path(__file__).parent /  "test_data" / "test_merge" / "test_split_1.mrc")
     ts1 = TiltStack(ts1path)
@@ -347,7 +347,7 @@ def test_merge():
 def test_flip_along_axes():
     flipped = flip_along_axes(
         tilt_stack = tilt_stack_path,
-        output_file=flipped_path,
+        output_path=flipped_path,
         axes = ["x","y","z"]
     )
     ts = TiltStack(tilt_stack_path)
@@ -363,7 +363,7 @@ def test_deconvolve():
     tilt_stack_path = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
     expected_output_path = str(Path(__file__).parent / "test_data" / "expected_output.mrc")
     synthetic_input = np.random.rand(4, 128, 128).astype(np.float32)
-    output_mrc = deconvolve(tilt_stack_path, pixel_size_a=3.42, defocus=2.5, output_file=expected_output_path)
+    output_mrc = deconvolve(tilt_stack_path, pixel_size_a=3.42, defocus=2.5, output_path=expected_output_path)
     expected_mrc = TiltStack(expected_output_path).data.transpose(2,1,0)
     assert np.allclose(output_mrc, expected_mrc, atol=1e-5)
     output_numpy = deconvolve(synthetic_input, pixel_size_a=3.42, defocus=4)
@@ -414,7 +414,7 @@ def test_equalize_histogram():
     with pytest.raises(ValueError):
         equalize_histogram(
             tilt_stack=tilt_stack_path,
-            output_file=tilt_stack_1_path,
+            output_path=tilt_stack_1_path,
             eh_method="notvalid"
         )
     synthetic_input = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
