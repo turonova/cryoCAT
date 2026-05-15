@@ -1895,6 +1895,52 @@ def ray_ellipsoid_intersection_3d(point, normal, ellipsoid_params):
     return p1, p2, d1, d2, is_inside
 
 
+def construct_rays(
+    points: np.ndarray,
+    normals: np.ndarray,
+    ray_length: float | None = None,
+    reverse_direction: bool = False,
+) -> np.ndarray:
+    """
+    Build rays from points and normals (N, 6): origin xyz + direction xyz.
+
+    Parameters
+    ----------
+    points : ndarray (N, 3)
+    normals : ndarray (N, 3)
+    ray_length : float, optional
+        Scale for direction magnitude; if None, effectively infinite.
+    reverse_direction : bool
+        If True, negate normals before building directions.
+    """
+    points = np.atleast_2d(np.asarray(points, dtype=np.float32))
+    normals = np.atleast_2d(np.asarray(normals, dtype=np.float32))
+
+    if points.shape[1] != 3:
+        raise ValueError(f"Points must have shape (N, 3), got {points.shape}")
+    if normals.shape[1] != 3:
+        raise ValueError(f"Normals must have shape (N, 3), got {normals.shape}")
+    if points.shape[0] != normals.shape[0]:
+        raise ValueError(
+            f"Points and normals length mismatch: {points.shape[0]} vs {normals.shape[0]}"
+        )
+
+    norm_mag = np.linalg.norm(normals, axis=1, keepdims=True)
+    if np.any(norm_mag < 1e-10):
+        raise ValueError("Found zero-length normal vectors")
+    normals_normalized = normals / norm_mag
+
+    if reverse_direction:
+        normals_normalized = -normals_normalized
+
+    if ray_length is None:
+        ray_directions = normals_normalized * 1e10
+    else:
+        ray_directions = normals_normalized * float(ray_length)
+
+    return np.hstack([points, ray_directions])
+
+
 def ray_ray_intersection_3d(starting_points, ending_points):
     """Calculate the intersection point and distances from the intersection to each line for a set of 3D rays.
 
