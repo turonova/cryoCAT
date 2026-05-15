@@ -58,7 +58,7 @@ def create_wedge_list_sg(
     voltage=300.0,
     amp_contrast=0.07,
     cs=2.7000,
-    output_file=None,
+    output_path=None,
     drop_nan_columns=True,
 ):
     """Create a wedge list dataframe for a single tomogram/tilt series in STOPGAP format.
@@ -94,7 +94,7 @@ def create_wedge_list_sg(
         The amplitude contrast of the microscope, defaults to 0.07.
     cs : float, default=2.7
         The spherical aberration coefficient, defaults to 2.7.
-    output_file : str, optional
+    output_path : str, optional
         The path to the output file, by default None. If None, the output is not written out.
     drop_nan_columns : bool, default=True
         Whether to drop columns with NaN values, defaults to True.
@@ -156,9 +156,9 @@ def create_wedge_list_sg(
     if drop_nan_columns:
         wedge_list_df = wedge_list_df.dropna(axis=1, how="all")
 
-    if output_file is not None:
+    if output_path is not None:
         starfileio.Starfile.write(
-            [wedge_list_df], output_file, specifiers=["data_stopgap_wedgelist"], number_columns=False
+            [wedge_list_df], output_path, specifiers=["data_stopgap_wedgelist"], number_columns=False
         )
     return wedge_list_df
 
@@ -177,7 +177,7 @@ def create_wedge_list_sg_batch(
     voltage=300.0,
     amp_contrast=0.07,
     cs=2.7000,
-    output_file=None,
+    output_path=None,
 ):
     """Create a wedge list dataframe in STOPGAP format for all tomograms/tilt series specified in tomo_list.
 
@@ -223,7 +223,7 @@ def create_wedge_list_sg_batch(
         The amplitude contrast of the microscope, defaults to 0.07.
     cs : float, default=2.7
         The spherical aberration coefficient, defaults to 2.7.
-    output_file : str, optional
+    output_path : str, optional
         The path to the output file, by default None. If None, the output is not written out. Defaults to None.
 
     Returns
@@ -309,7 +309,7 @@ def create_wedge_list_sg_batch(
             voltage=voltage,
             amp_contrast=amp_contrast,
             cs=cs,
-            output_file=None,
+            output_path=None,
             drop_nan_columns=False,
         )
 
@@ -317,9 +317,9 @@ def create_wedge_list_sg_batch(
 
     wedge_list_df = wedge_list_df.dropna(axis=1, how="all")
     wedge_list_df.reset_index(drop=True, inplace=True)
-    if output_file is not None:
+    if output_path is not None:
         starfileio.Starfile.write(
-            [wedge_list_df], output_file, specifiers=["data_stopgap_wedgelist"], number_columns=False
+            [wedge_list_df], output_path, specifiers=["data_stopgap_wedgelist"], number_columns=False
         )
     return wedge_list_df
 
@@ -327,7 +327,7 @@ def create_wedge_list_sg_batch(
 def create_wedge_list_em_batch(
     tomo_list,
     tlt_file_format,
-    output_file=None,
+    output_path=None,
 ):
     """Create a wedge list dataframe in EM format for all tomograms/tilt series specified in tomo_list.
 
@@ -340,7 +340,7 @@ def create_wedge_list_em_batch(
         The format describing name of the input files (including the path) with tilt angles. See `Notes` below for more
         information. See :meth:`cryocat.utils.ioutils.tlt_load` for more information on allowed input files (tlt, mdoc,
         xml).
-    output_file : str, optional
+    output_path : str, optional
         The path to the output file, by default None. If None, the output is not written out.
 
     Returns
@@ -384,10 +384,10 @@ def create_wedge_list_em_batch(
     wedge_list_df["min_angle"] = np.asarray(tilts_min)
     wedge_list_df["max_angle"] = np.asarray(tilts_max)
 
-    if output_file is not None:
+    if output_path is not None:
         wedge_array = wedge_list_df.to_numpy()
         wedge_array = wedge_array.reshape((1, wedge_array.shape[0], wedge_array.shape[1])).astype(np.single)
-        emfile.write(output_file, wedge_array, {}, overwrite=True)
+        emfile.write(output_path, wedge_array, {}, overwrite=True)
 
     return wedge_list_df
 

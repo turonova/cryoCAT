@@ -833,7 +833,7 @@ def rotate(
     return rot_struct
 
 
-def crop(input_map, new_size, output_file=None, crop_coord=None):
+def crop(input_map, new_size, output_path=None, crop_coord=None):
     """
     This function crops a given input map to a new size. If no crop coordinates are provided, the function will crop from the center of the input map. If an output file is specified, the cropped volume will be written to this file.
 
@@ -843,7 +843,7 @@ def crop(input_map, new_size, output_file=None, crop_coord=None):
         The input map to be cropped. If a string is provided, it is assumed to be the path to the input map file.
     new_size : tuple or str
         The desired size of the cropped volume. If a string is provided, it is assumed to be in the format 'x,y,z'.
-    output_file : str, optional
+    output_path : str, optional
         The path to the output file where the cropped volume will be written. If not provided, the cropped volume will not be written to a file.
     crop_coord : tuple or str, optional
         The coordinates from which to start cropping. If a string is provided, it is assumed to be in the format 'x,y,z'. If not provided, the function will crop from the center of the input map.
@@ -871,8 +871,8 @@ def crop(input_map, new_size, output_file=None, crop_coord=None):
     # print(vs[0], ve[0], vs[1], ve[1], vs[2], ve[2])
     cropped_volume = input_map[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
 
-    if output_file is not None:
-        write(cropped_volume, output_file, data_type=np.single)
+    if output_path is not None:
+        write(cropped_volume, output_path, data_type=np.single)
 
     return cropped_volume
 
@@ -1066,7 +1066,7 @@ def get_start_end_indices(coord, volume_shape, subvolume_shape):
     return volume_start_clip, volume_end_clip, subvolume_start, subvolume_end
 
 
-def extract_subvolume(volume, coordinates, subvolume_shape, enforce_shape=False, output_file=None):
+def extract_subvolume(volume, coordinates, subvolume_shape, enforce_shape=False, output_path=None):
     """
     Extracts a subvolume from a given volume.
 
@@ -1080,7 +1080,7 @@ def extract_subvolume(volume, coordinates, subvolume_shape, enforce_shape=False,
         The (x, y, z) shape of the subvolume to extract.
     enforce_shape : bool, optional
         If True, the final volume will have the same shape as the original volume and the voxels outside the region of interest will be set to the mean value of the original volume. Default is False.
-    output_file : str, optional
+    output_path : str, optional
         If provided, the extracted subvolume will be written to this file.
 
     Returns
@@ -1105,8 +1105,8 @@ def extract_subvolume(volume, coordinates, subvolume_shape, enforce_shape=False,
         subvolume = np.full(subvolume_shape, np.mean(volume))
         subvolume[ss[0] : se[0], ss[1] : se[1], ss[2] : se[2]] = volume[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
 
-    if output_file is not None:
-        write(subvolume, output_file, data_type=np.single)
+    if output_path is not None:
+        write(subvolume, output_path, data_type=np.single)
 
     return subvolume
 

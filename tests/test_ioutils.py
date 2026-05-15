@@ -3731,18 +3731,18 @@ Line 5
     with open(test_file, "w") as f:
         f.write(content)
     # Test case 3: Check if output file is written
-    output_file = Path(__file__).parent / "test_data" / "TS_018" / "output_file.txt"
+    output_path = Path(__file__).parent / "test_data" / "TS_018" / "output_path.txt"
     lines_to_remove = 0  # Remove first line
-    result = remove_lines(str(test_file), lines_to_remove, number_start=0, output_file=str(output_file))
+    result = remove_lines(str(test_file), lines_to_remove, number_start=0, output_path=str(output_path))
     # Verify if the output file was created
-    assert output_file.exists()
+    assert output_path.exists()
     # Read the content of the output file
-    with open(output_file, "r") as f:
+    with open(output_path, "r") as f:
         output_content = f.readlines()
     # Check if the output content is as expected
     assert output_content == ["Line 2\n", "Line 3\n", "Line 2\n", "Line 4\n", "Test 1\n", "Line 5\n"]
     # Clean up the created files
-    output_file.unlink()
+    output_path.unlink()
     test_file.unlink()
 
     if os.path.exists(test_file):
@@ -4041,7 +4041,7 @@ def test_defocus_remove_file_entries(tmp_path):
         entries_to_remove=entries_to_remove,
         file_type="gctf",
         numbered_from_1=True,
-        output_file=str(output_file_path),
+        output_path=str(output_file_path),
     )
 
     # Contenuto atteso
@@ -4081,7 +4081,7 @@ def test_defocus_remove_file_entries(tmp_path):
         entries_to_remove=entries_to_remove_ctffind4,
         file_type="ctffind4",
         numbered_from_1=True,
-        output_file=str(output_file_path_ctffind4),
+        output_path=str(output_file_path_ctffind4),
     )
 
     # Expected output: keep lines 0, 2, 4 (zero-based)

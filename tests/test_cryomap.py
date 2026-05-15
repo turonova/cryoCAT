@@ -228,13 +228,13 @@ def test_write(file_path):
 def test_invert_contrast(tmp_path):
     # Assuming we have a real .mrc file for this test
     input_file = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
-    output_file = str(Path(__file__).parent / "test_data" / "test_invert.mrc")
+    output_path = str(Path(__file__).parent / "test_data" / "test_invert.mrc")
     # Read the original map
     original_map = read(input_file)
     # Invert contrast and save to a new file
-    inverted_map = invert_contrast(input_file, output_path=output_file)
+    inverted_map = invert_contrast(input_file, output_path=output_path)
     # Read the saved inverted map
-    saved_inverted_map = read(output_file)
+    saved_inverted_map = read(output_path)
 
     # Check if the inverted map matches the manually inverted one
     np.testing.assert_array_equal(inverted_map, saved_inverted_map)
@@ -246,23 +246,23 @@ def test_invert_contrast(tmp_path):
     else:
         assert saved_inverted_map.dtype == original_map.dtype
 
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    if os.path.exists(output_path):
+        os.remove(output_path)
 
 
 def test_em2mrc():
     input_file = str(Path(__file__).parent / "test_data" / "au_1.em")
-    output_file = str(Path(__file__).parent / "test_data" / "au_12.mrc")
+    output_path = str(Path(__file__).parent / "test_data" / "au_12.mrc")
 
-    em2mrc(input_file, output_path=output_file)
-    assert os.path.exists(output_file), "Output file was not created"
+    em2mrc(input_file, output_path=output_path)
+    assert os.path.exists(output_path), "Output file was not created"
 
     input_data = read(input_file)
-    output_data = read(output_file)
+    output_data = read(output_path)
     assert np.allclose(input_data, output_data, atol=1e-6, rtol=1e-6), "Output data does not match input data"
 
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    if os.path.exists(output_path):
+        os.remove(output_path)
 
     # Test default output naming
     em2mrc(input_file)
@@ -286,16 +286,16 @@ def test_em2mrc():
 
 def test_mrc2em():
     input_file = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
-    output_file = str(Path(__file__).parent / "test_data" / "tilt_stack1.em")
+    output_path = str(Path(__file__).parent / "test_data" / "tilt_stack1.em")
 
-    mrc2em(input_file, output_path=output_file)
-    assert os.path.exists(output_file)
+    mrc2em(input_file, output_path=output_path)
+    assert os.path.exists(output_path)
     input_data = read(input_file)
-    output_data = read(output_file)
+    output_data = read(output_path)
     assert np.allclose(input_data, output_data, atol=1e-6, rtol=1e-6)
 
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    if os.path.exists(output_path):
+        os.remove(output_path)
 
     mrc2em(input_file)
     expected_path = str(Path(__file__).parent / "test_data" / "tilt_stack.em")
@@ -442,13 +442,13 @@ def test_crop():
 
     assert np.allclose(crop_coord, obtained_center, atol=1), "Center alignment incorrect"
 
-    output_file = str(Path(__file__).parent / "test_output.mrc")
-    crop(MRC_TEST_FILE, crop_size, output_file)
-    with mrcfile.open(output_file, mode="r") as mrc:
+    output_path = str(Path(__file__).parent / "test_output.mrc")
+    crop(MRC_TEST_FILE, crop_size, output_path)
+    with mrcfile.open(output_path, mode="r") as mrc:
         assert mrc.data.shape == tuple(crop_size)[::-1], "Saved cropped file has incorrect shape"
 
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    if os.path.exists(output_path):
+        os.remove(output_path)
 
 
 def test_shift():

@@ -1313,7 +1313,7 @@ class TwistDescriptor(Descriptor):
 
         return self.df[item]
 
-    def write_out(self, output_file):
+    def write_out(self, output_path):
         """
         Save self.df to CSV or Pickle depending on file extension.
 
@@ -1324,13 +1324,13 @@ class TwistDescriptor(Descriptor):
 
         Parameters
         ----------
-        output_file : str
+        output_path : str
             File path. Must end with `.csv` or `.pkl`.
         """
-        if output_file.endswith(".csv"):
-            self.df.to_csv(output_file, index=False)
-        elif output_file.endswith(".pkl"):
-            self.df.to_pickle(output_file)
+        if output_path.endswith(".csv"):
+            self.df.to_csv(output_path, index=False)
+        elif output_path.endswith(".pkl"):
+            self.df.to_pickle(output_path)
         else:
             raise ValueError("Unsupported file type. Use .csv or .pkl")
 
