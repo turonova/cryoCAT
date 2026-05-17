@@ -226,3 +226,33 @@ def test_ray_ray_intersection_3d_intersection(starting_points, end_points, dista
 # TODO: change_handedness_coordinates, change_handedness_orientation, euler_angles_to_normals, normals_to_euler_angles, ...
 def test_change_handedness_coordinates():
     pass
+
+
+@pytest.mark.parametrize(
+    "input_value, reference_size, expected",
+    [
+        ([1, 2, 3], None, np.array([1, 2, 3])),
+        ([1, 2], None, None),
+        (
+            [
+                1,
+            ],
+            None,
+            np.array([1, 1, 1]),
+        ),
+        (1, None, np.array([1, 1, 1])),
+        ((1, 2, 3), None, np.array([1, 2, 3])),
+        ((1, 2), None, None),
+        ((1,), None, np.array([1, 1, 1])),
+        ((1), None, np.array([1, 1, 1])),
+        ((1.5, 5.3, 3), None, np.array([1, 5, 3])),
+        (np.array([1, 5, 3]), None, np.array([1, 5, 3])),
+        (np.array([1.5, 5.3, 3]), None, np.array([1, 5, 3])),
+    ],
+)
+def test_as_triplet(input_value, reference_size, expected):
+    if expected is None:
+        with pytest.raises(ValueError):
+            as_triplet(input_value, reference_size)
+    else:
+        assert np.array_equal(as_triplet(input_value, reference_size), expected)

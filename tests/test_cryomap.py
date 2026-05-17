@@ -3,7 +3,7 @@ from io import StringIO
 
 from cryocat.core.cryomotl import Motl
 
-from cryocat.core.cryomask import get_correct_format
+from cryocat.utils.geom import as_triplet
 from matplotlib import pyplot as plt
 from scipy.fft import fftn, ifftn, fftshift
 from cryocat.core.cryomap import *
@@ -431,11 +431,11 @@ def test_crop():
     original_shape = np.array(input_map.shape)
 
     crop_size = original_shape // 2
-    crop_coord = get_correct_format(original_shape) // 2
+    crop_coord = as_triplet(original_shape) // 2
     cropped_volume = crop(MRC_TEST_FILE, crop_size)
 
     vs, ve, _, _ = get_start_end_indices(crop_coord, original_shape, crop_size)
-    obtained_center = vs + get_correct_format(cropped_volume.shape) // 2
+    obtained_center = vs + as_triplet(cropped_volume.shape) // 2
     assert cropped_volume.shape == tuple(crop_size), "Cropped volume has incorrect shape"
 
     assert np.any(cropped_volume), "Cropped volume is empty"
@@ -455,20 +455,20 @@ def test_shift():
     test_map = np.zeros((5, 5, 5))
     test_map[2, 2, 2] = 1
     delta = np.array([0.5, 0.5, 0.5])
-    shifted_map = shift(test_map, delta)
+    shifted_map = shift2(test_map, delta)
     assert shifted_map.shape == test_map.shape
     assert np.count_nonzero(shifted_map) > 0
     delta = np.array([0, 0, 0])
-    shifted_map = shift(test_map, delta)
+    shifted_map = shift2(test_map, delta)
     assert np.allclose(shifted_map, test_map, atol=1e-5)
     delta = np.array([1, 0, 0])
-    shifted_map = shift(test_map, delta)
+    shifted_map = shift2(test_map, delta)
     assert np.count_nonzero(shifted_map) > 0
     delta = np.array([0.1, 0.1, 0.1])
-    shifted_map = shift(test_map, delta)
+    shifted_map = shift2(test_map, delta)
     assert np.count_nonzero(shifted_map) > 0
     delta = np.array([0.9, 0.9, 0.9])
-    shifted_map = shift(test_map, delta)
+    shifted_map = shift2(test_map, delta)
     assert np.count_nonzero(shifted_map) > 0
 
 
@@ -613,7 +613,7 @@ def test_pad():
         new_size_invalid = (5, 5)  # New size has only 2 dimensions
         pad(input_volume, new_size_invalid)
         assert False, "Expected ValueError for invalid new_size"
-    except IndexError:
+    except ValueError:
         pass
     try:
         new_size_invalid_dim = (5, 5, 5, 5)  # New size has 4 dimensions

@@ -548,8 +548,8 @@ def generate_wedge_masks(
     """
 
     # init mask volumes for template and tile
-    filter_template = np.ones(cryomask.get_correct_format(template_size))
-    filter_tile = np.ones(cryomask.get_correct_format(tile_size))
+    filter_template = np.ones(geom.as_triplet(template_size))
+    filter_tile = np.ones(geom.as_triplet(tile_size))
 
     # get relevant subset of the wedgelist
     wedgelist = wedgeutils.load_wedge_list_sg(wedgelist)

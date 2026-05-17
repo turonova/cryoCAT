@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from cryocat.utils import ioutils
 from cryocat.utils import starfileio
+from cryocat.utils import geom
 from cryocat.core import cryomask
 from cryocat.core import cryomap
 import emfile
@@ -548,7 +549,7 @@ def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape="wedge", output_p
         sub_wg = wg_list_star_df.loc[wg_list_star_df["tomo_num"] == value].copy()
         angles = [i for i in sub_wg.loc[:, "tilt_angle"]]
 
-        box_size = cryomask.get_correct_format(box_size)
+        box_size = geom.as_triplet(box_size)
         mask = np.empty(box_size)
 
         if shape == "wedge" or shape == "sph_wedge":

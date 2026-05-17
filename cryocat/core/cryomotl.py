@@ -19,6 +19,7 @@ from cryocat.utils import mathutils
 from cryocat.utils import ioutils
 from cryocat.analysis import nnana
 from cryocat.utils import imod
+from cryocat._types import PathOrStr, MotlType
 
 from math import ceil
 from matplotlib import pyplot as plt
@@ -28,6 +29,17 @@ from scipy.spatial import KDTree
 from sklearn.neighbors import KDTree as snKDTree
 from scipy.spatial.transform import Rotation as rot
 
+type MotlSource = Motl | pd.DataFrame | PathOrStr
+"""Anything that can be used to construct or load a :class:`Motl`.
+
+Accepted forms:
+    * :class:`Motl` instance (or any subclass: EmMotl, RelionMotl, ...)
+    * :class:`pandas.DataFrame` with the 20-column motl schema
+    * Path (str / :class:`pathlib.Path` / :class:`os.PathLike`) to a
+      motl file
+
+Normalize with :func:`as_motl` at the function boundary.
+"""
 
 class Motl:
     """Base class for particle motive lists (motls).

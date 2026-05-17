@@ -136,36 +136,6 @@ def test_rotate(ref_masks):
     assert np.allclose(actual, expected, atol=1e-8)
 
 
-@pytest.mark.parametrize(
-    "input_value, reference_size, expected",
-    [
-        ([1, 2, 3], None, np.array([1, 2, 3])),
-        ([1, 2], None, None),
-        (
-            [
-                1,
-            ],
-            None,
-            np.array([1, 1, 1]),
-        ),
-        (1, None, np.array([1, 1, 1])),
-        ((1, 2, 3), None, np.array([1, 2, 3])),
-        ((1, 2), None, None),
-        ((1,), None, np.array([1, 1, 1])),
-        ((1), None, np.array([1, 1, 1])),
-        ((1.5, 5.3, 3), None, np.array([1, 5, 3])),
-        (np.array([1, 5, 3]), None, np.array([1, 5, 3])),
-        (np.array([1.5, 5.3, 3]), None, np.array([1, 5, 3])),
-    ],
-)
-def test_get_correct_format(input_value, reference_size, expected):
-    if expected is None:
-        with pytest.raises(ValueError):
-            get_correct_format(input_value, reference_size)
-    else:
-        assert np.array_equal(get_correct_format(input_value, reference_size), expected)
-
-
 def test_add_gaussian(ref_masks):
     actual = add_gaussian(ref_masks["sm0.em"], 0.5)
     expected = ref_masks["sm50.em"]
