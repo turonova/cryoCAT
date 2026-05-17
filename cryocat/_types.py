@@ -4,10 +4,10 @@ Single source of truth for the polymorphic input/output types used across the
 package. Goals:
 
 1. Stop repeating ``str | Path | np.ndarray | ...`` unions in every signature.
-2. Document the *intent* of a polymorphic input ("a volume source", not just
+2. Document the *intent* of a polymorphic input ("a map source", not just
    "a string or an ndarray").
 3. Give the GUI form generator and the future agent layer a stable vocabulary:
-   any parameter typed ``Volume`` gets the same widget; any parameter typed
+   any parameter typed ``MapSource`` gets the same widget; any parameter typed
    ``MotlType`` is a dropdown of fixed options.
 
 Aliases use the PEP 695 ``type`` statement (Python 3.12+), which evaluates
@@ -23,9 +23,9 @@ Conventions
 
 Notes on runtime checks
 -----------------------
-These are static-typing constructs. ``isinstance(x, Volume)`` does NOT work
-and will raise. To check membership at runtime, test against the concrete
-classes::
+These are static-typing constructs. ``isinstance(x, MapSource)`` does NOT
+work and will raise. To check membership at runtime, test against the
+concrete classes::
 
     if isinstance(source, np.ndarray):
         ...
@@ -54,8 +54,7 @@ Rotations and angles
     EulerAngles             -- (3,) or (N, 3) array of degrees
 
 3D map data
-    Volume                  -- ndarray | PathOrStr
-    Mask                    -- ndarray | PathOrStr (binary)
+    MapSource               -- ndarray | PathOrStr
     TiltStack               -- ndarray | PathOrStr (2D stacks)
 
 Per-tomogram metadata sources
@@ -90,7 +89,7 @@ Aliases defined ELSEWHERE (class-dependent; defined next to their class)
 Normalizers (boundary helpers that take a polymorphic input -> canonical form)
 ..............................................................................
 
-    Volume / Mask           -> cryocat.core.cryomap.read(x)
+    MapSource               -> cryocat.core.cryomap.read(x)
     TiltStack               -> cryocat.core.tiltstack helpers
     RotationLike            -> cryocat.utils.geom.as_rotation(x)
     Symmetry                -> cryocat.utils.geom.as_symmetry(x)
@@ -206,30 +205,25 @@ treat these as angles (degree spinners) rather than coordinates.
 
 
 # ===========================================================================
-# Volumes, masks, stacks (3D map data; ndarray-or-path)
+# Maps, masks, stacks (3D map data; ndarray-or-path)
 # ===========================================================================
 
-type Volume = npt.NDArray | PathOrStr
-"""A 3D volume: ndarray or path to a map file (.mrc, .em, ...).
+type MapSource = npt.NDArray | PathOrStr
+"""A 3D map: ndarray or path to a map file (.mrc, .em, ...).
 
-Normalize with :func:`cryocat.core.cryomap.read`. Used for tomograms,
-references, reconstructions, density maps. Common parameter names:
-``input_map``, ``map``, ``ref``.
-"""
+The single polymorphic input for any 3D map data -- tomograms, references,
+reconstructions, density maps, and binary masks. The distinction between a
+"volume" and a "mask" is purely semantic; both are loaded the same way and
+share the same structural type.
 
-type Mask = npt.NDArray | PathOrStr
-"""A 3D mask volume (typically binary), in memory or as a path.
-
-Structurally identical to :data:`Volume` but semantically distinct so the
-GUI/agent can render it differently (binary file filter, mask preview).
-Loaded with the same helper, :func:`cryocat.core.cryomap.read`.
-Used for ``input_mask``, ``mask``, ``dist_mask``.
+Normalize with :func:`cryocat.core.cryomap.read`. Common parameter names:
+``input_map``, ``mask``, ``input_mask``, ``ref``, ``dist_mask``.
 """
 
 type TiltStack = npt.NDArray | PathOrStr
 """A 2D image stack: ndarray or path to a stack file (.mrc, .st, ...).
 
-Used by :mod:`cryocat.core.tiltstack`. Distinct from :data:`Volume`
+Used by :mod:`cryocat.core.tiltstack`. Distinct from :data:`MapSource`
 because the semantics differ (tilt series vs. reconstruction) even though
 the I/O is similar.
 """

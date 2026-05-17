@@ -10,7 +10,7 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import splprep, splev
 from scipy.optimize import fsolve
 
-from cryocat._types import RotationLike, Symmetry, TripletLike, EulerAngles
+from cryocat._types import RotationLike, Symmetry, TripletLike, EulerAngles, ArrayLike
 
 
 # Constants
@@ -1229,8 +1229,8 @@ def cone_inplane_distance(
 
 
 def angular_score_for_c_symmetry(
-    inplane_1: np.ndarray | list[float] | float,
-    inplane_2: np.ndarray | list[float] | float,
+    inplane_1: ArrayLike,
+    inplane_2: ArrayLike,
     c_symmetry: Symmetry,
     max_val: float | None = None,
 ) -> np.ndarray:
@@ -1239,10 +1239,11 @@ def angular_score_for_c_symmetry(
 
     Parameters:
     -----------
-    inplane_1 : array-like
-        First set of in-plane angles (in radians).
-    inplane_2 : array-like
-        Second set of in-plane angles (in radians).
+    inplane_1 : ArrayLike
+        First set of in-plane angles (in radians). Normalized via
+        :func:`numpy.atleast_1d` / :func:`numpy.asarray`.
+    inplane_2 : ArrayLike
+        Second set of in-plane angles (in radians). Same handling as ``inplane_1``.
     c_symmetry : Symmetry
         Cyclic symmetry specifier (``"Cn"`` or ``n``); normalized via
         :func:`as_symmetry`. Must specify an order greater than 1.
@@ -1670,7 +1671,7 @@ def visualize_angles(
 
 def fill_ellipsoid(
     box_size: TripletLike,
-    ellipsoid_parameters: np.ndarray | tuple | list,
+    ellipsoid_parameters: ArrayLike,
 ) -> np.ndarray:
     """Fills a 3D space defined by `box_size` with a boolean mask where an ellipsoid defined by `ellipsoid_parameters`
     is located.
@@ -1815,16 +1816,16 @@ def fit_ellipsoid(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray
 
 
 def point_ellipsoid_distance(
-    p: np.ndarray | tuple[float, float, float] | list[float],
-    params: np.ndarray | list[float] | tuple,
+    p: ArrayLike,
+    params: ArrayLike,
 ) -> float:
     """Computes the shortest distance from a point p to the surface of an ellipsoid.
 
     Parameters:
     -----------
-    p : ndarray (3,)
-        The 3D point in space.
-    params : ndarray (26,)
+    p : ArrayLike
+        The 3D point in space. Normalized via :func:`numpy.asarray`.
+    params : ArrayLike
         The ellipsoid parameters in the following order:
         ["cx", "cy", "cz", "rx", "ry", "rz",
          "ev1x", "ev1y", "ev1z", "ev2x", "ev2y", "ev2z",
@@ -1835,6 +1836,9 @@ def point_ellipsoid_distance(
     float
         The shortest distance from the point to the ellipsoid surface.
     """
+    p = np.asarray(p)
+    params = np.asarray(params)
+
     # Extract ellipsoid parameters
     center = np.array(params[:3])  # (cx, cy, cz)
     radii = np.array(params[3:6])  # (rx, ry, rz)
@@ -1926,21 +1930,21 @@ def area_triangle(coords: np.ndarray) -> float:
 
 
 def ray_ellipsoid_intersection_3d(
-    point: np.ndarray | tuple[float, float, float] | list[float],
-    normal: np.ndarray | tuple[float, float, float] | list[float],
-    ellipsoid_params: np.ndarray | list[float] | tuple,
+    point: ArrayLike,
+    normal: ArrayLike,
+    ellipsoid_params: ArrayLike,
 ) -> tuple[np.ndarray, np.ndarray, float, float, bool]:
     """Compute the intersection between a ray starting at point in direction of normal and
     an ellipsoid specified by ellipsoid_params.
 
     Parameters
     ----------
-    point : ndarray (3,)
-        Point in 3D describing origin of ray.
-    normal : ndarray (3,)
-        Normal vector describing direction of ray.
-    ellipsoid_params : ndarray, list or tuple of 10 floats
-        Coefficients describing quadratic form of ellipsoid.
+    point : ArrayLike
+        Point in 3D describing origin of ray. Normalized via :func:`numpy.asarray`.
+    normal : ArrayLike
+        Normal vector describing direction of ray. Normalized via :func:`numpy.asarray`.
+    ellipsoid_params : ArrayLike
+        Coefficients describing quadratic form of ellipsoid (10 elements).
 
     Returns
     -------
@@ -1951,6 +1955,9 @@ def ray_ellipsoid_intersection_3d(
         d2: float (distance between point and p2), or NaN.
         is_inside: bool, true if point lies inside the ellipsoid.
     """
+    point = np.asarray(point)
+    normal = np.asarray(normal)
+
     # Extract line parameters
     x, y, z = point[0], point[1], point[2]
     n1, n2, n3 = normal[0], normal[1], normal[2]
@@ -2139,8 +2146,8 @@ def ray_ray_intersection_3d(starting_points, ending_points):
 
 def rotate_points_rodrigues(
     P: np.ndarray,
-    n0: np.ndarray | tuple[float, float, float] | list[float],
-    n1: np.ndarray | tuple[float, float, float] | list[float],
+    n0: ArrayLike,
+    n1: ArrayLike,
 ) -> np.ndarray:
     """Rotates points by the rotation defined by two vectors.
 
@@ -2148,10 +2155,12 @@ def rotate_points_rodrigues(
     ----------
     P : ndarray
         Array containing point(s) to be rotated. Can be a 1D array for a single point or a 2D array for multiple points.
-    n0 : ndarray
-        Initial vector, before rotation. Must be a 1D array of 3 elements.
-    n1 : ndarray
-        Final vector, after rotation. Must be a 1D array of 3 elements.
+    n0 : ArrayLike
+        Initial vector, before rotation. 3-element array-like; normalized via
+        :func:`numpy.asarray`.
+    n1 : ArrayLike
+        Final vector, after rotation. 3-element array-like; normalized via
+        :func:`numpy.asarray`.
 
     Returns
     -------
@@ -2177,6 +2186,9 @@ def rotate_points_rodrigues(
     if P.ndim == 1:
         P = P[np.newaxis, :]
 
+    n0 = np.asarray(n0)
+    n1 = np.asarray(n1)
+
     # Normalize vectors n0 and n1
     n0 = n0 / np.linalg.norm(n0)
     n1 = n1 / np.linalg.norm(n1)
@@ -2197,7 +2209,7 @@ def rotate_points_rodrigues(
 
 def project_3d_points_on_2d_plane_normal_aligned(
     coord: np.ndarray,
-    target_direction: np.ndarray | tuple[float, float, float] | list[float] | None = None,
+    target_direction: ArrayLike | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Projects 3D points onto a 2D plane that is aligned with a specified normal direction.
 
@@ -2306,9 +2318,9 @@ def fit_circle_3d_lsq(coord: np.ndarray) -> tuple[np.ndarray, float, float]:
 
 
 def fit_circle_2d_lsq(
-    x: np.ndarray | list[float],
-    y: np.ndarray | list[float],
-    w: np.ndarray | list[float] | None = None,
+    x: ArrayLike,
+    y: ArrayLike,
+    w: ArrayLike | None = None,
 ) -> tuple[float, float, float, float]:
     """Fit a circle to 2D points using the least squares method. The method was taken from
     https://meshlogic.github.io/posts/jupyter/curve-fitting/fitting-a-circle-to-cluster-of-3d-points/
@@ -2346,8 +2358,13 @@ def fit_circle_2d_lsq(
     >>> xc, yc, r, error = fit_circle_2d_lsq(x, y)
     """
 
+    x = np.asarray(x)
+    y = np.asarray(y)
+
     if w is None:
         w = []
+    else:
+        w = np.asarray(w)
 
     A = np.array([x, y, np.ones(len(x))]).T
     b = x**2 + y**2
@@ -2607,13 +2624,13 @@ def fit_circle_2d_newton(coord: np.ndarray) -> tuple[np.ndarray, float, int]:
     return circle_center, circle_radius, confidence
 
 
-def normalize_vector(vector: np.ndarray | tuple[float, ...] | list[float]) -> np.ndarray:
+def normalize_vector(vector: ArrayLike) -> np.ndarray:
     """Normalize a vector.
 
     Parameters
     ----------
-    vector : array_like
-        Input vector to be normalized.
+    vector : ArrayLike
+        Input vector to be normalized. Normalized via :func:`numpy.asarray`.
 
     Returns
     -------
@@ -2628,6 +2645,7 @@ def normalize_vector(vector: np.ndarray | tuple[float, ...] | list[float]) -> np
     array([0.26726124, 0.40089186, 0.80278373])
     """
 
+    vector = np.asarray(vector)
     return vector / np.linalg.norm(vector)
 
 
@@ -2701,17 +2719,17 @@ def angle_between_n_vectors(
 
 
 def vector_angular_distance(
-    v1: np.ndarray | tuple[float, ...] | list[float],
-    v2: np.ndarray | tuple[float, ...] | list[float],
+    v1: ArrayLike,
+    v2: ArrayLike,
 ) -> float:
     """Calculate the angular distance between two vectors in degrees.
 
     Parameters
     ----------
-    v1 : array_like
-        First input vector.
-    v2 : array_like
-        Second input vector.
+    v1 : ArrayLike
+        First input vector. Normalized via :func:`normalize_vector`.
+    v2 : ArrayLike
+        Second input vector. Normalized via :func:`normalize_vector`.
 
     Returns
     -------
@@ -2732,19 +2750,19 @@ def vector_angular_distance(
 
 
 def vector_angular_distance_signed(
-    u: np.ndarray | tuple[float, ...] | list[float],
-    v: np.ndarray | tuple[float, ...] | list[float],
-    n: np.ndarray | tuple[float, ...] | list[float] | None = None,
+    u: ArrayLike,
+    v: ArrayLike,
+    n: ArrayLike | None = None,
 ) -> float:
     """Compute the signed angular distance between two vectors.
 
     Parameters
     ----------
-    u : array_like
+    u : ArrayLike
         First input vector.
-    v : array_like
+    v : ArrayLike
         Second input vector.
-    n : array_like, optional
+    n : ArrayLike, optional
         Normal vector to the plane containing `u` and `v`. If not provided, the function
         computes the unsigned angular distance.
 

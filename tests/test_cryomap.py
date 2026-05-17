@@ -582,13 +582,13 @@ def test_extract_subvolume():
 
 
 def test_pad():
-    input_volume = np.ones((3, 3, 3))
+    input_map = np.ones((3, 3, 3))
     new_size = (5, 5, 5)
-    padded_volume = pad(input_volume, new_size)
+    padded_volume = pad(input_map, new_size)
     assert padded_volume.shape == new_size
     assert np.all(padded_volume == 1)
 
-    padded_volume_custom = pad(input_volume, new_size, fill_value=5)
+    padded_volume_custom = pad(input_map, new_size, fill_value=5)
     assert padded_volume_custom.shape == new_size
     assert np.all(padded_volume_custom[0] == 5)  # Top slice
     assert np.all(padded_volume_custom[-1] == 5)  # Bottom slice
@@ -598,32 +598,32 @@ def test_pad():
     assert np.all(padded_volume_custom[-1, -1] == 5)  # Back bottom corner
     assert np.all(padded_volume_custom[1:4, 1:4, 1:4] == 1)
 
-    input_volume_same_size = np.ones((5, 5, 5))
+    input_map_same_size = np.ones((5, 5, 5))
     new_size_same = (5, 5, 5)
-    padded_volume_same = pad(input_volume_same_size, new_size_same)
-    assert np.array_equal(input_volume_same_size, padded_volume_same)
+    padded_volume_same = pad(input_map_same_size, new_size_same)
+    assert np.array_equal(input_map_same_size, padded_volume_same)
 
-    input_volume_edge_case = np.ones((1, 1, 1))
+    input_map_edge_case = np.ones((1, 1, 1))
     new_size_edge_case = (3, 3, 3)
-    padded_volume_edge = pad(input_volume_edge_case, new_size_edge_case)
+    padded_volume_edge = pad(input_map_edge_case, new_size_edge_case)
     assert padded_volume_edge.shape == new_size_edge_case
     assert np.all(padded_volume_edge == 1)
 
     try:
         new_size_invalid = (5, 5)  # New size has only 2 dimensions
-        pad(input_volume, new_size_invalid)
+        pad(input_map, new_size_invalid)
         assert False, "Expected ValueError for invalid new_size"
     except ValueError:
         pass
     try:
         new_size_invalid_dim = (5, 5, 5, 5)  # New size has 4 dimensions
-        pad(input_volume, new_size_invalid_dim)
+        pad(input_map, new_size_invalid_dim)
         assert False, "Expected ValueError for invalid new_size"
     except Exception:
         pass
     try:
         new_size_small = (2, 2, 2)  # New size is smaller than the original volume
-        pad(input_volume, new_size_small)
+        pad(input_map, new_size_small)
         assert False, "Expected ValueError for new_size smaller than volume size"
     except Exception:
         pass
@@ -631,7 +631,7 @@ def test_pad():
 
 def test_deconvolve():
     # Parameters for the synthetic test
-    input_volume = np.random.rand(64, 64, 64).astype(np.float32)  # Random 3D volume
+    input_map = np.random.rand(64, 64, 64).astype(np.float32)  # Random 3D volume
     pixel_size_a = 3.42  # Angstroms
     defocus = 2.5  # micrometers
     snr_falloff = 1.2
@@ -642,21 +642,21 @@ def test_deconvolve():
 
     # Apply deconvolution to the synthetic 3D volume
     output_volume = deconvolve(
-        input_volume, pixel_size_a, defocus, snr_falloff, deconv_strength, highpass_nyquist, phase_flipped, phaseshift
+        input_map, pixel_size_a, defocus, snr_falloff, deconv_strength, highpass_nyquist, phase_flipped, phaseshift
     )
 
-    assert output_volume.shape == input_volume.shape
+    assert output_volume.shape == input_map.shape
     assert np.isfinite(output_volume).all()
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
-    plt.imshow(input_volume[32, :, :], cmap="gray")  # Slice through the middle
+    plt.imshow(input_map[32, :, :], cmap="gray")  # Slice through the middle
     plt.title("Original Volume Slice")
     plt.subplot(1, 2, 2)
     plt.imshow(output_volume[32, :, :], cmap="gray")  # Slice through the middle
     plt.title("Deconvolved Volume Slice")
     plt.show()
     # Compare FFT of input and output volumes (using log scale)
-    input_fft = np.abs(fftshift(fftn(input_volume)))
+    input_fft = np.abs(fftshift(fftn(input_map)))
     output_fft = np.abs(fftshift(fftn(output_volume)))
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
@@ -666,8 +666,8 @@ def test_deconvolve():
     plt.imshow(np.log1p(np.mean(output_fft, axis=0)), cmap="inferno")
     plt.title("FFT Output (Deconvolved)")
     plt.show()
-    assert not np.allclose(output_volume, input_volume)
-    assert np.max(output_volume) <= np.max(input_volume) * 2
+    assert not np.allclose(output_volume, input_map)
+    assert np.max(output_volume) <= np.max(input_map) * 2
     assert np.isfinite(output_volume).all()
 
 

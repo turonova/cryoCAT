@@ -13,13 +13,13 @@ from cryocat.core import cryomask
 from cryocat.utils import mathutils, ioutils
 from cryocat.utils import geom
 from skimage import transform
-from cryocat._types import Volume, Mask, PathOrStr, TripletLike, EulerAngles, Symmetry
+from cryocat._types import MapSource, PathOrStr, TripletLike, EulerAngles, Symmetry, ArrayLike
 
 if TYPE_CHECKING:
     from cryocat.core import cryomotl
 
 def scale(
-    input_map: Volume,
+    input_map: MapSource,
     scaling_factor: float,
     output_path: PathOrStr | None = None,
 ) -> np.ndarray:
@@ -28,7 +28,7 @@ def scale(
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input map to be scaled, either as an ndarray or a path to a map file
         (``.mrc``, ``.em``, ...). Normalized via :func:`read`.
     scaling_factor : float
@@ -144,12 +144,12 @@ def resolution2pixels(
     return pixels
 
 
-def binarize(input_map: Volume, threshold: float = 0.5) -> np.ndarray:
+def binarize(input_map: MapSource, threshold: float = 0.5) -> np.ndarray:
     """Converts a given input map to a binary map based on a specified threshold.
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input map to binarize, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
     threshold : float, default=0.5
@@ -225,7 +225,7 @@ def get_filter_radius(
 
 
 def bandpass(
-    input_map: Volume,
+    input_map: MapSource,
     lp_fourier_pixels: int | None = None,
     lp_target_resolution: float | None = None,
     hp_fourier_pixels: int | None = None,
@@ -239,7 +239,7 @@ def bandpass(
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input map to be filtered, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
     lp_fourier_pixels : int, optional
@@ -315,7 +315,7 @@ def bandpass(
 
 
 def lowpass(
-    input_map: Volume,
+    input_map: MapSource,
     fourier_pixels: int | None = None,
     target_resolution: float | None = None,
     pixel_size: float | None = None,
@@ -326,7 +326,7 @@ def lowpass(
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input map to be filtered, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
     fourier_pixels : int, optional
@@ -375,7 +375,7 @@ def lowpass(
 
 
 def highpass(
-    input_map: Volume,
+    input_map: MapSource,
     fourier_pixels: int | None = None,
     target_resolution: float | None = None,
     pixel_size: float | None = None,
@@ -386,7 +386,7 @@ def highpass(
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input map to be filtered, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
     fourier_pixels : int, optional
@@ -431,20 +431,19 @@ def highpass(
     return filtered_map
 
 def read(
-    input_map: Volume,
+    input_map: MapSource,
     transpose: bool = True,
     data_type: np.dtype | None = None,
 ) -> np.ndarray:
     """Read a volume from disk or pass through an in-memory ndarray.
  
-    Canonical normalizer for the :data:`cryocat._types.Volume` and
-    :data:`cryocat._types.Mask` types. Any function that accepts a
-    Volume or Mask should call ``cryomap.read(x)`` at its entry point
-    to get a plain ndarray to work with.
+    Canonical normalizer for the :data:`cryocat._types.MapSource` type.
+    Any function that accepts a MapSource should call ``cryomap.read(x)``
+    at its entry point to get a plain ndarray to work with.
  
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         Path to an MRC/EM file (str, :class:`pathlib.Path`, or any
         :class:`os.PathLike`) or an ndarray containing the map data.
     transpose : bool, optional
@@ -575,12 +574,12 @@ def write(
         raise ValueError("The output file name", file_name_str, "has to end with .mrc, .rec or .em!")
 
 
-def invert_contrast(input_map: Volume, output_path: PathOrStr | None = None) -> np.ndarray:
+def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None) -> np.ndarray:
     """Invert the contrast of an input volume map.
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input volume map, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
     output_path : PathOrStr, optional
@@ -614,7 +613,7 @@ def invert_contrast(input_map: Volume, output_path: PathOrStr | None = None) -> 
 
 
 def em2mrc(
-    map_name: PathOrStr,
+    input_path: PathOrStr,
     invert: bool = False,
     overwrite: bool = True,
     voxel_size: float = 1.0,
@@ -624,7 +623,7 @@ def em2mrc(
 
     Parameters
     ----------
-    map_name : PathOrStr
+    input_path : PathOrStr
         Path to the input map file to be converted (must have ``.em`` extension).
     invert : bool, default=False
         If True, the data will be inverted (multiplied by -1). Default is False.
@@ -634,7 +633,7 @@ def em2mrc(
         The size of the voxels to store in the header of the MRC files. Defaults to 1.0.
     output_path : PathOrStr, optional
         Path to the output MRC file. If None, the output name will be derived from
-        ``map_name`` by replacing the ``.em`` extension with ``.mrc``.
+        ``input_path`` by replacing the ``.em`` extension with ``.mrc``.
 
     Returns
     -------
@@ -644,21 +643,21 @@ def em2mrc(
     Raises
     -------
     ValueError
-        If input input_map is not a valid .em file path
+        If ``input_path`` is not a valid .em file path
 
     """
-    if not isinstance(map_name, (str, os.PathLike)):
+    if not isinstance(input_path, (str, os.PathLike)):
         raise ValueError(f"Input file must be a path or str")
-    map_name_str = os.fspath(map_name)
-    if not map_name_str.endswith(".em"):
+    input_path_str = os.fspath(input_path)
+    if not input_path_str.endswith(".em"):
         raise ValueError(f"Provided path must be .em file")
-    data_to_write = read(map_name_str)
+    data_to_write = read(input_path_str)
 
     if invert:
         data_to_write = data_to_write * (-1)
 
     if output_path is None:
-        output_path_str = map_name_str[:-2] + "mrc"
+        output_path_str = input_path_str[:-2] + "mrc"
     else:
         if not isinstance(output_path, (str, os.PathLike)):
             raise ValueError(f"output_path must be a path or str")
@@ -669,14 +668,14 @@ def em2mrc(
 
 
 def mrc2em(
-    map_name: PathOrStr,
+    input_path: PathOrStr,
     invert: bool = False,
     overwrite: bool = True,
     output_path: PathOrStr | None = None,
 ) -> None:
     """Convert a file in MRC format to EM format.
 
-    map_name : PathOrStr
+    input_path : PathOrStr
         Path to the input map file to be converted (must have ``.mrc`` extension).
     invert : bool, default=False
         If True, the data will be inverted (multiplied by -1). Default is False.
@@ -684,7 +683,7 @@ def mrc2em(
         If True, allows overwriting of the output file if it already exists. Default is True.
     output_path : PathOrStr, optional
         Path to the output EM file. If None, the output name will be derived from
-        ``map_name`` by replacing the ``.mrc`` extension with ``.em``.
+        ``input_path`` by replacing the ``.mrc`` extension with ``.em``.
 
     Returns
     -------
@@ -697,18 +696,18 @@ def mrc2em(
         If the provided file name does not end with .em extension.
 
     """
-    if not isinstance(map_name, (str, os.PathLike)):
+    if not isinstance(input_path, (str, os.PathLike)):
         raise ValueError(f"Input must be a path or str")
-    map_name_str = os.fspath(map_name)
-    if not map_name_str.endswith(".mrc"):
+    input_path_str = os.fspath(input_path)
+    if not input_path_str.endswith(".mrc"):
         raise ValueError(f"Input file is not .mrc file")
-    data_to_write = read(map_name_str)
+    data_to_write = read(input_path_str)
 
     if invert:
         data_to_write = data_to_write * (-1)
 
     if output_path is None:
-        output_path_str = map_name_str[:-3] + "em"
+        output_path_str = input_path_str[:-3] + "em"
     else:
         if not isinstance(output_path, (str, os.PathLike)):
             raise ValueError(f"output_path must be a path or str")
@@ -720,7 +719,7 @@ def mrc2em(
 
 
 def write_hdf5(
-    map_name: PathOrStr,
+    input_path: PathOrStr,
     labels: PathOrStr | None = None,
     weight: PathOrStr | None = None,
     output_path: PathOrStr | None = None,
@@ -729,7 +728,7 @@ def write_hdf5(
 
     Parameters
     ----------
-    map_name : PathOrStr
+    input_path : PathOrStr
         Path to the input file containing the data to be written.
     labels : PathOrStr, optional
         Path to the input file containing the labels to be written. If provided,
@@ -739,7 +738,7 @@ def write_hdf5(
         the weights will be stored in the HDF5 file. Default is None.
     output_path : PathOrStr, optional
         Path to the output HDF5 file. If not provided, the output file will be named
-        by replacing the ``.mrc``/``.em`` extension of ``map_name`` with ``.hdf5``.
+        by replacing the ``.mrc``/``.em`` extension of ``input_path`` with ``.hdf5``.
         Default is None.
 
     Returns
@@ -753,18 +752,18 @@ def write_hdf5(
         If the provided file name does not end with .em or .mrc extension.
 
     """
-    if not isinstance(map_name, (str, os.PathLike)):
+    if not isinstance(input_path, (str, os.PathLike)):
         raise ValueError(f"Input must be a path or str")
-    map_name_str = os.fspath(map_name)
-    if not map_name_str.endswith(".mrc") and not map_name_str.endswith(".em"):
+    input_path_str = os.fspath(input_path)
+    if not input_path_str.endswith(".mrc") and not input_path_str.endswith(".em"):
         raise ValueError(f"Input file is not either .em either .mrc file")
-    data_to_write = read(map_name_str)
+    data_to_write = read(input_path_str)
 
     if output_path is None:
-        if map_name_str.endswith(".mrc"):
-            output_path_str = map_name_str[:-3] + "hdf5"
+        if input_path_str.endswith(".mrc"):
+            output_path_str = input_path_str[:-3] + "hdf5"
         else:
-            output_path_str = map_name_str[:-2] + "hdf5"
+            output_path_str = input_path_str[:-2] + "hdf5"
     else:
         if not isinstance(output_path, (str, os.PathLike)):
             raise ValueError(f"output_path must be a path or str")
@@ -787,7 +786,7 @@ def write_hdf5(
 
 
 def read_hdf5(
-    hdf5_name: PathOrStr,
+    input_path: PathOrStr,
     dataset_name: str = "predictions",
     print_datasets: bool = False,
 ) -> np.ndarray:
@@ -795,7 +794,7 @@ def read_hdf5(
 
     Parameters
     ----------
-    hdf5_name : PathOrStr
+    input_path : PathOrStr
         Path to the HDF5 file to read from.
     dataset_name : str, defaults='predictions'
         The name of the dataset to read from the HDF5 file. Default is 'predictions'.
@@ -815,7 +814,7 @@ def read_hdf5(
         If the specified dataset name does not exist in the HDF5 file.
     """
 
-    f = h5py.File(hdf5_name, "r")
+    f = h5py.File(input_path, "r")
 
     if print_datasets:
         print(f"Available datasets: {f.keys()}")
@@ -826,12 +825,12 @@ def read_hdf5(
     return data
 
 
-def normalize(input_map: Volume) -> np.ndarray:
+def normalize(input_map: MapSource) -> np.ndarray:
     """Normalize a given map by standardizing its values.
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input map to be normalized, either as an ndarray or a path to a map
         file. Normalized via :func:`read`.
 
@@ -860,7 +859,7 @@ def normalize(input_map: Volume) -> np.ndarray:
 
 
 def rotate(
-    input_map: Volume,
+    input_map: MapSource,
     rotation: srot | None = None,
     rotation_angles: EulerAngles | None = None,
     coord_space: str = "zxz",
@@ -873,7 +872,7 @@ def rotate(
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input 3D map to be rotated, either as an ndarray or a path to a map
         file. Normalized via :func:`read`.
 
@@ -946,9 +945,9 @@ def rotate(
 
 
 def crop(
-    input_map: Volume,
+    input_map: MapSource,
     new_size: TripletLike,
-    output_file: PathOrStr | None = None,
+    output_path: PathOrStr | None = None,
     crop_coord: TripletLike | None = None,
 ) -> np.ndarray:
     """
@@ -956,13 +955,13 @@ def crop(
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input map to be cropped, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
     new_size : TripletLike
         The desired size of the cropped volume (single int broadcast to all axes,
         or a 3-element array-like).
-    output_file : PathOrStr, optional
+    output_path : PathOrStr, optional
         Path to the output file where the cropped volume will be written. If not
         provided, the cropped volume will not be written to a file.
     crop_coord : TripletLike, optional
@@ -999,8 +998,8 @@ def crop(
 
 
 def shift2(
-    input_map: Volume,
-    delta: np.ndarray | tuple[float, float, float] | list[float],
+    input_map: MapSource,
+    delta: ArrayLike,
     output_path: PathOrStr | None = None,
 ) -> np.ndarray:
     """
@@ -1008,11 +1007,12 @@ def shift2(
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input map to be shifted, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
-    delta : ndarray or 3-tuple or 3-list of float
-        The shift to apply to the input map. Must be of length 3 (one shift per axis).
+    delta : ArrayLike
+        The shift to apply to the input map (3-element array-like, one shift per
+        axis). Normalized via :func:`numpy.asarray`.
     output_path : PathOrStr, optional
         Path to the output file for the shifted map. The data type of the output
         will be np.single. Default is None.
@@ -1028,9 +1028,10 @@ def shift2(
     """
 
     input_map = read(input_map)
+    delta = np.asarray(delta)
 
     T = np.eye(4)
-    T[:3, -1] = -np.asarray(delta)
+    T[:3, -1] = -delta
 
     shifted_map = np.empty(input_map.shape)
     affine_transform(input=input_map, output=shifted_map, matrix=T, mode="grid-wrap")
@@ -1041,13 +1042,13 @@ def shift2(
     return shifted_map
 
 
-def recenter(map: Volume, new_center: TripletLike) -> np.ndarray:
+def recenter(input_map: MapSource, new_center: TripletLike) -> np.ndarray:
     """
     Recenter a given map around a new center.
 
     Parameters
     ----------
-    map : Volume
+    input_map : MapSource
         The input map to be recentered, either as an ndarray or a path to a map
         file. Normalized via :func:`read`.
     new_center : TripletLike
@@ -1066,7 +1067,7 @@ def recenter(map: Volume, new_center: TripletLike) -> np.ndarray:
     The function creates a transformation matrix, calculates the shift required to move the center of the map to the new center, applies the transformation to the map, and returns the recentered map.
     """
 
-    original_map = read(map)
+    original_map = read(input_map)
     new_center = geom.as_triplet(new_center)
     T = np.eye(4)
     structure_center = np.asarray(original_map.shape) // 2
@@ -1079,17 +1080,17 @@ def recenter(map: Volume, new_center: TripletLike) -> np.ndarray:
     return trans_struct
 
 
-def normalize_under_mask(ref: Volume, mask: Mask) -> np.ndarray:
+def normalize_under_mask(input_map: MapSource, mask: MapSource) -> np.ndarray:
     """A function to take a reference volume and a mask, and normalize the area
     under the mask to 0-mean and standard deviation of 1.
     Based on stopgap code by W.Wan
 
     Parameters
     ----------
-    ref : Volume
+    input_map : MapSource
         The reference volume, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
-    mask : Mask
+    mask : MapSource
         The mask volume, either as an ndarray or a path to a mask file.
         Normalized via :func:`read`.
 
@@ -1100,18 +1101,18 @@ def normalize_under_mask(ref: Volume, mask: Mask) -> np.ndarray:
         The map with the area under the mask normalized.
     """
 
-    ref = read(ref)
+    input_map = read(input_map)
     mask = read(mask)
 
     # Calculate mask parameters
     m_idx = mask > 0
 
     # Calculate stats
-    ref_mean = np.mean(ref[m_idx])
-    ref_std = np.std(ref[m_idx])
+    ref_mean = np.mean(input_map[m_idx])
+    ref_std = np.std(input_map[m_idx])
 
     # Normalize reference
-    norm_ref = ref - ref_mean
+    norm_ref = input_map - ref_mean
     norm_ref = norm_ref / ref_std
 
     return norm_ref
@@ -1177,7 +1178,7 @@ def extract_subvolume(
     coordinates: TripletLike,
     subvolume_shape: TripletLike,
     enforce_shape: bool = False,
-    output_file: PathOrStr | None = None,
+    output_path: PathOrStr | None = None,
 ) -> np.ndarray:
     """
     Extracts a subvolume from a given volume.
@@ -1192,7 +1193,7 @@ def extract_subvolume(
         The (x, y, z) shape of the subvolume to extract.
     enforce_shape : bool, optional
         If True, the final volume will have the same shape as the original volume and the voxels outside the region of interest will be set to the mean value of the original volume. Default is False.
-    output_file : PathOrStr, optional
+    output_path : PathOrStr, optional
         Path to the output file for the extracted subvolume. If not provided, the
         subvolume is not saved. Default is None.
 
@@ -1225,25 +1226,29 @@ def extract_subvolume(
 
 
 def get_cross_slices(
-    input_map: Volume,
+    input_map: MapSource,
     slice_half_dim: int | None = None,
-    slice_numbers: int | list[int] | np.ndarray | None = None,
-    axis: int | list[int] | np.ndarray | None = None,
+    slice_numbers: ArrayLike | None = None,
+    axis: ArrayLike | None = None,
 ) -> list[np.ndarray]:
     """
     This function generates cross slices across an axis from a given input map.
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input map from which to generate cross slices, either as an ndarray or
         a path to a map file. Normalized via :func:`read`.
     slice_half_dim : int, optional
         The half dimension of the slice. If None, the slice will cover the entire dimension of the input map.
-    slice_numbers : int, list of int, or ndarray, optional
-        The slice numbers to use. If None, the slice numbers will be calculated as the ceiling of half the shape of the input map.
-    axis : int, list of int, or ndarray, optional
-        The axis along which to generate the slices. If None, slices will be generated along all axes.
+    slice_numbers : ArrayLike, optional
+        The slice numbers to use (scalar, list, tuple, or ndarray; normalized via
+        :func:`numpy.asarray`). If None, the slice numbers will be calculated as
+        the ceiling of half the shape of the input map.
+    axis : ArrayLike, optional
+        The axis (or axes) along which to generate the slices (scalar, list, tuple,
+        or ndarray; normalized via :func:`numpy.asarray`). If None, slices will be
+        generated along all axes.
 
     Returns
     -------
@@ -1259,13 +1264,13 @@ def get_cross_slices(
 
     if axis is None:
         axis = np.asarray([0, 1, 2])
-    elif isinstance(axis, list):
-        axis = np.asarray(axis)
+    else:
+        axis = np.atleast_1d(np.asarray(axis))
 
     if slice_numbers is None:
         cs = np.ceil(np.asarray(cmap.shape) / 2).astype(int)
     else:
-        cs = np.asarray(slice_numbers).astype(int)
+        cs = np.atleast_1d(np.asarray(slice_numbers)).astype(int)
 
     if axis.shape[0] > cs.shape[0]:
         cs = np.full(axis.shape, cs[0])
@@ -1293,7 +1298,7 @@ def get_cross_slices(
 
 
 def pad(
-    input_volume: Volume,
+    input_map: MapSource,
     new_size: TripletLike,
     fill_value: float | None = None,
 ) -> np.ndarray:
@@ -1304,7 +1309,7 @@ def pad(
 
     Parameters
     ----------
-    input_volume : Volume
+    input_map : MapSource
         The input volume to be padded, either as an ndarray or a path to a map
         file. Normalized via :func:`read`.
     new_size : TripletLike
@@ -1324,7 +1329,7 @@ def pad(
     The original volume is placed in the center of the new volume. If the new size is not an integer multiple of the original size, the original volume is placed such that there is an equal number of padding voxels on either side of the volume in each dimension.
     """
 
-    volume = read(input_volume)
+    volume = read(input_map)
     new_size = geom.as_triplet(new_size)
 
     if fill_value is None:
@@ -1349,10 +1354,10 @@ def pad(
 
 
 def place_object(
-    input_object: Volume | list[Volume],
+    input_object: MapSource | list[MapSource],
     motl: "cryomotl.Motl",
     volume_shape: TripletLike | None = None,
-    volume: Volume | None = None,
+    volume: MapSource | None = None,
     feature_to_color: str = "object_id",
 ) -> np.ndarray:
     """
@@ -1360,7 +1365,7 @@ def place_object(
 
     Parameters
     ----------
-    input_object : Volume or list of Volume
+    input_object : MapSource or list of MapSource
         The object or list of objects to be placed, each either as an ndarray or
         a path to a map file. Normalized via :func:`read`.
     motl : cryomotl.Motl
@@ -1368,7 +1373,7 @@ def place_object(
         for placing the objects.
     volume_shape : TripletLike, optional
         The shape of the volume in which the objects are to be placed. If not provided, the volume parameter must be provided.
-    volume : Volume, optional
+    volume : MapSource, optional
         The volume in which the objects are to be placed, as an ndarray or a path
         to a map file. If not provided, ``volume_shape`` must be provided.
     feature_to_color : str, default="object_id"
@@ -1421,7 +1426,7 @@ def place_object(
 
 
 def deconvolve(
-    input_volume: Volume,
+    input_map: MapSource,
     pixel_size_a: float,
     defocus: float,
     snr_falloff: float,
@@ -1436,7 +1441,7 @@ def deconvolve(
 
     Parameters
     ----------
-    input_volume : Volume
+    input_map : MapSource
         Tomogram volume, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
     pixel_size_a : float
@@ -1463,7 +1468,7 @@ def deconvolve(
         deconvolved tomogram
 
     """
-    input_map = read(input_volume)
+    input_map = read(input_map)
     interp_dim = np.maximum(2048, input_map.shape[0])
 
     # Generate highpass filter
@@ -1576,7 +1581,7 @@ def compute_ctf_1d(
 
 
 def trim(
-    input_map: Volume,
+    input_map: MapSource,
     trim_start: TripletLike,
     trim_end: TripletLike,
     output_path: PathOrStr | None = None,
@@ -1586,7 +1591,7 @@ def trim(
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The 3D map to be trimmed, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
     trim_start : TripletLike
@@ -1626,7 +1631,7 @@ def trim(
 
 
 def flip(
-    input_map: Volume,
+    input_map: MapSource,
     axis: str = "z",
     output_path: PathOrStr | None = None,
 ) -> np.ndarray:
@@ -1635,7 +1640,7 @@ def flip(
 
     Parameters
     ----------
-    input_map : Volume
+    input_map : MapSource
         The input map to be flipped, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
     axis : str, default="z"
@@ -1802,15 +1807,15 @@ def calculate_flcf(
     return np.clip(cc_map, 0.0, 1.0)
 
 
-def symmetrize_volume(vol: Volume, symmetry: Symmetry) -> np.ndarray:
+def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
     """
     Symmetrize the input volume based on the specified symmetry.
 
     Parameters:
     -----------
-    vol : Volume
+    input_map : MapSource
         The input volume to be symmetrized, either as an ndarray or a path to a
-        map file. Normalized via :func:`read` (inside :func:`rotate`).
+        map file. Normalized via :func:`read`.
     symmetry : Symmetry
         The point-group symmetry specifier. Accepts a string like ``"C5"`` or a
         bare number (interpreted as the order of the cyclic symmetry).
@@ -1825,6 +1830,8 @@ def symmetrize_volume(vol: Volume, symmetry: Symmetry) -> np.ndarray:
         If the symmetry is not specified correctly
 
     """
+    input_map = read(input_map)
+
     if isinstance(symmetry, str):
         nfold = int(re.findall(r"\d+", symmetry)[-1])
     elif isinstance(symmetry, (int, float)):
@@ -1833,11 +1840,11 @@ def symmetrize_volume(vol: Volume, symmetry: Symmetry) -> np.ndarray:
         raise ValueError("The symmetry has to be specified as a string (starting with C) or as a number (only for C)!")
 
     inplane_step = 360 / nfold
-    rotated_sum = np.empty(vol.shape)
+    rotated_sum = np.empty(input_map.shape)
 
     for inplane in range(1, nfold + 1):
         # print('inplane',inplane, inplane*inplane_step)
-        rotated_volume = rotate(vol, rotation_angles=[0, 0, 360 % (inplane * inplane_step)])
+        rotated_volume = rotate(input_map, rotation_angles=[0, 0, 360 % (inplane * inplane_step)])
         # print('rot vol',rotated_volume[0][0][0:10])
         rotated_sum = np.add(rotated_sum, rotated_volume)
     sym_vol = np.divide(rotated_sum, nfold)
@@ -1846,10 +1853,10 @@ def symmetrize_volume(vol: Volume, symmetry: Symmetry) -> np.ndarray:
 
 
 def calculate_masked_fsc(
-    half_map_a: Volume,
-    half_map_b: Volume,
+    half_map_a: MapSource,
+    half_map_b: MapSource,
     pixel_size: float | None = None,
-    mask: Mask | None = None,
+    mask: MapSource | None = None,
     n_repeats: int = 10,
     fourier_cutoff: int | None = None,
     output_path: PathOrStr | None = None,
@@ -1865,14 +1872,14 @@ def calculate_masked_fsc(
 
     Parameters
     ----------
-    half_map_a : Volume
+    half_map_a : MapSource
         First half-map: file path or 3-D ndarray. Normalized via :func:`read`.
-    half_map_b : Volume
+    half_map_b : MapSource
         Second half-map: file path or 3-D ndarray. Normalized via :func:`read`.
     pixel_size : float, optional
         Pixel size in Angstroms. When given, the x-axis is expressed as
         spatial frequency in 1/Å; otherwise the Fourier shell index is used.
-    mask : Mask, optional
+    mask : MapSource, optional
         Real-space mask, either as an ndarray or a path to a mask file. A
         box-filling mask of ones is used when None. Default is None.
     n_repeats : int, default=10
