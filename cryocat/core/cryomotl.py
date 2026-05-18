@@ -3271,16 +3271,16 @@ class RelionMotl(Motl):
         ... subtomo_format="/path/to/$xxx/yy_2.6A.mrc", version=3.1)
         >>> print(rln_df["rlnMicrographName"].values[0])
         >>> print(rln_df["rlnImageName"].values[0])
-        ValueError: The format /path/to/$xxx/yy_2.6A.mrc does not contain any sequence of \$ followed by y.
+        ValueError: The format /path/to/$xxx/yy_2.6A.mrc does not contain any sequence of $ followed by y.
         """
 
         def find_longest_sequence(test_string, test_letter, raise_error=True):
-            pattern = f"\$(?:{test_letter})+"
+            pattern = rf"\$(?:{test_letter})+"
             findings = sorted(re.findall(pattern, test_string), key=len)
             if not findings:
                 if raise_error:
                     raise ValueError(
-                        f"The format {test_string} does not contain any sequence of \$ followed by {test_letter}."
+                        f"The format {test_string} does not contain any sequence of $ followed by {test_letter}."
                     )
                 else:
                     return None, 0
@@ -4293,12 +4293,12 @@ class RelionMotlv5(RelionMotl, Motl):
             Particles DataFrame with the appropriate RELION 5 column schema.
         """
         def find_longest_sequence(test_string, test_letter, raise_error=True):
-            pattern = f"\$(?:{test_letter})+"
+            pattern = rf"\$(?:{test_letter})+"
             findings = sorted(re.findall(pattern, test_string), key=len)
             if not findings:
                 if raise_error:
                     raise ValueError(
-                        f"The format {test_string} does not contain any sequence of \$ followed by {test_letter}."
+                        f"The format {test_string} does not contain any sequence of $ followed by {test_letter}."
                     )
                 else:
                     return None, 0
@@ -5215,7 +5215,7 @@ class ModMotl(Motl):
         def check_tomo_id_type(df):
             if df["mod_id"].apply(lambda x: isinstance(x, str)).all():
                 # If all values are strings, extract digits and convert to integers
-                df["mod_id"] = df["mod_id"].str.extract("(\d+)")[0].astype(int)
+                df["mod_id"] = df["mod_id"].str.extract(r"(\d+)")[0].astype(int)
             elif df["mod_id"].apply(lambda x: isinstance(x, int)).all():
                 # If all values are integers, do nothing or keep as is
                 pass
