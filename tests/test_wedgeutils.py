@@ -269,7 +269,7 @@ def test_load_wedge_list_em():
         load_wedge_list_em(12345)
 
 
-def test_create_wg_mask():
+def test_create_wg_mask(tmp_path):
     #print(sample_wedge_list)
     sample_wedge_list = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_list.star")
     sample_wedge_list = load_wedge_list_sg(sample_wedge_list)
@@ -285,8 +285,8 @@ def test_create_wg_mask():
     mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size_array)
     assert mask.shape == tuple(box_size_array), f"Forma errata: {mask.shape}"
 
-    output_path = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_mask.em")
-    mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size, output_path=str(output_path))
+    output_path = str(tmp_path / "wedge_mask.em")
+    mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size, output_path=output_path)
     assert os.path.exists(output_path)
 
     with pytest.raises(ValueError):
@@ -297,9 +297,6 @@ def test_create_wg_mask():
 
     with pytest.raises(ValueError):
         create_wg_mask(sample_wedge_list, sample_tomo_list, [64, 64])
-
-    """if os.path.exists(output_path):
-        os.remove(output_path)"""
 
 
 def create_sample_map_file(tmp_path, data, filename):

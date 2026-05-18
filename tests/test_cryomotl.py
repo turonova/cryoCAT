@@ -530,13 +530,14 @@ def test_stopgap2relion_write():
         os.remove(relion_written)
 
 
-def test_mod2emmotl():
+def test_mod2emmotl(tmp_path):
     file_path = test_data + "/motl_data/modMotl/"
-    emm = cryomotl.mod2emmotl(file_path, output_motl_path=test_data + "/motl_data/test.em", mod_prefix="correct", mod_suffix=".mod")
+    emm = cryomotl.mod2emmotl(file_path, output_motl_path=str(tmp_path / "test.em"), mod_prefix="correct", mod_suffix=".mod")
 
-def test_emmotl2mod():
-    file_path = test_data + "/motl_data/test.em"
-    mod = cryomotl.emmotl2mod(file_path, output_motl_path=test_data + "/motl_data/mod110.mod")
+def test_emmotl2mod(tmp_path):
+    em_path = str(tmp_path / "test.em")
+    cryomotl.mod2emmotl(test_data + "/motl_data/modMotl/", output_motl_path=em_path, mod_prefix="correct", mod_suffix=".mod")
+    mod = cryomotl.emmotl2mod(em_path, output_motl_path=str(tmp_path / "mod110.mod"))
 
 
 
@@ -4824,8 +4825,11 @@ class TestModMotl:
         if os.path.exists(test_file_path + "test567.mod"):
             os.remove(test_file_path + "test567.mod")
 
-    def test_check_em2mod(self):
-        check = ModMotl(test_data + "/motl_data/mod110.mod")
+    def test_check_em2mod(self, tmp_path):
+        em_path = str(tmp_path / "test.em")
+        cryomotl.mod2emmotl(test_data + "/motl_data/modMotl/", output_motl_path=em_path, mod_prefix="correct", mod_suffix=".mod")
+        cryomotl.emmotl2mod(em_path, output_motl_path=str(tmp_path / "mod110.mod"))
+        check = ModMotl(str(tmp_path / "mod110.mod"))
         pd.set_option('display.max_rows', None)
         pd.set_option('display.max_columns', None)
         pd.set_option('display.width', None)

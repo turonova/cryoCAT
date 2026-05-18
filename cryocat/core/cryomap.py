@@ -289,7 +289,6 @@ def bandpass(
     outer_mask = cryomask.spherical_mask(input_map.shape, lp_radius, gaussian=lp_gaussian, gaussian_outwards=False)
     inner_mask = cryomask.spherical_mask(input_map.shape, hp_radius, gaussian=hp_gaussian, gaussian_outwards=False)
     band_mask = fft.ifftshift(outer_mask - inner_mask)
-    write(outer_mask - inner_mask, "band.em", data_type=np.single)
     bandpass_filtered = np.real(fft.ifftn(fft.fftn(input_map) * band_mask))
 
     # lowpass_filtered = lowpass(
