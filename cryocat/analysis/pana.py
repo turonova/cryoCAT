@@ -548,8 +548,8 @@ def generate_wedge_masks(
     """
 
     # init mask volumes for template and tile
-    filter_template = np.ones(cryomask.get_correct_format(template_size))
-    filter_tile = np.ones(cryomask.get_correct_format(tile_size))
+    filter_template = np.ones(geom.as_triplet(template_size))
+    filter_tile = np.ones(geom.as_triplet(tile_size))
 
     # get relevant subset of the wedgelist
     wedgelist = wedgeutils.load_wedge_list_sg(wedgelist)
@@ -878,7 +878,7 @@ def get_soft_mask_stats(input_mask):
     return n_voxels, mask_bb
 
 
-def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
+def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_path):
     """Extract the highest-scoring subtomogram from a tomogram.
 
     Loads a tomogram and its corresponding particle motive list, identifies the entry
@@ -895,7 +895,7 @@ def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
         compatible format).
     subtomo_shape : tuple of int
         Shape of the subtomogram to extract, in (x, y, z) order.
-    output_file : str or None
+    output_path : str or None
         Path to save the extracted subtomogram. If None, the file is not saved.
 
     Returns
@@ -920,8 +920,8 @@ def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
     subvolume_sh = cryomap.shift2(subvolume, shifts)
     # subvolume_rot = cryomap.rotate(subvolume_sh,rotation_angles=angles)
 
-    if output_file is not None:
-        cryomap.write(subvolume_sh, output_file, data_type=np.single)
+    if output_path is not None:
+        cryomap.write(subvolume_sh, output_path, data_type=np.single)
 
     return subvolume_sh, angles
 
@@ -1357,7 +1357,7 @@ def analyze_rotations(
     input_angles,
     wedge_mask_tomo=None,
     wedge_mask_tmpl=None,
-    output_file=None,
+    output_path=None,
     cc_radius=3,
     angular_offset=None,
     starting_angle=None,
@@ -1386,7 +1386,7 @@ def analyze_rotations(
         File path to or a numpy array of the wedge mask for the tomogram.
     wedge_mask_tmpl : str or numpy.ndarray, optional
         File path to or an array of the wedge mask for the template.
-    output_file : str, optional
+    output_path : str, optional
         Base path for saving output CSV and EM maps. If None, results are not
         written to disk.
     cc_radius : int, default=3
@@ -1551,13 +1551,13 @@ def analyze_rotations(
     final_ccc_map = np.clip(final_ccc_map, 0.0, 1.0)
     final_ccc_map_masked = final_ccc_map * cc_mask
 
-    if output_file is not None:
-        res_table.to_csv(output_file + ".csv", index=False)
-        cryomap.write(file_name=output_file + "_scores.em", data_to_write=final_ccc_map, data_type=np.single)
-        # cryomap.write(file_name=output_file + '_scores_masked.em',
+    if output_path is not None:
+        res_table.to_csv(output_path + ".csv", index=False)
+        cryomap.write(file_name=output_path + "_scores.em", data_to_write=final_ccc_map, data_type=np.single)
+        # cryomap.write(file_name=output_path + '_scores_masked.em',
         #               data_to_write = final_ccc_map_masked,
         #               data_type=np.single)
-        cryomap.write(file_name=output_file + "_angles.em", data_to_write=final_angles_map, data_type=np.single)
+        cryomap.write(file_name=output_path + "_angles.em", data_to_write=final_angles_map, data_type=np.single)
 
     return res_table, final_ccc_map, final_angles_map, final_ccc_map_masked
 
@@ -1677,7 +1677,7 @@ def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_fol
             input_angles=angle_list,
             wedge_mask_tomo=wedge_tomo,
             wedge_mask_tmpl=wedge_tmpl,
-            output_file=output_folder + "/" + output_base,
+            output_path=output_folder + "/" + output_base,
             angular_offset=angular_offset,
             starting_angle=starting_angle,
             cc_radius=cc_radius_tol,
@@ -1787,7 +1787,7 @@ def run_angle_analysis(
                     input_angles=angles[j, :].reshape(1, 3),
                     wedge_mask_tomo=wedge_tomo,
                     wedge_mask_tmpl=wedge_tmpl,
-                    output_file=None,
+                    output_path=None,
                     starting_angle=starting_angle,
                     cc_radius=cc_radius_tol,
                     c_symmetry=c_symmetry,
@@ -2221,7 +2221,7 @@ def get_shape_stats(template_list, indices, shape_type, parent_folder_path):
         mask_stats.to_csv(output_base + shape_type + ".csv")
 
 
-def plot_scores_and_peaks(peak_files, plot_title=None, output_file=None):
+def plot_scores_and_peaks(peak_files, plot_title=None, output_path=None):
     """
     Plot heatmaps of peak cross-sections for multiple peak-related data arrays.
 
@@ -2239,7 +2239,7 @@ def plot_scores_and_peaks(peak_files, plot_title=None, output_file=None):
         `tmana.create_starting_parameters_2D` to extract peak-centered slices.
     plot_title : str, optional
         Title for the entire figure. If None, no title is added.
-    output_file : str, optional
+    output_path : str, optional
         Path to save the figure as an image file. If None, the figure is not saved.
     """
 
@@ -2295,8 +2295,8 @@ def plot_scores_and_peaks(peak_files, plot_title=None, output_file=None):
 
     plt.tight_layout()
 
-    if output_file is not None:
-        plt.savefig(output_file, transparent=True, bbox_inches="tight")
+    if output_path is not None:
+        plt.savefig(output_path, transparent=True, bbox_inches="tight")
 
 
 def compute_peak_shapes(template_list, indices, parent_folder_path):
@@ -2368,7 +2368,7 @@ def compute_peak_shapes(template_list, indices, parent_folder_path):
         plot_scores_and_peaks(
             [scores_map, t_th_map, t_surf, t_map, g_th_map, g_surf, g_map, h_th_map, h_surf, h_map],
             plot_title=structure_name + " id" + str(i),
-            output_file=output_folder + "peaks.png",
+            output_path=output_folder + "peaks.png",
         )
 
 

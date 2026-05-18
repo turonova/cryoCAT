@@ -200,7 +200,7 @@ def evaluate_alignment(
                 motl_type=motl_type,
                 filter_rows=filter_rows[i],
                 filter_column=filter_columns[i],
-                output_file=stats_file_name,
+                output_path=stats_file_name,
                 load_kwargs=load_kwargs
             )
         )
@@ -209,7 +209,7 @@ def evaluate_alignment(
         if labels is None:
             labels = [ioutils.get_filename_from_path(m)[0:-1] for m in motl_base_names]
         visplot.plot_alignment_stability(
-            stats_dfs, labels=labels, graph_title=graph_title, output_file=graph_output_file
+            stats_dfs, labels=labels, graph_title=graph_title, output_path=graph_output_file
         )
 
     return stats_dfs
@@ -250,7 +250,7 @@ def compute_alignment_statistics(
     motl_type="stopgap",
     filter_rows=None,
     filter_column="subtomo_id",
-    output_file=None,
+    output_path=None,
     load_kwargs=None
 ):
     """Compute alignment statistics for specified motls and iterations. Pairs of (current motl, subsequent motl) are
@@ -274,7 +274,7 @@ def compute_alignment_statistics(
     filter_columns : str, default="subtomo_id"
         Column names based on which the filtering is perfomed. If fitler_rows is None, no filtering will be done and
         this parameter will not be used. Defaults to "subtomo_id".
-    output_file : str, optional
+    output_path : str, optional
         Output file for the statistics. If None no file will be written out. Defaults to None.
     load_kwargs : dict, optional
         Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
@@ -292,7 +292,7 @@ def compute_alignment_statistics(
     >>> # will be written into /path/to/the/motl_alignment_stats.csv file.
     >>> stats_df = compute_alignment_statistics(
     ...    "/path/to/the/motl_", 1, 17,
-    ...     motl_type="stopgap", output_file="/path/to/the/motl_alignment_stats.csv"
+    ...     motl_type="stopgap", output_path="/path/to/the/motl_alignment_stats.csv"
     ... )
 
     >>> # Motls motl_1.star to motl_17.star will be loaded for evaluation, no file will be written out.
@@ -355,8 +355,8 @@ def compute_alignment_statistics(
         stats_df.at[i, "position_change"] = np.mean(point_distances)
         stats_df.loc[i, ["rmse_x", "rmse_y", "rmse_z"]] = mathutils.compute_rmse(current_coord, next_coord)
 
-    if output_file is not None:
-        stats_df.to_csv(output_file, index=False)
+    if output_path is not None:
+        stats_df.to_csv(output_path, index=False)
 
     return stats_df
 
@@ -455,8 +455,8 @@ def create_multiref_run(
         # create motl with randomly assigned classes
         motl.assign_random_classes(number_of_classes)
 
-        output_file = output_motl_base + "_mr" + str(i) + "_" + str(iteration_number)
-        write_out_motl(motl, output_file, output_motl_type=output_motl_type)
+        output_path = output_motl_base + "_mr" + str(i) + "_" + str(iteration_number)
+        write_out_motl(motl, output_path, output_motl_type=output_motl_type)
 
 
 def create_denovo_multiref_run(
@@ -534,8 +534,8 @@ def create_denovo_multiref_run(
 
         ref_df.reset_index(inplace=True, drop=True)
         new_motl = cryomotl.Motl(ref_df)
-        output_file = output_motl_base + "_ref_mr" + str(i) + "_" + str(iteration_number)
-        write_out_motl(new_motl, output_file_base=output_file, output_motl_type=output_motl_type)
+        output_path = output_motl_base + "_ref_mr" + str(i) + "_" + str(iteration_number)
+        write_out_motl(new_motl, output_file_base=output_path, output_motl_type=output_motl_type)
 
     # create motl with randomly assigned classes
     motl.assign_random_classes(number_of_classes)
@@ -718,7 +718,7 @@ def evaluate_classification(
 
     if plot_results:
         visplot.plot_classification_convergence(
-            occupancy, changing_subtomos, graph_title="Classification progress", output_file=output_file_graphs
+            occupancy, changing_subtomos, graph_title="Classification progress", output_path=output_file_graphs
         )
 
     if output_file_stats is not None:

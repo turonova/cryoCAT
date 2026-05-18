@@ -1044,7 +1044,7 @@ def imod_com_read(filename):
     return result_dict
 
 
-def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start=0, output_file=None):
+def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start=0, output_path=None):
     """Reads a file, removes specified lines while skipping those that start with given strings and returns/writes out
     the rest.
 
@@ -1060,7 +1060,7 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
         from lines_to_remove will be applied to filter only the remaining lines. Dafaults to None.
     number_start: int. default=0
         Whether the line numbers provied start counting at 0 or 1. Defaults to 0.
-    output_file: str
+    output_path: str
         Path to a file to write out the content into. Defaults to None (no file will be written out).
 
     Returns
@@ -1089,8 +1089,8 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
 
                 kept_counter += 1
 
-    if output_file is not None:
-        with open(output_file, "w") as of:
+    if output_path is not None:
+        with open(output_path, "w") as of:
             of.writelines(filtered_lines)
 
     return filtered_lines
@@ -1109,8 +1109,8 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
 
     filtered_lines = [line for i, line in enumerate(lines_to_write) if i not in lines_to_remove]
 
-    if output_file is not None:
-        with open(output_file, "w") as of:
+    if output_path is not None:
+        with open(output_path, "w") as of:
             of.writelines(filtered_lines)
 
     return filtered_lines """
@@ -1332,7 +1332,7 @@ def indices_reset(input_data):
 
 
 def defocus_remove_file_entries(
-    input_file, entries_to_remove, file_type="gctf", numbered_from_1=True, output_file=None
+    input_file, entries_to_remove, file_type="gctf", numbered_from_1=True, output_path=None
 ):
     """Remove specified entries from a file and optionally update a specification file.
 
@@ -1348,7 +1348,7 @@ def defocus_remove_file_entries(
         The type of the input file. Can be 'gctf' or "ctffind4'. Defaults to 'gctf'.
     numbered_from_1 : bool=True
         Indicates whether the entries in `entries_to_remove` are numbered from 1. Defaults to True.
-    output_file : str, optional
+    output_path : str, optional
         The path to the output file where the modified content will be saved. If None, the input_file will be overwritten.
         Defaults to None.
 
@@ -1367,19 +1367,19 @@ def defocus_remove_file_entries(
     lines_to_remove = indices_load(entries_to_remove, numbered_from_1=numbered_from_1)
     if lines_to_remove is not None:
 
-        if output_file is None:
-            output_file = input_file
+        if output_path is None:
+            output_path = input_file
 
         if file_type.lower() == "gctf":
             sf.Starfile.remove_lines(
                 input_file,
                 lines_to_remove,
-                output_path=output_file,
+                output_path=output_path,
                 data_specifier="data_",
                 number_columns=True,
             )
         elif file_type.lower() == "ctffind4":
-            _ = remove_lines(input_file, lines_to_remove, start_str_to_skip=["#"], output_file=output_file)
+            _ = remove_lines(input_file, lines_to_remove, start_str_to_skip=["#"], output_path=output_path)
         else:
             print(f"The defocus filetype {file_type} is not supported and thus will not be cleaned.")
 

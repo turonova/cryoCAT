@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import re
 from scipy.spatial.transform import Rotation as srot
 from cryocat.utils.exceptions import UserInputError
 import matplotlib.pyplot as plt
@@ -9,11 +10,15 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import splprep, splev
 from scipy.optimize import fsolve
 
+from cryocat._types import RotationLike, Symmetry, TripletLike, EulerAngles, ArrayLike
+
+
 # Constants
 ANGLE_DEGREES_TOL = 10e-12
 PHI = (1 + np.sqrt(5)) / 2
 ROOT3 = np.sqrt(3)
 ROOT2 = np.sqrt(2)
+
 
 
 class Line:
@@ -509,21 +514,42 @@ class Matrix:
         return eulers[0]
 
 
-def tetrahedron():
+def tetrahedron() -> np.ndarray:
+    """Return the four unit-sphere vertices of a regular tetrahedron.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(4, 3)`` array of vertices on the unit sphere.
+    """
 
     vertices = 1 / ROOT3 * np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]])
 
     return vertices
 
 
-def octahedron():
+def octahedron() -> np.ndarray:
+    """Return the six unit-sphere vertices of a regular octahedron.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(6, 3)`` array of vertices on the unit sphere.
+    """
 
     vertices = np.vstack((np.identity(3), -np.identity(3)))
 
     return vertices
 
 
-def cube():
+def cube() -> np.ndarray:
+    """Return the eight unit-sphere vertices of a cube.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(8, 3)`` array of vertices on the unit sphere.
+    """
 
     vertices = (
         1
@@ -534,7 +560,7 @@ def cube():
     return vertices
 
 
-def icosahedron():
+def icosahedron() -> np.ndarray:
 
     vertices = np.array(
         [
@@ -556,7 +582,7 @@ def icosahedron():
     return vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
 
 
-def dodecahedron():
+def dodecahedron() -> np.ndarray:
 
     vertices = np.array(
         [
@@ -582,22 +608,59 @@ def dodecahedron():
     return vertices
 
 
-def n_gon_points(n):
+def n_gon_points(n: int) -> np.ndarray:
+    """Return the unit-circle vertices of a regular n-gon in the xy-plane.
+
+    Parameters
+    ----------
+    n : int
+        Number of vertices in the polygon.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(n, 2)`` array of 2D vertex coordinates on the unit circle.
+    """
 
     coordinates = [np.array([np.cos(2 * np.pi * k / n), np.sin(2 * np.pi * k / n)]) for k in range(n)]
 
     return np.vstack(coordinates)
 
 
-def great_circle_distance(p1, p2):
+def great_circle_distance(p1: np.ndarray, p2: np.ndarray) -> float:
+    """Great-circle (geodesic) distance between two unit-sphere points.
+
+    Parameters
+    ----------
+    p1 : numpy.ndarray
+        First unit-sphere point.
+    p2 : numpy.ndarray
+        Second unit-sphere point.
+
+    Returns
+    -------
+    float
+        Geodesic angle (radians) between the two points.
+    """
 
     dot_product = np.clip(np.dot(p1, p2), -1.0, 1.0)
     return np.arccos(dot_product)
 
 
-def min_great_circle_distance(set1, set2):
-    """
-    Computes the minimum great-circle distance between two sets of points on S^n.
+def min_great_circle_distance(set1: np.ndarray, set2: np.ndarray) -> float:
+    """Compute the minimum great-circle distance between two sets of points on S^n.
+
+    Parameters
+    ----------
+    set1 : numpy.ndarray
+        ``(N, d)`` array of unit-sphere points.
+    set2 : numpy.ndarray
+        ``(M, d)`` array of unit-sphere points.
+
+    Returns
+    -------
+    float
+        Minimum geodesic distance between any pair drawn from the two sets.
     """
     min_distance = np.inf
     for p1 in set1:
@@ -608,17 +671,39 @@ def min_great_circle_distance(set1, set2):
     return min_distance
 
 
-def great_circle_distance_matrix(points1, points2):
-    """
-    Compute the pairwise great-circle distances between two sets of points on an n-sphere.
+def great_circle_distance_matrix(points1: np.ndarray, points2: np.ndarray) -> np.ndarray:
+    """Pairwise great-circle distances between two sets of points on an n-sphere.
+
+    Parameters
+    ----------
+    points1 : numpy.ndarray
+        ``(N, d)`` array of unit-sphere points.
+    points2 : numpy.ndarray
+        ``(M, d)`` array of unit-sphere points.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(N, M)`` matrix of geodesic distances.
     """
     dot_products = np.clip(np.dot(points1, points2.T), -1.0, 1.0)
     return np.arccos(dot_products)
 
 
-def hausdorff_distance_sphere(set1, set2):
-    """
-    Compute the simplified Hausdorff distance between two discrete sets of points on an n-sphere.
+def hausdorff_distance_sphere(set1: np.ndarray, set2: np.ndarray) -> float:
+    """Simplified Hausdorff distance between two discrete sets of points on an n-sphere.
+
+    Parameters
+    ----------
+    set1 : numpy.ndarray
+        ``(N, d)`` array of unit-sphere points.
+    set2 : numpy.ndarray
+        ``(M, d)`` array of unit-sphere points.
+
+    Returns
+    -------
+    float
+        Symmetric Hausdorff distance.
     """
     dist_matrix = great_circle_distance_matrix(set1, set2)
 
@@ -629,7 +714,11 @@ def hausdorff_distance_sphere(set1, set2):
     return max(dist_hd_ab, dist_hd_ba)
 
 
-def project_points_on_plane_with_preserved_distance(starting_point, normal, nn_points):
+def project_points_on_plane_with_preserved_distance(
+    starting_point: np.ndarray,
+    normal: np.ndarray,
+    nn_points: np.ndarray,
+) -> np.ndarray:
     """Project approximately coplanar points around a starting_point onto the
     plane perpendicular to normal vector. The distances between projected nearest neighbors and
     starting point are preserved.
@@ -673,7 +762,10 @@ def project_points_on_plane_with_preserved_distance(starting_point, normal, nn_p
     return shifted_points
 
 
-def align_points_to_xy_plane(points_on_plane, plane_normal=None):
+def align_points_to_xy_plane(
+    points_on_plane: np.ndarray,
+    plane_normal: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Plane is rotated to be aligned with xy-plane.
 
     Parameters
@@ -725,13 +817,14 @@ def align_points_to_xy_plane(points_on_plane, plane_normal=None):
     return rotated_points, rotation_matrix
 
 
-def spline_sampling(coords, sampling_distance):
+def spline_sampling(coords: pd.DataFrame, sampling_distance: float) -> np.ndarray:
     """Samples a spline specified by coordinates with a given sampling distance
 
     Parameters
     ----------
-    coords : ndarray
-        coordinates of the spline
+    coords : pandas.DataFrame
+        coordinates of the spline (rows are points; uses ``.iloc`` and
+        ``.iterrows()`` so a DataFrame is required).
     sampling_distance : float
         sampling frequency in pixels
 
@@ -774,17 +867,26 @@ def spline_sampling(coords, sampling_distance):
         return spline_t
 
 
-def compare_rotations(angles1, angles2, c_symmetry=1, rotation_type="all"):
+def compare_rotations(
+    angles1: RotationLike,
+    angles2: RotationLike,
+    c_symmetry: Symmetry = 1,
+    rotation_type: str = "all",
+) -> tuple[float, float, float] | float:
     """Compare the rotations between two sets of angles.
 
     Parameters
     ----------
-    angles1 : list
-        The first set of angles.
-    angles2 : list
-        The second set of angles.
-    c_symmetry : int
-        The degree of rotational symmetry. Defaults to 1.
+    angles1 : RotationLike
+        The first set of rotations (Euler angles, matrices, quaternions or
+        :class:`scipy.spatial.transform.Rotation`).
+    angles2 : RotationLike
+        The second set of rotations, same conventions as ``angles1``.
+    c_symmetry : Symmetry, default=1
+        Cyclic rotational symmetry specifier (e.g. ``"C5"`` or ``5``); normalized
+        via :func:`as_symmetry`.
+    rotation_type : {"all", "angular_distance", "cone_distance", "in_plane_distance"}, default="all"
+        Selects which distance(s) to return.
 
     Returns
     -------
@@ -795,6 +897,8 @@ def compare_rotations(angles1, angles2, c_symmetry=1, rotation_type="all"):
         - dist_degrees_inplane (float): The angular distance within the plane of rotation between the two sets of angles.
 
     """
+
+    _, c_symmetry = as_symmetry(c_symmetry)
 
     dist_degrees = angular_distance(angles1, angles2, c_symmetry=c_symmetry)[0]
     dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(angles1, angles2, c_symmetry=c_symmetry)
@@ -811,41 +915,14 @@ def compare_rotations(angles1, angles2, c_symmetry=1, rotation_type="all"):
         raise UserInputError(f"The rotation type {rotation_type} is not supported.")
 
 
-def change_handedness_coordinates(coordinates, dimensions):
-    """The change_handedness_coordinates function takes in a pandas dataframe of coordinates and the dimensions of the
-    coordinate system. It then changes the handedness of those coordinates by subtracting each z-coordinate from
-    dimension[2]. This is done because we want to change our coordinate system so that it has its origin at the top left
-    corner, with positive x going right and positive y going down. The original coordinate system had its origin at
-    bottom left, with positive x going right and positive y going up.
+def euler_angles_to_normals(angles: EulerAngles) -> np.ndarray:
+    """Compute normal vectors pointing in z-direction from Euler angles.
 
     Parameters
     ----------
-    coordinates :
-        Store the coordinates of the voxels
-    dimensions :
-        Determine the new z value
-
-    Returns
-    -------
-
-        The coordinates with the z axis inverted
-        Doc Author:
-        Trelent
-
-    """
-    new_z = dimensions[2] - coordinates["z"]
-    coordinates.loc[:, "z"] = new_z
-
-    return coordinates
-
-
-def euler_angles_to_normals(angles):
-    """Compute normal vectors pointing in z-direction from Euler angles.
-
-    Parameers
-    ---------
-    angles : ndarray (n,3)
-        n triplets of Euler angles
+    angles : EulerAngles
+        Single triple ``(3,)`` or a stack ``(N, 3)`` of Euler angles in degrees
+        (zxz convention).
 
     Returns
     -------
@@ -859,14 +936,17 @@ def euler_angles_to_normals(angles):
     return normalized_normal_vectors
 
 
-def normals_to_euler_angles(input_normals, output_order="zxz"):
+def normals_to_euler_angles(
+    input_normals: np.ndarray | pd.DataFrame,
+    output_order: str = "zxz",
+) -> np.ndarray:
     """Given normal vectors pointing in z-direction in particle frames,
     compute choice of Euler angles.
 
     Parameters
     ----------
-    input_normals : ndarray, pandas dataFrame
-        z-normal vectors
+    input_normals : numpy.ndarray or pandas.DataFrame
+        z-normal vectors. DataFrames must have ``x``, ``y``, ``z`` columns.
     output_order : str, optional
         Euler angle convention. Defaults to "zxz".
 
@@ -905,7 +985,7 @@ def normals_to_euler_angles(input_normals, output_order="zxz"):
     return angles
 
 
-def quaternion_mult(qs1, qs2):
+def quaternion_mult(qs1: np.ndarray, qs2: np.ndarray) -> np.ndarray:
     """Given arrays of quaternions in scalar-last convention, compute
     array of products of unit quaternions.
 
@@ -935,7 +1015,7 @@ def quaternion_mult(qs1, qs2):
     return np.vstack(mutliplied)
 
 
-def quaternion_log(q):
+def quaternion_log(q: np.ndarray) -> np.ndarray:
     """Given array of unit scalar-last quaternions, compute array of
     unit-quaternion logarithms.
 
@@ -980,23 +1060,27 @@ def quaternion_log(q):
     return np.hstack([new_vector, new_scalar])
 
 
-def cone_distance(input_rot1, input_rot2):
+def cone_distance(input_rot1: RotationLike, input_rot2: RotationLike) -> np.ndarray:
     """Compute great-circle distance between z-normals corresponding to orientations
     as represented by input rotations. This corresponds to angular distance between cone-rotation
     portions of respective input rotations.
 
     Parameters
     ----------
-    input_rot1 : scipy.spatial.transform.Rotation object
-        Rotation object describing orientation of particle
-    input_rot2 : scipy.spatial.transform.Rotation object
-        Rotation object describing orientation of particle
+    input_rot1 : RotationLike
+        Rotation describing orientation of particle (Rotation, Euler triple/stack,
+        matrix, or quaternion). Normalized via :func:`as_rotation`.
+    input_rot2 : RotationLike
+        Rotation describing orientation of particle. Normalized via
+        :func:`as_rotation`.
 
     Returns
     -------
-    float
+    numpy.ndarray
         cone-distance in degrees
     """
+    input_rot1 = as_rotation(input_rot1)
+    input_rot2 = as_rotation(input_rot2)
     point = [0, 0, 1.0]
 
     vec1 = np.array(input_rot1.apply(point), ndmin=2)
@@ -1011,14 +1095,15 @@ def cone_distance(input_rot1, input_rot2):
     return cone_angle
 
 
-def get_axis_from_rotation(input_rotation, axis="z"):
+def get_axis_from_rotation(input_rotation: RotationLike, axis: str = "z") -> np.ndarray:
     """Given an input rotation, compute the desired unit normal vector
     from the coordinate frame associated to the rotation.
 
     Parameters
     ----------
-    input_rotation : scipy.spatial.transform.Rotation object
-        Rotation object describing orientation of particle
+    input_rotation : RotationLike
+        Rotation describing orientation of particle (Rotation, Euler triple/stack,
+        matrix, or quaternion). Normalized via :func:`as_rotation`.
     axis : str, optional
         Desired coordinate direction. Defaults to "z".
 
@@ -1033,6 +1118,7 @@ def get_axis_from_rotation(input_rotation, axis="z"):
         unit vector
     """
 
+    input_rotation = as_rotation(input_rotation)
     matrix_rep = input_rotation.as_matrix()
 
     axes_dict = {"x": 0, "y": 1, "z": 2}
@@ -1047,27 +1133,37 @@ def get_axis_from_rotation(input_rotation, axis="z"):
     return ret_axis
 
 
-def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
+def inplane_distance(
+    input_rot1: RotationLike,
+    input_rot2: RotationLike,
+    convention: str = "zxz",
+    degrees: bool = True,
+    c_symmetry: Symmetry = 1,
+) -> np.ndarray:
     """Compute the angular distance between inplane-rotation portion of two given rotations.
 
     Parameters
     ----------
-    input_rot1 : scipy.spatial.transform.Rotation object
-        Rotation object describing orientation of particle.
-    input_rot2 : scipy.spatial.transform.Rotation object
-        Rotation object describing orientation of particle.
+    input_rot1 : RotationLike
+        Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
+    input_rot2 : RotationLike
+        Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees : bool, optional
         Return angular distance in degrees (True) or radians (False). Defaults to True.
-    c_symmetry : int, optional
-        Rotational symmetry of underlying particles. Defaults to 1.
+    c_symmetry : Symmetry, default=1
+        Cyclic rotational symmetry specifier of underlying particles (``"C5"`` or
+        ``5``); normalized via :func:`as_symmetry`.
 
     Returns
     -------
     float
         Angular distance between inplane rotations.
     """
+    input_rot1 = as_rotation(input_rot1, euler_order=convention, degrees=degrees)
+    input_rot2 = as_rotation(input_rot2, euler_order=convention, degrees=degrees)
+    _, c_symmetry = as_symmetry(c_symmetry)
     phi1 = np.array(input_rot1.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
     phi2 = np.array(input_rot2.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
 
@@ -1092,21 +1188,28 @@ def inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_s
     return inplane_angle
 
 
-def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
+def cone_inplane_distance(
+    input_rot1: RotationLike,
+    input_rot2: RotationLike,
+    convention: str = "zxz",
+    degrees: bool = True,
+    c_symmetry: Symmetry = 1,
+) -> tuple[np.ndarray, np.ndarray]:
     """Compute angular distance between cone-rotations and inplane-rotations, respectively.
 
     Parameters
     ----------
-    input_rot1 : scipy.spatial.transform.Rotation object
-        Rotation object describing orientation of particle.
-    input_rot2 : scipy.spatial.transform.Rotation object
-        Rotation object describing orientation of particle.
+    input_rot1 : RotationLike
+        Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
+    input_rot2 : RotationLike
+        Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees :bool, optional
         Return angular distance in degrees (True) or radians (False). Defaults to True.
-    c_symmetry : int, optional
-        Rotational symmetry of underlying particles. Defaults to 1.
+    c_symmetry : Symmetry, default=1
+        Cyclic rotational symmetry specifier of underlying particles; normalized
+        via :func:`as_symmetry`.
 
     Returns
     -------
@@ -1115,15 +1218,9 @@ def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True
     float
         angular distance between inplane rotations.
     """
-    if isinstance(input_rot1, np.ndarray):
-        rot1 = srot.from_euler(convention, input_rot1, degrees=degrees)
-    else:
-        rot1 = input_rot1
-
-    if isinstance(input_rot2, np.ndarray):
-        rot2 = srot.from_euler(convention, input_rot2, degrees=degrees)
-    else:
-        rot2 = input_rot2
+    rot1 = as_rotation(input_rot1, euler_order=convention, degrees=degrees)
+    rot2 = as_rotation(input_rot2, euler_order=convention, degrees=degrees)
+    _, c_symmetry = as_symmetry(c_symmetry)
 
     cone_angle = cone_distance(rot1, rot2)
     inplane_angle = inplane_distance(rot1, rot2, convention, degrees, c_symmetry)
@@ -1131,18 +1228,25 @@ def cone_inplane_distance(input_rot1, input_rot2, convention="zxz", degrees=True
     return cone_angle, inplane_angle
 
 
-def angular_score_for_c_symmetry(inplane_1, inplane_2, c_symmetry, max_val=None):
+def angular_score_for_c_symmetry(
+    inplane_1: ArrayLike,
+    inplane_2: ArrayLike,
+    c_symmetry: Symmetry,
+    max_val: float | None = None,
+) -> np.ndarray:
     """
     Computes an angular similarity score for arrays of in-plane angles, based on rotational symmetry.
 
     Parameters:
     -----------
-    inplane_1 : array-like
-        First set of in-plane angles (in radians).
-    inplane_2 : array-like
-        Second set of in-plane angles (in radians).
-    c_symmetry : int
-        Symmetry category, must be greater than 5.
+    inplane_1 : ArrayLike
+        First set of in-plane angles (in radians). Normalized via
+        :func:`numpy.atleast_1d` / :func:`numpy.asarray`.
+    inplane_2 : ArrayLike
+        Second set of in-plane angles (in radians). Same handling as ``inplane_1``.
+    c_symmetry : Symmetry
+        Cyclic symmetry specifier (``"Cn"`` or ``n``); normalized via
+        :func:`as_symmetry`. Must specify an order greater than 1.
     max_val : float, optional
         Maximum possible angular distance for normalization.
 
@@ -1150,10 +1254,9 @@ def angular_score_for_c_symmetry(inplane_1, inplane_2, c_symmetry, max_val=None)
     --------
     np.ndarray: Array of angular similarity scores in [0, 1].
     """
-    if not isinstance(c_symmetry, int) or c_symmetry <= 1:
-        raise TypeError("symmetry_category must be an integer greater than 1.")
-
-    symm = c_symmetry
+    _, symm = as_symmetry(c_symmetry)
+    if symm <= 1:
+        raise ValueError("c_symmetry must specify an order greater than 1.")
 
     if max_val is None:
         max_val = np.pi / symm
@@ -1187,23 +1290,30 @@ def angular_score_for_c_symmetry(inplane_1, inplane_2, c_symmetry, max_val=None)
     return np.array(scores)
 
 
-def angular_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_symmetry=1):
+def angular_distance(
+    input_rot1: RotationLike,
+    input_rot2: RotationLike,
+    convention: str = "zxz",
+    degrees: bool = True,
+    c_symmetry: Symmetry = 1,
+) -> tuple[np.ndarray, np.ndarray]:
     """Compute angular distance between two rotations.
     Formula is based on this post
     https://math.stackexchange.com/questions/90081/quaternion-distance
 
     Parameters
     ----------
-    input_rot1 : scipy.spatial.transform.Rotation object
-        Rotation object describing orientation of particle.
-    input_rot2 : scipy.spatial.transform.Rotation object
-        Rotation object describing orientation of particle.
+    input_rot1 : RotationLike
+        Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
+    input_rot2 : RotationLike
+        Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees : bool, optional
         Return angular distance in degrees (True) or radians (False). Defaults to True.
-    c_symmetry : int, optional
-        Rotational symmetry of underlying particles. Defaults to 1.
+    c_symmetry : Symmetry, default=1
+        Cyclic rotational symmetry specifier of underlying particles; normalized
+        via :func:`as_symmetry`.
 
     Returns
     -------
@@ -1218,15 +1328,9 @@ def angular_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_s
     45.0
     """
 
-    if isinstance(input_rot1, np.ndarray):
-        rot1 = srot.from_euler(convention, input_rot1, degrees=degrees)
-    else:
-        rot1 = input_rot1
-
-    if isinstance(input_rot2, np.ndarray):
-        rot2 = srot.from_euler(convention, input_rot2, degrees=degrees)
-    else:
-        rot2 = input_rot2
+    rot1 = as_rotation(input_rot1, euler_order=convention, degrees=degrees)
+    rot2 = as_rotation(input_rot2, euler_order=convention, degrees=degrees)
+    _, c_symmetry = as_symmetry(c_symmetry)
 
     if c_symmetry > 1:
         angles1 = rot1.as_euler(convention, degrees=degrees)
@@ -1254,7 +1358,7 @@ def angular_distance(input_rot1, input_rot2, convention="zxz", degrees=True, c_s
     return angle, dist
 
 
-def number_of_cone_rotations(cone_angle, cone_sampling):
+def number_of_cone_rotations(cone_angle: float, cone_sampling: float) -> int:
     """Calculates the number of rotations required for a sampling process
     of cone-angles based on a sampling interval.
 
@@ -1287,7 +1391,12 @@ def number_of_cone_rotations(cone_angle, cone_sampling):
     return number_of_rotations
 
 
-def sample_cone(cone_angle, cone_sampling, center=None, radius=1.0):
+def sample_cone(
+    cone_angle: float,
+    cone_sampling: float,
+    center: TripletLike | None = None,
+    radius: float = 1.0,
+) -> np.ndarray:
     """Creates an "even" distibution on sphere. Works for tame cases.
     Source:
     https://stackoverflow.com/questions/9600801/evenly-distributing-n-points-on-a-sphere/26127012#26127012
@@ -1298,8 +1407,10 @@ def sample_cone(cone_angle, cone_sampling, center=None, radius=1.0):
         Angle for sampling of cone-angles (refers to range of z-normals of particles).
     cone_sampling : float
         Frequency for cone sampling.
-    center : ndarray, optional
-        Center of sphere to be sampled. Defaults to None.
+    center : TripletLike, optional
+        Center of sphere to be sampled (single number broadcast to all axes, or a
+        3-element array-like). Normalized via :func:`as_triplet`. Defaults to
+        None (origin).
     radius : float, optional
         Radius of sphere to be sampled. Defaults to 1.0.
 
@@ -1311,6 +1422,8 @@ def sample_cone(cone_angle, cone_sampling, center=None, radius=1.0):
 
     if center is None:
         center = np.array([0.0, 0.0, 0.0])
+    else:
+        center = as_triplet(center)
 
     number_of_points = number_of_cone_rotations(cone_angle, cone_sampling)
 
@@ -1343,14 +1456,14 @@ def sample_cone(cone_angle, cone_sampling, center=None, radius=1.0):
 
 
 def generate_angles(
-    cone_angle,
-    cone_sampling,
-    inplane_angle=360.0,
-    inplane_sampling=None,
-    starting_angles=None,
-    symmetry=1.0,
-    angle_order="zxz",
-):
+    cone_angle: float,
+    cone_sampling: float,
+    inplane_angle: float = 360.0,
+    inplane_sampling: float | None = None,
+    starting_angles: EulerAngles | None = None,
+    symmetry: Symmetry = 1,
+    angle_order: str = "zxz",
+) -> np.ndarray:
     """Compute Euler angles from sample for normal vectors on sphere.
     Sphere sample corresponds to cone-angles.
 
@@ -1364,10 +1477,12 @@ def generate_angles(
         Desired inplane-angles for particle orientations. Defaults to 360.0.
     inplane_sampling : float, optional
         Frequency for sampling of inplane-angles. Defaults to None.
-    starting_angles : ndarray , optional
-        Triplet of Euler angles in convention as spefified by angle_order. Defaults to None.
-    symmetry : float, optional
-        Refers to rotational symmetry of particles. Defaults to 1.0.
+    starting_angles : EulerAngles, optional
+        Triplet of Euler angles in convention as specified by ``angle_order``
+        (single triple ``(3,)`` or 3-list/tuple). Defaults to None.
+    symmetry : Symmetry, default=1
+        Rotational symmetry specifier (``"Cn"`` or ``n``); normalized via
+        :func:`as_symmetry`.
     angle_order : str, optional
         Convention for Euler angles. Defaults to "zxz".
 
@@ -1376,6 +1491,8 @@ def generate_angles(
     ndarray
         Sample of Euler angles.
     """
+    _, symmetry = as_symmetry(symmetry)
+
     points = sample_cone(cone_angle, cone_sampling)
     angles = normals_to_euler_angles(points, output_order=angle_order)
     angles[:, 0] = 0.0
@@ -1387,6 +1504,7 @@ def generate_angles(
     cone_rotations = srot.from_euler(angle_order, angles=angles, degrees=True)
 
     if starting_angles is not None:
+        starting_angles = np.asarray(starting_angles, dtype=float)
         starting_rot = srot.from_euler(angle_order, angles=starting_angles, degrees=True)
         cone_rotations = starting_rot * cone_rotations  # swapped order w.r.t. the quat_mult in matlab!
         starting_phi = starting_angles[0]
@@ -1426,20 +1544,20 @@ def generate_angles(
 
 
 def visualize_rotations(
-    rotations,
-    plot_rotations=True,
-    color_map=None,
-    marker_size=20,
-    alpha=1.0,
-    radius=1.0,
-):
+    rotations: RotationLike,
+    plot_rotations: bool = True,
+    color_map: str | None = None,
+    marker_size: int = 20,
+    alpha: float = 1.0,
+    radius: float = 1.0,
+) -> np.ndarray:
     """Compute z-normals of input rotations.
     If desried, generate plot depicting z-normals of input rotations.
 
     Parameters
     ----------
-    rotations : array of scipy.spatial.transform.Rotation objects
-        Orientations to be visualized
+    rotations : RotationLike
+        Orientations to be visualized. Normalized via :func:`as_rotation`.
     plot_rotations : bool, optional
         If True, plot is generated. Defaults to True.
     color_map : str, optional
@@ -1456,6 +1574,7 @@ def visualize_rotations(
     ndarray (n,3)
         Array of z-normals.
     """
+    rotations = as_rotation(rotations)
     starting_point = np.array([0.0, 0.0, radius])
     new_points = np.array(rotations.apply(starting_point), ndmin=2)
 
@@ -1489,7 +1608,7 @@ def visualize_rotations(
     return new_points
 
 
-def angle_between_vectors(vectors1, vectors2):
+def angle_between_vectors(vectors1: np.ndarray, vectors2: np.ndarray) -> np.ndarray:
     """Compute the angle (in degrees) between corresponding pairs of vectors in two arrays.
 
     Parameters
@@ -1522,7 +1641,11 @@ def angle_between_vectors(vectors1, vectors2):
     return degrees
 
 
-def visualize_angles(angles, plot_rotations=True, color_map=None):
+def visualize_angles(
+    angles: EulerAngles,
+    plot_rotations: bool = True,
+    color_map: str | None = None,
+) -> np.ndarray:
     """Compute z-normals of input orientations as described using Euler angles in zxz-convention.
     If desried, generate plot depicting z-normals of input orientations.
 
@@ -1546,16 +1669,19 @@ def visualize_angles(angles, plot_rotations=True, color_map=None):
     return new_points
 
 
-def fill_ellipsoid(box_size, ellipsoid_parameters):
+def fill_ellipsoid(
+    box_size: TripletLike,
+    ellipsoid_parameters: ArrayLike,
+) -> np.ndarray:
     """Fills a 3D space defined by `box_size` with a boolean mask where an ellipsoid defined by `ellipsoid_parameters`
     is located.
 
     Parameters
     ----------
-    box_size : int or array_like
-        Size of the box in which the ellipsoid will be placed. If an integer is provided, it is
-        interpreted as the size for all three dimensions. If a tuple or list is provided, it should contain
-        three integers defining the dimensions of the box.
+    box_size : TripletLike
+        Size of the box in which the ellipsoid will be placed (single int broadcast
+        to all three axes, or a 3-element array-like). Normalized via
+        :func:`as_triplet`.
     ellipsoid_parameters : array_like
         Coefficients for the general ellipsoid equation:
         Ax^2 + By^2 + Cz^2 + 2Dxy + 2Exz + 2Fyz + 2Gx + 2Hy + 2Iz + J = 0
@@ -1577,10 +1703,7 @@ def fill_ellipsoid(box_size, ellipsoid_parameters):
 
     # Ax^2 + By^2 + Cz^2 + 2Dxy + 2Exz + 2Fyz + 2Gx + 2Hy + 2Iz + J = 0
 
-    if isinstance(box_size, int):
-        box_size = np.full((3,), box_size)
-    elif isinstance(box_size, (tuple, list)):
-        box_size = np.asarray(box_size)
+    box_size = as_triplet(box_size)
 
     x_array = np.arange(0, box_size[0], 1)
     y_array = np.arange(0, box_size[1], 1)
@@ -1606,7 +1729,7 @@ def fill_ellipsoid(box_size, ellipsoid_parameters):
     return mask
 
 
-def fit_ellipsoid(coord):
+def fit_ellipsoid(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Fit an ellipsoid to a set of 3D coordinates. It is based on
     http://www.mathworks.com/matlabcentral/fileexchange/24693-ellipsoid-fit
 
@@ -1692,14 +1815,17 @@ def fit_ellipsoid(coord):
     return center, radii, evecs, v
 
 
-def point_ellipsoid_distance(p, params):
+def point_ellipsoid_distance(
+    p: ArrayLike,
+    params: ArrayLike,
+) -> float:
     """Computes the shortest distance from a point p to the surface of an ellipsoid.
 
     Parameters:
     -----------
-    p : ndarray (3,)
-        The 3D point in space.
-    params : ndarray (26,)
+    p : ArrayLike
+        The 3D point in space. Normalized via :func:`numpy.asarray`.
+    params : ArrayLike
         The ellipsoid parameters in the following order:
         ["cx", "cy", "cz", "rx", "ry", "rz",
          "ev1x", "ev1y", "ev1z", "ev2x", "ev2y", "ev2z",
@@ -1710,6 +1836,9 @@ def point_ellipsoid_distance(p, params):
     float
         The shortest distance from the point to the ellipsoid surface.
     """
+    p = np.asarray(p)
+    params = np.asarray(params)
+
     # Extract ellipsoid parameters
     center = np.array(params[:3])  # (cx, cy, cz)
     radii = np.array(params[3:6])  # (rx, ry, rz)
@@ -1736,7 +1865,7 @@ def point_ellipsoid_distance(p, params):
     return np.linalg.norm(p - closest_global)
 
 
-def point_pairwise_dist(coord_1, coord_2):
+def point_pairwise_dist(coord_1: np.ndarray, coord_2: np.ndarray) -> np.ndarray:
     """Calculate the pairwise Euclidean distance between two sets of coordinates.
 
     Parameters
@@ -1772,7 +1901,7 @@ def point_pairwise_dist(coord_1, coord_2):
     return pairwise_dist
 
 
-def area_triangle(coords):
+def area_triangle(coords: np.ndarray) -> float:
     """Calculate the area of a triangle given its vertex coordinates. See
     https://stackoverflow.com/questions/71346322/numpy-area-of-triangle-and-equation-of-a-plane-on-which-triangle-lies-on
 
@@ -1800,18 +1929,22 @@ def area_triangle(coords):
     return np.linalg.norm(triangles) / 2
 
 
-def ray_ellipsoid_intersection_3d(point, normal, ellipsoid_params):
+def ray_ellipsoid_intersection_3d(
+    point: ArrayLike,
+    normal: ArrayLike,
+    ellipsoid_params: ArrayLike,
+) -> tuple[np.ndarray, np.ndarray, float, float, bool]:
     """Compute the intersection between a ray starting at point in direction of normal and
     an ellipsoid specified by ellipsoid_params.
 
     Parameters
     ----------
-    point : ndarray (3,)
-        Point in 3D describing origin of ray.
-    normal : ndarray (3,)
-        Normal vector describing direction of ray.
-    ellipsoid_params : ndarray, list or tuple of 10 floats
-        Coefficients describing quadratic form of ellipsoid.
+    point : ArrayLike
+        Point in 3D describing origin of ray. Normalized via :func:`numpy.asarray`.
+    normal : ArrayLike
+        Normal vector describing direction of ray. Normalized via :func:`numpy.asarray`.
+    ellipsoid_params : ArrayLike
+        Coefficients describing quadratic form of ellipsoid (10 elements).
 
     Returns
     -------
@@ -1822,6 +1955,9 @@ def ray_ellipsoid_intersection_3d(point, normal, ellipsoid_params):
         d2: float (distance between point and p2), or NaN.
         is_inside: bool, true if point lies inside the ellipsoid.
     """
+    point = np.asarray(point)
+    normal = np.asarray(normal)
+
     # Extract line parameters
     x, y, z = point[0], point[1], point[2]
     n1, n2, n3 = normal[0], normal[1], normal[2]
@@ -1895,6 +2031,52 @@ def ray_ellipsoid_intersection_3d(point, normal, ellipsoid_params):
     return p1, p2, d1, d2, is_inside
 
 
+def construct_rays(
+    points: np.ndarray,
+    normals: np.ndarray,
+    ray_length: float | None = None,
+    reverse_direction: bool = False,
+) -> np.ndarray:
+    """
+    Build rays from points and normals (N, 6): origin xyz + direction xyz.
+
+    Parameters
+    ----------
+    points : ndarray (N, 3)
+    normals : ndarray (N, 3)
+    ray_length : float, optional
+        Scale for direction magnitude; if None, effectively infinite.
+    reverse_direction : bool
+        If True, negate normals before building directions.
+    """
+    points = np.atleast_2d(np.asarray(points, dtype=np.float32))
+    normals = np.atleast_2d(np.asarray(normals, dtype=np.float32))
+
+    if points.shape[1] != 3:
+        raise ValueError(f"Points must have shape (N, 3), got {points.shape}")
+    if normals.shape[1] != 3:
+        raise ValueError(f"Normals must have shape (N, 3), got {normals.shape}")
+    if points.shape[0] != normals.shape[0]:
+        raise ValueError(
+            f"Points and normals length mismatch: {points.shape[0]} vs {normals.shape[0]}"
+        )
+
+    norm_mag = np.linalg.norm(normals, axis=1, keepdims=True)
+    if np.any(norm_mag < 1e-10):
+        raise ValueError("Found zero-length normal vectors")
+    normals_normalized = normals / norm_mag
+
+    if reverse_direction:
+        normals_normalized = -normals_normalized
+
+    if ray_length is None:
+        ray_directions = normals_normalized * 1e10
+    else:
+        ray_directions = normals_normalized * float(ray_length)
+
+    return np.hstack([points, ray_directions])
+
+
 def ray_ray_intersection_3d(starting_points, ending_points):
     """Calculate the intersection point and distances from the intersection to each line for a set of 3D rays.
 
@@ -1962,17 +2144,23 @@ def ray_ray_intersection_3d(starting_points, ending_points):
     return P_intersect, distances
 
 
-def rotate_points_rodrigues(P, n0, n1):
+def rotate_points_rodrigues(
+    P: np.ndarray,
+    n0: ArrayLike,
+    n1: ArrayLike,
+) -> np.ndarray:
     """Rotates points by the rotation defined by two vectors.
 
     Parameters
     ----------
     P : ndarray
         Array containing point(s) to be rotated. Can be a 1D array for a single point or a 2D array for multiple points.
-    n0 : ndarray
-        Initial vector, before rotation. Must be a 1D array of 3 elements.
-    n1 : ndarray
-        Final vector, after rotation. Must be a 1D array of 3 elements.
+    n0 : ArrayLike
+        Initial vector, before rotation. 3-element array-like; normalized via
+        :func:`numpy.asarray`.
+    n1 : ArrayLike
+        Final vector, after rotation. 3-element array-like; normalized via
+        :func:`numpy.asarray`.
 
     Returns
     -------
@@ -1998,6 +2186,9 @@ def rotate_points_rodrigues(P, n0, n1):
     if P.ndim == 1:
         P = P[np.newaxis, :]
 
+    n0 = np.asarray(n0)
+    n1 = np.asarray(n1)
+
     # Normalize vectors n0 and n1
     n0 = n0 / np.linalg.norm(n0)
     n1 = n1 / np.linalg.norm(n1)
@@ -2016,7 +2207,10 @@ def rotate_points_rodrigues(P, n0, n1):
     return P_rot
 
 
-def project_3d_points_on_2d_plane_normal_aligned(coord, target_direction=None):
+def project_3d_points_on_2d_plane_normal_aligned(
+    coord: np.ndarray,
+    target_direction: ArrayLike | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Projects 3D points onto a 2D plane that is aligned with a specified normal direction.
 
     Parameters
@@ -2056,7 +2250,7 @@ def project_3d_points_on_2d_plane_normal_aligned(coord, target_direction=None):
     return coord_proj, coord_mean, normal
 
 
-def project_3d_points_on_2d_plane_variance_based(coord):
+def project_3d_points_on_2d_plane_variance_based(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Projects 3D points onto a 2D plane using variance-based method via Singular Value Decomposition (SVD).
 
     Parameters
@@ -2091,7 +2285,7 @@ def project_3d_points_on_2d_plane_variance_based(coord):
     return coord_proj, U
 
 
-def fit_circle_3d_lsq(coord):
+def fit_circle_3d_lsq(coord: np.ndarray) -> tuple[np.ndarray, float, float]:
     """Fit a circle to 3D points using least squares optimization.
 
     Parameters
@@ -2123,7 +2317,11 @@ def fit_circle_3d_lsq(coord):
     return circle_center, circle_radius, residual_error
 
 
-def fit_circle_2d_lsq(x, y, w=None):
+def fit_circle_2d_lsq(
+    x: ArrayLike,
+    y: ArrayLike,
+    w: ArrayLike | None = None,
+) -> tuple[float, float, float, float]:
     """Fit a circle to 2D points using the least squares method. The method was taken from
     https://meshlogic.github.io/posts/jupyter/curve-fitting/fitting-a-circle-to-cluster-of-3d-points/
 
@@ -2160,8 +2358,13 @@ def fit_circle_2d_lsq(x, y, w=None):
     >>> xc, yc, r, error = fit_circle_2d_lsq(x, y)
     """
 
+    x = np.asarray(x)
+    y = np.asarray(y)
+
     if w is None:
         w = []
+    else:
+        w = np.asarray(w)
 
     A = np.array([x, y, np.ones(len(x))]).T
     b = x**2 + y**2
@@ -2187,7 +2390,7 @@ def fit_circle_2d_lsq(x, y, w=None):
     return xc, yc, r, error
 
 
-def fit_circle_3d_pratt(coord):
+def fit_circle_3d_pratt(coord: np.ndarray) -> tuple[np.ndarray, float, int]:
     """Fit a circle to a set of 3D points using Pratt's method after projecting them onto a 2D plane.
 
     Parameters
@@ -2249,7 +2452,7 @@ def fit_circle_3d_pratt(coord):
     return circle_center, circle_radius, confidence
 
 
-def fit_circle_3d_taubin(coord):
+def fit_circle_3d_taubin(coord: np.ndarray) -> tuple[np.ndarray, float, int]:
     """Fit a circle to 3D points using Taubin's method projected onto a 2D plane.
 
     Parameters
@@ -2313,7 +2516,7 @@ def fit_circle_3d_taubin(coord):
     return circle_center, circle_radius, confidence
 
 
-def fit_circle_2d_newton(coord):
+def fit_circle_2d_newton(coord: np.ndarray) -> tuple[np.ndarray, float, int]:
     """Fit a circle to 2D data using Newton's method.
 
     Parameters
@@ -2421,13 +2624,13 @@ def fit_circle_2d_newton(coord):
     return circle_center, circle_radius, confidence
 
 
-def normalize_vector(vector):
+def normalize_vector(vector: ArrayLike) -> np.ndarray:
     """Normalize a vector.
 
     Parameters
     ----------
-    vector : array_like
-        Input vector to be normalized.
+    vector : ArrayLike
+        Input vector to be normalized. Normalized via :func:`numpy.asarray`.
 
     Returns
     -------
@@ -2442,10 +2645,11 @@ def normalize_vector(vector):
     array([0.26726124, 0.40089186, 0.80278373])
     """
 
+    vector = np.asarray(vector)
     return vector / np.linalg.norm(vector)
 
 
-def normalize_vectors(v):
+def normalize_vectors(v: np.ndarray) -> np.ndarray:
     """Normalize each vector, handling both single vectors and arrays of vectors.
 
     Parameters
@@ -2470,7 +2674,11 @@ def normalize_vectors(v):
 
 
 # TODO: This function should not be necessary due to "angle_between_vectors"
-def angle_between_n_vectors(v1, v2, degrees=True):
+def angle_between_n_vectors(
+    v1: np.ndarray,
+    v2: np.ndarray,
+    degrees: bool = True,
+) -> np.ndarray:
     """Compute the angle (in degrees) between corresponding pairs of vectors in two arrays.
 
     Parameters
@@ -2510,15 +2718,18 @@ def angle_between_n_vectors(v1, v2, degrees=True):
         return angle
 
 
-def vector_angular_distance(v1, v2):
+def vector_angular_distance(
+    v1: ArrayLike,
+    v2: ArrayLike,
+) -> float:
     """Calculate the angular distance between two vectors in degrees.
 
     Parameters
     ----------
-    v1 : array_like
-        First input vector.
-    v2 : array_like
-        Second input vector.
+    v1 : ArrayLike
+        First input vector. Normalized via :func:`normalize_vector`.
+    v2 : ArrayLike
+        Second input vector. Normalized via :func:`normalize_vector`.
 
     Returns
     -------
@@ -2538,16 +2749,20 @@ def vector_angular_distance(v1, v2):
     return np.degrees(np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)))
 
 
-def vector_angular_distance_signed(u, v, n=None):
+def vector_angular_distance_signed(
+    u: ArrayLike,
+    v: ArrayLike,
+    n: ArrayLike | None = None,
+) -> float:
     """Compute the signed angular distance between two vectors.
 
     Parameters
     ----------
-    u : array_like
+    u : ArrayLike
         First input vector.
-    v : array_like
+    v : ArrayLike
         Second input vector.
-    n : array_like, optional
+    n : ArrayLike, optional
         Normal vector to the plane containing `u` and `v`. If not provided, the function
         computes the unsigned angular distance.
 
@@ -2586,7 +2801,7 @@ def vector_angular_distance_signed(u, v, n=None):
         return np.arctan2(np.dot(n, np.cross(u, v)), np.dot(u, v))
 
 
-def oversample_spline(coords, target_spacing):
+def oversample_spline(coords: np.ndarray, target_spacing: float) -> np.ndarray:
     """Fit a spline through 3D coordinates and oversample so that the distance between points is approximately `target_spacing`.
 
     Parameters
@@ -2620,7 +2835,19 @@ def oversample_spline(coords, target_spacing):
     return oversampled_points
 
 
-def distance_array(vol):
+def distance_array(vol: np.ndarray) -> np.ndarray:
+    """Build a cubic grid of Euclidean distances from the centre.
+
+    Parameters
+    ----------
+    vol : numpy.ndarray
+        Reference 3D volume whose first-axis length determines the cubic edge.
+
+    Returns
+    -------
+    numpy.ndarray
+        3D array of distances from the centre voxel.
+    """
     shell_grid = np.arange(math.floor(-len(vol[0]) / 2), math.ceil(len(vol[0]) / 2), 1)
     xv, yv, zv = shell_grid, shell_grid, shell_grid
     shell_space = np.meshgrid(xv, yv, zv, indexing="xy")  ## 'ij' denominates matrix indexing, 'xy' cartesian
@@ -2629,7 +2856,7 @@ def distance_array(vol):
     return distance_v
 
 
-def order_points_on_circle(points):
+def order_points_on_circle(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Order points on a circle based on their angles with respect to the x-axis.
 
     Parameters
@@ -2670,7 +2897,10 @@ def order_points_on_circle(points):
     return ordered_points, sorted_indices
 
 
-def cartesian_to_spherical(coord, normalize=True):
+def cartesian_to_spherical(
+    coord: np.ndarray,
+    normalize: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
     """Convert Cartesian coordinates to spherical coordinates.
 
     Parameters
@@ -2734,7 +2964,11 @@ def cartesian_to_spherical(coord, normalize=True):
 # =============================================================================
 
 
-def _triangle_mesh_vertices(opp_vertex, v1, v2):
+def _triangle_mesh_vertices(
+    opp_vertex: np.ndarray,
+    v1: np.ndarray,
+    v2: np.ndarray,
+) -> np.ndarray:
     """Compute the four corners of a parallelogram mesh from three triangle vertices.
 
     Given the vertex opposite to the shortest edge (``v1``–``v2``) and the
@@ -2760,7 +2994,7 @@ def _triangle_mesh_vertices(opp_vertex, v1, v2):
     return np.array((v1, fourth_vertex, v2, opp_vertex))
 
 
-def sample_triangle(vertices, sampling_distance):
+def sample_triangle(vertices: np.ndarray, sampling_distance: float) -> np.ndarray:
     """Sample a triangle into a regular grid of 3-D points.
 
     The function identifies the shortest edge of the triangle, constructs a
@@ -2809,7 +3043,7 @@ def sample_triangle(vertices, sampling_distance):
     return np.concatenate(mesh_points, axis=0)
 
 
-def _barycentric_coords(triangle, point):
+def _barycentric_coords(triangle: np.ndarray, point: np.ndarray) -> np.ndarray:
     """Compute barycentric coordinates of a point with respect to a triangle.
 
     Projects the triangle onto the plane that discards the dominant axis of
@@ -2861,7 +3095,7 @@ def _barycentric_coords(triangle, point):
     return b
 
 
-def point_inside_triangle(point, triangle):
+def point_inside_triangle(point: np.ndarray, triangle: np.ndarray) -> bool:
     """Test whether a 3-D point lies inside a triangle.
 
     Uses barycentric coordinates: the point is inside if all three weights
@@ -2882,3 +3116,210 @@ def point_inside_triangle(point, triangle):
     """
     b = _barycentric_coords(triangle, point)
     return bool(np.all(b >= -0.0001) and np.all(b <= 1.0001))
+
+
+# ---------------------------------------------------------------------------
+# Normalizers for polymorphic inputs
+# ---------------------------------------------------------------------------
+
+
+def as_rotation(
+    source: RotationLike,
+    *,
+    euler_order: str = "zxz",
+    degrees: bool = True,
+) -> srot:
+    """Normalize a rotation-like input to a SciPy Rotation.
+
+    Canonical normalizer for the :data:`cryocat._types.RotationLike` type.
+    Any function that accepts a RotationLike should call this at its
+    entry point.
+
+    Parameters
+    ----------
+    source : RotationLike
+        One of:
+
+        * :class:`scipy.spatial.transform.Rotation` -- returned as-is
+        * Shape ``(3,)`` -- Euler angles (single rotation)
+        * Shape ``(N, 3)`` -- stack of Euler angles
+        * Shape ``(3, 3)`` -- rotation matrix
+        * Shape ``(N, 3, 3)`` -- stack of rotation matrices
+        * Shape ``(4,)`` -- quaternion (xyzw)
+        * Shape ``(N, 4)`` -- stack of quaternions
+    euler_order : str, default="zxz"
+        Euler convention for Euler-angle inputs. Standard SciPy
+        conventions are accepted.
+    degrees : bool, default=True
+        Whether the Euler angles are in degrees.
+
+    Returns
+    -------
+    Rotation
+        Equivalent SciPy Rotation object.
+
+    Raises
+    ------
+    ValueError
+        If the shape of `source` cannot be interpreted as a rotation.
+
+    Examples
+    --------
+    >>> as_rotation([0, 45, 0])             # single Euler triple
+    >>> as_rotation(np.eye(3))              # identity matrix
+    >>> as_rotation([0, 0, 0, 1])           # identity quaternion
+    """
+    if isinstance(source, srot):
+        return source
+
+    arr = np.asarray(source, dtype=float)
+
+    # 1-D shape (3,): single Euler triple
+    if arr.ndim == 1 and arr.shape[0] == 3:
+        return srot.from_euler(euler_order, arr, degrees=degrees)
+    # 1-D shape (4,): single quaternion
+    if arr.ndim == 1 and arr.shape[0] == 4:
+        return srot.from_quat(arr)
+    # 2-D shape (3, 3): single rotation matrix
+    if arr.shape == (3, 3):
+        return srot.from_matrix(arr)
+    # 2-D shape (N, 3): stack of Euler triples
+    if arr.ndim == 2 and arr.shape[1] == 3:
+        return srot.from_euler(euler_order, arr, degrees=degrees)
+    # 2-D shape (N, 4): stack of quaternions
+    if arr.ndim == 2 and arr.shape[1] == 4:
+        return srot.from_quat(arr)
+    # 3-D shape (N, 3, 3): stack of matrices
+    if arr.ndim == 3 and arr.shape[1:] == (3, 3):
+        return srot.from_matrix(arr)
+
+    raise ValueError(
+        f"Cannot interpret array of shape {arr.shape} as a rotation. "
+        "Expected (3,), (N, 3), (3, 3), (N, 3, 3), (4,), or (N, 4)."
+    )
+
+
+def as_symmetry(source: Symmetry) -> tuple[str, int]:
+    """Normalize a symmetry specifier to ``(group, order)``.
+
+    Canonical normalizer for the :data:`cryocat._types.Symmetry` type.
+    Consolidates the symmetry-parsing logic previously duplicated in
+    :func:`cryomap.rotational_average` and :meth:`Motl.split_in_asymmetric_subunits`.
+
+    Parameters
+    ----------
+    source : Symmetry
+        Either a string like ``"C5"`` or ``"D2"`` (case-insensitive),
+        or a bare integer/float ``n`` (interpreted as cyclic Cn).
+
+    Returns
+    -------
+    group : str
+        ``"C"`` for cyclic, ``"D"`` for dihedral.
+    order : int
+        The order of the symmetry group (n in Cn / Dn).
+
+    Raises
+    ------
+    ValueError
+        If the string does not start with C or D, if no digits are
+        present, or if the input type is unsupported.
+
+    Examples
+    --------
+    >>> as_symmetry("C5")
+    ('C', 5)
+    >>> as_symmetry("d2")
+    ('D', 2)
+    >>> as_symmetry(7)
+    ('C', 7)
+    """
+    if isinstance(source, str):
+        digits = re.findall(r"\d+", source)
+        if not digits:
+            raise ValueError(f"No order found in symmetry string {source!r}.")
+        order = int(digits[-1])
+        letter = source.strip()[0].upper()
+        if letter == "C":
+            return ("C", order)
+        if letter == "D":
+            return ("D", order)
+        raise ValueError(
+            f"Unknown symmetry {source!r}: only C (cyclic) and D (dihedral) are supported."
+        )
+
+    # int / float
+    if isinstance(source, (int, float, np.integer, np.floating)):
+        if source != int(source):
+            raise ValueError(f"Symmetry order must be a whole number, got {source}.")
+        return ("C", int(source))
+
+    raise ValueError(
+        f"Symmetry must be a string ('Cn'/'Dn') or an integer, got {type(source).__name__}."
+    )
+
+
+def as_triplet(
+    input_value: TripletLike | None,
+    reference_size: TripletLike | None = None,
+) -> np.ndarray:
+    """Normalize a TripletLike input to a length-3 integer ndarray.
+
+    Canonical normalizer for the :data:`cryocat._types.TripletLike` type.
+    Any function that accepts a TripletLike should call this at its entry
+    point to get a length-3 ndarray to work with.
+
+    If ``input_value`` is None, ``reference_size`` is normalized the same
+    way and then divided by 2 (useful for deriving a centre from a box
+    size).
+
+    Parameters
+    ----------
+    input_value : TripletLike, optional
+        A scalar (broadcast to all three axes), 3-tuple/3-list, single-element
+        container ``(x,)`` (broadcast), or a length-3 ndarray.
+    reference_size : TripletLike, optional
+        Fallback used when ``input_value`` is None. Normalized the same way
+        and divided by 2. Defaults to None.
+
+    Returns
+    -------
+    numpy.ndarray
+        Length-3 integer ndarray.
+
+    Raises
+    ------
+    ValueError
+        If both ``input_value`` and ``reference_size`` are None, or if a
+        container input has length neither 1 nor 3.
+
+    Examples
+    --------
+    >>> as_triplet(5)
+    array([5, 5, 5])
+    >>> as_triplet([1, 2, 3])
+    array([1, 2, 3])
+    >>> as_triplet(None, reference_size=8)
+    array([4, 4, 4])
+    """
+
+    def format_input(unformatted_value):
+        if isinstance(unformatted_value, (tuple, list, np.ndarray)):
+            if len(unformatted_value) == 3:
+                return np.asarray(unformatted_value).astype(int)
+            elif len(unformatted_value) == 1:
+                return np.full((3,), unformatted_value).astype(int)
+            else:
+                raise ValueError("The size have to be a single number or have to have length of 3!")
+        elif isinstance(unformatted_value, (float, int)):
+            return np.full((3,), unformatted_value).astype(int)
+
+    if input_value is not None:
+        size_correct_format = format_input(input_value)
+    elif reference_size is not None:
+        box_size = format_input(reference_size)
+        size_correct_format = box_size // 2
+    else:
+        raise ValueError("Either input_size or referene_size have to be specified")
+
+    return size_correct_format

@@ -4,6 +4,7 @@ import math
 from cryocat.core import cryomap
 from cryocat.core import cryomotl
 from cryocat.utils import ioutils
+from cryocat.utils import geom
 from skimage import filters
 from scipy import ndimage
 from scipy.spatial.transform import Rotation as srot
@@ -366,8 +367,8 @@ def spherical_shell_mask(mask_size, shell_thickness, radius=None, center=None, g
     The function creates a spherical shell by subtracting a smaller sphere from a larger sphere, both centered at the same point.
     """
 
-    mask_size = get_correct_format(mask_size)
-    center = get_correct_format(center, reference_size=mask_size)
+    mask_size = geom.as_triplet(mask_size)
+    center = geom.as_triplet(center, reference_size=mask_size)
 
     if radius is None:
         radius = np.amin(mask_size) // 2
@@ -419,13 +420,13 @@ def spherical_mask(mask_size, radius=None, center=None, gaussian=0.0, gaussian_o
 
     See Also
     --------
-    :meth:`cryocat.core.cryomask.get_correct_format` :
+    :func:`cryocat.utils.geom.as_triplet` :
         For more information on formatting the inputs.
 
     """
 
-    mask_size = get_correct_format(mask_size)
-    center = get_correct_format(center, reference_size=mask_size)
+    mask_size = geom.as_triplet(mask_size)
+    center = geom.as_triplet(center, reference_size=mask_size)
 
     if radius is None:
         radius = np.amin(mask_size) // 2
@@ -495,12 +496,12 @@ def cylindrical_mask(
 
     See Also
     --------
-    :meth:`cryocat.core.cryomask.get_correct_format` :
+    :func:`cryocat.utils.geom.as_triplet` :
         For more information on formatting the inputs.
 
     """
-    mask_size = get_correct_format(mask_size)
-    center = get_correct_format(center, reference_size=mask_size)
+    mask_size = geom.as_triplet(mask_size)
+    center = geom.as_triplet(center, reference_size=mask_size)
 
     if radius is None:
         radius = np.amin(mask_size[:2]) // 2  # only x, y are relevant
@@ -605,62 +606,6 @@ def cylindrical_mask_from_points(
 
     return rot_shifted
 
-def get_correct_format(input_value, reference_size=None):
-    """Formats correctly the size of the mask, radius or coordinates of the mask centers.
-    If the input size is specified, it will be converted to a `numpy.ndarray` of length 3.
-    If the reference size is specified, it will be converted to a `numpy.ndarray` of length 3 and then divided by 2.
-
-    Parameters
-    ----------
-    input_value : int or array-like
-        Specify the value either by one number, tuple, list or numpy.ndarray.
-        In case of one number, it is assumed that the output should be the same for all three dimensions.
-    reference_size : int, optional
-        If input_value is None, then the reference size can be used to compute the correct output. For example,
-        getting the center coordinates based on the box size (reference_size) by dividing the box size by 2. Defaults
-        to None.
-
-    Returns
-    -------
-    numpy.ndarray
-        An (3,) array with size/coordinates.
-
-    Raises
-    ------
-    ValueError
-        If the size is specified as a container with size different from 1 or 3.
-    ValueError
-        If both input_size and reference_size are None.
-
-    Notes
-    -----
-    This function is mainly use internally to ensure correct format of the input values, such as mask and radius
-    size or center coordinates.
-
-    """
-
-    def format_input(unformatted_value):
-        if isinstance(unformatted_value, (tuple, list, np.ndarray)):
-            if len(unformatted_value) == 3:
-                return np.asarray(unformatted_value).astype(int)
-            elif len(unformatted_value) == 1:
-                return np.full((3,), unformatted_value).astype(int)
-            else:
-                raise ValueError("The size have to be a single number or have to have length of 3!")
-        elif isinstance(unformatted_value, (float, int)):
-            return np.full((3,), unformatted_value).astype(int)
-
-    if input_value is not None:
-        size_correct_format = format_input(input_value)
-    elif reference_size is not None:
-        box_size = format_input(reference_size)
-        size_correct_format = box_size // 2
-    else:
-        raise ValueError("Either input_size or referene_size have to be specified")
-
-    return size_correct_format
-
-
 def ellipsoid_shell_mask(mask_size, shell_thickness, radii, center=None, gaussian=0.0, angles=None, output_path=None):
     """Generates a binary mask of an ellipsoid shell within a given mask size.
 
@@ -695,9 +640,9 @@ def ellipsoid_shell_mask(mask_size, shell_thickness, radii, center=None, gaussia
     Optional Gaussian blurring and rotation can be applied to the shell mask before returning.
     """
 
-    mask_size = get_correct_format(mask_size)
-    center = get_correct_format(center, reference_size=mask_size)
-    radii = get_correct_format(radii, reference_size=mask_size)
+    mask_size = geom.as_triplet(mask_size)
+    center = geom.as_triplet(center, reference_size=mask_size)
+    radii = geom.as_triplet(radii, reference_size=mask_size)
 
     shell_thickness = shell_thickness / 2
 
@@ -758,13 +703,13 @@ def ellipsoid_mask(
 
     See Also
     --------
-    :meth:`cryocat.core.cryomask.get_correct_format` :
+    :func:`cryocat.utils.geom.as_triplet` :
         For more information on formatting the inputs.
 
     """
-    mask_shape = get_correct_format(mask_size)
-    center = get_correct_format(center, reference_size=mask_shape)
-    radii = get_correct_format(radii, reference_size=mask_shape)
+    mask_shape = geom.as_triplet(mask_size)
+    center = geom.as_triplet(center, reference_size=mask_shape)
+    radii = geom.as_triplet(radii, reference_size=mask_shape)
 
     radii = preprocess_params(radii, gaussian, gaussian_outwards)
 

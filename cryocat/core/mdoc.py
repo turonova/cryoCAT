@@ -504,7 +504,7 @@ class Mdoc:
         return formatted
 
 
-def remove_images(input_mdoc, idx_to_remove, numbered_from_1=True, output_file=None):
+def remove_images(input_mdoc, idx_to_remove, numbered_from_1=True, output_path=None):
     """Remove images from an mdoc file by index.
 
     Parameters
@@ -515,7 +515,7 @@ def remove_images(input_mdoc, idx_to_remove, numbered_from_1=True, output_file=N
         Indices of images to remove, or a path to a file containing them.
     numbered_from_1 : bool, default=True
         When ``True``, indices are treated as 1-based.
-    output_file : str, optional
+    output_path : str, optional
         If given, the modified mdoc is written to this path.
 
     Returns
@@ -528,20 +528,20 @@ def remove_images(input_mdoc, idx_to_remove, numbered_from_1=True, output_file=N
     if idx_to_remove_final is not None:
         mdoc.remove_images(idx_to_remove_final)
 
-        if output_file:
-            mdoc.write(output_file, overwrite=True)
+        if output_path:
+            mdoc.write(output_path, overwrite=True)
 
     return mdoc
 
 
-def get_tilt_angles(input_mdoc, output_file=None):
+def get_tilt_angles(input_mdoc, output_path=None):
     """Extract tilt angles from an mdoc file.
 
     Parameters
     ----------
     input_mdoc : str
         Path to the ``.mdoc`` file.
-    output_file : str, optional
+    output_path : str, optional
         If given, tilt angles are written as a single-column CSV to this path.
 
     Returns
@@ -551,13 +551,13 @@ def get_tilt_angles(input_mdoc, output_file=None):
     """
     mdoc = Mdoc(input_mdoc)
 
-    if output_file:
-        mdoc.imgs["TiltAngle"].to_csv(output_file, index=False, header=False)
+    if output_path:
+        mdoc.imgs["TiltAngle"].to_csv(output_path, index=False, header=False)
 
     return mdoc.imgs["TiltAngle"].values
 
 
-def sort_mdoc_by_tilt_angles(input_mdoc, reset_z_value=False, output_file=None):
+def sort_mdoc_by_tilt_angles(input_mdoc, reset_z_value=False, output_path=None):
     """Sort an mdoc file by tilt angle.
 
     Parameters
@@ -567,7 +567,7 @@ def sort_mdoc_by_tilt_angles(input_mdoc, reset_z_value=False, output_file=None):
     reset_z_value : bool, default=False
         When ``True``, the ``ZValue`` column is reset to a sequential range
         after sorting.
-    output_file : str, optional
+    output_path : str, optional
         If given, the sorted mdoc is written to this path.
 
     Returns
@@ -578,8 +578,8 @@ def sort_mdoc_by_tilt_angles(input_mdoc, reset_z_value=False, output_file=None):
     mdoc = Mdoc(input_mdoc)
     mdoc.sort_by_tilt(reset_z_value=reset_z_value)
 
-    if output_file:
-        mdoc.write(output_file, overwrite=True)
+    if output_path:
+        mdoc.write(output_path, overwrite=True)
 
     return mdoc
 
@@ -637,7 +637,7 @@ def split_mdoc_file(input_mdoc, new_id=None, output_folder=None):
     return mdocs_all
 
 
-def merge_mdoc_files(mdoc_path, new_id=None, reorder=True, stripFramePath=False, output_file=None):
+def merge_mdoc_files(mdoc_path, new_id=None, reorder=True, stripFramePath=False, output_path=None):
     """Merge multiple mdoc files matching a path prefix into a single :class:`Mdoc`.
 
     Discovers all ``*.mdoc`` files in the same directory that share the
@@ -654,7 +654,7 @@ def merge_mdoc_files(mdoc_path, new_id=None, reorder=True, stripFramePath=False,
         When ``True``, images are sorted by tilt angle and ZValues are reset.
     stripFramePath : bool, default=False
         When ``True``, directory information is stripped from ``SubFramePath``.
-    output_file : str, optional
+    output_path : str, optional
         If given, the merged mdoc is written to this path.
 
     Returns
@@ -685,13 +685,13 @@ def merge_mdoc_files(mdoc_path, new_id=None, reorder=True, stripFramePath=False,
     if reorder:
         merged_mdoc.sort_by_tilt(reset_z_value=True)
 
-    if output_file is not None:
-        merged_mdoc.write(out_path=output_file, overwrite=True)
+    if output_path is not None:
+        merged_mdoc.write(out_path=output_path, overwrite=True)
 
     return merged_mdoc
 
 
-def update_mdoc_features(mdoc_path, features_dict, output_file=None):
+def update_mdoc_features(mdoc_path, features_dict, output_path=None):
     """Update a specific entry in the mdoc file.
 
     Parameters
@@ -700,7 +700,7 @@ def update_mdoc_features(mdoc_path, features_dict, output_file=None):
         Path to the mdoc file to be updated.
     features_dict : dict
         Dictionary containing the features to be updated as keys and their new value.
-    output_file : str, optional, default=None
+    output_path : str, optional, default=None
         Path to save the updated mdoc file. If None, no updated file is saved.
 
     Returns
@@ -725,7 +725,7 @@ def update_mdoc_features(mdoc_path, features_dict, output_file=None):
         else:
             raise KeyError(f"Entry '{feature}' not found in project info or image data.")
 
-    if output_file:
-        mdoc.write(output_file, overwrite=True)
+    if output_path:
+        mdoc.write(output_path, overwrite=True)
 
     return mdoc

@@ -136,36 +136,6 @@ def test_rotate(ref_masks):
     assert np.allclose(actual, expected, atol=1e-8)
 
 
-@pytest.mark.parametrize(
-    "input_value, reference_size, expected",
-    [
-        ([1, 2, 3], None, np.array([1, 2, 3])),
-        ([1, 2], None, None),
-        (
-            [
-                1,
-            ],
-            None,
-            np.array([1, 1, 1]),
-        ),
-        (1, None, np.array([1, 1, 1])),
-        ((1, 2, 3), None, np.array([1, 2, 3])),
-        ((1, 2), None, None),
-        ((1,), None, np.array([1, 1, 1])),
-        ((1), None, np.array([1, 1, 1])),
-        ((1.5, 5.3, 3), None, np.array([1, 5, 3])),
-        (np.array([1, 5, 3]), None, np.array([1, 5, 3])),
-        (np.array([1.5, 5.3, 3]), None, np.array([1, 5, 3])),
-    ],
-)
-def test_get_correct_format(input_value, reference_size, expected):
-    if expected is None:
-        with pytest.raises(ValueError):
-            get_correct_format(input_value, reference_size)
-    else:
-        assert np.array_equal(get_correct_format(input_value, reference_size), expected)
-
-
 def test_add_gaussian(ref_masks):
     actual = add_gaussian(ref_masks["sm0.em"], 0.5)
     expected = ref_masks["sm50.em"]
@@ -709,10 +679,10 @@ def test_fill_hollow_mask(tmp_path):
 
     # 5. Output File
     hollow_cube_file = create_sample_map_file(tmp_path, hollow_cube, "hollow_cube.em")
-    output_file = tmp_path / "filled_cube.em"
-    fill_hollow_mask(hollow_cube_file, output_path=str(output_file))
-    assert os.path.exists(output_file), "Output file was not created"
-    filled_cube_from_file = cryomap.read(str(output_file))
+    output_path = tmp_path / "filled_cube.em"
+    fill_hollow_mask(hollow_cube_file, output_path=str(output_path))
+    assert os.path.exists(output_path), "Output file was not created"
+    filled_cube_from_file = cryomap.read(str(output_path))
     assert np.array_equal(filled_cube_from_file, expected_filled_cube), "Output file content is incorrect"
 
     # 6. input from file

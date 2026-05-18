@@ -156,7 +156,7 @@ class TestMdocWithFiles:
         try:
             indices_to_remove = list(range(min(1, num_images)))
             if indices_to_remove:
-                result = mdoc.remove_images(mdoc_file, indices_to_remove, output_file=tmp_path)
+                result = mdoc.remove_images(mdoc_file, indices_to_remove, output_path=tmp_path)
                 assert isinstance(result, mdoc.Mdoc)
                 assert len(result.removed_images()) == len(indices_to_remove)
                 assert os.path.exists(tmp_path)
@@ -172,7 +172,7 @@ class TestMdocWithFiles:
         with tempfile.NamedTemporaryFile(suffix='.csv', delete=False) as tmp_file:
             tmp_path = tmp_file.name
         try:
-            tilt_angles = mdoc.get_tilt_angles(mdoc_file, output_file=tmp_path)
+            tilt_angles = mdoc.get_tilt_angles(mdoc_file, output_path=tmp_path)
             assert os.path.exists(tmp_path)
             with open(tmp_path, 'r') as f:
                 content = f.read().strip()
@@ -190,7 +190,7 @@ class TestMdocWithFiles:
         with tempfile.NamedTemporaryFile(suffix='.mdoc', delete=False) as tmp_file:
             tmp_path = tmp_file.name
         try:
-            result = mdoc.sort_mdoc_by_tilt_angles(mdoc_file, reset_z_value=True, output_file=tmp_path)
+            result = mdoc.sort_mdoc_by_tilt_angles(mdoc_file, reset_z_value=True, output_path=tmp_path)
             assert os.path.exists(tmp_path)
             assert result.imgs['ZValue'].tolist() == list(range(len(result.imgs)))
         finally:
@@ -236,7 +236,7 @@ class TestMdocWithFiles:
         merged = mdoc.merge_mdoc_files(
             str(first_file.parent / prefix),
             reorder=True,
-            output_file=None
+            output_path=None
         )
 
         assert isinstance(merged, mdoc.Mdoc)
@@ -254,7 +254,7 @@ class TestMdocWithFiles:
         merged_no_reorder = mdoc.merge_mdoc_files(
             str(first_file.parent / prefix),
             reorder=False,
-            output_file=None
+            output_path=None
         )
         assert len(merged_no_reorder.imgs) == expected_total_images
 
@@ -265,7 +265,7 @@ class TestMdocWithFiles:
             merged_with_output = mdoc.merge_mdoc_files(
                 str(first_file.parent / prefix),
                 reorder=True,
-                output_file=tmp_path
+                output_path=tmp_path
             )
             assert os.path.exists(tmp_path)
             read_back = mdoc.Mdoc(tmp_path)
@@ -278,7 +278,7 @@ class TestMdocWithFiles:
             str(first_file.parent / prefix),
             reorder=True,
             stripFramePath=True,
-            output_file=None
+            output_path=None
         )
         for path in merged_stripped.imgs['SubFramePath']:
             assert path == os.path.basename(path)
@@ -287,7 +287,7 @@ class TestMdocWithFiles:
             str(first_file.parent / prefix),
             new_id="FrameSet" if merged.section_id == "ZValue" else "ZValue",
             reorder=True,
-            output_file=None
+            output_path=None
         )
         assert merged_new_id.section_id != merged.section_id
 

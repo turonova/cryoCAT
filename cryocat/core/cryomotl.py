@@ -19,6 +19,7 @@ from cryocat.utils import mathutils
 from cryocat.utils import ioutils
 from cryocat.analysis import nnana
 from cryocat.utils import imod
+from cryocat._types import PathOrStr, MotlType
 
 from math import ceil
 from matplotlib import pyplot as plt
@@ -28,6 +29,17 @@ from scipy.spatial import KDTree
 from sklearn.neighbors import KDTree as snKDTree
 from scipy.spatial.transform import Rotation as rot
 
+type MotlSource = Motl | pd.DataFrame | PathOrStr
+"""Anything that can be used to construct or load a :class:`Motl`.
+
+Accepted forms:
+    * :class:`Motl` instance (or any subclass: EmMotl, RelionMotl, ...)
+    * :class:`pandas.DataFrame` with the 20-column motl schema
+    * Path (str / :class:`pathlib.Path` / :class:`os.PathLike`) to a
+      motl file
+
+Normalize with :func:`as_motl` at the function boundary.
+"""
 
 class Motl:
     """Base class for particle motive lists (motls).
@@ -396,7 +408,7 @@ class Motl:
         self.df = cleaned_df
 
     def clean_by_distance_to_points(
-        self, points, radius_in_voxels, feature_id="tomo_id", inplace=True, output_file=None
+        self, points, radius_in_voxels, feature_id="tomo_id", inplace=True, output_path=None
     ):
         """Cleans the motl by removing points that are within a specified radius of any point in a the provided dataframe
         with points.
@@ -412,7 +424,7 @@ class Motl:
             The column name that identifies how the particles in motl should be grouped. Defaults to 'tomo_id'.
         inplace : bool, default=True
             If True, modifies the motl in place. If False, returns a new Motl object. Defaults to True.
-        output_file : str or None, optional
+        output_path : str or None, optional
             If specified, the cleaned Motl object will be written to this file. Defaults to None.
 
         Returns
@@ -459,8 +471,8 @@ class Motl:
         cleaned_df.reset_index(drop=True, inplace=True)
         cleaned_motl = Motl(cleaned_df)
 
-        if output_file:
-            cleaned_motl.write_out(output_file)
+        if output_path:
+            cleaned_motl.write_out(output_path)
 
         print(f"{self.df.shape[0]-cleaned_motl.df.shape[0]} particles were removed.")
 
@@ -470,7 +482,7 @@ class Motl:
             return cleaned_motl
 
     def clean_by_tomo_mask(
-        self, tomo_list, tomo_masks, inplace=True, boundary_type="center", box_size=None, output_file=None
+        self, tomo_list, tomo_masks, inplace=True, boundary_type="center", box_size=None, output_path=None
     ):
         """Removes particles from the motive list based on provided tomomgram masks.
 
@@ -490,7 +502,7 @@ class Motl:
             box ("whole"). In the latter case, the box_size have to be specified as well. Defaults to "center".
         box_size : int, optional
             Size of the subtomogram box. Required if `boundary_type` is set to "whole". Defaults to None.
-        output_file : str, optional
+        output_path : str, optional
             Path to save the cleaned motive list. If not provided, the motive list is not saved. Defaults to None.
 
         Returns
@@ -506,7 +518,7 @@ class Motl:
         Notes
         -----
         The function loads tomograms and their corresponding masks, binarizes the masks, and then filters out particles
-        in the motive list that fall into masked-out (zero-valued) areas of the tomograms. If `output_file` is provided,
+        in the motive list that fall into masked-out (zero-valued) areas of the tomograms. If `output_path` is provided,
         the cleaned motive list is saved to this file.
 
         The function creates a new instance of a Motl and does not alter the original one.
@@ -585,8 +597,8 @@ class Motl:
 
         cleaned_motl.df.reset_index(inplace=True, drop=True)
 
-        if output_file is not None:
-            cleaned_motl.write_out(output_file)
+        if output_path is not None:
+            cleaned_motl.write_out(output_path)
 
         if inplace:
             self.df = cleaned_motl.df
