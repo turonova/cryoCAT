@@ -28,17 +28,11 @@ from cryocat.core import cryomap
 from cryocat.utils.geom import Matrix
 from cryocat.utils.classutils import get_classes_from_names, get_class_names_by_parent
 from cryocat.analysis import visplot
-import pandas as pd
-import plotly.graph_objects as go
-
-from matplotlib.colors import LinearSegmentedColormap, to_hex
-
-### Utility functions ###
+from matplotlib.colors import to_hex
 
 
 def get_colormap_color(cmap, val):
-    """
-    Get a color from a colormap based on a value.
+    """Get a color from a colormap based on a value.
 
     Parameters
     ----------
@@ -54,9 +48,6 @@ def get_colormap_color(cmap, val):
     """
     rgba = cmap(val)
     return to_hex(rgba, keep_alpha=False)
-
-
-###
 
 
 class Particle:
@@ -1125,22 +1116,12 @@ class Descriptor:
         else:
             merged_df = pd.merge(self.desc, self.df, on="qp_id", how="left")
 
-        fig = go.Figure(
-            data=[
-                go.Scatter3d(
-                    x=merged_df["twist_x"],
-                    y=merged_df["twist_y"],
-                    z=merged_df["twist_z"],
-                    mode="markers",
-                    marker=dict(size=3, opacity=1, color=merged_df[color_column], colorbar=dict(title="Group")),
-                )
-            ]
-        )
-
-        fig.update_layout(
+        fig = visplot.plot_scatter_3d(
+            merged_df,
+            coord_columns=["twist_x", "twist_y", "twist_z"],
+            color_column=color_column,
+            color_label="Group",
             title="K-means analysis",
-            scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
-            margin=dict(l=0, r=0, b=0, t=30),
         )
 
         fig.show()
@@ -1928,7 +1909,6 @@ class TwistDescriptor(Descriptor):
             c_range = range(2, int(c_range))
 
         symmetries_dict = {}
-
         for n in c_range:
             max_val = np.pi / n
             scores = geom.angular_score_for_c_symmetry(qp_inplane, nn_inplane, n, max_val=max_val)
@@ -1937,44 +1917,17 @@ class TwistDescriptor(Descriptor):
         df_symmetries = pd.DataFrame(symmetries_dict)
         df_melted = df_symmetries.melt(var_name="Column", value_name="Value")
 
-        color_list = [
-            (0.0, "#AEC684"),
-            (0.25, "#4EACB6"),
-            (0.5, "#C0A3BA"),
-            (0.75, "#7D82AB"),
-            (1.0, "#865B96"),
-        ]
-        positions, colors = zip(*color_list)
-        cmap = LinearSegmentedColormap.from_list("custom_cmap", list(zip(positions, colors)))
-
-        fig = go.Figure()
-        unique_cols = sorted(df_melted["Column"].unique())
-        n_cols = len(unique_cols)
-
-        # For each symmetry type, add a box trace
-        for i, col in enumerate(unique_cols):
-            val = i / (n_cols - 1) if n_cols > 1 else 0  # normalise index to [0,1]
-            colour = get_colormap_color(cmap, val)
-
-            fig.add_trace(
-                go.Box(
-                    y=df_melted.loc[df_melted["Column"] == col, "Value"],
-                    name=str(col),
-                    boxpoints="outliers",
-                    marker_color=colour,
-                )
-            )
-
-        fig.update_layout(
+        fig = visplot.plot_grouped_box(
+            df_melted,
+            group_column="Column",
+            value_column="Value",
             title="Rotational Symmetry Angular Scores",
             xaxis_title="Rotational symmetry type",
             yaxis_title="Angular score",
-            font=dict(size=12),
-            xaxis=dict(tickangle=45),
+            colorscale="Monet",
         )
 
         if plot_graph:
-
             fig.show()
 
         return fig

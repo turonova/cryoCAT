@@ -27,12 +27,8 @@ chain stats, etc.) lives in ``cryocat.analysis.structure.Chain``.
 
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import sklearn.neighbors as sn
-import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation as srot
-from plotly.subplots import make_subplots
-import plotly.graph_objects as go
 
 from cryocat.core import cryomotl
 from cryocat.core import cryomap
@@ -282,7 +278,7 @@ def rotations_to_unit_vectors(rotations):
     euler_angles : numpy.ndarray
         Shape ``(M, 3)``.  zxz Euler angles in degrees.
     """
-    points = geom.visualize_rotations(rotations, plot_rotations=False)
+    points = geom.rotations_to_z_normals(rotations)
     angles = rotations.as_euler("zxz", degrees=True)
     return points, angles
 
@@ -1464,181 +1460,3 @@ def trace_chains(motl_entry, motl_exit=None, max_distance=None, min_distance=0,
     return traced_motl
 
 
-# =============================================================================
-# Plotting
-# =============================================================================
-
-
-def plot_nn_coord(coord, displ_threshold=None, marker_size=20):
-    """Plot three 2-D scatter views (XY, XZ, YZ) of a 3-D coordinate array.
-
-    Parameters
-    ----------
-    coord : numpy.ndarray, shape ``(N, 3)``
-        Particle coordinates as columns ``[x, y, z]``.
-    displ_threshold : float, optional
-        When given, all three axes are clamped to
-        ``[-displ_threshold, displ_threshold]``.
-    marker_size : int, default=20
-        Scatter marker size passed to :func:`matplotlib.axes.Axes.scatter`.
-    """
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    axs[0].set_title("XY distribution")
-    axs[0].scatter(coord[:, 0], coord[:, 1], s=marker_size)
-    axs[1].set_title("XZ distribution")
-    axs[1].scatter(coord[:, 0], coord[:, 2], s=marker_size)
-    axs[2].set_title("YZ distribution")
-    axs[2].scatter(coord[:, 1], coord[:, 2], s=marker_size)
-    for ax in axs:
-        ax.set_aspect("equal", "box")
-    if displ_threshold is not None:
-        limits = [-displ_threshold, displ_threshold]
-        for ax in axs:
-            ax.set(xlim=limits, ylim=limits)
-
-
-def plot_nn_coord_df(df, circle_radius, output_name=None,
-                     displ_threshold=None, title=None, marker_size=20):
-    """Plot three 2-D scatter views of NN coordinates with a reference circle.
-
-    Reads columns ``coord_x``, ``coord_y``, ``coord_z`` from ``df`` and
-    draws XY, XZ, and YZ projections.  A filled circle of radius
-    ``circle_radius`` centered at the origin is overlaid on each panel.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        Must contain columns ``coord_x``, ``coord_y``, ``coord_z``.
-    circle_radius : float
-        Radius of the reference circle drawn on each panel.
-    output_name : str, optional
-        File path for saving the figure (passed to
-        :func:`matplotlib.pyplot.savefig`).
-    displ_threshold : float, optional
-        When given, all axes are clamped to
-        ``[-displ_threshold, displ_threshold]``.
-    title : str, optional
-        Super-title placed above all subplots.
-    marker_size : int, default=20
-        Scatter marker size.
-    """
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    axs[0].set_title("XY distribution")
-    sns.scatterplot(ax=axs[0], data=df, x="coord_x", y="coord_y", s=marker_size)
-    axs[1].set_title("XZ distribution")
-    sns.scatterplot(ax=axs[1], data=df, x="coord_x", y="coord_z", s=marker_size)
-    axs[2].set_title("YZ distribution")
-    sns.scatterplot(ax=axs[2], data=df, x="coord_y", y="coord_z", s=marker_size)
-    for ax in axs:
-        ax.set_aspect("equal", "box")
-        ax.add_patch(plt.Circle((0, 0), circle_radius, color="gold", alpha=0.4, fill=True))
-    if displ_threshold is not None:
-        limits = [-displ_threshold, displ_threshold]
-        for ax in axs:
-            ax.set(xlim=limits, ylim=limits)
-    if title is not None:
-        fig.suptitle(title)
-    if output_name is not None:
-        plt.savefig(output_name, transparent=True)
-
-
-def plot_nn_rot_coord_df(df, output_name=None, displ_threshold=None,
-                         title=None, marker_size=20):
-    """Plot NN displacement vectors rotated into the query-particle frame.
-
-    Reads columns ``coord_rx``, ``coord_ry``, ``coord_rz`` and a ``type``
-    column (used as hue) from ``df`` and draws XY, XZ, and YZ projections.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        Must contain columns ``coord_rx``, ``coord_ry``, ``coord_rz``, ``type``.
-    output_name : str, optional
-        File path for saving the figure.
-    displ_threshold : float, optional
-        When given, all axes are clamped to
-        ``[-displ_threshold, displ_threshold]``.
-    title : str, optional
-        Super-title placed above all subplots.
-    marker_size : int, default=20
-        Scatter marker size.
-    """
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    axs[0].set_title("XY distribution")
-    sns.scatterplot(ax=axs[0], data=df, x="coord_rx", y="coord_ry", hue="type", s=marker_size)
-    axs[1].set_title("XZ distribution")
-    sns.scatterplot(ax=axs[1], data=df, x="coord_rx", y="coord_rz", hue="type", s=marker_size)
-    axs[2].set_title("YZ distribution")
-    sns.scatterplot(ax=axs[2], data=df, x="coord_ry", y="coord_rz", hue="type", s=marker_size)
-    for ax in axs:
-        sns.move_legend(ax, "upper right")
-        ax.set_aspect("equal", "box")
-    if displ_threshold is not None:
-        limits = [-displ_threshold, displ_threshold]
-        for ax in axs:
-            ax.set(xlim=limits, ylim=limits)
-    if title is not None:
-        fig.suptitle(title)
-    plt.tight_layout()
-    if output_name is not None:
-        plt.savefig(output_name, transparent=True)
-
-
-def plot_nn_rot_coord_df_plotly(df, coord_columns, desc, displ_threshold=None,
-                                title=None, marker_size=5, output_name=None):
-    """Interactive Plotly version of :func:`plot_nn_rot_coord_df`.
-
-    Draws XY, XZ, and YZ scatter panels using :class:`plotly.graph_objects.Scattergl`
-    for large datasets.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        Source data.
-    coord_columns : sequence of str, length 3
-        Column names for the x, y, and z coordinates, in that order.
-    desc : str
-        Column name used as hover text for each point.
-    displ_threshold : float, optional
-        When given, all axes are clamped to
-        ``[-displ_threshold, displ_threshold]``.
-    title : str, optional
-        Figure title (currently unused; reserved for future use).
-    marker_size : int, default=5
-        Marker size in pixels.
-    output_name : str, optional
-        File path for saving the figure.  ``*.html`` files are written with
-        :meth:`~plotly.graph_objects.Figure.write_html`; all other extensions
-        use :meth:`~plotly.graph_objects.Figure.write_image`.
-
-    Returns
-    -------
-    plotly.graph_objects.Figure
-    """
-    fig = make_subplots(
-        rows=1, cols=3,
-        subplot_titles=["XY Distribution", "XZ Distribution", "YZ Distribution"],
-        shared_yaxes=False,
-        horizontal_spacing=0.08,
-    )
-    cx, cy, cz = (df[coord_columns[i]] for i in range(3))
-    for col_idx, (x, y) in enumerate([(cx, cy), (cx, cz), (cy, cz)], start=1):
-        fig.add_trace(
-            go.Scattergl(x=x, y=y, mode="markers",
-                         marker=dict(size=marker_size),
-                         text=df[desc], showlegend=False),
-            row=1, col=col_idx,
-        )
-    if displ_threshold is not None:
-        limits = [-displ_threshold, displ_threshold]
-        for c in (1, 2, 3):
-            fig.update_xaxes(range=limits, row=1, col=c)
-            fig.update_yaxes(range=limits, row=1, col=c)
-    fig.update_layout(height=400, margin=dict(t=40, b=30, l=30, r=30),
-                      plot_bgcolor="white")
-    if output_name:
-        if output_name.endswith(".html"):
-            fig.write_html(output_name)
-        else:
-            fig.write_image(output_name)
-    return fig

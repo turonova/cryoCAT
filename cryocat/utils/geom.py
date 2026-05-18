@@ -929,7 +929,8 @@ def euler_angles_to_normals(angles: EulerAngles) -> np.ndarray:
     ndarray (n,3)
         Unit length z-normal vectors associated to input Euler angles.
     """
-    points = visualize_angles(angles, plot_rotations=False)
+    rotations = srot.from_euler("zxz", angles=angles, degrees=True)
+    points = rotations_to_z_normals(rotations)
     n_length = np.linalg.norm(points)
     normalized_normal_vectors = points / n_length
 
@@ -1543,69 +1544,36 @@ def generate_angles(
     return angular_array
 
 
-def visualize_rotations(
+def rotations_to_z_normals(
     rotations: RotationLike,
-    plot_rotations: bool = True,
-    color_map: str | None = None,
-    marker_size: int = 20,
-    alpha: float = 1.0,
     radius: float = 1.0,
 ) -> np.ndarray:
     """Compute z-normals of input rotations.
-    If desried, generate plot depicting z-normals of input rotations.
+
+    Each rotation is applied to the reference vector ``(0, 0, radius)`` to
+    obtain a point on (or rescaled from) the unit sphere.
 
     Parameters
     ----------
     rotations : RotationLike
-        Orientations to be visualized. Normalized via :func:`as_rotation`.
-    plot_rotations : bool, optional
-        If True, plot is generated. Defaults to True.
-    color_map : str, optional
-        Specify colormap for plot. Defaults to None.
-    marker_size : int, optional
-        Specify marker size for plot. Defaults to 20.
-    alpha : float, optional
-        Specify alpha parameter for plot. Defaults to 1.0.
-    radius : float, optional
-        Specify size of sphere for visualization. Defaults to 1.0.
+        Orientations. Normalized via :func:`as_rotation`.
+    radius : float, default=1.0
+        Length of the reference vector. The returned points lie on a sphere
+        of this radius.
 
     Returns
     -------
-    ndarray (n,3)
-        Array of z-normals.
+    numpy.ndarray
+        Shape ``(N, 3)``. Z-normal vectors for the input rotations.
+
+    See Also
+    --------
+    cryocat.analysis.visplot.plot_rotation_normals : Plot the resulting
+        z-normals as a 3-D scatter.
     """
     rotations = as_rotation(rotations)
     starting_point = np.array([0.0, 0.0, radius])
-    new_points = np.array(rotations.apply(starting_point), ndmin=2)
-
-    if plot_rotations:
-        fig = plt.figure()
-        ax = fig.add_subplot(projection="3d")
-
-        if color_map is None:
-            ax.scatter(
-                new_points[:, 0],
-                new_points[:, 1],
-                new_points[:, 2],
-                s=marker_size,
-                alpha=alpha,
-            )
-        else:
-            ax.scatter(
-                new_points[:, 0],
-                new_points[:, 1],
-                new_points[:, 2],
-                s=marker_size,
-                alpha=alpha,
-                c=color_map,
-            )
-            # plt.colorbar(color_map)
-
-        ax.set_xlim3d(-radius, radius)
-        ax.set_ylim3d(-radius, radius)
-        ax.set_zlim3d(-radius, radius)
-
-    return new_points
+    return np.array(rotations.apply(starting_point), ndmin=2)
 
 
 def angle_between_vectors(vectors1: np.ndarray, vectors2: np.ndarray) -> np.ndarray:
@@ -1639,34 +1607,6 @@ def angle_between_vectors(vectors1: np.ndarray, vectors2: np.ndarray) -> np.ndar
     degrees = np.degrees(radians)
 
     return degrees
-
-
-def visualize_angles(
-    angles: EulerAngles,
-    plot_rotations: bool = True,
-    color_map: str | None = None,
-) -> np.ndarray:
-    """Compute z-normals of input orientations as described using Euler angles in zxz-convention.
-    If desried, generate plot depicting z-normals of input orientations.
-
-    Parameters
-    ----------
-    angles : ndarray (n, 3)
-        Array of triplets of Euler angles in zxz-convention.
-    plot_rotations : bool, optional
-        If True, plot is generated. Defaults to True.
-    color_map : str, optional
-        Specify colormap for plot. Defaults to None.
-
-    Returns
-    -------
-    ndarray (n,3)
-        Array of z-normals.
-    """
-    rotations = srot.from_euler("zxz", angles=angles, degrees=True)
-    new_points = visualize_rotations(rotations, plot_rotations, color_map)
-
-    return new_points
 
 
 def fill_ellipsoid(
@@ -2957,6 +2897,246 @@ def cartesian_to_spherical(
     theta = theta[mask]
 
     return phi, theta
+
+
+# =============================================================================
+# Sphere projections (Lambert / stereographic / equidistant)
+# =============================================================================
+
+
+def _spherical_for_projection(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Compute (theta, phi) from (N, 3) Cartesian coordinates, preserving rows.
+
+    Unlike :func:`cartesian_to_spherical`, this helper does not drop rows with
+    NaN values. NaNs in the output are replaced with ``0.0`` in place so the
+    output shape matches the input row count — required by the projection
+    functions that index back into the original coordinate array.
+
+    Parameters
+    ----------
+    coord : numpy.ndarray
+        Shape ``(N, 3)``.
+
+    Returns
+    -------
+    theta : numpy.ndarray
+        Inclination angles, shape ``(N,)``.
+    phi : numpy.ndarray
+        Azimuthal angles, shape ``(N,)``.
+    """
+    x, y, z = coord[:, 0], coord[:, 1], coord[:, 2]
+    phi = np.arctan2(y, x)
+    theta = np.arccos(np.clip(z, -1.0, 1.0))
+    np.nan_to_num(phi, copy=False, nan=0.0)
+    np.nan_to_num(theta, copy=False, nan=0.0)
+    return theta, phi
+
+
+def project_lambert(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Lambert azimuthal equal-area projection of unit vectors.
+
+    The ``+z`` pole maps to the origin.
+
+    Parameters
+    ----------
+    coord : numpy.ndarray
+        Shape ``(N, 3)``. Vectors are assumed to lie on the unit sphere.
+
+    Returns
+    -------
+    projection_polar : numpy.ndarray
+        Polar coordinates ``(phi, r)`` of projected points, shape ``(N, 2)``.
+    projection_xy : numpy.ndarray
+        Cartesian ``(x, y)`` coordinates of projected points, shape ``(N, 2)``.
+
+    Notes
+    -----
+    Per the `Wikipedia article on the Lambert azimuthal equal-area projection
+    <https://en.wikipedia.org/wiki/Lambert_azimuthal_equal-area_projection>`_,
+    the symbols for inclination and azimuth are inverted relative to the
+    standard spherical-coordinate convention. The implementation uses
+    ``pi - theta`` so that ``+z`` projects to ``(0, 0)``.
+    """
+    theta, phi = _spherical_for_projection(coord)
+
+    n = phi.shape[0]
+    projection_xy = np.zeros((n, 2))
+    projection_polar = np.zeros((n, 2))
+
+    # divide by sqrt(2) so the unit sphere projects onto the unit disk
+    with np.errstate(divide="ignore", invalid="ignore"):
+        projection_xy[:, 0] = coord[:, 0] * np.sqrt(2.0 / (1.0 + coord[:, 2]))
+        projection_xy[:, 1] = coord[:, 1] * np.sqrt(2.0 / (1.0 + coord[:, 2]))
+    np.nan_to_num(projection_xy, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+
+    projection_polar[:, 0] = phi
+    projection_polar[:, 1] = 2.0 * np.cos((np.pi - theta) / 2.0)
+
+    return projection_polar, projection_xy
+
+
+def project_stereo(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Stereographic projection of unit vectors.
+
+    The ``+z`` pole maps to the origin; the ``-z`` pole maps to infinity.
+
+    Parameters
+    ----------
+    coord : numpy.ndarray
+        Shape ``(N, 3)``.
+
+    Returns
+    -------
+    projection_polar : numpy.ndarray
+        Polar coordinates ``(phi, r)`` of projected points, shape ``(N, 2)``.
+    projection_xy : numpy.ndarray
+        Cartesian ``(x, y)`` coordinates of projected points, shape ``(N, 2)``.
+    """
+    theta, phi = _spherical_for_projection(coord)
+
+    n = phi.shape[0]
+    projection_xy = np.zeros((n, 2))
+    projection_polar = np.zeros((n, 2))
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        projection_xy[:, 0] = coord[:, 0] / (1.0 - coord[:, 2])
+        projection_xy[:, 1] = coord[:, 1] / (1.0 - coord[:, 2])
+    np.nan_to_num(projection_xy, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # NOTE: https://en.wikipedia.org/wiki/Stereographic_projection uses a
+    # different convention from the spherical-coords page. (pi - theta) so
+    # that +z projects to (0, 0).
+    projection_polar[:, 0] = phi
+    with np.errstate(divide="ignore", invalid="ignore"):
+        projection_polar[:, 1] = np.sin(np.pi - theta) / (1.0 - np.cos(np.pi - theta))
+    np.nan_to_num(projection_polar, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+
+    return projection_polar, projection_xy
+
+
+def project_equidistant(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Azimuthal equidistant projection of unit vectors.
+
+    Parameters
+    ----------
+    coord : numpy.ndarray
+        Shape ``(N, 3)``.
+
+    Returns
+    -------
+    projection_polar : numpy.ndarray
+        Polar coordinates ``(phi, r)`` of projected points, shape ``(N, 2)``.
+    projection_xy : numpy.ndarray
+        Cartesian ``(x, y)`` coordinates of projected points, shape ``(N, 2)``.
+
+    Notes
+    -----
+    See https://en.wikipedia.org/wiki/Azimuthal_equidistant_projection.
+    """
+    theta, phi = _spherical_for_projection(coord)
+
+    n = phi.shape[0]
+    projection_xy = np.zeros((n, 2))
+    projection_polar = np.zeros((n, 2))
+
+    projection_xy[:, 0] = (np.pi / 2.0 + phi) * np.sin(theta)
+    projection_xy[:, 1] = -(np.pi / 2.0 + phi) * np.cos(theta)
+
+    # polar form: r from (x, y) norm, phi from atan2(y, x)
+    r_xy = np.linalg.norm(projection_xy, axis=1)
+    phi_xy = np.arctan2(projection_xy[:, 1], projection_xy[:, 0])
+    np.nan_to_num(phi_xy, copy=False, nan=0.0)
+
+    projection_polar[:, 0] = phi_xy
+    projection_polar[:, 1] = r_xy
+
+    return projection_polar, projection_xy
+
+
+def project_points_on_sphere(
+    coord: np.ndarray,
+    projection_type: str = "stereo",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Dispatch to the requested sphere projection.
+
+    Parameters
+    ----------
+    coord : numpy.ndarray
+        Shape ``(N, 3)``.
+    projection_type : {'stereo', 'lambert', 'equidistant'}, default="stereo"
+        Projection algorithm.
+
+    Returns
+    -------
+    projection_polar : numpy.ndarray
+        Polar coordinates ``(phi, r)``, shape ``(N, 2)``.
+    projection_xy : numpy.ndarray
+        Cartesian ``(x, y)`` coordinates, shape ``(N, 2)``.
+
+    Raises
+    ------
+    ValueError
+        If *projection_type* is not one of the supported algorithms.
+    """
+    if projection_type == "stereo":
+        return project_stereo(coord)
+    if projection_type == "lambert":
+        return project_lambert(coord)
+    if projection_type == "equidistant":
+        return project_equidistant(coord)
+    raise ValueError(
+        f"Unknown projection_type {projection_type!r}; "
+        "expected one of: 'stereo', 'lambert', 'equidistant'."
+    )
+
+
+def create_projection(
+    coord: np.ndarray,
+    projection_type: str = "stereo",
+    split_into_hemispheres: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Project 3-D unit vectors onto a 2-D plane, optionally per hemisphere.
+
+    When *split_into_hemispheres* is ``True``, points with ``z >= 0`` and
+    ``z < 0`` are projected separately. The southern hemisphere is mirrored
+    (``z *= -1``) before projection so that both hemispheres use the same
+    ``+z``-pole projection convention.
+
+    Parameters
+    ----------
+    coord : numpy.ndarray
+        Shape ``(N, 3)``.
+    projection_type : {'stereo', 'lambert', 'equidistant'}, default="stereo"
+        Projection algorithm.
+    split_into_hemispheres : bool, default=True
+        Project northern and southern hemispheres separately.
+
+    Returns
+    -------
+    polar_pos : numpy.ndarray
+        Polar coordinates of northern-hemisphere points, shape ``(M, 2)``.
+    xy_pos : numpy.ndarray
+        Cartesian coordinates of northern-hemisphere points, shape ``(M, 2)``.
+    polar_neg : numpy.ndarray
+        Polar coordinates of southern-hemisphere points, shape ``(K, 2)``.
+        Empty array when *split_into_hemispheres* is ``False``.
+    xy_neg : numpy.ndarray
+        Cartesian coordinates of southern-hemisphere points, shape ``(K, 2)``.
+        Empty array when *split_into_hemispheres* is ``False``.
+    """
+    if split_into_hemispheres:
+        coord_pos = coord[coord[:, 2] >= 0]
+        coord_neg = coord[coord[:, 2] < 0].copy()  # copy: we mutate below
+        coord_neg[:, 2] *= -1
+
+        polar_pos, xy_pos = project_points_on_sphere(coord_pos, projection_type)
+        polar_neg, xy_neg = project_points_on_sphere(coord_neg, projection_type)
+
+        return polar_pos, xy_pos, polar_neg, xy_neg
+
+    polar, xy = project_points_on_sphere(coord, projection_type)
+    empty = np.empty((0, 2))
+    return polar, xy, empty, empty
 
 
 # =============================================================================

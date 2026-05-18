@@ -17,7 +17,7 @@ from cryocat.utils.classutils import get_class_names_by_parent, get_classes_from
 from cryocat.core.cryomotl import Motl
 from cryocat.analysis.nnana import NearestNeighbors
 from cryocat.analysis.tango import TwistDescriptor, Descriptor, CustomDescriptor
-from cryocat.analysis.nnana import plot_nn_rot_coord_df_plotly
+from cryocat.analysis import visplot
 
 from cryocat.app.globalvars import global_twist
 from cryocat.app.apputils import generate_form_from_docstring, generate_kwargs
@@ -488,7 +488,7 @@ def show_nn_motl_option(n_clicks, main_motl_df, nn_motl_df, use_single_motl, nn_
 
     norm_data = np.column_stack((nn_stats.get_normalized_coord(), nn_stats.df["nn_subtomo_id"].values))
     nn_df = pd.DataFrame(data=norm_data, columns=["x", "y", "z", "nn_subtomo_id"])
-    fig = plot_nn_rot_coord_df_plotly(nn_df, ["x", "y", "z"], "nn_subtomo_id")
+    fig = visplot.plot_scatter_xyz_panels(nn_df, coord_columns=["x", "y", "z"], hover_column="nn_subtomo_id")
 
     return "nn-tab", dcc.Graph(figure=fig), table_data, info_string
 

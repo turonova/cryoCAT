@@ -291,7 +291,7 @@ def read_segmentation(segmentation_path: str, logger: logging.Logger = None) -> 
     -------
     segmentation : np.ndarray or None
         3D segmentation data array (ZYX order)
-    voxel_size : float or None
+    pixel_size : float or None
         Voxel size in nanometers
     origin : tuple or None
         Origin coordinates (x, y, z) in nanometers
@@ -309,15 +309,15 @@ def read_segmentation(segmentation_path: str, logger: logging.Logger = None) -> 
     try:
         with mrcfile.mmap(segmentation_path, mode="r", permissive=True) as mrc:
             segmentation = mrc.data
-            voxel_size = mrc.voxel_size.x / 10  # Convert to nm
+            pixel_size = mrc.voxel_size.x / 10  # Convert to nm
             origin = (mrc.header.origin.x / 10, mrc.header.origin.y / 10, mrc.header.origin.z / 10)
             shape = mrc.data.shape
 
-            log_msg(f"Voxel size: {voxel_size:.4f} nm")
+            log_msg(f"Voxel size: {pixel_size:.4f} nm")
             log_msg(f"Origin: {origin}")
             log_msg(f"Shape (ZYX): {shape}")
 
-        return segmentation, voxel_size, origin, shape
+        return segmentation, pixel_size, origin, shape
     except Exception as e:
         log_msg(f"Error reading MRC file: {e}")
         traceback.print_exc()
@@ -339,7 +339,7 @@ def read_tomo(tomo_path: str, logger: logging.Logger = None) -> tuple[np.ndarray
     -------
     tomo : np.ndarray or None
         3D tomogram data array (ZYX order)
-    voxel_size : float or None
+    pixel_size : float or None
         Voxel size in nanometers
     shape : tuple or None
         Shape of the tomogram array (ZYX order)
@@ -391,10 +391,10 @@ def validate_seg_tomo_compatibility(
         Dictionary containing compatibility details:
         - 'segmentation_shape': tuple of segmentation dimensions (ZYX)
         - 'tomogram_shape': tuple of tomogram dimensions (ZYX)
-        - 'segmentation_voxel_size': float, voxel size in nm
-        - 'tomogram_voxel_size': float, voxel size in nm
+        - 'segmentation_pixel_size': float, voxel size in nm
+        - 'tomogram_pixel_size': float, voxel size in nm
         - 'dimensions_match': bool, whether shapes are identical
-        - 'voxel_sizes_match': bool, whether voxel sizes are within tolerance
+        - 'pixel_sizes_match': bool, whether voxel sizes are within tolerance
         - 'error': str, error message if validation failed
     """
     log_msg = lambda msg: logger.info(msg) if logger else print(msg)
@@ -402,13 +402,13 @@ def validate_seg_tomo_compatibility(
     try:
         # Read segmentation metadata
         log_msg("Validating segmentation and tomogram compatibility...")
-        segmentation, seg_voxel_size, seg_origin, seg_shape = read_segmentation(segmentation_path, logger=logger)
+        segmentation, seg_pixel_size, seg_origin, seg_shape = read_segmentation(segmentation_path, logger=logger)
 
         if segmentation is None:
             return False, {"error": "Failed to read segmentation file"}
 
         # Read tomogram metadata
-        tomo, tomo_voxel_size, tomo_shape = read_tomo(tomo_path, logger=logger)
+        tomo, tomo_pixel_size, tomo_shape = read_tomo(tomo_path, logger=logger)
 
         if tomo is None:
             return False, {"error": "Failed to read tomogram file"}
@@ -417,31 +417,31 @@ def validate_seg_tomo_compatibility(
         dims_match = seg_shape == tomo_shape
 
         # Check voxel size (within tolerance)
-        voxel_size_match = abs(seg_voxel_size - tomo_voxel_size) < tolerance
+        pixel_size_match = abs(seg_pixel_size - tomo_pixel_size) < tolerance
 
         # Compatibility requires both dimension and voxel size match
-        compatible = dims_match and voxel_size_match
+        compatible = dims_match and pixel_size_match
 
         details = {
             "segmentation_shape": seg_shape,
             "tomogram_shape": tomo_shape,
-            "segmentation_voxel_size": seg_voxel_size,
-            "tomogram_voxel_size": tomo_voxel_size,
+            "segmentation_pixel_size": seg_pixel_size,
+            "tomogram_pixel_size": tomo_pixel_size,
             "dimensions_match": dims_match,
-            "voxel_sizes_match": voxel_size_match,
+            "pixel_sizes_match": pixel_size_match,
         }
 
         if compatible:
             log_msg("✓ Segmentation and tomogram are compatible")
             log_msg(f"  Dimensions: {seg_shape}")
-            log_msg(f"  Voxel size: {seg_voxel_size:.4f} nm")
+            log_msg(f"  Voxel size: {seg_pixel_size:.4f} nm")
         else:
             log_msg("✗ Compatibility check failed:")
             if not dims_match:
                 log_msg(f"  Dimension mismatch: {seg_shape} vs {tomo_shape}")
-            if not voxel_size_match:
-                log_msg(f"  Voxel size mismatch: {seg_voxel_size:.4f} vs {tomo_voxel_size:.4f} nm")
-                log_msg(f"  Difference: {abs(seg_voxel_size - tomo_voxel_size):.4f} nm (tolerance: {tolerance:.4f} nm)")
+            if not pixel_size_match:
+                log_msg(f"  Voxel size mismatch: {seg_pixel_size:.4f} vs {tomo_pixel_size:.4f} nm")
+                log_msg(f"  Difference: {abs(seg_pixel_size - tomo_pixel_size):.4f} nm (tolerance: {tolerance:.4f} nm)")
 
         return compatible, details
 
@@ -456,7 +456,7 @@ def generate_thickness_volume(
     thickness_results: np.ndarray,
     valid_mask: np.ndarray,
     segmentation: np.ndarray,
-    voxel_size: float,
+    pixel_size: float,
     point_pairs: np.ndarray,
 ) -> np.ndarray:
     """
@@ -472,7 +472,7 @@ def generate_thickness_volume(
         1D boolean array indicating valid measurements
     segmentation : np.ndarray
         3D reference segmentation for volume dimensions
-    voxel_size : float
+    pixel_size : float
         Voxel size in nanometers (unused but kept for consistency)
     point_pairs : np.ndarray
         1D array of paired point indices
@@ -518,7 +518,7 @@ def generate_thickness_volume(
 
 
 def save_thickness_volume(
-    thickness_volume: np.ndarray, output_path: str, voxel_size: float, origin: tuple = (0, 0, 0)
+    thickness_volume: np.ndarray, output_path: str, pixel_size: float, origin: tuple = (0, 0, 0)
 ) -> None:
     """
     Save thickness volume as MRC file with proper metadata.
@@ -529,7 +529,7 @@ def save_thickness_volume(
         3D volume with thickness values in nanometers
     output_path : str
         Path for output MRC file
-    voxel_size : float
+    pixel_size : float
         Voxel size in nanometers
     origin : tuple, default (0, 0, 0)
         Origin coordinates (x, y, z) in nanometers
@@ -544,7 +544,7 @@ def save_thickness_volume(
         thickness_volume_viz = np.nan_to_num(thickness_volume, nan=0.0)
         mrc.set_data(thickness_volume_viz.astype(np.float32))
 
-        mrc.voxel_size = (voxel_size * 10, voxel_size * 10, voxel_size * 10)
+        mrc.voxel_size = (pixel_size * 10, pixel_size * 10, pixel_size * 10)
         mrc.header.origin.x = origin[0] * 10
         mrc.header.origin.y = origin[1] * 10
         mrc.header.origin.z = origin[2] * 10
@@ -564,7 +564,7 @@ def verify_and_save_outputs(
     membrane_name: str,
     base_name: str,
     output_dir: str,
-    voxel_size: float,
+    pixel_size: float,
     origin: tuple,
     save_vertices_mrc: bool = False,
     save_vertices_xyz: bool = False,
@@ -591,7 +591,7 @@ def verify_and_save_outputs(
         Base filename for outputs
     output_dir : str
         Output directory path
-    voxel_size : float
+    pixel_size : float
         Voxel size in nanometers
     origin : tuple
         Origin coordinates (x, y, z) in nanometers
@@ -616,12 +616,12 @@ def verify_and_save_outputs(
 
     try:
         # Scale vertices once for all uses
-        scaled_vertices = aligned_vertices * voxel_size + np.array(origin)
+        scaled_vertices = aligned_vertices * pixel_size + np.array(origin)
 
         # Save MRC file if requested
         if save_vertices_mrc:
             mrc_output = os.path.join(output_dir, f"{base_name}_{membrane_name}_vertices.mrc")
-            save_vertices_mrc_helper(vertex_volume, mrc_output, voxel_size, origin)
+            save_vertices_mrc_helper(vertex_volume, mrc_output, pixel_size, origin)
             log_msg(f"Saved MRC to {mrc_output}")
 
         # Save XYZ file if requested
@@ -658,7 +658,7 @@ def verify_and_save_outputs(
     return True
 
 
-def save_vertices_mrc_helper(vertex_volume: np.ndarray, output_path: str, voxel_size: float, origin: tuple) -> None:
+def save_vertices_mrc_helper(vertex_volume: np.ndarray, output_path: str, pixel_size: float, origin: tuple) -> None:
     """
     Helper function to save vertex volume as MRC file.
 
@@ -668,14 +668,14 @@ def save_vertices_mrc_helper(vertex_volume: np.ndarray, output_path: str, voxel_
         3D binary volume data
     output_path : str
         Path for output MRC file
-    voxel_size : float
+    pixel_size : float
         Voxel size in nanometers
     origin : tuple
         Origin coordinates (x, y, z) in nanometers
     """
     with mrcfile.new(output_path, overwrite=True) as mrc:
         mrc.set_data(vertex_volume.astype(np.int16))
-        mrc.voxel_size = voxel_size if isinstance(voxel_size, np.float32) else np.float32(voxel_size)
+        mrc.voxel_size = pixel_size if isinstance(pixel_size, np.float32) else np.float32(pixel_size)
         mrc.header.origin.x = origin[0]
         mrc.header.origin.y = origin[1]
         mrc.header.origin.z = origin[2]
@@ -693,7 +693,7 @@ def generate_matching_statistics(
     points: np.ndarray,
     surface1_mask: np.ndarray,
     surface2_mask: np.ndarray,
-    voxel_size: float,
+    pixel_size: float,
 ) -> dict:
     """
     Generate comprehensive statistics for thickness measurements.
@@ -712,7 +712,7 @@ def generate_matching_statistics(
         1D boolean array for surface 1 points
     surface2_mask : np.ndarray
         1D boolean array for surface 2 points
-    voxel_size : float
+    pixel_size : float
         Voxel size in nanometers for coordinate scaling
 
     Returns
@@ -754,12 +754,12 @@ def generate_matching_statistics(
         # Spatial distribution analysis
         valid_points = points[valid_mask]
         stats["spatial_distribution"] = {
-            "x_mean": np.mean(valid_points[:, 0]) * voxel_size,
-            "y_mean": np.mean(valid_points[:, 1]) * voxel_size,
-            "z_mean": np.mean(valid_points[:, 2]) * voxel_size,
-            "x_std": np.std(valid_points[:, 0]) * voxel_size,
-            "y_std": np.std(valid_points[:, 1]) * voxel_size,
-            "z_std": np.std(valid_points[:, 2]) * voxel_size,
+            "x_mean": np.mean(valid_points[:, 0]) * pixel_size,
+            "y_mean": np.mean(valid_points[:, 1]) * pixel_size,
+            "z_mean": np.mean(valid_points[:, 2]) * pixel_size,
+            "x_std": np.std(valid_points[:, 0]) * pixel_size,
+            "y_std": np.std(valid_points[:, 1]) * pixel_size,
+            "z_std": np.std(valid_points[:, 2]) * pixel_size,
         }
 
     return stats
@@ -1723,7 +1723,7 @@ def find_all_possible_matches_kernel(
         match_counts[idx] = match_count
 
 
-def process_matches_gpu2cpu(match_distances, match_indices, match_counts, n_points, max_matches_per_point, voxel_size):
+def process_matches_gpu2cpu(match_distances, match_indices, match_counts, n_points, max_matches_per_point, pixel_size):
     """
     Process matches on CPU to ensure one-to-one matching and convert to physical units.
 
@@ -1739,7 +1739,7 @@ def process_matches_gpu2cpu(match_distances, match_indices, match_counts, n_poin
         Number of points
     max_matches_per_point : int
         Maximum number of matches per point
-    voxel_size : float
+    pixel_size : float
         Voxel size for scaling
 
     Returns
@@ -1789,7 +1789,7 @@ def process_matches_gpu2cpu(match_distances, match_indices, match_counts, n_poin
             surface2_assigned.add(surf2_idx)
 
     # Convert thickness results to physical units before returning
-    thickness_results = thickness_results * voxel_size
+    thickness_results = thickness_results * pixel_size
 
     return thickness_results, valid_mask, point_pairs
 
@@ -1799,7 +1799,7 @@ def measure_thickness_gpu(
     normals,
     surface1_mask,
     surface2_mask,
-    voxel_size,
+    pixel_size,
     max_thickness_nm=8.0,
     max_angle_degrees=1.0,
     direction="1to2",
@@ -1835,7 +1835,7 @@ def measure_thickness_gpu(
         Normal vectors
     surface1_mask, surface2_mask : ndarray
         Boolean masks for each surface
-    voxel_size : float
+    pixel_size : float
         Voxel size in nm or angstroms
     max_thickness_nm : float
         Maximum thickness in nm (will be converted to voxels internally)
@@ -1892,7 +1892,7 @@ def measure_thickness_gpu(
     max_angle_cos = math.cos(math.radians(max_angle_degrees))
 
     # Convert max thickness from nm to voxels
-    max_thickness_voxels = max_thickness_nm / voxel_size
+    max_thickness_voxels = max_thickness_nm / pixel_size
 
     # Set maximum number of potential matches per point
     max_matches_per_point = 25
@@ -1936,7 +1936,7 @@ def measure_thickness_gpu(
     # Process matches and convert to physical units
     log_msg("Processing matches on CPU to ensure one-to-one matching...")
     thickness_results, valid_mask, point_pairs = process_matches_gpu2cpu(
-        match_distances_cpu, match_indices_cpu, match_counts_cpu, n_points, max_matches_per_point, voxel_size
+        match_distances_cpu, match_indices_cpu, match_counts_cpu, n_points, max_matches_per_point, pixel_size
     )
 
     log_msg(f"Found {np.sum(valid_mask)} valid thickness measurements")
@@ -2045,7 +2045,7 @@ def measure_thickness_cpu(
     normals,
     surface1_mask,
     surface2_mask,
-    voxel_size,
+    pixel_size,
     max_thickness_nm=8.0,
     max_angle_degrees=1.0,
     direction="1to2",
@@ -2075,7 +2075,7 @@ def measure_thickness_cpu(
     max_angle_cos = np.cos(np.radians(max_angle_degrees))
 
     # Convert max thickness from nm to voxels
-    max_thickness_voxels = max_thickness_nm / voxel_size
+    max_thickness_voxels = max_thickness_nm / pixel_size
 
     log_msg(f"Starting CPU thickness measurement with {n_points} points...")
     log_msg(f"Source points: {np.sum(source_mask)}, Target points: {np.sum(target_mask)}")
@@ -2157,7 +2157,7 @@ def measure_thickness_cpu(
 
     # Process matches to ensure one-to-one matching
     log_msg("Processing matches to ensure one-to-one matching...")
-    thickness_results, valid_mask, point_pairs = process_matches_cpu2cpu(flat_matches, n_points, voxel_size)
+    thickness_results, valid_mask, point_pairs = process_matches_cpu2cpu(flat_matches, n_points, pixel_size)
 
     log_msg(f"Found {np.sum(valid_mask)} valid thickness measurements")
     if np.sum(valid_mask) > 0:
@@ -2169,7 +2169,7 @@ def measure_thickness_cpu(
     return thickness_results, valid_mask, point_pairs
 
 
-def process_matches_cpu2cpu(flat_matches, n_points, voxel_size):
+def process_matches_cpu2cpu(flat_matches, n_points, pixel_size):
     """
     Process matches on CPU to ensure one-to-one matching and convert to physical units.
 
@@ -2179,7 +2179,7 @@ def process_matches_cpu2cpu(flat_matches, n_points, voxel_size):
         List of tuples (distance, source_idx, target_idx)
     n_points : int
         Total number of points
-    voxel_size : float
+    pixel_size : float
         Voxel size for scaling
 
     Returns
@@ -2215,7 +2215,7 @@ def process_matches_cpu2cpu(flat_matches, n_points, voxel_size):
             target_assigned.add(target_idx)
 
     # Convert thickness results to physical units before returning
-    thickness_results = thickness_results * voxel_size
+    thickness_results = thickness_results * pixel_size
 
     return thickness_results, valid_mask, point_pairs
 
@@ -2653,7 +2653,7 @@ def print_summary(results: Dict, logger: logging.Logger = None) -> None:
 def extract_intensity_profile(
     thickness_df: pd.DataFrame,
     tomo: np.ndarray,
-    voxel_size: float = None,
+    pixel_size: float = None,
     intensity_extension_voxels: int = 10,
     intensity_normalize_method: Literal["zscore", "minmax", "percentile", "none"] = "zscore",
     logger: logging.Logger = None,
@@ -2688,7 +2688,7 @@ def extract_intensity_profile(
         3D tomogram array with shape (Z, Y, X) in ZYX order. The tomogram
         should have the same dimensions as the segmentation used for thickness
         measurement. Intensity values are extracted from this volume.
-    voxel_size : float, optional
+    pixel_size : float, optional
         Voxel size in nanometers for physical coordinate scaling. If None,
         only voxel coordinates are returned. If provided, physical coordinates
         in nanometers are added to each profile dictionary.
@@ -2719,20 +2719,20 @@ def extract_intensity_profile(
         - 'start': np.ndarray, extended start coordinates (voxel units)
         - 'end': np.ndarray, extended end coordinates (voxel units)
 
-        **Physical coordinates (if voxel_size provided):**
+        **Physical coordinates (if pixel_size provided):**
         - 'p1_nm': np.ndarray, first point in nanometers
         - 'p2_nm': np.ndarray, second point in nanometers
         - 'midpoint_nm': np.ndarray, midpoint in nanometers
         - 'start_nm': np.ndarray, extended start in nanometers
         - 'end_nm': np.ndarray, extended end in nanometers
-        - 'voxel_size': float, voxel size used for scaling
+        - 'pixel_size': float, voxel size used for scaling
 
     Raises
     ------
     ValueError
         If required columns are missing from thickness_df.
         If tomo is not a 3D array.
-        If voxel_size is negative.
+        If pixel_size is negative.
     IndexError
         If any coordinate pairs are outside tomogram bounds.
 
@@ -2741,7 +2741,7 @@ def extract_intensity_profile(
     - Profiles extend beyond the matched points by intensity_extension_voxels in both directions
     - Invalid or NaN coordinate pairs are automatically filtered out
     - Interpolation is performed using scipy.ndimage.map_coordinates with linear interpolation
-    - Physical coordinates are computed by multiplying voxel coordinates by voxel_size
+    - Physical coordinates are computed by multiplying voxel coordinates by pixel_size
     - The function handles variable line lengths automatically
     - Processing time scales with the number of coordinate pairs and extension distance
 
@@ -2752,7 +2752,7 @@ def extract_intensity_profile(
     >>> profiles = extract_intensity_profile(
     ...     thickness_df=df,
     ...     tomo=tomogram_array,
-    ...     voxel_size=0.788,
+    ...     pixel_size=0.788,
     ...     intensity_extension_voxels=10,
     ...     intensity_normalize_method='zscore'
     ... )
@@ -2774,8 +2774,8 @@ def extract_intensity_profile(
         raise ValueError(f"Missing required columns: {missing_cols}")
 
     log_msg(f"Extracting intensity profiles with extension of {intensity_extension_voxels} voxels")
-    if voxel_size is not None:
-        log_msg(f"Including physical coordinates with voxel size: {voxel_size:.4f} nm")
+    if pixel_size is not None:
+        log_msg(f"Including physical coordinates with voxel size: {pixel_size:.4f} nm")
 
     # Extract coordinate arrays
     p1_coords = thickness_df[["x1_voxel", "y1_voxel", "z1_voxel"]].values
@@ -2840,16 +2840,16 @@ def extract_intensity_profile(
             "end": ends[i],
         }
 
-        # Add physical coordinates if voxel_size provided
-        if voxel_size is not None:
+        # Add physical coordinates if pixel_size provided
+        if pixel_size is not None:
             profile_data.update(
                 {
-                    "p1_nm": p1_coords[i] * voxel_size,
-                    "p2_nm": p2_coords[i] * voxel_size,
-                    "midpoint_nm": midpoints[i] * voxel_size,
-                    "start_nm": starts[i] * voxel_size,
-                    "end_nm": ends[i] * voxel_size,
-                    "voxel_size": voxel_size,
+                    "p1_nm": p1_coords[i] * pixel_size,
+                    "p2_nm": p2_coords[i] * pixel_size,
+                    "midpoint_nm": midpoints[i] * pixel_size,
+                    "start_nm": starts[i] * pixel_size,
+                    "end_nm": ends[i] * pixel_size,
+                    "pixel_size": pixel_size,
                 }
             )
 
@@ -4006,7 +4006,7 @@ def process_membrane_segmentation(
     os.makedirs(output_dir, exist_ok=True)
 
     base_name = os.path.splitext(os.path.basename(segmentation_path))[0]
-    segmentation, voxel_size, origin, shape = read_segmentation(segmentation_path, logger=logger)
+    segmentation, pixel_size, origin, shape = read_segmentation(segmentation_path, logger=logger)
 
     if segmentation is None:
         logger.error("Failed to read segmentation")
@@ -4058,7 +4058,7 @@ def process_membrane_segmentation(
                     membrane_name,
                     base_name,
                     output_dir,
-                    voxel_size,
+                    pixel_size,
                     origin,
                     save_vertices_mrc,
                     save_vertices_xyz,
@@ -4160,7 +4160,7 @@ def measure_membrane_thickness(
     stats_file = os.path.join(output_dir, f"{output_base}_stats.log")
 
     # Read segmentation and voxel size from MRC file
-    segmentation, voxel_size, origin, shape = read_segmentation(segmentation_path, logger=logger)
+    segmentation, pixel_size, origin, shape = read_segmentation(segmentation_path, logger=logger)
 
     if segmentation is None:
         logger.error("Failed to read segmentation")
@@ -4201,7 +4201,7 @@ def measure_membrane_thickness(
             normals,
             surface1_mask,
             surface2_mask,
-            voxel_size=voxel_size,
+            pixel_size=pixel_size,
             max_thickness_nm=max_thickness,
             max_angle_degrees=max_angle,
             direction=direction,
@@ -4214,7 +4214,7 @@ def measure_membrane_thickness(
             normals,
             surface1_mask,
             surface2_mask,
-            voxel_size=voxel_size,
+            pixel_size=pixel_size,
             max_thickness_nm=max_thickness,
             max_angle_degrees=max_angle,
             direction=direction,
@@ -4227,7 +4227,7 @@ def measure_membrane_thickness(
 
     # Generate and save statistics
     stats = generate_matching_statistics(
-        thickness_results, valid_mask, point_pairs, points, surface1_mask, surface2_mask, voxel_size
+        thickness_results, valid_mask, point_pairs, points, surface1_mask, surface2_mask, pixel_size
     )
     save_matching_statistics(stats, stats_file, logger)
 
@@ -4409,7 +4409,7 @@ def int_profiles_extract_clean(
     profiles = extract_intensity_profile(
         thickness_df=thickness_df,
         tomo=tomo,
-        voxel_size=tomo_voxel,
+        pixel_size=tomo_voxel,
         intensity_extension_voxels=intensity_extension_voxels,
         intensity_normalize_method=intensity_normalize_method,
     )

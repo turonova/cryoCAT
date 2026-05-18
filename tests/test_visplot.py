@@ -4,6 +4,7 @@ import pytest
 from copy import deepcopy
 
 import cryocat.analysis.visplot as vp
+from cryocat.utils import geom
 
 
 # ---------------------------------------------------------------------------
@@ -154,31 +155,31 @@ class TestDefaults:
 class TestFormatInputDataId:
     def test_dataframe_no_id(self):
         df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
-        result = vp.format_input_data_id(df, None)
+        result = vp._format_input_data_id(df, None)
         assert list(result) == ["a", "b"]
 
     def test_ndarray_1d_no_id(self):
         arr = np.array([1.0, 2.0, 3.0])
-        result = vp.format_input_data_id(arr, None)
+        result = vp._format_input_data_id(arr, None)
         assert result == ["Value"]
 
     def test_ndarray_2d_no_id(self):
         arr = np.zeros((5, 3))
-        result = vp.format_input_data_id(arr, None)
+        result = vp._format_input_data_id(arr, None)
         assert result == ["Value", "Value", "Value"]
 
     def test_explicit_id_returned_unchanged(self):
         df = pd.DataFrame({"x": [1]})
-        result = vp.format_input_data_id(df, ["x"])
+        result = vp._format_input_data_id(df, ["x"])
         assert result == ["x"]
 
     def test_invalid_type_raises(self):
         with pytest.raises(TypeError):
-            vp.format_input_data_id([1, 2, 3], None)
+            vp._format_input_data_id([1, 2, 3], None)
 
     def test_custom_default_name(self):
         arr = np.zeros((4, 2))
-        result = vp.format_input_data_id(arr, None, default_name="Col")
+        result = vp._format_input_data_id(arr, None, default_name="Col")
         assert result == ["Col", "Col"]
 
 
@@ -189,167 +190,89 @@ class TestFormatInputDataId:
 class TestFormatInputData:
     def test_dataframe_returns_numpy(self):
         df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
-        data, ids = vp.format_input_data(df, ["a", "b"], 2)
+        data, ids = vp._format_input_data(df, ["a", "b"], 2)
         assert isinstance(data, np.ndarray)
         assert data.shape == (2, 2)
         assert ids == ["a", "b"]
 
     def test_dataframe_drops_missing_columns(self):
         df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
-        data, ids = vp.format_input_data(df, ["a", "z"], 2)
+        data, ids = vp._format_input_data(df, ["a", "z"], 2)
         assert ids == ["a"]
 
     def test_dataframe_no_matching_columns_raises(self):
         df = pd.DataFrame({"a": [1.0]})
         with pytest.raises(ValueError):
-            vp.format_input_data(df, ["z"], 1)
+            vp._format_input_data(df, ["z"], 1)
 
     def test_ndarray_returns_data(self):
         arr = np.array([[1.0, 2.0], [3.0, 4.0]])
-        data, ids = vp.format_input_data(arr, ["x", "y"], 2)
+        data, ids = vp._format_input_data(arr, ["x", "y"], 2)
         np.testing.assert_array_equal(data, arr)
         assert ids == ["x", "y"]
 
     def test_invalid_type_raises(self):
         with pytest.raises(TypeError):
-            vp.format_input_data([1, 2, 3], ["x"], 1)
+            vp._format_input_data([1, 2, 3], ["x"], 1)
 
 
 # ---------------------------------------------------------------------------
-# convert_to_radial
-# ---------------------------------------------------------------------------
-
-class TestConvertToRadial:
-    def test_unit_x(self):
-        coords = np.array([[1.0, 0.0]])
-        r, phi = vp.convert_to_radial(coords)
-        assert r[0] == pytest.approx(1.0)
-        assert phi[0] == pytest.approx(0.0)
-
-    def test_unit_y(self):
-        coords = np.array([[0.0, 1.0]])
-        r, phi = vp.convert_to_radial(coords)
-        assert r[0] == pytest.approx(1.0)
-        assert phi[0] == pytest.approx(np.pi / 2)
-
-    def test_radius_pythagoras(self):
-        coords = np.array([[3.0, 4.0]])
-        r, _ = vp.convert_to_radial(coords)
-        assert r[0] == pytest.approx(5.0)
-
-    def test_nan_replaced(self):
-        coords = np.array([[0.0, 0.0]])
-        _, phi = vp.convert_to_radial(coords, replace_nan=True)
-        assert not np.isnan(phi[0])
-
-    def test_output_shapes(self):
-        coords = np.random.randn(10, 2)
-        r, phi = vp.convert_to_radial(coords)
-        assert r.shape == (10,)
-        assert phi.shape == (10,)
-
-
-# ---------------------------------------------------------------------------
-# convert_to_spherical
-# ---------------------------------------------------------------------------
-
-class TestConvertToSpherical:
-    def test_unit_z(self):
-        coords = np.array([[0.0, 0.0, 1.0]])
-        r, theta, phi = vp.convert_to_spherical(coords)
-        assert r[0] == pytest.approx(1.0)
-        assert theta[0] == pytest.approx(0.0, abs=1e-10)
-
-    def test_unit_x(self):
-        coords = np.array([[1.0, 0.0, 0.0]])
-        r, theta, phi = vp.convert_to_spherical(coords)
-        assert r[0] == pytest.approx(1.0)
-        assert theta[0] == pytest.approx(np.pi / 2, rel=1e-6)
-        assert phi[0] == pytest.approx(0.0, abs=1e-10)
-
-    def test_unit_y(self):
-        coords = np.array([[0.0, 1.0, 0.0]])
-        r, theta, phi = vp.convert_to_spherical(coords)
-        assert r[0] == pytest.approx(1.0)
-        assert theta[0] == pytest.approx(np.pi / 2, rel=1e-6)
-        assert phi[0] == pytest.approx(np.pi / 2, rel=1e-6)
-
-    def test_radius_magnitude(self):
-        coords = np.array([[1.0, 2.0, 3.0]])
-        r, _, _ = vp.convert_to_spherical(coords)
-        assert r[0] == pytest.approx(np.sqrt(14), rel=1e-6)
-
-    def test_output_shapes(self):
-        coords = np.random.randn(20, 3)
-        r, theta, phi = vp.convert_to_spherical(coords)
-        assert r.shape == (20,)
-        assert theta.shape == (20,)
-        assert phi.shape == (20,)
-
-    def test_theta_range(self):
-        coords = np.random.randn(50, 3)
-        _, theta, _ = vp.convert_to_spherical(_unit(coords))
-        assert np.all(theta >= -1e-10)
-        assert np.all(theta <= np.pi + 1e-10)
-
-
-# ---------------------------------------------------------------------------
-# project_lambert
+# project_lambert  (moved to geom)
 # ---------------------------------------------------------------------------
 
 class TestProjectLambert:
     def test_north_pole_maps_to_origin(self):
         coord = np.array([[0.0, 0.0, 1.0]])
-        _, xy = vp.project_lambert(coord)
+        _, xy = geom.project_lambert(coord)
         np.testing.assert_allclose(xy[0], [0.0, 0.0], atol=1e-10)
 
     def test_output_shapes(self):
         coord = _unit(np.random.randn(15, 3))
-        tr, xy = vp.project_lambert(coord)
+        tr, xy = geom.project_lambert(coord)
         assert tr.shape == (15, 2)
         assert xy.shape == (15, 2)
 
     def test_equator_r_equals_sqrt2(self):
         coord = np.array([[1.0, 0.0, 0.0]])
-        tr, _ = vp.project_lambert(coord)
+        tr, _ = geom.project_lambert(coord)
         # At equator (theta=pi/2): r = 2*cos((pi - pi/2)/2) = 2*cos(pi/4) = sqrt(2)
         assert tr[0, 1] == pytest.approx(np.sqrt(2), rel=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# project_stereo
+# project_stereo  (moved to geom)
 # ---------------------------------------------------------------------------
 
 class TestProjectStereo:
     def test_north_pole_polar_r_is_zero(self):
         # At the north pole (z=1) xy is 0/0 (singularity), but polar r should be 0
         coord = np.array([[0.0, 0.0, 1.0]])
-        tr, _ = vp.project_stereo(coord)
+        tr, _ = geom.project_stereo(coord)
         assert tr[0, 1] == pytest.approx(0.0, abs=1e-10)
 
     def test_output_shapes(self):
         coord = _unit(np.random.randn(12, 3))
         # avoid south pole (z close to 1) to prevent division by zero
         coord = coord[coord[:, 2] > -0.9]
-        tr, xy = vp.project_stereo(coord)
+        tr, xy = geom.project_stereo(coord)
         assert tr.shape[1] == 2
         assert xy.shape[1] == 2
 
 
 # ---------------------------------------------------------------------------
-# project_equidistant
+# project_equidistant  (moved to geom)
 # ---------------------------------------------------------------------------
 
 class TestProjectEquidistant:
     def test_output_shapes(self):
         coord = _unit(np.random.randn(10, 3))
-        tr, xy = vp.project_equidistant(coord)
+        tr, xy = geom.project_equidistant(coord)
         assert tr.shape == (10, 2)
         assert xy.shape == (10, 2)
 
 
 # ---------------------------------------------------------------------------
-# project_points_on_sphere dispatch
+# project_points_on_sphere dispatch  (moved to geom)
 # ---------------------------------------------------------------------------
 
 class TestProjectPointsOnSphere:
@@ -357,20 +280,20 @@ class TestProjectPointsOnSphere:
     def test_dispatch(self, proj):
         coord = _unit(np.random.randn(8, 3))
         coord = coord[coord[:, 2] > -0.8]  # avoid south-pole singularity for stereo
-        tr, xy = vp.project_points_on_sphere(coord, projection_type=proj)
+        tr, xy = geom.project_points_on_sphere(coord, projection_type=proj)
         assert tr.shape[1] == 2
         assert xy.shape[1] == 2
 
 
 # ---------------------------------------------------------------------------
-# create_projection
+# create_projection  (moved to geom)
 # ---------------------------------------------------------------------------
 
 class TestCreateProjection:
     def test_split_hemispheres(self):
         np.random.seed(0)
         coord = _unit(np.random.randn(30, 3))
-        tr_pos, xy_pos, tr_neg, xy_neg = vp.create_projection(coord, "lambert", split_into_hemispheres=True)
+        tr_pos, xy_pos, tr_neg, xy_neg = geom.create_projection(coord, "lambert", split_into_hemispheres=True)
         n_pos = np.sum(coord[:, 2] >= 0)
         n_neg = np.sum(coord[:, 2] < 0)
         assert tr_pos.shape[0] == n_pos
@@ -378,15 +301,15 @@ class TestCreateProjection:
 
     def test_no_split(self):
         coord = _unit(np.random.randn(20, 3))
-        tr, xy, tr_neg, xy_neg = vp.create_projection(coord, "lambert", split_into_hemispheres=False)
+        tr, xy, tr_neg, xy_neg = geom.create_projection(coord, "lambert", split_into_hemispheres=False)
         assert tr.shape[0] == 20
-        assert tr_neg == []
-        assert xy_neg == []
+        assert tr_neg.shape == (0, 2)
+        assert xy_neg.shape == (0, 2)
 
     def test_all_northern_hemisphere(self):
         coord = _unit(np.random.randn(10, 3))
         coord[:, 2] = np.abs(coord[:, 2])  # force z >= 0
-        tr_pos, _, tr_neg, _ = vp.create_projection(coord, "lambert")
+        tr_pos, _, tr_neg, _ = geom.create_projection(coord, "lambert")
         assert tr_pos.shape[0] == 10
         assert tr_neg.shape[0] == 0
 
@@ -409,3 +332,144 @@ class TestGetColorsFromPalette:
     def test_custom_palette(self):
         result = vp.get_colors_from_palette(4, pallete_name="viridis")
         assert len(result) == 4
+
+
+# ---------------------------------------------------------------------------
+# plot_scatter_xyz_panels
+# ---------------------------------------------------------------------------
+
+class TestPlotScatterXyzPanels:
+    def _make_df(self, n=20):
+        rng = np.random.default_rng(42)
+        return pd.DataFrame({"x": rng.standard_normal(n),
+                             "y": rng.standard_normal(n),
+                             "z": rng.standard_normal(n),
+                             "group": np.tile(["a", "b"], n // 2)})
+
+    def test_returns_figure(self):
+        import plotly.graph_objects as go
+        df = self._make_df()
+        fig = vp.plot_scatter_xyz_panels(df, coord_columns=["x", "y", "z"])
+        assert isinstance(fig, go.Figure)
+
+    def test_three_subplots(self):
+        df = self._make_df()
+        fig = vp.plot_scatter_xyz_panels(df, coord_columns=["x", "y", "z"])
+        assert len(fig.data) == 3
+
+    def test_group_by_creates_legend_groups(self):
+        df = self._make_df()
+        fig = vp.plot_scatter_xyz_panels(df, coord_columns=["x", "y", "z"], group_by="group")
+        legend_groups = {t.legendgroup for t in fig.data}
+        assert legend_groups == {"a", "b"}
+
+    def test_displ_threshold_applied(self):
+        df = self._make_df()
+        fig = vp.plot_scatter_xyz_panels(df, coord_columns=["x", "y", "z"], displ_threshold=2.0)
+        assert tuple(fig.layout.xaxis.range) == (-2.0, 2.0)
+
+    def test_wrong_coord_columns_raises(self):
+        df = self._make_df()
+        with pytest.raises(ValueError):
+            vp.plot_scatter_xyz_panels(df, coord_columns=["x", "y"])
+
+    def test_accepts_numpy_array(self):
+        import plotly.graph_objects as go
+        arr = np.zeros((10, 3))
+        fig = vp.plot_scatter_xyz_panels(arr)
+        assert isinstance(fig, go.Figure)
+
+
+# ---------------------------------------------------------------------------
+# plot_scatter_3d
+# ---------------------------------------------------------------------------
+
+class TestPlotScatter3d:
+    def _make_df(self, n=15):
+        rng = np.random.default_rng(0)
+        return pd.DataFrame({"x": rng.standard_normal(n),
+                             "y": rng.standard_normal(n),
+                             "z": rng.standard_normal(n),
+                             "val": rng.uniform(0, 1, n)})
+
+    def test_returns_figure(self):
+        import plotly.graph_objects as go
+        df = self._make_df()
+        fig = vp.plot_scatter_3d(df, coord_columns=["x", "y", "z"])
+        assert isinstance(fig, go.Figure)
+
+    def test_single_trace(self):
+        df = self._make_df()
+        fig = vp.plot_scatter_3d(df, coord_columns=["x", "y", "z"])
+        assert len(fig.data) == 1
+
+    def test_color_column_sets_marker_color(self):
+        df = self._make_df()
+        fig = vp.plot_scatter_3d(df, coord_columns=["x", "y", "z"], color_column="val")
+        assert fig.data[0].marker.color is not None
+
+    def test_wrong_coord_columns_raises(self):
+        df = self._make_df()
+        with pytest.raises(ValueError):
+            vp.plot_scatter_3d(df, coord_columns=["x", "y"])
+
+
+# ---------------------------------------------------------------------------
+# plot_grouped_box
+# ---------------------------------------------------------------------------
+
+class TestPlotGroupedBox:
+    def _make_df(self, n=30):
+        rng = np.random.default_rng(7)
+        return pd.DataFrame({"group": np.tile(["A", "B", "C"], n // 3),
+                             "value": rng.standard_normal(n)})
+
+    def test_returns_figure(self):
+        import plotly.graph_objects as go
+        df = self._make_df()
+        fig = vp.plot_grouped_box(df, group_column="group", value_column="value")
+        assert isinstance(fig, go.Figure)
+
+    def test_one_box_per_group(self):
+        df = self._make_df()
+        fig = vp.plot_grouped_box(df, group_column="group", value_column="value")
+        assert len(fig.data) == 3
+
+    def test_group_names_match(self):
+        df = self._make_df()
+        fig = vp.plot_grouped_box(df, group_column="group", value_column="value")
+        names = {t.name for t in fig.data}
+        assert names == {"A", "B", "C"}
+
+    def test_title_applied(self):
+        df = self._make_df()
+        fig = vp.plot_grouped_box(df, group_column="group", value_column="value",
+                                  title="My Title")
+        assert fig.layout.title.text == "My Title"
+
+
+# ---------------------------------------------------------------------------
+# add_xyz_heatmap_row
+# ---------------------------------------------------------------------------
+
+class TestAddXyzHeatmapRow:
+    def test_adds_three_traces(self):
+        from plotly.subplots import make_subplots
+        fig = make_subplots(rows=1, cols=3)
+        slices = [np.zeros((4, 4)), np.ones((4, 4)), np.eye(4)]
+        vp.add_xyz_heatmap_row(fig, slices, row=1)
+        assert len(fig.data) == 3
+
+    def test_wrong_slice_count_raises(self):
+        from plotly.subplots import make_subplots
+        fig = make_subplots(rows=1, cols=3)
+        with pytest.raises(ValueError):
+            vp.add_xyz_heatmap_row(fig, [np.zeros((4, 4)), np.zeros((4, 4))], row=1)
+
+    def test_coloraxis_propagated(self):
+        from plotly.subplots import make_subplots
+        fig = make_subplots(rows=1, cols=3)
+        slices = [np.zeros((3, 3))] * 3
+        vp.add_xyz_heatmap_row(fig, slices, row=1, coloraxis="coloraxis2")
+        for trace in fig.data:
+            assert trace.coloraxis == "coloraxis2"

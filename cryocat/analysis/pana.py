@@ -1,12 +1,13 @@
 import numpy as np
 import pandas as pd
-from matplotlib import pyplot as plt
-import seaborn as sns
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
 from cryocat.core import cryomap
 from cryocat.utils import geom
 from cryocat.utils import ioutils
 from cryocat.core import cryomotl
 from cryocat.analysis import tmana
+from cryocat.analysis import visplot
 from cryocat.utils import mathutils
 from cryocat.utils import wedgeutils
 from scipy.spatial.transform import Rotation as srot
@@ -16,7 +17,6 @@ from cryocat.core import cryomask
 import os
 from skimage import measure
 from skimage import morphology
-import matplotlib.gridspec as gridspec
 from scipy.interpolate import RegularGridInterpolator
 from skimage.transform import rotate as skimage_rotate
 
@@ -1991,53 +1991,68 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
                 cryomap.get_cross_slices(input_map, slice_half_dim=5, slice_numbers=peak_center, axis=[0, 1, 2])
             )
 
-        grid_rows_n = 2
-        unit_size = 5
-        grid_row_ratio = [1.6 * unit_size, 6 * unit_size]
-
-        # check if file for histogram analysis exists or not
         hist_file = output_folder + output_base + "_gradual_angles_histograms.csv"
-        add_hist = False
-        last_row = 1
+        add_hist = os.path.isfile(hist_file)
 
-        # change the figure layout slightly if hist file exists
-        if os.path.isfile(hist_file):
-            grid_rows_n += 1
-            add_hist = True
-            last_row = 2
-            grid_row_ratio = [1.6 * unit_size, 0.8 * unit_size, 6 * unit_size]
+        n_hm_rows = len(cross_slices)  # 6
+        n_top_rows = 2 + (1 if add_hist else 0)
+        total_rows = n_top_rows + n_hm_rows
 
-        fig_height = sum(grid_row_ratio) + 0.4
-        widths = [unit_size, unit_size, unit_size, unit_size * 0.05]
-
-        fig = plt.figure(layout="constrained", figsize=(sum(widths), fig_height))
-        fig.suptitle(figure_title, fontsize=16, y=1.008)
-
-        grid_base = gridspec.GridSpec(grid_rows_n, 1, figure=fig, height_ratios=grid_row_ratio)
-        grid_rows = [gridspec.GridSpecFromSubplotSpec(2, 3, subplot_spec=grid_base[0])]
-
+        specs = [
+            [{"type": "table"}, {"type": "table"}, {"type": "table"}],
+            [{"type": "xy"}, {"type": "xy"}, {"type": "xy"}],
+        ]
         if add_hist:
-            grid_rows.append(gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=grid_base[1]))
+            specs.append([{"type": "xy"}, {"type": "xy"}, None])
+        for _ in range(n_hm_rows):
+            specs.append([{"type": "xy"}, {"type": "xy"}, {"type": "xy"}])
 
-        grid_rows.append(
-            gridspec.GridSpecFromSubplotSpec(
-                6,
-                4,
-                subplot_spec=grid_base[last_row],
-                height_ratios=[unit_size, unit_size, unit_size, unit_size, unit_size, unit_size],
-                width_ratios=widths,
-            )
+        row_heights_w = [2.5, 1.2]
+        if add_hist:
+            row_heights_w.append(0.8)
+        row_heights_w.extend([1.0] * n_hm_rows)
+
+        # Calculate colorbar y positions based on row layout
+        vs = 0.02
+        content_h = 1.0 - (total_rows - 1) * vs
+        total_w = sum(row_heights_w)
+        row_h_frac = [w / total_w * content_h for w in row_heights_w]
+        row_tops, row_bottoms = [], []
+        cum = 0.0
+        for k, h in enumerate(row_h_frac):
+            top = 1.0 - cum - (vs if k > 0 else 0)
+            row_tops.append(top)
+            row_bottoms.append(top - h)
+            cum += h + (vs if k < total_rows - 1 else 0)
+
+        s = n_top_rows  # index of first heatmap row
+        ca1_y = (row_tops[s] + row_bottoms[s]) / 2
+        ca1_len = row_tops[s] - row_bottoms[s]
+        ca2_y = (row_tops[s + 1] + row_bottoms[s + 2]) / 2
+        ca2_len = row_tops[s + 1] - row_bottoms[s + 2]
+        ca3_y = (row_tops[s + 3] + row_bottoms[s + 5]) / 2
+        ca3_len = row_tops[s + 3] - row_bottoms[s + 5]
+
+        fig = make_subplots(
+            rows=total_rows, cols=3,
+            specs=specs,
+            row_heights=row_heights_w,
+            horizontal_spacing=0.03,
+            vertical_spacing=vs,
         )
 
-        table_plots = []
-        for j in range(3):
-            table_plots.append(fig.add_subplot(grid_rows[0][0, j]))
-
-        col_width = [[0.4, 0.6], [0.3, 0.7], [0.4, 0.6]]
-        for tbl, dc, cw in zip(table_plots, dicts, col_width):
-            tbl_h = tbl.table(colWidths=cw, cellText=dc, bbox=[0, 0, 1, 1])
-            tbl_h.auto_set_font_size(False)
-            tbl_h.set_fontsize(10)
+        # Row 1: tables
+        for j, d in enumerate(dicts, start=1):
+            keys = [row[0] for row in d]
+            values = [row[1] for row in d]
+            fig.add_trace(
+                go.Table(
+                    header=dict(values=["Parameter", "Value"], align="left",
+                                fill_color="lightgrey", font=dict(size=10)),
+                    cells=dict(values=[keys, values], align="left", font=dict(size=10)),
+                ),
+                row=1, col=j,
+            )
 
         rot_info = pd.read_csv(output_folder + output_base + ".csv", index_col=0)
         line_profiles = pd.read_csv(output_folder + output_base + "_peak_line_profiles.csv", index_col=0)
@@ -2046,103 +2061,87 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
             print(i)
             continue
 
-        ad_plt = sns.scatterplot(
-            ax=fig.add_subplot(grid_rows[0][1, 0]),
-            data=rot_info,
-            x="Tight mask overlap",
-            y="ccc_masked",
-            linewidth=0,
-            s=5,
+        # Row 2: scatter + line plots
+        fig.add_trace(
+            go.Scatter(x=rot_info["Tight mask overlap"], y=rot_info["ccc_masked"],
+                       mode="markers", marker=dict(size=3), showlegend=False),
+            row=2, col=1,
         )
-        ad_plt.set(ylabel="CCC", xlabel="Tight mask overlap (in voxels)")
-        ad_plt = sns.scatterplot(
-            ax=fig.add_subplot(grid_rows[0][1, 1]), data=rot_info, x="ang_dist", y="ccc_masked", linewidth=0, s=5
-        )
-        ad_plt.set(ylabel=None, xlabel="Angular distance (in degrees)")
-        ad_plt = sns.lineplot(ax=fig.add_subplot(grid_rows[0][1, 2]), data=line_profiles[["x", "y", "z"]])
-        ad_plt.set(ylabel=None, xlabel="Position (in voxels)")
+        fig.update_xaxes(title_text="Tight mask overlap (in voxels)", row=2, col=1)
+        fig.update_yaxes(title_text="CCC", row=2, col=1)
 
+        fig.add_trace(
+            go.Scatter(x=rot_info["ang_dist"], y=rot_info["ccc_masked"],
+                       mode="markers", marker=dict(size=3), showlegend=False),
+            row=2, col=2,
+        )
+        fig.update_xaxes(title_text="Angular distance (in degrees)", row=2, col=2)
+
+        x_pos = list(range(len(line_profiles)))
+        for col_name in ["x", "y", "z"]:
+            fig.add_trace(
+                go.Scatter(x=x_pos, y=line_profiles[col_name], mode="lines", name=col_name),
+                row=2, col=3,
+            )
+        fig.update_xaxes(title_text="Position (in voxels)", row=2, col=3)
+
+        # Row 3 (optional): histogram line plots
         if add_hist:
             hist_info = pd.read_csv(hist_file, index_col=0)
-            hist_plt = fig.add_subplot(grid_rows[1][0, 0])
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 1.0, num=100), y="ang_dist")
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 1.0, num=100), y="cone_dist")
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 1.0, num=100), y="inplane_dist")
-            hist_plt.set(ylim=(0, 250), ylabel="Number of CCC values (bin size 0.1)", xlabel="CCC")
+            x100 = np.linspace(0.0, 1.0, num=100)
+            for col_name in ["ang_dist", "cone_dist", "inplane_dist"]:
+                fig.add_trace(
+                    go.Scatter(x=x100, y=hist_info[col_name], mode="lines",
+                               name=col_name, showlegend=False),
+                    row=3, col=1,
+                )
+            fig.update_yaxes(range=[0, 250], title_text="Number of CCC values (bin size 0.1)", row=3, col=1)
+            fig.update_xaxes(title_text="CCC", row=3, col=1)
 
-            hist_info = pd.read_csv(output_folder + output_base + "_gradual_angles_analysis.csv", index_col=0)
-            hist_plt = fig.add_subplot(grid_rows[1][0, 1])
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 359.0, num=359), y="ccc_masked")
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 359.0, num=359), y="cone_ccc_masked")
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 359.0, num=359), y="inplane_ccc_masked")
-            hist_plt.set(ylabel="CCC", xlabel="Rotation (in degrees)")
+            hist_info2 = pd.read_csv(output_folder + output_base + "_gradual_angles_analysis.csv", index_col=0)
+            x359 = np.linspace(0.0, 359.0, num=359)
+            for col_name in ["ccc_masked", "cone_ccc_masked", "inplane_ccc_masked"]:
+                fig.add_trace(
+                    go.Scatter(x=x359, y=hist_info2[col_name], mode="lines",
+                               name=col_name, showlegend=False),
+                    row=3, col=2,
+                )
+            fig.update_yaxes(title_text="CCC", row=3, col=2)
+            fig.update_xaxes(title_text="Rotation (in degrees)", row=3, col=2)
 
-        for c, slice in enumerate(cross_slices):
-            if c <= 1:
-                use_annot = False
-            else:
-                use_annot = True
-
-            f_fmt = ".2f"
+        # Heatmap rows (coloraxis1=gray/tight mask, coloraxis2=viridis/scores, coloraxis3=cividis/angles)
+        for c, slice_group in enumerate(cross_slices):
             if c == 0:
-                data_max = 1.0
-                c_scheme = "gray"
-            elif c < 3:
-                data_max = temp_df.at[i, "Peak value"]
-                c_scheme = "viridis"
-            else:
-                data_max = 180
-                c_scheme = "cividis"
-                f_fmt = ".1f"
+                coloraxis, annot_fmt = "coloraxis1", None
+            elif c == 1:
+                coloraxis, annot_fmt = "coloraxis2", None
+            elif c == 2:
+                coloraxis, annot_fmt = "coloraxis2", ".2f"
+            else:  # c >= 3
+                coloraxis, annot_fmt = "coloraxis3", ".1f"
 
-            hm1 = fig.add_subplot(grid_rows[last_row][c, 0])
-            hm2 = fig.add_subplot(grid_rows[last_row][c, 1])
-            hm3 = fig.add_subplot(grid_rows[last_row][c, 2])
-            cb = fig.add_subplot(grid_rows[last_row][c, 3])
-
-            sns.heatmap(
-                ax=hm1,
-                data=np.flipud(slice[0].T),
-                annot=use_annot,
-                fmt=f_fmt,
-                square=True,
-                cmap=c_scheme,
-                yticklabels=False,
-                xticklabels=False,
-                vmin=0,
-                vmax=data_max,
-                cbar_ax=cb,
-            )
-            sns.heatmap(
-                ax=hm2,
-                data=np.flipud(slice[1].T),
-                annot=use_annot,
-                fmt=f_fmt,
-                square=True,
-                cmap=c_scheme,
-                yticklabels=False,
-                xticklabels=False,
-                vmin=0,
-                vmax=data_max,
-                cbar=False,
-            )
-            sns.heatmap(
-                ax=hm3,
-                data=np.flipud(slice[2].T),
-                annot=use_annot,
-                fmt=f_fmt,
-                square=True,
-                cmap=c_scheme,
-                yticklabels=False,
-                xticklabels=False,
-                vmin=0,
-                vmax=data_max,
-                cbar=False,
+            hm_row = n_top_rows + c + 1
+            visplot.add_xyz_heatmap_row(
+                fig, slice_group, row=hm_row,
+                coloraxis=coloraxis, annot_format=annot_fmt,
             )
 
-        # plt.tight_layout() # or layout = "constrained" in figure
-        plt.savefig(output_folder + output_base + "_summary.pdf", transparent=True, bbox_inches="tight")
-        plt.close()
+        peak_val = temp_df.at[i, "Peak value"]
+        fig.update_layout(
+            title_text=figure_title,
+            height=max(900, 280 * total_rows),
+            coloraxis1=dict(colorscale="gray", cmin=0, cmax=1.0,
+                            colorbar=dict(title="Tight mask", thickness=12,
+                                         len=ca1_len, y=ca1_y, yanchor="middle", x=1.02)),
+            coloraxis2=dict(colorscale="viridis", cmin=0, cmax=peak_val,
+                            colorbar=dict(title="Score", thickness=12,
+                                         len=ca2_len, y=ca2_y, yanchor="middle", x=1.10)),
+            coloraxis3=dict(colorscale="cividis", cmin=0, cmax=180,
+                            colorbar=dict(title="Angle (°)", thickness=12,
+                                         len=ca3_len, y=ca3_y, yanchor="middle", x=1.18)),
+        )
+
+        fig.write_html(output_folder + output_base + "_summary.html")
 
 
 ##########################################################################################################################
@@ -2221,84 +2220,6 @@ def get_shape_stats(template_list, indices, shape_type, parent_folder_path):
         mask_stats.to_csv(output_base + shape_type + ".csv")
 
 
-def plot_scores_and_peaks(peak_files, plot_title=None, output_path=None):
-    """
-    Plot heatmaps of peak cross-sections for multiple peak-related data arrays.
-
-    This function visualizes peak data from a list of files or arrays by generating
-    heatmaps for three orthogonal 2D slices (X, Y, Z) centered at the main peak.
-    The peak center and the color-scale maximum (vmax) are determined from the
-    first entry in `peak_files` and reused for all subsequent entries; the
-    color-scale minimum (vmin) is the data minimum of each entry independently.
-
-    Parameters
-    ----------
-    peak_files : list of array_like or list of str
-        List of 3D arrays or file paths containing peak-related data.
-        Each entry is processed using
-        `tmana.create_starting_parameters_2D` to extract peak-centered slices.
-    plot_title : str, optional
-        Title for the entire figure. If None, no title is added.
-    output_path : str, optional
-        Path to save the figure as an image file. If None, the figure is not saved.
-    """
-
-    n_rows = len(peak_files)
-    row_size = 4 * n_rows
-    fig, axs = plt.subplots(n_rows, 4, figsize=(row_size, 100), gridspec_kw={"width_ratios": [20, 20, 20, 1]})
-
-    if plot_title is not None:
-        fig.suptitle(plot_title, fontsize=28, y=1.005)
-
-    peak_center, peak_height, _ = tmana.create_starting_parameters_2D(peak_files[0])
-
-    for i, p in enumerate(peak_files):
-        _, _, peaks = tmana.create_starting_parameters_2D(p, peak_center=peak_center)
-        data_min = np.amin(p)
-
-        sns.heatmap(
-            ax=axs[i][0],
-            data=np.flipud(peaks[:, :, 0].T),
-            square=True,
-            cmap="viridis",
-            annot=False,
-            yticklabels=False,
-            xticklabels=False,
-            vmin=data_min,
-            vmax=peak_height,
-            cbar_ax=axs[i][3],
-        )
-        sns.heatmap(
-            ax=axs[i][1],
-            data=np.flipud(peaks[:, :, 1].T),
-            square=True,
-            cmap="viridis",
-            annot=False,
-            yticklabels=False,
-            xticklabels=False,
-            vmin=data_min,
-            vmax=peak_height,
-            cbar=False,
-        )
-        sns.heatmap(
-            ax=axs[i][2],
-            data=np.flipud(peaks[:, :, 2].T),
-            square=True,
-            cmap="viridis",
-            annot=False,
-            yticklabels=False,
-            xticklabels=False,
-            vmin=data_min,
-            vmax=peak_height,
-            cbar=False,
-        )
-
-    plt.tight_layout()
-
-    if output_path is not None:
-        plt.savefig(output_path, transparent=True, bbox_inches="tight")
-
-
 def compute_peak_shapes(template_list, indices, parent_folder_path):
     """
     Compute and record peak shape statistics from scores maps for selected structures.
@@ -2365,7 +2286,7 @@ def compute_peak_shapes(template_list, indices, parent_folder_path):
 
         temp_df.to_csv(template_list)  # save what was finished in case of a crush
 
-        plot_scores_and_peaks(
+        visplot.plot_scores_and_peaks(
             [scores_map, t_th_map, t_surf, t_map, g_th_map, g_surf, g_map, h_th_map, h_surf, h_map],
             plot_title=structure_name + " id" + str(i),
             output_path=output_folder + "peaks.png",

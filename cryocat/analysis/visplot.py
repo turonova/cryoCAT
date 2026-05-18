@@ -16,13 +16,37 @@ import plotly.express as px
 from dataclasses import dataclass, field, asdict
 from contextlib import contextmanager
 from copy import deepcopy
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
 import plotly.io as pio
 from scipy.stats import gaussian_kde
 from cryocat.utils import geom
+from cryocat.utils import ioutils
+from cryocat._types import ArrayLike, ColumnNames, DataFrameSource, PathOrStr, RotationLike
 
 Color = str  # hex like "#1f77b4" or "rgb(…)"
 Colorscale = List[Tuple[float, Color]]  # [(0.0, "#..."), (1.0, "#...")]
+
+
+def _save_plotly(fig: go.Figure, output_path: Optional[PathOrStr]) -> None:
+    """Save a Plotly figure to disk.
+
+    ``.html`` paths are written with :meth:`~plotly.graph_objects.Figure.write_html`;
+    any other extension uses :meth:`~plotly.graph_objects.Figure.write_image`
+    (requires the *kaleido* package).
+    """
+    if output_path is None:
+        return
+    p = str(output_path)
+    if p.endswith(".html"):
+        fig.write_html(p)
+    else:
+        fig.write_image(p)
+
+
+def _save_mpl(fig, output_path: Optional[PathOrStr]) -> None:
+    if output_path is None:
+        return
+    fig.savefig(str(output_path), dpi=fig.dpi)
 
 # ---------- Example usage --------------------
 # # 1) Set global defaults for the session
@@ -286,7 +310,7 @@ def set_defaults(**kwargs) -> None:
 
 
 @contextmanager
-def use_defaults(**overrides):
+def use_defaults(**overrides) -> Iterator[None]:
     """Temporarily override DEFAULTS inside a 'with' block."""
     global DEFAULTS
     old = deepcopy(DEFAULTS)
@@ -298,7 +322,7 @@ def use_defaults(**overrides):
 
 
 # ---------- Helpers to apply defaults ----------
-def apply_defaults(fig, **layout_overrides):
+def apply_defaults(fig: go.Figure, **layout_overrides) -> go.Figure:
     """Apply global defaults to an existing figure, with optional overrides."""
     layout = DEFAULTS.to_layout_kwargs()
     layout.update(layout_overrides or {})
@@ -381,7 +405,11 @@ def convert_color_scheme(num_colors, color_scheme=None):
 # ---------------- Helpers for data formatting -------
 
 
-def format_input_data_id(input_data, input_data_id, default_name="Value"):
+def _format_input_data_id(
+    input_data: Union[pd.DataFrame, np.ndarray],
+    input_data_id: Optional[Sequence[str]],
+    default_name: str = "Value",
+) -> Sequence[str]:
     """Resolve column/series names for *input_data*.
 
     Parameters
@@ -412,7 +440,11 @@ def format_input_data_id(input_data, input_data_id, default_name="Value"):
     return input_data_id
 
 
-def format_input_data(input_data, input_data_id, n_columns):
+def _format_input_data(
+    input_data: Union[pd.DataFrame, np.ndarray],
+    input_data_id: Sequence[str],
+    n_columns: int,
+) -> Tuple[np.ndarray, Sequence[str]]:
     """Extract and validate data columns from a DataFrame or ndarray.
 
     Parameters
@@ -498,11 +530,11 @@ class BaseBuilder:
         color_type="palette",
     ):
 
-        input_data_id = format_input_data_id(input_data, input_data_id)
+        input_data_id = _format_input_data_id(input_data, input_data_id)
 
         self.n_columns = len(input_data_id)
 
-        self.x_axis, self.x_id = format_input_data(input_data, input_data_id, self.n_columns)
+        self.x_axis, self.x_id = _format_input_data(input_data, input_data_id, self.n_columns)
 
         # Set colors
         if color_type == "palette":
@@ -661,8 +693,8 @@ class BaseBuilder:
             of X columns.
         """
         if second_axis_data is not None:
-            self.y_id = format_input_data_id(second_axis_data, second_axis_id)
-            self.y_axis, _ = format_input_data(second_axis_data, self.y_id, self.n_columns)
+            self.y_id = _format_input_data_id(second_axis_data, second_axis_id)
+            self.y_axis, _ = _format_input_data(second_axis_data, self.y_id, self.n_columns)
             self.y_axis, self.y_id, expanded = self._expand_array(self.y_axis, self.y_id)
             self.legend = self.x_id
 
@@ -1586,18 +1618,18 @@ class KDEBuilder(Hist2DBuilder):
 
 
 def plot_histogram(
-    input_data,
-    input_data_id,
-    bins=20,
-    separate_graphs=False,
-    hist_type="count",  # "count" | "sum" | "avg" | "min" | "max"
-    hist_norm="",
-    same_range_for_separate=True,
-    same_scale=False,
-    colors=None,
-    opacity=None,
-    grid_spec="column",
-):
+    input_data: DataFrameSource,
+    input_data_id: ColumnNames,
+    bins: int = 20,
+    separate_graphs: bool = False,
+    hist_type: str = "count",
+    hist_norm: str = "",
+    same_range_for_separate: bool = True,
+    same_scale: bool = False,
+    colors: Optional[Union[str, Sequence[str]]] = None,
+    opacity: Optional[float] = None,
+    grid_spec: str = "column",
+) -> go.Figure:
     """Plot 1-D histogram(s) using Plotly.
 
     Parameters
@@ -1629,6 +1661,7 @@ def plot_histogram(
     -------
     plotly.graph_objects.Figure
     """
+    input_data = ioutils.df_load(input_data)
     builder = HistBuilder(
         input_data=input_data,
         input_data_id=input_data_id,
@@ -1647,24 +1680,24 @@ def plot_histogram(
     return fig
 
 
-def plot_histogram2D(
-    input_data,
-    input_data_id=None,
-    second_axis_data=None,
-    second_axis_id=None,
-    nbinsx=40,
-    nbinsy=40,
-    x_range=None,  # (xmin, xmax) or None
-    y_range=None,  # (ymin, ymax) or None
-    hist_type="count",
-    hist_norm=None,
-    same_scale=False,
-    colors=None,
-    separate_graphs=False,
-    same_range_for_separate=True,
-    opacity=None,
-    grid_spec="column",
-):
+def plot_histogram_2d(
+    input_data: DataFrameSource,
+    input_data_id: ColumnNames = None,
+    second_axis_data: Optional[DataFrameSource] = None,
+    second_axis_id: ColumnNames = None,
+    nbinsx: int = 40,
+    nbinsy: int = 40,
+    x_range: Optional[Tuple[float, float]] = None,
+    y_range: Optional[Tuple[float, float]] = None,
+    hist_type: str = "count",
+    hist_norm: Optional[str] = None,
+    same_scale: bool = False,
+    colors: Optional[Union[str, Sequence[str]]] = None,
+    separate_graphs: bool = False,
+    same_range_for_separate: bool = True,
+    opacity: Optional[float] = None,
+    grid_spec: str = "column",
+) -> go.Figure:
     """Plot 2-D histogram(s) using Plotly.
 
     Parameters
@@ -1706,6 +1739,9 @@ def plot_histogram2D(
     -------
     plotly.graph_objects.Figure
     """
+    input_data = ioutils.df_load(input_data)
+    if second_axis_data is not None:
+        second_axis_data = ioutils.df_load(second_axis_data)
     builder = Hist2DBuilder(
         input_data=input_data,
         input_data_id=input_data_id,
@@ -1729,21 +1765,21 @@ def plot_histogram2D(
     return fig
 
 
-def plot_spherical_density_hist2d(
-    input_data,
-    input_data_id=None,
-    nbinsx=10,
-    nbinsy=10,
-    x_range=None,
-    y_range=None,
-    hist_type="count",
-    hist_norm="percent",
-    normalize_coord=True,
-    colors="Viridis",
-    same_scale=False,
-    same_range_for_separate=False,
-    grid_spec="column",
-):
+def plot_spherical_density_2d(
+    input_data: DataFrameSource,
+    input_data_id: ColumnNames = None,
+    nbinsx: int = 10,
+    nbinsy: int = 10,
+    x_range: Optional[Tuple[float, float]] = None,
+    y_range: Optional[Tuple[float, float]] = None,
+    hist_type: str = "count",
+    hist_norm: str = "percent",
+    normalize_coord: bool = True,
+    colors: Optional[Union[str, Sequence[str]]] = "Viridis",
+    same_scale: bool = False,
+    same_range_for_separate: bool = False,
+    grid_spec: str = "column",
+) -> go.Figure:
     """Plot spherical density as 2-D histograms in (phi, theta) space.
 
     Converts 3-D Cartesian coordinates to spherical angles and renders each
@@ -1783,6 +1819,8 @@ def plot_spherical_density_hist2d(
     -------
     plotly.graph_objects.Figure
     """
+    if isinstance(input_data, str):
+        input_data = ioutils.df_load(input_data)
     if isinstance(input_data, pd.DataFrame):
         if not input_data_id:
             raise ValueError("When input_data is a DataFrame, input_data_id (ordered list of columns) is required.")
@@ -1862,19 +1900,19 @@ def plot_spherical_density_hist2d(
     return fig  # , H, bin_to_indices
 
 
-def plot_scatter2D(
-    input_data,
-    input_data_id,
-    second_axis_data=None,
-    second_axis_id=None,
-    separate_graphs=False,
-    same_range_for_separate=False,
-    x_range=None,
-    y_range=None,
-    colors=None,
-    opacity=None,
-    grid_spec="column",
-):
+def plot_scatter_2d(
+    input_data: DataFrameSource,
+    input_data_id: ColumnNames,
+    second_axis_data: Optional[DataFrameSource] = None,
+    second_axis_id: ColumnNames = None,
+    separate_graphs: bool = False,
+    same_range_for_separate: bool = False,
+    x_range: Optional[Tuple[float, float]] = None,
+    y_range: Optional[Tuple[float, float]] = None,
+    colors: Optional[Union[str, Sequence[str]]] = None,
+    opacity: Optional[float] = None,
+    grid_spec: str = "column",
+) -> go.Figure:
     """Plot 2-D scatter plot(s) using Plotly.
 
     Parameters
@@ -1906,6 +1944,9 @@ def plot_scatter2D(
     -------
     plotly.graph_objects.Figure
     """
+    input_data = ioutils.df_load(input_data)
+    if second_axis_data is not None:
+        second_axis_data = ioutils.df_load(second_axis_data)
     builder = ScatterBuilder(
         input_data=input_data,
         input_data_id=input_data_id,
@@ -1926,14 +1967,14 @@ def plot_scatter2D(
 
 
 def plot_line(
-    input_data,
-    input_data_id,
-    separate_graphs=False,
-    same_range_for_separate=False,
-    colors=None,
-    opacity=None,
-    grid_spec="column",
-):
+    input_data: DataFrameSource,
+    input_data_id: ColumnNames,
+    separate_graphs: bool = False,
+    same_range_for_separate: bool = False,
+    colors: Optional[Union[str, Sequence[str]]] = None,
+    opacity: Optional[float] = None,
+    grid_spec: str = "column",
+) -> go.Figure:
     """Plot line chart(s) using Plotly.
 
     Parameters
@@ -1957,6 +1998,7 @@ def plot_line(
     -------
     plotly.graph_objects.Figure
     """
+    input_data = ioutils.df_load(input_data)
     builder = ScatterBuilder(
         input_data=input_data,
         input_data_id=input_data_id,
@@ -1972,243 +2014,274 @@ def plot_line(
     return fig
 
 
-def convert_to_radial(coordinates, replace_nan=True):
-    """Convert 2-D Cartesian coordinates to polar ``(r, phi)``.
+def plot_scatter_xyz_panels(
+    data: DataFrameSource,
+    coord_columns: ColumnNames = None,
+    group_by: Optional[str] = None,
+    hover_column: Optional[str] = None,
+    circle_radius: Optional[float] = None,
+    displ_threshold: Optional[float] = None,
+    title: Optional[str] = None,
+    marker_size: int = 5,
+    output_path: Optional[PathOrStr] = None,
+) -> go.Figure:
+    """Plot three 2-D scatter views (XY, XZ, YZ) of 3-D coordinates.
+
+    Subsumes the four nearest-neighbour scatter helpers that previously lived
+    in :mod:`cryocat.analysis.nnana`. The behavior of those helpers is recovered
+    via the optional parameters: pass *group_by* to colour-group particles
+    (``plot_nn_rot_coord_df``), *hover_column* for interactive hover text
+    (``plot_nn_rot_coord_df_plotly``), or *circle_radius* to overlay a reference
+    disk (``plot_nn_coord_df``).
 
     Parameters
     ----------
-    coordinates : numpy.ndarray
-        Shape ``(N, 2)``.
-    replace_nan : bool, default=True
-        Replace ``NaN`` values in phi with ``0.0``.
+    data : DataFrameSource
+        Source data with at least three columns of coordinates. Normalized
+        via :func:`cryocat.utils.ioutils.df_load`.
+    coord_columns : list of str, optional
+        Three column names for x, y, z. Defaults to the first three columns
+        of *data*.
+    group_by : str, optional
+        Column whose unique values define color groups with a legend. Mutually
+        useful with *hover_column*; the latter is ignored when *group_by* is set.
+    hover_column : str, optional
+        Column used as per-point hover text.
+    circle_radius : float, optional
+        When given, a filled gold reference disk of this radius is overlaid
+        on each panel.
+    displ_threshold : float, optional
+        Clamp all axes to ``[-displ_threshold, displ_threshold]``.
+    title : str, optional
+        Figure title.
+    marker_size : int, default=5
+        Scatter marker size in pixels.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
 
     Returns
     -------
-    r : numpy.ndarray
-        Radial distances, shape ``(N,)``.
-    phi : numpy.ndarray
-        Azimuthal angles in radians, shape ``(N,)``.
+    plotly.graph_objects.Figure
     """
-    r = np.linalg.norm(coordinates, axis=1)
-    phi = np.arctan2(coordinates[:, 1], coordinates[:, 0])
+    df = ioutils.df_load(data)
 
-    if replace_nan:
-        np.nan_to_num(phi, copy=False, nan=0.0)
+    if coord_columns is None:
+        if df.shape[1] < 3:
+            raise ValueError(f"Need at least 3 columns; got {df.shape[1]}.")
+        coord_columns = list(df.columns[:3])
+    elif len(coord_columns) != 3:
+        raise ValueError(f"coord_columns must have exactly 3 names; got {len(coord_columns)}.")
 
-    return r, phi
+    x_col, y_col, z_col = coord_columns
+    pairs = [(x_col, y_col), (x_col, z_col), (y_col, z_col)]
+    subplot_titles = ["XY Distribution", "XZ Distribution", "YZ Distribution"]
 
+    fig = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=subplot_titles,
+        shared_yaxes=False,
+        horizontal_spacing=0.08,
+    )
 
-def convert_to_spherical(coordinates):
-    """Convert 3-D Cartesian coordinates to spherical ``(r, theta, phi)``.
-
-    Parameters
-    ----------
-    coordinates : numpy.ndarray
-        Shape ``(N, 3)``.
-
-    Returns
-    -------
-    r : numpy.ndarray
-        Radial distances, shape ``(N,)``.
-    theta : numpy.ndarray
-        Inclination angles in radians ``[0, pi]``, shape ``(N,)``.
-    phi : numpy.ndarray
-        Azimuthal angles in radians ``[-pi, pi]``, shape ``(N,)``.
-    """
-    coord = np.around(coordinates, decimals=14)
-
-    x = coord[:, 0]
-    y = coord[:, 1]
-    z = coord[:, 2]
-    r = np.linalg.norm(coord, axis=1)
-
-    theta = np.arccos(z / r)  # inclination
-    phi = np.arctan2(y, x)  # azimuth
-
-    # r2  = np.linalg.norm(coord[:,:2], axis=1)
-    # phi = np.sign(y)*np.arccos(x/r2)
-
-    np.nan_to_num(phi, copy=False, nan=0.0)
-    np.nan_to_num(theta, copy=False, nan=0.0)
-
-    return r, theta, phi
-
-
-def project_lambert(coord):
-    """Lambert azimuthal equal-area projection of unit vectors.
-
-    The +z pole is mapped to the origin.
-
-    Parameters
-    ----------
-    coord : numpy.ndarray
-        Shape ``(N, 3)``.  Vectors are assumed to be on the unit sphere.
-
-    Returns
-    -------
-    projection_theta_r : numpy.ndarray
-        Polar coordinates ``(phi, r)`` of projected points, shape ``(N, 2)``.
-    projection_xy : numpy.ndarray
-        Cartesian ``(x, y)`` coordinates of projected points, shape ``(N, 2)``.
-    """
-    _, theta, phi = convert_to_spherical(coord)
-
-    projection_xy_local = np.zeros((phi.shape[0], 2))
-    projection_theta_r_local = np.zeros((phi.shape[0], 2))
-
-    # dividing by sqrt(2) so that we're projecting onto a unit circle
-    projection_xy_local[:, 0] = coord[:, 0] * (np.sqrt(2 / (1 + coord[:, 2])))
-    projection_xy_local[:, 1] = coord[:, 1] * (np.sqrt(2 / (1 + coord[:, 2])))
-
-    np.nan_to_num(projection_xy_local, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-    # sperhical coordinates -- CAREFUL as per this wikipedia page: https://en.wikipedia.org/wiki/Lambert_azimuthal_equal-area_projection
-    # the symbols for inclination and azimuth ARE INVERTED WITH RESPEST TO THE SPHERICAL COORDS!!!
-    projection_theta_r_local[:, 0] = phi
-    # HACK: doing math.pi - angle in order for the +z to be projected to 0,0
-    projection_theta_r_local[:, 1] = 2 * np.cos((np.pi - theta) / 2)
-
-    return projection_theta_r_local, projection_xy_local
-
-
-def project_stereo(coord):
-    """Stereographic projection of unit vectors.
-
-    The +z pole is mapped to the origin; the -z pole maps to infinity.
-
-    Parameters
-    ----------
-    coord : numpy.ndarray
-        Shape ``(N, 3)``.
-
-    Returns
-    -------
-    projection_theta_r : numpy.ndarray
-        Polar coordinates ``(phi, r)`` of projected points, shape ``(N, 2)``.
-    projection_xy : numpy.ndarray
-        Cartesian ``(x, y)`` coordinates of projected points, shape ``(N, 2)``.
-    """
-    _, theta, phi = convert_to_spherical(coord)
-
-    projection_xy_local = np.zeros((phi.shape[0], 2))
-    projection_theta_r_local = np.zeros((phi.shape[0], 2))
-    projection_xy_local[:, 0] = coord[:, 0] / (1 - coord[:, 2])
-    projection_xy_local[:, 1] = coord[:, 1] / (1 - coord[:, 2])
-
-    # https://en.wikipedia.org/wiki/Stereographic_projection uses a different standard from the page on spherical coord Spherical_coordinate_system
-    projection_theta_r_local[:, 0] = phi
-    # HACK: doing math.pi - angle in order for the +z to be projected to 0,0
-    projection_theta_r_local[:, 1] = np.sin(np.pi - theta) / (1 - np.cos(np.pi - theta))
-
-    return projection_theta_r_local, projection_xy_local
-
-
-def project_equidistant(coord):
-    """Azimuthal equidistant projection of unit vectors.
-
-    Parameters
-    ----------
-    coord : numpy.ndarray
-        Shape ``(N, 3)``.
-
-    Returns
-    -------
-    projection_theta_r : numpy.ndarray
-        Polar coordinates ``(phi, r)`` of projected points, shape ``(N, 2)``.
-    projection_xy : numpy.ndarray
-        Cartesian ``(x, y)`` coordinates of projected points, shape ``(N, 2)``.
-    """
-    _, theta, phi = convert_to_spherical(coord)
-
-    projection_xy_local = np.zeros((phi.shape[0], 2))
-    projection_theta_r_local = np.zeros((phi.shape[0], 2))
-
-    # https://en.wikipedia.org/wiki/Azimuthal_equidistant_projection
-    # TODO: To be checked, but this looks like it should -- a straight down projection.
-
-    projection_xy_local[:, 0] = (np.pi / 2 + phi) * np.sin(theta)
-    projection_xy_local[:, 1] = -(np.pi / 2 + phi) * np.cos(theta)
-
-    projection_theta_r_local[:, 0] = convert_to_radial(projection_xy_local)[1]  # phi
-    projection_theta_r_local[:, 1] = convert_to_radial(projection_xy_local)[
-        0
-    ]  # np.cos(( np.pi + theta )/2) #np.cos( theta  - np.pi/2)
-
-    return projection_theta_r_local, projection_xy_local
-
-
-def project_points_on_sphere(coord, projection_type="stereo"):
-    """Dispatch to the requested sphere projection.
-
-    Parameters
-    ----------
-    coord : numpy.ndarray
-        Shape ``(N, 3)``.
-    projection_type : {'stereo', 'lambert', 'equidistant'}, default="stereo"
-        Projection algorithm.
-
-    Returns
-    -------
-    projection_theta_r : numpy.ndarray
-        Polar coordinates ``(phi, r)``, shape ``(N, 2)``.
-    projection_xy : numpy.ndarray
-        Cartesian ``(x, y)`` coordinates, shape ``(N, 2)``.
-    """
-    if projection_type == "stereo":
-        theta_r, xy_proj = project_stereo(coord)
-    elif projection_type == "lambert":
-        theta_r, xy_proj = project_lambert(coord)
-    elif projection_type == "equidistant":
-        theta_r, xy_proj = project_equidistant(coord)
-
-    return theta_r, xy_proj
-
-
-def create_projection(coord, projection_type="stereo", split_into_hemispheres=True):
-    """Project 3-D coordinates onto a 2-D plane, optionally per hemisphere.
-
-    Parameters
-    ----------
-    coord : numpy.ndarray
-        Shape ``(N, 3)``.
-    projection_type : {'stereo', 'lambert', 'equidistant'}, default="stereo"
-        Projection algorithm.
-    split_into_hemispheres : bool, default=True
-        When ``True``, points with ``z >= 0`` and ``z < 0`` are projected
-        separately.  The southern hemisphere is mirrored (z *= -1) before
-        projection so that both hemispheres use the same +z-pole projection.
-
-    Returns
-    -------
-    theta_r_pos : numpy.ndarray
-        Polar coordinates of northern-hemisphere points, shape ``(M, 2)``.
-    xy_pos : numpy.ndarray
-        Cartesian coordinates of northern-hemisphere points, shape ``(M, 2)``.
-    theta_r_neg : numpy.ndarray
-        Polar coordinates of southern-hemisphere points, shape ``(K, 2)``.
-        Empty array ``[]`` when *split_into_hemispheres* is ``False``.
-    xy_neg : numpy.ndarray
-        Cartesian coordinates of southern-hemisphere points, shape ``(K, 2)``.
-        Empty array ``[]`` when *split_into_hemispheres* is ``False``.
-    """
-    if split_into_hemispheres:
-        coord_pos = coord[coord[:, 2] >= 0]
-        coord_neg = coord[coord[:, 2] < 0]
-
-        coord_neg[:, 2] *= -1
-
-        theta_r_pos, xy_proj_pos = project_points_on_sphere(coord_pos, projection_type)
-        theta_r_neg, xy_proj_neg = project_points_on_sphere(coord_neg, projection_type)
-
-        return theta_r_pos, xy_proj_pos, theta_r_neg, xy_proj_neg
+    if group_by is not None:
+        for type_val in df[group_by].unique():
+            sub = df[df[group_by] == type_val]
+            for col_idx, (xc, yc) in enumerate(pairs, start=1):
+                fig.add_trace(
+                    go.Scattergl(
+                        x=sub[xc], y=sub[yc], mode="markers",
+                        marker=dict(size=marker_size),
+                        name=str(type_val),
+                        legendgroup=str(type_val),
+                        showlegend=(col_idx == 1),
+                    ),
+                    row=1, col=col_idx,
+                )
     else:
-        theta_r, xy_proj = project_points_on_sphere(coord, projection_type)
+        hover = df[hover_column] if hover_column is not None else None
+        for col_idx, (xc, yc) in enumerate(pairs, start=1):
+            fig.add_trace(
+                go.Scattergl(
+                    x=df[xc], y=df[yc], mode="markers",
+                    marker=dict(size=marker_size),
+                    text=hover,
+                    showlegend=False,
+                ),
+                row=1, col=col_idx,
+            )
 
-        return theta_r, xy_proj, [], []
+    if circle_radius is not None:
+        for c in (1, 2, 3):
+            fig.add_shape(
+                type="circle",
+                x0=-circle_radius, y0=-circle_radius,
+                x1=circle_radius, y1=circle_radius,
+                fillcolor="gold", opacity=0.4, line_color="gold",
+                row=1, col=c,
+            )
+
+    for c, xref in enumerate(["x", "x2", "x3"], start=1):
+        fig.update_yaxes(scaleanchor=xref, scaleratio=1, row=1, col=c)
+
+    if displ_threshold is not None:
+        limits = [-displ_threshold, displ_threshold]
+        for c in (1, 2, 3):
+            fig.update_xaxes(range=limits, row=1, col=c)
+            fig.update_yaxes(range=limits, row=1, col=c)
+
+    if title is not None:
+        fig.update_layout(title_text=title)
+    fig.update_layout(height=400, margin=dict(t=40, b=30, l=30, r=30), plot_bgcolor="white")
+
+    _save_plotly(fig, output_path)
+    return fig
+
+
+def plot_scatter_3d(
+    data: DataFrameSource,
+    coord_columns: ColumnNames = None,
+    color_column: Optional[str] = None,
+    color_label: str = "Group",
+    marker_size: int = 3,
+    opacity: float = 1.0,
+    title: Optional[str] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> go.Figure:
+    """3-D scatter plot with an optional color-coded value column.
+
+    Parameters
+    ----------
+    data : DataFrameSource
+        Source data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
+    coord_columns : list of str, optional
+        Three column names for x, y, z. Defaults to the first three columns.
+    color_column : str, optional
+        Column whose values colour the markers (continuous colorbar).
+    color_label : str, default="Group"
+        Title shown on the colorbar.
+    marker_size : int, default=3
+        Marker size in pixels.
+    opacity : float, default=1.0
+        Marker opacity.
+    title : str, optional
+        Figure title.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    df = ioutils.df_load(data)
+
+    if coord_columns is None:
+        if df.shape[1] < 3:
+            raise ValueError(f"Need at least 3 columns; got {df.shape[1]}.")
+        coord_columns = list(df.columns[:3])
+    elif len(coord_columns) != 3:
+        raise ValueError(f"coord_columns must have exactly 3 names; got {len(coord_columns)}.")
+
+    x_col, y_col, z_col = coord_columns
+
+    marker_kwargs = dict(size=marker_size, opacity=opacity)
+    if color_column is not None:
+        marker_kwargs["color"] = df[color_column]
+        marker_kwargs["colorbar"] = dict(title=color_label)
+
+    fig = go.Figure(
+        data=[go.Scatter3d(
+            x=df[x_col], y=df[y_col], z=df[z_col],
+            mode="markers",
+            marker=marker_kwargs,
+        )]
+    )
+    fig.update_layout(
+        title=title,
+        scene=dict(xaxis_title=x_col, yaxis_title=y_col, zaxis_title=z_col),
+        margin=dict(l=0, r=0, b=0, t=30 if title else 0),
+    )
+
+    _save_plotly(fig, output_path)
+    return fig
+
+
+def plot_grouped_box(
+    data: DataFrameSource,
+    group_column: str,
+    value_column: str,
+    title: Optional[str] = None,
+    xaxis_title: Optional[str] = None,
+    yaxis_title: Optional[str] = None,
+    colorscale: Union[str, Colorscale, Sequence[Color]] = "Monet",
+    boxpoints: Union[str, bool] = "outliers",
+    output_path: Optional[PathOrStr] = None,
+) -> go.Figure:
+    """Side-by-side box plots of *value_column* grouped by *group_column*.
+
+    Each group is rendered with a colour sampled from *colorscale*, so the
+    palette degrades gracefully whatever the number of groups.
+
+    Parameters
+    ----------
+    data : DataFrameSource
+        Long-format data: one row per observation. Normalized via
+        :func:`cryocat.utils.ioutils.df_load`.
+    group_column : str
+        Column whose unique values define the box groups (x-axis).
+    value_column : str
+        Column holding the numeric values plotted in each box.
+    title, xaxis_title, yaxis_title : str, optional
+        Figure and axis labels.
+    colorscale : str or list, default="Monet"
+        Colorscale specification used to colour each box. See
+        :func:`resolve_colors_any`.
+    boxpoints : str or bool, default="outliers"
+        Plotly ``boxpoints`` setting (e.g. ``"all"``, ``"outliers"``, ``False``).
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    df = ioutils.df_load(data)
+    unique_groups = sorted(df[group_column].unique())
+    n_groups = len(unique_groups)
+
+    palette = resolve_colors_any(colorscale, color_type="palette", n=n_groups)
+
+    fig = go.Figure()
+    for i, grp in enumerate(unique_groups):
+        fig.add_trace(go.Box(
+            y=df.loc[df[group_column] == grp, value_column],
+            name=str(grp),
+            boxpoints=boxpoints,
+            marker_color=palette[i],
+        ))
+
+    fig.update_layout(
+        title=title,
+        xaxis_title=xaxis_title,
+        yaxis_title=yaxis_title,
+        font=dict(size=12),
+        xaxis=dict(tickangle=45),
+    )
+
+    _save_plotly(fig, output_path)
+    return fig
+
+
 
 
 def plot_polar_nn_distances(
-    coordinates, distances, max_radius=None, marker_size=3, colormap="viridis_r", graph_title=None, output_path=None
-):
+    coordinates: ArrayLike,
+    distances: ArrayLike,
+    max_radius: Optional[float] = None,
+    marker_size: int = 3,
+    colormap: str = "viridis_r",
+    graph_title: Optional[str] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> None:
     """Plot nearest-neighbour distances in polar (stereographic) projection.
 
     Renders two polar axes — northern and southern hemispheres — with each
@@ -2232,10 +2305,12 @@ def plot_polar_nn_distances(
     output_path : str, optional
         Path for saving the figure.
     """
+    coordinates = np.asarray(coordinates)
+    distances = np.asarray(distances)
     coord_sorted = coordinates[coordinates[:, 2].argsort()]
     dist_sorted = distances[coordinates[:, 2].argsort()]
 
-    theta_r_pos, _, theta_r_neg, _ = create_projection(coord_sorted)
+    theta_r_pos, _, theta_r_neg, _ = geom.create_projection(coord_sorted)
 
     dist_neg = dist_sorted[0 : theta_r_neg.shape[0]]
     dist_pos = dist_sorted[theta_r_neg.shape[0] :]
@@ -2265,11 +2340,10 @@ def plot_polar_nn_distances(
         fig.suptitle(graph_title)
     plt.show()
 
-    if output_path is not None:
-        fig.savefig(output_path, dpi=fig.dpi)
+    _save_mpl(fig, output_path)
 
 
-def fill_wedge(r1, r2, theta1, theta2, theta_step, **kargs):
+def _fill_wedge(r1, r2, theta1, theta2, theta_step, **kargs):
     """Fill an annular sector in a polar axes.
 
     Parameters
@@ -2295,7 +2369,7 @@ def fill_wedge(r1, r2, theta1, theta2, theta_step, **kargs):
     plt.fill_between(theta, cr1, cr2, **kargs)
 
 
-def create_smooth_polar_histogram(ax, histogram, hist_norm_value=None, colormap="viridis_r"):
+def _create_smooth_polar_histogram(ax, histogram, hist_norm_value=None, colormap="viridis_r"):
     """Render a 2-D histogram as filled wedges on a polar axes.
 
     Each bin is drawn as a coloured annular sector.
@@ -2330,20 +2404,62 @@ def create_smooth_polar_histogram(ax, histogram, hist_norm_value=None, colormap=
         for xi, theta_start in enumerate(x_bins[:-1]):
             theta_end = x_bins[xi + 1]
             color = rgb[int(h[xi, yi] / hist_norm_value * (len(space) - 1))]
-            fill_wedge(r_start, r_end, theta_start, theta_end, wedge_draw_step, color=color)
+            _fill_wedge(r_start, r_end, theta_start, theta_end, wedge_draw_step, color=color)
+
+
+def plot_rotation_normals(
+    rotations: RotationLike,
+    color_map: Optional[str] = None,
+    marker_size: int = 20,
+    alpha: float = 1.0,
+    radius: float = 1.0,
+) -> None:
+    """Plot z-normals of input rotations as a 3-D scatter.
+
+    Each rotation is applied to ``(0, 0, radius)`` and the resulting points
+    are scattered on a sphere of the given radius. This is the plotting
+    counterpart of :func:`cryocat.utils.geom.rotations_to_z_normals`.
+
+    Parameters
+    ----------
+    rotations : RotationLike
+        Orientations to plot. Normalized via
+        :func:`cryocat.utils.geom.as_rotation`.
+    color_map : str, optional
+        Color or matplotlib colormap name passed to ``scatter`` as ``c``.
+    marker_size : int, default=20
+        Scatter marker size.
+    alpha : float, default=1.0
+        Marker transparency.
+    radius : float, default=1.0
+        Sphere radius. Sets the reference vector length and axis limits.
+    """
+    new_points = geom.rotations_to_z_normals(rotations, radius=radius)
+
+    fig = plt.figure()
+    ax = fig.add_subplot(projection="3d")
+
+    scatter_kwargs = dict(s=marker_size, alpha=alpha)
+    if color_map is not None:
+        scatter_kwargs["c"] = color_map
+
+    ax.scatter(new_points[:, 0], new_points[:, 1], new_points[:, 2], **scatter_kwargs)
+    ax.set_xlim3d(-radius, radius)
+    ax.set_ylim3d(-radius, radius)
+    ax.set_zlim3d(-radius, radius)
 
 
 def plot_orientational_distribution(
-    coordinates,
-    projection="stereo",
-    graph_title=None,
-    theta_bin=73,
-    radius_bin=33,
-    max_radius=None,
-    colormap="viridis_r",
-    output_path=None,
-    show=True,
-):
+    coordinates: ArrayLike,
+    projection: str = "stereo",
+    graph_title: Optional[str] = None,
+    theta_bin: int = 73,
+    radius_bin: int = 33,
+    max_radius: Optional[float] = None,
+    colormap: str = "viridis_r",
+    output_path: Optional[PathOrStr] = None,
+    show: bool = True,
+) -> "plt.Figure":
     """Plot the orientational distribution of unit vectors as a polar histogram.
 
     Both hemispheres are shown side by side using coloured annular-sector bins.
@@ -2373,7 +2489,7 @@ def plot_orientational_distribution(
     -------
     matplotlib.figure.Figure
     """
-    theta_r_pos, _, theta_r_neg, _ = create_projection(coordinates, projection_type=projection)
+    theta_r_pos, _, theta_r_neg, _ = geom.create_projection(coordinates, projection_type=projection)
 
     if max_radius is None:
         max_radius = np.amax(np.hstack((theta_r_pos[:, 1], theta_r_neg[:, 1])))
@@ -2402,13 +2518,13 @@ def plot_orientational_distribution(
     ax1 = plt.subplot(gs[0], projection="polar")
     ax1.set_yticklabels([])
     if theta_r_pos.shape[0] > 0:
-        create_smooth_polar_histogram(ax1, hist_pos, hist_norm_value=hist_max)
+        _create_smooth_polar_histogram(ax1, hist_pos, hist_norm_value=hist_max)
     ax1.set_xlabel("Northern hemisphere")
 
     ax2 = plt.subplot(gs[1], projection="polar")
     ax2.set_yticklabels([])
     if theta_r_neg.shape[0] > 0:
-        create_smooth_polar_histogram(ax2, hist_neg, hist_norm_value=hist_max)
+        _create_smooth_polar_histogram(ax2, hist_neg, hist_norm_value=hist_max)
     ax2.set_xlabel("Southern hemisphere")
 
     ax3 = plt.subplot(gs[2])
@@ -2423,15 +2539,19 @@ def plot_orientational_distribution(
     if show:
         plt.show()
 
-    if output_path is not None:
-        fig.savefig(output_path, dpi=fig.dpi)
+    _save_mpl(fig, output_path)
 
     return fig
 
 
 def plot_class_occupancy(
-    occupancy_dic, color_scheme=None, ax=None, show_legend=True, graph_title=None, output_path=None
-):
+    occupancy_dic: dict,
+    color_scheme: Optional[Union[str, Sequence[str]]] = None,
+    ax=None,
+    show_legend: bool = True,
+    graph_title: Optional[str] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> None:
     """Plot per-class particle counts over alignment iterations.
 
     Parameters
@@ -2477,13 +2597,18 @@ def plot_class_occupancy(
         plt.tight_layout()
         plt.show()
 
-    if output_path is not None and not ax_provided:
-        fig.savefig(output_path, dpi=fig.dpi)
+    if not ax_provided:
+        _save_mpl(fig, output_path)
 
 
 def plot_class_stability(
-    subtomo_changes, color_scheme=None, ax=None, show_legend=True, graph_title=None, output_path=None
-):
+    subtomo_changes: dict,
+    color_scheme: Optional[Union[str, Sequence[str]]] = None,
+    ax=None,
+    show_legend: bool = True,
+    graph_title: Optional[str] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> None:
     """Plot the number of particles that changed class at each iteration.
 
     Parameters
@@ -2529,13 +2654,17 @@ def plot_class_stability(
         plt.tight_layout()
         plt.show()
 
-    if output_path is not None and not ax_provided:
-        fig.savefig(output_path, dpi=fig.dpi)
+    if not ax_provided:
+        _save_mpl(fig, output_path)
 
 
 def plot_classification_convergence(
-    occupancy_dic, subtomo_changes_dic, color_scheme=None, graph_title=None, output_path=None
-):
+    occupancy_dic: dict,
+    subtomo_changes_dic: dict,
+    color_scheme: Optional[Union[str, Sequence[str]]] = None,
+    graph_title: Optional[str] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> None:
     """Plot class occupancy and class stability side by side.
 
     Parameters
@@ -2568,11 +2697,15 @@ def plot_classification_convergence(
 
     plt.show()
 
-    if output_path is not None:
-        fig.savefig(output_path, dpi=fig.dpi)
+    _save_mpl(fig, output_path)
 
 
-def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stability", output_path=None):
+def plot_alignment_stability(
+    input_dfs: Sequence[DataFrameSource],
+    labels: Optional[Sequence[str]] = None,
+    graph_title: str = "Alignment stability",
+    output_path: Optional[PathOrStr] = None,
+) -> None:
     """Plot per-parameter alignment statistics over iterations.
 
     Creates a 3×4 grid of line plots, one panel per DataFrame column.  Each
@@ -2591,6 +2724,7 @@ def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stab
     output_path : str, optional
         Path for saving the figure.
     """
+    input_dfs = [ioutils.df_load(d) for d in input_dfs]
     x_axis = np.arange(input_dfs[0].shape[0])
 
     n_rows = 3
@@ -2624,23 +2758,22 @@ def plot_alignment_stability(input_dfs, labels=None, graph_title="Alignment stab
     fig.suptitle(graph_title)
     plt.show()
 
-    if output_path is not None:
-        fig.savefig(output_path, dpi=fig.dpi)
+    _save_mpl(fig, output_path)
 
 
-def scatter_with_histogram(
-    data_x,
-    data_y,
-    bins_x=None,
-    bins_y=None,
-    colors_x=None,
-    colors_y=None,
-    edges_x=None,
-    edges_y=None,
-    axis_title_x=None,
-    axis_title_y=None,
-    output_path=None,
-):
+def plot_scatter_with_histogram(
+    data_x: ArrayLike,
+    data_y: ArrayLike,
+    bins_x: Optional[int] = None,
+    bins_y: Optional[int] = None,
+    colors_x: Optional[Union[str, List[str]]] = None,
+    colors_y: Optional[Union[str, List[str]]] = None,
+    edges_x: Optional[List[float]] = None,
+    edges_y: Optional[List[float]] = None,
+    axis_title_x: Optional[str] = None,
+    axis_title_y: Optional[str] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> None:
     """Scatter plot with marginal histograms on the top and right.
 
     Parameters
@@ -2755,13 +2888,18 @@ def scatter_with_histogram(
     ax_histy.set_xlabel("Count")
     ax_histy.yaxis.set_tick_params(labelleft=False)  # Hide y labels
 
-    if output_path is not None:
-        fig.savefig(output_path, dpi=fig.dpi)
+    _save_mpl(fig, output_path)
 
     plt.show()
 
 
-def plot_pca_summary(cumulative_variance, feature_importances, scatter_kwargs=None, bar_kwargs=None):
+def plot_pca_summary(
+    cumulative_variance: ArrayLike,
+    feature_importances: "pd.Series",
+    scatter_kwargs: Optional[dict] = None,
+    bar_kwargs: Optional[dict] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> go.Figure:
     """Create a combined subplot fro PCA analysis:
     - Cumulative explained variance (line plot)
     - Feature importance (horizontal bar plot)
@@ -2822,24 +2960,26 @@ def plot_pca_summary(cumulative_variance, feature_importances, scatter_kwargs=No
     fig.update_xaxes(tickangle=-30, row=1, col=2)
     fig.update_yaxes(row=1, col=2, categoryorder="total ascending")
 
+    _save_plotly(fig, output_path)
     return fig
 
 
 def plot_kde(
-    input_data,
-    input_data_id=None,
-    second_axis_data=None,
-    second_axis_id=None,
-    nbinsx=200,
-    nbinsy=200,
-    hist_type="count",
-    hist_norm=None,
-    colors=None,
-    opacity=None,
-    grid_spec="column",
-    same_range_for_separate=False,
-    same_scale=False,
-):
+    input_data: DataFrameSource,
+    input_data_id: ColumnNames = None,
+    second_axis_data: Optional[DataFrameSource] = None,
+    second_axis_id: ColumnNames = None,
+    nbinsx: int = 200,
+    nbinsy: int = 200,
+    hist_type: str = "count",
+    hist_norm: Optional[str] = None,
+    colors: Optional[Union[str, Sequence[str]]] = None,
+    opacity: Optional[float] = None,
+    grid_spec: str = "column",
+    same_range_for_separate: bool = False,
+    same_scale: bool = False,
+    output_path: Optional[PathOrStr] = None,
+) -> go.Figure:
     """Plot 2-D kernel density estimate contour(s) using Plotly.
 
     Parameters
@@ -2875,6 +3015,9 @@ def plot_kde(
     -------
     plotly.graph_objects.Figure
     """
+    input_data = ioutils.df_load(input_data)
+    if second_axis_data is not None:
+        second_axis_data = ioutils.df_load(second_axis_data)
     builder = KDEBuilder(
         input_data,
         input_data_id=input_data_id,
@@ -2895,6 +3038,7 @@ def plot_kde(
 
     fig = builder.plot_graph()
 
+    _save_plotly(fig, output_path)
     return fig
 
 
@@ -3123,7 +3267,138 @@ def plot_spherical_density(
     return H, bin_to_indices
 
 
-def plot_fsc(input_data, pixel_size=None, box_size=None, output_path=None):
+def add_xyz_heatmap_row(
+    fig: go.Figure,
+    slices: Sequence[ArrayLike],
+    row: int,
+    coloraxis: str = "coloraxis",
+    annot_format: Optional[str] = None,
+    hide_ticks: bool = True,
+) -> None:
+    """Add a row of three XY / XZ / YZ cross-section heatmaps to an existing figure.
+
+    Each input slice is transposed and vertically flipped before plotting so
+    that the on-screen orientation matches the standard cryo-EM display
+    convention. The function mutates *fig* in place; pair it with a
+    :func:`~plotly.subplots.make_subplots` figure that has at least 3 columns.
+
+    Parameters
+    ----------
+    fig : plotly.graph_objects.Figure
+        Subplot figure with ``cols >= 3``.
+    slices : sequence of array-like
+        Exactly three 2-D arrays in ``(XY, XZ, YZ)`` order.
+    row : int
+        1-based row index in the subplot grid.
+    coloraxis : str, default="coloraxis"
+        Name of the shared coloraxis to attach the traces to.
+    annot_format : str, optional
+        Python ``format()`` spec for cell annotations (e.g. ``".2f"``).
+        When ``None``, no annotations are added.
+    hide_ticks : bool, default=True
+        Hide tick labels on the three subplots.
+
+    Raises
+    ------
+    ValueError
+        If *slices* does not contain exactly three elements.
+    """
+    slices = list(slices)
+    if len(slices) != 3:
+        raise ValueError(f"slices must have exactly 3 elements; got {len(slices)}.")
+
+    for col_idx, sl in enumerate(slices, start=1):
+        data = np.flipud(np.asarray(sl).T)
+        text_arr = (
+            [[format(v, annot_format) for v in r] for r in data.tolist()]
+            if annot_format is not None else None
+        )
+        fig.add_trace(
+            go.Heatmap(
+                z=data, coloraxis=coloraxis, showscale=False,
+                text=text_arr,
+                texttemplate="%{text}" if annot_format is not None else None,
+            ),
+            row=row, col=col_idx,
+        )
+        if hide_ticks:
+            fig.update_xaxes(showticklabels=False, row=row, col=col_idx)
+            fig.update_yaxes(showticklabels=False, row=row, col=col_idx)
+
+
+def plot_scores_and_peaks(
+    peak_files: Sequence[Union[ArrayLike, PathOrStr]],
+    plot_title: Optional[str] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> go.Figure:
+    """Plot interactive heatmaps of peak cross-sections for multiple peak-related arrays.
+
+    Generates heatmaps for three orthogonal 2-D slices (X, Y, Z) centered at
+    the main peak. The peak center and the colour-scale maximum (``vmax``) are
+    determined from the first entry in *peak_files* and reused for all
+    subsequent entries; the colour-scale minimum (``vmin``) is the data minimum
+    of each entry independently.
+
+    Parameters
+    ----------
+    peak_files : list of array_like or list of str
+        List of 3-D arrays or file paths containing peak-related data. Each
+        entry is processed using
+        :func:`cryocat.analysis.tmana.create_starting_parameters_2D` to extract
+        peak-centered slices.
+    plot_title : str, optional
+        Title for the entire figure.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    # Local import: avoid tightening visplot ↔ tmana coupling at module load time.
+    from cryocat.analysis import tmana
+
+    n_rows = len(peak_files)
+    peak_center, peak_height, _ = tmana.create_starting_parameters_2D(peak_files[0])
+
+    fig = make_subplots(rows=n_rows, cols=3, horizontal_spacing=0.03, vertical_spacing=0.02)
+
+    vs = 0.02
+    row_h = (1.0 - (n_rows - 1) * vs) / n_rows
+
+    for i, p in enumerate(peak_files):
+        _, _, peaks = tmana.create_starting_parameters_2D(p, peak_center=peak_center)
+        data_min = np.amin(p)
+        coloraxis_name = f"coloraxis{i + 1}"
+        cb_y = 1.0 - i * (row_h + vs) - row_h / 2
+
+        add_xyz_heatmap_row(
+            fig,
+            slices=(peaks[:, :, 0], peaks[:, :, 1], peaks[:, :, 2]),
+            row=i + 1,
+            coloraxis=coloraxis_name,
+        )
+        fig.update_layout(**{
+            coloraxis_name: dict(
+                colorscale="viridis", cmin=data_min, cmax=peak_height,
+                colorbar=dict(thickness=12, len=row_h * 0.9, y=cb_y, yanchor="middle"),
+            )
+        })
+
+    if plot_title is not None:
+        fig.update_layout(title_text=plot_title, title_font=dict(size=28))
+    fig.update_layout(height=300 * n_rows)
+
+    _save_plotly(fig, output_path)
+    return fig
+
+
+def plot_fsc(
+    input_data: DataFrameSource,
+    pixel_size: Optional[float] = None,
+    box_size: Optional[int] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> go.Figure:
     """Plot a Fourier Shell Correlation (FSC) curve using Plotly.
 
     Parameters
@@ -3157,8 +3432,6 @@ def plot_fsc(input_data, pixel_size=None, box_size=None, output_path=None):
     -------
     plotly.graph_objects.Figure
     """
-    from cryocat.utils import ioutils
-
     if isinstance(input_data, str):
         df = ioutils.fsc_read(input_data, pixel_size=pixel_size, box_size=box_size)
     else:
@@ -3202,10 +3475,6 @@ def plot_fsc(input_data, pixel_size=None, box_size=None, output_path=None):
         template="plotly_white",
     )
 
-    if output_path is not None:
-        if output_path.endswith(".html"):
-            fig.write_html(output_path)
-        else:
-            fig.write_image(output_path)
+    _save_plotly(fig, output_path)
 
     return fig

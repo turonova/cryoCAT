@@ -546,7 +546,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                 )
             elif graph_type == "Histogram 2D":
 
-                fig = visplot.plot_histogram2D(
+                fig = visplot.plot_histogram_2d(
                     input_data=input_data,
                     input_data_id=x_values,
                     separate_graphs=plot_separately,
@@ -583,7 +583,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                 for s in x_values:
                     parsed = json.loads(s)  # e.g. ["a","b"]
                     all_ids.extend(parsed)
-                fig = visplot.plot_spherical_density_hist2d(
+                fig = visplot.plot_spherical_density_2d(
                     input_data=input_data,
                     input_data_id=all_ids,
                     nbinsx=h2D_binsx,
@@ -609,7 +609,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     grid_spec=grid_spec,
                 )
             elif graph_type == "Scatter plot 1D":  # "Scatter plot 2D""
-                fig = visplot.plot_scatter2D(
+                fig = visplot.plot_scatter_2d(
                     input_data=input_data,
                     input_data_id=x_values,
                     separate_graphs=plot_separately,
@@ -644,7 +644,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                         no_update,
                     )
 
-                fig = visplot.plot_scatter2D(
+                fig = visplot.plot_scatter_2d(
                     input_data=input_data,
                     input_data_id=x_values,
                     second_axis_data=input_data,

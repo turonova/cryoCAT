@@ -22,6 +22,7 @@ def scale(
     input_map: MapSource,
     scaling_factor: float,
     output_path: PathOrStr | None = None,
+    pixel_size: float = 1.0,
 ) -> np.ndarray:
     """
     Scales an input map by a given scaling factor.
@@ -36,6 +37,8 @@ def scale(
     output_path : PathOrStr, optional
         Path to the output file to which to write the scaled map. If not provided,
         the scaled map will not be saved. Default is None.
+    pixel_size : float, default=1.0
+        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
 
     Returns
     -------
@@ -62,7 +65,7 @@ def scale(
         scaled_map = scaled_map.astype(np.float32)
 
     if output_path is not None:
-        write(scaled_map, output_path)
+        write(scaled_map, output_path, pixel_size=pixel_size)
 
     return scaled_map
 
@@ -308,7 +311,7 @@ def bandpass(
     # )
 
     if output_path is not None:
-        write(bandpass_filtered, output_path, data_type=np.single)
+        write(bandpass_filtered, output_path, data_type=np.single, pixel_size=pixel_size or 1.0)
 
     return bandpass_filtered
 
@@ -368,7 +371,7 @@ def lowpass(
     filtered_map = np.real(fft.ifftn(fft.fftn(input_map) * lowpass_filter))
 
     if output_path is not None:
-        write(filtered_map, output_path, data_type=np.single)
+        write(filtered_map, output_path, data_type=np.single, pixel_size=pixel_size or 1.0)
 
     return filtered_map
 
@@ -425,7 +428,7 @@ def highpass(
     filtered_map = np.real(fft.ifftn(fft.fftn(input_map) * highpass_filter))
 
     if output_path is not None:
-        write(filtered_map, output_path, data_type=np.single)
+        write(filtered_map, output_path, data_type=np.single, pixel_size=pixel_size or 1.0)
 
     return filtered_map
 
@@ -512,7 +515,7 @@ def write(
     file_name: PathOrStr,
     transpose: bool = True,
     data_type: np.dtype | None = None,
-    voxel_size: float = 1.0,
+    pixel_size: float = 1.0,
     overwrite: bool = True,
 ) -> None:
     """Write data to a specified file in a given format.
@@ -531,9 +534,9 @@ def write(
     data_type : type, optional
         If specified, the data will be cast to this type before writing. If None (default),
         the original data type will be used.
-    voxel_size: float, default=1.0
-        The size of the voxels to store in the header of the MRC files. Note that .em files do not store such
-        in the header and this value is therefore ignored. Defaults to 1.0.
+    pixel_size : float, default=1.0
+        Pixel size in Angstroms to store in the header of MRC files. Note that .em files
+        do not store this value in the header and it is therefore ignored. Defaults to 1.0.
     overwrite : bool, default=True
         If True (default), existing files will be overwritten. If False, an error will be
         raised if the file already exists. Default is True.
@@ -566,14 +569,14 @@ def write(
         data_to_write = data_to_write.astype(np.float32)
 
     if file_name_str.endswith(".mrc") or file_name_str.endswith(".rec"):
-        mrcfile.write(name=file_name_str, data=data_to_write, overwrite=overwrite, voxel_size=voxel_size)
+        mrcfile.write(name=file_name_str, data=data_to_write, overwrite=overwrite, voxel_size=pixel_size)
     elif file_name_str.endswith(".em"):
         emfile.write(file_name_str, data=data_to_write, overwrite=overwrite)
     else:
         raise ValueError("The output file name", file_name_str, "has to end with .mrc, .rec or .em!")
 
 
-def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None) -> np.ndarray:
+def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, pixel_size: float = 1.0) -> np.ndarray:
     """Invert the contrast of an input volume map.
 
     Parameters
@@ -584,6 +587,8 @@ def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None) 
     output_path : PathOrStr, optional
         Path to the output file where the inverted volume map will be saved.
         If not provided, the output will not be saved to a file. Default is None.
+    pixel_size : float, default=1.0
+        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
 
     Returns
     -------
@@ -606,7 +611,7 @@ def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None) 
         else:
             data_type = inverted_map.dtype
 
-        write(inverted_map, output_path, data_type=data_type)
+        write(inverted_map, output_path, data_type=data_type, pixel_size=pixel_size)
 
     return inverted_map
 
@@ -615,7 +620,7 @@ def em2mrc(
     input_path: PathOrStr,
     invert: bool = False,
     overwrite: bool = True,
-    voxel_size: float = 1.0,
+    pixel_size: float = 1.0,
     output_path: PathOrStr | None = None,
 ) -> None:
     """Convert a file in EM format to MRC format.
@@ -628,8 +633,8 @@ def em2mrc(
         If True, the data will be inverted (multiplied by -1). Default is False.
     overwrite : bool, default=True
         If True, allows overwriting of the output file if it already exists. Default is True.
-    voxel_size: float, default=1.0
-        The size of the voxels to store in the header of the MRC files. Defaults to 1.0.
+    pixel_size : float, default=1.0
+        Pixel size in Angstroms to store in the header of the output MRC file. Defaults to 1.0.
     output_path : PathOrStr, optional
         Path to the output MRC file. If None, the output name will be derived from
         ``input_path`` by replacing the ``.em`` extension with ``.mrc``.
@@ -663,7 +668,7 @@ def em2mrc(
         output_path_str = os.fspath(output_path)
         if not output_path_str.endswith(".mrc"):
             raise ValueError(f"Specified output file name must end with .mrc")
-    write(data_to_write, output_path_str, overwrite=overwrite, voxel_size=voxel_size)
+    write(data_to_write, output_path_str, overwrite=overwrite, pixel_size=pixel_size)
 
 
 def mrc2em(
@@ -866,6 +871,7 @@ def rotate(
     degrees: bool = True,
     spline_order: int = 3,
     output_path: PathOrStr | None = None,
+    pixel_size: float = 1.0,
 ) -> np.ndarray:
     """Rotate a 3D input map using a specified rotation matrix or rotation angles.
 
@@ -899,6 +905,8 @@ def rotate(
     output_path : PathOrStr, optional
         Path to the output file for the rotated structure. If not provided, the
         result is not saved. Default is None.
+    pixel_size : float, default=1.0
+        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
 
     Returns
     -------
@@ -938,7 +946,7 @@ def rotate(
     affine_transform(input=input_map, output=rot_struct, matrix=final_matrix, order=spline_order)
 
     if output_path is not None:
-        write(rot_struct, output_path, data_type=np.single)
+        write(rot_struct, output_path, data_type=np.single, pixel_size=pixel_size)
 
     return rot_struct
 
@@ -948,6 +956,7 @@ def crop(
     new_size: TripletLike,
     output_path: PathOrStr | None = None,
     crop_coord: TripletLike | None = None,
+    pixel_size: float = 1.0,
 ) -> np.ndarray:
     """
     This function crops a given input map to a new size. If no crop coordinates are provided, the function will crop from the center of the input map. If an output file is specified, the cropped volume will be written to this file.
@@ -966,6 +975,8 @@ def crop(
     crop_coord : TripletLike, optional
         The (integer) center coordinates of the crop. If not provided, the function
         will crop from the center of the input map.
+    pixel_size : float, default=1.0
+        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
 
     Returns
     -------
@@ -991,7 +1002,7 @@ def crop(
     cropped_volume = input_map[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
 
     if output_path is not None:
-        write(cropped_volume, output_path, data_type=np.single)
+        write(cropped_volume, output_path, data_type=np.single, pixel_size=pixel_size)
 
     return cropped_volume
 
@@ -1000,6 +1011,7 @@ def shift2(
     input_map: MapSource,
     delta: ArrayLike,
     output_path: PathOrStr | None = None,
+    pixel_size: float = 1.0,
 ) -> np.ndarray:
     """
     Shifts an input map by a specified delta.
@@ -1015,6 +1027,8 @@ def shift2(
     output_path : PathOrStr, optional
         Path to the output file for the shifted map. The data type of the output
         will be np.single. Default is None.
+    pixel_size : float, default=1.0
+        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
 
     Returns
     -------
@@ -1036,7 +1050,7 @@ def shift2(
     affine_transform(input=input_map, output=shifted_map, matrix=T, mode="grid-wrap")
 
     if output_path is not None:
-        write(shifted_map, output_path, data_type=np.single)
+        write(shifted_map, output_path, data_type=np.single, pixel_size=pixel_size)
 
     return shifted_map
 
@@ -1178,6 +1192,7 @@ def extract_subvolume(
     subvolume_shape: TripletLike,
     enforce_shape: bool = False,
     output_path: PathOrStr | None = None,
+    pixel_size: float = 1.0,
 ) -> np.ndarray:
     """
     Extracts a subvolume from a given volume.
@@ -1195,6 +1210,8 @@ def extract_subvolume(
     output_path : PathOrStr, optional
         Path to the output file for the extracted subvolume. If not provided, the
         subvolume is not saved. Default is None.
+    pixel_size : float, default=1.0
+        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
 
     Returns
     -------
@@ -1219,7 +1236,7 @@ def extract_subvolume(
         subvolume[ss[0] : se[0], ss[1] : se[1], ss[2] : se[2]] = volume[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
 
     if output_path is not None:
-        write(subvolume, output_path, data_type=np.single)
+        write(subvolume, output_path, data_type=np.single, pixel_size=pixel_size)
 
     return subvolume
 
@@ -1517,7 +1534,7 @@ def deconvolve(
     deconvolved_map = np.real(np.fft.ifftn(np.fft.fftn(input_map) * ramp))
 
     if output_path is not None:
-        write(deconvolved_map, output_path, data_type=np.single)
+        write(deconvolved_map, output_path, data_type=np.single, pixel_size=pixel_size_a)
 
     return deconvolved_map
 
@@ -1584,6 +1601,7 @@ def trim(
     trim_start: TripletLike,
     trim_end: TripletLike,
     output_path: PathOrStr | None = None,
+    pixel_size: float = 1.0,
 ) -> np.ndarray:
     """
     Trims a 3D map to a specified range.
@@ -1600,6 +1618,8 @@ def trim(
     output_path : PathOrStr, optional
         Path to the output file for the trimmed map. The file will be written in
         single precision float format. Default is None.
+    pixel_size : float, default=1.0
+        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
 
     Returns
     -------
@@ -1624,7 +1644,7 @@ def trim(
     output_map = output_map[ts[0] : te[0], ts[1] : te[1], ts[2] : te[2]]
 
     if output_path is not None:
-        write(output_map, output_path, data_type=np.single)
+        write(output_map, output_path, data_type=np.single, pixel_size=pixel_size)
 
     return output_map
 
@@ -1633,6 +1653,7 @@ def flip(
     input_map: MapSource,
     axis: str = "z",
     output_path: PathOrStr | None = None,
+    pixel_size: float = 1.0,
 ) -> np.ndarray:
     """
     Function to flip a given input map along specified axis.
@@ -1648,6 +1669,8 @@ def flip(
     output_path : PathOrStr, optional
         Path to the output file. If not provided, the function will only return
         the flipped map. Default is None.
+    pixel_size : float, default=1.0
+        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
 
     Returns
     -------
@@ -1671,7 +1694,7 @@ def flip(
         output_map = np.flip(output_map, 0)
 
     if output_path is not None:
-        write(output_map, output_path, data_type=np.single)
+        write(output_map, output_path, data_type=np.single, pixel_size=pixel_size)
 
     return output_map
 

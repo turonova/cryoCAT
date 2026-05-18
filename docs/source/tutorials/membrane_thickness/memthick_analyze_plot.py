@@ -1421,7 +1421,7 @@ def plot_min_to_min_distribution(
     membrane_names: Optional[List[str]] = None,
     histogram_bins: Union[int, List[float]] = 40,
     separation_range: Optional[Tuple[float, float]] = None,
-    voxel_size_nm: Optional[float] = None,
+    pixel_size_nm: Optional[float] = None,
     show_statistics: bool = True,
     show_mean_lines: bool = True,
     density_normalization: bool = True,
@@ -1446,7 +1446,7 @@ def plot_min_to_min_distribution(
         Number of bins or bin edges for histogram
     separation_range : Optional[Tuple[float, float]], optional
         (min, max) separation range to plot
-    voxel_size_nm : Optional[float], optional
+    pixel_size_nm : Optional[float], optional
         Voxel size in nm. If provided, distances are converted from voxels to nm
     show_statistics : bool, default True
         If True, print summary statistics
@@ -1539,8 +1539,8 @@ def plot_min_to_min_distribution(
         separation_distances = np.array(separation_distances)
         
         # Convert to nm if voxel size provided
-        if voxel_size_nm is not None:
-            separation_distances = separation_distances * voxel_size_nm
+        if pixel_size_nm is not None:
+            separation_distances = separation_distances * pixel_size_nm
             unit = 'nm'
             x_title = 'Minima Separation (nm)'
         else:
@@ -1628,7 +1628,7 @@ def plot_min_to_min_distribution(
     if plot_title:
         title = plot_title
     else:
-        unit_str = f" ({unit})" if voxel_size_nm is not None else f" ({unit})"
+        unit_str = f" ({unit})" if pixel_size_nm is not None else f" ({unit})"
         range_str = f" ({separation_range[0]:.1f}-{separation_range[1]:.1f} {unit})" if separation_range else ""
         membrane_str = " Comparison" if len(data_list) > 1 else ""
         title = f'Minima Separation Distribution{unit_str}{range_str}{membrane_str}'
@@ -1913,7 +1913,7 @@ def plot_intensity_profile_summary(
     membrane_names: Optional[List[str]] = None,
     max_profiles_displayed: int = 50,
     extension_range_voxels: Tuple[float, float] = (-10, 10),
-    voxel_size_nm: Optional[float] = None,
+    pixel_size_nm: Optional[float] = None,
     show_individual_profiles: bool = True,
     show_mean_profile: bool = True,
     show_percentile_bands: bool = True,
@@ -1935,7 +1935,7 @@ def plot_intensity_profile_summary(
         Maximum number of individual profiles to show per membrane
     extension_range_voxels : Tuple[float, float], default (-30, 30)
         (min_distance, max_distance) range to display along profile
-    voxel_size_nm : Optional[float], optional
+    pixel_size_nm : Optional[float], optional
         Voxel size in nanometers. If provided, distances will be scaled by this value.
         If None, distances remain in voxel units.
     show_individual_profiles : bool, default True
@@ -1988,8 +1988,8 @@ def plot_intensity_profile_summary(
             membrane_names = [f'Membrane {i+1}' for i in range(len(data_list))]
 
     # Determine distance scaling and units
-    if voxel_size_nm is not None:
-        distance_scale = voxel_size_nm
+    if pixel_size_nm is not None:
+        distance_scale = pixel_size_nm
         distance_unit = "nm"
         x_axis_title = "Distance along profile (nm)"
     else:
@@ -2172,7 +2172,7 @@ def plot_intensity_profile_binned(
     thickness_bins: Optional[Union[int, List[Tuple[float, float, str]]]] = None,
     binning_method: str = 'quantile',
     extension_range_voxels: Tuple[float, float] = (-10, 10),
-    voxel_size_nm: Optional[float] = None,
+    pixel_size_nm: Optional[float] = None,
     colors: Optional[List[str]] = None,
     figure_size: Tuple[int, int] = (900, 600),
     plot_title: Optional[str] = None
@@ -2195,7 +2195,7 @@ def plot_intensity_profile_binned(
         Method for automatic binning ('quantile' or 'equal_width')
     extension_range_voxels : Tuple[float, float], default (-25, 25)
         (min_distance, max_distance) for the plot
-    voxel_size_nm : Optional[float], optional
+    pixel_size_nm : Optional[float], optional
         Voxel size in nanometers. If provided, distances will be scaled by this value.
         If None, distances remain in voxel units.
     colors : Optional[List[str]], optional
@@ -2240,8 +2240,8 @@ def plot_intensity_profile_binned(
         else:
             membrane_names = [f'Membrane {i+1}' for i in range(len(data_list))]
 
-    if voxel_size_nm is not None:
-        distance_scale = voxel_size_nm
+    if pixel_size_nm is not None:
+        distance_scale = pixel_size_nm
         distance_unit = "nm"
         x_axis_title = "Distance along profile (nm)"
     else:

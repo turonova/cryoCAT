@@ -18,7 +18,7 @@ from dash.dash_table.Format import Format, Scheme
 
 from cryocat.app.apputils import format_columns
 from cryocat.core.cryomotl import Motl
-from cryocat.analysis.nnana import get_nn_stats, plot_nn_rot_coord_df_plotly
+from cryocat.analysis.nnana import get_nn_stats
 from cryocat.analysis.visplot import plot_orientational_distribution
 from cryocat.analysis.tango import TwistDescriptor, FeatureCatalog
 
