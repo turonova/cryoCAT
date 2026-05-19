@@ -22,13 +22,53 @@ ROOT2 = np.sqrt(2)
 
 
 class Line:
+    """An infinite line in 3-D space defined by a point and a direction.
+
+    Attributes
+    ----------
+    p : array-like
+        A point on the line.
+    dir : array-like
+        Direction vector of the line (not necessarily unit length).
+    """
+
     def __init__(self, starting_point, line_dir):
+        """
+        Parameters
+        ----------
+        starting_point : array-like, shape (3,)
+            A point on the line.
+        line_dir : array-like, shape (3,)
+            Direction vector of the line.
+        """
         self.p = starting_point
         self.dir = line_dir
 
 
 class LineSegment(Line):
+    """A finite line segment in 3-D space defined by two endpoints.
+
+    Attributes
+    ----------
+    p : array-like, shape (3,)
+        The start point of the segment.
+    dir : ndarray, shape (3,)
+        Unit direction vector from ``p`` toward ``p_end``.
+    p_end : array-like, shape (3,)
+        The end point of the segment.
+    length : float
+        Euclidean length of the segment.
+    """
+
     def __init__(self, point1, point2):
+        """
+        Parameters
+        ----------
+        point1 : array-like, shape (3,)
+            Start point of the segment.
+        point2 : array-like, shape (3,)
+            End point of the segment.
+        """
         self.p = point1
         self.dir = normalize_vectors(point2 - point1)
         self.p_end = point2
@@ -36,7 +76,30 @@ class LineSegment(Line):
 
 
 class Point3D:
+    """A point in 3-D space with NumPy-compatible arithmetic.
+
+    Supports element-wise addition, subtraction, multiplication and division
+    with other :class:`Point3D` instances or scalars/arrays.  The object also
+    acts as a length-3 array (``__array__``, ``__iter__``, ``__getitem__``),
+    so it can be passed directly to NumPy functions.
+
+    Attributes
+    ----------
+    x, y, z : float
+        Coordinate accessors backed by a single ``(3,)`` float64 array.
+    """
+
     def __init__(self, x, y, z):
+        """
+        Parameters
+        ----------
+        x : float
+            x-coordinate.
+        y : float
+            y-coordinate.
+        z : float
+            z-coordinate.
+        """
         self._coords = np.array([x, y, z], dtype=float)
 
     @property
@@ -119,16 +182,21 @@ class Point3D:
         return False
 
     def cone_indicator(self, cone_height, cone_radius, axis=None):
-        """Boolean function that checks whether a given point lies within a cone.
+        """Check whether the point lies within a cone whose tip is at the origin.
 
-        Args:
-            input_point (numpy array): Point for which to check whether it lies in a cone
-            cone_height (float): Height of the cone.
-            cone_radius (float): Radius of the cone.
-            axis (numpy array): Axis of revolution for cone. Defaults to -np.array([0,0,1]).
+        Parameters
+        ----------
+        cone_height : float
+            Height of the cone along its axis.
+        cone_radius : float
+            Radius of the cone's base circle.
+        axis : array-like, shape (3,), optional
+            Axis of revolution. Defaults to ``-np.array([0, 0, 1])``.
 
-        Returns:
-            Bool: True if input_point lies in cone. False else.
+        Returns
+        -------
+        bool
+            ``True`` if the point lies inside the cone, ``False`` otherwise.
         """
         if axis is None:
             axis = -np.array([0, 0, 1])
@@ -156,16 +224,22 @@ class Point3D:
         return height_bool and radial_bool and angular_bool
 
     def torus_indicator(self, inner_rad, outer_rad, axis=None):
-        """Boolean function that checks whether a given point lies within a solid torus.
+        """Check whether the point lies within a solid torus centred at the origin.
 
-        Args:
-            input_point (_type_): Point for which to check whether it lies in a solid torus.
-            inner_rad (_type_): Inner radius of solid torus
-            outer_rad (_type_): Outer radius of solid torus
-            axis (_type_, optional): Axis of revolution. Tours lies in orthogonal complement of the axis. Defaults to np.array([0,0,1]).
+        Parameters
+        ----------
+        inner_rad : float
+            Inner radius of the solid torus (distance from axis to inner edge).
+        outer_rad : float
+            Outer radius of the solid torus (distance from axis to outer edge).
+        axis : array-like, shape (3,), optional
+            Axis of revolution. The torus lies in the plane perpendicular to this
+            axis. Defaults to ``np.array([0, 0, 1])``.
 
-        Returns:
-            Bool: True if input_point lies in solid torus. False else.
+        Returns
+        -------
+        bool
+            ``True`` if the point lies inside the solid torus, ``False`` otherwise.
         """
         if axis is None:
             axis = np.array([0, 0, 1])
@@ -207,18 +281,26 @@ class Point3D:
         torus_revolution=None,
         cone_revolution=None,
     ):
-        """Boolean function that checks whether a given point lies in the intersection of a solid torus and a cone.
+        """Check whether the point lies in the intersection of a solid torus and a cone.
 
-        Args:
-            input_point (_type_): Point for which to check whether it lies in the intersection.
-            inner_rad (_type_): Inner radius of torus
-            outer_rad (_type_): Outer radius of torus
-            cone_radius (_type_): Radius of cone
-            torus_revolution (_type_, optional): Axis of revolution of torus. Defaults to np.array([0,0,1]).
-            cone_revolution (_type_, optional): Axis of revolution of cone. Defaults to np.array([1,0,0]).
+        Parameters
+        ----------
+        inner_rad : float
+            Inner radius of the torus.
+        outer_rad : float
+            Outer radius of the torus (also used as the cone height).
+        cone_radius : float
+            Radius of the cone's base circle.
+        torus_revolution : array-like, shape (3,), optional
+            Axis of revolution for the torus. Defaults to ``np.array([0, 0, 1])``.
+        cone_revolution : array-like, shape (3,), optional
+            Axis of revolution for the cone. Defaults to ``np.array([1, 0, 0])``.
 
-        Returns:
-            Bool: _description_
+        Returns
+        -------
+        bool
+            ``True`` if the point is inside both the torus and the cone,
+            ``False`` otherwise (including when the two axes are parallel).
         """
         if torus_revolution is None:
             torus_revolution = np.array([0, 0, 1])
@@ -238,25 +320,63 @@ class Point3D:
 
 
 class Triangle:
+    """A triangle in 3-D space defined by three :class:`Point3D` vertices.
+
+    Attributes
+    ----------
+    a, b, c : Point3D
+        The three vertices of the triangle.
+    """
 
     def __init__(self, a, b, c):
+        """
+        Parameters
+        ----------
+        a : array-like, shape (3,)
+            First vertex coordinates.
+        b : array-like, shape (3,)
+            Second vertex coordinates.
+        c : array-like, shape (3,)
+            Third vertex coordinates.
+        """
         self.a = Point3D(a[0], a[1], a[2])
         self.b = Point3D(b[0], b[1], b[2])
         self.c = Point3D(c[0], c[1], c[2])
 
     def _side_lengths(self):
+        """Return the three side lengths (ab, bc, ca).
+
+        Returns
+        -------
+        ab, bc, ca : float
+            Lengths of the sides opposite vertices c, a, and b respectively.
+        """
         ab = np.linalg.norm(self.b - self.a)
         bc = np.linalg.norm(self.c - self.b)
         ca = np.linalg.norm(self.a - self.c)
         return ab, bc, ca
 
     def area(self):
+        """Compute the area of the triangle via the cross-product formula.
+
+        Returns
+        -------
+        float
+            Area of the triangle.
+        """
         ab = self.b - self.a
         ac = self.c - self.a
         cross = np.cross(ab, ac)
         return 0.5 * np.linalg.norm(cross)
 
     def inner_angles(self):
+        """Compute the three interior angles of the triangle in degrees.
+
+        Returns
+        -------
+        angle_A, angle_B, angle_C : float
+            Interior angles at vertices A, B, and C in degrees.
+        """
         ab = np.array(self.b - self.a)
         bc = np.array(self.c - self.b)
         ca = np.array(self.a - self.c)
@@ -268,6 +388,15 @@ class Triangle:
         return angle_A, angle_B, angle_C
 
     def inscribed_circle(self):
+        """Compute the inscribed circle (incircle) of the triangle.
+
+        Returns
+        -------
+        center : Point3D
+            Centre of the incircle.
+        radius : float
+            Inradius of the triangle.
+        """
         a, b, c = self._side_lengths()
         p = a + b + c
         center = (a * self.a + b * self.b + c * self.c) / p
@@ -276,14 +405,28 @@ class Triangle:
         return center, radius
 
     def circumcircle_radius(self):
+        """Compute the circumradius of the triangle.
 
+        Returns
+        -------
+        float
+            Radius of the circumscribed circle.
+        """
         a, b, c = self._side_lengths()
         radius = a * b * c / (4 * self.area())
 
         return radius
 
     def circumcircle(self):
+        """Compute the circumscribed circle (circumcircle) of the triangle.
 
+        Returns
+        -------
+        center : Point3D or ndarray
+            Centre of the circumcircle (``NaN``-filled for degenerate triangles).
+        radius : float
+            Circumradius (``NaN`` for degenerate triangles).
+        """
         ab = np.array(self.b - self.a)
         ac = np.array(self.c - self.a)
         ab_cross_ac = np.cross(ab, ac)
@@ -313,9 +456,37 @@ class Triangle:
 
 
 class Matrix:
+    """A thin wrapper around a 2-D NumPy array with Lie-group helpers.
+
+    Provides convenience methods for SO(3) / SE(3) checks, Lie-algebra
+    computations, and noise addition.
+
+    Attributes
+    ----------
+    m : ndarray
+        The underlying matrix.
+    nrow : int
+        Number of rows.
+    ncol : int
+        Number of columns.
+    """
 
     def __init__(self, input_data=None, size=3):
+        """
+        Parameters
+        ----------
+        input_data : ndarray, optional
+            Pre-built matrix to wrap. If ``None``, an identity matrix of the
+            given ``size`` is created.
+        size : int, optional
+            Edge length for the default identity matrix. Ignored when
+            ``input_data`` is provided. Default is 3.
 
+        Raises
+        ------
+        ValueError
+            If ``size`` is not an ``int``.
+        """
         if input_data is not None:
             # TODO write properly, i.e. reading from a file, changing dimensions etc.
             self.m = input_data
@@ -331,13 +502,13 @@ class Matrix:
         self.ncol = self.m.shape[1]
 
     def is_SE3(self):
-        """Boolean function to check whether an input matrix is a rototranslation.
+        """Check whether the matrix is a valid SE(3) roto-translation.
 
-        Args:
-            input_matrix (_type_): _description_
-
-        Returns:
-            _type_: _description_
+        Returns
+        -------
+        bool
+            ``True`` if the upper-left 3×3 block is SO(3), the bottom row is
+            ``[0, 0, 0, 1]``, and the matrix is 4×4.
         """
         rotation = self.m[:3, :3]
         if Matrix(rotation).is_SO3():
@@ -355,27 +526,38 @@ class Matrix:
         return np.allclose(det, 1, atol=0.01) and np.allclose(potential_id, np.identity(3), atol=0.01)
 
     def dual_basis_so3(self):
-        """Given a skew-symmetric 3x3 matric, return the coefficients
-        of said matrix in linear combination w.r.t. canonical basis of
-        so3
+        """Return the coordinates of a skew-symmetric matrix in the canonical so(3) basis.
 
-        Args:
-            so_3 (nd-array): so(3)-matrix
+        Extracts the three independent components ``[m[2,1], m[0,2], m[1,0]]``
+        that identify the rotation vector corresponding to the skew-symmetric
+        matrix.
+
+        Returns
+        -------
+        ndarray, shape (3,)
+            Coefficients ``[ω_x, ω_y, ω_z]`` of the matrix in the canonical
+            so(3) basis.
         """
         coefficients = np.asarray([self.m[2, 1], self.m[0, 2], self.m[1, 0]])
         return coefficients
 
     def dual_basis_se3(self, index=None):
-        """Given an se(3)-matrix, return the ith coefficient of
-        said matrix in linear combination w.r.t. canonical basis of
-        se(3)
+        """Return se(3) coordinates of the matrix, optionally a single component.
 
-        Args:
-            i (int): 1,2,3,4,5 or 6
-            se_3 (_type_): se(3)-matrix
+        The six canonical se(3) basis coefficients are
+        ``[m[2,1], m[0,2], m[1,0], m[0,3], m[1,3], m[2,3]]`` (indices 1–6).
 
-        Returns:
-            float: Coefficient from linear combination
+        Parameters
+        ----------
+        index : int, optional
+            If provided (1-based), returns the single coefficient at that
+            position. If ``None``, all six coefficients are returned.
+
+        Returns
+        -------
+        list or float
+            All six coefficients when ``index`` is ``None``, or a single
+            ``float`` when ``index`` is given.
         """
         # input index is i = 1,2,3,4,5,6
         # input matrix needs to live in se(3)
@@ -386,14 +568,17 @@ class Matrix:
             return coefficients[index - 1]
 
     def twist_from_skew_translation(self, translation):
-        """Combine so(3) matrix with R^3 translation to se(3) matrix.
+        """Build a twist (se(3) vector) from the skew-symmetric part and a translation.
 
-        Args:
-            skew_symm (np.array): so(3) matrix
-            translation (np.array): translation vector
+        Parameters
+        ----------
+        translation : ndarray, shape (3,)
+            Translation component of the twist.
 
-        Returns:
-            np.array: se(3) vector
+        Returns
+        -------
+        ndarray, shape (6,)
+            Concatenation of the so(3) rotation vector and the translation.
         """
         skew_portion = self.dual_basis_so3()
 
@@ -429,7 +614,25 @@ class Matrix:
             raise ValueError(f"Noise level should be below {noise_threshold} for orientational noise.")
 
     def matrix_power(self, k):
+        """Compute the k-th power of the wrapped square matrix.
 
+        Parameters
+        ----------
+        k : int
+            Non-negative integer exponent.
+
+        Returns
+        -------
+        ndarray
+            The matrix raised to the k-th power (identity for k=0).
+
+        Raises
+        ------
+        ValueError
+            If ``k`` is negative or the matrix is not square.
+        TypeError
+            If the wrapped matrix is not an ndarray or ``k`` is not an int.
+        """
         if isinstance(self.m, np.ndarray) and isinstance(k, int):
             if k >= 0 and self.m.shape[0] == self.m.shape[1]:
                 if k == 0:
@@ -447,14 +650,15 @@ class Matrix:
             raise TypeError("mat has to be np.ndarray.")
 
     def SE3_cleanup(self):
-        """Given an input matrix that is a rototranslation, perform some cleanup of
-        rounding errors etc.
+        """Clean up floating-point rounding errors in an SE(3) matrix.
 
-        Args:
-            input_matrix (_type_): _description_
+        Zeros out entries whose absolute value is below 1e-15.
 
-        Returns:
-            _type_: _description_
+        Returns
+        -------
+        ndarray or None
+            The cleaned-up 4×4 SE(3) matrix, or ``None`` if the matrix is not
+            a valid roto-translation (a message is printed in that case).
         """
         rotation_m = Matrix(self.m[:3, :3])
         if rotation_m.is_SE3():
@@ -471,14 +675,17 @@ class Matrix:
             print("Input matrix is not rototranslation")
 
     def special_euclidean_from_rot_translation(self, translation):
-        """Combine SO(3) matrix with R^3 translation to SE(3) matrix.
+        """Combine the wrapped SO(3) matrix with a translation to form an SE(3) matrix.
 
-        Args:
-            rotation (np.array): SO(3) matrix
-            translation (np.array): translation vector
+        Parameters
+        ----------
+        translation : ndarray, shape (3,)
+            Translation vector.
 
-        Returns:
-            np.array: SE(3) matrix
+        Returns
+        -------
+        ndarray, shape (4, 4)
+            The corresponding 4×4 homogeneous SE(3) transformation matrix.
         """
         bottom_portion = np.zeros(4)
         bottom_portion[-1] = 1
@@ -508,7 +715,13 @@ class Matrix:
         return cone, in_plane
 
     def in_plane_angle(self):
+        """Extract the in-plane rotation angle (first ZXZ Euler angle) in radians.
 
+        Returns
+        -------
+        float
+            The φ angle (first ZXZ Euler angle) in radians.
+        """
         eulers = srot.from_matrix(self.m).as_euler("zxz")
 
         return eulers[0]
@@ -561,7 +774,13 @@ def cube() -> np.ndarray:
 
 
 def icosahedron() -> np.ndarray:
+    """Return the twelve unit-sphere vertices of a regular icosahedron.
 
+    Returns
+    -------
+    numpy.ndarray
+        ``(12, 3)`` array of vertices on the unit sphere.
+    """
     vertices = np.array(
         [
             [0, 1, PHI],
@@ -583,7 +802,17 @@ def icosahedron() -> np.ndarray:
 
 
 def dodecahedron() -> np.ndarray:
+    """Return the twenty unit-sphere vertices of a regular dodecahedron.
 
+    The twelve face-centre vertices are combined with the eight cube vertices
+    (see :func:`cube`) to produce all twenty dodecahedron vertices on the unit
+    sphere.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(20, 3)`` array of vertices on the unit sphere.
+    """
     vertices = np.array(
         [
             [0, 1 / PHI, PHI],
@@ -868,21 +1097,21 @@ def spline_sampling(coords: pd.DataFrame, sampling_distance: float) -> np.ndarra
 
 
 def compare_rotations(
-    angles1: RotationLike,
-    angles2: RotationLike,
-    c_symmetry: Symmetry = 1,
+    input_rotation_1: RotationLike,
+    input_rotation_2: RotationLike,
+    cyclic_symmetry: Symmetry = 1,
     rotation_type: str = "all",
 ) -> tuple[float, float, float] | float:
     """Compare the rotations between two sets of angles.
 
     Parameters
     ----------
-    angles1 : RotationLike
+    input_rotation_1 : RotationLike
         The first set of rotations (Euler angles, matrices, quaternions or
         :class:`scipy.spatial.transform.Rotation`).
-    angles2 : RotationLike
-        The second set of rotations, same conventions as ``angles1``.
-    c_symmetry : Symmetry, default=1
+    input_rotation_2 : RotationLike
+        The second set of rotations, same conventions as ``input_rotation_1``.
+    cyclic_symmetry : Symmetry, default=1
         Cyclic rotational symmetry specifier (e.g. ``"C5"`` or ``5``); normalized
         via :func:`as_symmetry`.
     rotation_type : {"all", "angular_distance", "cone_distance", "in_plane_distance"}, default="all"
@@ -898,10 +1127,10 @@ def compare_rotations(
 
     """
 
-    _, c_symmetry = as_symmetry(c_symmetry)
+    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
 
-    dist_degrees = angular_distance(angles1, angles2, c_symmetry=c_symmetry)[0]
-    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(angles1, angles2, c_symmetry=c_symmetry)
+    dist_degrees = angular_distance(input_rotation_1, input_rotation_2, cyclic_symmetry=cyclic_symmetry)[0]
+    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(input_rotation_1, input_rotation_2, cyclic_symmetry=cyclic_symmetry)
 
     if rotation_type == "all":
         return dist_degrees, dist_degrees_normals, dist_degrees_inplane
@@ -1061,17 +1290,17 @@ def quaternion_log(q: np.ndarray) -> np.ndarray:
     return np.hstack([new_vector, new_scalar])
 
 
-def cone_distance(input_rot1: RotationLike, input_rot2: RotationLike) -> np.ndarray:
+def cone_distance(input_rotation_1: RotationLike, input_rotation_2: RotationLike) -> np.ndarray:
     """Compute great-circle distance between z-normals corresponding to orientations
     as represented by input rotations. This corresponds to angular distance between cone-rotation
     portions of respective input rotations.
 
     Parameters
     ----------
-    input_rot1 : RotationLike
+    input_rotation_1 : RotationLike
         Rotation describing orientation of particle (Rotation, Euler triple/stack,
         matrix, or quaternion). Normalized via :func:`as_rotation`.
-    input_rot2 : RotationLike
+    input_rotation_2 : RotationLike
         Rotation describing orientation of particle. Normalized via
         :func:`as_rotation`.
 
@@ -1080,12 +1309,12 @@ def cone_distance(input_rot1: RotationLike, input_rot2: RotationLike) -> np.ndar
     numpy.ndarray
         cone-distance in degrees
     """
-    input_rot1 = as_rotation(input_rot1)
-    input_rot2 = as_rotation(input_rot2)
+    input_rotation_1 = as_rotation(input_rotation_1)
+    input_rotation_2 = as_rotation(input_rotation_2)
     point = [0, 0, 1.0]
 
-    vec1 = np.array(input_rot1.apply(point), ndmin=2)
-    vec2 = np.array(input_rot2.apply(point), ndmin=2)
+    vec1 = np.array(input_rotation_1.apply(point), ndmin=2)
+    vec2 = np.array(input_rotation_2.apply(point), ndmin=2)
 
     vec1_n = np.linalg.norm(vec1, axis=1)
     vec1 = vec1 / vec1_n[:, np.newaxis]
@@ -1135,25 +1364,25 @@ def get_axis_from_rotation(input_rotation: RotationLike, axis: str = "z") -> np.
 
 
 def inplane_distance(
-    input_rot1: RotationLike,
-    input_rot2: RotationLike,
+    input_rotation_1: RotationLike,
+    input_rotation_2: RotationLike,
     convention: str = "zxz",
     degrees: bool = True,
-    c_symmetry: Symmetry = 1,
+    cyclic_symmetry: Symmetry = 1,
 ) -> np.ndarray:
     """Compute the angular distance between inplane-rotation portion of two given rotations.
 
     Parameters
     ----------
-    input_rot1 : RotationLike
+    input_rotation_1 : RotationLike
         Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
-    input_rot2 : RotationLike
+    input_rotation_2 : RotationLike
         Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees : bool, optional
         Return angular distance in degrees (True) or radians (False). Defaults to True.
-    c_symmetry : Symmetry, default=1
+    cyclic_symmetry : Symmetry, default=1
         Cyclic rotational symmetry specifier of underlying particles (``"C5"`` or
         ``5``); normalized via :func:`as_symmetry`.
 
@@ -1162,11 +1391,11 @@ def inplane_distance(
     float
         Angular distance between inplane rotations.
     """
-    input_rot1 = as_rotation(input_rot1, euler_order=convention, degrees=degrees)
-    input_rot2 = as_rotation(input_rot2, euler_order=convention, degrees=degrees)
-    _, c_symmetry = as_symmetry(c_symmetry)
-    phi1 = np.array(input_rot1.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
-    phi2 = np.array(input_rot2.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
+    input_rotation_1 = as_rotation(input_rotation_1, euler_order=convention, degrees=degrees)
+    input_rotation_2 = as_rotation(input_rotation_2, euler_order=convention, degrees=degrees)
+    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
+    phi1 = np.array(input_rotation_1.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
+    phi2 = np.array(input_rotation_2.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
 
     # Remove flot precision errors during conversion
     phi1 = np.where(abs(phi1) < ANGLE_DEGREES_TOL, 0.0, phi1)
@@ -1177,8 +1406,8 @@ def inplane_distance(
     phi2 += 180.0
 
     # Get the angular range for symmetry and divide the angles to be only in that range
-    if c_symmetry > 1:
-        sym_div = 360.0 / c_symmetry
+    if cyclic_symmetry > 1:
+        sym_div = 360.0 / cyclic_symmetry
         phi1 = np.mod(phi1, sym_div)
         phi2 = np.mod(phi2, sym_div)
 
@@ -1190,25 +1419,25 @@ def inplane_distance(
 
 
 def cone_inplane_distance(
-    input_rot1: RotationLike,
-    input_rot2: RotationLike,
+    input_rotation_1: RotationLike,
+    input_rotation_2: RotationLike,
     convention: str = "zxz",
     degrees: bool = True,
-    c_symmetry: Symmetry = 1,
+    cyclic_symmetry: Symmetry = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute angular distance between cone-rotations and inplane-rotations, respectively.
 
     Parameters
     ----------
-    input_rot1 : RotationLike
+    input_rotation_1 : RotationLike
         Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
-    input_rot2 : RotationLike
+    input_rotation_2 : RotationLike
         Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees :bool, optional
         Return angular distance in degrees (True) or radians (False). Defaults to True.
-    c_symmetry : Symmetry, default=1
+    cyclic_symmetry : Symmetry, default=1
         Cyclic rotational symmetry specifier of underlying particles; normalized
         via :func:`as_symmetry`.
 
@@ -1219,12 +1448,12 @@ def cone_inplane_distance(
     float
         angular distance between inplane rotations.
     """
-    rot1 = as_rotation(input_rot1, euler_order=convention, degrees=degrees)
-    rot2 = as_rotation(input_rot2, euler_order=convention, degrees=degrees)
-    _, c_symmetry = as_symmetry(c_symmetry)
+    rot1 = as_rotation(input_rotation_1, euler_order=convention, degrees=degrees)
+    rot2 = as_rotation(input_rotation_2, euler_order=convention, degrees=degrees)
+    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
 
     cone_angle = cone_distance(rot1, rot2)
-    inplane_angle = inplane_distance(rot1, rot2, convention, degrees, c_symmetry)
+    inplane_angle = inplane_distance(rot1, rot2, convention, degrees, cyclic_symmetry)
 
     return cone_angle, inplane_angle
 
@@ -1232,7 +1461,7 @@ def cone_inplane_distance(
 def angular_score_for_c_symmetry(
     inplane_1: ArrayLike,
     inplane_2: ArrayLike,
-    c_symmetry: Symmetry,
+    cyclic_symmetry: Symmetry,
     max_val: float | None = None,
 ) -> np.ndarray:
     """
@@ -1245,7 +1474,7 @@ def angular_score_for_c_symmetry(
         :func:`numpy.atleast_1d` / :func:`numpy.asarray`.
     inplane_2 : ArrayLike
         Second set of in-plane angles (in radians). Same handling as ``inplane_1``.
-    c_symmetry : Symmetry
+    cyclic_symmetry : Symmetry
         Cyclic symmetry specifier (``"Cn"`` or ``n``); normalized via
         :func:`as_symmetry`. Must specify an order greater than 1.
     max_val : float, optional
@@ -1255,9 +1484,9 @@ def angular_score_for_c_symmetry(
     --------
     np.ndarray: Array of angular similarity scores in [0, 1].
     """
-    _, symm = as_symmetry(c_symmetry)
+    _, symm = as_symmetry(cyclic_symmetry)
     if symm <= 1:
-        raise ValueError("c_symmetry must specify an order greater than 1.")
+        raise ValueError("cyclic_symmetry must specify an order greater than 1.")
 
     if max_val is None:
         max_val = np.pi / symm
@@ -1292,11 +1521,11 @@ def angular_score_for_c_symmetry(
 
 
 def angular_distance(
-    input_rot1: RotationLike,
-    input_rot2: RotationLike,
+    input_rotation_1: RotationLike,
+    input_rotation_2: RotationLike,
     convention: str = "zxz",
     degrees: bool = True,
-    c_symmetry: Symmetry = 1,
+    cyclic_symmetry: Symmetry = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute angular distance between two rotations.
     Formula is based on this post
@@ -1304,15 +1533,15 @@ def angular_distance(
 
     Parameters
     ----------
-    input_rot1 : RotationLike
+    input_rotation_1 : RotationLike
         Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
-    input_rot2 : RotationLike
+    input_rotation_2 : RotationLike
         Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees : bool, optional
         Return angular distance in degrees (True) or radians (False). Defaults to True.
-    c_symmetry : Symmetry, default=1
+    cyclic_symmetry : Symmetry, default=1
         Cyclic rotational symmetry specifier of underlying particles; normalized
         via :func:`as_symmetry`.
 
@@ -1329,14 +1558,14 @@ def angular_distance(
     45.0
     """
 
-    rot1 = as_rotation(input_rot1, euler_order=convention, degrees=degrees)
-    rot2 = as_rotation(input_rot2, euler_order=convention, degrees=degrees)
-    _, c_symmetry = as_symmetry(c_symmetry)
+    rot1 = as_rotation(input_rotation_1, euler_order=convention, degrees=degrees)
+    rot2 = as_rotation(input_rotation_2, euler_order=convention, degrees=degrees)
+    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
 
-    if c_symmetry > 1:
+    if cyclic_symmetry > 1:
         angles1 = rot1.as_euler(convention, degrees=degrees)
         angles2 = rot2.as_euler(convention, degrees=degrees)
-        sym_div = 360.0 / c_symmetry
+        sym_div = 360.0 / cyclic_symmetry
         angles1[:, 0] = np.mod(angles1[:, 0], sym_div)
         angles2[:, 0] = np.mod(angles2[:, 0], sym_div)
         rot1 = srot.from_euler(convention, angles1, degrees=degrees)
@@ -1545,17 +1774,17 @@ def generate_angles(
 
 
 def rotations_to_z_normals(
-    rotations: RotationLike,
+    input_rotation: RotationLike,
     radius: float = 1.0,
 ) -> np.ndarray:
-    """Compute z-normals of input rotations.
+    """Compute z-normals of input input_rotation.
 
     Each rotation is applied to the reference vector ``(0, 0, radius)`` to
     obtain a point on (or rescaled from) the unit sphere.
 
     Parameters
     ----------
-    rotations : RotationLike
+    input_rotation : RotationLike
         Orientations. Normalized via :func:`as_rotation`.
     radius : float, default=1.0
         Length of the reference vector. The returned points lie on a sphere
@@ -1564,16 +1793,120 @@ def rotations_to_z_normals(
     Returns
     -------
     numpy.ndarray
-        Shape ``(N, 3)``. Z-normal vectors for the input rotations.
+        Shape ``(N, 3)``. Z-normal vectors for the input input_rotation.
 
     See Also
     --------
     cryocat.analysis.visplot.plot_rotation_normals : Plot the resulting
         z-normals as a 3-D scatter.
     """
-    rotations = as_rotation(rotations)
+    input_rotation = as_rotation(input_rotation)
     starting_point = np.array([0.0, 0.0, radius])
-    return np.array(rotations.apply(starting_point), ndmin=2)
+    return np.array(input_rotation.apply(starting_point), ndmin=2)
+
+
+def compute_relative_orientations(
+    angles: np.ndarray,
+    direction_vectors: np.ndarray,
+) -> np.ndarray:
+    """Compute orientations relative to a reference frame built from particle 0.
+
+    For each particle, a local right-handed orthonormal frame is constructed
+    from its current orientation and its direction-to-target vector::
+
+        v1 = z-normal of the particle's rotation
+        v2 = direction_vectors[i] / ||direction_vectors[i]||
+        v3 = (v1 Ã v2) / ||v1 Ã v2||
+
+    The reference frame ``W`` is the local frame of particle 0 (columns of
+    ``W`` are ``(w1, w2, w3)``); each particle ``i`` gets its rotation as
+    ``W Â· V_i`` where ``V_i`` has rows ``(v1, v2, v3)`` of particle ``i``.
+    Equivalently, the returned Euler angles describe the rotation that takes
+    particle ``i``'s local frame onto particle 0's local frame.
+
+    Row 0 is always ``(0, 0, 0)`` â particle 0 is the reference.
+
+    Parameters
+    ----------
+    angles : numpy.ndarray
+        Shape ``(N, 3)``. Particle orientations as zxz Euler angles in degrees.
+    direction_vectors : numpy.ndarray
+        Shape ``(N, 3)``. Direction from each particle toward its target
+        (centroid, nearest neighbor, ...). Need not be unit-length.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape ``(N, 3)``. Relative orientations as zxz Euler angles in degrees.
+
+    Notes
+    -----
+    The algorithm is undefined when a particle's z-normal is parallel to its
+    direction vector (the cross product is zero); the resulting Euler angles
+    will contain NaN in that case. Callers are expected to filter such pairs
+    upstream.
+    """
+    n = angles.shape[0]
+    if direction_vectors.shape != (n, 3):
+        raise ValueError(
+            f"direction_vectors must have shape ({n}, 3); got {direction_vectors.shape}."
+        )
+
+    v1 = euler_angles_to_normals(angles)
+    v2 = direction_vectors / np.linalg.norm(direction_vectors, axis=1, keepdims=True)
+    v3 = np.cross(v1, v2)
+    v3 = v3 / np.linalg.norm(v3, axis=1, keepdims=True)
+
+    # Per-particle V_i has rows (v1, v2, v3); shape (N, 3, 3).
+    v_base_mat = np.stack([v1, v2, v3], axis=1)
+
+    # Reference frame W from particle 0 with columns (w1, w2, w3).
+    # Equivalently: transpose of V_0 (which has them as rows).
+    w_base_mat = v_base_mat[0].T
+
+    # final_mat[i] = W @ V_i, broadcasting (3, 3) against (N, 3, 3).
+    final_mat = w_base_mat @ v_base_mat
+
+    return srot.from_matrix(final_mat).as_euler("zxz", degrees=True)
+
+
+def in_box_bounds(
+    coords: np.ndarray,
+    box_dims: TripletLike,
+    boundary: int = 0,
+) -> np.ndarray:
+    """Check whether each integer-valued coordinate sits inside a 3-D box.
+
+    A coordinate ``c`` is in-bounds when ``c - boundary >= 0`` and
+    ``c + boundary < box_dims[axis]`` for every axis. With ``boundary == 0``
+    this is the standard "center is inside the box" check; with
+    ``boundary == ceil(box_size / 2)`` it is the "whole subtomogram fits in
+    the box" check.
+
+    Parameters
+    ----------
+    coords : numpy.ndarray
+        Shape ``(N, 3)``. Coordinates to test.
+    box_dims : TripletLike
+        ``(x, y, z)`` box dimensions in voxels. Scalar broadcasts to all three.
+    boundary : int, default=0
+        Per-axis padding around each coordinate to require inside the box.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean mask of shape ``(N,)``.
+    """
+    dims = as_triplet(box_dims)
+    coords = np.asarray(coords)
+    coords_min = coords - boundary
+    coords_max = coords + boundary
+    return (
+        (coords_min >= 0).all(axis=1)
+        & (coords_max[:, 0] < dims[0])
+        & (coords_max[:, 1] < dims[1])
+        & (coords_max[:, 2] < dims[2])
+    )
 
 
 def angle_between_vectors(vectors1: np.ndarray, vectors2: np.ndarray) -> np.ndarray:
@@ -1792,7 +2125,7 @@ def point_ellipsoid_distance(
         scaled = p_local / (1 + lmbda)
         return np.sum((scaled / radii) ** 2) - 1
 
-    # Solve for λ numerically
+    # Solve for Î» numerically
     lambda_solution = fsolve(scale_equation, 0)[0]
 
     # Compute closest point on ellipsoid in local space
@@ -2909,7 +3242,7 @@ def _spherical_for_projection(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray
 
     Unlike :func:`cartesian_to_spherical`, this helper does not drop rows with
     NaN values. NaNs in the output are replaced with ``0.0`` in place so the
-    output shape matches the input row count — required by the projection
+    output shape matches the input row count â required by the projection
     functions that index back into the original coordinate array.
 
     Parameters
@@ -3151,14 +3484,14 @@ def _triangle_mesh_vertices(
 ) -> np.ndarray:
     """Compute the four corners of a parallelogram mesh from three triangle vertices.
 
-    Given the vertex opposite to the shortest edge (``v1``–``v2``) and the
+    Given the vertex opposite to the shortest edge (``v1``â``v2``) and the
     two endpoints of that edge, the fourth corner is constructed so that the
     four points form a parallelogram.
 
     Parameters
     ----------
     opp_vertex : numpy.ndarray, shape (3,)
-        The triangle vertex opposite to the edge ``v1``–``v2``.
+        The triangle vertex opposite to the edge ``v1``â``v2``.
     v1 : numpy.ndarray, shape (3,)
         First endpoint of the reference edge.
     v2 : numpy.ndarray, shape (3,)

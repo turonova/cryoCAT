@@ -4037,7 +4037,7 @@ def test_defocus_remove_file_entries(tmp_path):
 
     # Chiamata alla funzione
     defocus_remove_file_entries(
-        input_file=str(input_file_path),
+        input_path=str(input_file_path),
         entries_to_remove=entries_to_remove,
         file_type="gctf",
         numbered_from_1=True,
@@ -4077,7 +4077,7 @@ def test_defocus_remove_file_entries(tmp_path):
     output_file_path_ctffind4 = tmp_path / "test_ctffind4_output.txt"
 
     defocus_remove_file_entries(
-        input_file=str(input_file_path_ctffind4),
+        input_path=str(input_file_path_ctffind4),
         entries_to_remove=entries_to_remove_ctffind4,
         file_type="ctffind4",
         numbered_from_1=True,

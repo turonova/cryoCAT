@@ -70,7 +70,7 @@ def evaluate_alignment(
     write_out_stats=False,
     plot_values=True,
     filter_rows=None,
-    filter_columns="subtomo_id",
+    filter_column_name="subtomo_id",
     labels=None,
     graph_title="Alignment stability",
     graph_output_file=None,
@@ -97,7 +97,7 @@ def evaluate_alignment(
         Whether to plot values. Defaults to True.
     filter_rows  : array-like or list of array-like, optional
         Rows to filter. Only rows that are within the filter_rows will be kept. Defaults to None which means no filtering.
-    filter_columns  : str or list, default="subtomo_id"
+    filter_column_name  : str or list, default="subtomo_id"
         Column names based on which the filtering is perfomed. If fitler_rows is None, no filtering will be done and
         this parameter will not be used. Defaults to "subtomo_id".
     labels  : str or list, optional
@@ -138,7 +138,7 @@ def evaluate_alignment(
     >>> filter_rows = [values_to_keep_for_motl1, values_to_keep_for_motl3]
     >>> stats_df = evaluate_alignment(
     ...     motl_base_names, 1, 17,
-    ...     filter_rows=filter_rows, filter_column="geom3",
+    ...     filter_rows=filter_rows, filter_column_name="geom3",
     ...     motl_type="stopgap", plot_values=True, write_out_stats=True
     ... )
 
@@ -148,10 +148,10 @@ def evaluate_alignment(
     >>> # Only particles with values in filter_rows will be evaluated.
     >>> motl_base_names = ["/path/to/the/motl1_", "/path/to/the/motl3_"]
     >>> filter_rows = [values_to_keep_for_motl1, values_to_keep_for_motl3]
-    >>> filter_column = ["geom3", "subtomo_id"]
+    >>> filter_column_name = ["geom3", "subtomo_id"]
     >>> stats_df = evaluate_alignment(
     ...     motl_base_names, 1, 17,
-    ...     filter_rows=filter_rows, filter_column=filter_column,
+    ...     filter_rows=filter_rows, filter_column_name=filter_column_name,
     ...     motl_type="stopgap", plot_values=True, write_out_stats=True
     ... )
 
@@ -161,10 +161,10 @@ def evaluate_alignment(
     >>> # Only particles with values in filter_rows will be evaluated.
     >>> motl_base_names = ["/path/to/the/motl1_", "/path/to/the/motl3_"]
     >>> filter_rows = [values_to_keep_for_motl1, None]
-    >>> filter_column = ["geom3", None]
+    >>> filter_column_name = ["geom3", None]
     >>> stats_df = evaluate_alignment(
     ...     motl_base_names, 1, 17,
-    ...     filter_rows=filter_rows, filter_column=filter_column,
+    ...     filter_rows=filter_rows, filter_column_name=filter_column_name,
     ...     motl_type="stopgap", plot_values=True, write_out_stats=True
     ... )
     """
@@ -172,10 +172,10 @@ def evaluate_alignment(
     if not isinstance(motl_base_names, list):
         motl_base_names = [motl_base_names]
     # ensure correct input formats in case there is only one filter_rows and filter_column specified
-    if not isinstance(filter_columns, list):
-        filter_columns = [filter_columns]
-        if len(motl_base_names) > 1 and len(filter_columns) == 1:
-            filter_columns = filter_columns * len(motl_base_names)
+    if not isinstance(filter_column_name, list):
+        filter_column_name = [filter_column_name]
+        if len(motl_base_names) > 1 and len(filter_column_name) == 1:
+            filter_column_name = filter_column_name * len(motl_base_names)
 
     if filter_rows is None:
         filter_rows = [None] * len(motl_base_names)
@@ -199,7 +199,7 @@ def evaluate_alignment(
                 end_it,
                 motl_type=motl_type,
                 filter_rows=filter_rows[i],
-                filter_column=filter_columns[i],
+                filter_column_name=filter_column_name[i],
                 output_path=stats_file_name,
                 load_kwargs=load_kwargs
             )
@@ -249,7 +249,7 @@ def compute_alignment_statistics(
     end_it,
     motl_type="stopgap",
     filter_rows=None,
-    filter_column="subtomo_id",
+    filter_column_name="subtomo_id",
     output_path=None,
     load_kwargs=None
 ):
@@ -299,7 +299,7 @@ def compute_alignment_statistics(
     >>> # Filtering will be done based on column geom3 and only particles with values in filter_rows will be evaluated.
     >>> stats_df = compute_alignment_statistics(
     ...     "/path/to/the/motl_", 1, 17,
-    ...     filter_rows=values_to_keep_for_motl, filter_column="geom3",
+    ...     filter_rows=values_to_keep_for_motl, filter_column_name="geom3",
     ...     motl_type="stopgap"
     ... )
     """
@@ -332,7 +332,7 @@ def compute_alignment_statistics(
         filename = get_motl_filename(motl_base_name, i, motl_type)
         m = cryomotl.Motl.load(filename, motl_type=motl_type, **load_kwargs)
         if filter_rows is not None:
-            m.df = m.df[m.df[filter_column].isin(filter_rows)]
+            m.df = m.df[m.df[filter_column_name].isin(filter_rows)]
         motls.append(m)
 
     for i in np.arange(0, end_it-start_it): ## FIXME this fixes 'index out of range' when start_it=!0, but does not account for the correct plot labels in such case (when called by evaluate_alignment)

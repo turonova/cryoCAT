@@ -1,5 +1,6 @@
 import re
 from cryocat.utils import ioutils
+from cryocat.utils.classutils import as_list
 import json
 
 
@@ -402,9 +403,7 @@ def generate_script(
 
         script_file.write(f"{script_header}\n")
 
-        # Check if coms_and_params is a list, if not, turn it into a list
-        if not isinstance(coms_and_params, list):
-            coms_and_params = [coms_and_params]
+        coms_and_params = as_list(coms_and_params)
 
         process_cluster_params(script_file=script_file, cluster_params=cluster_params)
 

@@ -1,4 +1,3 @@
-import decimal
 import emfile
 import numpy as np
 import os
@@ -7,8 +6,6 @@ import subprocess
 import re
 import warnings
 import copy
-import warnings
-import re
 
 from cryocat.utils.exceptions import UserInputError
 from cryocat.core import cryomap
@@ -19,14 +16,13 @@ from cryocat.utils import mathutils
 from cryocat.utils import ioutils
 from cryocat.analysis import nnana
 from cryocat.utils import imod
-from cryocat._types import PathOrStr, MotlType
+from cryocat._types import ArrayLike, MapSource, MotlType, PathOrStr, RotationLike, Symmetry, TomoDimensions
+from typing import Dict, List, Optional, Tuple, Union
 
 from math import ceil
-from matplotlib import pyplot as plt
 from pathlib import Path
 
 from scipy.spatial import KDTree
-from sklearn.neighbors import KDTree as snKDTree
 from scipy.spatial.transform import Rotation as rot
 
 type MotlSource = Motl | pd.DataFrame | PathOrStr
@@ -40,6 +36,7 @@ Accepted forms:
 
 Normalize with :func:`as_motl` at the function boundary.
 """
+
 
 class Motl:
     """Base class for particle motive lists (motls).
@@ -64,21 +61,21 @@ class Motl:
     --------
     Load a motl from an EM file::
 
-        motl = Motl.load(‘path_to_em_file’)
+        motl = Motl.load(âpath_to_em_fileâ)
 
     Clean by Otsu threshold and save::
 
-        motl.clean_by_otsu(4, histogram_bin=20).write_out(‘output.em’)
+        motl.clean_by_otsu(4, histogram_bin=20).write_out(âoutput.emâ)
     """
 
     # Motl module example usage
     #
     # Initialize a Motl instance from an emfile
-    #   `motl = Motl.load(‘path_to_em_file’)`
+    #   `motl = Motl.load(âpath_to_em_fileâ)`
     # Run clean_by_otsu and write the result to a new file
-    #   `motl.clean_by_otsu(4, histogram_bin=20).write_to_emfile(‘path_to_output_em_file’)`
+    #   `motl.clean_by_otsu(4, histogram_bin=20).write_to_emfile(âpath_to_output_em_fileâ)`
     # Run class_consistency on multiple Motl instances
-    #   `motl_intersect, motl_bad, cl_overlap = Motl.class_consistency(Motl.load(‘emfile1’, ‘emfile2’, ‘emfile3’))`
+    #   `motl_intersect, motl_bad, cl_overlap = Motl.class_consistency(Motl.load(âemfile1â, âemfile2â, âemfile3â))`
     motl_columns = [
         "score",
         "geom1",
@@ -102,7 +99,7 @@ class Motl:
         "class",
     ]
 
-    def __init__(self, motl_df=None):
+    def __init__(self, motl_df: Optional[pd.DataFrame] = None) -> None:
         if motl_df is not None:
             if self.check_df_correct_format(motl_df):
                 self.df = motl_df
@@ -111,7 +108,7 @@ class Motl:
         else:
             self.df = Motl.create_empty_motl_df()
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return a human-readable summary of the motl.
 
         Returns
@@ -131,7 +128,7 @@ class Motl:
         else:
             return "Motive list is empty."
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Returns the number of particles in the Motl.
 
         Returns
@@ -142,7 +139,7 @@ class Motl:
 
         return self.df.shape[0]
 
-    def __getitem__(self, row_number):
+    def __getitem__(self, row_number: int) -> pd.DataFrame:
         """Retrieve a specific row from the Motl.
 
         Parameters
@@ -163,7 +160,7 @@ class Motl:
         # Does it make sense - could be also index of the frame or subtomo id
         return self.df.iloc[[row_number]]
 
-    def __add__(self, other_motl):
+    def __add__(self, other_motl: "Motl") -> "Motl":
         """Add two Motl objects together by concatenating their dataframes.
 
         Parameters
@@ -188,7 +185,7 @@ class Motl:
         else:
             raise ValueError("Both objects need to be instances of Motl class.")
 
-    def adapt_to_trimming(self, trim_coord_start, trim_coord_end):
+    def adapt_to_trimming(self, trim_coord_start: ArrayLike, trim_coord_end: ArrayLike) -> None:
         """The adapt_to_trimming function takes in the trim_coord_start and trim_coord_end values, which are the
         coordinates used for trimming the tomogram, and changes particle coordinates to correspond to the trimmed
         tomogram. The particles from the trimmed area are removed.
@@ -224,13 +221,13 @@ class Motl:
             :,
         ]
 
-    def apply_rotation(self, rotation):
-        """The apply_rotation function applies a rotation to the angles in the DataFrame.
+    def apply_rotation(self, input_rotation: RotationLike) -> None:
+        """The apply_rotation function applies a input_rotation to the angles in the DataFrame.
 
         Parameters
         ----------
-        rotation : `scipy.spatial.transform._rotation.Rotation`
-            A scipy rotation object representing the rotation.
+        input_rotation : `scipy.spatial.transform._rotation.Rotation`
+            A scipy input_rotation object representing the input_rotation.
 
         Returns
         -------
@@ -246,7 +243,7 @@ class Motl:
         >>> # you can use ChimeraX fit function to fit the average to the reference. In the log file you will get output
         >>> # that looks like this:
         >>> #
-        >>> # Matrix rotation and translation
+        >>> # Matrix input_rotation and translation
         >>> # 0.50840235 0.86106603 -0.00960989 -17.20630613
         >>> # -0.86111334 0.50832424 -0.00950164 65.37276832
         >>> # -0.00329660 0.01310586 0.99990868 -0.66904104
@@ -255,7 +252,7 @@ class Motl:
         >>> # Rotation angle (degrees) 59.44816674
         >>> # Shift along axis 0.20350209
         >>> #
-        >>> # To apply this rotation on the motl that corresponds to the fitted average you run:
+        >>> # To apply this input_rotation on the motl that corresponds to the fitted average you run:
         >>> from scipy.spatial.transform import Rotation as R
         >>> motl = Motl.load("/path/to/the/motl.em")
         >>> # Create the matrix from the ChimeraX output by leaving out the last column
@@ -267,18 +264,17 @@ class Motl:
         >>> motl.write_out("rotated_motl.em")
 
         """
-        if not isinstance(rotation, rot):  # Use `rot` instead of `R`
-            raise ValueError("rotation must be an instance of scipy.spatial.transform.Rotation")
+        input_rotation = geom.as_rotation(input_rotation)
 
         angles = self.df.loc[:, ["phi", "theta", "psi"]].to_numpy()
 
         angles_rot = rot.from_euler("zxz", angles, degrees=True)
-        final_rotation = angles_rot * rotation
+        final_rotation = angles_rot * input_rotation
         angles = final_rotation.as_euler("zxz", degrees=True)
         self.df[["phi", "theta", "psi"]] = self.df[["phi", "theta", "psi"]].astype(float)
         self.df.loc[:, ["phi", "theta", "psi"]] = angles
 
-    def assign_column(self, input_df, column_pairs):
+    def assign_column(self, input_df: pd.DataFrame, column_pairs: Dict[str, str]) -> None:
         """The assign_column function takes a dataframe and a dictionary of column pairs.
         The function then iterates through the dictionary, checking if the paired key is in
         the input_df columns. If it is, it assigns that column to the em_key in self.df.
@@ -306,21 +302,21 @@ class Motl:
 
     def clean_by_distance(
         self,
-        distance_in_voxels,
-        feature_id,
-        metric_id="score",
-        keep_greater=True,
-        dist_mask=None,
-    ):
+        distance_in_voxels: float,
+        column_name: str,
+        metric_column_name: str = "score",
+        keep_greater: bool = True,
+        dist_mask: Optional[MapSource] = None,
+    ) -> None:
         """Cleans `df` by removing particles closer than a given distnace threshold (in voxels).
 
         Parameters
         ----------
         distance_in_voxels : float
             The distance cutoff in voxels.
-        feature_id : str
+        column_name : str
             The ID of the feature by which the particles are grouped before cleaning.
-        metric_id : str, default='score'
+        metric_column_name : str, default='score'
             The ID of the metric to decide which particles to keep. Defaults to "score". The particle with the greater
             value is kept.
         keep_greater: bool, default=True
@@ -340,76 +336,58 @@ class Motl:
 
         """
 
-        # Distance cutoff (pixels)
-        d_cut = distance_in_voxels
-
-        # Load mask if provided
+        # Directional path: precompute NN stats and filter once across all features.
         if dist_mask is not None:
-            nn_stats = nnana.get_nn_stats_within_radius(self, nn_radius=d_cut, feature=feature_id)
+            nn_stats = nnana.get_nn_stats_within_radius(self, nn_radius=distance_in_voxels, column_name=column_name)
             nn_stats_filtered = nnana.filter_nn_radial_stats(nn_stats, dist_mask)
 
-        # Parse tomograms
-        features = np.unique(self.get_feature(feature_id))
-
-        # Initialize clean motl
+        features = np.unique(self.get_feature(column_name))
         cleaned_df = pd.DataFrame()
 
-        # Loop through and clean
         for f in features:
-            # Parse tomogram
-            feature_m = self.get_motl_subset(f, feature_id=feature_id, reset_index=True)
-            n_temp_motl = feature_m.df.shape[0]
+            feature_m = self.get_motl_subset(f, column_name=column_name, reset_index=True)
 
-            # Parse positions
-            pos = feature_m.get_coordinates()
-
-            # Parse scores
-            temp_scores = feature_m.df[metric_id].values
-
-            # prepare scores
-            if keep_greater:
-                # Sort scores
-                sort_idx = np.argsort(temp_scores)[::-1]
-            else:  # lower than
-                # Sort scores
+            if dist_mask is None:
+                # Classic radius-based cleaning â delegate to nnana.
+                temp_keep = nnana.nms_by_distance(
+                    coords=feature_m.get_coordinates(),
+                    scores=feature_m.df[metric_column_name].values,
+                    distance=distance_in_voxels,
+                    keep_greater=keep_greater,
+                )
+            else:
+                # Directional cleaning: walk scores in order and suppress only the
+                # neighbors that fall in the mask-1 region (precomputed above).
+                n_temp_motl = feature_m.df.shape[0]
+                temp_scores = feature_m.df[metric_column_name].values
                 sort_idx = np.argsort(temp_scores)
-
-            # Temporary keep index
-            temp_keep = np.ones((n_temp_motl,), dtype=bool)
-
-            # Loop through in order of score
-            for j in sort_idx:
-                if temp_keep[j]:
-
-                    # classic radius-based cleaning
-                    if dist_mask is None:
-                        # Calculate distances
-                        dist = geom.point_pairwise_dist(pos[j, :], pos)
-                        # Find cutoff
-                        d_cut_idx = dist < d_cut
-
-                        # Keep current entry
-                        d_cut_idx[j] = False
-                    else:
-                        d_cut_idx = np.arange(feature_m.df.shape[0])
-                        subtomo_id = feature_m.df.loc[j, "subtomo_id"]
-                        filtered_idx = nn_stats_filtered.loc[
-                            nn_stats_filtered["qp_subtomo_id"] == subtomo_id, "nn_motl_idx"
-                        ].values
-                        d_cut_idx = np.isin(d_cut_idx, filtered_idx)
-
-                    # Remove other entries
+                if keep_greater:
+                    sort_idx = sort_idx[::-1]
+                temp_keep = np.ones((n_temp_motl,), dtype=bool)
+                for j in sort_idx:
+                    if not temp_keep[j]:
+                        continue
+                    subtomo_id = feature_m.df.loc[j, "subtomo_id"]
+                    filtered_idx = nn_stats_filtered.loc[
+                        nn_stats_filtered["qp_subtomo_id"] == subtomo_id, "nn_motl_idx"
+                    ].values
+                    d_cut_idx = np.isin(np.arange(n_temp_motl), filtered_idx)
+                    d_cut_idx[j] = False
                     temp_keep[d_cut_idx] = False
 
-            # Add entries to main list
             cleaned_df = pd.concat((cleaned_df, feature_m.df.iloc[temp_keep, :]), ignore_index=True)
 
         print(f"Cleaned {self.df.shape[0] - cleaned_df.shape[0]} particles.")
         self.df = cleaned_df
 
     def clean_by_distance_to_points(
-        self, points, radius_in_voxels, feature_id="tomo_id", inplace=True, output_path=None
-    ):
+        self,
+        points: pd.DataFrame,
+        radius_in_voxels: float,
+        column_name: str = "tomo_id",
+        inplace: bool = True,
+        output_path: Optional[PathOrStr] = None,
+    ) -> Optional["Motl"]:
         """Cleans the motl by removing points that are within a specified radius of any point in a the provided dataframe
         with points.
 
@@ -417,10 +395,10 @@ class Motl:
         ----------
         points : DataFrame
             DataFrame containing the coordinates of points to check against. It has to contain column specified by the
-            param feature_id and also columns x,y,z.
+            param column_name and also columns x,y,z.
         radius_in_voxels : float
             The radius within which points will be considered for removal, in voxel units.
-        feature_id : str, default="tomo_id"
+        column_name : str, default="tomo_id"
             The column name that identifies how the particles in motl should be grouped. Defaults to 'tomo_id'.
         inplace : bool, default=True
             If True, modifies the motl in place. If False, returns a new Motl object. Defaults to True.
@@ -436,11 +414,11 @@ class Motl:
         -----
         The function uses a KDTree for efficient spatial queries, which can significantly speed up the process of finding
         nearby points. The function assumes that the input motl and the points DataFrame have columns 'x', 'y', and 'z'
-        that represent coordinates and also columns specified by feature_id.
+        that represent coordinates and also columns specified by column_name.
         """
 
         # Parse tomograms
-        features = self.get_unique_values(feature_id)
+        features = self.get_unique_values(column_name)
 
         # Initialize clean motl
         cleaned_df = pd.DataFrame()
@@ -448,11 +426,11 @@ class Motl:
         # Loop through and clean
         for f in features:
             # Parse tomogram
-            feature_m = self.get_motl_subset(f, feature_id=feature_id, reset_index=True)
+            feature_m = self.get_motl_subset(f, column_name=column_name, reset_index=True)
 
             # Parse positions
             coord1 = feature_m.get_coordinates()
-            coord2 = points.loc[points[feature_id] == f, ["x", "y", "z"]].values
+            coord2 = points.loc[points[column_name] == f, ["x", "y", "z"]].values
 
             # Create a KDTree from coord1
             tree = KDTree(coord1)
@@ -481,9 +459,32 @@ class Motl:
         else:
             return cleaned_motl
 
+    @staticmethod
+    def _boundary_from_type(boundary_type: str, box_size: Optional[int]) -> int:
+        """Resolve ``(boundary_type, box_size)`` into a numeric per-axis boundary.
+
+        Internal helper shared by :meth:`clean_by_tomo_mask` and
+        :meth:`remove_out_of_bounds_particles`.
+        """
+        if boundary_type == "whole":
+            if not box_size:
+                raise UserInputError(
+                    "You need to specify box_size when boundary_type is set to 'whole'."
+                )
+            return ceil(box_size / 2)
+        if boundary_type == "center":
+            return 0
+        raise UserInputError(f"Unknown type of boundaries: {boundary_type}")
+
     def clean_by_tomo_mask(
-        self, tomo_list, tomo_masks, inplace=True, boundary_type="center", box_size=None, output_path=None
-    ):
+        self,
+        tomo_list: TomoDimensions,
+        tomo_masks: Union[MapSource, List[MapSource]],
+        inplace: bool = True,
+        boundary_type: str = "center",
+        box_size: Optional[int] = None,
+        output_path: Optional[PathOrStr] = None,
+    ) -> Optional["Motl"]:
         """Removes particles from the motive list based on provided tomomgram masks.
 
         Parameters
@@ -527,73 +528,43 @@ class Motl:
         tomos = ioutils.tlt_load(tomo_list)
 
         requries_loading = True
-
         if isinstance(tomo_masks, list):
             if len(tomos) != len(tomo_masks):
-                raise ValueError(f"The list of tomograms has different length than lists of tomogram masks")
+                raise ValueError("The list of tomograms has different length than lists of tomogram masks")
         else:
             tomo_mask = cryomap.binarize(tomo_masks)
             requries_loading = False
 
-        # Get type of bounds
-        if boundary_type == "whole":
-            if box_size:
-                boundary = ceil(box_size / 2)
-            else:
-                raise UserInputError("You need to specify box_size when boundary_type is set to 'whole'.")
-        elif boundary_type == "center":
-            boundary = 0
-        else:
-            raise UserInputError(f"Unknown type of boundaries: {boundary_type}")
+        boundary = self._boundary_from_type(boundary_type, box_size)
 
-        cleaned_motl = Motl.load(
-            self
-        )  # prepare the a copy of the motive list to be cleaned, so that the original one is not altered until the end of the function
+        cleaned_motl = Motl.load(self)  # work on a copy until the end
 
         for i, t in enumerate(tomos):
             tm = self.get_motl_subset(t, reset_index=True)
             coords = tm.get_coordinates().astype(int)
-            coords_min = coords - boundary
-            coords_max = coords + boundary
 
             if requries_loading:
                 tomo_mask = cryomap.binarize(tomo_masks[i])
 
-            # Ensure coordinates are within the bounds of the mask array - if not, remove them
-            # Get binary mask
-            within_bounds = (
-                (coords_min >= 0).all(axis=1)
-                & (coords_max[:, 0] < tomo_mask.shape[0])
-                & (coords_max[:, 1] < tomo_mask.shape[1])
-                & (coords_max[:, 2] < tomo_mask.shape[2])
-            )
+            # Drop particles whose box extends outside the mask array.
+            within_bounds = geom.in_box_bounds(coords, tomo_mask.shape, boundary=boundary)
+            out_of_bounds_subtomo_ids = tm.df.loc[~within_bounds, "subtomo_id"].values
 
-            out_of_bounds_indices = np.where(~within_bounds)[
-                0
-            ]  # Retrieve the indices of the False elements in the within_bounds mask
-            out_of_bounds_subtomo_ids = tm.df.loc[out_of_bounds_indices, "subtomo_id"].values
-
-            # Filter the coords array and tm-particles to include only the in-bounds coordinates
             coords = coords[within_bounds]
-            coords_min = coords_min[within_bounds]
-            coords_max = coords_max[within_bounds]
             tm.df = tm.df[within_bounds].reset_index(drop=True)
 
-            # Filter out coordinates where the mask value is 0
+            # Drop particles whose box corners fall on a mask-zero voxel.
+            coords_min = coords - boundary
+            coords_max = coords + boundary
             mask_values_min = tomo_mask[coords_min[:, 0], coords_min[:, 1], coords_min[:, 2]]
             mask_values_max = tomo_mask[coords_max[:, 0], coords_max[:, 1], coords_max[:, 2]]
-            # mask_values = tomo_mask[coords[:, 0], coords[:, 1], coords[:, 2]]
-
-            # Get the indices of the filtered coordinates
-            idx_to_remove = np.where((mask_values_min == 0) | (mask_values_max == 0))[0]
-            subtomo_idx = tm.df.loc[idx_to_remove, "subtomo_id"].values
-            # idx_to_remove = np.where(mask_values == 0)[0]
-            # subtomo_idx = tm.df.loc[idx_to_remove, "subtomo_id"].values
+            in_mask_zero = (mask_values_min == 0) | (mask_values_max == 0)
+            subtomo_idx = tm.df.loc[in_mask_zero, "subtomo_id"].values
 
             subtomo_idx = np.concatenate((subtomo_idx, out_of_bounds_subtomo_ids))
             cleaned_motl.remove_feature("subtomo_id", subtomo_idx)
 
-            print(f"Removed {str(subtomo_idx.shape[0])} particles from tomogram #{str(t)}")
+            print(f"Removed {subtomo_idx.shape[0]} particles from tomogram #{t}")
 
         cleaned_motl.df.reset_index(inplace=True, drop=True)
 
@@ -602,21 +573,21 @@ class Motl:
 
         if inplace:
             self.df = cleaned_motl.df
-        else:
-            return cleaned_motl
+            return None
+        return cleaned_motl
 
-    def clean_by_otsu(self, feature_id, histogram_bin=None, global_level=False):
+    def clean_by_otsu(self, column_name: str, histogram_bin: Optional[int] = None, global_level: bool = False) -> None:
         """Clean the DataFrame by applying Otsu's thresholding algorithm on the scores.
 
         Parameters
         ----------
-        feature_id : str
+        column_name : str
             The feature ID to be used to group particles for cleaning.
         histogram_bin : int, optional
             The number of bins for the histogram. If not provided, a default value will be used based on the feature ID.
             Defaults to None.
         global_level : bool, default=False
-            Flag to indicate whether to compute the Otsu threshold grouping the particles based on feature_id on the dataset-level instead of on a tomogram-basis
+            Flag to indicate whether to compute the Otsu threshold grouping the particles based on column_name on the dataset-level instead of on a tomogram-basis
 
         Returns
         -------
@@ -640,13 +611,13 @@ class Motl:
         if histogram_bin:
             hbin = histogram_bin
         else:
-            if feature_id == "tomo_id":
+            if column_name == "tomo_id":
                 hbin = 40
-            elif feature_id == "object_id":
+            elif column_name == "object_id":
                 hbin = 30
             else:
                 raise UserInputError(
-                    f"The selected feature ({feature_id}) does not correspond either to tomo_id, nor to"
+                    f"The selected feature ({column_name}) does not correspond either to tomo_id, nor to"
                     f"object_id. You need to specify the histogram_bin."
                 )
 
@@ -655,22 +626,22 @@ class Motl:
             cleaned_motl = self.__class__.create_empty_motl_df()
             for t in tomos:  # if feature == object_id, tomo_id needs to be used too
                 tm = self.get_motl_subset(t)
-                cleaned_motl_tm = tm.compute_otsu_threshold(feature_id, hbin)
+                cleaned_motl_tm = tm.compute_otsu_threshold(column_name, hbin)
                 cleaned_motl = pd.concat([cleaned_motl, cleaned_motl_tm])
 
         else:
-            cleaned_motl = self.compute_otsu_threshold(feature_id, hbin)
+            cleaned_motl = self.compute_otsu_threshold(column_name, hbin)
 
         print(f"Cleaned {self.df.shape[0] - cleaned_motl.shape[0]} particles.")
         self.df = cleaned_motl.reset_index(drop=True)
 
-    def compute_otsu_threshold(self, feature_id, hbin):
+    def compute_otsu_threshold(self, column_name: str, hbin: int) -> pd.DataFrame:
         """Compute Otsu threshold on the Motl 'score' value after grouping the particles by a desired feature.
         This function generates a plot of the particle distribution for each value of the feature and overlays the threshold value.
 
         Parameters
         ----------
-            feature_id : str
+            column_name : str
                The feature ID to be used to group particles.
             hbin : int
                The number of bins for the histogram.
@@ -683,32 +654,27 @@ class Motl:
         Examples
         --------
         >>> original_motl = cryomotl.Motl.load("my_motl.em")
-        >>> filtered_motl_df = original_motl.compute_otsu_threshold(feature_id='class', hbin=40)
+        >>> filtered_motl_df = original_motl.compute_otsu_threshold(column_name='class', hbin=40)
 
         """
         tm = self.df
-        features = tm.loc[:, feature_id].unique()
+        features = tm.loc[:, column_name].unique()
         subset_motl = self.__class__.create_empty_motl_df()
 
         for f in features:
-            fm = tm.loc[tm[feature_id] == f]
-            bin_counts, bin_centers, _ = plt.hist(fm.loc[:, "score"], bins=hbin)
+            fm = tm.loc[tm[column_name] == f]
+            bin_counts, bin_edges = np.histogram(fm.loc[:, "score"], bins=hbin)
             bn = mathutils.otsu_threshold(bin_counts)
-            ind = np.where(
-                bin_counts == bin_counts[bin_counts > bn][0]
-            )  # get index of the first bin_counts element that is greater than the threshold
-            cc_t = bin_centers[ind[0] + 1][
-                0
-            ]  # get the upper edge of the first bin that is greater than the threshold - this is the score that will be used for cleaning
-            print(f"Otsu threhold for particles grouped on {feature_id}={f} is {cc_t}")
-            fm = fm.loc[fm["score"] >= cc_t]  # retain all particles with a scores greater than the threshold
-            plt.axvline(cc_t, color="r")  # plot the threshold
-
+            # index of the first bin whose count exceeds the Otsu threshold
+            ind = np.where(bin_counts == bin_counts[bin_counts > bn][0])
+            cc_t = bin_edges[ind[0] + 1][0]  # upper edge of that bin = score cutoff
+            print(f"Otsu threhold for particles grouped on {column_name}={f} is {cc_t}")
+            fm = fm.loc[fm["score"] >= cc_t]
             subset_motl = pd.concat([subset_motl, fm])
 
         return subset_motl
 
-    def convert_to_motl(self, input_df):
+    def convert_to_motl(self, input_df: pd.DataFrame) -> None:
         """Abstract method implemented only within child classes.
 
         Parameters
@@ -731,7 +697,7 @@ class Motl:
         raise ValueError("Provided motl does not have correct format.")
 
     @staticmethod
-    def create_empty_motl_df():
+    def create_empty_motl_df() -> pd.DataFrame:
         """Creates an empty DataFrame with the columns defined in :attr:`cryocat.core.cryomotl.Motl.motl_columns`.
 
         Parameters
@@ -755,7 +721,7 @@ class Motl:
         return empty_motl_df
 
     @staticmethod
-    def check_df_correct_format(input_df):
+    def check_df_correct_format(input_df: pd.DataFrame) -> bool:
         """Check if the input DataFrame has the correct format.
 
         Parameters
@@ -775,7 +741,7 @@ class Motl:
         else:
             return False
 
-    def check_df_type(self, input_motl):
+    def check_df_type(self, input_motl: pd.DataFrame) -> None:
         """Checks the type of the input dataframe and assigns it to the class attribute 'df' if it is in the
         correct format. If it is not in the correct format it tries to convert it.
 
@@ -803,7 +769,7 @@ class Motl:
         else:
             self.convert_to_motl(input_motl)
 
-    def fill(self, input_dict):
+    def fill(self, input_dict: dict) -> None:
         """The fill function is used to fill in the values of a column or columns
         in the starfile. The input_dict argument should be a dictionary with keys
         that are either column names, coord, angles, shifts.
@@ -837,7 +803,7 @@ class Motl:
 
         self.df = self.df.fillna(0.0)
 
-    def get_random_subset(self, number_of_particles):
+    def get_random_subset(self, number_of_particles: int) -> "Motl":
         """Generate a random subset of particles from the motl.
 
         Parameters
@@ -857,7 +823,7 @@ class Motl:
 
         return new_motl
 
-    def assign_random_classes(self, number_of_classes):
+    def assign_random_classes(self, number_of_classes: int) -> None:
         """Assign a random class to each point in the motl.
 
         Parameters
@@ -877,7 +843,7 @@ class Motl:
         r_classes = np.random.randint(1, number_of_classes + 1, size=self.df.shape[0])
         self.df["class"] = r_classes
 
-    def flip_handedness(self, tomo_dimensions=None):
+    def flip_handedness(self, tomo_dimensions: Optional[TomoDimensions] = None) -> None:
         """Flip the handedness of the particles in the motl.
 
         Parameters
@@ -917,7 +883,7 @@ class Motl:
                     z_dim = float(dims.loc[dims["tomo_id"] == t, "z"].iloc[0]) + 1
                     self.df.loc[self.df["tomo_id"] == t, "z"] = z_dim - self.df.loc[self.df["tomo_id"] == t, "z"]
 
-    def get_angles(self, tomo_number=None):
+    def get_angles(self, tomo_number: Optional[int] = None) -> np.ndarray:
         """This function takes in a tomo_number and returns the angles of all particles in that
         tomogram. If no tomo_number is given, it will return the angles of all particles.
 
@@ -940,7 +906,7 @@ class Motl:
 
         return np.atleast_2d(angles)
 
-    def get_coordinates(self, tomo_number=None):
+    def get_coordinates(self, tomo_number: Optional[int] = None) -> np.ndarray:
         """This function takes in a tomo_number and returns the coordinates of all particles in that
         tomogram. If no tomo_number is given, it will return the coordinates of all particles. The coordinates are
         computes as x + shift_x, y + shift_y, z + shift_z.
@@ -969,24 +935,24 @@ class Motl:
 
         return coord
 
-    def get_max_number_digits(self, feature_id="tomo_id"):
-        """This function returns the maximum number of digits in the column specified by feature_id.
+    def get_max_number_digits(self, column_name: str = "tomo_id") -> int:
+        """This function returns the maximum number of digits in the column specified by column_name.
 
         Parameters
         ----------
-        feature_id : str, default="tomo_id"
+        column_name : str, default="tomo_id"
             Specify the column name of the feature to get the max digits. Defaults to "tomo_id".
 
         Returns
         -------
         int
-            The maximum number of digits in the column specified by feature_id.
+            The maximum number of digits in the column specified by column_name.
 
         """
-        max_tomo_id = self.df[feature_id].max()
+        max_tomo_id = self.df[column_name].max()
         return len(str(max_tomo_id))
 
-    def get_rotations(self, tomo_number=None):
+    def get_rotations(self, tomo_number: Optional[int] = None) -> Union[rot, List]:
         """The get_rotations function returns rotations for all particles.
 
         Parameters
@@ -1007,7 +973,7 @@ class Motl:
 
         return rotations
 
-    def make_angles_canonical(self):
+    def make_angles_canonical(self) -> None:
         """Convert Euler angles to their canonical zxz representation in-place.
 
         Passes the current angles through a scipy ``Rotation`` round-trip to
@@ -1019,7 +985,7 @@ class Motl:
         converted_angles = rotations.as_euler("zxz", degrees=True)
         self.df[["phi", "theta", "psi"]] = converted_angles
 
-    def get_barycentric_motl(self, idx, nn_idx):
+    def get_barycentric_motl(self, idx: ArrayLike, nn_idx: ArrayLike) -> "Motl":
         """Returns a new Motl object with coordinates corresponding to the barycentric coordinates of the particles
         (speficied by their indices within idx) and their nearest neigbors (specified by their indices within nn_idx).
 
@@ -1040,112 +1006,97 @@ class Motl:
         :class:`Motl`
             A new Motl object with coordinates corresponding to the barycentric centers
 
-        Notes
-        -----
-        TODO: Move the geometry specific computation to the :mod:`cryocat.utils.geom`.
-
         """
 
-        coord1 = self.get_coordinates()[idx, :].astype(np.float32)
-        new_coord = coord1.copy()
-
+        coords = self.get_coordinates()
+        coord1 = coords[idx, :].astype(np.float32)
         n_vertices = nn_idx.shape[1]
 
-        coord2 = np.zeros((nn_idx.shape[0], 3, n_vertices))
-
+        # Barycentric centroid: mean of (particle + N neighbors).
+        new_coord = coord1.copy()
         for i in range(n_vertices):
-            coord2[:, :, i] = self.get_coordinates()[nn_idx[:, i], :]
-            new_coord += coord2[:, :, i]
+            new_coord += coords[nn_idx[:, i], :]
+        new_coord /= n_vertices + 1
 
-        new_coord = new_coord / (n_vertices + 1)
-        print(new_coord[0, :])
-        c_coord = new_coord - coord1
+        direction_vectors = new_coord - coord1
+        angles = self.df[["phi", "theta", "psi"]].values[idx, :]
+        rot_angles = geom.compute_relative_orientations(angles, direction_vectors)
 
-        angles = self.df[["phi", "theta", "psi"]].values
-        angles = angles[idx, :]
+        return self._build_subset_motl(idx, new_coord, rot_angles)
 
+    def _build_subset_motl(
+        self,
+        idx: ArrayLike,
+        new_coords: np.ndarray,
+        new_angles: Optional[np.ndarray] = None,
+    ) -> "Motl":
+        """Build a new Motl that inherits ``tomo_id`` and ``object_id`` from a subset of self.
+
+        Internal helper used by :meth:`get_barycentric_motl` and
+        :meth:`get_relative_position`. The new Motl gets fresh sequential
+        ``subtomo_id``\\s, zero shifts, and ``class=1``.
+
+        Parameters
+        ----------
+        idx : array-like
+            Row indices into ``self.df`` whose ``tomo_id`` and ``object_id``
+            are inherited. Length must equal ``new_coords.shape[0]``.
+        new_coords : numpy.ndarray
+            Shape ``(N, 3)``. Coordinates for the new particles.
+        new_angles : numpy.ndarray, optional
+            Shape ``(N, 3)``. Euler angles (zxz, degrees) for the new
+            particles. When ``None``, angles are left at the default
+            ``(0, 0, 0)``.
+
+        Returns
+        -------
+        Motl
+            A new :class:`Motl` instance with ``update_coordinates`` already
+            applied.
         """
-        norm_start_vec = np.linalg.norm([1, 0, 0])
-        norm_diff_vecs = np.linalg.norm(rotated_coord, axis=1)
-        cos_angles = np.sum([1, 0, 0] * rotated_coord, axis=1) / (
-            norm_start_vec * norm_diff_vecs
-        )
-        phi_rotation = np.rad2deg(np.arccos(cos_angles))
-        phi_rotation = np.rad2deg(np.arctan(c_coord[:, 1] / c_coord[:, 0]))
-        """
-        # starting frame created from the first orientation
-        w1 = geom.euler_angles_to_normals(angles[0, :])
-        w2 = c_coord[0, :] / np.linalg.norm(c_coord[0, :])
-        w3 = np.cross(w1, w2)
-        w3 = (w3 / np.linalg.norm(w3)).reshape(
-            3,
-        )
-        w_base_mat = np.asarray([w1.reshape((3,)), w2, w3]).T
-        print(w1, w2, w3)
-        print(w_base_mat)
-
-        v1 = geom.euler_angles_to_normals(angles)
-
-        rot_angles = np.zeros(angles.shape)
-
-        for i in range(1, angles.shape[0]):
-            v2 = c_coord[i, :] / np.linalg.norm(c_coord[i, :])
-            v3 = np.cross(v1[i, :], v2)
-            v3 = (v3 / np.linalg.norm(v3)).reshape(
-                3,
-            )
-            v_base_mat = np.asarray([v1[i, :].reshape((3,)), v2, v3])
-            final_mat = np.matmul(w_base_mat, v_base_mat)
-            final_rot = rot.from_matrix(final_mat)
-            rot_angles[i, :] = final_rot.as_euler("zxz", degrees=True)
-
         new_motl_df = Motl.create_empty_motl_df()
-
-        new_motl_df[["x", "y", "z"]] = new_coord
+        new_motl_df[["x", "y", "z"]] = new_coords
         new_motl_df[["shift_x", "shift_y", "shift_z"]] = 0.0
         new_motl_df["tomo_id"] = self.df["tomo_id"].values[idx]
         new_motl_df["object_id"] = self.df["object_id"].values[idx]
         new_motl_df["class"] = 1
         new_motl_df["subtomo_id"] = range(1, new_motl_df.shape[0] + 1)
-        # new_motl_df[["phi", "psi", "theta"]] = self.df[["phi", "psi", "theta"]].values[
-        #    idx
-        # ]
-        new_motl_df[["phi", "theta", "psi"]] = rot_angles
+        if new_angles is not None:
+            new_motl_df[["phi", "theta", "psi"]] = new_angles
 
         new_motl = Motl(new_motl_df)
         new_motl.update_coordinates()
-
         return new_motl
 
-    def get_feature(self, feature_id):
-        """Returns the values from the column in self.df specified by feature_id.
+    def get_feature(self, column_name: Union[str, List[str]]) -> np.ndarray:
+        """Returns the values from the column in self.df specified by column_name.
 
         Parameters
         ----------
-        feature_id : str
+        column_name : str
             The column name to get the values for.
 
         Returns
         -------
         numpy.ndarray
-            Values corresponding to the feature_id.
+            Values corresponding to the column_name.
 
         Raises
         ------
         UserInputError
-            In case the feature_id is not existing column in self.df dataframe.
+            In case the column_name is not existing column in self.df dataframe.
 
         """
 
-        if isinstance(feature_id, str):
-            feature_id = [feature_id]
+        if isinstance(column_name, str):
+            column_name = [column_name]
 
-        missing_columns = set(feature_id) - set(self.df.columns)
+        missing_columns = set(column_name) - set(self.df.columns)
 
         if missing_columns:
-            raise UserInputError(f"The class Motl does not contain column with name {feature_id}")
+            raise UserInputError(f"The class Motl does not contain column with name {column_name}")
 
-        return self.df[feature_id].values  # self.df.loc[:, feature_id].values
+        return self.df[column_name].values  # self.df.loc[:, column_name].values
         # if isinstance(feature_id, str) and feature_id in self.df.columns:
         #    return self.df.loc[:, feature_id].values
         # elif isinstance(feature_id,list):
@@ -1155,14 +1106,14 @@ class Motl:
     # else:
     #     raise UserInputError(f"The class Motl does not contain column with name {feature_id}")
 
-    def get_motl_subset(self, feature_values, feature_id="tomo_id", return_df=False, reset_index=True):
+    def get_motl_subset(self, column_values: Union[ArrayLike, int, float], column_name: str = "tomo_id", return_df: bool = False, reset_index: bool = True) -> Union["Motl", pd.DataFrame]:
         """Get a subset of the Motl object based on specified feature values.
 
         Parameters
         ----------
-        feature_values : array-like or int
+        column_values : array-like or int
             The feature values to filter the Motl object by.
-        feature_id : str, default="tomo_id"
+        column_name : str, default="tomo_id"
             The name of the feature column to filter by. Defaults to "tomo_id".
         return_df : bool, default=False
             Whether to return the filtered subset as a DataFrame. Defaults to False.
@@ -1180,17 +1131,8 @@ class Motl:
 
         """
 
-        if isinstance(feature_values, list):
-            feature_values = np.array(feature_values)
-        elif isinstance(feature_values, np.ndarray):
-            feature_values = feature_values
-        else:
-            feature_values = np.array([feature_values])
-
-        new_df = Motl.create_empty_motl_df()
-        for i in feature_values:
-            df_i = self.df.loc[self.df[feature_id] == i].copy()
-            new_df = pd.concat([new_df, df_i])
+        column_values = np.atleast_1d(column_values)
+        new_df = self.df.loc[self.df[column_name].isin(column_values)].copy()
 
         if reset_index:
             new_df = new_df.reset_index(drop=True)
@@ -1201,8 +1143,8 @@ class Motl:
             return Motl(motl_df=new_df)
 
     @classmethod
-    def get_motl_intersection(cls, motl1, motl2, feature_id="subtomo_id"):
-        """Creates motl intersection of two motls based on feature_id.
+    def get_motl_intersection(cls, motl1: "Motl", motl2: "Motl", column_name: str = "subtomo_id") -> "Motl":
+        """Creates motl intersection of two motls based on column_name.
 
         Parameters
         ----------
@@ -1210,26 +1152,26 @@ class Motl:
             First motl.
         motl2 : :class:`Motl`
             Second motl.
-        feature_id : str, default="subtomo_id"
+        column_name : str, default="subtomo_id"
             Feature ID to use for intersection. Defaults to "subtomo_id".
 
         Returns
         -------
         :class:`Motl`
-            The intersection (based on feature_id) of two motls.
+            The intersection (based on column_name) of two motls.
 
         """
         m1 = cls.load(motl1.df)
         m2 = cls.load(motl2.df)
 
-        s1 = m1.df.merge(m2.df[feature_id], how="inner")
+        s1 = m1.df.merge(m2.df[column_name], how="inner")
 
         if s1.shape[0] == 0:
             warnings.warn("The intersection of the two motls is empty.")
 
         return cls(s1.reset_index(drop=True))
 
-    def renumber_objects_sequentially(self, starting_number=1):
+    def renumber_objects_sequentially(self, starting_number: int = 1) -> None:
         """Renumber objects sequentially, starting with 1 or provided number.
 
         Parameters
@@ -1261,7 +1203,7 @@ class Motl:
         # Apply the custom function to each group
         self.df = df_reset.groupby("tomo_id", group_keys=False).apply(assign_new_object_id)
 
-    def get_relative_position(self, idx, nn_idx):
+    def get_relative_position(self, idx: ArrayLike, nn_idx: ArrayLike) -> Tuple["Motl", np.ndarray]:
         """Returns a new Motl object with coordinates corresponding to the center between the particles
         (speficied by their indices within idx) and their nearest neigbors (specified by their indices within nn_idx).
 
@@ -1277,96 +1219,42 @@ class Motl:
         :class:`Motl`
             A new Motl object with coordinates corresponding to the center between the particles and their nearest
             neighbors.
-
-        Notes
-        -----
-        TODO: Move the geometry specific computation to the :mod:`cryocat.utils.geom`.
-
+        numpy.ndarray
+            The qpânn direction vectors expressed in the local frame of each query particle.
         """
-        coord1 = self.get_coordinates()[idx, :]
-        coord2 = self.get_coordinates()[nn_idx, :]
-        print(coord1.shape, coord2.shape)
-        c_coord = coord2 - coord1
+        coords = self.get_coordinates()
+        coord1 = coords[idx, :]
+        coord2 = coords[nn_idx, :]
+        direction_vectors = coord2 - coord1
 
-        angles = self.df[["phi", "theta", "psi"]].values
-        angles = angles[idx, :]
-        rot_coord = rot.from_euler("zxz", angles=angles, degrees=True)
-        rotated_coord = rot_coord.apply(c_coord)
+        angles = self.df[["phi", "theta", "psi"]].values[idx, :]
+        rotated_coord = rot.from_euler("zxz", angles=angles, degrees=True).apply(direction_vectors)
 
-        """
-        norm_start_vec = np.linalg.norm([1, 0, 0])
-        norm_diff_vecs = np.linalg.norm(rotated_coord, axis=1)
-        cos_angles = np.sum([1, 0, 0] * rotated_coord, axis=1) / (
-            norm_start_vec * norm_diff_vecs
-        )
-        phi_rotation = np.rad2deg(np.arccos(cos_angles))
-        phi_rotation = np.rad2deg(np.arctan(c_coord[:, 1] / c_coord[:, 0]))
-        """
-        # starting frame created from the first orientation
-        w1 = geom.euler_angles_to_normals(angles[0, :])
-        w2 = c_coord[0, :] / np.linalg.norm(c_coord[0, :])
-        w3 = np.cross(w1, w2)
-        w3 = (w3 / np.linalg.norm(w3)).reshape(
-            3,
-        )
-        w_base_mat = np.asarray([w1.reshape((3,)), w2, w3]).T
-        print(w1, w2, w3)
-        print(w_base_mat)
-
-        v1 = geom.euler_angles_to_normals(angles)
-
-        rot_angles = np.zeros(angles.shape)
-
-        for i in range(1, angles.shape[0]):
-            v2 = c_coord[i, :] / np.linalg.norm(c_coord[i, :])
-            v3 = np.cross(v1[i, :], v2)
-            v3 = (v3 / np.linalg.norm(v3)).reshape(
-                3,
-            )
-            v_base_mat = np.asarray([v1[i, :].reshape((3,)), v2, v3])
-            final_mat = np.matmul(w_base_mat, v_base_mat)
-            final_rot = rot.from_matrix(final_mat)
-            rot_angles[i, :] = final_rot.as_euler("zxz", degrees=True)
-
+        rot_angles = geom.compute_relative_orientations(angles, direction_vectors)
         new_coord = (coord1 + coord2) / 2.0
-        print(new_coord[0, :])
-        new_motl_df = Motl.create_empty_motl_df()
 
-        new_motl_df[["x", "y", "z"]] = new_coord
-        new_motl_df[["shift_x", "shift_y", "shift_z"]] = 0.0
-        new_motl_df["tomo_id"] = self.df["tomo_id"].values[idx]
-        new_motl_df["object_id"] = self.df["object_id"].values[idx]
-        new_motl_df["class"] = 1
-        new_motl_df["subtomo_id"] = range(1, new_motl_df.shape[0] + 1)
-        # new_motl_df[["phi", "psi", "theta"]] = self.df[["phi", "psi", "theta"]].values[
-        #    idx
-        # ]
-        new_motl_df[["phi", "theta", "psi"]] = rot_angles
-
-        new_motl = Motl(new_motl_df)
-        new_motl.update_coordinates()
-
+        new_motl = self._build_subset_motl(idx, new_coord, rot_angles)
         return new_motl, rotated_coord
 
-    def get_unique_values(self, feature_id):
+    def get_unique_values(self, column_name: str) -> np.ndarray:
         """Get unique values from a specific feature.
 
         Parameters
         ----------
-        feature_id : str
+        column_name : str
             The ID of the feature.
 
         Returns
         -------
         numpy.ndarray
-            A numpy.ndarray containing the unique values stored in the column feature_id.
+            A numpy.ndarray containing the unique values stored in the column column_name.
 
         """
 
-        return self.df.loc[:, feature_id].unique()
+        return self.df.loc[:, column_name].unique()
 
     @classmethod
-    def load(cls, input_motl, motl_type="emmotl", **kwargs):
+    def load(cls, input_motl: "MotlSource", motl_type: MotlType = "emmotl", **kwargs) -> "Motl":
         """This function is a factory function that returns an instance of the appropriate Motl class.
 
         Parameters
@@ -1417,14 +1305,14 @@ class Motl:
         else:
             raise UserInputError(f"Provided motl file {input_motl} has format that is currently not supported.")
 
-    def remove_feature(self, feature_id, feature_values):
+    def remove_feature(self, column_name: str, column_values: Union[ArrayLike, int, float]) -> None:
         """The function removes particles based on their feature (i.e. tomo number).
 
         Parameters
         ----------
-        feature_id : str
+        column_name : str
             Specify the feature based on which the particles will be removed.
-        feature_values : array-like
+        column_values : array-like
             Specify which particles should be removed.
 
 
@@ -1438,12 +1326,10 @@ class Motl:
 
         """
 
-        if not isinstance(feature_values, (list, np.ndarray)):
-            feature_values = [feature_values]
-        for value in feature_values:
-            self.df = self.df.loc[self.df[feature_id] != value]
+        column_values = np.atleast_1d(column_values)
+        self.df = self.df.loc[~self.df[column_name].isin(column_values)]
 
-    def renumber_particles(self):
+    def renumber_particles(self) -> None:
         """This function renumbers the particles in a motl. This is useful when you want to reorder the particles in a
         motl, or if you have deleted some of them and need to renumber the remaining ones. The function takes no
 
@@ -1464,7 +1350,7 @@ class Motl:
         """
         self.df.loc[:, "subtomo_id"] = list(range(1, len(self.df) + 1))
 
-    def scale_coordinates(self, scaling_factor):
+    def scale_coordinates(self, scaling_factor: float) -> None:
         """Scales coordinates (including shifts) by the scaling factor.
 
         Parameters
@@ -1481,17 +1367,15 @@ class Motl:
         None
 
         """
-        for coord in ("x", "y", "z"):
-            self.df[coord] = self.df[coord] * scaling_factor
-            shift_column = "shift_" + coord
-            self.df[shift_column] = self.df[shift_column] * scaling_factor
+        cols = ["x", "y", "z", "shift_x", "shift_y", "shift_z"]
+        self.df[cols] = self.df[cols] * scaling_factor
 
-    def split_by_feature(self, feature_id, write_out=False, output_prefix=""):
-        """Splits motl by the feature_id and writes them out.
+    def split_by_feature(self, column_name: str, write_out: bool = False, output_prefix: str = "") -> List["Motl"]:
+        """Splits motl by the column_name and writes them out.
 
         Parameters
         ----------
-        feature_id : str
+        column_name : str
             Specify the feature based on which the motl will be split.
         write_out : bool, default=False
             Whether to write out the motls. Defaults to False.
@@ -1502,7 +1386,7 @@ class Motl:
         Returns
         -------
         list
-            List of :class:`Motl` split by given feature_id.
+            List of :class:`Motl` split by given column_name.
 
         Warnings
         --------
@@ -1514,12 +1398,12 @@ class Motl:
         TODO: Make this function to be class specific.
 
         """
-        uniq_values = self.get_unique_values(feature_id)
+        uniq_values = self.get_unique_values(column_name)
         motls = list()
 
         for value in uniq_values:
-            # submotl = self.__class__(self.df.loc[self.df[feature_id] == value])
-            submotl = Motl(self.df.loc[self.df[feature_id] == value])
+            # submotl = self.__class__(self.df.loc[self.df[column_name] == value])
+            submotl = Motl(self.df.loc[self.df[column_name] == value])
             motls.append(submotl)
 
             if write_out:
@@ -1528,7 +1412,7 @@ class Motl:
 
         return motls
 
-    def write_out(self, output_path, motl_type="emmotl"):
+    def write_out(self, output_path: PathOrStr, motl_type: MotlType = "emmotl") -> None:
         """Writes out a motl file to the specified output path.
 
         Parameters
@@ -1564,39 +1448,39 @@ class Motl:
         else:
             raise UserInputError(f"Provided motl file {output_path} has format that is currently not supported.")
 
-    def write_to_model_file(self, feature_id, output_base, point_size, binning=1.0, zero_padding=None):
-        """It splits the dataframe based on feature_id and writes them out as mod files (from IMOD). The values in "class"
+    def write_to_model_file(self, column_name: str, output_base: str, point_size: int, binning: float = 1.0, zero_padding: Optional[int] = None) -> None:
+        """It splits the dataframe based on column_name and writes them out as mod files (from IMOD). The values in "class"
         column are used to created different objects, the countour is always the same. This function requires IMOD's
         point2model function to exist and being in PATH.
 
         Parameters
         ----------
-        feature_id : str
+        column_name : str
             Name of the feature (column) to split by.
         output_base : str
             The base for the output files. The final name of each mod file will have a form of
-            {output_base}_{feature_id}_{feature_id_value} where the feature_id_value will be pad with zeros.
+            {output_base}_{column_name}_{feature_id_value} where the feature_id_value will be pad with zeros.
         point_size : int
             Size of the point that should be used
         binning : float, default=1.0
             Scaling factor to apply to coordinates. Defaults to 1.0 which corresponds to no binning.
         zero_padding : int, optional
             Defines the zero padding for the feature_id_value for the output names (see
-            above). In None, the length of the maximum value in feature_id is used. Defaults to None.
+            above). In None, the length of the maximum value in column_name is used. Defaults to None.
 
         Returns
         -------
         None
 
         """
-        uniq_values = self.get_unique_values(feature_id)
-        outpath = f"{output_base}_{feature_id}_"
+        uniq_values = self.get_unique_values(column_name)
+        outpath = f"{output_base}_{column_name}_"
 
         if zero_padding is None:
-            zero_padding = self.get_max_number_digits(feature_id)
+            zero_padding = self.get_max_number_digits(column_name)
 
         for value in uniq_values:
-            fm = self.get_motl_subset(value, feature_id=feature_id, reset_index=True)
+            fm = self.get_motl_subset(value, column_name=column_name, reset_index=True)
             feature_str = str(value).zfill(zero_padding)
 
             output_txt = f"{outpath}{feature_str}_model.txt"
@@ -1606,7 +1490,7 @@ class Motl:
             coord_df = pd.DataFrame(fm.get_coordinates(), columns=["x", "y", "z"])
             class_v = fm.df.loc[:, "class"].astype(
                 int
-            )  # TODO add possibility to create object based on other feature_id
+            )  # TODO add possibility to create object based on other column_name
             if np.any(class_v == 0):
                 class_v = (
                     class_v + 1
@@ -1633,7 +1517,7 @@ class Motl:
                 ]
             )
 
-    def update_coordinates(self):
+    def update_coordinates(self) -> None:
         """Aplies the existing shifts to x, y, z positions, rounds the new coordinates and stores them as integer
         positions in x, y, z and stores the rest into shifts. After the positions are updated, new extraction of
         subtomograms is necessery.
@@ -1655,25 +1539,56 @@ class Motl:
 
         """
 
-        # Python 0.5 rounding: round(1.5) = 2, BUT round(2.5) = 2, while in Matlab round(2.5) = 3
-        def round_and_recenter(row):
-            new_row = row.copy()
-            shifted_x = row["x"] + row["shift_x"]
-            shifted_y = row["y"] + row["shift_y"]
-            shifted_z = row["z"] + row["shift_z"]
-            new_row["x"] = float(decimal.Decimal(shifted_x).to_integral_value(rounding=decimal.ROUND_HALF_UP))
-            new_row["y"] = float(decimal.Decimal(shifted_y).to_integral_value(rounding=decimal.ROUND_HALF_UP))
-            new_row["z"] = float(decimal.Decimal(shifted_z).to_integral_value(rounding=decimal.ROUND_HALF_UP))
-            new_row["shift_x"] = shifted_x - new_row["x"]
-            new_row["shift_y"] = shifted_y - new_row["y"]
-            new_row["shift_z"] = shifted_z - new_row["z"]
-            return new_row
-
-        self.df = self.df.apply(round_and_recenter, axis=1)
+        # Vectorized round-half-up: numpy uses banker's rounding by default,
+        # so we branch on sign and use floor(|x| + 0.5).
+        pos = self.df[["x", "y", "z"]].to_numpy()
+        sh = self.df[["shift_x", "shift_y", "shift_z"]].to_numpy()
+        shifted = pos + sh
+        new_pos = np.where(shifted >= 0, np.floor(shifted + 0.5), -np.floor(-shifted + 0.5))
+        self.df[["x", "y", "z"]] = new_pos
+        self.df[["shift_x", "shift_y", "shift_z"]] = shifted - new_pos
         warnings.warn("The coordinates for subtomogram extraction were changed, new extraction is necessary!")
 
     @classmethod
-    def merge_and_renumber(cls, motl_list):
+    def _concat_with_renumbered_objects(cls, motl_list: List["MotlSource"]) -> "Motl":
+        """Concatenate motls while bumping ``object_id`` to keep it unique across the merged result.
+
+        Internal helper shared by :meth:`merge_and_renumber` and
+        :meth:`merge_and_drop_duplicates`. Empty motls are skipped with a
+        warning. The returned Motl has its index reset but has not been
+        renumbered or deduplicated â the caller applies whichever finalizer
+        it needs.
+        """
+        if not isinstance(motl_list, list) or len(motl_list) == 0:
+            raise UserInputError(
+                f"You must provide a list of em file paths, or Motl instances. "
+                f"Instead, an instance of {type(motl_list).__name__} was given."
+            )
+
+        merged_df = cls.create_empty_motl_df()
+        feature_add = 0
+
+        for m in motl_list:
+            if m is None:
+                raise ValueError("Motl list cannot contain None values.")
+            motl = cls.load(m)
+            if motl.df.empty:
+                print(f"Skipping empty Motl: {motl}")
+                continue
+
+            feature_min = motl.df["object_id"].min()
+            if feature_min <= feature_add:
+                motl.df["object_id"] = motl.df["object_id"] + (feature_add - feature_min + 1)
+
+            merged_df = pd.concat([merged_df, motl.df])
+            feature_add = motl.df["object_id"].max()
+
+        merged_motl = cls(merged_df)
+        merged_motl.df.reset_index(inplace=True, drop=True)
+        return merged_motl
+
+    @classmethod
+    def merge_and_renumber(cls, motl_list: List["MotlSource"]) -> "Motl":
         """Merge a list of Motl instances or paths to motl files to a single motl. It renumbers its particles and objects
          to ensure uniqueness.
 
@@ -1693,42 +1608,12 @@ class Motl:
             If motl_list is not a list or is empty.
 
         """
-        if not isinstance(motl_list, list) or len(motl_list) == 0:
-            raise UserInputError(f"Input must be a list of em file paths, or Motl instances.")
-
-        merged_df = cls.create_empty_motl_df()
-        feature_add = 0
-
-        if not isinstance(motl_list, list) or len(motl_list) == 0:
-            raise UserInputError(
-                f"You must provide a list of em file paths, or Motl instances. "
-                f"Instead, an instance of {type(motl_list).__name__} was given."
-            )
-
-        for m in motl_list:
-            if m is None:
-                raise ValueError("Motl list cannot contain None values.")
-            motl = cls.load(m)
-            if not motl.df.empty:
-                feature_min = min(motl.df.loc[:, "object_id"])
-            else:
-                print("Warning: Encountered an empty Motl DataFrame. Skipping.")
-                continue
-
-            if feature_min <= feature_add:
-                motl.df.loc[:, "object_id"] = motl.df.loc[:, "object_id"] + (feature_add - feature_min + 1)
-
-            merged_df = pd.concat([merged_df, motl.df])
-            feature_add = max(motl.df.loc[:, "object_id"])
-
-        merged_motl = cls(merged_df)
+        merged_motl = cls._concat_with_renumbered_objects(motl_list)
         merged_motl.renumber_particles()
-        merged_motl.df.reset_index(inplace=True, drop=True)
-
         return merged_motl
 
     @classmethod
-    def merge_and_drop_duplicates(cls, motl_list):
+    def merge_and_drop_duplicates(cls, motl_list: List["MotlSource"]) -> "Motl":
         """Merge a list of Motl instances or paths to motl files to a single motl. Does not renumber particles - uniqueness
         has to be inherent to the instances!
 
@@ -1748,36 +1633,12 @@ class Motl:
             If motl_list is not a list or is empty.
 
         """
-
-        merged_df = cls.create_empty_motl_df()
-        feature_add = 0
-
-        if not isinstance(motl_list, list) or len(motl_list) == 0:
-            raise UserInputError(
-                f"You must provide a list of em file paths, or Motl instances. "
-                f"Instead, an instance of {type(motl_list).__name__} was given."
-            )
-
-        for m in motl_list:
-            motl = cls.load(m)
-            if motl.df.empty:
-                print(f"Skipping empty Motl: {motl}")
-                continue  # Skip empty motls
-            feature_min = min(motl.df.loc[:, "object_id"])
-
-            if feature_min <= feature_add:
-                motl.df.loc[:, "object_id"] = motl.df.loc[:, "object_id"] + (feature_add - feature_min + 1)
-
-            merged_df = pd.concat([merged_df, motl.df])
-            feature_add = max(motl.df.loc[:, "object_id"])
-
-        merged_motl = cls(merged_df)
+        merged_motl = cls._concat_with_renumbered_objects(motl_list)
         merged_motl.drop_duplicates()
         merged_motl.df.reset_index(inplace=True, drop=True)
-
         return merged_motl
 
-    def remove_out_of_bounds_particles(self, dimensions, boundary_type="center", box_size=None):
+    def remove_out_of_bounds_particles(self, dimensions: TomoDimensions, boundary_type: str = "center", box_size: Optional[int] = None) -> None:
         """Removes particles that are out of tomogram bounds.
 
         Parameters
@@ -1807,55 +1668,41 @@ class Motl:
 
         """
         dim = ioutils.dimensions_load(dimensions)
+        boundary = self._boundary_from_type(boundary_type, box_size)
+
         original_size = len(self.df)
+        coords = self.get_coordinates()
 
-        # Get type of bounds
-        if boundary_type == "whole":
-            if box_size:
-                boundary = ceil(box_size / 2)
-            else:
-                raise UserInputError("You need to specify box_size when boundary_type is set to 'whole'.")
-        elif boundary_type == "center":
-            boundary = 0
+        # Per-tomo bounds: build (N, 3) array of dimensions matched to each particle.
+        if dim.shape == (1, 3):
+            tomo_dims = np.tile(dim[["x", "y", "z"]].iloc[0].values, (original_size, 1))
         else:
-            raise UserInputError(f"Unknown type of boundaries: {boundary_type}")
+            dim_lookup = dim.set_index("tomo_id")[["x", "y", "z"]]
+            tomo_dims = dim_lookup.loc[self.df["tomo_id"].values].values
 
-        recentered = self.get_coordinates()
-        recentered_df = pd.DataFrame(
-            {
-                "x": recentered[:, 0],
-                "y": recentered[:, 1],
-                "z": recentered[:, 2],
-                "tomo_id": self.df["tomo_id"].values,  # Add the tomo_id column from the original df.
-            }
+        # Vectorized bounds check; per-particle dimensions allow grouping in one pass.
+        coords_min = coords - boundary
+        coords_max = coords + boundary
+        keep = (
+            (coords_min >= 0).all(axis=1)
+            & (coords_max[:, 0] < tomo_dims[:, 0])
+            & (coords_max[:, 1] < tomo_dims[:, 1])
+            & (coords_max[:, 2] < tomo_dims[:, 2])
         )
-        idx_list = []
-        for i, row in recentered_df.iterrows():
-            tn = row["tomo_id"]
-            tomo_dim = dim.loc[dim["tomo_id"] == tn, "x":"z"].reset_index(drop=True)
-            c_min = [c - boundary for c in row["x":"z"]]
-            c_max = [c + boundary for c in row["x":"z"]]
-            if (
-                (all(c_min) >= 0)
-                and (c_max[0] < tomo_dim["x"][0])
-                and (c_max[1] < tomo_dim["y"][0])
-                and (c_max[2] < tomo_dim["z"][0])
-            ):
-                idx_list.append(i)
 
-        self.df = self.df.iloc[idx_list].reset_index(drop=True)
+        self.df = self.df.iloc[keep].reset_index(drop=True)
 
         print(f"Removed {original_size - len(self.df)} particles.")
         print(f"Original size {original_size}, new_size {len(self.df)}")
 
-    def drop_duplicates(self, duplicates_column="subtomo_id", decision_column="score", decision_sort_ascending=False):
+    def drop_duplicates(self, column_name: str = "subtomo_id", decision_column_name: str = "score", decision_sort_ascending: bool = False) -> None:
         """Drop duplicates based on a specified column and keep the first occurrence with the highest/lowest score.
 
         Parameters
         ----------
-        duplicates_column: str, default="subtomo_id"
+        column_name: str, default="subtomo_id"
             The column based on which duplicates will be dropped. Defaults to subtomo_id.
-        decision_column: str, default="score"
+        decision_column_name: str, default="score"
             The column used to decide which duplicate to keep. Defaults to score.
         decision_sort_ascending: bool, default=False
             Whether to sort the decision column in ascending order. Defaults to False (i.e., it will sort in
@@ -1878,34 +1725,34 @@ class Motl:
         >>> # remove entries with duplicated subtomo_idx values, keeping the ones with lower score
         >>> m.drop_duplicates(decision_sort_ascending=True)
         >>> # remove entries with duplicated subtomo_idx values, keeping the ones with lower geom1 value
-        >>> m.drop_duplicates(decision_column="geom1", decision_sort_ascending=True)
+        >>> m.drop_duplicates(decision_column_name="geom1", decision_sort_ascending=True)
         >>> # remove entries with duplicated object_id values, keeping the ones with lower geom1 value
-        >>> m.drop_duplicates(duplicates_column="object_id", decision_column="geom1", decision_sort_ascending=True)
+        >>> m.drop_duplicates(column_name="object_id", decision_column_name="geom1", decision_sort_ascending=True)
         """
 
         # Sort the DataFrame by "score" in descending order
         self.df = self.df.sort_values(
-            by=[duplicates_column, decision_column], ascending=[True, decision_sort_ascending]
+            by=[column_name, decision_column_name], ascending=[True, decision_sort_ascending]
         )
 
         # Drop duplicates based on "subtomo_id" keeping the first occurrence (highest score)
-        self.df = self.df.drop_duplicates(subset=duplicates_column)
+        self.df = self.df.drop_duplicates(subset=column_name)
         self.df.reset_index(inplace=True, drop=True)
 
     @staticmethod
-    def recenter_to_subparticle(input_motl, input_mask, rotation=None, motl_type="emmotl", **kwargs):
+    def recenter_to_subparticle(input_motl: "MotlSource", input_map: MapSource, input_rotation: Optional[RotationLike] = None, motl_type: MotlType = "emmotl", **kwargs) -> "Motl":
         """Computes the center of mass of the provided binary mask and computes the necessary shift between the mask box
-        center and the center of mass. This shift is applied to the motl positions. If rotation is specified it applies
+        center and the center of mass. This shift is applied to the motl positions. If input_rotation is specified it applies
         it to the shifted particles as well.
 
         Parameters
         ----------
         input_motl: Motl or str or Pandas.DataFrame
             Input motl to apply the recentering to (see :meth:`cryocat.core.cryomotl.Motl.load` for more details on format)
-        input_mask : str
+        input_map : str
             Binary mask specified either as a file path or ndarray. The box size of the mask
             should correspond to the box size of the reference on which the mask was placed.
-        rotation : scipy.spatial.transform._rotation.Rotation
+        input_rotation : scipy.spatial.transform._rotation.Rotation
             Rotation to apply on the new positions. Defaults to None.
         motl_type : str, optional
             Type of motl to load if not standard Motl.
@@ -1929,21 +1776,20 @@ class Motl:
         else:
             motl_orig = Motl.load(input_motl, motl_type=motl_type, **kwargs)
 
-        input_mask = cryomap.read(input_mask)
-        old_center = np.array(input_mask.shape) / 2
-        mask_center = cryomask.get_mass_center(input_mask)  # find center of mask
+        input_map = cryomap.read(input_map)
+        old_center = np.array(input_map.shape) / 2
+        mask_center = cryomask.get_mass_center(input_map)  # find center of mask
         shifts = mask_center - old_center  # get shifts
-        print(shifts)
         # change shifts in the motl accordingly
         motl = motl_orig.shift_positions(shifts, inplace=False)
         motl.update_coordinates()
 
-        if rotation is not None:
-            motl.apply_rotation(rotation)
+        if input_rotation is not None:
+            motl.apply_rotation(input_rotation)
 
         return motl
 
-    def apply_tomo_rotation(self, rotation_angles, tomo_id, tomo_dim):
+    def apply_tomo_rotation(self, rotation_angles: ArrayLike, tomo_id: int, tomo_dim: ArrayLike) -> "Motl":
         """Apply tomogram rotation to the corresponding particles in the motl. The rotation angles can come e.g. from
         trimvol command or from slicer in etomo. Currently works only for one tomogram.
 
@@ -1968,7 +1814,9 @@ class Motl:
             points = rot.apply(points) + dim / 2
             return points
 
-        feature_motl = self.get_motl_subset(tomo_id, feature_id="tomo_id")
+        feature_motl = self.get_motl_subset(tomo_id, column_name="tomo_id")
+        if len(feature_motl.df) == 0:
+            raise ValueError(f"No particles found for tomo_id={tomo_id}.")
         coord_rot = rot.from_euler(
             "zyx", angles=[rotation_angles[2], rotation_angles[1], rotation_angles[0]], degrees=True
         )
@@ -1987,13 +1835,12 @@ class Motl:
         )
         rot_angles[:, 0] = phi_angle
 
-        print(x_vector[0], y_vector[0])
         feature_motl.fill({"angles": rot_angles})
         feature_motl.fill({"coord": coord})
 
         return feature_motl
 
-    def shift_positions(self, shift, inplace=True):
+    def shift_positions(self, shift: ArrayLike, inplace: bool = True) -> Optional["Motl"]:
         """Shifts the coordinates by the provided shift.
 
         Parameters
@@ -2013,26 +1860,21 @@ class Motl:
         new_motl : Motl
             A new instance of motl with shifted coordinate (only if inplace is set to False).
         """
+        target = self if inplace else copy.deepcopy(self)
 
-        def shift_coords(row):
-            v = np.array(shift)
-            euler_angles = np.array([[row["phi"], row["theta"], row["psi"]]])
-            orientations = rot.from_euler(seq="zxz", angles=euler_angles, degrees=True)
-            rshifts = orientations.apply(v)
+        # One batched rotation for all particles; rotate the shift vector into
+        # each particle's local frame and add it to its existing shifts.
+        angles = target.df[["phi", "theta", "psi"]].to_numpy()
+        rotations = rot.from_euler("zxz", angles, degrees=True)
+        rshifts = rotations.apply(np.asarray(shift))
+        target.df[["shift_x", "shift_y", "shift_z"]] = (
+            target.df[["shift_x", "shift_y", "shift_z"]].to_numpy() + rshifts
+        )
+        target.df.reset_index(drop=True, inplace=True)
 
-            row["shift_x"] = row["shift_x"] + rshifts[0][0]
-            row["shift_y"] = row["shift_y"] + rshifts[0][1]
-            row["shift_z"] = row["shift_z"] + rshifts[0][2]
-            return row
+        return None if inplace else target
 
-        if inplace:
-            self.df = self.df.apply(shift_coords, axis=1).reset_index(drop=True)
-        else:
-            new_motl = copy.deepcopy(self)
-            new_motl.df = new_motl.df.apply(shift_coords, axis=1).reset_index(drop=True)
-            return new_motl
-
-    def split_in_asymmetric_subunits(self, symmetry, xyz_shift):
+    def split_in_asymmetric_subunits(self, symmetry: Symmetry, xyz_shift: ArrayLike) -> "Motl":
         """Split the motive list into assymetric subunits.
 
         Parameters
@@ -2055,30 +1897,17 @@ class Motl:
         This method does not preserve a child class - it always returns :class:`Motl`.
 
         """
-        if isinstance(symmetry, str):
-            nfold = int(re.findall(r"\d+", symmetry)[-1])
-            if symmetry.lower().startswith("c"):
-                s_type = 1  # c symmetry
-            elif symmetry.lower().startswith("d"):
-                s_type = 2  # d symmetry
-            else:
-                ValueError("Unknown symmetry - currently only c and d are supported!")
-        elif isinstance(symmetry, (int, float)):
-            s_type = 1  # c symmetry
-            nfold = symmetry
-        else:
-            ValueError(
-                "The symmetry has to be specified as a string (starting with c or d) or as a number (float, int)!"
-            )
+        group, nfold = geom.as_symmetry(symmetry)
+        is_dihedral = group == "D"
 
         inplane_step = 360 / nfold
 
-        if s_type == 1:
+        if not is_dihedral:
             n_subunits = nfold
             phi_angles = np.arange(0, 360, int(inplane_step))
             new_angles = np.zeros((n_subunits, 3))
             new_angles[:, 0] = phi_angles
-        elif s_type == 2:
+        else:
             n_subunits = nfold * 2
             in_plane_offset = int(inplane_step / 2)
             new_angles = np.zeros((n_subunits, 3))
@@ -2101,11 +1930,9 @@ class Motl:
         rep_the = np.full((n_subunits,), the) + np.deg2rad(phi_angles)
         rep_z = np.full((n_subunits,), starting_vector[2])
 
-        if s_type == 2:
+        if is_dihedral:
             rep_z[1::2] *= -1
 
-        # https://stackoverflow.com/questions/20924085/python-conversion-between-coordinates
-        # [center_shift(:, 1), center_shift(:, 2), center_shift(:, 3)] = pol2cart([0;0.785398163397448;1.570796326794897;2.356194490192345;3.141592653589793;3.926990816987241;4.712388980384690;5.497787143782138], repmat(10,8,1), repmat(0,8,1));
         center_shift = np.zeros([rot_rho.shape[0], 3])
         center_shift[:, 0] = rot_rho * np.cos(rep_the)
         center_shift[:, 1] = rot_rho * np.sin(rep_the)
@@ -2152,7 +1979,7 @@ class EmMotl(Motl):
         If ``input_motl`` is of an unsupported type.
     """
 
-    def __init__(self, input_motl=None, header=None):
+    def __init__(self, input_motl: Optional["MotlSource"] = None, header: Optional[dict] = None) -> None:
         if input_motl is not None:
             if isinstance(input_motl, EmMotl):
                 self.df = input_motl.df.copy()
@@ -2170,7 +1997,7 @@ class EmMotl(Motl):
 
         self.header = header if header else {}
 
-    def convert_to_motl(self, input_df):
+    def convert_to_motl(self, input_df: pd.DataFrame) -> None:
         """Convert input_df to correct motl_df format. In this class, it is expected to have the correct format already
         and no conversion is provided. If this function is called the format of the input is incorrect and error is
         raised.
@@ -2193,12 +2020,12 @@ class EmMotl(Motl):
         raise ValueError("Provided motl does not have the correct format.")
 
     @staticmethod
-    def read_in(emfile_path):
+    def read_in(input_path: PathOrStr) -> Tuple[pd.DataFrame, dict]:
         """Reads in an EM file and returns a pandas DataFrame and header.
 
         Parameters
         ----------
-        emfile_path : str
+        input_path : str
             The path to the EM file.
 
         Returns
@@ -2215,10 +2042,10 @@ class EmMotl(Motl):
 
         """
 
-        if not os.path.isfile(emfile_path):
-            raise UserInputError(f"Provided file {emfile_path} does not exist.")
+        if not os.path.isfile(input_path):
+            raise UserInputError(f"Provided file {input_path} does not exist.")
 
-        header, parsed_emfile = emfile.read(emfile_path)
+        header, parsed_emfile = emfile.read(input_path)
         if not len(parsed_emfile[0][0]) == 20:
             raise UserInputError(
                 f"Provided file contains {len(parsed_emfile[0][0])} columns, while 20 columns are expected."
@@ -2228,7 +2055,7 @@ class EmMotl(Motl):
 
         return motl_df, header
 
-    def write_out(self, output_path):
+    def write_out(self, output_path: PathOrStr) -> None:
         """Writes out the dataframe as emfile.
 
         Parameters
@@ -2260,9 +2087,9 @@ class RelionMotl(Motl):
         RELION version (e.g. ``3.1``, ``4.0``).  Inferred from the file when
         ``None``.
     pixel_size : float, optional
-        Voxel size in Ångströms.  Read from the star file when ``None``.
+        Voxel size in ÃngstrÃ¶ms.  Read from the star file when ``None``.
     binning : float, optional
-        Binning factor applied to the coordinates.  Required for version ≥ 4.0.
+        Binning factor applied to the coordinates.  Required for version â¥ 4.0.
     optics_data : pandas.DataFrame, optional
         Pre-loaded optics group data.
     tomo_format : str, default=''
@@ -2274,7 +2101,7 @@ class RelionMotl(Motl):
     ------
     UserInputError
         If ``input_motl`` is of an unsupported type, or if ``binning`` is not
-        provided for RELION version ≥ 4.0.
+        provided for RELION version â¥ 4.0.
     """
 
     default_version = 3.1
@@ -2432,10 +2259,10 @@ class RelionMotl(Motl):
         elif self.optics_data is not None:
             if "rlnImagePixelSize" in self.optics_data.columns and "rlnOpticsGroup" in self.optics_data.columns:
                 if len(self.optics_data) == 1:
-                    # Single optics group → scalar pixel size
+                    # Single optics group â scalar pixel size
                     self.pixel_size = self.optics_data["rlnImagePixelSize"].iloc[0]
                 else:
-                    # Multiple optics groups → assign per-particle from optics group
+                    # Multiple optics groups â assign per-particle from optics group
                     merged = self.relion_df.merge(
                         self.optics_data[["rlnOpticsGroup", "rlnImagePixelSize"]],
                         on="rlnOpticsGroup",
@@ -3718,7 +3545,7 @@ class RelionMotlv5(RelionMotl, Motl):
     tomo_idx : str or array-like, optional
         Subset of tomogram IDs to load.
     pixel_size : float, optional
-        Voxel size in Ångströms.
+        Voxel size in ÃngstrÃ¶ms.
     binning : float, default=1.0
         Binning factor.  Should always be set explicitly for RELION 5.
     optics_data : pandas.DataFrame, optional
@@ -3914,6 +3741,7 @@ class RelionMotlv5(RelionMotl, Motl):
             The same DataFrame with ``rlnTomoParticleName`` replaced by
             integer subtomogram IDs.
         """
+
         def extract_subtomo_id(name):
             if not isinstance(name, str):
                 return name
@@ -4012,8 +3840,31 @@ class RelionMotlv5(RelionMotl, Motl):
         self.df = self.df.fillna(0)
         self.update_coordinates()
 
+    def _merge_tomo_sizes(self, relion_df: pd.DataFrame) -> pd.DataFrame:
+        """Merge ``rlnTomoSizeX/Y/Z`` from ``self.tomo_df`` onto ``relion_df``.
+
+        Internal helper shared by :meth:`convert_coordinates_merge` and
+        :meth:`convert_coordinates_ang_merge`. Raises if ``rlnTomoName`` is
+        missing from either DataFrame, or if any particle has no matching
+        tomogram in ``self.tomo_df``.
+        """
+        if "rlnTomoName" not in relion_df.columns or "rlnTomoName" not in self.tomo_df.columns:
+            raise UserInputError("Missing 'rlnTomoName' column to merge tomogram info.")
+
+        merged_df = relion_df.merge(
+            self.tomo_df[["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]],
+            on="rlnTomoName",
+            how="left",
+            validate="many_to_one",  # each particle maps to one tomo
+        )
+        missing_mask = merged_df[["rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]].isnull().any(axis=1)
+        if missing_mask.any():
+            missing_tomos = merged_df.loc[missing_mask, "rlnTomoName"].unique()
+            raise ValueError(f"The following rlnTomoName values are missing in tomo_df: {missing_tomos}")
+        return merged_df
+
     def convert_coordinates_merge(self, relion_df):
-        """Convert RELION 5 centered Ångström coordinates to pixel coordinates.
+        """Convert RELION 5 centered ÃngstrÃ¶m coordinates to pixel coordinates.
 
         Merges tomogram dimensions from ``self.tomo_df`` and computes
         ``rlnCoordinateX/Y/Z`` as ``tomo_size/2 + centered_coord/pixel_size``.
@@ -4038,38 +3889,19 @@ class RelionMotlv5(RelionMotl, Motl):
         ValueError
             If any tomogram in ``relion_df`` has no match in ``self.tomo_df``.
         """
-        # convert new relion system into old one
-        if "rlnTomoName" not in relion_df.columns or "rlnTomoName" not in self.tomo_df.columns:
-            raise UserInputError("Missing 'rlnTomoName' column to merge tomogram info.")
-        else:
-            merged_df = relion_df.merge(
-                self.tomo_df[["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]],
-                on="rlnTomoName",
-                how="left",
-                validate="many_to_one",  # each particle maps to one tomo
+        merged_df = self._merge_tomo_sizes(relion_df)
+        for axis in ("X", "Y", "Z"):
+            merged_df[f"rlnCoordinate{axis}"] = (
+                merged_df[f"rlnTomoSize{axis}"] / 2
+                + merged_df[f"rlnCenteredCoordinate{axis}Angst"] / self.pixel_size
             )
-            # Check for missing matches by looking for NaNs in any of the joined columns
-            missing_mask = merged_df[["rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]].isnull().any(axis=1)
-            if missing_mask.any():
-                missing_tomos = merged_df.loc[missing_mask, "rlnTomoName"].unique()
-                raise ValueError(f"The following rlnTomoName values are missing in tomo_df: {missing_tomos}")
-
-            merged_df["rlnCoordinateX"] = (merged_df["rlnTomoSizeX"] / 2) + (
-                merged_df["rlnCenteredCoordinateXAngst"] / self.pixel_size
-            )
-            merged_df["rlnCoordinateY"] = (merged_df["rlnTomoSizeY"] / 2) + (
-                merged_df["rlnCenteredCoordinateYAngst"] / self.pixel_size
-            )
-            merged_df["rlnCoordinateZ"] = (merged_df["rlnTomoSizeZ"] / 2) + (
-                merged_df["rlnCenteredCoordinateZAngst"] / self.pixel_size
-            )
-            merged_df = RelionMotlv5.clean_tomo_name_column(merged_df)
-            if "rlnTomoParticleName" in merged_df.columns:
-                merged_df = RelionMotlv5.clean_subtomo_name_column(merged_df)
-            return merged_df
+        merged_df = RelionMotlv5.clean_tomo_name_column(merged_df)
+        if "rlnTomoParticleName" in merged_df.columns:
+            merged_df = RelionMotlv5.clean_subtomo_name_column(merged_df)
+        return merged_df
 
     def convert_coordinates_ang_merge(self, relion_df):
-        """Convert pixel coordinates to RELION 5 centered Ångström coordinates.
+        """Convert pixel coordinates to RELION 5 centered ÃngstrÃ¶m coordinates.
 
         Merges tomogram dimensions from ``self.tomo_df`` and computes
         ``rlnCenteredCoordinateXAngst/YAngst/ZAngst`` as
@@ -4094,36 +3926,15 @@ class RelionMotlv5(RelionMotl, Motl):
         ValueError
             If any tomogram in ``relion_df`` has no match in ``self.tomo_df``.
         """
-        # convert old system into relion new system
-        if "rlnTomoName" not in relion_df.columns or "rlnTomoName" not in self.tomo_df.columns:
-            raise UserInputError("Missing 'rlnTomoName' column to merge tomogram info.")
-        else:
-            merged_df = relion_df.merge(
-                self.tomo_df[["rlnTomoName", "rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]],
-                on="rlnTomoName",
-                how="left",
-                validate="many_to_one",
-            )
-            # Check for missing matches by looking for NaNs in any of the joined columns
-            missing_mask = merged_df[["rlnTomoSizeX", "rlnTomoSizeY", "rlnTomoSizeZ"]].isnull().any(axis=1)
-            if missing_mask.any():
-                missing_tomos = merged_df.loc[missing_mask, "rlnTomoName"].unique()
-                raise ValueError(f"The following rlnTomoName values are missing in tomo_df: {missing_tomos}")
-
-            merged_df["rlnCenteredCoordinateXAngst"] = (
-                merged_df["rlnCoordinateX"] - merged_df["rlnTomoSizeX"] / 2
+        merged_df = self._merge_tomo_sizes(relion_df)
+        for axis in ("X", "Y", "Z"):
+            merged_df[f"rlnCenteredCoordinate{axis}Angst"] = (
+                merged_df[f"rlnCoordinate{axis}"] - merged_df[f"rlnTomoSize{axis}"] / 2
             ) * self.pixel_size
-            merged_df["rlnCenteredCoordinateYAngst"] = (
-                merged_df["rlnCoordinateY"] - merged_df["rlnTomoSizeY"] / 2
-            ) * self.pixel_size
-            merged_df["rlnCenteredCoordinateZAngst"] = (
-                merged_df["rlnCoordinateZ"] - merged_df["rlnTomoSizeZ"] / 2
-            ) * self.pixel_size
-
-            merged_df = RelionMotlv5.clean_tomo_name_column(merged_df)
-            if "rlnTomoParticleName" in merged_df.columns:
-                merged_df = RelionMotlv5.clean_subtomo_name_column(merged_df)
-            return merged_df
+        merged_df = RelionMotlv5.clean_tomo_name_column(merged_df)
+        if "rlnTomoParticleName" in merged_df.columns:
+            merged_df = RelionMotlv5.clean_subtomo_name_column(merged_df)
+        return merged_df
 
     def check_isWarp(self):
         """Detect whether ``self.relion_df`` originates from WarpTools.
@@ -4291,12 +4102,12 @@ class RelionMotlv5(RelionMotl, Motl):
         Parameters
         ----------
         tomo_format : str, default=''
-            Format string for ``rlnTomoName``.  Use ``$x…x`` placeholders
+            Format string for ``rlnTomoName``.  Use ``$xâ¦x`` placeholders
             (number of ``x`` characters sets zero-padding width).  An empty
             string stores the raw integer ``tomo_id``.
         subtomo_format : str, default=''
-            Format string for ``rlnTomoParticleName``.  Supports ``$y…y`` for
-            subtomo ID and ``$x…x`` for tomo ID.  An empty string stores the
+            Format string for ``rlnTomoParticleName``.  Supports ``$yâ¦y`` for
+            subtomo ID and ``$xâ¦x`` for tomo ID.  An empty string stores the
             raw integer ``subtomo_id``.
 
         Returns
@@ -4304,6 +4115,7 @@ class RelionMotlv5(RelionMotl, Motl):
         pandas.DataFrame
             Particles DataFrame with the appropriate RELION 5 column schema.
         """
+
         def find_longest_sequence(test_string, test_letter, raise_error=True):
             pattern = rf"\$(?:{test_letter})+"
             findings = sorted(re.findall(pattern, test_string), key=len)
@@ -4380,7 +4192,7 @@ class RelionMotlv5(RelionMotl, Motl):
         Parameters
         ----------
         pixel_size : float, optional
-            Binned pixel size in Ångströms.  Defaults to ``self.pixel_size``.
+            Binned pixel size in ÃngstrÃ¶ms.  Defaults to ``self.pixel_size``.
         subtomo_size : int, optional
             Subtomogram box size in pixels.  Stored as ``rlnImageSize``.
             Defaults to ``'NaN'``.
@@ -4586,7 +4398,7 @@ class RelionMotlv5(RelionMotl, Motl):
         binning : float, optional
             Coordinate scaling factor override.
         pixel_size : float, optional
-            Pixel size override in Ångströms.
+            Pixel size override in ÃngstrÃ¶ms.
         optics_data : str or dict or pandas.DataFrame, optional
             Override optics source (see :meth:`prepare_optics_data`).
         subtomo_size : int, optional
@@ -4634,7 +4446,7 @@ class RelionMotlv5_1:
     tomo_idx : str or array-like, optional
         Subset of tomogram IDs to load.
     pixel_size : float, optional
-        Voxel size in Ångströms.
+        Voxel size in ÃngstrÃ¶ms.
     binning : float, optional
         Binning factor.
     optics_data : pandas.DataFrame, optional
@@ -4734,7 +4546,7 @@ class StopgapMotl(Motl):
         "class",
     ]
 
-    def __init__(self, input_motl=None):
+    def __init__(self, input_motl: Optional["MotlSource"] = None) -> None:
         super().__init__()
         self.sg_df = pd.DataFrame()
 
@@ -4754,7 +4566,7 @@ class StopgapMotl(Motl):
                 )
 
     @staticmethod
-    def read_in(input_path):
+    def read_in(input_path: PathOrStr) -> pd.DataFrame:
         """Reads in a starfile in stopgap format and returns the particles as a dataframe in stopgap format.
 
         Parameters
@@ -4786,7 +4598,7 @@ class StopgapMotl(Motl):
 
         return stopgap_df
 
-    def convert_to_motl(self, stopgap_df, keep_halfsets=False):
+    def convert_to_motl(self, stopgap_df: pd.DataFrame, keep_halfsets: bool = False) -> None:
         """Converts a stopgap DataFrame to a motl DataFrame and stores it in self.df.
 
         Parameters
@@ -4865,7 +4677,7 @@ class StopgapMotl(Motl):
         return stopgap_df
 
     @staticmethod
-    def sg_df_reset_index(stopgap_df, reset_index=False):
+    def sg_df_reset_index(stopgap_df: pd.DataFrame, reset_index: bool = False) -> pd.DataFrame:
         """Resets the "motl_idx" of a stopgap DataFrame to sequence from 1 to the length of the particle list if
         reset_index is True.
 
@@ -4890,7 +4702,7 @@ class StopgapMotl(Motl):
 
         return stopgap_df
 
-    def write_out(self, output_path, update_coord=False, reset_index=False):
+    def write_out(self, output_path: PathOrStr, update_coord: bool = False, reset_index: bool = False) -> None:
         """Writes the StopgapMotl object to a star file unless the extesions of the file is .em in which case it writes
         out the emfile type.
 
@@ -4948,7 +4760,7 @@ class DynamoMotl(Motl):
         If ``input_motl`` is of an unsupported type.
     """
 
-    def __init__(self, input_motl=None):
+    def __init__(self, input_motl: Optional["MotlSource"] = None) -> None:
         super().__init__()
         self.dynamo_df = pd.DataFrame()
 
@@ -4967,7 +4779,7 @@ class DynamoMotl(Motl):
                 )
 
     @staticmethod
-    def read_in(input_path):
+    def read_in(input_path: PathOrStr) -> pd.DataFrame:
         """Reads in a file from the specified input path and returns a pandas DataFrame in dynamo format.
 
         Parameters
@@ -4997,7 +4809,7 @@ class DynamoMotl(Motl):
 
         return dynamo_df
 
-    def convert_to_motl(self, dynamo_df):
+    def convert_to_motl(self, dynamo_df: pd.DataFrame) -> None:
         """Converts a dynamo DataFrame to a motl DataFrame format.
 
         Parameters
@@ -5037,7 +4849,7 @@ class DynamoMotl(Motl):
         self.df["class"] = dynamo_df.loc[:, 21]
 
     @staticmethod
-    def convert_to_dynamo_motl(motl_df):
+    def convert_to_dynamo_motl(motl_df: pd.DataFrame) -> pd.DataFrame:
         """Convert a standard motl DataFrame to a 35-column Dynamo table.
 
         Parameters
@@ -5074,7 +4886,7 @@ class DynamoMotl(Motl):
         )
         return dynamo_df
 
-    def write_out(self, output_path):
+    def write_out(self, output_path: PathOrStr) -> None:
         """Writes the dynamo DataFrame to a .tbl file.
 
         Parameters
@@ -5121,7 +4933,7 @@ class ModMotl(Motl):
 
     columns = ["object_id", "contour_id", "x", "y", "z", "object_radius", "mod_id"]
 
-    def __init__(self, input_motl=None, mod_prefix="", mod_suffix=".mod"):
+    def __init__(self, input_motl: Optional["MotlSource"] = None, mod_prefix: str = "", mod_suffix: str = ".mod") -> None:
         super().__init__()
         self.mod_df = pd.DataFrame()
 
@@ -5140,7 +4952,7 @@ class ModMotl(Motl):
                 )
 
     @staticmethod
-    def read_in(input_path, mod_prefix="", mod_suffix=".mod"):
+    def read_in(input_path: PathOrStr, mod_prefix: str = "", mod_suffix: str = ".mod") -> pd.DataFrame:
         """Reads in IMOD model file(s) from a file or specified directory. In case a path to the directory is
         specified, prefix and/or suffix can be passed as well to narrow down which files should be loaded. If none of
         them are passed all files with the extension .mod in that directory will be loaded.
@@ -5166,7 +4978,7 @@ class ModMotl(Motl):
 
         return imod.read_mod_files(input_path, file_prefix=mod_prefix, file_suffix=mod_suffix)
 
-    def convert_to_motl(self, mod_df):
+    def convert_to_motl(self, mod_df: pd.DataFrame) -> None:
         """Converts a DataFrame containing model data into a format suitable for motl file generation.
 
         Parameters
@@ -5284,7 +5096,7 @@ class ModMotl(Motl):
         self.update_coordinates()
 
     @staticmethod
-    def convert_to_mod_motl(motl_df):
+    def convert_to_mod_motl(motl_df: pd.DataFrame) -> pd.DataFrame:
         mod_df = pd.DataFrame(data=np.zeros((motl_df.shape[0], 7)), columns=ModMotl.columns)
         mod_df["object_id"] = motl_df["object_id"]
         mod_df["x"] = motl_df["x"]
@@ -5296,7 +5108,7 @@ class ModMotl(Motl):
 
         return mod_df
 
-    def write_out(self, output_path, motl_type="mod_motl"):
+    def write_out(self, output_path: PathOrStr, motl_type: str = "mod_motl") -> None:
         """
         Write the mod_df (IMOD model format) to a .mod file using imod-compatible binary writer.
 
@@ -5323,14 +5135,14 @@ class ModMotl(Motl):
 
 
 def emmotl2relion(
-    input_motl,
-    relion_version,
-    output_motl_path=None,
-    flip_handedness=False,
-    tomo_dim=None,
-    load_kwargs=None,
-    write_kwargs=None,
-):
+    input_motl: "MotlSource",
+    relion_version: float,
+    output_path: Optional[PathOrStr] = None,
+    flip_handedness: bool = False,
+    tomo_dim: Optional[TomoDimensions] = None,
+    load_kwargs: Optional[dict] = None,
+    write_kwargs: Optional[dict] = None,
+) -> "RelionMotl":
     """Converts an EmMotl to RelionMotl format and optionally writes it to file.
 
     Parameters
@@ -5339,7 +5151,7 @@ def emmotl2relion(
         Path to the input EM MOTL file or an already loaded EmMotl object.
     relion_version : float
         The version of the Relion file format.
-    output_motl_path : str, optional
+    output_path : str, optional
         If provided, the converted motl will be written to this path.
     flip_handedness : bool, default=False
         If True, flips the handedness of the coordinates.
@@ -5375,9 +5187,9 @@ def emmotl2relion(
             rln_motl = RelionMotlv5_1(input_particles=em_motl.df, **load_kwargs)
         else:
             raise UserInputError("Not yet supported relion version")
-    if output_motl_path is not None:
+    if output_path is not None:
         rln_motl.write_out(
-            output_motl_path,
+            output_path,
             **write_kwargs,
         )
 
@@ -5385,16 +5197,16 @@ def emmotl2relion(
 
 
 def relion2emmotl(
-    input_motl,
-    relion_version,
-    load_kwargs=None,
-    output_motl_path=None,
-    pixel_size=None,
-    binning=None,
-    update_coordinates=False,
-    flip_handedness=False,
-    tomo_dim=None,
-):
+    input_motl: "MotlSource",
+    relion_version: float,
+    load_kwargs: Optional[dict] = None,
+    output_path: Optional[PathOrStr] = None,
+    pixel_size: Optional[float] = None,
+    binning: Optional[float] = None,
+    update_coordinates: bool = False,
+    flip_handedness: bool = False,
+    tomo_dim: Optional[TomoDimensions] = None,
+) -> "EmMotl":
     """Converts a RelionMotl to EmMotl format and optionally writes it to a file.
 
     Parameters
@@ -5406,7 +5218,7 @@ def relion2emmotl(
     load_kwargs : dict, optional
         Dictionary of keyword arguments passed to the `RelionMotl` or `RelionMotlv5` constructor.
         See `RelionMotl.__init__` or `RelionMotlv5.__init__` for full list of accepted keys.
-    output_motl_path : str, optional
+    output_path : str, optional
         If provided, the converted motl will be written to this path.
     pixel_size : float, optional
         The pixel size of the data. Required if `input_motl` is a file path and a pixel size is not specified in the file's optics group.
@@ -5443,20 +5255,20 @@ def relion2emmotl(
     if update_coordinates:
         em_motl.update_coordinates()
 
-    if output_motl_path is not None:
-        em_motl.write_out(output_motl_path)
+    if output_path is not None:
+        em_motl.write_out(output_path)
 
     return em_motl
 
 
-def stopgap2emmotl(input_motl, output_motl_path=None, update_coordinates=False):
+def stopgap2emmotl(input_motl: "MotlSource", output_path: Optional[PathOrStr] = None, update_coordinates: bool = False) -> "EmMotl":
     """Converts a StopgapMotl to EmMotl format and optionally writes it to a file.
 
     Parameters
     ----------
     input_motl : str or pandas.DataFrame or StopgapMotl
         Path to the input STOPGAP MOTL file or an already loaded StopgapMotl object.
-    output_motl_path : str, optional
+    output_path : str, optional
         If provided, the converted motl will be written to this path.
     update_coordinates : bool, default=False
         If True, updates the coordinates in the DataFrame.
@@ -5472,20 +5284,20 @@ def stopgap2emmotl(input_motl, output_motl_path=None, update_coordinates=False):
     if update_coordinates:
         em_motl.update_coordinates()
 
-    if output_motl_path is not None:
-        em_motl.write_out(output_motl_path)
+    if output_path is not None:
+        em_motl.write_out(output_path)
 
     return em_motl
 
 
-def emmotl2stopgap(input_motl, output_motl_path=None, update_coordinates=False, reset_index=False):
+def emmotl2stopgap(input_motl: "MotlSource", output_path: Optional[PathOrStr] = None, update_coordinates: bool = False, reset_index: bool = False) -> "StopgapMotl":
     """Converts an EmMotl to StopgapMotl format and optionally writes it to a file.
 
     Parameters
     ----------
     input_motl : str or pandas.DataFrame or EmMotl
         Path to the input EM MOTL file or an already loaded EmMotl object.
-    output_motl_path : str, optional
+    output_path : str, optional
         If provided, the converted motl will be written to this path.
     update_coordinates : bool, default=False
         If True, updates the coordinates in the DataFrame.
@@ -5503,15 +5315,20 @@ def emmotl2stopgap(input_motl, output_motl_path=None, update_coordinates=False, 
     if update_coordinates:
         sg_motl.update_coordinates()
 
-    if output_motl_path is not None:
-        sg_motl.write_out(output_motl_path, update_coord=False, reset_index=reset_index)
+    if output_path is not None:
+        sg_motl.write_out(output_path, update_coord=False, reset_index=reset_index)
 
     return sg_motl
 
 
 def relion2stopgap(
-    input_motl, relion_version, load_kwargs=None, output_motl_path=None, update_coordinates=False, reset_index=False
-):
+    input_motl: "MotlSource",
+    relion_version: float,
+    load_kwargs: Optional[dict] = None,
+    output_path: Optional[PathOrStr] = None,
+    update_coordinates: bool = False,
+    reset_index: bool = False,
+) -> "StopgapMotl":
     """Converts a RelionMotl to StopgapMotl format and optionally writes it to a file.
 
     Parameters
@@ -5523,7 +5340,7 @@ def relion2stopgap(
     load_kwargs : dict, optional
         Dictionary of keyword arguments passed to the `RelionMotl` or `RelionMotlv5` constructor.
         See `RelionMotl.__init__` or `RelionMotlv5.__init__` for full list of accepted keys.
-    output_motl_path : str, optional
+    output_path : str, optional
         If provided, the converted motl will be written to this path.
     update_coordinates : bool, default=False
         If True, updates the coordinates in the DataFrame.
@@ -5549,21 +5366,21 @@ def relion2stopgap(
     if update_coordinates:
         sg_motl.update_coordinates()
 
-    if output_motl_path is not None:
-        sg_motl.write_out(output_motl_path, update_coord=False, reset_index=reset_index)
+    if output_path is not None:
+        sg_motl.write_out(output_path, update_coord=False, reset_index=reset_index)
 
     return sg_motl
 
 
 def stopgap2relion(
-    input_motl,
-    relion_version,
-    output_motl_path=None,
-    flip_handedness=False,
-    tomo_dim=None,
-    load_kwargs=None,
-    write_kwargs=None,
-):
+    input_motl: "MotlSource",
+    relion_version: float,
+    output_path: Optional[PathOrStr] = None,
+    flip_handedness: bool = False,
+    tomo_dim: Optional[TomoDimensions] = None,
+    load_kwargs: Optional[dict] = None,
+    write_kwargs: Optional[dict] = None,
+) -> "RelionMotl":
     """Converts a StopgapMotl to RelionMotl format and optionally writes it to file.
 
     Parameters
@@ -5572,7 +5389,7 @@ def stopgap2relion(
         Path to the input Stopgap star file or an already loaded StopgapMotl object.
     relion_version : float
         Version of the desired relion object in output.
-    output_motl_path : str, optional
+    output_path : str, optional
         If provided, the converted motl will be written to this path.
     flip_handedness : bool, default=False
         If True, flips the handedness of the coordinates.
@@ -5608,13 +5425,13 @@ def stopgap2relion(
     else:
         rln_motl = RelionMotl(input_motl=sg_motl.df, version=relion_version, **load_kwargs)
 
-    if output_motl_path is not None:
-        rln_motl.write_out(output_motl_path, **write_kwargs)
+    if output_path is not None:
+        rln_motl.write_out(output_path, **write_kwargs)
 
     return rln_motl
 
 
-def emmotl2mod(input_motl, output_motl_path=None, mod_prefix="", mod_suffix=".mod"):
+def emmotl2mod(input_motl: "MotlSource", output_path: Optional[PathOrStr] = None, mod_prefix: str = "", mod_suffix: str = ".mod") -> "ModMotl":
     """Converts an EmMotl to ModMotl format and optionally writes it to a .mod file.
 
     Parameters
@@ -5637,20 +5454,20 @@ def emmotl2mod(input_motl, output_motl_path=None, mod_prefix="", mod_suffix=".mo
 
     mod_motl = ModMotl(input_motl=em_motl.df, mod_prefix=mod_prefix, mod_suffix=mod_suffix)
 
-    if output_motl_path is not None:
-        mod_motl.write_out(output_motl_path)
+    if output_path is not None:
+        mod_motl.write_out(output_path)
 
     return mod_motl
 
 
-def mod2emmotl(input_mod, output_motl_path=None, mod_prefix="", mod_suffix=".mod", update_coordinates=False):
+def mod2emmotl(input_mod: "MotlSource", output_path: Optional[PathOrStr] = None, mod_prefix: str = "", mod_suffix: str = ".mod", update_coordinates: bool = False) -> "EmMotl":
     """Converts a ModMotl to EmMotl format and optionally writes it to a file.
 
     Parameters
     ----------
     input_mod : str or pandas.DataFrame or ModMotl
         Path to the input IMOD .mod file or directory, or an already loaded ModMotl object.
-    output_motl_path : str, optional
+    output_path : str, optional
         If provided, the converted motl will be written to this path.
     mod_prefix : str, default=""
         Prefix for mod files when reading from directory.
@@ -5671,7 +5488,7 @@ def mod2emmotl(input_mod, output_motl_path=None, mod_prefix="", mod_suffix=".mod
     if update_coordinates:
         em_motl.update_coordinates()
 
-    if output_motl_path is not None:
-        em_motl.write_out(output_motl_path)
+    if output_path is not None:
+        em_motl.write_out(output_path)
 
     return em_motl

@@ -907,7 +907,7 @@ def filter_dist_maps(dist_maps, th_mask, min_angles_voxel_count):
 
 
 def create_angular_distance_maps(
-    angles_map, angles_list, output_file_base=None, write_out_maps=True, c_symmetry=1, angles_order="zxz"
+    angles_map, angles_list, output_file_base=None, write_out_maps=True, cyclic_symmetry=1, angles_order="zxz"
 ):
     """Compute per-voxel angular distance maps relative to the first entry in the angles list.
 
@@ -934,7 +934,7 @@ def create_angular_distance_maps(
         Whether to save the three distance maps to disk as ``.em`` files
         (``*_dist_all.em``, ``*_dist_normals.em``, ``*_dist_inplane.em``)
         in single precision.
-    c_symmetry : int, default=1
+    cyclic_symmetry : int, default=1
         Cyclic symmetry order passed to :func:`cryocat.utils.geom.compare_rotations`
         when computing angular distances.
     angles_order : str, default='zxz'
@@ -972,7 +972,7 @@ def create_angular_distance_maps(
     angles = ioutils.rot_angles_load(angles_list, angles_order)
 
     zero_rotations = np.tile(angles[0, :], (angles.shape[0], 1))
-    dist_all, dist_normals, dist_inplane = geom.compare_rotations(zero_rotations, angles, c_symmetry)
+    dist_all, dist_normals, dist_inplane = geom.compare_rotations(zero_rotations, angles, cyclic_symmetry)
 
     angles_array = angles_map.flatten() - 1
 

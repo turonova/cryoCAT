@@ -36,7 +36,7 @@ class Chain:
     ----------
     traced_motl : str or Motl
     pixel_size : float, default=1.0
-    feature : str, default='tomo_id'
+    column_name : str, default='tomo_id'
     chain_id_col : str, default='object_id'
     order_id_col : str, default='geom2'
     step_dist_col : str, default='geom4'
@@ -46,14 +46,14 @@ class Chain:
         self,
         traced_motl,
         pixel_size=1.0,
-        feature="tomo_id",
+        column_name="tomo_id",
         chain_id_col="object_id",
         order_id_col="geom2",
         step_dist_col="geom4",
     ):
         self.traced_motl = cryomotl.Motl.load(traced_motl)
         self.pixel_size = pixel_size
-        self.feature = feature
+        self.column_name = column_name
         self.chain_id_col = chain_id_col
         self.order_id_col = order_id_col
         self.step_dist_col = step_dist_col
@@ -65,7 +65,7 @@ class Chain:
         motl_exit,
         max_distance,
         min_distance=0,
-        feature="tomo_id",
+        column_name="tomo_id",
         pixel_size=1.0,
         output_motl=None,
         chain_id_col="object_id",
@@ -88,7 +88,7 @@ class Chain:
             entry/exit pairs.
         min_distance : float, default=0
             Minimum allowed step distance.
-        feature : str, default='tomo_id'
+        column_name : str, default='tomo_id'
             Column used to group particles before tracing.
         pixel_size : float, default=1.0
             Pixel size in Å; stored on the instance for later distance scaling.
@@ -110,7 +110,7 @@ class Chain:
             motl_exit,
             max_distance=max_distance,
             min_distance=min_distance,
-            feature=feature,
+            column_name=column_name,
             output_motl=output_motl,
             store_idx1=chain_id_col,
             store_idx2=order_id_col,
@@ -119,7 +119,7 @@ class Chain:
         return cls(
             traced,
             pixel_size=pixel_size,
-            feature=feature,
+            column_name=column_name,
             chain_id_col=chain_id_col,
             order_id_col=order_id_col,
             step_dist_col=step_dist_col,
@@ -131,7 +131,7 @@ class Chain:
         motl,
         max_distance,
         min_distance=0,
-        feature="tomo_id",
+        column_name="tomo_id",
         pixel_size=1.0,
         output_motl=None,
         chain_id_col="object_id",
@@ -152,7 +152,7 @@ class Chain:
             Maximum allowed step distance (in voxels).
         min_distance : float, default=0
             Minimum allowed step distance.
-        feature : str, default='tomo_id'
+        column_name : str, default='tomo_id'
             Column used to group particles before tracing.
         pixel_size : float, default=1.0
             Pixel size in Å.
@@ -174,7 +174,7 @@ class Chain:
             motl_exit=None,
             max_distance=max_distance,
             min_distance=min_distance,
-            feature=feature,
+            column_name=column_name,
             output_motl=output_motl,
             store_idx1=chain_id_col,
             store_idx2=order_id_col,
@@ -183,7 +183,7 @@ class Chain:
         return cls(
             traced,
             pixel_size=pixel_size,
-            feature=feature,
+            column_name=column_name,
             chain_id_col=chain_id_col,
             order_id_col=order_id_col,
             step_dist_col=step_dist_col,
@@ -206,7 +206,7 @@ class Chain:
 
         return np.hstack(
             [
-                df[self.feature].values[:-1].reshape(-1, 1),
+                df[self.column_name].values[:-1].reshape(-1, 1),
                 chain_dist,
                 centered,
                 rotated,
@@ -238,14 +238,14 @@ class Chain:
             ``phi/theta/psi``, ``type``.
         """
         df = self.traced_motl.df.copy()
-        df.sort_values([self.feature, self.chain_id_col, self.order_id_col], inplace=True)
-        chain_sizes = df.groupby([self.feature, self.chain_id_col])[self.order_id_col].transform("max")
+        df.sort_values([self.column_name, self.chain_id_col, self.order_id_col], inplace=True)
+        chain_sizes = df.groupby([self.column_name, self.chain_id_col])[self.order_id_col].transform("max")
         df = df[chain_sizes >= min_chain_size]
         if df.empty:
             return pd.DataFrame()
 
-        dist_stats = df.groupby([self.feature, self.chain_id_col]).apply(self._step_distances_and_rotated_coords)
-        rot_stats = df.groupby([self.feature, self.chain_id_col]).apply(self._step_rotations)
+        dist_stats = df.groupby([self.column_name, self.chain_id_col]).apply(self._step_distances_and_rotated_coords)
+        rot_stats = df.groupby([self.column_name, self.chain_id_col]).apply(self._step_rotations)
 
         dist_stats = np.vstack(dist_stats.values)
         rot_stats = np.vstack(rot_stats.values)
@@ -292,7 +292,7 @@ class Chain:
         Motl
             The updated ``self.traced_motl``.
         """
-        self.traced_motl.df[occupancy_id] = self.traced_motl.df.groupby([self.feature, self.chain_id_col])[
+        self.traced_motl.df[occupancy_id] = self.traced_motl.df.groupby([self.column_name, self.chain_id_col])[
             self.order_id_col
         ].transform("max")
         if output_motl is not None:
@@ -344,7 +344,7 @@ class Chain:
 
         cols = [occupancy_id, self.order_id_col, self.step_dist_col, self.chain_id_col]
         input_motl.df[cols] = traced_motl.df[cols].values
-        input_motl.df.sort_values([self.feature, self.chain_id_col, self.order_id_col], inplace=True)
+        input_motl.df.sort_values([self.column_name, self.chain_id_col, self.order_id_col], inplace=True)
 
         if output_motl_path is not None:
             input_motl.write_out(output_motl_path)
@@ -512,7 +512,7 @@ class NPC:
             motl_exit=None,
             max_distance=dist_threshold,
             min_distance=0,
-            feature="tomo_id",
+            column_name="tomo_id",
             output_motl=None,
             store_idx1="object_id",
             store_idx2="geom2",
@@ -522,7 +522,7 @@ class NPC:
         rot_180 = srot.from_euler("zxz", angles=[0, 180, 0], degrees=True)
 
         for t in traced_motl.get_unique_values("tomo_id"):
-            tm = traced_motl.get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
+            tm = traced_motl.get_motl_subset(column_values=[t], column_name="tomo_id", reset_index=True)
             rotations = tm.get_rotations()
             for i in np.arange(1, tm.df["geom2"].max(), dtype=int):
                 cone_angle = geom.cone_distance(rotations[i - 1], rotations[i])
@@ -633,7 +633,7 @@ class NPC:
             Estimated centre coordinates, shape ``(3,)``.
         """
         vector_x = np.asarray([-radius, 0, 0])
-        shifted_motl = cryomotl.Motl(object_motl.df)
+        shifted_motl = cryomotl.Motl(object_motl.df.copy())
         shifted_motl.shift_positions(vector_x)
         center_coordinates = shifted_motl.get_coordinates()
         return np.mean(center_coordinates, axis=0)
@@ -707,7 +707,7 @@ class NPC:
         central_points = []
         object_idx = []
         for o in tomo_motl.get_unique_values("object_id"):
-            om = tomo_motl.get_motl_subset(feature_values=[o], feature_id="object_id", reset_index=True)
+            om = tomo_motl.get_motl_subset(column_values=[o], column_name="object_id", reset_index=True)
             cetroid = NPC.get_center_with_radius(om, radius)
             central_points.append(cetroid)
             object_idx.append(o)
@@ -794,7 +794,7 @@ class NPC:
             input_motl = cryomotl.Motl.load(input_motl)
 
         for t in input_motl.get_unique_values("tomo_id"):
-            tm = input_motl.get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
+            tm = input_motl.get_motl_subset(column_values=[t], column_name="tomo_id", reset_index=True)
             new_object_motl = NPC.get_centers_as_motl(tm, t, radius=npc_radius)
 
             changed_objects = []
@@ -813,7 +813,7 @@ class NPC:
             tm.df["geom1"] = tm.df.groupby(["object_id"])["object_id"].transform("count")
 
             for o in changed_objects:
-                om = tm.get_motl_subset(feature_values=o, feature_id="object_id", reset_index=True)
+                om = tm.get_motl_subset(column_values=o, column_name="object_id", reset_index=True)
                 s_idx = NPC.get_new_subunit_idx(om, npc_radius)
                 tm.df.loc[tm.df["object_id"] == o, "geom2"] = s_idx
 
@@ -880,8 +880,8 @@ class NPC:
 
         for i in ring_pairs:
             for t in ring_motls[i[0]].get_unique_values("tomo_id"):
-                tm1 = ring_motls[i[0]].get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
-                tm2 = ring_motls[i[1]].get_motl_subset(feature_values=[t], feature_id="tomo_id", reset_index=True)
+                tm1 = ring_motls[i[0]].get_motl_subset(column_values=[t], column_name="tomo_id", reset_index=True)
+                tm2 = ring_motls[i[1]].get_motl_subset(column_values=[t], column_name="tomo_id", reset_index=True)
                 if tm2.df.shape[0] > 0:
                     centers1 = NPC.get_centers_as_motl(tm1, t, radius=npc_radius)
                     centers2 = NPC.get_centers_as_motl(tm2, t, radius=npc_radius)
@@ -919,14 +919,14 @@ class PleomorphicSurface:
     """
 
     @staticmethod
-    def get_parametric_description(input_motl, feature_id="object_id", output_path=None):
+    def get_parametric_description(input_motl, column_name="object_id", output_path=None):
         """Fit an ellipsoid to each group of particles and return the parameters.
 
         Parameters
         ----------
         input_motl : str or Motl
             Input particle list.
-        feature_id : str, default='object_id'
+        column_name : str, default='object_id'
             Column used to group particles (one ellipsoid per unique value).
         output_path : str, optional
             Path for saving the parameter table as a CSV.
@@ -934,22 +934,22 @@ class PleomorphicSurface:
         Returns
         -------
         pandas.DataFrame
-            One row per feature value with columns ``tomo_id``,
-            ``{feature_id}``, ``cx/cy/cz`` (centre), ``rx/ry/rz``
+            One row per column_name value with columns ``tomo_id``,
+            ``{column_name}``, ``cx/cy/cz`` (centre), ``rx/ry/rz``
             (semi-axes), ``ev1–ev3 x/y/z`` (eigenvectors), and
             ``p1–p10`` (implicit quadric coefficients).
         """
         in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(feature_id=feature_id)
+        features = in_motl.get_unique_values(column_name=column_name)
         el_params_all = pd.DataFrame()
 
         for f in features:
-            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id)
+            fm = in_motl.get_motl_subset(column_values=f, column_name=column_name)
             coord = fm.get_coordinates()
-            el_params = PleomorphicSurface.load_parametric_surface(feature_id=feature_id)
+            el_params = PleomorphicSurface.load_parametric_surface(column_name=column_name)
             center, radii, evecs, v = geom.fit_ellipsoid(coord)
             el_params["tomo_id"] = [fm.df.iloc[0]["tomo_id"]]
-            el_params[feature_id] = [f]
+            el_params[column_name] = [f]
             el_params[["cx", "cy", "cz"]] = [center]
             el_params[["rx", "ry", "rz"]] = [radii]
             el_params[["ev1x", "ev1y", "ev1z"]] = [evecs[0, :]]
@@ -966,7 +966,7 @@ class PleomorphicSurface:
         return el_params_all
 
     @staticmethod
-    def load_parametric_surface(parametric_surface=None, feature_id="object_id"):
+    def load_parametric_surface(parametric_surface=None, column_name="object_id"):
         """Load or initialise the ellipsoid parameter table.
 
         Parameters
@@ -982,7 +982,7 @@ class PleomorphicSurface:
                 Wrap in a DataFrame using the expected column names.
             ``None``
                 Return an empty DataFrame with the correct columns.
-        feature_id : str, default='object_id'
+        column_name : str, default='object_id'
             Column used as the group identifier.
 
         Returns
@@ -998,7 +998,7 @@ class PleomorphicSurface:
         """
         columns = [
             "tomo_id",
-            feature_id,
+            column_name,
             "cx",
             "cy",
             "cz",
@@ -1027,7 +1027,7 @@ class PleomorphicSurface:
         ]
 
         if isinstance(parametric_surface, cryomotl.Motl):
-            el_params = PleomorphicSurface.get_parametric_description(parametric_surface, feature_id=feature_id)
+            el_params = PleomorphicSurface.get_parametric_description(parametric_surface, column_name=column_name)
         elif isinstance(parametric_surface, str):
             el_params = pd.read_csv("parametric_surface")
         elif isinstance(parametric_surface, np.ndarray):
@@ -1045,7 +1045,7 @@ class PleomorphicSurface:
         object_motl,
         tomo_dim,
         shell_size,
-        feature_id="object_id",
+        column_name="object_id",
         output_path=None,
         radius_offset=0.0,
         motl_radius_id="geom5",
@@ -1054,7 +1054,7 @@ class PleomorphicSurface:
 
         For every surface object a spherical-shell mask is placed at its
         position.  Particles whose tomogram coordinates fall within the mask
-        are labelled with that object's ``feature_id``.
+        are labelled with that object's ``column_name``.
 
         Parameters
         ----------
@@ -1066,7 +1066,7 @@ class PleomorphicSurface:
             Tomogram dimensions table; see :func:`ioutils.dimensions_load`.
         shell_size : int
             Thickness of the spherical shell used for the mask.
-        feature_id : str, default='object_id'
+        column_name : str, default='object_id'
             Column to write the assigned object identifier into.
         output_path : str, optional
             Path to save the assigned motl.
@@ -1079,29 +1079,29 @@ class PleomorphicSurface:
         Returns
         -------
         Motl
-            Particles with ``feature_id`` set to their assigned object.
+            Particles with ``column_name`` set to their assigned object.
         """
         in_motl = cryomotl.Motl.load(input_motl)
         object_motl = cryomotl.Motl.load(object_motl)
         tomo_dim = ioutils.dimensions_load(tomo_dim)
-        tomos = in_motl.get_unique_values(feature_id="tomo_id")
+        tomos = in_motl.get_unique_values(column_name="tomo_id")
         assigned_motl_df = pd.DataFrame()
 
         for t in tomos:
-            tm = in_motl.get_motl_subset(feature_values=t, feature_id="tomo_id", reset_index=True)
+            tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id", reset_index=True)
             tm_dim = tomo_dim.loc[tomo_dim["tomo_id"] == t, ["x", "y", "z"]].values[0]
             coords = tm.get_coordinates().astype(int)
             print(t)
-            tom = object_motl.get_motl_subset(feature_values=t, feature_id="tomo_id")
-            for o in tom.get_unique_values(feature_id=feature_id):
-                om = tom.get_motl_subset(feature_values=o, feature_id=feature_id)
+            tom = object_motl.get_motl_subset(column_values=t, column_name="tomo_id")
+            for o in tom.get_unique_values(column_name=column_name):
+                om = tom.get_motl_subset(column_values=o, column_name=column_name)
                 om.df["class"] = 1
                 to_radius = tom.df.iloc[0][motl_radius_id] + radius_offset
                 object_mask = cryomask.generate_mask("s_shell_r" + str(int(to_radius)) + "_s" + str(int(shell_size)))
                 tomo_mask = cryomap.place_object(object_mask, om, volume_shape=tm_dim, feature_to_color="class")
                 mask_values = tomo_mask[coords[:, 0], coords[:, 1], coords[:, 2]]
                 idx_to_keep = np.where(mask_values == 1)[0]
-                tm.df[feature_id] = o
+                tm.df[column_name] = o
                 assigned_motl_df = pd.concat([assigned_motl_df, tm.df.iloc[idx_to_keep]])
 
         assigned_motl_df.reset_index(drop=True, inplace=True)
@@ -1115,7 +1115,7 @@ class PleomorphicSurface:
         input_motl,
         parametric_surface,
         surface_type="ellipsoid",
-        feature_id="object_id",
+        column_name="object_id",
         output_path=None,
         store_id="geom4",
     ):
@@ -1124,12 +1124,12 @@ class PleomorphicSurface:
         Parameters
         ----------
         input_motl : str or Motl
-            Particles with ``feature_id`` already assigned.
+            Particles with ``column_name`` already assigned.
         parametric_surface : str or numpy.ndarray or Motl
             Surface parameter table; see :meth:`load_parametric_surface`.
         surface_type : str, default='ellipsoid'
             Quadric surface type forwarded to :class:`quadric.QuadricsM`.
-        feature_id : str, default='object_id'
+        column_name : str, default='object_id'
             Column used to match particles to surface objects.
         output_path : str, optional
             Path to save the result.
@@ -1142,12 +1142,12 @@ class PleomorphicSurface:
             Input motl with ``store_id`` populated.
         """
         in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(feature_id=feature_id)
+        features = in_motl.get_unique_values(column_name=column_name)
         assigned_motl_df = pd.DataFrame()
-        m_qs = quadric.QuadricsM(parametric_surface, quadric=surface_type, feature_id=feature_id)
+        m_qs = quadric.QuadricsM(parametric_surface, quadric=surface_type, feature_id=column_name)
 
         for f in features:
-            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
+            fm = in_motl.get_motl_subset(column_values=f, column_name=column_name, reset_index=True)
             coord = fm.get_coordinates()
             fm.df[store_id] = m_qs.distance_point_surface(fm.df["tomo_id"].values[0], f, coord)
             assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
@@ -1163,7 +1163,7 @@ class PleomorphicSurface:
         input_motl,
         parametric_surface,
         surface_type="ellipsoid",
-        feature_id="object_id",
+        column_name="object_id",
         output_path=None,
         unassigned_value=None,
     ):
@@ -1182,37 +1182,37 @@ class PleomorphicSurface:
         surface_type : str, default='ellipsoid'
             Quadric surface type (not used in the distance calculation itself,
             stored for downstream compatibility).
-        feature_id : str, default='object_id'
+        column_name : str, default='object_id'
             Column that receives the assigned surface identifier.
         output_path : str, optional
             Path to save the result.
         unassigned_value : scalar, optional
-            When provided, only particles whose current ``feature_id`` equals
+            When provided, only particles whose current ``column_name`` equals
             this value are re-assigned; the rest are kept unchanged.
 
         Returns
         -------
         Motl
-            Motl with ``feature_id`` updated.
+            Motl with ``column_name`` updated.
         """
         in_motl = cryomotl.Motl.load(input_motl)
 
         if unassigned_value:
             assigned_motl = cryomotl.Motl(in_motl.df)
-            in_motl.df = in_motl.df[in_motl.df[feature_id] == unassigned_value]
+            in_motl.df = in_motl.df[in_motl.df[column_name] == unassigned_value]
             in_motl.df.reset_index(drop=True, inplace=True)
 
         el_params = PleomorphicSurface.load_parametric_surface(
-            parametric_surface=parametric_surface, feature_id=feature_id
+            parametric_surface=parametric_surface, column_name=column_name
         )
-        m_qs = quadric.QuadricsM(parametric_surface, quadric=surface_type, feature_id=feature_id)
-        tomos = in_motl.get_unique_values(feature_id="tomo_id")
+        m_qs = quadric.QuadricsM(parametric_surface, quadric=surface_type, feature_id=column_name)
+        tomos = in_motl.get_unique_values(column_name="tomo_id")
         assigned_motl_df = pd.DataFrame()
 
         for t in tomos:
-            tm = in_motl.get_motl_subset(feature_values=t, feature_id="tomo_id", reset_index=True)
+            tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id", reset_index=True)
             coord = tm.get_coordinates()
-            fm_ep = el_params.loc[el_params["tomo_id"] == t, [feature_id, "cx", "cy", "cz"]].values
+            fm_ep = el_params.loc[el_params["tomo_id"] == t, [column_name, "cx", "cy", "cz"]].values
 
             num_points = coord.shape[0]
             closest_ids = np.full(num_points, -1)
@@ -1225,11 +1225,11 @@ class PleomorphicSurface:
                         closest_distances[i] = distance
                         closest_ids[i] = fm_ep[e, 0]
 
-            tm.df[feature_id] = closest_ids
+            tm.df[column_name] = closest_ids
             assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
 
         if unassigned_value:
-            assigned_motl.df.loc[assigned_motl.df[feature_id] == unassigned_value, :] = assigned_motl_df.values
+            assigned_motl.df.loc[assigned_motl.df[column_name] == unassigned_value, :] = assigned_motl_df.values
         else:
             assigned_motl = cryomotl.Motl(assigned_motl_df)
 
@@ -1242,7 +1242,7 @@ class PleomorphicSurface:
     def assign_affiliation_intersection_based(
         input_motl,
         parametric_surface,
-        feature_id="object_id",
+        column_name="object_id",
         output_path=None,
         keep_unassigned=True,
     ):
@@ -1260,32 +1260,32 @@ class PleomorphicSurface:
             Particles to assign.  Euler angles are used to derive normals.
         parametric_surface : str or numpy.ndarray or Motl
             Surface parameter table; see :meth:`load_parametric_surface`.
-        feature_id : str, default='object_id'
+        column_name : str, default='object_id'
             Column that receives the assigned surface identifier.
         output_path : str, optional
             Path to save the result.
         keep_unassigned : bool, default=True
-            When ``False``, particles with ``feature_id == -1`` are removed.
+            When ``False``, particles with ``column_name == -1`` are removed.
 
         Returns
         -------
         Motl
-            Motl with ``feature_id`` updated.  Prints the count of
+            Motl with ``column_name`` updated.  Prints the count of
             unassigned/inside particles.
         """
         in_motl = cryomotl.Motl.load(input_motl)
         el_params = PleomorphicSurface.load_parametric_surface(
-            parametric_surface=parametric_surface, feature_id=feature_id
+            parametric_surface=parametric_surface, column_name=column_name
         )
-        tomos = in_motl.get_unique_values(feature_id="tomo_id")
+        tomos = in_motl.get_unique_values(column_name="tomo_id")
         assigned_motl_df = pd.DataFrame()
 
         for t in tomos:
-            tm = in_motl.get_motl_subset(feature_values=t, feature_id="tomo_id")
+            tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id")
             coord = tm.get_coordinates()
             normal_vectors = -geom.euler_angles_to_normals(tm.get_angles())
             fm_ep = el_params.loc[
-                el_params["tomo_id"] == t, [feature_id, "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]
+                el_params["tomo_id"] == t, [column_name, "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]
             ].values
 
             num_points = coord.shape[0]
@@ -1307,13 +1307,13 @@ class PleomorphicSurface:
                             closest_distances[i] = d
                             closest_ids[i] = fm_ep[e, 0]
 
-            tm.df[feature_id] = closest_ids
+            tm.df[column_name] = closest_ids
             assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
 
-        unassigned = assigned_motl_df[assigned_motl_df[feature_id] == -1].shape[0]
+        unassigned = assigned_motl_df[assigned_motl_df[column_name] == -1].shape[0]
 
         if not keep_unassigned:
-            assigned_motl_df = assigned_motl_df[assigned_motl_df[feature_id] != -1]
+            assigned_motl_df = assigned_motl_df[assigned_motl_df[column_name] != -1]
 
         assigned_motl_df.reset_index(drop=True, inplace=True)
         assigned_motl = cryomotl.Motl(assigned_motl_df)
@@ -1323,7 +1323,7 @@ class PleomorphicSurface:
         return assigned_motl
 
     @staticmethod
-    def compute_intersection(input_motl, parametric_surface, feature_id="object_id"):
+    def compute_intersection(input_motl, parametric_surface, column_name="object_id"):
         """Compute ray–ellipsoid intersection distances for each particle.
 
         For every particle a ray is cast along ``-euler_angles_to_normals``
@@ -1333,41 +1333,41 @@ class PleomorphicSurface:
         Parameters
         ----------
         input_motl : str or Motl
-            Particles grouped by ``feature_id``.
+            Particles grouped by ``column_name``.
         parametric_surface : str or numpy.ndarray or Motl
             Surface parameter table; see :meth:`load_parametric_surface`.
-        feature_id : str, default='object_id'
+        column_name : str, default='object_id'
             Column used to match particles to surfaces.
 
         Returns
         -------
         pandas.DataFrame
-            Columns: ``subtomo_id``, ``feature_id``, ``d1``, ``d2``
+            Columns: ``subtomo_id``, ``column_name``, ``d1``, ``d2``
             (the two signed intersection distances along the ray).
         """
         in_motl = cryomotl.Motl.load(input_motl)
         el_params = PleomorphicSurface.load_parametric_surface(
-            parametric_surface=parametric_surface, feature_id=feature_id
+            parametric_surface=parametric_surface, column_name=column_name
         )
-        features = in_motl.get_unique_values(feature_id=feature_id)
-        intersection_points = pd.DataFrame(columns=["subtomo_id", "feature_id", "d1", "d2"])
+        features = in_motl.get_unique_values(column_name=column_name)
+        intersection_points = pd.DataFrame(columns=["subtomo_id", "column_name", "d1", "d2"])
 
         for f in features:
-            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
+            fm = in_motl.get_motl_subset(column_values=f, column_name=column_name, reset_index=True)
             coord = fm.get_coordinates()
             normal_vectors = -geom.euler_angles_to_normals(fm.get_angles())
             fm_ep = el_params.loc[
-                el_params[feature_id] == f, ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]
+                el_params[column_name] == f, ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]
             ].values[0]
             for i in np.arange(0, coord.shape[0]):
                 _, _, d1, d2, _ = geom.ray_ellipsoid_intersection_3d(coord[i, :], normal_vectors[i, :], fm_ep)
-                new_row = pd.Series({"subtomo_id": fm.df.iloc[i]["subtomo_id"], "feature_id": f, "d1": d1, "d2": d2})
+                new_row = pd.Series({"subtomo_id": fm.df.iloc[i]["subtomo_id"], "column_name": f, "d1": d1, "d2": d2})
                 intersection_points = pd.concat([intersection_points, new_row.to_frame().T], ignore_index=True)
 
         return intersection_points
 
     @staticmethod
-    def compute_normals(input_motl, surface_params, feature_id="object_id", store_id="geom4", output_path=None):
+    def compute_normals(input_motl, surface_params, column_name="object_id", store_id="geom4", output_path=None):
         """Compute the angle between each particle's orientation and the surface normal.
 
         The surface normal at a particle's position is approximated as the
@@ -1378,10 +1378,10 @@ class PleomorphicSurface:
         Parameters
         ----------
         input_motl : str or Motl
-            Particles grouped by ``feature_id``.
+            Particles grouped by ``column_name``.
         surface_params : str or numpy.ndarray or Motl
             Surface parameter table; see :meth:`get_parametric_description`.
-        feature_id : str, default='object_id'
+        column_name : str, default='object_id'
             Column used to match particles to surfaces.
         store_id : str, default='geom4'
             Column that receives the angle values (degrees).
@@ -1394,15 +1394,15 @@ class PleomorphicSurface:
             Input motl with ``store_id`` populated.
         """
         in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(feature_id=feature_id)
-        el_params = PleomorphicSurface.get_parametric_description(surface_params, feature_id=feature_id)
+        features = in_motl.get_unique_values(column_name=column_name)
+        el_params = PleomorphicSurface.get_parametric_description(surface_params, column_name=column_name)
         assigned_motl_df = pd.DataFrame()
 
         for f in features:
-            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
+            fm = in_motl.get_motl_subset(column_values=f, column_name=column_name, reset_index=True)
             coord = fm.get_coordinates()
             normals = geom.euler_angles_to_normals(fm.get_angles())
-            center = el_params.loc[el_params[feature_id] == f, ["cx", "cy", "cz"]].values
+            center = el_params.loc[el_params[column_name] == f, ["cx", "cy", "cz"]].values
             normals_t = coord - np.tile(center, (coord.shape[0], 1))
             fm.df[store_id] = geom.angle_between_n_vectors(normals, normals_t)
             assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
@@ -1416,7 +1416,7 @@ class PleomorphicSurface:
     @staticmethod
     def clean_by_normals(
         input_motl,
-        feature_id="object_id",
+        column_name="object_id",
         compute_normals=True,
         surface_params=None,
         normals_id="geom4",
@@ -1433,7 +1433,7 @@ class PleomorphicSurface:
         ----------
         input_motl : str or Motl
             Particles to clean.
-        feature_id : str, default='object_id'
+        column_name : str, default='object_id'
             Column used to group particles (forwarded to
             :meth:`compute_normals`).
         compute_normals : bool, default=True
@@ -1461,7 +1461,7 @@ class PleomorphicSurface:
 
         if compute_normals:
             in_motl = PleomorphicSurface.compute_normals(
-                in_motl, surface_params, feature_id=feature_id, store_id=normals_id, output_path=None
+                in_motl, surface_params, column_name=column_name, store_id=normals_id, output_path=None
             )
 
         diff_angles = in_motl.df[normals_id].values
@@ -1485,7 +1485,7 @@ class PleomorphicSurface:
         return in_motl
 
     @staticmethod
-    def clean_by_radius(input_motl, feature_id="object_id", threshold=None, output_path=None):
+    def clean_by_radius(input_motl, column_name="object_id", threshold=None, output_path=None):
         """Remove particles that lie too far from the mean ellipsoid radius.
 
         For each surface group the mean radius ``(rx+ry+rz)/3`` and the
@@ -1497,8 +1497,8 @@ class PleomorphicSurface:
         Parameters
         ----------
         input_motl : str or Motl
-            Particles to clean, grouped by ``feature_id``.
-        feature_id : str, default='object_id'
+            Particles to clean, grouped by ``column_name``.
+        column_name : str, default='object_id'
             Column used to group particles.
         threshold : float, optional
             Half-width of the allowed distance band.  Defaults to one
@@ -1513,15 +1513,15 @@ class PleomorphicSurface:
             particles.
         """
         in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(feature_id=feature_id)
-        el_params = PleomorphicSurface.get_parametric_description(in_motl, feature_id=feature_id)
+        features = in_motl.get_unique_values(column_name=column_name)
+        el_params = PleomorphicSurface.get_parametric_description(in_motl, column_name=column_name)
         cleaned_motl_df = pd.DataFrame()
 
         for f in features:
-            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
+            fm = in_motl.get_motl_subset(column_values=f, column_name=column_name, reset_index=True)
             coord = fm.get_coordinates()
-            center = el_params.loc[el_params[feature_id] == f, ["cx", "cy", "cz"]].values
-            radius = np.mean(el_params.loc[el_params[feature_id] == f, ["rx", "ry", "rz"]].values)
+            center = el_params.loc[el_params[column_name] == f, ["cx", "cy", "cz"]].values
+            radius = np.mean(el_params.loc[el_params[column_name] == f, ["rx", "ry", "rz"]].values)
             distances = np.linalg.norm(coord - center, axis=1)
             to_remove = (
                 np.where((distances < radius - np.std(distances)) | (distances > radius + np.std(distances)))
@@ -1604,48 +1604,3 @@ class PleomorphicSurface:
         if output_path is not None:
             motl.write_out(output_path)
         return motl
-
-
-class MAK:
-    """Static helpers for MAK (multi-subunit complex) particle-list analysis."""
-
-    def get_centre_from_mean_subunit_location(subunit_motl, output_path):
-        """Compute the complex centre as the mean of its subunit positions.
-
-        For each unique ``object_id`` the mean x, y, z position (coordinates
-        + shifts) is written into the particle with ``geom2 == 1``.
-
-        Parameters
-        ----------
-        subunit_motl : Motl
-            Subunit particle list.  ``object_id`` identifies the complex;
-            ``geom2`` identifies the subunit type.
-        output_path : str or None
-            Path to save the result.  No file is written when ``None``.
-
-        Returns
-        -------
-        Motl
-            Motl containing only the ``geom2 == 1`` particles, with
-            coordinates replaced by the per-complex mean position.
-        """
-        subunit_motl.update_coordinates()
-        unique_obj_id = cryomotl.Motl.get_unique_values(subunit_motl, "object_id")
-        id_list = [i for i in unique_obj_id]
-        motl_object_id = cryomotl.Motl.get_motl_subset(subunit_motl, 1, "geom2", False, False)
-        for i in id_list:
-            motl_object_i = cryomotl.Motl.get_motl_subset(subunit_motl, i, "object_id", False, False)
-            coordx = motl_object_i.df.loc[:, ["x"]].values + motl_object_i.df.loc[:, ["shift_x"]].values
-            ctr_coordx = np.mean(coordx, 0)
-            coordy = motl_object_i.df.loc[:, ["y"]].values + motl_object_i.df.loc[:, ["shift_y"]].values
-            ctr_coordy = np.mean(coordy, 0)
-            coordz = motl_object_i.df.loc[:, ["z"]].values + motl_object_i.df.loc[:, ["shift_z"]].values
-            ctr_coordz = np.mean(coordz, 0)
-
-            motl_object_id.df.loc[lambda df: df["object_id"] == i, ["x"]] = ctr_coordx
-            motl_object_id.df.loc[lambda df: df["object_id"] == i, ["y"]] = ctr_coordy
-            motl_object_id.df.loc[lambda df: df["object_id"] == i, ["z"]] = ctr_coordz
-        motl_object_i.update_coordinates()
-        if output_path is not None:
-            cryomotl.Motl.write_out(motl_object_id, output_path)
-        return motl_object_id

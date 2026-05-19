@@ -11,12 +11,12 @@ import xml.etree.ElementTree as ET
 from cryocat.utils.exceptions import UserInputError
 
 
-def get_file_encoding(file_path):
+def get_file_encoding(input_path):
     """Detects the encoding of a file by trying a list of common encodings.
 
     Parameters
     ----------
-    file_path : str
+    input_path : str
         The path to the file for which the encoding needs to be determined.
 
     Returns
@@ -38,13 +38,13 @@ def get_file_encoding(file_path):
     encodings = ["utf-8", "iso-8859-1", "windows-1252"]
     for encoding in encodings:
         try:
-            with open(file_path, "r", encoding=encoding) as file:
+            with open(input_path, "r", encoding=encoding) as file:
                 _ = file.read()
             return encoding
         except UnicodeDecodeError:
             pass
     else:
-        raise UnicodeEncodeError(f"Failed to read file {file_path} with any of the tried encodings.")
+        raise UnicodeEncodeError(f"Failed to read file {input_path} with any of the tried encodings.")
 
 
 def get_all_files_matching_pattern(filename_pattern, numeric_wildcards_only=False, return_wildcards=True):
@@ -220,12 +220,12 @@ def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
     return sorted(matching_files)
 
 
-def get_number_of_lines_with_character(filename, character):
+def get_number_of_lines_with_character(input_path, character):
     """Count the number of lines in a file that start with a specified character.
 
     Parameters
     ----------
-    filename : str
+    input_path : str
         The path to the file to be read.
     character : str
         The character to check at the start of each line.
@@ -237,7 +237,7 @@ def get_number_of_lines_with_character(filename, character):
     """
 
     # Open the file for reading
-    with open(filename, "r") as file:
+    with open(input_path, "r") as file:
         # Count the number of lines starting with specified character
         count = sum(1 for line in file if line.startswith(character))
 
@@ -436,12 +436,12 @@ def get_data_from_warp_xml(xml_file_path, node_name, node_level=1):
         return None
 
 
-def warp_ctf_read(input_file):
+def warp_ctf_read(input_path):
     """Reads CTF parameters from a WARP XML file.
 
     Parameters
     ----------
-    input_file: str
+    input_path: str
         Path to the input WARP XML file.
 
     Returns:
@@ -452,11 +452,11 @@ def warp_ctf_read(input_file):
 
     df_columns = ["defocus1", "defocus2", "astigmatism", "phase_shift", "defocus_mean"]
     defocus_df = pd.DataFrame(columns=df_columns)
-    defocus_df["defocus_mean"] = get_data_from_warp_xml(input_file, "GridCTF", node_level=2)
-    defocus_df["phase_shift"] = get_data_from_warp_xml(input_file, "GridCTFPhase", node_level=2)
+    defocus_df["defocus_mean"] = get_data_from_warp_xml(input_path, "GridCTF", node_level=2)
+    defocus_df["phase_shift"] = get_data_from_warp_xml(input_path, "GridCTFPhase", node_level=2)
     defocus_df["defocus1"] = defocus_df["defocus_mean"]
     defocus_df["defocus2"] = defocus_df["defocus_mean"]
-    defocus_df["astigmatism"] = get_data_from_warp_xml(input_file, "GridCTFDefocusAngle", node_level=2)
+    defocus_df["astigmatism"] = get_data_from_warp_xml(input_path, "GridCTFDefocusAngle", node_level=2)
     return defocus_df
 
 def extract_defocus_data(df, u_col, v_col, angle_col, phase_col=None):
@@ -545,13 +545,13 @@ def defocus_load(input_data, file_type="gctf"):
 
     return defocus_df
 
-def gctf_read(file_path):
+def gctf_read(input_path):
     """This function reads in a gctf starfile and returns a pandas dataframe with the following columns:
     defocus1, defocus2, astigmatism, phase_shift, and defocus_mean. All defocii values are in micrometers.
 
     Parameters
     ----------
-    file_path: str
+    input_path: str
         Path to the gctf star file that contains values for all tilts in the tilt series. The columns to be read in are
         "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", and "rlnPhaseShift" (if present, otherwise the phase shift
         is set to 0.0). The defocii values are converted to micrometers.
@@ -564,7 +564,7 @@ def gctf_read(file_path):
 
     """
 
-    gctf_df = sf.Starfile.read(file_path, data_id=0)[0]
+    gctf_df = sf.Starfile.read(input_path, data_id=0)[0]
 
     return extract_defocus_data(
         gctf_df,
@@ -574,13 +574,13 @@ def gctf_read(file_path):
         phase_col="rlnPhaseShift"
     )
 
-def ctffind4_read(file_path):
+def ctffind4_read(input_path):
     """This function reads in a ctffind4 file (typically .txt) and returns a pandas dataframe with the following columns:
     defocus1, defocus2, astigmatism, phase_shift, and defocus_mean. All defocii values are in micrometers.
 
     Parameters
     ----------
-    file_path: str
+    input_path: str
         Path to the ctffind4 file (typically in .txt format) that contains values for all tilts in the tilt series.
         The defocii values are converted to micrometers.
 
@@ -591,8 +591,8 @@ def ctffind4_read(file_path):
         are in micrometers.
 
     """
-    rows_to_skip = get_number_of_lines_with_character(file_path, "#")
-    ctf = pd.read_csv(file_path, skiprows=rows_to_skip, header=None, dtype=np.float32, sep=r"\s+", engine="python")
+    rows_to_skip = get_number_of_lines_with_character(input_path, "#")
+    ctf = pd.read_csv(input_path, skiprows=rows_to_skip, header=None, dtype=np.float32, sep=r"\s+", engine="python")
     converted_ctf = ctf.iloc[:, 1:5].copy()
     converted_ctf.loc[:, converted_ctf.columns[0:2]] *= 10e-5
     converted_ctf.columns = ["defocus1", "defocus2", "astigmatism", "phase_shift"]
@@ -600,12 +600,12 @@ def ctffind4_read(file_path):
     converted_ctf["defocus_mean"] = (converted_ctf["defocus1"] + converted_ctf["defocus2"]).values / 2.0
     return converted_ctf
 
-def relion_ctffind4_read(file_path):
+def relion_ctffind4_read(input_path):
     """Reads a Relion ctffind4-style STAR file and extracts defocus data.
 
     Parameters
     ----------
-    file_path : str
+    input_path : str
         Path to the STAR file.
 
     Returns
@@ -613,7 +613,7 @@ def relion_ctffind4_read(file_path):
     pandas.DataFrame
         DataFrame with columns: defocus1, defocus2, astigmatism, phase_shift, defocus_mean
     """
-    df = sf.Starfile.read(file_path, data_id=0)[0]
+    df = sf.Starfile.read(input_path, data_id=0)[0]
 
     return extract_defocus_data(
         df,
@@ -624,13 +624,13 @@ def relion_ctffind4_read(file_path):
     )
 
 
-def one_value_per_line_read(file_path, data_type=np.float32):
+def one_value_per_line_read(input_path, data_type=np.float32):
     """This function reads in a file with one value per line and returns them as numpy ndarray. The values are expected
     to be in the format specified in data_type.
 
     Parameters
     ----------
-    file_path: str
+    input_path: str
         Path to the file where on each line there is expected to be a one value of the type specified by data_type.
     data_type: dtype, default=np.float32
         A typde of the data to be read in.
@@ -643,13 +643,13 @@ def one_value_per_line_read(file_path, data_type=np.float32):
     Raises
     -------
     ValueError
-        If file does not exist or if specified from file_path is not readable
+        If file does not exist or if specified from input_path is not readable
     """
-    if not os.path.isfile(file_path):
+    if not os.path.isfile(input_path):
         raise ValueError("The input file does not exist")
 
     try:
-        data_df = pd.read_csv(file_path, header=None, dtype=data_type, sep=r"\s+", engine="python")
+        data_df = pd.read_csv(input_path, header=None, dtype=data_type, sep=r"\s+", engine="python")
         if data_df.empty:
             raise ValueError("The input file is empty or contains no valid data.")
     except pd.errors.EmptyDataError:
@@ -999,12 +999,12 @@ def z_shift_load(input_shift):
     return z_shift
 
 
-def imod_com_read(filename):
+def imod_com_read(input_path):
     """Reads a file in IMOD's .com format and returns a dictionary containing the data.
 
     Parameters
     ----------
-    filename : str
+    input_path : str
         The name of the IMOC .com file to be read. All lines starting with # or $ are ignored, the rest is read in as
         dictionary. The keys are the first words of each line, and the values are the remaining words converted to the
         correct type.
@@ -1023,7 +1023,7 @@ def imod_com_read(filename):
 
     result_dict = {}
 
-    with open(filename, "r") as file:
+    with open(input_path, "r") as file:
         for line in file:
             # Ignore lines starting with #
             if line.startswith("#") or line.startswith("$"):
@@ -1044,13 +1044,13 @@ def imod_com_read(filename):
     return result_dict
 
 
-def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start=0, output_path=None):
+def remove_lines(input_path, lines_to_remove, start_str_to_skip=None, number_start=0, output_path=None):
     """Reads a file, removes specified lines while skipping those that start with given strings and returns/writes out
     the rest.
 
     Parameters
     ----------
-    filename : str
+    input_path : str
         The name of the file to remove the lines from.
     lines_to_remove: int or array-like
         Array/list (or single int) with numbers of lines to be removed. If start_str_to_skip is empty, the indices
@@ -1079,7 +1079,7 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
         start_str_to_skip = [start_str_to_skip]
 
     kept_counter = number_start
-    with open(filename, "r") as file:
+    with open(input_path, "r") as file:
         for line in file:
             if any(line.startswith(s) for s in start_str_to_skip):
                 filtered_lines.append(line)
@@ -1102,7 +1102,7 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
     elif not isinstance(start_str_to_skip, list):
         start_str_to_skip = [start_str_to_skip]
 
-    with open(filename, "r") as file:
+    with open(input_path, "r") as file:
         for line in file:
             if not any(line.startswith(s) for s in start_str_to_skip):
                 lines_to_write.append(line)
@@ -1116,14 +1116,14 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
     return filtered_lines """
 
 
-def dict_write(dict_data, file_name):
+def dict_write(dict_data, output_path):
     """Write the given dictionary to a file in JSON format.
 
     Parameters
     ----------
     dict_data : dict
         Dictionary containing the data to write to the file.
-    file_name : str
+    output_path : str
         The name of the file where the dictionary will be written.
 
     Returns
@@ -1131,7 +1131,7 @@ def dict_write(dict_data, file_name):
     None
     """
 
-    with open(file_name, "w") as json_file:
+    with open(output_path, "w") as json_file:
         json.dump(dict_data, json_file, indent=4)
 
 
@@ -1332,13 +1332,13 @@ def indices_reset(input_data):
 
 
 def defocus_remove_file_entries(
-    input_file, entries_to_remove, file_type="gctf", numbered_from_1=True, output_path=None
+    input_path, entries_to_remove, file_type="gctf", numbered_from_1=True, output_path=None
 ):
     """Remove specified entries from a file and optionally update a specification file.
 
     Parameters
     ----------
-    input_file : str
+    input_path : str
         The path to the input file from which entries will be removed.
     entries_to_remove : str, list, or numpy.ndarray
         The entries to remove can be specified as a file path to a CSV file, a text file containing indices
@@ -1349,7 +1349,7 @@ def defocus_remove_file_entries(
     numbered_from_1 : bool=True
         Indicates whether the entries in `entries_to_remove` are numbered from 1. Defaults to True.
     output_path : str, optional
-        The path to the output file where the modified content will be saved. If None, the input_file will be overwritten.
+        The path to the output file where the modified content will be saved. If None, the input_path will be overwritten.
         Defaults to None.
 
     Returns
@@ -1368,18 +1368,18 @@ def defocus_remove_file_entries(
     if lines_to_remove is not None:
 
         if output_path is None:
-            output_path = input_file
+            output_path = input_path
 
         if file_type.lower() == "gctf":
             sf.Starfile.remove_lines(
-                input_file,
+                input_path,
                 lines_to_remove,
                 output_path=output_path,
                 data_specifier="data_",
                 number_columns=True,
             )
         elif file_type.lower() == "ctffind4":
-            _ = remove_lines(input_file, lines_to_remove, start_str_to_skip=["#"], output_path=output_path)
+            _ = remove_lines(input_path, lines_to_remove, start_str_to_skip=["#"], output_path=output_path)
         else:
             print(f"The defocus filetype {file_type} is not supported and thus will not be cleaned.")
 

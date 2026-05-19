@@ -9,11 +9,11 @@ from pathlib import PureWindowsPath
 class Mdoc:
     """Class for reading, writing, and manipulating Mdoc files."""
 
-    def __init__(self, file_path=None, titles=None, project_info=None, imgs=None, section_id="ZValue"):
+    def __init__(self, input_path=None, titles=None, project_info=None, imgs=None, section_id="ZValue"):
         """
         Parameters
         ----------
-        file_path : str, optional
+        input_path : str, optional
             Path to an existing ``.mdoc`` file to read.  When supplied and the
             file exists, all other arguments are ignored.
         titles : list of str, optional
@@ -27,9 +27,9 @@ class Mdoc:
             Column name used as the section identifier (``'ZValue'`` or
             ``'FrameSet'``).
         """
-        if file_path and path.isfile(file_path):
-            self.file_path = file_path
-            self.titles, self.project_info, self.imgs, self.section_id = self._read_mdoc(file_path)
+        if input_path and path.isfile(input_path):
+            self.input_path = input_path
+            self.titles, self.project_info, self.imgs, self.section_id = self._read_mdoc(input_path)
         else:
             self.titles = titles
             self.project_info = project_info
@@ -269,12 +269,12 @@ class Mdoc:
             imgs = pd.concat([imgs, self.get_image_by_zvalue_range(zvalue_min, zvalue_max)], ignore_index=True)
         return imgs
 
-    def get_image_feature(self, feature):
+    def get_image_feature(self, column_name):
         """Return a single column from the image DataFrame.
 
         Parameters
         ----------
-        feature : str
+        column_name : str
             Column name.
 
         Returns
@@ -282,7 +282,7 @@ class Mdoc:
         pandas.Series
             The requested column.
         """
-        return self.imgs[feature]
+        return self.imgs[column_name]
 
     def get_image_features(self, features):
         """Return multiple columns from the image DataFrame.
@@ -322,8 +322,8 @@ class Mdoc:
             New directory to prepend to each frame filename.  When ``None``
             or empty, paths are reduced to filenames only.
         """
-        def add_new_path(file_name):
-            return path.join(new_path, file_name)
+        def add_new_path(input_path):
+            return path.join(new_path, input_path)
 
         self.imgs["SubFramePath"] = self.imgs["SubFramePath"].apply(path.basename)
 
@@ -403,8 +403,8 @@ class Mdoc:
         self.project_info = new_project_info
 
     @staticmethod
-    def _read_mdoc(file_path):
-        with open(file_path, "r") as f:
+    def _read_mdoc(input_path):
+        with open(input_path, "r") as f:
             lines = f.readlines()
 
             # separate first part of lines until a first occurrence of a line starting with "[ZValue"

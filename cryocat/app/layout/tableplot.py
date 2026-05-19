@@ -534,7 +534,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
 
                 fig = visplot.plot_histogram(
                     input_data=input_data,
-                    input_data_id=x_values,
+                    column_names_x=x_values,
                     bins=h_bins,
                     separate_graphs=plot_separately,
                     hist_type=h_type.lower(),
@@ -548,10 +548,10 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
 
                 fig = visplot.plot_histogram_2d(
                     input_data=input_data,
-                    input_data_id=x_values,
+                    column_names_x=x_values,
                     separate_graphs=plot_separately,
                     second_axis_data=input_data,
-                    second_axis_id=h2D_column_options,
+                    column_names_y=h2D_column_options,
                     hist_type=h2D_type.lower(),
                     hist_norm=h2D_norm.lower(),
                     nbinsx=h2D_binsx,
@@ -565,9 +565,9 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
             elif graph_type == "Kernel density estimation":
                 fig = visplot.plot_kde(
                     input_data=input_data,
-                    input_data_id=x_values,
+                    column_names_x=x_values,
                     second_axis_data=input_data,
-                    second_axis_id=h2D_column_options,
+                    column_names_y=h2D_column_options,
                     nbinsx=h2D_binsx,
                     nbinsy=h2D_binsy,
                     hist_type=h2D_type.lower(),
@@ -585,7 +585,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
                     all_ids.extend(parsed)
                 fig = visplot.plot_spherical_density_2d(
                     input_data=input_data,
-                    input_data_id=all_ids,
+                    column_names_x=all_ids,
                     nbinsx=h2D_binsx,
                     nbinsy=h2D_binsy,
                     x_range=None,
@@ -601,7 +601,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
             elif graph_type == "Line plot":  # , "Scatter plot 1D", "Scatter plot 2D""
                 fig = visplot.plot_line(
                     input_data=input_data,
-                    input_data_id=x_values,
+                    column_names_x=x_values,
                     separate_graphs=plot_separately,
                     same_range_for_separate=same_range,
                     colors=effective_colorscale,
@@ -611,7 +611,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
             elif graph_type == "Scatter plot 1D":  # "Scatter plot 2D""
                 fig = visplot.plot_scatter_2d(
                     input_data=input_data,
-                    input_data_id=x_values,
+                    column_names_x=x_values,
                     separate_graphs=plot_separately,
                     same_range_for_separate=same_range,
                     colors=effective_colorscale,
@@ -646,9 +646,9 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
 
                 fig = visplot.plot_scatter_2d(
                     input_data=input_data,
-                    input_data_id=x_values,
+                    column_names_x=x_values,
                     second_axis_data=input_data,
-                    second_axis_id=y_values,
+                    column_names_y=y_values,
                     separate_graphs=plot_separately,
                     same_range_for_separate=same_range,
                     colors=effective_colorscale,

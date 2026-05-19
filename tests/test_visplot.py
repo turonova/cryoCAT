@@ -149,37 +149,37 @@ class TestDefaults:
 
 
 # ---------------------------------------------------------------------------
-# format_input_data_id
+# _format_column_names
 # ---------------------------------------------------------------------------
 
-class TestFormatInputDataId:
+class TestFormatColumnNames:
     def test_dataframe_no_id(self):
         df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
-        result = vp._format_input_data_id(df, None)
+        result = vp._format_column_names(df, None)
         assert list(result) == ["a", "b"]
 
     def test_ndarray_1d_no_id(self):
         arr = np.array([1.0, 2.0, 3.0])
-        result = vp._format_input_data_id(arr, None)
+        result = vp._format_column_names(arr, None)
         assert result == ["Value"]
 
     def test_ndarray_2d_no_id(self):
         arr = np.zeros((5, 3))
-        result = vp._format_input_data_id(arr, None)
+        result = vp._format_column_names(arr, None)
         assert result == ["Value", "Value", "Value"]
 
     def test_explicit_id_returned_unchanged(self):
         df = pd.DataFrame({"x": [1]})
-        result = vp._format_input_data_id(df, ["x"])
+        result = vp._format_column_names(df, ["x"])
         assert result == ["x"]
 
     def test_invalid_type_raises(self):
         with pytest.raises(TypeError):
-            vp._format_input_data_id([1, 2, 3], None)
+            vp._format_column_names([1, 2, 3], None)
 
     def test_custom_default_name(self):
         arr = np.zeros((4, 2))
-        result = vp._format_input_data_id(arr, None, default_name="Col")
+        result = vp._format_column_names(arr, None, default_name="Col")
         assert result == ["Col", "Col"]
 
 
@@ -315,26 +315,6 @@ class TestCreateProjection:
 
 
 # ---------------------------------------------------------------------------
-# get_colors_from_palette
-# ---------------------------------------------------------------------------
-
-class TestGetColorsFromPalette:
-    def test_returns_correct_count(self):
-        result = vp.get_colors_from_palette(5)
-        assert len(result) == 5
-
-    def test_returns_hex_strings(self):
-        result = vp.get_colors_from_palette(3)
-        for c in result:
-            assert c.startswith("#")
-            assert len(c) == 7
-
-    def test_custom_palette(self):
-        result = vp.get_colors_from_palette(4, pallete_name="viridis")
-        assert len(result) == 4
-
-
-# ---------------------------------------------------------------------------
 # plot_scatter_xyz_panels
 # ---------------------------------------------------------------------------
 
@@ -405,7 +385,7 @@ class TestPlotScatter3d:
 
     def test_color_column_sets_marker_color(self):
         df = self._make_df()
-        fig = vp.plot_scatter_3d(df, coord_columns=["x", "y", "z"], color_column="val")
+        fig = vp.plot_scatter_3d(df, coord_columns=["x", "y", "z"], color_column_name="val")
         assert fig.data[0].marker.color is not None
 
     def test_wrong_coord_columns_raises(self):
@@ -427,23 +407,23 @@ class TestPlotGroupedBox:
     def test_returns_figure(self):
         import plotly.graph_objects as go
         df = self._make_df()
-        fig = vp.plot_grouped_box(df, group_column="group", value_column="value")
+        fig = vp.plot_grouped_box(df, group_column_name="group", value_column_name="value")
         assert isinstance(fig, go.Figure)
 
     def test_one_box_per_group(self):
         df = self._make_df()
-        fig = vp.plot_grouped_box(df, group_column="group", value_column="value")
+        fig = vp.plot_grouped_box(df, group_column_name="group", value_column_name="value")
         assert len(fig.data) == 3
 
     def test_group_names_match(self):
         df = self._make_df()
-        fig = vp.plot_grouped_box(df, group_column="group", value_column="value")
+        fig = vp.plot_grouped_box(df, group_column_name="group", value_column_name="value")
         names = {t.name for t in fig.data}
         assert names == {"A", "B", "C"}
 
     def test_title_applied(self):
         df = self._make_df()
-        fig = vp.plot_grouped_box(df, group_column="group", value_column="value",
+        fig = vp.plot_grouped_box(df, group_column_name="group", value_column_name="value",
                                   title="My Title")
         assert fig.layout.title.text == "My Title"
 

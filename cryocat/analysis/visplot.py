@@ -44,6 +44,11 @@ def _save_plotly(fig: go.Figure, output_path: Optional[PathOrStr]) -> None:
 
 
 def _save_mpl(fig, output_path: Optional[PathOrStr]) -> None:
+    """Save a matplotlib figure to disk via :meth:`~matplotlib.figure.Figure.savefig`.
+
+    No-op when *output_path* is ``None``. The figure's own ``dpi`` is preserved
+    by passing ``dpi=fig.dpi``.
+    """
     if output_path is None:
         return
     fig.savefig(str(output_path), dpi=fig.dpi)
@@ -311,7 +316,12 @@ def set_defaults(**kwargs) -> None:
 
 @contextmanager
 def use_defaults(**overrides) -> Iterator[None]:
-    """Temporarily override DEFAULTS inside a 'with' block."""
+    """Temporarily override DEFAULTS inside a 'with' block.
+
+    Yields
+    ------
+    None
+    """
     global DEFAULTS
     old = deepcopy(DEFAULTS)
     try:
@@ -343,71 +353,12 @@ def px_defaults(**overrides) -> dict:
     return base
 
 
-# ---------------- Old -> remove -------------
-
-
-def get_colors_from_palette(num_colors, pallete_name="tab10"):
-    """Generate a list of color codes in hexadecimal format from a specified color palette.
-
-    Parameters
-    ----------
-    num_colors : int
-        The number of distinct colors to generate.
-    pallete_name : str, optional
-        The name of the color palette to use (default is "tab10").
-
-    Returns
-    -------
-    list of str
-        A list containing the hexadecimal color codes.
-
-    Examples
-    --------
-    >>> get_colors_from_palette(3)
-    ['#1f77b4', '#ff7f0e', '#2ca02c']
-    >>> get_colors_from_palette(5, pallete_name="viridis")
-    ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725']
-    """
-
-    # Generate a colormap with the desired number of distinct colors
-    cmap = plt.cm.get_cmap(pallete_name, num_colors)
-
-    # Convert RGBA colors to hex format
-    color_classes_hex = [colors.rgb2hex(cmap(i)) for i in range(num_colors)]
-
-    return color_classes_hex
-
-
-def convert_color_scheme(num_colors, color_scheme=None):
-    """Return a list of ``num_colors`` color strings from a scheme specification.
-
-    Parameters
-    ----------
-    num_colors : int
-        Number of colors to return.
-    color_scheme : str or list of str, optional
-        Name of a matplotlib colormap, a list of explicit color strings, or
-        ``None`` to use the default palette (``tab10``).
-
-    Returns
-    -------
-    list of str
-        Hex or named color strings of length ``num_colors``.
-    """
-    if color_scheme is None:
-        return get_colors_from_palette(num_colors)
-    elif isinstance(color_scheme, "str"):
-        return get_colors_from_palette(num_colors, pallete_name=color_scheme)
-    elif isinstance(color_scheme, list):
-        return color_scheme[:num_colors]
-
-
 # ---------------- Helpers for data formatting -------
 
 
-def _format_input_data_id(
+def _format_column_names(
     input_data: Union[pd.DataFrame, np.ndarray],
-    input_data_id: Optional[Sequence[str]],
+    column_names_x: ColumnNames,
     default_name: str = "Value",
 ) -> Sequence[str]:
     """Resolve column/series names for *input_data*.
@@ -415,34 +366,36 @@ def _format_input_data_id(
     Parameters
     ----------
     input_data : pandas.DataFrame or numpy.ndarray
-        Data whose column names are to be resolved.
-    input_data_id : list of str or None
-        Explicit column names.  When ``None``, column names are taken from
-        the DataFrame index or set to ``[default_name] * n_cols``.
+        Data whose column names are to be resolved. The builder framework
+        consumes already-loaded in-memory data, so paths are not accepted
+        here.
+    column_names_x : list of str, optional
+        Explicit column names. When ``None``, column names are taken from
+        the DataFrame columns or set to ``[default_name] * n_cols``.
     default_name : str, default="Value"
         Fallback name used for each column when *input_data* is an ndarray
-        and *input_data_id* is ``None``.
+        and *column_names_x* is ``None``.
 
     Returns
     -------
     list of str
         Resolved column names.
     """
-    if input_data_id is None:  # no axis names specified
+    if column_names_x is None:  # no axis names specified
         if isinstance(input_data, pd.DataFrame):  # if dataframe, take all columns
-            input_data_id = input_data.columns
+            column_names_x = input_data.columns
         elif isinstance(input_data, np.ndarray):  # in ndarray name all axis x
             n = 1 if input_data.ndim == 1 else input_data.shape[1]
-            input_data_id = [default_name] * n
+            column_names_x = [default_name] * n
         else:
             raise TypeError("input_data must be a pandas DataFrame or a numpy ndarray.")
 
-    return input_data_id
+    return column_names_x
 
 
 def _format_input_data(
     input_data: Union[pd.DataFrame, np.ndarray],
-    input_data_id: Sequence[str],
+    column_names_x: Sequence[str],
     n_columns: int,
 ) -> Tuple[np.ndarray, Sequence[str]]:
     """Extract and validate data columns from a DataFrame or ndarray.
@@ -451,7 +404,7 @@ def _format_input_data(
     ----------
     input_data : pandas.DataFrame or numpy.ndarray
         Source data.
-    input_data_id : list of str
+    column_names_x : list of str
         Column names to extract (for DataFrame) or labels to associate
         (for ndarray).
     n_columns : int
@@ -465,22 +418,22 @@ def _format_input_data(
         Column labels actually used.
     """
     if isinstance(input_data, pd.DataFrame):
-        cols = [c for c in input_data_id if c in input_data.columns]
+        cols = [c for c in column_names_x if c in input_data.columns]
         if not cols:
             raise ValueError("None of the requested columns are present in the DataFrame.")
         return input_data[cols].dropna().to_numpy(), cols
 
     elif isinstance(input_data, np.ndarray):
         arr = np.asarray(input_data)
-        if len(input_data_id) != n_columns:
-            if len(input_data_id) == 1:  # if only one name was specified use it for all columns
-                input_data_id = input_data_id[0] * n_columns
+        if len(column_names_x) != n_columns:
+            if len(column_names_x) == 1:  # if only one name was specified use it for all columns
+                column_names_x = column_names_x[0] * n_columns
             raise ValueError(
-                f"Length of input_data_id ({len(input_data_id)}) must be 1 or equal number of columns ({n_columns})."
+                f"Length of column_names_x ({len(column_names_x)}) must be 1 or equal number of columns ({n_columns})."
             )
 
         # Pandas handles 1D as a single-column DataFrame when columns has length 1
-        return arr, input_data_id
+        return arr, column_names_x
 
     else:
         raise TypeError("input_data must be a pandas DataFrame or a numpy ndarray.")
@@ -500,7 +453,7 @@ class BaseBuilder:
     ----------
     input_data : pandas.DataFrame or numpy.ndarray
         Data to plot.
-    input_data_id : list of str, optional
+    column_names_x : list of str, optional
         Column names.  Resolved automatically when ``None``.
     colors : str or list of str, optional
         Palette name, colorscale name, or explicit list of color strings.
@@ -521,7 +474,7 @@ class BaseBuilder:
     def __init__(
         self,
         input_data,
-        input_data_id=None,
+        column_names_x=None,
         colors=None,
         separate_graphs=False,
         same_range_for_separate=True,
@@ -530,11 +483,11 @@ class BaseBuilder:
         color_type="palette",
     ):
 
-        input_data_id = _format_input_data_id(input_data, input_data_id)
+        column_names_x = _format_column_names(input_data, column_names_x)
 
-        self.n_columns = len(input_data_id)
+        self.n_columns = len(column_names_x)
 
-        self.x_axis, self.x_id = _format_input_data(input_data, input_data_id, self.n_columns)
+        self.x_axis, self.x_id = _format_input_data(input_data, column_names_x, self.n_columns)
 
         # Set colors
         if color_type == "palette":
@@ -670,7 +623,7 @@ class BaseBuilder:
         self.opacity = 1.0 if opacity is None else opacity
         self.update_layout_settings(**dict(showlegend=False, height=max(360, 250 * self.n_columns)))
 
-    def process_second_axis_data(self, second_axis_data, second_axis_id, x_id="x"):
+    def process_second_axis_data(self, second_axis_data, column_names_y, x_id="x"):
         """Load and align a second (Y) axis onto ``self.y_axis`` / ``self.y_id``.
 
         When *second_axis_data* is ``None``, the original ``x_axis`` is
@@ -681,7 +634,7 @@ class BaseBuilder:
         ----------
         second_axis_data : array-like or pandas.DataFrame or None
             Data for the Y axis.  ``None`` triggers the index-as-x fallback.
-        second_axis_id : list of str or None
+        column_names_y : list of str or None
             Column names for *second_axis_data*.
         x_id : str, default="x"
             Column label used for the synthetic index axis.
@@ -693,7 +646,7 @@ class BaseBuilder:
             of X columns.
         """
         if second_axis_data is not None:
-            self.y_id = _format_input_data_id(second_axis_data, second_axis_id)
+            self.y_id = _format_column_names(second_axis_data, column_names_y)
             self.y_axis, _ = _format_input_data(second_axis_data, self.y_id, self.n_columns)
             self.y_axis, self.y_id, expanded = self._expand_array(self.y_axis, self.y_id)
             self.legend = self.x_id
@@ -790,7 +743,7 @@ class HistBuilder(BaseBuilder):
     ----------
     input_data : pandas.DataFrame or numpy.ndarray
         Data to histogram.
-    input_data_id : list of str, optional
+    column_names_x : list of str, optional
         Column labels.
     bins : int, default=20
         Number of bins.
@@ -818,7 +771,7 @@ class HistBuilder(BaseBuilder):
     def __init__(
         self,
         input_data,
-        input_data_id=None,
+        column_names_x=None,
         bins=20,
         hist_type="count",  # "count" | "sum" | "avg" | "min" | "max"
         hist_norm="",  # "percent" | "probability" | "density" | "probability density"
@@ -833,7 +786,7 @@ class HistBuilder(BaseBuilder):
 
         super().__init__(
             input_data,
-            input_data_id,
+            column_names_x,
             colors=colors,
             separate_graphs=separate_graphs,
             same_range_for_separate=same_range_for_separate,
@@ -955,11 +908,11 @@ class Hist2DBuilder(BaseBuilder):
     ----------
     input_data : pandas.DataFrame or numpy.ndarray
         X-axis data.
-    input_data_id : list of str, optional
+    column_names_x : list of str, optional
         Column labels for *input_data*.
     second_axis_data : array-like or pandas.DataFrame, optional
         Y-axis data.  When ``None``, the sequential index is used.
-    second_axis_id : list of str, optional
+    column_names_y : list of str, optional
         Column labels for *second_axis_data*.
     nbinsx : int, default=40
         Number of bins along the X axis.
@@ -990,9 +943,9 @@ class Hist2DBuilder(BaseBuilder):
     def __init__(
         self,
         input_data,
-        input_data_id=None,
+        column_names_x=None,
         second_axis_data=None,
-        second_axis_id=None,
+        column_names_y=None,
         nbinsx=40,
         nbinsy=40,
         x_range=None,  # (xmin, xmax) or None
@@ -1009,7 +962,7 @@ class Hist2DBuilder(BaseBuilder):
 
         super().__init__(
             input_data,
-            input_data_id,
+            column_names_x,
             colors=colors,
             separate_graphs=separate_graphs,
             same_range_for_separate=same_range_for_separate,
@@ -1018,7 +971,7 @@ class Hist2DBuilder(BaseBuilder):
             color_type="colorscale",
         )
 
-        expanded = self.process_second_axis_data(second_axis_data, second_axis_id)
+        expanded = self.process_second_axis_data(second_axis_data, column_names_y)
 
         if not expanded and self.n_columns > 1 and not separate_graphs:
             self.change_to_separate_graphs(
@@ -1199,11 +1152,11 @@ class ScatterBuilder(BaseBuilder):
     ----------
     input_data : pandas.DataFrame or numpy.ndarray
         X-axis data (or Y-axis data when *second_axis_data* is ``None``).
-    input_data_id : list of str, optional
+    column_names_x : list of str, optional
         Column labels.
     second_axis_data : array-like or pandas.DataFrame, optional
         Y-axis data.
-    second_axis_id : list of str, optional
+    column_names_y : list of str, optional
         Column labels for *second_axis_data*.
     line_mode : str, default="markers"
         Plotly ``mode`` string, e.g. ``"markers"``, ``"lines"``,
@@ -1227,9 +1180,9 @@ class ScatterBuilder(BaseBuilder):
     def __init__(
         self,
         input_data,
-        input_data_id=None,
+        column_names_x=None,
         second_axis_data=None,
-        second_axis_id=None,
+        column_names_y=None,
         line_mode="markers",
         x_range=None,  # (xmin, xmax) or None
         y_range=None,  # (ymin, ymax) or None
@@ -1242,7 +1195,7 @@ class ScatterBuilder(BaseBuilder):
 
         super().__init__(
             input_data,
-            input_data_id,
+            column_names_x,
             colors=colors,
             separate_graphs=separate_graphs,
             same_range_for_separate=same_range_for_separate,
@@ -1251,7 +1204,7 @@ class ScatterBuilder(BaseBuilder):
             color_type="palette",
         )
 
-        expanded = self.process_second_axis_data(second_axis_data, second_axis_id)
+        expanded = self.process_second_axis_data(second_axis_data, column_names_y)
 
         self.mode = line_mode
 
@@ -1335,11 +1288,11 @@ class KDEBuilder(Hist2DBuilder):
     ----------
     input_data : pandas.DataFrame or numpy.ndarray
         X-axis data.
-    input_data_id : list of str, optional
+    column_names_x : list of str, optional
         Column labels.
     second_axis_data : array-like or pandas.DataFrame, optional
         Y-axis data.
-    second_axis_id : list of str, optional
+    column_names_y : list of str, optional
         Column labels for *second_axis_data*.
     nbinsx : int, default=200
         Grid resolution along the X axis.
@@ -1368,9 +1321,9 @@ class KDEBuilder(Hist2DBuilder):
     def __init__(
         self,
         input_data,
-        input_data_id=None,
+        column_names_x=None,
         second_axis_data=None,
-        second_axis_id=None,
+        column_names_y=None,
         nbinsx=200,
         nbinsy=200,
         x_range=None,  # (xmin, xmax) or None
@@ -1387,9 +1340,9 @@ class KDEBuilder(Hist2DBuilder):
 
         super().__init__(
             input_data,
-            input_data_id,
+            column_names_x,
             second_axis_data=second_axis_data,
-            second_axis_id=second_axis_id,
+            column_names_y=column_names_y,
             nbinsx=nbinsx,
             nbinsy=nbinsy,
             x_range=x_range,  # (xmin, xmax) or None
@@ -1619,14 +1572,14 @@ class KDEBuilder(Hist2DBuilder):
 
 def plot_histogram(
     input_data: DataFrameSource,
-    input_data_id: ColumnNames,
+    column_names_x: ColumnNames = None,
     bins: int = 20,
     separate_graphs: bool = False,
-    hist_type: str = "count",
+    hist_type: str = "count",  # "count" | "sum" | "avg" | "min" | "max"
     hist_norm: str = "",
     same_range_for_separate: bool = True,
     same_scale: bool = False,
-    colors: Optional[Union[str, Sequence[str]]] = None,
+    colors: Optional[Union[str, Sequence[Color]]] = None,
     opacity: Optional[float] = None,
     grid_spec: str = "column",
 ) -> go.Figure:
@@ -1634,10 +1587,10 @@ def plot_histogram(
 
     Parameters
     ----------
-    input_data : pandas.DataFrame or numpy.ndarray
-        Data to histogram.
-    input_data_id : list of str
-        Column labels.
+    input_data : DataFrameSource
+        Data to histogram. Normalized via :func:`cryocat.utils.ioutils.df_load`.
+    column_names_x : list of str, optional
+        Column labels. Defaults to the DataFrame's own columns.
     bins : int, default=20
         Number of bins.
     separate_graphs : bool, default=False
@@ -1664,7 +1617,7 @@ def plot_histogram(
     input_data = ioutils.df_load(input_data)
     builder = HistBuilder(
         input_data=input_data,
-        input_data_id=input_data_id,
+        column_names_x=column_names_x,
         bins=bins,
         hist_type=hist_type,
         hist_norm=hist_norm,
@@ -1682,9 +1635,9 @@ def plot_histogram(
 
 def plot_histogram_2d(
     input_data: DataFrameSource,
-    input_data_id: ColumnNames = None,
+    column_names_x: ColumnNames = None,
     second_axis_data: Optional[DataFrameSource] = None,
-    second_axis_id: ColumnNames = None,
+    column_names_y: ColumnNames = None,
     nbinsx: int = 40,
     nbinsy: int = 40,
     x_range: Optional[Tuple[float, float]] = None,
@@ -1692,7 +1645,7 @@ def plot_histogram_2d(
     hist_type: str = "count",
     hist_norm: Optional[str] = None,
     same_scale: bool = False,
-    colors: Optional[Union[str, Sequence[str]]] = None,
+    colors: Optional[Union[str, Sequence[Color]]] = None,
     separate_graphs: bool = False,
     same_range_for_separate: bool = True,
     opacity: Optional[float] = None,
@@ -1702,13 +1655,13 @@ def plot_histogram_2d(
 
     Parameters
     ----------
-    input_data : pandas.DataFrame or numpy.ndarray
-        X-axis data.
-    input_data_id : list of str, optional
+    input_data : DataFrameSource
+        X-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
+    column_names_x : list of str, optional
         Column labels for X data.
-    second_axis_data : array-like or pandas.DataFrame, optional
-        Y-axis data.
-    second_axis_id : list of str, optional
+    second_axis_data : DataFrameSource, optional
+        Y-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
+    column_names_y : list of str, optional
         Column labels for Y data.
     nbinsx : int, default=40
         Bins along X.
@@ -1720,7 +1673,7 @@ def plot_histogram_2d(
         ``(min, max)`` for the Y axis.
     hist_type : str, default="count"
         Plotly aggregation function.
-    hist_norm : str or None, optional
+    hist_norm : str, optional
         Normalisation string.
     same_scale : bool, default=False
         Shared colorscale across subplots.
@@ -1744,9 +1697,9 @@ def plot_histogram_2d(
         second_axis_data = ioutils.df_load(second_axis_data)
     builder = Hist2DBuilder(
         input_data=input_data,
-        input_data_id=input_data_id,
+        column_names_x=column_names_x,
         second_axis_data=second_axis_data,
-        second_axis_id=second_axis_id,
+        column_names_y=column_names_y,
         nbinsx=nbinsx,
         nbinsy=nbinsy,
         x_range=x_range,
@@ -1767,7 +1720,7 @@ def plot_histogram_2d(
 
 def plot_spherical_density_2d(
     input_data: DataFrameSource,
-    input_data_id: ColumnNames = None,
+    column_names_x: ColumnNames = None,
     nbinsx: int = 10,
     nbinsy: int = 10,
     x_range: Optional[Tuple[float, float]] = None,
@@ -1775,7 +1728,7 @@ def plot_spherical_density_2d(
     hist_type: str = "count",
     hist_norm: str = "percent",
     normalize_coord: bool = True,
-    colors: Optional[Union[str, Sequence[str]]] = "Viridis",
+    colors: Union[str, Colorscale, Sequence[Color]] = "Viridis",
     same_scale: bool = False,
     same_range_for_separate: bool = False,
     grid_spec: str = "column",
@@ -1787,10 +1740,11 @@ def plot_spherical_density_2d(
 
     Parameters
     ----------
-    input_data : pandas.DataFrame or numpy.ndarray
-        Cartesian coordinates.  Must contain a multiple-of-3 number of
-        columns (x, y, z for each set) when given as a DataFrame.
-    input_data_id : list of str, optional
+    input_data : DataFrameSource
+        Cartesian coordinates. Must contain a multiple-of-3 number of columns
+        (x, y, z for each set) when given as a DataFrame or CSV. Normalized
+        via :func:`cryocat.utils.ioutils.df_load`.
+    column_names_x : list of str, optional
         Column names when *input_data* is a DataFrame.
     nbinsx : int, default=10
         Bins along the phi axis.
@@ -1819,12 +1773,17 @@ def plot_spherical_density_2d(
     -------
     plotly.graph_objects.Figure
     """
+    # Accept CSV path; ndarray skips the DataFrame branch below entirely.
     if isinstance(input_data, str):
         input_data = ioutils.df_load(input_data)
+
     if isinstance(input_data, pd.DataFrame):
-        if not input_data_id:
-            raise ValueError("When input_data is a DataFrame, input_data_id (ordered list of columns) is required.")
-        cols = [c for c in input_data_id if c in input_data.columns]
+        if not column_names_x:
+            raise ValueError(
+                "When input_data is a DataFrame or CSV path, column_names_x "
+                "(ordered list of columns) is required."
+            )
+        cols = [c for c in column_names_x if c in input_data.columns]
         if len(cols) == 0 or (len(cols) % 3) != 0:
             raise ValueError(f"Expected a multiple of 3 columns, got {len(cols)}.")
         # drop rows with NaNs across the selected columns
@@ -1840,9 +1799,9 @@ def plot_spherical_density_2d(
 
     builder = Hist2DBuilder(
         input_data=phi,
-        input_data_id=["phi"] * phi.shape[1],
+        column_names_x=["phi"] * phi.shape[1],
         second_axis_data=theta,
-        second_axis_id=["theta"] * theta.shape[1],
+        column_names_y=["theta"] * theta.shape[1],
         nbinsx=nbinsx,
         nbinsy=nbinsy,
         x_range=x_range,
@@ -1902,14 +1861,14 @@ def plot_spherical_density_2d(
 
 def plot_scatter_2d(
     input_data: DataFrameSource,
-    input_data_id: ColumnNames,
+    column_names_x: ColumnNames = None,
     second_axis_data: Optional[DataFrameSource] = None,
-    second_axis_id: ColumnNames = None,
+    column_names_y: ColumnNames = None,
     separate_graphs: bool = False,
     same_range_for_separate: bool = False,
     x_range: Optional[Tuple[float, float]] = None,
     y_range: Optional[Tuple[float, float]] = None,
-    colors: Optional[Union[str, Sequence[str]]] = None,
+    colors: Optional[Union[str, Sequence[Color]]] = None,
     opacity: Optional[float] = None,
     grid_spec: str = "column",
 ) -> go.Figure:
@@ -1917,13 +1876,13 @@ def plot_scatter_2d(
 
     Parameters
     ----------
-    input_data : pandas.DataFrame or numpy.ndarray
-        X-axis data.
-    input_data_id : list of str
+    input_data : DataFrameSource
+        X-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
+    column_names_x : list of str, optional
         Column labels for X data.
-    second_axis_data : array-like or pandas.DataFrame, optional
-        Y-axis data.
-    second_axis_id : list of str, optional
+    second_axis_data : DataFrameSource, optional
+        Y-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
+    column_names_y : list of str, optional
         Column labels for Y data.
     separate_graphs : bool, default=False
         One subplot per column pair.
@@ -1949,9 +1908,9 @@ def plot_scatter_2d(
         second_axis_data = ioutils.df_load(second_axis_data)
     builder = ScatterBuilder(
         input_data=input_data,
-        input_data_id=input_data_id,
+        column_names_x=column_names_x,
         second_axis_data=second_axis_data,
-        second_axis_id=second_axis_id,
+        column_names_y=column_names_y,
         colors=colors,
         separate_graphs=separate_graphs,
         same_range_for_separate=same_range_for_separate,
@@ -1968,10 +1927,10 @@ def plot_scatter_2d(
 
 def plot_line(
     input_data: DataFrameSource,
-    input_data_id: ColumnNames,
+    column_names_x: ColumnNames = None,
     separate_graphs: bool = False,
     same_range_for_separate: bool = False,
-    colors: Optional[Union[str, Sequence[str]]] = None,
+    colors: Optional[Union[str, Sequence[Color]]] = None,
     opacity: Optional[float] = None,
     grid_spec: str = "column",
 ) -> go.Figure:
@@ -1979,9 +1938,10 @@ def plot_line(
 
     Parameters
     ----------
-    input_data : pandas.DataFrame or numpy.ndarray
-        Y-axis data.  X is the sequential row index.
-    input_data_id : list of str
+    input_data : DataFrameSource
+        Y-axis data. X is the sequential row index. Normalized via
+        :func:`cryocat.utils.ioutils.df_load`.
+    column_names_x : list of str, optional
         Column labels.
     separate_graphs : bool, default=False
         One subplot per column.
@@ -2001,7 +1961,7 @@ def plot_line(
     input_data = ioutils.df_load(input_data)
     builder = ScatterBuilder(
         input_data=input_data,
-        input_data_id=input_data_id,
+        column_names_x=column_names_x,
         colors=colors,
         separate_graphs=separate_graphs,
         same_range_for_separate=same_range_for_separate,
@@ -2018,7 +1978,7 @@ def plot_scatter_xyz_panels(
     data: DataFrameSource,
     coord_columns: ColumnNames = None,
     group_by: Optional[str] = None,
-    hover_column: Optional[str] = None,
+    hover_column_name: Optional[str] = None,
     circle_radius: Optional[float] = None,
     displ_threshold: Optional[float] = None,
     title: Optional[str] = None,
@@ -2030,7 +1990,7 @@ def plot_scatter_xyz_panels(
     Subsumes the four nearest-neighbour scatter helpers that previously lived
     in :mod:`cryocat.analysis.nnana`. The behavior of those helpers is recovered
     via the optional parameters: pass *group_by* to colour-group particles
-    (``plot_nn_rot_coord_df``), *hover_column* for interactive hover text
+    (``plot_nn_rot_coord_df``), *hover_column_name* for interactive hover text
     (``plot_nn_rot_coord_df_plotly``), or *circle_radius* to overlay a reference
     disk (``plot_nn_coord_df``).
 
@@ -2044,8 +2004,8 @@ def plot_scatter_xyz_panels(
         of *data*.
     group_by : str, optional
         Column whose unique values define color groups with a legend. Mutually
-        useful with *hover_column*; the latter is ignored when *group_by* is set.
-    hover_column : str, optional
+        useful with *hover_column_name*; the latter is ignored when *group_by* is set.
+    hover_column_name : str, optional
         Column used as per-point hover text.
     circle_radius : float, optional
         When given, a filled gold reference disk of this radius is overlaid
@@ -2098,7 +2058,7 @@ def plot_scatter_xyz_panels(
                     row=1, col=col_idx,
                 )
     else:
-        hover = df[hover_column] if hover_column is not None else None
+        hover = df[hover_column_name] if hover_column_name is not None else None
         for col_idx, (xc, yc) in enumerate(pairs, start=1):
             fig.add_trace(
                 go.Scattergl(
@@ -2140,7 +2100,7 @@ def plot_scatter_xyz_panels(
 def plot_scatter_3d(
     data: DataFrameSource,
     coord_columns: ColumnNames = None,
-    color_column: Optional[str] = None,
+    color_column_name: Optional[str] = None,
     color_label: str = "Group",
     marker_size: int = 3,
     opacity: float = 1.0,
@@ -2155,7 +2115,7 @@ def plot_scatter_3d(
         Source data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
     coord_columns : list of str, optional
         Three column names for x, y, z. Defaults to the first three columns.
-    color_column : str, optional
+    color_column_name : str, optional
         Column whose values colour the markers (continuous colorbar).
     color_label : str, default="Group"
         Title shown on the colorbar.
@@ -2184,8 +2144,8 @@ def plot_scatter_3d(
     x_col, y_col, z_col = coord_columns
 
     marker_kwargs = dict(size=marker_size, opacity=opacity)
-    if color_column is not None:
-        marker_kwargs["color"] = df[color_column]
+    if color_column_name is not None:
+        marker_kwargs["color"] = df[color_column_name]
         marker_kwargs["colorbar"] = dict(title=color_label)
 
     fig = go.Figure(
@@ -2207,8 +2167,8 @@ def plot_scatter_3d(
 
 def plot_grouped_box(
     data: DataFrameSource,
-    group_column: str,
-    value_column: str,
+    group_column_name: str,
+    value_column_name: str,
     title: Optional[str] = None,
     xaxis_title: Optional[str] = None,
     yaxis_title: Optional[str] = None,
@@ -2216,7 +2176,7 @@ def plot_grouped_box(
     boxpoints: Union[str, bool] = "outliers",
     output_path: Optional[PathOrStr] = None,
 ) -> go.Figure:
-    """Side-by-side box plots of *value_column* grouped by *group_column*.
+    """Side-by-side box plots of *value_column_name* grouped by *group_column_name*.
 
     Each group is rendered with a colour sampled from *colorscale*, so the
     palette degrades gracefully whatever the number of groups.
@@ -2226,9 +2186,9 @@ def plot_grouped_box(
     data : DataFrameSource
         Long-format data: one row per observation. Normalized via
         :func:`cryocat.utils.ioutils.df_load`.
-    group_column : str
+    group_column_name : str
         Column whose unique values define the box groups (x-axis).
-    value_column : str
+    value_column_name : str
         Column holding the numeric values plotted in each box.
     title, xaxis_title, yaxis_title : str, optional
         Figure and axis labels.
@@ -2245,7 +2205,7 @@ def plot_grouped_box(
     plotly.graph_objects.Figure
     """
     df = ioutils.df_load(data)
-    unique_groups = sorted(df[group_column].unique())
+    unique_groups = sorted(df[group_column_name].unique())
     n_groups = len(unique_groups)
 
     palette = resolve_colors_any(colorscale, color_type="palette", n=n_groups)
@@ -2253,7 +2213,7 @@ def plot_grouped_box(
     fig = go.Figure()
     for i, grp in enumerate(unique_groups):
         fig.add_trace(go.Box(
-            y=df.loc[df[group_column] == grp, value_column],
+            y=df.loc[df[group_column_name] == grp, value_column_name],
             name=str(grp),
             boxpoints=boxpoints,
             marker_color=palette[i],
@@ -2289,12 +2249,12 @@ def plot_polar_nn_distances(
 
     Parameters
     ----------
-    coordinates : numpy.ndarray
+    coordinates : array-like
         Unit vectors, shape ``(N, 3)``.
-    distances : numpy.ndarray
+    distances : array-like
         Per-point distances, shape ``(N,)``.
     max_radius : float, optional
-        Maximum radial extent for both polar axes.  Defaults to the data
+        Maximum radial extent for both polar axes. Defaults to the data
         maximum.
     marker_size : int, default=3
         Scatter marker size.
@@ -2302,8 +2262,8 @@ def plot_polar_nn_distances(
         Matplotlib colormap name.
     graph_title : str, optional
         Figure suptitle.
-    output_path : str, optional
-        Path for saving the figure.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_mpl`.
     """
     coordinates = np.asarray(coordinates)
     distances = np.asarray(distances)
@@ -2408,13 +2368,13 @@ def _create_smooth_polar_histogram(ax, histogram, hist_norm_value=None, colormap
 
 
 def plot_rotation_normals(
-    rotations: RotationLike,
+    input_rotation: RotationLike,
     color_map: Optional[str] = None,
     marker_size: int = 20,
     alpha: float = 1.0,
     radius: float = 1.0,
 ) -> None:
-    """Plot z-normals of input rotations as a 3-D scatter.
+    """Plot z-normals of input input_rotation as a 3-D scatter.
 
     Each rotation is applied to ``(0, 0, radius)`` and the resulting points
     are scattered on a sphere of the given radius. This is the plotting
@@ -2422,7 +2382,7 @@ def plot_rotation_normals(
 
     Parameters
     ----------
-    rotations : RotationLike
+    input_rotation : RotationLike
         Orientations to plot. Normalized via
         :func:`cryocat.utils.geom.as_rotation`.
     color_map : str, optional
@@ -2434,7 +2394,7 @@ def plot_rotation_normals(
     radius : float, default=1.0
         Sphere radius. Sets the reference vector length and axis limits.
     """
-    new_points = geom.rotations_to_z_normals(rotations, radius=radius)
+    new_points = geom.rotations_to_z_normals(input_rotation, radius=radius)
 
     fig = plt.figure()
     ax = fig.add_subplot(projection="3d")
@@ -2466,7 +2426,7 @@ def plot_orientational_distribution(
 
     Parameters
     ----------
-    coordinates : numpy.ndarray
+    coordinates : array-like
         Unit vectors (or vectors that will be projected), shape ``(N, 3)``.
     projection : {'stereo', 'lambert', 'equidistant'}, default="stereo"
         Projection algorithm.
@@ -2477,15 +2437,16 @@ def plot_orientational_distribution(
     radius_bin : int, default=33
         Number of radial bins.
     max_radius : float, optional
-        Maximum projected radius.  Defaults to the data maximum.
+        Maximum projected radius. Defaults to the data maximum.
     colormap : str, default="viridis_r"
         Matplotlib colormap name.
-    output_path : str, optional
-        Path for saving the figure.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_mpl`.
     show : bool, default=True
         Call :func:`matplotlib.pyplot.show`.
 
     Returns
+    -------
     -------
     matplotlib.figure.Figure
     """
@@ -2544,10 +2505,71 @@ def plot_orientational_distribution(
     return fig
 
 
+def plot_otsu_thresholds(
+    motl,
+    column_name: str,
+    hbin: int,
+    graph_title: Optional[str] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> None:
+    """Plot per-group score histograms with their Otsu thresholds overlaid.
+
+    This is the visual companion to :meth:`cryocat.core.cryomotl.Motl.compute_otsu_threshold`:
+    the threshold and the per-group histogram are computed with exactly the
+    same logic, but here the figure is the deliverable instead of the filtered
+    motl. Particles are grouped by ``column_name`` and one panel is drawn per
+    group, with the threshold marked as a vertical red line.
+
+    Parameters
+    ----------
+    motl : Motl
+        Source motl. The ``score`` column is histogrammed.
+    column_name : str
+        Column used to group particles (e.g. ``"tomo_id"`` or ``"object_id"``).
+    hbin : int
+        Number of histogram bins per group.
+    graph_title : str, optional
+        Figure suptitle.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_mpl`.
+    """
+    from cryocat.utils import mathutils  # local: visplot otherwise has no math dep
+
+    features = motl.df[column_name].unique()
+    n = len(features)
+    n_cols = min(3, n)
+    n_rows = (n + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), squeeze=False)
+    axes = axes.flatten()
+
+    for ax, f in zip(axes, features):
+        scores = motl.df.loc[motl.df[column_name] == f, "score"].values
+        bin_counts, bin_edges = np.histogram(scores, bins=hbin)
+        bn = mathutils.otsu_threshold(bin_counts)
+        ind = np.where(bin_counts == bin_counts[bin_counts > bn][0])
+        cc_t = bin_edges[ind[0] + 1][0]
+
+        ax.bar(bin_edges[:-1], bin_counts, width=np.diff(bin_edges), align="edge", color="steelblue")
+        ax.axvline(cc_t, color="r", linewidth=1.5)
+        ax.set_title(f"{column_name}={f}\nthreshold={cc_t:.3f}", fontsize=10)
+        ax.set_xlabel("score")
+        ax.set_ylabel("count")
+
+    # blank out unused panels
+    for ax in axes[len(features):]:
+        ax.set_visible(False)
+
+    if graph_title is not None:
+        fig.suptitle(graph_title)
+    fig.tight_layout()
+
+    _save_mpl(fig, output_path)
+
+
 def plot_class_occupancy(
     occupancy_dic: dict,
-    color_scheme: Optional[Union[str, Sequence[str]]] = None,
-    ax=None,
+    color_scheme: Optional[Union[str, Sequence[Color]]] = None,
+    ax: Optional["plt.Axes"] = None,
     show_legend: bool = True,
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
@@ -2560,21 +2582,22 @@ def plot_class_occupancy(
         Mapping ``{class_id: list_of_counts}`` where each list contains the
         particle count at each iteration.
     color_scheme : str or list of str, optional
-        Colormap name or explicit list of colors.
+        Plotly palette name or explicit list of colors. ``None`` falls back to
+        ``DEFAULTS.colorway``.
     ax : matplotlib.axes.Axes, optional
-        Axes to draw on.  A new figure is created when ``None``.
+        Axes to draw on. A new figure is created when ``None``.
     show_legend : bool, default=True
         Display the class legend.
     graph_title : str, optional
-        Axes title.  Defaults to ``"Class occupancy progress"``.
-    output_path : str, optional
-        Path for saving the figure (only when *ax* was not provided).
+        Axes title. Defaults to ``"Class occupancy progress"``.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_mpl`. Ignored when *ax* is provided.
     """
     ax_provided = True
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(6, 4))
         ax_provided = False
-    color_classes = convert_color_scheme(num_colors=len(occupancy_dic), color_scheme=color_scheme)
+    color_classes = resolve_colors_any(color_scheme, color_type="palette", n=len(occupancy_dic))
 
     for i, c in enumerate(sorted(occupancy_dic)):
         ax.plot(range(1, len(occupancy_dic[c]) + 1), occupancy_dic[c], label="Class " + str(c), color=color_classes[i])
@@ -2603,8 +2626,8 @@ def plot_class_occupancy(
 
 def plot_class_stability(
     subtomo_changes: dict,
-    color_scheme: Optional[Union[str, Sequence[str]]] = None,
-    ax=None,
+    color_scheme: Optional[Union[str, Sequence[Color]]] = None,
+    ax: Optional["plt.Axes"] = None,
     show_legend: bool = True,
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
@@ -2616,22 +2639,23 @@ def plot_class_stability(
     subtomo_changes : dict
         Mapping ``{class_id: list_of_change_counts}`` per iteration.
     color_scheme : str or list of str, optional
-        Colormap name or explicit list of colors.
+        Plotly palette name or explicit list of colors. ``None`` falls back to
+        ``DEFAULTS.colorway``.
     ax : matplotlib.axes.Axes, optional
-        Axes to draw on.  A new figure is created when ``None``.
+        Axes to draw on. A new figure is created when ``None``.
     show_legend : bool, default=True
         Display the class legend.
     graph_title : str, optional
-        Axes title.  Defaults to ``"Stability of classes"``.
-    output_path : str, optional
-        Path for saving the figure (only when *ax* was not provided).
+        Axes title. Defaults to ``"Stability of classes"``.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_mpl`. Ignored when *ax* is provided.
     """
     ax_provided = True
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(6, 4))
         ax_provided = False
 
-    color_classes = convert_color_scheme(num_colors=len(subtomo_changes), color_scheme=color_scheme)
+    color_classes = resolve_colors_any(color_scheme, color_type="palette", n=len(subtomo_changes))
 
     for cls, values in sorted(subtomo_changes.items()):
         ax.plot(range(1, len(values) + 1), values, label="Class " + str(cls), color=color_classes[cls - 1])
@@ -2661,7 +2685,7 @@ def plot_class_stability(
 def plot_classification_convergence(
     occupancy_dic: dict,
     subtomo_changes_dic: dict,
-    color_scheme: Optional[Union[str, Sequence[str]]] = None,
+    color_scheme: Optional[Union[str, Sequence[Color]]] = None,
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
 ) -> None:
@@ -2676,11 +2700,12 @@ def plot_classification_convergence(
         Mapping ``{class_id: list_of_changes}`` (forwarded to
         :func:`plot_class_stability`).
     color_scheme : str or list of str, optional
-        Colormap name or explicit list of colors.
+        Plotly palette name or explicit list of colors. ``None`` falls back to
+        ``DEFAULTS.colorway``.
     graph_title : str, optional
         Overall figure suptitle.
-    output_path : str, optional
-        Path for saving the figure.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_mpl`.
     """
     # Create subplots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
@@ -2708,21 +2733,22 @@ def plot_alignment_stability(
 ) -> None:
     """Plot per-parameter alignment statistics over iterations.
 
-    Creates a 3×4 grid of line plots, one panel per DataFrame column.  Each
+    Creates a 3×4 grid of line plots, one panel per DataFrame column. Each
     series in *input_dfs* is drawn on the same panel.
 
     Parameters
     ----------
-    input_dfs : list of pandas.DataFrame
-        Each DataFrame has the same columns (alignment parameters) and the
-        same number of rows (iterations).
-    labels : list of str, optional
-        Series labels for the legend.  Defaults to ``input_dfs[0].columns``
+    input_dfs : sequence of DataFrameSource
+        Each element is normalized via :func:`cryocat.utils.ioutils.df_load`.
+        All sources must share the same columns (alignment parameters) and
+        the same number of rows (iterations).
+    labels : sequence of str, optional
+        Series labels for the legend. Defaults to ``input_dfs[0].columns``
         with the legend hidden.
     graph_title : str, default="Alignment stability"
         Figure suptitle.
-    output_path : str, optional
-        Path for saving the figure.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_mpl`.
     """
     input_dfs = [ioutils.df_load(d) for d in input_dfs]
     x_axis = np.arange(input_dfs[0].shape[0])
@@ -2766,10 +2792,10 @@ def plot_scatter_with_histogram(
     data_y: ArrayLike,
     bins_x: Optional[int] = None,
     bins_y: Optional[int] = None,
-    colors_x: Optional[Union[str, List[str]]] = None,
-    colors_y: Optional[Union[str, List[str]]] = None,
-    edges_x: Optional[List[float]] = None,
-    edges_y: Optional[List[float]] = None,
+    colors_x: Optional[Union[str, Sequence[Color]]] = None,
+    colors_y: Optional[Union[str, Sequence[Color]]] = None,
+    edges_x: Optional[Sequence[float]] = None,
+    edges_y: Optional[Sequence[float]] = None,
     axis_title_x: Optional[str] = None,
     axis_title_y: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
@@ -2783,11 +2809,11 @@ def plot_scatter_with_histogram(
     data_y : array-like
         Y data.
     bins_x : int, optional
-        Number of bins for the X-marginal histogram.  Defaults to ``30``.
+        Number of bins for the X-marginal histogram. Defaults to ``30``.
     bins_y : int, optional
-        Number of bins for the Y-marginal histogram.  Defaults to ``30``.
+        Number of bins for the Y-marginal histogram. Defaults to ``30``.
     colors_x : str or list of str, optional
-        Color(s) for the X histogram bars.  A single string is treated as a
+        Color(s) for the X histogram bars. A single string is treated as a
         named color; a string paired with *edges_x* is treated as a colormap.
     colors_y : str or list of str, optional
         Color(s) for the Y histogram bars.
@@ -2799,8 +2825,8 @@ def plot_scatter_with_histogram(
         X-axis label for the scatter panel.
     axis_title_y : str, optional
         Y-axis label for the scatter panel.
-    output_path : str, optional
-        Path for saving the figure.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_mpl`.
     """
     if not bins_x:
         bins_x = 30
@@ -2895,26 +2921,36 @@ def plot_scatter_with_histogram(
 
 def plot_pca_summary(
     cumulative_variance: ArrayLike,
-    feature_importances: "pd.Series",
+    feature_importances: pd.Series,
     scatter_kwargs: Optional[dict] = None,
     bar_kwargs: Optional[dict] = None,
     output_path: Optional[PathOrStr] = None,
 ) -> go.Figure:
-    """Create a combined subplot fro PCA analysis:
-    - Cumulative explained variance (line plot)
-    - Feature importance (horizontal bar plot)
+    """Create a combined subplot for PCA analysis.
+
+    The figure has two side-by-side panels:
+
+    - Cumulative explained variance (line plot).
+    - Feature importance (horizontal bar plot).
 
     Parameters
     ----------
-    cumulative_variance : ndarray
+    cumulative_variance : array-like
         Values of cumulative explained variance.
-    feature_importances : pd.Series
+    feature_importances : pandas.Series
         Series of feature importance (e.g., squared loadings) from PCA.
+    scatter_kwargs : dict, optional
+        Keyword arguments forwarded to the cumulative-variance
+        :class:`plotly.graph_objects.Scatter`.
+    bar_kwargs : dict, optional
+        Keyword arguments forwarded to the feature-importance
+        :class:`plotly.graph_objects.Bar`.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
 
     Returns
     -------
-    fig : plotly.graph_objects.Figure
-        Combined plotly figure.
+    plotly.graph_objects.Figure
     """
 
     if scatter_kwargs is None:
@@ -2966,14 +3002,14 @@ def plot_pca_summary(
 
 def plot_kde(
     input_data: DataFrameSource,
-    input_data_id: ColumnNames = None,
+    column_names_x: ColumnNames = None,
     second_axis_data: Optional[DataFrameSource] = None,
-    second_axis_id: ColumnNames = None,
+    column_names_y: ColumnNames = None,
     nbinsx: int = 200,
     nbinsy: int = 200,
     hist_type: str = "count",
     hist_norm: Optional[str] = None,
-    colors: Optional[Union[str, Sequence[str]]] = None,
+    colors: Optional[Union[str, Colorscale, Sequence[Color]]] = None,
     opacity: Optional[float] = None,
     grid_spec: str = "column",
     same_range_for_separate: bool = False,
@@ -2984,13 +3020,13 @@ def plot_kde(
 
     Parameters
     ----------
-    input_data : pandas.DataFrame or numpy.ndarray
-        X-axis data.
-    input_data_id : list of str, optional
+    input_data : DataFrameSource
+        X-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
+    column_names_x : list of str, optional
         Column labels for X data.
-    second_axis_data : array-like or pandas.DataFrame, optional
-        Y-axis data.
-    second_axis_id : list of str, optional
+    second_axis_data : DataFrameSource, optional
+        Y-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
+    column_names_y : list of str, optional
         Column labels for Y data.
     nbinsx : int, default=200
         Grid resolution along X.
@@ -2998,7 +3034,7 @@ def plot_kde(
         Grid resolution along Y.
     hist_type : str, default="count"
         Passed to :class:`KDEBuilder` (not used in contour rendering).
-    hist_norm : str or None, optional
+    hist_norm : str, optional
         Passed to :class:`KDEBuilder` (not used in contour rendering).
     colors : str or list, optional
         Colorscale specification.
@@ -3010,6 +3046,8 @@ def plot_kde(
         Share axis ranges across subplots.
     same_scale : bool, default=False
         Normalise all subplots to the same z range.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
 
     Returns
     -------
@@ -3020,9 +3058,9 @@ def plot_kde(
         second_axis_data = ioutils.df_load(second_axis_data)
     builder = KDEBuilder(
         input_data,
-        input_data_id=input_data_id,
+        column_names_x=column_names_x,
         second_axis_data=second_axis_data,
-        second_axis_id=second_axis_id,
+        column_names_y=column_names_y,
         nbinsx=nbinsx,
         nbinsy=nbinsy,
         x_range=None,
@@ -3037,234 +3075,10 @@ def plot_kde(
     )
 
     fig = builder.plot_graph()
-
     _save_plotly(fig, output_path)
     return fig
 
 
-def plot_kernel_density_estimation(input_data, input_data_id=None, nbinsx=200, nbinsy=200, colors=None):
-    """Plot a single 2-D KDE contour from exactly two data columns.
-
-    Unlike :func:`plot_kde`, this function does not use the builder system and
-    handles one (x, y) pair only.
-
-    Parameters
-    ----------
-    input_data : pandas.DataFrame or numpy.ndarray
-        Data with exactly 2 columns (x and y).
-    input_data_id : list of str, optional
-        Column names.  Required when *input_data* is a DataFrame.
-    nbinsx : int, default=200
-        Grid resolution along X.
-    nbinsy : int, default=200
-        Grid resolution along Y.
-    colors : str or list, optional
-        Colorscale specification.
-
-    Returns
-    -------
-    plotly.graph_objects.Figure
-    """
-    def padded_limits(v, frac=0.05, min_pad=0.0, bw=None, k_bw=3.0):
-        v = np.asarray(v, float)
-        vmin, vmax = np.nanmin(v), np.nanmax(v)
-        span = vmax - vmin
-        # pad from % of span, absolute floor, and (optional) k * bandwidth
-        pad = max(frac * span, min_pad, (k_bw * bw if bw is not None else 0.0))
-        if span == 0:  # all values equal → make a tiny window around it
-            pad = max(pad, 1.0 if min_pad == 0 else min_pad)
-        return vmin - pad, vmax + pad
-
-    if isinstance(input_data, pd.DataFrame):
-        cols = [c for c in input_data_id if c in input_data.columns]
-        if len(cols) != 2:
-            raise ValueError(f"Expected exactly 2 columns, got {len(cols)}.")
-        input_data = input_data[cols].dropna().to_numpy(copy=True)
-    elif isinstance(input_data, np.ndarray):
-        if input_data.ndim != 2 or input_data.shape[1] != 2:
-            raise TypeError("Input_data must be a pandas DataFrame or a numpy ndarray with dimensions N,2.")
-
-    x_axis = input_data[:, 0]
-    y_axis = input_data[:, 1]
-
-    if input_data_id is not None:
-        x_id = input_data_id[0]
-        y_id = input_data_id[1]
-
-    kde = gaussian_kde(np.vstack([x_axis, y_axis]), bw_method="scott")
-    # per-dimension KDE bandwidth ≈ factor * std
-    bw_x = kde.factor * np.std(x_axis, ddof=1)
-    bw_y = kde.factor * np.std(y_axis, ddof=1)
-
-    # choose padding rules
-    x_lo, x_hi = padded_limits(x_axis, frac=0.05, min_pad=0.5, bw=bw_x, k_bw=3.0)
-    y_lo, y_hi = padded_limits(y_axis, frac=0.05, min_pad=0.05, bw=bw_y, k_bw=3.0)
-
-    nx = nbinsx
-    ny = nbinsy
-    xg = np.linspace(x_lo, x_hi, nx)
-    yg = np.linspace(y_lo, y_hi, ny)
-    X, Y = np.meshgrid(xg, yg)
-    Z = kde(np.vstack([X.ravel(), Y.ravel()])).reshape(ny, nx)
-
-    scale = resolve_colors_any(colors, color_type="colorscale")
-
-    tol = 1e-4 * float(np.nanmax(Z))
-    Z_plot = np.where(Z < tol, 0.0, Z)
-
-    fig = go.Figure(
-        go.Contour(
-            x=xg,
-            y=yg,
-            z=Z,
-            contours=dict(coloring="fill", showlines=False),
-            colorscale=scale,
-            colorbar=dict(title=dict(text="Density", side="right")),
-            zauto=False,
-            zmin=0.0,
-            zmax=float(np.nanmax(Z_plot)),
-        )
-    )
-
-    # lock axes to the padded limits (optional)
-    fig.update_xaxes(range=[x_lo, x_hi])
-    fig.update_yaxes(range=[y_lo, y_hi])
-
-    fig.update_layout(
-        xaxis_title=x_id,
-        yaxis_title=y_id,
-        width=600,
-        height=700,
-    )
-
-    return fig
-
-
-def plot_spherical_density(
-    data,
-    num_bins=10,
-    mode="density",
-    title="Spherical Histogram",
-    phi_edges=None,
-    theta_edges=None,
-    colorscale="Viridis",
-):
-    """Plot the spherical density of 3-D vectors as a (phi, theta) heatmap.
-
-    Parameters
-    ----------
-    data : array-like
-        3-D vectors, shape ``(N, 3)``.  Normalised to unit length internally.
-    num_bins : int, default=10
-        Number of bins along each angular dimension.
-    mode : {'density', 'count'}, default="density"
-        ``"density"`` normalises the histogram to ``[0, 1]``; ``"count"``
-        shows raw particle counts.
-    title : str, default="Spherical Histogram"
-        Figure title.
-    phi_edges : numpy.ndarray, optional
-        Custom bin edges for phi (azimuth).  Defaults to ``num_bins`` uniform
-        bins over ``[-pi, pi]``.
-    theta_edges : numpy.ndarray, optional
-        Custom bin edges for theta (inclination).  Defaults to ``num_bins``
-        uniform bins over ``[0, pi]``.
-    colorscale : str or list, default="Viridis"
-        Colorscale specification.
-
-    Returns
-    -------
-    H : numpy.ndarray
-        2-D histogram array, shape ``(num_bins, num_bins)``.
-    bin_to_indices : dict
-        Mapping from ``(phi_bin, theta_bin)`` to lists of point indices.
-    """
-    data = np.asarray(data)
-    normalized_data = data / np.linalg.norm(data, axis=1, keepdims=True)
-
-    # Convert to spherical coordinates
-    phi = np.arctan2(normalized_data[:, 1], normalized_data[:, 0])
-    theta = np.arccos(normalized_data[:, 2])
-
-    if phi_edges is None:
-        phi_edges = np.linspace(-np.pi, np.pi, num_bins + 1)
-    if theta_edges is None:
-        theta_edges = np.linspace(0, np.pi, num_bins + 1)
-
-    # Histogram: phi is x-axis (columns), theta is y-axis (rows)
-    H, _, _ = np.histogram2d(phi, theta, bins=[phi_edges, theta_edges])
-
-    # Digitize
-    phi_bin_idx = np.digitize(phi, phi_edges) - 1
-    theta_bin_idx = np.digitize(theta, theta_edges) - 1
-    phi_bin_idx = np.clip(phi_bin_idx, 0, num_bins - 1)
-    theta_bin_idx = np.clip(theta_bin_idx, 0, num_bins - 1)
-
-    # Map (theta_bin, phi_bin) to point indices
-    bin_to_indices = defaultdict(list)
-    for i, (pb, tb) in enumerate(zip(phi_bin_idx, theta_bin_idx)):
-        bin_to_indices[(pb, tb)].append(i)  # note: still key = (phi_bin, theta_bin)
-
-    # Bin centers
-    phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
-    theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
-
-    # Plotting values
-    if mode == "density":
-        H_plot = H.T / H.max() if H.max() > 0 else H.T
-        colorbar_title = "Normalized Density"
-    elif mode == "count":
-        H_plot = H.T
-        colorbar_title = "Particle Count"
-    else:
-        raise ValueError("Mode must be 'density' or 'count'")
-
-    # Hover text
-    hover_text = []
-    bin_index = 0
-    norm = Normalize(vmin=H_plot.min(), vmax=H_plot.max())
-    for i in range(H_plot.shape[0]):  # theta rows
-        row = []
-        for j in range(H_plot.shape[1]):  # phi columns
-            val = H_plot[i, j]
-            row.append(f"Bin #{bin_index}<br>" f"Value: {int(val) if mode == 'count' else round(val, 3)}")
-            bin_index += 1
-        hover_text.append(row)
-
-    scale = resolve_colors_any(colorscale, color_type="colorscale")
-
-    # Plotly heatmap
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=H_plot,
-            x=phi_centers,
-            y=theta_centers,
-            colorscale=scale,
-            text=hover_text,
-            hoverinfo="text",
-            colorbar=dict(
-                title=colorbar_title,
-                titleside="right",
-                titlefont=dict(size=14),
-                tickfont=dict(size=12),
-                len=1.0,  # Make colorbar full height of the plot
-                y=0.5,  # Center it vertically
-                yanchor="middle",
-            ),
-        )
-    )
-
-    fig.update_layout(
-        title=title,
-        xaxis_title="phi [radians]",
-        yaxis_title="theta [radians]",
-        width=400,
-        height=500,
-        margin=dict(t=40, b=40, l=60, r=60),
-    )
-
-    fig.show()
-
-    return H, bin_to_indices
 
 
 def add_xyz_heatmap_row(
@@ -3394,7 +3208,7 @@ def plot_scores_and_peaks(
 
 
 def plot_fsc(
-    input_data: DataFrameSource,
+    input_data: Union[PathOrStr, pd.DataFrame],
     pixel_size: Optional[float] = None,
     box_size: Optional[int] = None,
     output_path: Optional[PathOrStr] = None,
@@ -3403,7 +3217,7 @@ def plot_fsc(
 
     Parameters
     ----------
-    input_data : str or pandas.DataFrame
+    input_data : path or pandas.DataFrame
         Data source. Accepted formats:
 
         ``.csv``
@@ -3412,21 +3226,19 @@ def plot_fsc(
         ``.xml``
             ChimeraX-compatible FSC XML (``<coordinate><x>``/``<y>``).
         ``.txt``
-            Single-column file of FSC values.  Requires *pixel_size* and
+            Single-column file of FSC values. Requires *pixel_size* and
             *box_size* to compute the x-axis.
         :class:`pandas.DataFrame`
             Same column convention as ``.csv``.
 
     pixel_size : float, optional
-        Pixel size in Angstroms.  Used to label the x-axis ``1/Å`` and
+        Pixel size in Angstroms. Used to label the x-axis ``1/Å`` and
         required when *input_data* is a ``.txt`` file.
     box_size : int, optional
-        Box edge length in voxels.  Required when *input_data* is a
+        Box edge length in voxels. Required when *input_data* is a
         ``.txt`` file.
-    output_path : str, optional
-        File path for saving the figure.  ``.html`` produces an interactive
-        Plotly file; any other extension uses ``fig.write_image()`` (requires
-        the *kaleido* package).
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
 
     Returns
     -------
@@ -3476,5 +3288,4 @@ def plot_fsc(
     )
 
     _save_plotly(fig, output_path)
-
     return fig

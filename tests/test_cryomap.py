@@ -693,6 +693,7 @@ def test_compute_ctf_1d():
     if expected_ctf_path.exists():
         os.remove(expected_ctf_path)
 
+
 def test_trim():
     input_map = np.arange(27).reshape(3, 3, 3)
     trim_start = [1, 1, 1]
@@ -1109,6 +1110,7 @@ def test_get_cross_slices():
     assert result[1].shape == (10, 10)
     assert result[2].shape == (10, 10)
 
+
 @pytest.fixture
 def sample_motl_data():
     """Fixture providing a sample DataFrame for Motl object."""
@@ -1136,12 +1138,14 @@ def sample_motl_data():
     }
     return pd.DataFrame(data)
 
+
 def test_place_object_basic(sample_motl_data):
     motl = Motl(sample_motl_data)
     input_object = np.ones((5, 5, 5))  # Simple input object
     volume_shape = (100, 100, 100)
     result = place_object(input_object, motl, volume_shape=volume_shape)
     assert result.shape == volume_shape
+
 
 def test_place_object_list_input(sample_motl_data):
     motl = Motl(sample_motl_data)
@@ -1150,12 +1154,14 @@ def test_place_object_list_input(sample_motl_data):
     result = place_object(input_objects, motl, volume_shape=volume_shape)
     assert result.shape == volume_shape
 
+
 def test_place_object_volume_input(sample_motl_data):
     motl = Motl(sample_motl_data)
     input_object = np.ones((4, 4, 4))
     volume = np.zeros((80, 80, 80))
     result = place_object(input_object, motl, volume=volume)
     assert result.shape == volume.shape
+
 
 def test_place_object_feature_to_color_class(sample_motl_data):
     motl = Motl(sample_motl_data)
@@ -1164,23 +1170,25 @@ def test_place_object_feature_to_color_class(sample_motl_data):
     result = place_object(input_object, motl, volume_shape=volume_shape, feature_to_color="class")
     assert result.shape == volume_shape
 
+
 def test_place_object_shifts(sample_motl_data):
     motl_data = sample_motl_data.copy()
-    motl_data['shift_x'] = [1,2,3,4,5,6]
-    motl_data['shift_y'] = [1,2,3,4,5,6]
-    motl_data['shift_z'] = [1,2,3,4,5,6]
+    motl_data["shift_x"] = [1, 2, 3, 4, 5, 6]
+    motl_data["shift_y"] = [1, 2, 3, 4, 5, 6]
+    motl_data["shift_z"] = [1, 2, 3, 4, 5, 6]
 
     motl = Motl(motl_data)
     input_object = np.ones((4, 4, 4))
     volume_shape = (80, 80, 80)
     result = place_object(input_object, motl, volume_shape=volume_shape)
     assert result.shape == volume_shape
+
 
 def test_place_object_rotations(sample_motl_data):
     motl_data = sample_motl_data.copy()
-    motl_data['phi'] = [10,20,30,40,50,60]
-    motl_data['psi'] = [10,20,30,40,50,60]
-    motl_data['theta'] = [10,20,30,40,50,60]
+    motl_data["phi"] = [10, 20, 30, 40, 50, 60]
+    motl_data["psi"] = [10, 20, 30, 40, 50, 60]
+    motl_data["theta"] = [10, 20, 30, 40, 50, 60]
 
     motl = Motl(motl_data)
     input_object = np.ones((4, 4, 4))
@@ -1188,11 +1196,12 @@ def test_place_object_rotations(sample_motl_data):
     result = place_object(input_object, motl, volume_shape=volume_shape)
     assert result.shape == volume_shape
 
+
 def test_place_object_placement_and_color(sample_motl_data):
     motl_data = sample_motl_data.copy()
-    motl_data['x'] = [1, 5, 10, 15, 20, 25]
-    motl_data['y'] = [1, 5, 10, 15, 20, 25]
-    motl_data['z'] = [1, 5, 10, 15, 20, 25]
+    motl_data["x"] = [1, 5, 10, 15, 20, 25]
+    motl_data["y"] = [1, 5, 10, 15, 20, 25]
+    motl_data["z"] = [1, 5, 10, 15, 20, 25]
     motl = Motl(motl_data)
     input_object = np.ones((3, 3, 3))
     volume_shape = (30, 30, 30)
@@ -1284,7 +1293,7 @@ def test_calculate_masked_fsc_ones_mask_unchanged():
     mask = np.ones((box, box, box), dtype=np.float32)
 
     df_no_mask = calculate_masked_fsc(vol, vol, n_repeats=0)
-    df_with_mask = calculate_masked_fsc(vol, vol, mask=mask, n_repeats=0)
+    df_with_mask = calculate_masked_fsc(vol, vol, input_mask=mask, n_repeats=0)
 
     np.testing.assert_allclose(
         df_no_mask["uncorrected_fsc"].values,
@@ -1315,6 +1324,7 @@ def test_calculate_masked_fsc_xml_output(tmp_path):
     assert os.path.exists(output_path)
 
     import xml.etree.ElementTree as ET
+
     root = ET.parse(output_path).getroot()
     assert root.tag == "fsc"
     assert len(root.findall("coordinate")) == box // 2
@@ -1325,7 +1335,7 @@ def test_calculate_masked_fsc_xml_output(tmp_path):
     [
         ("shape_mismatch", np.zeros((8, 8, 8)), np.zeros((8, 8, 10)), {}),
         ("not_cubic", np.zeros((8, 8, 10)), np.zeros((8, 8, 10)), {}),
-        ("mask_shape", np.zeros((8, 8, 8)), np.zeros((8, 8, 8)), {"mask": np.zeros((10, 10, 10))}),
+        ("mask_shape", np.zeros((8, 8, 8)), np.zeros((8, 8, 8)), {"input_mask": np.zeros((10, 10, 10))}),
         ("bad_extension", np.zeros((8, 8, 8)), np.zeros((8, 8, 8)), {"output_path": "fsc.npz"}),
     ],
 )

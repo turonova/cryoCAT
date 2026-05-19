@@ -12,8 +12,8 @@ class QuadricsM:
 
         if isinstance(input_data, cryomotl.Motl):
             input_motl = cryomotl.Motl.load(input_data)
-            for f in input_motl.get_unique_values(feature_id=feature_id):
-                fm = input_motl.get_motl_subset(feature_values=f, feature_id=feature_id, reset_index=True)
+            for f in input_motl.get_unique_values(column_name=feature_id):
+                fm = input_motl.get_motl_subset(column_values=f, column_name=feature_id, reset_index=True)
                 tomo_id = fm.df["tomo_id"].values[0]
                 self.dict[(tomo_id, f)] = Quadric.load(fm.get_coordinates(), quadric_type=quadric)
         elif isinstance(input_data, str):
@@ -240,11 +240,11 @@ class Ellipsoid(Quadric):
     def load_from_motl(input_motl, feature_id="object_id"):
 
         in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(feature_id=feature_id)
+        features = in_motl.get_unique_values(column_name=feature_id)
         el_params_all = pd.DataFrame()
 
         for f in features:
-            fm = in_motl.get_motl_subset(feature_values=f, feature_id=feature_id)
+            fm = in_motl.get_motl_subset(column_values=f, column_name=feature_id)
             coord = fm.get_coordinates()
             el_params = pd.DataFrame()
             # TODO fix - this is not working anymore, the method cannot be static

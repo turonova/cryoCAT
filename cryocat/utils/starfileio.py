@@ -319,38 +319,38 @@ class Starfile:
         Comment lines associated with each data block.
     """
 
-    def __init__(self, file_path=None, frames=None, specifiers=None, comments=None):
-        """Initialise a Starfile, optionally reading from *file_path*.
+    def __init__(self, input_path=None, frames=None, specifiers=None, comments=None):
+        """Initialise a Starfile, optionally reading from *input_path*.
 
-        If *file_path* points to an existing file it is read immediately and
+        If *input_path* points to an existing file it is read immediately and
         ``frames``, ``specifiers``, and ``comments`` are populated from it.
         Otherwise the provided values (or ``None``) are stored directly.
 
         Parameters
         ----------
-        file_path : str, optional
+        input_path : str, optional
             Path to a ``.star`` file to read. Defaults to None.
         frames : list of pandas.DataFrame, optional
-            Pre-built data frames. Used only when *file_path* is not given.
+            Pre-built data frames. Used only when *input_path* is not given.
         specifiers : list of str, optional
-            Specifier strings matching *frames*. Used only when *file_path* is not given.
+            Specifier strings matching *frames*. Used only when *input_path* is not given.
         comments : list of list of str, optional
-            Comments matching *frames*. Used only when *file_path* is not given.
+            Comments matching *frames*. Used only when *input_path* is not given.
         """
-        if file_path and path.isfile(file_path):
-            self.frames, self.specifiers, self.comments = self.read(file_path)
+        if input_path and path.isfile(input_path):
+            self.frames, self.specifiers, self.comments = self.read(input_path)
         else:
             self.frames = frames
             self.specifiers = specifiers
             self.comments = comments
 
     @staticmethod
-    def remove_lines(file_path, lines_to_remove, output_path=None, data_specifier=None, number_columns=True):
+    def remove_lines(input_path, lines_to_remove, output_path=None, data_specifier=None, number_columns=True):
         """Remove rows from a data block in a STAR file.
 
         Parameters
         ----------
-        file_path : str
+        input_path : str
             Path to the input STAR file.
         lines_to_remove : array-like of int
             Integer row indices (0-based) to remove from the target data block.
@@ -368,7 +368,7 @@ class Starfile:
         tuple or None
             ``(frames, specifiers, comments)`` when *output_path* is None, otherwise None.
         """
-        frames, specifiers, comments = Starfile.read(file_path)
+        frames, specifiers, comments = Starfile.read(input_path)
 
         if data_specifier is None:
             spec_id = 0
@@ -388,7 +388,7 @@ class Starfile:
             return frames, specifiers, comments
 
     @staticmethod
-    def read(file_path, data_id=None):
+    def read(input_path, data_id=None):
         """Parse a STAR file into DataFrames, specifiers, and comments.
 
         Columns that contain entirely numeric data are automatically cast to
@@ -396,7 +396,7 @@ class Starfile:
 
         Parameters
         ----------
-        file_path : str
+        input_path : str
             Path to the ``.star`` file to read.
         data_id : int, optional
             If given, return only the data block at this index rather than all
@@ -411,7 +411,7 @@ class Starfile:
         comments : list of list of str, or list of str
             Comments (or a single comment list when *data_id* is given).
         """
-        with open(file_path, mode="r") as file:
+        with open(input_path, mode="r") as file:
             raw_starfile = file.read()
 
         tokens = Token.tokenize(raw_starfile)
@@ -457,12 +457,12 @@ class Starfile:
         return None
 
     @staticmethod
-    def get_frame_and_comments(file_path, specifier):
+    def get_frame_and_comments(input_path, specifier):
         """Read a single data block and its comments from a STAR file.
 
         Parameters
         ----------
-        file_path : str
+        input_path : str
             Path to the ``.star`` file.
         specifier : str
             Specifier of the data block to retrieve (e.g. ``"data_particles"``).
@@ -479,7 +479,7 @@ class Starfile:
         ValueError
             If *specifier* is not found in the file.
         """
-        frames, specifiers, comments = Starfile.read(file_path)
+        frames, specifiers, comments = Starfile.read(input_path)
         spec_id = Starfile.get_specifier_id(specifiers, specifier)
         if spec_id is None:
             raise ValueError(f"There is no entry with specifier {specifier}.")

@@ -479,9 +479,9 @@ def read(
     if isinstance(input_map, (str, os.PathLike)):
         path_str = os.fspath(input_map)
  
-        def valid_mrc(filename: str) -> bool:
+        def valid_mrc(input_path: str) -> bool:
             pattern = r"\.(mrc|ali|rec|st)(\.\d+)?$"
-            return bool(re.search(pattern, filename))
+            return bool(re.search(pattern, input_path))
  
         if valid_mrc(path_str):
             data = mrcfile.open(path_str).data
@@ -512,7 +512,7 @@ def read(
 
 def write(
     data_to_write: np.ndarray,
-    file_name: PathOrStr,
+    output_path: PathOrStr,
     transpose: bool = True,
     data_type: np.dtype | None = None,
     pixel_size: float = 1.0,
@@ -524,7 +524,7 @@ def write(
     ----------
     data_to_write : numpy.ndarray
         The data array to be written to the file. It can be of any shape and type.
-    file_name : PathOrStr
+    output_path : PathOrStr
         Path to the output file (str, :class:`pathlib.Path`, or any
         :class:`os.PathLike`). The file extension must be one of: ``.mrc``,
         ``.rec``, or ``.em``.
@@ -553,11 +553,11 @@ def write(
     before writing to the file.
     """
 
-    if not isinstance(file_name, (str, os.PathLike)):
+    if not isinstance(output_path, (str, os.PathLike)):
         raise ValueError(
-            f"file_name must be a path or str, got {type(file_name).__name__}."
+            f"output_path must be a path or str, got {type(output_path).__name__}."
         )
-    file_name_str = os.fspath(file_name)
+    file_name_str = os.fspath(output_path)
 
     if data_type is not None:
         data_to_write = data_to_write.astype(data_type)
@@ -1093,7 +1093,7 @@ def recenter(input_map: MapSource, new_center: TripletLike) -> np.ndarray:
     return trans_struct
 
 
-def normalize_under_mask(input_map: MapSource, mask: MapSource) -> np.ndarray:
+def normalize_under_mask(input_map: MapSource, input_mask: MapSource) -> np.ndarray:
     """A function to take a reference volume and a mask, and normalize the area
     under the mask to 0-mean and standard deviation of 1.
     Based on stopgap code by W.Wan
@@ -1103,7 +1103,7 @@ def normalize_under_mask(input_map: MapSource, mask: MapSource) -> np.ndarray:
     input_map : MapSource
         The reference volume, either as an ndarray or a path to a map file.
         Normalized via :func:`read`.
-    mask : MapSource
+    input_mask : MapSource
         The mask volume, either as an ndarray or a path to a mask file.
         Normalized via :func:`read`.
 
@@ -1115,10 +1115,10 @@ def normalize_under_mask(input_map: MapSource, mask: MapSource) -> np.ndarray:
     """
 
     input_map = read(input_map)
-    mask = read(mask)
+    input_mask = read(input_mask)
 
     # Calculate mask parameters
-    m_idx = mask > 0
+    m_idx = input_mask > 0
 
     # Calculate stats
     ref_mean = np.mean(input_map[m_idx])
@@ -1875,10 +1875,10 @@ def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
 
 
 def calculate_masked_fsc(
-    half_map_a: MapSource,
-    half_map_b: MapSource,
+    input_map_even: MapSource,
+    input_map_odd: MapSource,
     pixel_size: float | None = None,
-    mask: MapSource | None = None,
+    input_mask: MapSource | None = None,
     n_repeats: int = 10,
     fourier_cutoff: int | None = None,
     output_path: PathOrStr | None = None,
@@ -1894,14 +1894,14 @@ def calculate_masked_fsc(
 
     Parameters
     ----------
-    half_map_a : MapSource
+    input_map_even : MapSource
         First half-map: file path or 3-D ndarray. Normalized via :func:`read`.
-    half_map_b : MapSource
+    input_map_odd : MapSource
         Second half-map: file path or 3-D ndarray. Normalized via :func:`read`.
     pixel_size : float, optional
         Pixel size in Angstroms. When given, the x-axis is expressed as
-        spatial frequency in 1/Å; otherwise the Fourier shell index is used.
-    mask : MapSource, optional
+        spatial frequency in 1/Ã; otherwise the Fourier shell index is used.
+    input_mask : MapSource, optional
         Real-space mask, either as an ndarray or a path to a mask file. A
         box-filling mask of ones is used when None. Default is None.
     n_repeats : int, default=10
@@ -1913,7 +1913,7 @@ def calculate_masked_fsc(
         box<210, 15 otherwise).
     output_path : PathOrStr, optional
         File path for saving results.  Extension selects format:
-        ``.csv`` – comma-separated table; ``.xml`` – ChimeraX-compatible XML.
+        ``.csv`` â comma-separated table; ``.xml`` â ChimeraX-compatible XML.
         The best available FSC column (corrected or uncorrected) is written.
 
     Returns
@@ -1929,8 +1929,8 @@ def calculate_masked_fsc(
         the mask shape differs from the half-maps, or an unsupported output
         extension is provided.
     """
-    map_a = read(half_map_a)
-    map_b = read(half_map_b)
+    map_a = read(input_map_even)
+    map_b = read(input_map_odd)
 
     if map_a.shape != map_b.shape:
         raise ValueError("Half-maps must have the same shape.")
@@ -1940,10 +1940,10 @@ def calculate_masked_fsc(
     box = map_a.shape[0]
     max_shell = box // 2
 
-    if mask is None:
+    if input_mask is None:
         fsc_mask = np.ones(map_a.shape, dtype=np.float32)
     else:
-        fsc_mask = read(mask)
+        fsc_mask = read(input_mask)
         if fsc_mask.shape != map_a.shape:
             raise ValueError("Mask shape does not match half-map shape.")
 

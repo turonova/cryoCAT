@@ -3,6 +3,7 @@ import re
 import numpy as np
 from cryocat.core import cryomap
 from cryocat.utils import ioutils
+from cryocat.utils.classutils import as_list
 from scipy.interpolate import interp1d
 from skimage.transform import downscale_local_mean
 from skimage import exposure
@@ -751,8 +752,7 @@ def flip_along_axes(tilt_stack, axes, output_path=None, input_order="xyz", outpu
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
-    if not isinstance(axes, list):
-        axes = [axes]
+    axes = as_list(axes)
 
     for a in axes:
         if a == "x":

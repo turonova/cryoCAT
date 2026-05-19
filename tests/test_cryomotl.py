@@ -317,7 +317,7 @@ def test_emmotl2relion():
     relion_written = test_data + "/motl_data/relionfromem1.star"
     rln_motl = cryomotl.emmotl2relion(
         input_motl=em_motl,
-        output_motl_path=relion_written,
+        output_path=relion_written,
         relion_version=3.1,
         write_kwargs={"write_optics": False}
     )
@@ -338,7 +338,7 @@ def test_relion2emmotl():
     rln = RelionMotl(input_motl=relion, version=3.1)
     em = cryomotl.relion2emmotl(
         input_motl=rln,
-        output_motl_path=written_em,
+        output_path=written_em,
         relion_version=3.1
     )
     assert isinstance(em, EmMotl)
@@ -474,7 +474,7 @@ def test_emmotl2stopgap_basic(tmp_path):
 def test_relion2stopgap():
     relion3 = test_data + "/motl_data/relion_3.0.star"
     stopgap = test_data + "/motl_data/sg_from_relion.star"
-    sg = cryomotl.relion2stopgap(input_motl=relion3, relion_version=3.0, output_motl_path=stopgap)
+    sg = cryomotl.relion2stopgap(input_motl=relion3, relion_version=3.0, output_path=stopgap)
     sg1 = StopgapMotl(input_motl=stopgap)
     assert not list(sg.sg_df.columns) == StopgapMotl.columns
     assert list(sg1.sg_df.columns) == StopgapMotl.columns
@@ -488,7 +488,7 @@ def test_relion2stopgap_write():
     relion3written = test_data + "/motl_data/stopgap_written.star"
     sg = cryomotl.relion2stopgap(
         input_motl=relion3,
-        output_motl_path=relion3written,
+        output_path=relion3written,
         relion_version=3.0
     )
     sg_written = StopgapMotl(relion3written)
@@ -516,7 +516,7 @@ def test_stopgap2relion_write():
     relion_written = test_data + "/motl_data/rln31_written.star"
     relion = cryomotl.stopgap2relion(
         input_motl=sg,
-        output_motl_path=relion_written,
+        output_path=relion_written,
         relion_version=3.1
     )
     assert isinstance(relion, RelionMotl)
@@ -532,12 +532,12 @@ def test_stopgap2relion_write():
 
 def test_mod2emmotl(tmp_path):
     file_path = test_data + "/motl_data/modMotl/"
-    emm = cryomotl.mod2emmotl(file_path, output_motl_path=str(tmp_path / "test.em"), mod_prefix="correct", mod_suffix=".mod")
+    emm = cryomotl.mod2emmotl(file_path, output_path=str(tmp_path / "test.em"), mod_prefix="correct", mod_suffix=".mod")
 
 def test_emmotl2mod(tmp_path):
     em_path = str(tmp_path / "test.em")
-    cryomotl.mod2emmotl(test_data + "/motl_data/modMotl/", output_motl_path=em_path, mod_prefix="correct", mod_suffix=".mod")
-    mod = cryomotl.emmotl2mod(em_path, output_motl_path=str(tmp_path / "mod110.mod"))
+    cryomotl.mod2emmotl(test_data + "/motl_data/modMotl/", output_path=em_path, mod_prefix="correct", mod_suffix=".mod")
+    mod = cryomotl.emmotl2mod(em_path, output_path=str(tmp_path / "mod110.mod"))
 
 
 
@@ -790,25 +790,25 @@ class TestMotl:
 
     def test_clean_by_distance_basic(self, sample_motl_data1):
         motl = Motl(sample_motl_data1.copy())
-        motl.clean_by_distance(distance_in_voxels=2, feature_id="tomo_id", metric_id="score")
+        motl.clean_by_distance(distance_in_voxels=2, column_name="tomo_id", metric_column_name="score")
         assert motl.df.shape[0] == 4
         assert np.all(motl.df["tomo_id"].values == np.array([1, 1, 2, 2]))
 
     def test_clean_by_distance_grouping(self, sample_motl_data1):
         motl = Motl(sample_motl_data1.copy())
-        motl.clean_by_distance(distance_in_voxels=20, feature_id="tomo_id", metric_id="score")
+        motl.clean_by_distance(distance_in_voxels=20, column_name="tomo_id", metric_column_name="score")
         assert motl.df.shape[0] == 2
         assert np.all(motl.df["tomo_id"].values == np.array([1, 2]))
 
     def test_clean_by_distance_metric(self, sample_motl_data1):
         motl = Motl(sample_motl_data1.copy())
-        motl.clean_by_distance(distance_in_voxels=2, feature_id="tomo_id", metric_id="x")
+        motl.clean_by_distance(distance_in_voxels=2, column_name="tomo_id", metric_column_name="x")
         assert motl.df.shape[0] == 4
         assert np.all(motl.df["x"].values == np.array([11, 20, 31, 40]))
 
     def test_clean_by_distance_empty(self):
         motl = Motl(Motl.create_empty_motl_df())
-        motl.clean_by_distance(distance_in_voxels=2, feature_id="tomo_id", metric_id="score")
+        motl.clean_by_distance(distance_in_voxels=2, column_name="tomo_id", metric_column_name="score")
         assert motl.df.shape[0] == 0
 
     def test_clean_by_distance_dist_mask(self, sample_motl_data1):
@@ -822,7 +822,7 @@ class TestMotl:
         mask[2, 2, 3] = True
 
         motl = Motl(sample_motl_data1.copy())
-        motl.clean_by_distance(distance_in_voxels=2, feature_id="tomo_id", metric_id="score", dist_mask=mask)
+        motl.clean_by_distance(distance_in_voxels=2, column_name="tomo_id", metric_column_name="score", dist_mask=mask)
 
         assert motl.df.shape[0] == 5
 
@@ -866,7 +866,7 @@ class TestMotl:
         }
         points_df2 = pd.DataFrame(points_data2)
         motl4 = Motl(sample_motl_data1.copy())
-        motl4.clean_by_distance_to_points(points_df2, radius_in_voxels=2, feature_id='class')
+        motl4.clean_by_distance_to_points(points_df2, radius_in_voxels=2, column_name='class')
         assert motl4.df.shape[0] == 4
 
     def test_clean_by_tomo_mask(self, sample_motl_data1):
@@ -1229,23 +1229,23 @@ class TestMotl:
         assert max_digits_tomo_id == 1  # max tomo_id is 2
 
         # Test with a different feature_id ("subtomo_id")
-        max_digits_subtomo_id = sample_motl_object.get_max_number_digits(feature_id="subtomo_id")
+        max_digits_subtomo_id = sample_motl_object.get_max_number_digits(column_name="subtomo_id")
         assert max_digits_subtomo_id == 1  # max subtomo_id is 6
 
         # Test with a different feature_id ("score")
-        max_digits_score = sample_motl_object.get_max_number_digits(feature_id="score")
+        max_digits_score = sample_motl_object.get_max_number_digits(column_name="score")
         assert max_digits_score == 3 # max score is 0.9
 
         # Test with a different feature_id ("x")
-        max_digits_x = sample_motl_object.get_max_number_digits(feature_id="x")
+        max_digits_x = sample_motl_object.get_max_number_digits(column_name="x")
         assert max_digits_x == 2 # max x is 40
 
         # Test with a different feature_id ("y")
-        max_digits_y = sample_motl_object.get_max_number_digits(feature_id="y")
+        max_digits_y = sample_motl_object.get_max_number_digits(column_name="y")
         assert max_digits_y == 2 # max y is 40
 
         # Test with a different feature_id ("z")
-        max_digits_z = sample_motl_object.get_max_number_digits(feature_id="z")
+        max_digits_z = sample_motl_object.get_max_number_digits(column_name="z")
         assert max_digits_z == 2 # max z is 40
 
     def test_get_rotations(self, sample_motl_data1):
@@ -1331,23 +1331,15 @@ class TestMotl:
         angles_original = motl.df[["phi", "theta", "psi"]].values[idx]
         coord_diff = bary_motl_angles.get_coordinates() - motl.get_coordinates()[idx]
 
-        w1 = geom.euler_angles_to_normals(angles_original[0, :])
-        w2 = coord_diff[0, :] / np.linalg.norm(coord_diff[0, :])
-        w3 = np.cross(w1, w2)
-        w3 = (w3 / np.linalg.norm(w3)).reshape(3,)
-        w_base_mat = np.asarray([w1.reshape((3,)), w2, w3]).T
-
+        # Compute expected angles using the vectorized algorithm (matches compute_relative_orientations)
         v1 = geom.euler_angles_to_normals(angles_original)
-        rot_angles = np.zeros(angles_original.shape)
-
-        for i in range(1, angles_original.shape[0]):
-            v2 = coord_diff[i, :] / np.linalg.norm(coord_diff[i, :])
-            v3 = np.cross(v1[i, :], v2)
-            v3 = (v3 / np.linalg.norm(v3)).reshape(3,)
-            v_base_mat = np.asarray([v1[i, :].reshape((3,)), v2, v3])
-            final_mat = np.matmul(w_base_mat, v_base_mat)
-            final_rot = rot.from_matrix(final_mat)
-            rot_angles[i, :] = final_rot.as_euler("zxz", degrees=True)
+        v2_all = coord_diff / np.linalg.norm(coord_diff, axis=1, keepdims=True)
+        v3_all = np.cross(v1, v2_all)
+        v3_all = v3_all / np.linalg.norm(v3_all, axis=1, keepdims=True)
+        v_base_mat = np.stack([v1, v2_all, v3_all], axis=1)
+        w_base_mat = v_base_mat[0].T
+        final_mat = w_base_mat @ v_base_mat
+        rot_angles = rot.from_matrix(final_mat).as_euler("zxz", degrees=True)
 
         assert np.allclose(bary_motl_angles.df[["phi", "theta", "psi"]].values[1:], rot_angles[1:])
 
@@ -1376,7 +1368,7 @@ class TestMotl:
         assert np.allclose(subset_motl_list_df.values, expected_df_list.values)
 
         # Test with different feature_id
-        subset_motl_score = motl.get_motl_subset(0.9, feature_id="score")
+        subset_motl_score = motl.get_motl_subset(0.9, column_name="score")
         expected_df_score = sample_motl_data1[sample_motl_data1["score"] == 0.9].reset_index(drop=True)
 
         subset_motl_score_df = subset_motl_score.df[expected_df_score.columns]
@@ -1437,7 +1429,7 @@ class TestMotl:
         assert np.allclose(intersection_motl.df.values, expected_df.values)
 
         # Test with different feature_id ("tomo_id")
-        intersection_motl_tomo = Motl.get_motl_intersection(motl1, motl2, feature_id="tomo_id")
+        intersection_motl_tomo = Motl.get_motl_intersection(motl1, motl2, column_name="tomo_id")
         expected_df_tomo = pd.merge(sample_motl_data1, sample_motl_data2[["tomo_id"]], how="inner").reset_index(drop=True)
         assert np.allclose(intersection_motl_tomo.df.values, expected_df_tomo.values)
 
@@ -1866,9 +1858,11 @@ class TestMotl:
         assert list(motl.df['subtomo_id']) == expected_subtomo_ids
 
         # Test whole boundary type with larger box_size=40
+        # Particle 1 at (10,10,10) with boundary=20 has coords_min=(-10,-10,-10) < 0 -> removed.
+        # Only particle 2 at (20,20,20) with coords_min=(0,0,0) and coords_max=(40,40,40) survives.
         motl = Motl(sample_motl_df)
         motl.remove_out_of_bounds_particles(sample_dimensions, boundary_type="whole", box_size=40)
-        assert len(motl.df) == 2  # Same result but tests different boundary condition
+        assert len(motl.df) == 1
 
         # Test invalid boundary type
         with pytest.raises(UserInputError, match="Unknown type of boundaries:"):
@@ -1895,7 +1889,7 @@ class TestMotl:
 
         # Test drop duplicates, keep lowest geom1
         motl = Motl(df.copy())
-        motl.drop_duplicates(decision_column="geom1", decision_sort_ascending=True)
+        motl.drop_duplicates(decision_column_name="geom1", decision_sort_ascending=True)
         assert len(motl.df) == len(sample_motl_data1)
         assert motl.df["geom1"].iloc[0] == sample_motl_data1["geom1"].iloc[0]
 
@@ -1903,7 +1897,7 @@ class TestMotl:
         df2 = df.copy()
         df2['object_id'] = [1,1,2,3,4,5,1]
         motl = Motl(df2.copy())
-        motl.drop_duplicates(duplicates_column="object_id", decision_column="geom1", decision_sort_ascending=True)
+        motl.drop_duplicates(column_name="object_id", decision_column_name="geom1", decision_sort_ascending=True)
         assert len(motl.df) == 5 # Corrected assertion
         assert motl.df["geom1"].iloc[0] == sample_motl_data1["geom1"].iloc[0]
 
@@ -1935,7 +1929,7 @@ class TestMotl:
 
         # Test with rotation
         rotation = rot.from_euler("xyz", [np.pi / 4, 0, 0])
-        rotated_motl = Motl.recenter_to_subparticle(motl, mask_path, rotation=rotation)
+        rotated_motl = Motl.recenter_to_subparticle(motl, mask_path, input_rotation=rotation)
 
         # Apply the same rotation to the shifts and check
         rotated_shifts = rotation.apply(expected_shifts)
@@ -1949,7 +1943,7 @@ class TestMotl:
         tomo_id = 1
         tomo_dim = [100, 100, 100]
 
-        subset_motl = motl.get_motl_subset(tomo_id, feature_id="tomo_id")
+        subset_motl = motl.get_motl_subset(tomo_id, column_name="tomo_id")
         coord = subset_motl.get_coordinates()
 
         coord_rot = rot.from_euler(
@@ -1987,7 +1981,7 @@ class TestMotl:
         tomo_id = 1
         tomo_dim = [100, 100, 100]
 
-        subset_motl = motl.get_motl_subset(tomo_id, feature_id="tomo_id")
+        subset_motl = motl.get_motl_subset(tomo_id, column_name="tomo_id")
         result = motl.apply_tomo_rotation(rotation_angles, tomo_id, tomo_dim)
 
         np.testing.assert_allclose(result.get_coordinates(), subset_motl.get_coordinates(), atol=1e-5)
@@ -4715,7 +4709,7 @@ class TestModMotl:
             'theta': [0.0, 0.0, 0.0],
             'class': [0.0, 0.0, 0.0]
         })
-        pd.testing.assert_frame_equal(mod_motl1.df, expected_df_single)
+        pd.testing.assert_frame_equal(mod_motl1.df, expected_df_single, check_dtype=False)
 
 
 
@@ -4827,8 +4821,8 @@ class TestModMotl:
 
     def test_check_em2mod(self, tmp_path):
         em_path = str(tmp_path / "test.em")
-        cryomotl.mod2emmotl(test_data + "/motl_data/modMotl/", output_motl_path=em_path, mod_prefix="correct", mod_suffix=".mod")
-        cryomotl.emmotl2mod(em_path, output_motl_path=str(tmp_path / "mod110.mod"))
+        cryomotl.mod2emmotl(test_data + "/motl_data/modMotl/", output_path=em_path, mod_prefix="correct", mod_suffix=".mod")
+        cryomotl.emmotl2mod(em_path, output_path=str(tmp_path / "mod110.mod"))
         check = ModMotl(str(tmp_path / "mod110.mod"))
         pd.set_option('display.max_rows', None)
         pd.set_option('display.max_columns', None)

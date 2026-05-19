@@ -225,7 +225,7 @@ def test_compute_alignment_statistics_2(sg_mock):
             motl_base, 1, 2,
             motl_type="stopgap",
             filter_rows=filter_rows,
-            filter_column="subtomo_id"
+            filter_column_name="subtomo_id"
         )
 
         assert stats_filtered.shape[0] == 1
@@ -340,7 +340,7 @@ def test_evaluate_alignment(sg_mock):
             [motl_base1, motl_base2], 1, 3,
             motl_type="stopgap",
             filter_rows=filter_rows,
-            filter_columns=["subtomo_id", "subtomo_id"],
+            filter_column_name=["subtomo_id", "subtomo_id"],
             plot_values=False,
             write_out_stats=False
         )
@@ -363,7 +363,7 @@ def test_evaluate_alignment(sg_mock):
             [motl_base1, motl_base2], 1, 3,
             motl_type="stopgap",
             filter_rows=filter_rows,
-            filter_columns=filter_columns,
+            filter_column_name=filter_columns,
             plot_values=False,
             write_out_stats=False
         )

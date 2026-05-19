@@ -33,6 +33,7 @@ from scipy.spatial.transform import Rotation as srot
 from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.utils import geom
+from cryocat._types import ArrayLike
 
 
 # =============================================================================
@@ -172,6 +173,58 @@ def find_nn_within_self(coords, radius, unique_only=True):
         ]
 
     return center_idx, nn_idx_out
+
+
+def nms_by_distance(
+    coords: ArrayLike,
+    scores: ArrayLike,
+    distance: float,
+    keep_greater: bool = True,
+) -> np.ndarray:
+    """Greedy non-maximum suppression by Euclidean distance.
+
+    Walks through the points in score order and keeps the current one, then
+    suppresses all not-yet-suppressed points within *distance* of it. Identical
+    in spirit to bounding-box NMS in object detection, only the suppression
+    criterion is pairwise Euclidean distance rather than IoU.
+
+    Parameters
+    ----------
+    coords : array-like
+        Shape ``(N, 3)``. Point positions.
+    scores : array-like
+        Shape ``(N,)``. Per-point score used to break ties.
+    distance : float
+        Suppression radius. Points within this distance of a kept point
+        are removed.
+    keep_greater : bool, default=True
+        When ``True``, points are visited in descending score order, so the
+        highest-scoring point in each cluster survives. When ``False``,
+        ascending order; the lowest-scoring point survives.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean keep-mask of shape ``(N,)``.
+    """
+    coords = np.asarray(coords)
+    scores = np.asarray(scores)
+    n = coords.shape[0]
+
+    sort_idx = np.argsort(scores)
+    if keep_greater:
+        sort_idx = sort_idx[::-1]
+
+    keep = np.ones(n, dtype=bool)
+    for j in sort_idx:
+        if not keep[j]:
+            continue
+        dist = geom.point_pairwise_dist(coords[j, :], coords)
+        within = dist < distance
+        within[j] = False  # never suppress the current point
+        keep[within] = False
+
+    return keep
 
 
 def centered_nn_coords(coords_qp, qp_idx, coords_nn, nn_idx, pixel_size=1.0):
@@ -318,7 +371,7 @@ class NearestNeighbors:
     def __init__(
         self,
         input_data=None,
-        feature_id="tomo_id",
+        column_name="tomo_id",
         nn_type="closest_dist",
         type_param=None,
         remove_qp=None,
@@ -328,11 +381,11 @@ class NearestNeighbors:
         if input_data is None:
             self.features = None
             self.df = None
-            self.feature_id = feature_id
+            self.column_name = column_name
             self.paired = paired
             return
 
-        self.feature_id = feature_id
+        self.column_name = column_name
         self.paired = paired
 
         if not isinstance(input_data, list):
@@ -344,12 +397,12 @@ class NearestNeighbors:
 
         single_motl = bool(remove_qp) or single_motl
 
-        features = motl_list[0].get_unique_values(feature_id)
+        features = motl_list[0].get_unique_values(column_name)
         for m in motl_list[1:]:
-            features = np.intersect1d(features, m.get_unique_values(feature_id), assume_unique=True)
+            features = np.intersect1d(features, m.get_unique_values(column_name), assume_unique=True)
 
         columns = [
-            "motl_id", feature_id,
+            "motl_id", column_name,
             "qp_id", "qp_subtomo_id",
             "nn_id", "nn_subtomo_id",
             *self._QP_ANGLE_COLS, *self._QP_COORD_COLS,
@@ -360,13 +413,13 @@ class NearestNeighbors:
 
         results = []
         for f in features:
-            fm_qp = motl_list[0].get_motl_subset(feature_values=f, feature_id=feature_id)
+            fm_qp = motl_list[0].get_motl_subset(column_values=f, column_name=column_name)
             qp_subtomos = fm_qp.df["subtomo_id"].values
             qp_coord = fm_qp.get_coordinates()
             qp_angles = fm_qp.get_angles()
 
             for motl_idx, m in enumerate(motl_list[1:], start=1):
-                fm_nn = m.get_motl_subset(feature_values=f, feature_id=feature_id)
+                fm_nn = m.get_motl_subset(column_values=f, column_name=column_name)
                 nn_subtomos = fm_nn.df["subtomo_id"].values
                 nn_coord = fm_nn.get_coordinates()
                 nn_angles = qp_angles if paired else fm_nn.get_angles()
@@ -411,7 +464,7 @@ class NearestNeighbors:
         self.features = features
 
     @staticmethod
-    def _stack_nn_results(motl_idx, feature_value, qp_idx, nn_idx,
+    def _stack_nn_results(motl_idx, column_value, qp_idx, nn_idx,
                           qp_subtomos, nn_subtomos, qp_angles, nn_angles,
                           qp_coord, nn_coord, nn_dist):
         nn_idx = np.atleast_2d(nn_idx)
@@ -425,7 +478,7 @@ class NearestNeighbors:
         n_pairs = len(nn_flat)
         return np.column_stack([
             np.repeat(motl_idx, n_pairs),
-            np.repeat(feature_value, n_pairs),
+            np.repeat(column_value, n_pairs),
             qp_expanded, qp_subtomos[qp_expanded],
             nn_flat, nn_subtomos[nn_flat],
             qp_angles[qp_expanded], qp_coord[qp_expanded],
@@ -434,7 +487,7 @@ class NearestNeighbors:
         ])
 
     @staticmethod
-    def _stack_nn_results_radius(motl_idx, feature_value, qp_idx, nn_idx_list,
+    def _stack_nn_results_radius(motl_idx, column_value, qp_idx, nn_idx_list,
                                  qp_subtomos, nn_subtomos, qp_angles, nn_angles,
                                  qp_coord, nn_coord):
         if not nn_idx_list:
@@ -448,7 +501,7 @@ class NearestNeighbors:
         n_pairs = counts.sum()
         return np.column_stack([
             np.repeat(motl_idx, n_pairs),
-            np.repeat(feature_value, n_pairs),
+            np.repeat(column_value, n_pairs),
             qp_expanded, qp_subtomos[qp_expanded],
             nn_flat, nn_subtomos[nn_flat],
             qp_angles[qp_expanded], qp_coord[qp_expanded],
@@ -474,14 +527,14 @@ class NearestNeighbors:
         """
         return self.features
 
-    def get_nn_subset(self, motl_values, feature_values):
+    def get_nn_subset(self, motl_id_values, column_values):
         """Return a new :class:`NearestNeighbors` restricted to the given subset.
 
         Parameters
         ----------
-        motl_values : int or list of int
+        motl_id_values : int or list of int
             ``motl_id`` values to keep.
-        feature_values : scalar or list
+        column_values : scalar or list
             Feature values (e.g. tomo IDs) to keep.
 
         Returns
@@ -492,15 +545,15 @@ class NearestNeighbors:
         sub = NearestNeighbors()
         sub.feature_id = self.feature_id
         sub.paired = self.paired
-        if not isinstance(motl_values, list):
-            motl_values = [motl_values]
-        if not isinstance(feature_values, list):
-            feature_values = [feature_values]
+        if not isinstance(motl_id_values, list):
+            motl_id_values = [motl_id_values]
+        if not isinstance(column_values, list):
+            column_values = [column_values]
         sub.df = self.df[
-            (self.df["motl_id"].isin(motl_values))
-            & (self.df[self.feature_id].isin(feature_values))
+            (self.df["motl_id"].isin(motl_id_values))
+            & (self.df[self.feature_id].isin(column_values))
         ].copy()
-        sub.features = feature_values
+        sub.features = column_values
         return sub
 
     def get_normalized_coord(self, add_to_df=True):
@@ -692,7 +745,7 @@ class NearestNeighbors:
 # =============================================================================
 
 
-def get_feature_nn_indices(motl_a, motl_nn, nn_number=1, remove_qp=False, feature="tomo_id"):
+def get_feature_nn_indices(motl_a, motl_nn, nn_number=1, remove_qp=False, column_name="tomo_id"):
     """k-nearest-neighbor indices and distances for two motls.
 
     Thin wrapper around :func:`find_nn_indices` that accepts motl paths or
@@ -708,7 +761,7 @@ def get_feature_nn_indices(motl_a, motl_nn, nn_number=1, remove_qp=False, featur
         Number of neighbors to retrieve per query point.
     remove_qp : bool, default=False
         Drop self-matches (use when query and neighbor are the same motl).
-    feature : str, default='tomo_id'
+    column_name : str, default='tomo_id'
         Not used by this function; kept for API symmetry.
 
     Returns
@@ -775,8 +828,8 @@ def get_nn_within_distance(feature_motl, radius, unique_only=True):
     return find_nn_within_self(feature_motl.get_coordinates(), radius, unique_only=unique_only)
 
 
-def get_nn_within_radius(motl_a, motl_nn, nn_radius, pixel_size=1.0, feature="tomo_id"):
-    """Per-particle count of neighbors within *nn_radius*, grouped by feature.
+def get_nn_within_radius(motl_a, motl_nn, nn_radius, pixel_size=1.0, column_name="tomo_id"):
+    """Per-particle count of neighbors within *nn_radius*, grouped by column_name.
 
     Parameters
     ----------
@@ -788,26 +841,26 @@ def get_nn_within_radius(motl_a, motl_nn, nn_radius, pixel_size=1.0, feature="to
         Search radius in physical units (voxels × *pixel_size*).
     pixel_size : float, default=1.0
         Scale factor applied to coordinates before the radius search.
-    feature : str, default='tomo_id'
+    column_name : str, default='tomo_id'
         Column used to split particles into groups before searching.
 
     Returns
     -------
     numpy.ndarray
         Shape ``(N,)`` — number of neighbors within *nn_radius* for each
-        query particle, ordered by feature then by row position in the motl.
+        query particle, ordered by column_name then by row position in the motl.
     """
     motl_a = cryomotl.Motl.load(motl_a)
     motl_nn = cryomotl.Motl.load(motl_nn)
 
-    features_a = np.unique(motl_a.df.loc[:, feature].values)
-    features_nn = np.unique(motl_nn.df.loc[:, feature].values)
+    features_a = np.unique(motl_a.df.loc[:, column_name].values)
+    features_nn = np.unique(motl_nn.df.loc[:, column_name].values)
     features = np.intersect1d(features_a, features_nn, assume_unique=True)
 
     counts = []
     for f in features:
-        fm_a = motl_a.get_motl_subset(f, feature_id=feature)
-        fm_nn = motl_nn.get_motl_subset(f, feature_id=feature)
+        fm_a = motl_a.get_motl_subset(f, column_name=column_name)
+        fm_nn = motl_nn.get_motl_subset(f, column_name=column_name)
         coord_a = fm_a.get_coordinates() * pixel_size
         coord_nn = fm_nn.get_coordinates() * pixel_size
         kdt = sn.KDTree(coord_nn)
@@ -816,7 +869,7 @@ def get_nn_within_radius(motl_a, motl_nn, nn_radius, pixel_size=1.0, feature="to
     return np.concatenate(counts, axis=0) if counts else np.array([])
 
 
-def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id",
+def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, column_name="tomo_id",
                  nn_number=1, rotation_type="angular_distance",
                  paired=False, remove_duplicates=False):
     """Return a per-pair statistics DataFrame for two motls.
@@ -829,7 +882,7 @@ def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id",
         Neighbor motl.
     pixel_size : float, default=1.0
         Pixel size in Å; applied to distances and coordinates.
-    feature_id : str, default='tomo_id'
+    column_name : str, default='tomo_id'
         Column used to group particles before searching.
     nn_number : int, default=1
         Number of nearest neighbors per query particle.
@@ -849,7 +902,7 @@ def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id",
     """
     nn = NearestNeighbors(
         input_data=[motl_a, motl_nn],
-        feature_id=feature_id,
+        column_name=column_name,
         nn_type="closest_dist",
         type_param=nn_number,
         paired=paired,
@@ -859,7 +912,7 @@ def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id",
 
 
 def get_nn_distances(motl_a, motl_nn, pixel_size=1.0, nn_number=1,
-                     feature="tomo_id", rotation_type="angular_distance",
+                     column_name="tomo_id", rotation_type="angular_distance",
                      paired=False, remove_duplicates=False):
     """Return per-pair geometry as a flat tuple (backward-compatible).
 
@@ -873,7 +926,7 @@ def get_nn_distances(motl_a, motl_nn, pixel_size=1.0, nn_number=1,
         Pixel size in Å.
     nn_number : int, default=1
         Number of nearest neighbors per query particle.
-    feature : str, default='tomo_id'
+    column_name : str, default='tomo_id'
         Column used to group particles before searching.
     rotation_type : str, default='angular_distance'
         Angular metric for the returned angular-distance array.
@@ -897,7 +950,7 @@ def get_nn_distances(motl_a, motl_nn, pixel_size=1.0, nn_number=1,
     """
     nn = NearestNeighbors(
         input_data=[motl_a, motl_nn],
-        feature_id=feature,
+        column_name=column_name,
         nn_type="closest_dist",
         type_param=nn_number,
         paired=paired,
@@ -915,7 +968,7 @@ def get_nn_distances(motl_a, motl_nn, pixel_size=1.0, nn_number=1,
             nn.df["qp_subtomo_id"].to_numpy(), nn.df["nn_subtomo_id"].to_numpy())
 
 
-def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id",
+def get_nn_rotations(motl_a, motl_nn, nn_number=1, column_name="tomo_id",
                      paired=False, remove_duplicates=False):
     """Return the qp→nn relative rotations as unit vectors and Euler angles.
 
@@ -927,7 +980,7 @@ def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id",
         Neighbor motl.
     nn_number : int, default=1
         Number of nearest neighbors per query particle.
-    feature : str, default='tomo_id'
+    column_name : str, default='tomo_id'
         Column used to group particles before searching.
     paired : bool, default=False
         When ``True``, angles are taken from *motl_a* for both sides.
@@ -942,7 +995,7 @@ def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id",
     """
     nn = NearestNeighbors(
         input_data=[motl_a, motl_nn],
-        feature_id=feature,
+        column_name=column_name,
         nn_type="closest_dist",
         type_param=nn_number,
         paired=paired,
@@ -951,7 +1004,7 @@ def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id",
     return rotations_to_unit_vectors(nn.get_relative_rotations())
 
 
-def get_nn_stats_within_radius(input_motl, nn_radius, feature="tomo_id",
+def get_nn_stats_within_radius(input_motl, nn_radius, column_name="tomo_id",
                                index_by_feature=True):
     """Build a per-pair stats DataFrame for all self-NN pairs within a radius.
 
@@ -966,11 +1019,11 @@ def get_nn_stats_within_radius(input_motl, nn_radius, feature="tomo_id",
         path string is given.
     nn_radius : float
         Search radius in voxels.
-    feature : str, default='tomo_id'
+    column_name : str, default='tomo_id'
         Column used to partition particles before searching.
     index_by_feature : bool, default=True
         When ``True``, row indices in the returned DataFrame refer to the
-        per-feature subset; when ``False``, they refer to the global motl index.
+        per-column_name subset; when ``False``, they refer to the global motl index.
 
     Returns
     -------
@@ -990,14 +1043,14 @@ def get_nn_stats_within_radius(input_motl, nn_radius, feature="tomo_id",
         ``phi``, ``theta``, ``psi``
             zxz Euler angles of the relative rotation in degrees.
         ``qp_motl_id``, ``nn_motl_idx``
-            Row indices (feature-local or global) of the two particles.
+            Row indices (column_name-local or global) of the two particles.
     """
     input_motl = cryomotl.Motl.load(input_motl)
-    features = np.unique(input_motl.df.loc[:, feature].values)
+    features = np.unique(input_motl.df.loc[:, column_name].values)
 
     rows = []
     for f in features:
-        fm = input_motl.get_motl_subset(f, feature_id=feature)
+        fm = input_motl.get_motl_subset(f, column_name=column_name)
         coord = fm.get_coordinates()
         center_idx, nn_idx_list = find_nn_within_self(coord, nn_radius, unique_only=False)
 
@@ -1007,7 +1060,7 @@ def get_nn_stats_within_radius(input_motl, nn_radius, feature="tomo_id",
         angles_all = fm.get_angles()
         subtomos = fm.df["subtomo_id"].to_numpy()
         motl_idx = (fm.df.index.to_numpy() if index_by_feature
-                    else input_motl.df.index[input_motl.df[feature] == f].to_numpy())
+                    else input_motl.df.index[input_motl.df[column_name] == f].to_numpy())
 
         for i, c in enumerate(center_idx):
             for n in nn_idx_list[i]:
@@ -1292,7 +1345,7 @@ def _add_chain_prefix(chain_df, motl, traced_df, subtomo_id, current_dist,
 
 
 def trace_chains(motl_entry, motl_exit=None, max_distance=None, min_distance=0,
-                 feature="tomo_id", output_motl=None,
+                 column_name="tomo_id", output_motl=None,
                  store_idx1="object_id", store_idx2="geom2", store_dist="geom4"):
     """Build chains by linking the exit of particle A to the entry of particle B.
 
@@ -1312,7 +1365,7 @@ def trace_chains(motl_entry, motl_exit=None, max_distance=None, min_distance=0,
         Maximum allowed link distance in voxels.  **Required.**
     min_distance : float, default=0
         Minimum allowed link distance in voxels.
-    feature : str, default='tomo_id'
+    column_name : str, default='tomo_id'
         Column used to partition the motl before tracing (usually ``'tomo_id'``).
     output_motl : str, optional
         If given, the resulting motl is written to this path.
@@ -1333,7 +1386,7 @@ def trace_chains(motl_entry, motl_exit=None, max_distance=None, min_distance=0,
     ------
     ValueError
         If ``max_distance`` is ``None`` or if the two motls have different
-        feature sets.
+        column_name sets.
     """
     if max_distance is None:
         raise ValueError("max_distance must be specified")
@@ -1341,16 +1394,16 @@ def trace_chains(motl_entry, motl_exit=None, max_distance=None, min_distance=0,
     motl_entry = cryomotl.Motl.load(motl_entry)
     motl_exit = motl_entry if motl_exit is None else cryomotl.Motl.load(motl_exit)
 
-    features1 = np.unique(motl_entry.df.loc[:, feature])
-    features2 = np.unique(motl_exit.df.loc[:, feature])
+    features1 = np.unique(motl_entry.df.loc[:, column_name])
+    features2 = np.unique(motl_exit.df.loc[:, column_name])
     if not np.array_equal(features1, features2):
         raise ValueError("Provided motls have different features sets!")
 
     traced_motl = cryomotl.Motl.create_empty_motl_df()
 
     for f in features1:
-        fm_entry = motl_entry.get_motl_subset(f, feature, reset_index=False)
-        fm_exit = motl_exit.get_motl_subset(f, feature, reset_index=False)
+        fm_entry = motl_entry.get_motl_subset(f, column_name, reset_index=False)
+        fm_exit = motl_exit.get_motl_subset(f, column_name, reset_index=False)
         nfm_df = cryomotl.Motl.create_empty_motl_df()
 
         fm_size = fm_entry.df.shape[0]

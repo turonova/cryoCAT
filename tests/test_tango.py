@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from scipy.spatial.transform import Rotation as R
-from matplotlib.colors import LinearSegmentedColormap
+
 
 # emfile is an optional binary dependency not present in all environments.
 # Stub it so that cryomotl (and everything that imports it) can be collected.
@@ -15,7 +15,6 @@ from cryocat.analysis.tango import (
     Particle,
     SymmParticle,
     Descriptor,
-    get_colormap_color,
 )
 
 
@@ -387,24 +386,3 @@ class TestDescriptor:
         assert result["NNCountTwist"] == "TwistDescriptor"
         assert result["CountSHOT"] == "SHOTDescriptor"
 
-
-# ===========================================================================
-# get_colormap_color
-# ===========================================================================
-
-class TestGetColormapColor:
-    def test_returns_hex_string(self):
-        cmap = LinearSegmentedColormap.from_list("test", ["#000000", "#ffffff"])
-        color = get_colormap_color(cmap, 0.5)
-        assert isinstance(color, str)
-        assert color.startswith("#")
-
-    def test_black_at_zero(self):
-        cmap = LinearSegmentedColormap.from_list("test", ["#000000", "#ffffff"])
-        color = get_colormap_color(cmap, 0.0)
-        assert color == "#000000"
-
-    def test_white_at_one(self):
-        cmap = LinearSegmentedColormap.from_list("test", ["#000000", "#ffffff"])
-        color = get_colormap_color(cmap, 1.0)
-        assert color == "#ffffff"

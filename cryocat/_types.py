@@ -44,7 +44,7 @@ Paths
 
 Generic arrays and lists
     ArrayLike               -- numpy.typing.ArrayLike re-export
-    OneOrMany[T]            -- T | list[T] | tuple[T, ...]
+    ListLike[T]            -- T | list[T] | tuple[T, ...]
 
 Shapes and sizes
     TripletLike             -- int | float | 3-tuple | 3-list | 3-ndarray
@@ -94,7 +94,7 @@ Normalizers (boundary helpers that take a polymorphic input -> canonical form)
     RotationLike            -> cryocat.utils.geom.as_rotation(x)
     Symmetry                -> cryocat.utils.geom.as_symmetry(x)
     TripletLike             -> cryocat.utils.geom.as_triplet(x)
-    OneOrMany               -> cryocat.utils.classutils.as_list(x)
+    ListLike               -> cryocat.utils.classutils.as_list(x)
     MotlSource              -> cryocat.core.cryomotl.as_motl(x)
     TomoDimensions          -> cryocat.utils.ioutils.dimensions_load(x)
     TomoList                -> cryocat.utils.ioutils.tlt_load(x)
@@ -140,7 +140,7 @@ Normalize at the function boundary with ``np.asarray(x)`` (or
 ``np.asarray(x, dtype=...)`` to pin the dtype).
 """
 
-type OneOrMany[T] = T | list[T] | tuple[T, ...]
+type ListLike[T] = T | list[T] | tuple[T, ...]
 """A single value or a sequence of values of the same type.
 
 PEP 695 generic alias. Use for parameters where the user can pass either
@@ -149,8 +149,8 @@ one item or many. Normalize at the boundary with
 
 Examples
 --------
-    def crop(tomo_ids: OneOrMany[int]) -> ...:
-    def load_masks(paths: OneOrMany[PathOrStr]) -> ...:
+    def crop(tomo_ids: ListLike[int]) -> ...:
+    def load_masks(paths: ListLike[PathOrStr]) -> ...:
 """
 
 # ===========================================================================

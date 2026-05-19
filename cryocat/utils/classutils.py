@@ -5,7 +5,7 @@ import types
 import re
 import numpy as np
 from numpydoc.docscrape import NumpyDocString
-from cryocat._types import OneOrMany
+from cryocat._types import ListLike
 
 def filter_strings(input_list, filter_contains=None, filter_exclude=None):
     """Filter a list of strings based on inclusion and exclusion criteria.
@@ -344,7 +344,7 @@ def process_method_docstring(path_to_method, method_name, pretty_print=False):
     return params_dict
 
 
-def as_list[T](x: OneOrMany[T]) -> list[T]:
+def as_list[T](x: ListLike[T]) -> list[T]:
     """Wrap a scalar in a list, or convert a sequence to a list.
 
     Strings and bytes are treated as scalars (wrapped, not iterated).

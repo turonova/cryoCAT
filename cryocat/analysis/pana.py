@@ -1361,7 +1361,7 @@ def analyze_rotations(
     cc_radius=3,
     angular_offset=None,
     starting_angle=None,
-    c_symmetry=1,
+    cyclic_symmetry=1,
     angles_order="zxz",
 ):
     """Perform template matching between a tomogram and a reference template.
@@ -1399,7 +1399,7 @@ def analyze_rotations(
         Applied as a base rotation right-multiplied onto every input angle
         before matching, and used as the reference when computing angular
         distances in ``res_table``.  Defaults to ``(0, 0, 0)``.
-    c_symmetry : int, default=1
+    cyclic_symmetry : int, default=1
         C symmetry of the structure.
     angles_order : str, default='zxz'
         Euler angle convention used for rotations.
@@ -1485,7 +1485,7 @@ def analyze_rotations(
     starting_angles = np.tile(starting_angle, (angles.shape[0], 1))
 
     # calculates angular/cone/inplane distances
-    ang_dist, cone, inplane = geom.compare_rotations(starting_angles, angles, c_symmetry=c_symmetry)
+    ang_dist, cone, inplane = geom.compare_rotations(starting_angles, angles, cyclic_symmetry=cyclic_symmetry)
 
     res_table = pd.DataFrame(
         columns=[
@@ -1553,11 +1553,11 @@ def analyze_rotations(
 
     if output_path is not None:
         res_table.to_csv(output_path + ".csv", index=False)
-        cryomap.write(file_name=output_path + "_scores.em", data_to_write=final_ccc_map, data_type=np.single)
-        # cryomap.write(file_name=output_path + '_scores_masked.em',
+        cryomap.write(output_path=output_path + "_scores.em", data_to_write=final_ccc_map, data_type=np.single)
+        # cryomap.write(output_path=output_path + '_scores_masked.em',
         #               data_to_write = final_ccc_map_masked,
         #               data_type=np.single)
-        cryomap.write(file_name=output_path + "_angles.em", data_to_write=final_angles_map, data_type=np.single)
+        cryomap.write(output_path=output_path + "_angles.em", data_to_write=final_angles_map, data_type=np.single)
 
     return res_table, final_ccc_map, final_angles_map, final_ccc_map_masked
 
@@ -1624,7 +1624,7 @@ def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_fol
     - `starting_angle` is read directly from `"Phi"`, `"Theta"`, `"Psi"` columns.
     - If `"Apply angular offset"` is true, `angular_offset` is set to half of
       `Degrees` for all three Euler components; otherwise it is [0, 0, 0].
-    - Symmetry (`c_symmetry`) is passed to `analyze_rotations` to account for
+    - Symmetry (`cyclic_symmetry`) is passed to `analyze_rotations` to account for
       cyclic symmetry in angular distance calculations.
     """
 
@@ -1662,7 +1662,7 @@ def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_fol
         else:
             angular_offset = np.asarray([0, 0, 0])
 
-        c_symmetry = temp_df.at[i, "Symmetry"]
+        cyclic_symmetry = temp_df.at[i, "Symmetry"]
         output_base = create_output_base_name(i)
         output_folder = create_output_folder_path(parent_folder_path, structure_name, i)
 
@@ -1681,7 +1681,7 @@ def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_fol
             angular_offset=angular_offset,
             starting_angle=starting_angle,
             cc_radius=cc_radius_tol,
-            c_symmetry=c_symmetry,
+            cyclic_symmetry=cyclic_symmetry,
         )[0]
 
         angles_map = output_folder + "/" + output_base + "_angles.em"
@@ -1764,7 +1764,7 @@ def run_angle_analysis(
             tomo = create_em_path(parent_folder_path, temp_df.at[i, "Compare"], temp_df.at[i, "Tomo map"])
 
         starting_angle = temp_df.loc[[i], ["Phi", "Theta", "Psi"]].to_numpy()
-        c_symmetry = temp_df.at[i, "Symmetry"]
+        cyclic_symmetry = temp_df.at[i, "Symmetry"]
 
         results = np.zeros((angular_range, 8, 3))
 
@@ -1790,7 +1790,7 @@ def run_angle_analysis(
                     output_path=None,
                     starting_angle=starting_angle,
                     cc_radius=cc_radius_tol,
-                    c_symmetry=c_symmetry,
+                    cyclic_symmetry=cyclic_symmetry,
                 )
                 results[a, :, j] = res_df.values
                 hist, _ = np.histogram(cc_map, bins=n_bins, range=(0.0, 1.0))
@@ -2487,5 +2487,5 @@ def recompute_dist_maps(template_list, indices, parent_folder_path, angle_list_p
         output_folder = create_output_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
         angles_map = output_folder + output_base + "_angles.em"
         angle_list = angle_list_path + temp_df.at[i, "Angles"]
-        c_symmetry = temp_df.at[i, "Symmetry"]
-        _, _, _ = tmana.create_angular_distance_maps(angles_map, angle_list, write_out_maps=True, c_symmetry=c_symmetry)
+        cyclic_symmetry = temp_df.at[i, "Symmetry"]
+        _, _, _ = tmana.create_angular_distance_maps(angles_map, angle_list, write_out_maps=True, cyclic_symmetry=cyclic_symmetry)

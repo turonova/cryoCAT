@@ -212,7 +212,7 @@ class ObjectHeader(ImodHeader):
     sympad : int
         Padding byte.
     trans : int
-        Transparency (0–255).
+        Transparency (0â255).
     meshsize : int
         Number of meshes.
     surfsize : int
@@ -351,7 +351,7 @@ class ModelHeader(ImodHeader):
     pixsize : float
         Size of one pixel/voxel in *units*.
     units : int
-        Unit code: 0 = pixels, -6 = µm, -9 = nm, -10 = Å, etc.
+        Unit code: 0 = pixels, -6 = Âµm, -9 = nm, -10 = Ã, etc.
     csum : int
         Checksum (used for autosave only).
     alpha, beta, gamma : float
@@ -523,14 +523,14 @@ def read_mod_files(input_path, file_prefix="", file_suffix=".mod"):
         return mod_df
 
 
-def read_mod_file(file_path):
+def read_mod_file(input_path):
     """Read a single IMOD binary model file and extract coordinate data.
 
     Parses IMOD model file format to extract object contours and their 3D coordinates.
 
     Parameters
     ----------
-    file_path : str
+    input_path : str
         Path to the .mod file to read
 
     Returns
@@ -538,9 +538,9 @@ def read_mod_file(file_path):
     pandas.DataFrame
         DataFrame with columns: object_id, contour_id, x, y, z, object_radius
     """
-    encoding = ioutils.get_file_encoding(file_path)
+    encoding = ioutils.get_file_encoding(input_path)
 
-    with open(file_path, "rb") as f:
+    with open(input_path, "rb") as f:
         # Read 4 bytes at a time
         while True:
             segment = f.read(4)
@@ -561,7 +561,7 @@ def read_mod_file(file_path):
                 segment = segment.decode(encoding)
                 # print(f"Found segment: {segment}")
 
-    with open(file_path, "rb") as f:
+    with open(input_path, "rb") as f:
         # Read the 8-byte ID
         id_data = f.read(8)
         # if id_data != b'\x4F\x4A\x42\x54\x43\x4F\x4E\x54':  # Check for the expected ID
@@ -592,7 +592,7 @@ def read_mod_file(file_path):
     return df
 
 
-def write_model_binary(df, filename):
+def write_model_binary(df, output_path):
     """Write a DataFrame of 3-D coordinates as an IMOD binary ``.mod`` file.
 
     Parameters
@@ -600,7 +600,7 @@ def write_model_binary(df, filename):
     df : pandas.DataFrame
         Coordinate table with columns ``object_id``, ``contour_id``,
         ``x``, ``y``, ``z``, and optionally ``object_radius``.
-    filename : str
+    output_path : str
         Output path for the ``.mod`` file.
 
     Returns
@@ -623,7 +623,7 @@ def write_model_binary(df, filename):
     num_objects = df["object_id"].nunique()
 
     # Open the file in binary write mode
-    with open(filename, "wb") as file:
+    with open(output_path, "wb") as file:
         # Write the magic bytes and version id
         file.write(b"IMODV1.2")
 

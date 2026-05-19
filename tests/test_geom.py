@@ -256,3 +256,429 @@ def test_as_triplet(input_value, reference_size, expected):
             as_triplet(input_value, reference_size)
     else:
         assert np.array_equal(as_triplet(input_value, reference_size), expected)
+
+
+# ---------------------------------------------------------------------------
+# Line / LineSegment
+# ---------------------------------------------------------------------------
+
+def test_line_stores_point_and_direction():
+    p = np.array([1.0, 2.0, 3.0])
+    d = np.array([0.0, 0.0, 1.0])
+    line = Line(p, d)
+    assert np.allclose(line.p, p)
+    assert np.allclose(line.dir, d)
+
+
+def test_line_segment_length():
+    p1 = np.array([0.0, 0.0, 0.0])
+    p2 = np.array([3.0, 4.0, 0.0])
+    seg = LineSegment(p1, p2)
+    assert seg.length == pytest.approx(5.0)
+
+
+def test_line_segment_unit_direction():
+    p1 = np.array([0.0, 0.0, 0.0])
+    p2 = np.array([0.0, 0.0, 7.0])
+    seg = LineSegment(p1, p2)
+    assert np.allclose(np.linalg.norm(seg.dir), 1.0)
+    assert np.allclose(seg.dir, [0.0, 0.0, 1.0])
+
+
+def test_line_segment_end_point():
+    p1 = np.array([1.0, 2.0, 3.0])
+    p2 = np.array([4.0, 6.0, 3.0])
+    seg = LineSegment(p1, p2)
+    assert np.allclose(seg.p_end, p2)
+
+
+# ---------------------------------------------------------------------------
+# Point3D
+# ---------------------------------------------------------------------------
+
+def test_point3d_coords():
+    p = Point3D(1.0, 2.0, 3.0)
+    assert p.x == 1.0 and p.y == 2.0 and p.z == 3.0
+
+
+def test_point3d_add():
+    p1 = Point3D(1.0, 2.0, 3.0)
+    p2 = Point3D(4.0, 5.0, 6.0)
+    result = p1 + p2
+    assert np.allclose(np.array(result), [5.0, 7.0, 9.0])
+
+
+def test_point3d_sub():
+    p1 = Point3D(4.0, 5.0, 6.0)
+    p2 = Point3D(1.0, 2.0, 3.0)
+    result = p1 - p2
+    assert np.allclose(np.array(result), [3.0, 3.0, 3.0])
+
+
+def test_point3d_mul_scalar():
+    p = Point3D(1.0, 2.0, 3.0)
+    result = p * 2.0
+    assert np.allclose(np.array(result), [2.0, 4.0, 6.0])
+
+
+def test_point3d_equality():
+    assert Point3D(1.0, 2.0, 3.0) == Point3D(1.0, 2.0, 3.0)
+    assert not (Point3D(1.0, 2.0, 3.0) == Point3D(0.0, 0.0, 0.0))
+
+
+def test_point3d_len():
+    assert len(Point3D(1.0, 2.0, 3.0)) == 3
+
+
+def test_point3d_numpy_array():
+    p = Point3D(1.0, 2.0, 3.0)
+    arr = np.asarray(p)
+    assert arr.shape == (3,)
+    assert np.allclose(arr, [1.0, 2.0, 3.0])
+
+
+# ---------------------------------------------------------------------------
+# Triangle
+# ---------------------------------------------------------------------------
+
+def test_triangle_area_right():
+    t = Triangle([0, 0, 0], [1, 0, 0], [0, 1, 0])
+    assert t.area() == pytest.approx(0.5)
+
+
+def test_triangle_area_colinear_zero():
+    t = Triangle([0, 0, 0], [1, 0, 0], [2, 0, 0])
+    assert t.area() == pytest.approx(0.0, abs=1e-12)
+
+
+def test_triangle_inner_angles_equilateral():
+    s = np.sqrt(3) / 2
+    t = Triangle([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, s, 0.0])
+    a, b, c = t.inner_angles()
+    assert a == pytest.approx(60.0, rel=1e-5)
+    assert b == pytest.approx(60.0, rel=1e-5)
+    assert c == pytest.approx(60.0, rel=1e-5)
+
+
+def test_triangle_inner_angles_sum_180():
+    t = Triangle([0, 0, 0], [3, 0, 0], [1, 2, 0])
+    a, b, c = t.inner_angles()
+    assert a + b + c == pytest.approx(180.0, rel=1e-5)
+
+
+def test_triangle_circumcircle_equilateral():
+    s = np.sqrt(3) / 2
+    t = Triangle([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, s, 0.0])
+    center, radius = t.circumcircle()
+    assert radius == pytest.approx(1.0 / np.sqrt(3), rel=1e-5)
+
+
+def test_triangle_inscribed_circle_equilateral():
+    s = np.sqrt(3) / 2
+    t = Triangle([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, s, 0.0])
+    center, radius = t.inscribed_circle()
+    assert radius == pytest.approx(s / 3, rel=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Matrix
+# ---------------------------------------------------------------------------
+
+def test_matrix_default_is_identity():
+    m = Matrix()
+    assert np.allclose(m.m, np.eye(3))
+
+
+def test_matrix_is_so3_identity():
+    assert Matrix().is_SO3()
+
+
+def test_matrix_is_so3_rejects_non_orthogonal():
+    m = Matrix(np.ones((3, 3)))
+    assert not m.is_SO3()
+
+
+def test_matrix_is_se3_identity_block():
+    rot = np.eye(3)
+    t = np.array([1.0, 2.0, 3.0])
+    se3 = np.eye(4)
+    se3[:3, :3] = rot
+    se3[:3, 3] = t
+    assert Matrix(se3).is_SE3()
+
+
+def test_matrix_is_se3_rejects_bad_bottom_row():
+    se3 = np.eye(4)
+    se3[3, 0] = 1.0
+    assert not Matrix(se3).is_SE3()
+
+
+def test_matrix_power_zero_is_identity():
+    rot = srot.from_euler("zxz", [30, 45, 60], degrees=True).as_matrix()
+    m = Matrix(rot)
+    assert np.allclose(m.matrix_power(0), np.eye(3))
+
+
+def test_matrix_power_one_is_self():
+    rot = srot.from_euler("zxz", [30, 45, 60], degrees=True).as_matrix()
+    m = Matrix(rot)
+    assert np.allclose(m.matrix_power(1), rot)
+
+
+def test_matrix_power_negative_raises():
+    with pytest.raises(ValueError):
+        Matrix().matrix_power(-1)
+
+
+def test_matrix_dual_basis_so3():
+    skew = np.array([[0, -3, 2], [3, 0, -1], [-2, 1, 0]], dtype=float)
+    m = Matrix(skew)
+    assert np.allclose(m.dual_basis_so3(), [1.0, 2.0, 3.0])
+
+
+# ---------------------------------------------------------------------------
+# Platonic solid vertex functions
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "fn, expected_count",
+    [
+        (tetrahedron, 4),
+        (octahedron, 6),
+        (cube, 8),
+        (icosahedron, 12),
+        (dodecahedron, 20),
+    ],
+)
+def test_platonic_vertex_count(fn, expected_count):
+    v = fn()
+    assert v.shape == (expected_count, 3)
+
+
+@pytest.mark.parametrize("fn", [tetrahedron, octahedron, cube, icosahedron])
+def test_platonic_vertices_on_unit_sphere(fn):
+    v = fn()
+    norms = np.linalg.norm(v, axis=1)
+    assert np.allclose(norms, 1.0, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# normalize_vectors
+# ---------------------------------------------------------------------------
+
+def test_normalize_vectors_unit_norms():
+    v = np.array([[1.0, 2.0, 3.0], [4.0, 0.0, 0.0]])
+    n = normalize_vectors(v)
+    norms = np.linalg.norm(n, axis=1)
+    assert np.allclose(norms, 1.0)
+
+
+def test_normalize_vectors_direction_preserved():
+    v = np.array([[3.0, 0.0, 0.0], [0.0, 5.0, 0.0]])
+    n = normalize_vectors(v)
+    assert np.allclose(n[0], [1.0, 0.0, 0.0])
+    assert np.allclose(n[1], [0.0, 1.0, 0.0])
+
+
+# ---------------------------------------------------------------------------
+# angle_between_n_vectors
+# ---------------------------------------------------------------------------
+
+def test_angle_between_n_vectors_orthogonal():
+    v1 = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    v2 = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    angles = angle_between_n_vectors(v1, v2)
+    assert np.allclose(angles, [90.0, 90.0])
+
+
+def test_angle_between_n_vectors_parallel():
+    v1 = np.array([[1.0, 0.0, 0.0]])
+    v2 = np.array([[2.0, 0.0, 0.0]])
+    angles = angle_between_n_vectors(v1, v2)
+    assert np.allclose(angles, [0.0], atol=1e-10)
+
+
+def test_angle_between_n_vectors_radians():
+    v1 = np.array([[1.0, 0.0, 0.0]])
+    v2 = np.array([[0.0, 1.0, 0.0]])
+    angle_rad = angle_between_n_vectors(v1, v2, degrees=False)
+    assert np.allclose(angle_rad, [np.pi / 2])
+
+
+# ---------------------------------------------------------------------------
+# vector_angular_distance_signed
+# ---------------------------------------------------------------------------
+
+def test_vector_angular_distance_signed_no_normal():
+    u = np.array([1.0, 0.0, 0.0])
+    v = np.array([0.0, 1.0, 0.0])
+    d = vector_angular_distance_signed(u, v)
+    assert d == pytest.approx(np.pi / 2, rel=1e-6)
+
+
+def test_vector_angular_distance_signed_with_normal():
+    u = np.array([1.0, 0.0, 0.0])
+    v = np.array([0.0, 1.0, 0.0])
+    n_pos = np.array([0.0, 0.0, 1.0])
+    n_neg = np.array([0.0, 0.0, -1.0])
+    assert vector_angular_distance_signed(u, v, n_pos) == pytest.approx(np.pi / 2, rel=1e-6)
+    assert vector_angular_distance_signed(u, v, n_neg) == pytest.approx(-np.pi / 2, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# as_rotation
+# ---------------------------------------------------------------------------
+
+def test_as_rotation_from_euler():
+    r = as_rotation([0.0, 0.0, 0.0])
+    assert np.allclose(r.as_matrix(), np.eye(3))
+
+
+def test_as_rotation_from_matrix():
+    rot = srot.from_euler("zxz", [30, 45, 60], degrees=True).as_matrix()
+    r = as_rotation(rot)
+    assert np.allclose(r.as_matrix(), rot, atol=1e-12)
+
+
+def test_as_rotation_from_quaternion():
+    q = np.array([0.0, 0.0, 0.0, 1.0])
+    r = as_rotation(q)
+    assert np.allclose(r.as_matrix(), np.eye(3), atol=1e-12)
+
+
+def test_as_rotation_passthrough():
+    r = srot.from_euler("zxz", [10, 20, 30], degrees=True)
+    assert as_rotation(r) is r
+
+
+def test_as_rotation_invalid_raises():
+    with pytest.raises(ValueError):
+        as_rotation(np.zeros(5))
+
+
+# ---------------------------------------------------------------------------
+# as_symmetry
+# ---------------------------------------------------------------------------
+
+def test_as_symmetry_cyclic_string():
+    assert as_symmetry("C5") == ("C", 5)
+
+
+def test_as_symmetry_dihedral_string_lowercase():
+    assert as_symmetry("d3") == ("D", 3)
+
+
+def test_as_symmetry_integer():
+    assert as_symmetry(7) == ("C", 7)
+
+
+def test_as_symmetry_float_whole():
+    assert as_symmetry(4.0) == ("C", 4)
+
+
+def test_as_symmetry_invalid_string_raises():
+    with pytest.raises(ValueError):
+        as_symmetry("X5")
+
+
+def test_as_symmetry_float_non_whole_raises():
+    with pytest.raises(ValueError):
+        as_symmetry(2.5)
+
+
+# ---------------------------------------------------------------------------
+# point_inside_triangle
+# ---------------------------------------------------------------------------
+
+def test_point_inside_triangle_centroid():
+    tri = np.array([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 3.0, 0.0]])
+    centroid = tri.mean(axis=0)
+    assert point_inside_triangle(centroid, tri)
+
+
+def test_point_inside_triangle_outside():
+    tri = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    outside = np.array([2.0, 2.0, 0.0])
+    assert not point_inside_triangle(outside, tri)
+
+
+def test_point_inside_triangle_vertex():
+    tri = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    assert point_inside_triangle(tri[0], tri)
+
+
+# ---------------------------------------------------------------------------
+# distance_array
+# ---------------------------------------------------------------------------
+
+def test_distance_array_shape():
+    vol = np.zeros((10, 10, 10))
+    d = distance_array(vol)
+    assert d.shape == (10, 10, 10)
+
+
+def test_distance_array_center_is_zero():
+    vol = np.zeros((10, 10, 10))
+    d = distance_array(vol)
+    center = tuple([5] * 3)
+    assert d[center] == pytest.approx(0.0, abs=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# order_points_on_circle
+# ---------------------------------------------------------------------------
+
+def test_order_points_on_circle_sorted_angles():
+    angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
+    pts = np.column_stack([np.cos(angles), np.sin(angles), np.zeros(8)])
+    shuffled = pts[[4, 2, 6, 0, 7, 3, 5, 1]]
+    ordered, _ = order_points_on_circle(shuffled)
+    ordered_angles = np.arctan2(ordered[:, 1], ordered[:, 0])
+    assert np.all(np.diff(ordered_angles) >= 0)
+
+
+# ---------------------------------------------------------------------------
+# cartesian_to_spherical
+# ---------------------------------------------------------------------------
+
+def test_cartesian_to_spherical_z_axis():
+    coord = np.array([[0.0, 0.0, 1.0]])
+    phi, theta = cartesian_to_spherical(coord, normalize=False)
+    assert theta == pytest.approx(0.0, abs=1e-10)
+
+
+def test_cartesian_to_spherical_shape():
+    coord = np.random.randn(20, 3)
+    norms = np.linalg.norm(coord, axis=1, keepdims=True)
+    coord = coord / norms
+    phi, theta = cartesian_to_spherical(coord)
+    assert phi.shape == theta.shape
+    assert len(phi) <= 20
+
+
+def test_cartesian_to_spherical_invalid_shape_raises():
+    with pytest.raises(ValueError):
+        cartesian_to_spherical(np.ones((5, 4)))
+
+
+# ---------------------------------------------------------------------------
+# project_points_on_sphere
+# ---------------------------------------------------------------------------
+
+def test_project_points_on_sphere_stereo_shape():
+    pts = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    polar, xy = project_points_on_sphere(pts, projection_type="stereo")
+    assert polar.shape == (3, 2)
+    assert xy.shape == (3, 2)
+
+
+def test_project_points_on_sphere_lambert_shape():
+    pts = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
+    polar, xy = project_points_on_sphere(pts, projection_type="lambert")
+    assert polar.shape == (2, 2)
+
+
+def test_project_points_on_sphere_invalid_raises():
+    pts = np.array([[0.0, 0.0, 1.0]])
+    with pytest.raises(ValueError):
+        project_points_on_sphere(pts, projection_type="gnomonic")

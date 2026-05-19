@@ -488,7 +488,7 @@ def show_nn_motl_option(n_clicks, main_motl_df, nn_motl_df, use_single_motl, nn_
 
     norm_data = np.column_stack((nn_stats.get_normalized_coord(), nn_stats.df["nn_subtomo_id"].values))
     nn_df = pd.DataFrame(data=norm_data, columns=["x", "y", "z", "nn_subtomo_id"])
-    fig = visplot.plot_scatter_xyz_panels(nn_df, coord_columns=["x", "y", "z"], hover_column="nn_subtomo_id")
+    fig = visplot.plot_scatter_xyz_panels(nn_df, coord_columns=["x", "y", "z"], hover_column_name="nn_subtomo_id")
 
     return "nn-tab", dcc.Graph(figure=fig), table_data, info_string
 
@@ -546,7 +546,7 @@ def show_desc_options(class_name):
                 "input_twist",
                 "input_motl",
                 "nn_radius",
-                "feature_id",
+                "column_name",
                 "symm",
                 "remove_qp",
                 "remove_duplicates",

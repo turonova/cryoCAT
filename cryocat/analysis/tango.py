@@ -28,26 +28,6 @@ from cryocat.core import cryomap
 from cryocat.utils.geom import Matrix
 from cryocat.utils.classutils import get_classes_from_names, get_class_names_by_parent
 from cryocat.analysis import visplot
-from matplotlib.colors import to_hex
-
-
-def get_colormap_color(cmap, val):
-    """Get a color from a colormap based on a value.
-
-    Parameters
-    ----------
-    cmap : matplotlib.colors.Colormap
-        The colormap to use.
-    val : float
-        The value to map to a color. Should be in the range [0, 1].
-
-    Returns
-    -------
-    str
-        The color in hexadecimal format.
-    """
-    rgba = cmap(val)
-    return to_hex(rgba, keep_alpha=False)
 
 
 class Particle:
@@ -71,7 +51,7 @@ class Particle:
         tomo_id : int, optional
             An optional identifier for the tomography, must be an integer or float. Default is None.
         motl_fid : str, optional
-            An optional motl feature_id for the particle that will be used as additional label. Default is None.
+            An optional motl column_name for the particle that will be used as additional label. Default is None.
         degrees : bool, default=True
             A flag indicating whether the rotation is provided in degrees. Ddefault is True.
         particle_id : int, default=0
@@ -731,7 +711,7 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
     tm = cryomotl.Motl.load(input_motl)
 
     if subset_tomo_id is not None:
-        tm = tm.get_motl_subset(subset_tomo_id, feature_id="tomo_id")
+        tm = tm.get_motl_subset(subset_tomo_id, column_name="tomo_id")
 
     coord = tm.get_coordinates()
     angles = tm.get_angles()
@@ -1102,12 +1082,12 @@ class Descriptor:
 
         return result_df
 
-    def plot_k_means(self, color_column):
+    def plot_k_means(self, color_column_name):
         """Plot the k-means clustering results in 3D.
 
         Parameters
         ----------
-        color_column : str
+        color_column_name : str
             The column name in the DataFrame to use for coloring the points.
         """
 
@@ -1119,7 +1099,7 @@ class Descriptor:
         fig = visplot.plot_scatter_3d(
             merged_df,
             coord_columns=["twist_x", "twist_y", "twist_z"],
-            color_column=color_column,
+            color_column_name=color_column_name,
             color_label="Group",
             title="K-means analysis",
         )
@@ -1222,7 +1202,7 @@ class TwistDescriptor(Descriptor):
         input_twist=None,
         input_motl=None,
         nn_radius=None,
-        feature_id="tomo_id",
+        column_name="tomo_id",
         symm=None,
         remove_qp=False,
         remove_duplicates=False,
@@ -1243,7 +1223,7 @@ class TwistDescriptor(Descriptor):
         nn_radius : float, optional
             The radius within which to compute the twist descriptors. If input_motl is passed as a parameter, the radius
             has to be specified. Default is None.
-        feature_id : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
+        column_name : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
             The identifier for the motl feature which specifies the level of comparison. For instance, if "tomo_id" is
             specified the NN analysis will be computed at the tomogram level. If "object_id" is specified, the nearest
             neighbors will be searched in the objects with same "object_id". Note that one should ensure unique
@@ -1278,7 +1258,7 @@ class TwistDescriptor(Descriptor):
                 self.df = self.read_in(input_twist)
         elif input_motl is not None and isinstance(nn_radius, (float, int)):
             self.df = TwistDescriptor.get_nn_twist_stats_within_radius(
-                input_motl, nn_radius, feature_id, symm, remove_qp=remove_qp, remove_duplicates=remove_duplicates
+                input_motl, nn_radius, column_name, symm, remove_qp=remove_qp, remove_duplicates=remove_duplicates
             )
         else:
             raise ValueError(
@@ -1316,7 +1296,7 @@ class TwistDescriptor(Descriptor):
             raise ValueError("Unsupported file type. Use .csv or .pkl")
 
     @staticmethod
-    def read_in(input_file):
+    def read_in(input_path):
         """
         Reads in a pandas DataFrame from a CSV or Pickle file depending on file extension.
 
@@ -1327,13 +1307,13 @@ class TwistDescriptor(Descriptor):
 
         Parameters
         ----------
-        input_file : str
+        input_path : str
             File path. Must end with `.csv` or `.pkl`.
         """
-        if input_file.endswith(".csv"):
-            return pd.read_csv(input_file)
-        elif input_file.endswith(".pkl"):
-            return pd.read_pickle(input_file)
+        if input_path.endswith(".csv"):
+            return pd.read_csv(input_path)
+        elif input_path.endswith(".pkl"):
+            return pd.read_pickle(input_path)
         else:
             raise ValueError("Unsupported file type. Use .csv or .pkl")
 
@@ -1519,13 +1499,13 @@ class TwistDescriptor(Descriptor):
         else:
             motl = cryomotl.Motl.load(input_motl)
 
-        pm = motl.get_motl_subset(feature_values=motl.df["subtomo_id"].iloc[0], feature_id="subtomo_id")
+        pm = motl.get_motl_subset(column_values=motl.df["subtomo_id"].iloc[0], column_name="subtomo_id")
         part = convert_to_particle_list(pm, symm=symm)
         return part[0].max_dissimilarity(), part[0].category
 
     @staticmethod
     def get_nn_twist_stats_within_radius(
-        input_motl, nn_radius, feature_id="tomo_id", symm=None, remove_qp=None, remove_duplicates=False
+        input_motl, nn_radius, column_name="tomo_id", symm=None, remove_qp=None, remove_duplicates=False
     ):
         """Compute twist descriptor for a given input_motl within a specified radius.
 
@@ -1535,7 +1515,7 @@ class TwistDescriptor(Descriptor):
             The path to the input Motl file or Motl object to be loaded.
         nn_radius : float
             The radius within which to compute the twist descriptor.
-        feature_id : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
+        column_name : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
             The identifier for the motl feature which specifies the level of comparison. For instance, if "tomo_id" is
             specified the NN analysis will be computed at the tomogram level. If "object_id" is specified, the nearest
             neighbors will be searched in the objects with same "object_id". Note that one should ensure unique
@@ -1558,7 +1538,7 @@ class TwistDescriptor(Descriptor):
 
         nn = nnana.NearestNeighbors(
             input_motl,
-            feature_id=feature_id,
+            column_name=column_name,
             nn_type="radius",
             type_param=nn_radius,
             remove_qp=remove_qp,
@@ -1570,7 +1550,7 @@ class TwistDescriptor(Descriptor):
         results = []
 
         for tomo_id in tomo_idx:
-            t_nn = nn.get_nn_subset(motl_values=1, feature_values=tomo_id)
+            t_nn = nn.get_nn_subset(motl_id_values=1, column_values=tomo_id)
             if t_nn.df.shape[0] > 0:
                 results.append(TwistDescriptor.process_tomo_twist(t_nn, symm, symm_max_value, symm_category))
 
@@ -1606,12 +1586,12 @@ class TwistDescriptor(Descriptor):
         return twist_df
 
     @staticmethod
-    def get_axis_feature_id(feature_id, axis="z"):
+    def get_axis_feature_id(column_name, axis="z"):
         """Get the feature ID for a specific axis.
 
         Parameters
         ----------
-        feature_id : str
+        column_name : str
             The base feature ID (e.g., "twist_so").
         axis : str, {"z", "x", "y"}
             The axis to use. Default is "z".
@@ -1628,12 +1608,12 @@ class TwistDescriptor(Descriptor):
         """
         if isinstance(axis, str):
             if axis.endswith(("x", "y", "z")):
-                column = f"{feature_id}_{axis}"
+                column = f"{column_name}_{axis}"
             else:
                 raise ValueError("Axis should refer to x-, y-, or z-axis.")
         else:
             print("Invalid choise; default axis is used.")
-            column = "{feature_id}_so_z"
+            column = "{column_name}_so_z"
 
         return column
 
@@ -1919,8 +1899,8 @@ class TwistDescriptor(Descriptor):
 
         fig = visplot.plot_grouped_box(
             df_melted,
-            group_column="Column",
-            value_column="Value",
+            group_column_name="Column",
+            value_column_name="Value",
             title="Rotational Symmetry Angular Scores",
             xaxis_title="Rotational symmetry type",
             yaxis_title="Angular score",
@@ -1961,9 +1941,9 @@ class AxisRot(Filter):
 
         """
 
-        feature_id = TwistDescriptor.get_axis_feature_id("rot_angle", axis=axis)
+        column_name = TwistDescriptor.get_axis_feature_id("rot_angle", axis=axis)
         self.filter = TwistDescriptor.get_data_range(
-            twist_desc=twist_desc, twist_descriptor_id=feature_id, min_value=min_angle, max_value=max_angle
+            twist_desc=twist_desc, twist_descriptor_id=column_name, min_value=min_angle, max_value=max_angle
         )
 
 
