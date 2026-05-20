@@ -31,6 +31,8 @@ dependencies = [
     "dash_ag_grid>=35.2.0",
     "networkx>=3.6.1",
     "numpydoc>=1.10",
+    "open3d>=0.19",
+    "pyvista>=0.48",
 ]
 classifiers = [
     "Intended Audience :: Science/Research",

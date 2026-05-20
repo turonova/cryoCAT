@@ -1,8 +1,10 @@
+from __future__ import annotations
 import numpy as np
 import pandas as pd
 import warnings
 import decimal
 import os
+from scipy.spatial.transform import Rotation as srot
 from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.core import cryomask
@@ -10,8 +12,18 @@ from cryocat.utils import geom
 from cryocat.utils import mathutils
 from cryocat.analysis import nnana
 from cryocat.utils import ioutils
-from cryocat.core import quadric
-from scipy.spatial.transform import Rotation as srot
+from cryocat._types import PathOrStr
+from cryocat.core.surface import (
+    Surface,
+    DiscreteSurface,
+    Mesh,
+    OrientedPointCloud,
+    AnalyticSurface,
+    Cylinder,
+    Ellipsoid,
+    QuadricsM,
+)
+from typing import Any, Callable, Sequence
 
 # =============================================================================
 # Chain — generic linear-chain analysis on traced particles
@@ -413,7 +425,7 @@ class Chain:
 
 
 # =============================================================================
-# NPC, MAK, PleomorphicSurface
+# NPC
 # =============================================================================
 
 
@@ -909,135 +921,1656 @@ class NPC:
 
         return ring_motls
 
+# =============================================================================
+# PleomorphicSurface for discrete surfaces (Mesh and OrientedPointCloud)
+# =============================================================================
 
 class PleomorphicSurface:
-    """Static helpers for assigning particles to pleomorphic surfaces.
+    """Wrapper around :class:`Mesh` or :class:`OrientedPointCloud`."""
 
-    All methods are ``@staticmethod``; the class is used as a namespace.
-    Surfaces are described by fitted ellipsoid parameters (centre, semi-axes,
-    eigenvectors, and the 10 coefficients of the implicit quadric).
-    """
+    def __init__(self, surface: Mesh | OrientedPointCloud | "PleomorphicSurface"):
+        if isinstance(surface, PleomorphicSurface):
+            surface = surface.surface
+        if not isinstance(surface, (Mesh, OrientedPointCloud)):
+            raise TypeError(
+                f"Unsupported surface type: {type(surface)}. "
+                "Must be Mesh, OrientedPointCloud, or PleomorphicSurface."
+            )
+        self.surface = surface
 
     @staticmethod
-    def get_parametric_description(input_motl, column_name="object_id", output_path=None):
-        """Fit an ellipsoid to each group of particles and return the parameters.
+    def _unwrap_surface(surface):
+        """Return the concrete Mesh / OrientedPointCloud behind an optional wrapper."""
+        if isinstance(surface, PleomorphicSurface):
+            return surface.surface
+        if isinstance(surface, (Mesh, OrientedPointCloud)):
+            return surface
+        raise TypeError(
+            f"Unsupported surface type: {type(surface)}. "
+            "Must be Mesh, OrientedPointCloud, or PleomorphicSurface."
+        )
+
+    @classmethod
+    def read(cls, input_path: PathOrStr, method: str = "mesh", **kwargs) -> "PleomorphicSurface":
+        """
+        Create a wrapped surface from common on-disk inputs.
+
+        Parameters
+        ----------
+        input_path : str or Path
+            Input file path.
+        method : str, default="mesh"
+            Loader to use:
+            - "mesh": geometry-only triangle mesh via :meth:`Mesh.read`
+            - "mesh_curvatures": VTP triangle mesh with curvature fields via
+              :meth:`Mesh.read_curvatures`
+            - "mesh_from_mrc": segmentation-to-mesh via :meth:`Mesh.from_mrc`
+            - "point_cloud": oriented point cloud via :meth:`OrientedPointCloud.read`
+            - "point_cloud_from_mrc": segmentation-to-point-cloud via
+              :meth:`OrientedPointCloud.from_mrc`
+        **kwargs
+            Forwarded to the selected loader.
+        """
+        method = str(method).lower()
+        aliases = {
+            "curvatures": "mesh_curvatures",
+            "mesh_with_curvatures": "mesh_curvatures",
+            "mrc_mesh": "mesh_from_mrc",
+            "pcd": "point_cloud",
+            "pointcloud": "point_cloud",
+            "mrc_point_cloud": "point_cloud_from_mrc",
+            "mrc_pointcloud": "point_cloud_from_mrc",
+        }
+        method = aliases.get(method, method)
+
+        if method == "mesh":
+            surface = Mesh.read(input_path, **kwargs)
+        elif method == "mesh_curvatures":
+            surface = Mesh.read_curvatures(input_path, **kwargs)
+        elif method == "mesh_from_mrc":
+            surface = Mesh.from_mrc(input_path, **kwargs)
+        elif method == "point_cloud":
+            surface = OrientedPointCloud.read(input_path, **kwargs)
+        elif method == "point_cloud_from_mrc":
+            surface = OrientedPointCloud.from_mrc(input_path, **kwargs)
+        else:
+            raise ValueError(
+                f"Unknown read method '{method}'. Use 'mesh', 'mesh_curvatures', "
+                "'mesh_from_mrc', 'point_cloud', or 'point_cloud_from_mrc'."
+            )
+
+        return cls(surface)
+
+    @property
+    def is_mesh(self) -> bool:
+        """True when the backing geometry has triangle connectivity (:class:`Mesh`)."""
+        return isinstance(self.surface, Mesh)
+
+    @property
+    def is_point_cloud(self) -> bool:
+        """True when the backing geometry is discrete samples (:class:`OrientedPointCloud`)."""
+        return isinstance(self.surface, OrientedPointCloud)
+
+    @property
+    def vertices(self):
+        """DiscreteSurface vertices / points."""
+        return self.surface.get_vertices()
+
+    @property
+    def normals(self):
+        """DiscreteSurface normals."""
+        return self.surface.get_normals()
+
+    @property
+    def faces(self):
+        """Triangle connectivity for mesh-backed surfaces."""
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("faces are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.faces
+
+    @property
+    def units(self):
+        """Coordinate units stored on the wrapped surface."""
+        return self.surface.units
+
+    @units.setter
+    def units(self, value):
+        """Set coordinate units on the wrapped mesh or oriented point cloud."""
+        self.surface.units = value
+
+    def get_principal_curvatures(self):
+        """Return mesh principal curvatures."""
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.get_principal_curvatures()
+
+    def get_mean_curvature(self):
+        """Return mesh mean curvature."""
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.get_mean_curvature()
+
+    def get_gaussian_curvature(self):
+        """Return mesh Gaussian curvature."""
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.get_gaussian_curvature()
+
+    def get_curvature_directions(self):
+        """Return mesh principal curvature directions."""
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.get_curvature_directions()
+
+    def get_surface_area(self) -> float:
+        """Return total surface area of a mesh-backed surface."""
+        if not isinstance(self.surface, Mesh):
+            raise TypeError(
+                "get_surface_area is only available for Mesh-backed PleomorphicSurface. "
+                "An OrientedPointCloud has no face connectivity from which to compute area."
+            )
+        return self.surface.get_surface_area()
+
+    def save(self, output_path: PathOrStr, format: str | None = None, **kwargs):
+        """
+        Save the wrapped surface.
+
+        If ``format`` is None, the wrapped surface may infer it from ``output_path``.
+        Additional keyword arguments are forwarded to the concrete surface save method.
+        """
+        return self.surface.save(output_path, format=format, **kwargs)
+
+    def compute_normals(self, **kwargs) -> "PleomorphicSurface":
+        """
+        Delegates to ``Mesh.compute_normals`` or ``OrientedPointCloud.compute_normals``.
+
+        Returns
+        -------
+        PleomorphicSurface
+            ``self`` when the delegate updates in place; a new wrapper when the delegate returns
+            a copy (point cloud with ``inplace=False``).
+        """
+        out = self.surface.compute_normals(**kwargs)
+        if out is None:
+            return self
+        return PleomorphicSurface(out)
+
+    def flip_normals(self, inplace=True, **kwargs) -> "PleomorphicSurface" | None:
+        """
+        Delegate normal-direction flipping to the wrapped surface.
+
+        For meshes, keyword arguments such as ``flip_faces`` are passed through to
+        :meth:`Mesh.flip_normals`.
+
+        Returns
+        -------
+        PleomorphicSurface or None
+            ``self`` when ``inplace=True``; a new wrapper when ``inplace=False``.
+        """
+        out = self.surface.flip_normals(inplace=inplace, **kwargs)
+        if inplace:
+            return self
+        return PleomorphicSurface(out)
+
+    def refine_normals(
+        self,
+        radius_hit: float = 3.0,
+        batch_size: int = 2000,
+        n_iter: int = 1,
+        mask: np.ndarray | None = None,
+        logger=None,
+        inplace: bool = True,
+        **kwargs,
+    ) -> "PleomorphicSurface":
+        """
+        Refine normals on the wrapped surface by neighborhood averaging.
+
+        Delegates to :meth:`Mesh.refine_normals` or :meth:`OrientedPointCloud.refine_normals`
+        (both inherit :meth:`DiscreteSurface.refine_normals`).
+
+        Parameters
+        ----------
+        radius_hit : float, default=3.0
+            Neighborhood radius for normal averaging, in mesh/point-cloud units.
+        batch_size : int, default=2000
+            Batch size for spatial neighbor queries.
+        n_iter : int, default=1
+            Number of refinement passes.
+        mask : np.ndarray, optional
+            Boolean mask of vertices/samples to update. If None, all are refined.
+        logger : optional
+            Logger passed through to the delegate.
+        inplace : bool, default=True
+            If True, update the wrapped surface in place. If False, return a new wrapper.
+        **kwargs
+            Additional keyword arguments forwarded to the delegate.
+
+        Returns
+        -------
+        PleomorphicSurface
+            ``self`` when ``inplace=True``; a new wrapper when ``inplace=False``.
+        """
+        if not (self.is_mesh or self.is_point_cloud):
+            raise TypeError(
+                f"Unsupported surface type: {type(self.surface)}. "
+                "refine_normals requires a Mesh or OrientedPointCloud backing."
+            )
+        out = self.surface.refine_normals(
+            radius_hit=radius_hit,
+            batch_size=batch_size,
+            n_iter=n_iter,
+            mask=mask,
+            logger=logger,
+            inplace=inplace,
+            **kwargs,
+        )
+        if inplace:
+            return self
+        return PleomorphicSurface(out)
+
+    def remove_nonfinite_vertices(self, inplace: bool = True, **kwargs) -> "PleomorphicSurface":
+        """
+        Remove NaN/Inf vertices or point samples from the wrapped surface.
+
+        Mesh inputs also drop affected faces and remap connectivity.
+        """
+        out = self.surface.remove_nonfinite_vertices(inplace=inplace, **kwargs)
+        if inplace:
+            return self
+        return PleomorphicSurface(out)
+
+    def oversample(self, **kwargs) -> "PleomorphicSurface":
+        """
+        Delegate to ``oversample`` on :attr:`surface` (mesh vs point cloud semantics differ).
+
+        Returns
+        -------
+        PleomorphicSurface
+            Wrapped result.
+        """
+        return PleomorphicSurface(self.surface.oversample(**kwargs))
+
+    def crop(self, bbox, inplace=False):
+        """
+        Delegate to :meth:`Mesh.crop` / :meth:`OrientedPointCloud.crop`.
+
+        Returns
+        -------
+        PleomorphicSurface or None
+            Wrapped surface when ``inplace=False``; ``None`` when ``inplace=True``.
+        """
+        out = self.surface.crop(bbox, inplace=inplace)
+        if inplace:
+            return None
+        return PleomorphicSurface(out)
+
+    def extract_region(self, indices: np.ndarray, element: str = "triangles", **kwargs) -> "PleomorphicSurface":
+        """
+        Extract an indexed subregion from the wrapped surface.
+
+        For meshes, ``element='triangles'`` extracts a triangle submesh and preserves
+        per-vertex curvature fields by default. For point clouds, ``element='points'``
+        extracts selected points; ``element='mask'`` treats ``indices`` as a boolean mask.
+        """
+        element = str(element).lower()
+        if isinstance(self.surface, Mesh):
+            if element not in ("triangle", "triangles"):
+                raise ValueError("Mesh subregions currently support element='triangles'")
+            out = self.surface.extract_submesh(indices, **kwargs)
+            return PleomorphicSurface(out)
+
+        if isinstance(self.surface, OrientedPointCloud):
+            if element in ("point", "points"):
+                out = self.surface.extract_points(point_ids=indices, **kwargs)
+            elif element == "mask":
+                out = self.surface.extract_points(mask=indices, **kwargs)
+            else:
+                raise ValueError("Point-cloud subregions support element='points' or element='mask'")
+            return PleomorphicSurface(out)
+
+        raise TypeError(f"Unsupported surface type: {type(self.surface)}")
+
+    def convex_hull(self):
+        """Return convex hull as a :class:`PleomorphicSurface` wrapping a :class:`Mesh`."""
+        if isinstance(self.surface, Mesh):
+            hull_o3d, _ = self.surface._to_open3d().compute_convex_hull()
+        elif isinstance(self.surface, OrientedPointCloud):
+            hull_o3d, _ = self.surface._to_open3d().compute_convex_hull()
+        else:
+            raise TypeError(f"Unsupported surface type: {type(self.surface)}")
+        hull_mesh = Mesh.from_open3d(hull_o3d)
+        print(f"Computed convex hull with {len(hull_mesh.vertices)} vertices")
+        return PleomorphicSurface(hull_mesh)
+
+    def clean_by_normals(self, max_angle_deg: float = 90.0) -> "PleomorphicSurface":
+        """Remove points whose normal deviates more than ``max_angle_deg`` from the mean direction."""
+        self.surface.filter_by_normal_orientation(
+            angle_threshold=max_angle_deg,
+            inplace=True,
+        )
+        print("Cleaned by normals (angle vs mean)")
+        return self
+
+    def separate_surfaces(self, threshold_angle: float = 90.0, reference_point: np.ndarray | None = None) -> np.ndarray:
+        """
+        Separate inner and outer surfaces based on normal direction.
+        
+        Works for both Mesh and OrientedPointCloud.
+        
+        Parameters
+        ----------
+        threshold_angle : float, default=90.0
+            Angle threshold in degrees
+        reference_point : np.ndarray (3,), optional
+            Reference point. If None, uses centroid.
+            
+        Returns
+        -------
+        vertex_labels : np.ndarray
+            Labels: 0=inner, 1=outer
+        """
+        return DiscreteSurface.separate_surfaces(
+            self.surface, threshold_angle, reference_point
+        )
+
+    def filter_by_labels(self, vertex_labels: np.ndarray, surface_type: str = 'inner', inplace: bool = False) -> "PleomorphicSurface" | None:
+        """
+        Create a new surface containing only inner or outer vertices/points.
+        
+        Parameters
+        ----------
+        vertex_labels : np.ndarray
+            Labels from separate_surfaces_by_normals (0=inner, 1=outer)
+        surface_type : str, default='inner'
+            Which surface to extract: 'inner' or 'outer'
+        inplace : bool, default=False
+            If True, modify in place. If False, return new instance.
+            
+        Returns
+        -------
+        PleomorphicSurface or None
+            New instance if inplace=False, else None
+        """
+        if not isinstance(self.surface, (Mesh, OrientedPointCloud)):
+            raise TypeError(f"Unsupported surface type: {type(self.surface)}")
+        filtered_surface = self.surface.filter_by_labels(
+            vertex_labels, surface_type, inplace=inplace
+        )
+        if inplace:
+            return None
+        return PleomorphicSurface(filtered_surface)
+
+    def distance_to_points(self, target: np.ndarray, compute_occupancy: bool = True, compute_signed: bool = False, 
+                                    return_closest_points: bool = False) -> dict:
+        """
+        Compute distance from a point to a Mesh or an OrientedPointCloud surface.
+        
+        Parameters
+        ----------
+        target : np.ndarray
+            Query points as (N, 3) array
+        compute_occupancy : bool, default=True
+            Compute occupancy (inside/outside). Only for Mesh.
+        compute_signed : bool, default=False
+            Compute signed distance instead of unsigned. Only for Mesh.
+            If True, compute_occupancy is automatically enabled.
+        return_closest_points : bool, default=False
+            Return closest surface points and triangle/point IDs
+        
+        Returns
+        -------
+        dict
+            Dictionary containing:
+            - 'distances': unsigned or signed distances for each point
+            - 'distance_type': 'signed' or 'unsigned'
+            - 'n_total': total number of query points
+            
+            If compute_occupancy=True and Mesh:
+            - 'occupancy': binary array (1=inside, 0=outside)
+            - 'inside_mask': boolean mask for inside points
+            - 'outside_mask': boolean mask for outside points
+            - 'n_inside': number of points inside
+            - 'n_outside': number of points outside
+            
+            If return_closest_points=True:
+            - 'closest_points': closest points on surface (N, 3)
+            - 'primitive_ids': triangle IDs (Mesh) or point IDs (PointCloud) (N,)
+            - 'closest_distances': distances to closest points (same as 'distances' for unsigned)
+        
+        Raises
+        ------
+        TypeError
+            If trying to compute occupancy/signed distance for non-Mesh surface
+        """
+        target = np.atleast_2d(target).astype(np.float32)
+        if isinstance(self.surface, Mesh):
+            return self.surface.distance_to_points(
+                target=target,
+                compute_occupancy=compute_occupancy,
+                compute_signed=compute_signed,
+                return_closest_points=return_closest_points,
+            )
+        elif isinstance(self.surface, OrientedPointCloud):
+            if compute_occupancy or compute_signed:
+                raise TypeError(
+                    "OrientedPointCloud does not support occupancy or signed distance queries; use Mesh."
+                )
+            return self.surface.distance_to_points(
+                target=target,
+                return_closest_points=return_closest_points,
+            )
+        raise TypeError(f"Unsupported surface type: {type(self.surface)}")
+
+    def get_points_within_distance(self, target: np.ndarray, threshold: float) -> dict:
+        """
+        Find points within a distance threshold from a Mesh or an OrientedPointCloud surface.
+        
+        Parameters
+        ----------
+        target : np.ndarray
+            Query points as (N, 3) array
+        threshold : float
+            Distance threshold
+        
+        Returns
+        -------
+        dict
+            Dictionary containing:
+            - 'mask': boolean array indicating points within threshold
+            - 'distances': unsigned distances for all points
+            - 'indices': indices of points within threshold
+            - 'within_points': coordinates of points within threshold
+            - 'n_within': number of points within threshold
+            - 'n_total': total number of query points
+        """
+        target = np.atleast_2d(target).astype(np.float32)
+        dist_result = self.distance_to_points(
+            target=target,
+            compute_occupancy=False,
+            compute_signed=False,
+            return_closest_points=False,
+        )
+        
+        distances = dist_result['distances']
+        
+        # Find points within threshold
+        mask = distances <= threshold
+        indices = np.where(mask)[0]
+        
+        result = {
+            'mask': mask,
+            'distances': distances,
+            'indices': indices,
+            'within_points': target[mask],
+            'n_within': np.sum(mask),
+            'n_total': len(target)
+        }
+        
+        return result
+
+    def get_neighboring_triangles(self, triangle_id: int, method: str = 'edge-connected', **kwargs) -> set | dict:
+        """
+        Get neighboring triangles (Mesh only).
+        
+        Parameters
+        ----------
+        triangle_id : int
+            ID of the seed triangle
+        method : str, default='edge-connected'
+            Method to use:
+            - 'edge-connected': edge-connected triangles
+            - 'radius': distance-based 
+        **kwargs
+            Additional parameters:
+            - For 'q': max_hops (int, default=1)
+            - For 'radius': radius (float, required), use_kdtree (bool, default=True)
+        
+        Returns
+        -------
+        set or dict
+            For 'edge-connected': set of triangle IDs
+            For 'radius': dict with 'neighbor_ids', 'distances', 'seed_centroid', 'n_neighbors'
+        
+        Raises
+        ------
+        TypeError
+            If surface is not a Mesh
+        ValueError
+            If invalid method or missing required parameters
+        """
+        if not isinstance(self.surface, Mesh):
+            raise TypeError(f"Triangle neighbors only available for Mesh, not {type(self.surface).__name__}")
+        
+        if method == 'edge-connected':
+            max_hops = kwargs.get('max_hops', 1)
+            return self.surface.get_connected_triangles(triangle_id, max_hops=max_hops)
+        
+        elif method == 'radius':
+            if 'radius' not in kwargs:
+                raise ValueError("'radius' parameter required for method='radius'")
+            radius = kwargs['radius']
+            use_kdtree = kwargs.get('use_kdtree', True)
+            return self.surface.get_triangles_within_radius(triangle_id, radius, use_kdtree=use_kdtree)
+        
+        else:
+            raise ValueError(f"Unknown method: {method}. Use 'topology' or 'radius'")
+
+    def get_connected_triangles(self, triangle_id: int, max_hops: int = 1) -> set:
+        """Return edge-connected neighboring triangle IDs for a mesh-backed surface."""
+        if not isinstance(self.surface, Mesh):
+            raise TypeError(f"Triangle neighbors only available for Mesh, not {type(self.surface).__name__}")
+        return self.surface.get_connected_triangles(triangle_id, max_hops=max_hops)
+
+    def get_triangles_within_radius(self, triangle_id: int, radius: float, use_kdtree: bool = True) -> dict:
+        """Return triangle-neighborhood query result for a mesh-backed surface."""
+        if not isinstance(self.surface, Mesh):
+            raise TypeError(f"Triangle neighbors only available for Mesh, not {type(self.surface).__name__}")
+        return self.surface.get_triangles_within_radius(
+            triangle_id, radius, use_kdtree=use_kdtree
+        )
+
+    def ray_intersections(self,
+                                rays: np.ndarray,
+                                one_hit_per_target: bool = False,
+                                knn_radius: float = 10.0,
+                                return_orientations: bool = False,
+                                target_orientation: str | Callable = 'normal') -> dict:
+        """
+        Compute ray intersections with this surface.
+        
+        For meshes, uses Open3D's exact raycasting. For oriented point clouds,
+        uses KDTree-based nearest neighbor search along ray trajectories.
+        
+        Parameters
+        ----------
+        rays : np.ndarray, shape (N, 6)
+            Ray array where each row is [origin_x, origin_y, origin_z, dir_x, dir_y, dir_z]
+        one_hit_per_target : bool, default=False
+            If True and multiple rays are supplied, add ``shortest_distance`` and
+            ``shortest_indices`` for the global shortest hit across all rays.
+        knn_radius : float, default=10.0
+            For OrientedPointCloud only: maximum search radius for finding
+            nearest points along ray trajectory
+        return_orientations : bool, default=False
+            If True, compute relative orientations between ray directions and 
+            surface orientations at hit points. Returns additional fields:
+            - 'ray_directions': normalized ray direction vectors
+            - 'surface_orientations': orientation vectors at hit points
+            - 'angles_deg': angles in degrees between ray and surface orientation
+            - 'dot_products': dot products (cosine of angle)
+        target_orientation : str or callable, default='normal'
+            Which orientation to use for comparison. Options:
+            
+            For OrientedPointCloud:
+                - 'normal': Use the normals stored in the point cloud 
+                  (for filaments, these are the axis/tangent directions)
+            
+            For Mesh:
+                - 'normal': Use surface normals at hit points (default)
+                - 'principal_1': Use first principal curvature direction
+                - 'principal_2': Use second principal curvature direction
+            
+            Custom function:
+                - A callable that takes (surface, primitive_ids, hit_points) and returns
+                  an (N, 3) array of orientation vectors, where N is the number of hits.
+                  Example: lambda surf, ids, pts: surf.get_curvature_directions()[ids, :, 0]
+        
+        Returns
+        -------
+        result : dict
+            Dictionary containing intersection results. See docstring for details.
+        """
+        surface = self.surface
+        rays = np.atleast_2d(rays).astype(np.float32)
+
+        if isinstance(surface, Mesh):
+            result = surface.cast_rays(
+                rays,
+                one_hit_per_target=one_hit_per_target,
+            )
+        elif isinstance(surface, OrientedPointCloud):
+            result = surface.cast_rays(
+                rays,
+                knn_radius=knn_radius,
+                one_hit_per_target=one_hit_per_target,
+            )
+        else:
+            raise TypeError(
+                f"Unsupported surface type: {type(surface)}. Must be Mesh or OrientedPointCloud"
+            )
+
+        # Compute orientation metrics if requested
+        if return_orientations:
+            origins = rays[:, :3]
+            directions = rays[:, 3:]
+
+            # Normalize ray directions
+            dir_magnitudes = np.linalg.norm(directions, axis=1, keepdims=True)
+            ray_directions = directions / (dir_magnitudes + 1e-10)
+
+            # Get surface orientations at hit points based on target_orientation
+            surface_orientations_hits = DiscreteSurface.ray_hit_orientations(
+                surface, result, target_orientation
+            )
+            
+            if surface_orientations_hits is not None:
+                # Create full-size array for all rays (fill with NaN for non-hits)
+                hit_mask = np.isfinite(result['t_hit'])
+                n_rays = len(rays)
+                n_hits = hit_mask.sum()
+                
+                surface_orientations = np.full((n_rays, 3), np.nan)
+                if n_hits > 0:
+                    surface_orientations[hit_mask] = surface_orientations_hits
+                
+                # Normalize surface orientations (only for valid hits)
+                normalized_orientations = np.full((n_rays, 3), np.nan)
+                if n_hits > 0:
+                    orient_magnitudes = np.linalg.norm(surface_orientations_hits, axis=1, keepdims=True)
+                    normalized_orientations[hit_mask] = surface_orientations_hits / (orient_magnitudes + 1e-10)
+                
+                # Compute dot products (cosine of angle)
+                # For rays that didn't hit, use NaN
+                dot_products = np.full(n_rays, np.nan)
+                
+                if n_hits > 0:
+                    # Compute dot product for valid hits only
+                    dots = np.sum(ray_directions[hit_mask] * normalized_orientations[hit_mask], axis=1)
+                    # Clamp to [-1, 1] for numerical stability
+                    dots = np.clip(dots, -1.0, 1.0)
+                    dot_products[hit_mask] = dots
+                
+                # Compute angles in degrees
+                angles_deg = np.full(n_rays, np.nan)
+                if n_hits > 0:
+                    valid_dots = dot_products[hit_mask]
+                    angles_deg[hit_mask] = np.arccos(valid_dots) * 180.0 / np.pi
+                
+                result['ray_directions'] = ray_directions
+                result['surface_orientations'] = surface_orientations
+                result['angles_deg'] = angles_deg
+                result['dot_products'] = dot_products
+            else:
+                # No orientations available
+                result['ray_directions'] = ray_directions
+                result['surface_orientations'] = np.full((len(rays), 3), np.nan)
+                result['angles_deg'] = np.full(len(rays), np.nan)
+                result['dot_products'] = np.full(len(rays), np.nan)
+        
+        return result
+
+    def invalidate_caches(self):
+        """Invalidate cached geometry on the wrapped surface (mesh ray scene, neighbor trees, etc.)."""
+        if isinstance(self.surface, Mesh):
+            self.surface._invalidate_cache()
+            self.surface._invalidate_neighbor_cache()
+
+    def distance_to_pointcloud(self, 
+                                    target: 'PleomorphicSurface' | OrientedPointCloud,
+                                    method: str = 'nn_unoriented',
+                                    max_distance: float | None = None,
+                                    ray_length: float | None = None,
+                                    reverse_normals: bool = False,
+                                    bidirectional: bool = False,
+                                    one_hit_per_target: bool = False,
+                                    knn_radius: float = 10.0,
+                                    return_stats: bool = True) -> dict:
+        """
+        Compute distance from this surface to another point cloud surface.
+        - If source is Mesh: always uses raycasting
+        - If source is OrientedPointCloud search nearest neighbours (unoriented or along normals)
+        
+        Parameters
+        ----------
+        target : PleomorphicSurface or OrientedPointCloud
+            Target surface. Wrapped targets are unwrapped internally; the concrete
+            target must be an OrientedPointCloud.
+        method : str, default='nn_unoriented'
+            Distance computation method (only used if source is OrientedPointCloud):
+            - 'nn_unoriented': Nearest neighbor KDTree search
+            - 'nn_oriented': Cast rays along normals from source point cloud
+        max_distance : float, optional
+            Maximum distance threshold. Points beyond this distance are excluded.
+        ray_length : float, optional
+            For raycasting: maximum ray length. If None, uses infinite rays.
+            If max_distance is set and ray_length is None, ray_length = max_distance.
+        reverse_normals : bool, default=False
+            For normal: if True, cast rays opposite to normal direction
+        bidirectional : bool, default=False
+            For Mesh sources, cast along both normal directions and keep the closer hit.
+        one_hit_per_target : bool, default=False
+            For mesh sources: keep only the closest mesh vertex per target particle
+            (deduplicate ``distance_to_pointcloud`` hits).
+        knn_radius : float, default=10.0
+            For point cloud search along normals: search radius for finding points along ray trajectory
+        return_stats : bool, default=True
+            If True, return stats dictionary. If False, return only distances array.
+        
+        Returns
+        -------
+        dict or np.ndarray
+            If return_details=True, returns dictionary with:
+                'distances': np.ndarray (N,) - distance for each source point
+                'closest_points': np.ndarray (N, 3) - coordinates of closest/hit points
+                'closest_indices': np.ndarray (N,) - indices in target point cloud (-1 if no hit)
+                'hit_mask': np.ndarray (N,) - boolean mask of successful matches
+                'closest_normals': np.ndarray (N, 3) - normals at closest points (if available)
+                'stats': dict with min, max, mean, median, std distance statistics
+            
+            If return_stats=False, returns only distances array (N,)
+        """
+        target_surface = self._unwrap_surface(target)
+        if not isinstance(target_surface, OrientedPointCloud):
+            raise TypeError(
+                f"Target surface must be OrientedPointCloud, got {type(target_surface).__name__}. "
+            )
+
+        if isinstance(self.surface, Mesh):
+            result = self.surface.distance_to_pointcloud(
+                target=target_surface,
+                ray_length=ray_length,
+                max_distance=max_distance,
+                reverse_normals=reverse_normals,
+                bidirectional=bidirectional,
+                one_hit_per_target=one_hit_per_target,
+            )
+        elif isinstance(self.surface, OrientedPointCloud):
+            if bidirectional:
+                raise ValueError("bidirectional=True is only supported for Mesh sources")
+            result = self.surface.distance_to_pointcloud(
+                target=target_surface,
+                method=method,
+                max_distance=max_distance,
+                ray_length=ray_length,
+                reverse_normals=reverse_normals,
+                knn_radius=knn_radius,
+                one_hit_per_target=one_hit_per_target,
+            )
+        else:
+            raise TypeError(f"Unsupported source surface type: {type(self.surface)}")
+
+        if return_stats:
+            return result
+        return result["distances"]
+
+    @staticmethod
+    def _infer_query_type(result: dict[str, Any]) -> str:
+        """Infer result format from keys produced by ray or distance queries."""
+        if "t_hit" in result:
+            return "ray"
+        if "hit_mask" in result and "closest_indices" in result:
+            return "distance_to_pointcloud"
+        raise ValueError(
+            "Could not infer query_type from result. "
+            "Pass query_type='ray' or query_type='distance_to_pointcloud'."
+        )
+
+    @staticmethod
+    def _filter_hits_by_distance(
+        distances: np.ndarray,
+        min_distance_source_target: float | None = None,
+        max_distance_source_target: float | None = None,
+    ) -> np.ndarray:
+        """Boolean mask for hits within an optional source-target distance interval."""
+        keep = np.ones(len(distances), dtype=bool)
+        if min_distance_source_target is not None:
+            keep &= distances >= min_distance_source_target
+        if max_distance_source_target is not None:
+            keep &= distances <= max_distance_source_target
+        return keep
+
+    @staticmethod
+    def _parse_ray_hits(
+        result: dict[str, Any],
+        min_distance_source_target: float | None = None,
+        max_distance_source_target: float | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Extract per-ray hit rows from :meth:`ray_intersections` output."""
+        t_hit = np.asarray(result["t_hit"])
+        hit_mask = np.isfinite(t_hit)
+        source_ids = np.where(hit_mask)[0]
+        distances = t_hit[hit_mask]
+
+        if "primitive_ids" not in result:
+            raise KeyError(
+                "Ray result must contain 'primitive_ids'. "
+                "Both Mesh and OrientedPointCloud cast_rays return this key."
+            )
+        target_ids = np.asarray(result["primitive_ids"])[hit_mask]
+
+        keep = PleomorphicSurface._filter_hits_by_distance(
+            distances, min_distance_source_target, max_distance_source_target
+        )
+        out: dict[str, np.ndarray] = {
+            "source_ids": source_ids[keep],
+            "target_ids": target_ids[keep],
+            "distances": distances[keep],
+        }
+        if "hit_points" in result:
+            hit_points = np.asarray(result["hit_points"])[hit_mask][keep]
+            out["hit_points"] = hit_points
+        return out
+
+    @staticmethod
+    def _parse_distance_hits(
+        result: dict[str, Any],
+        min_distance_source_target: float | None = None,
+        max_distance_source_target: float | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Extract per-source hit rows from :meth:`distance_to_pointcloud` output."""
+        hit_mask = np.asarray(result["hit_mask"], dtype=bool)
+        source_ids = np.where(hit_mask)[0]
+        distances = np.asarray(result["distances"])[hit_mask]
+        target_ids = np.asarray(result["closest_indices"])[hit_mask]
+
+        keep = PleomorphicSurface._filter_hits_by_distance(
+            distances, min_distance_source_target, max_distance_source_target
+        )
+        out: dict[str, np.ndarray] = {
+            "source_ids": source_ids[keep],
+            "target_ids": target_ids[keep],
+            "distances": distances[keep],
+        }
+        if "closest_points" in result:
+            out["hit_points"] = np.asarray(result["closest_points"])[hit_mask][keep]
+        if "used_reverse_normals" in result:
+            out["used_reverse_normals"] = np.asarray(
+                result["used_reverse_normals"]
+            )[hit_mask][keep]
+        return out
+
+    def _mesh_triangle_curvature_table(self) -> dict[str, np.ndarray]:
+        """Per-triangle mean and Gaussian curvature (vertex average over face corners)."""
+        if not isinstance(self.surface, Mesh):
+            raise TypeError(
+                "Triangle curvature table requires a Mesh-backed PleomorphicSurface"
+            )
+        faces = self.surface.faces
+        mean_vertex = self.get_mean_curvature()
+        gaussian_vertex = self.get_gaussian_curvature()
+        return {
+            "mean_curvature": mean_vertex[faces].mean(axis=1),
+            "gaussian_curvature": gaussian_vertex[faces].mean(axis=1),
+        }
+
+    def _triangles_from_vertices(self, vertex_ids: np.ndarray) -> np.ndarray:
+        """Triangle IDs incident on any of the given mesh vertex indices."""
+        if not isinstance(self.surface, Mesh):
+            raise TypeError(
+                "Vertex-to-triangle lookup requires a Mesh-backed PleomorphicSurface"
+            )
+        vertex_ids = np.unique(np.asarray(vertex_ids, dtype=np.intp))
+        faces = self.surface.faces
+        return np.flatnonzero(np.isin(faces, vertex_ids).any(axis=1))
+
+    def get_triangle_neighborhoods(
+        self,
+        seed_triangle_ids: np.ndarray,
+        radii: Sequence[float],
+        use_kdtree: bool = True,
+    ) -> dict[str, np.ndarray]:
+        """
+        Expand seed triangles on the mesh using ``surface_radii`` (centroid distance).
+
+        Always includes ``"hit triangles"``. For each radius ``r``, adds ``"r <= {r} nm"``
+        and annulus bands ``"{r_inner} < r <= {r_outer} nm"`` between consecutive radii.
+        """
+        if not isinstance(self.surface, Mesh):
+            raise TypeError(
+                "Triangle neighborhoods require a Mesh-backed PleomorphicSurface"
+            )
+
+        seeds = np.unique(np.asarray(seed_triangle_ids, dtype=np.intp))
+        regions: dict[str, np.ndarray] = {
+            "hit triangles": np.sort(seeds),
+        }
+
+        radii = [float(r) for r in radii]
+        if len(radii) == 0:
+            return regions
+
+        cumulative: list[set] = []
+        for radius in radii:
+            expanded: set = set()
+            for triangle_id in seeds:
+                neighbors = self.get_triangles_within_radius(
+                    int(triangle_id), radius, use_kdtree=use_kdtree
+                )["neighbor_ids"]
+                expanded.update(np.asarray(neighbors, dtype=np.intp).tolist())
+            cumulative.append(expanded)
+            regions[f"r <= {radius:g} nm"] = np.array(sorted(expanded), dtype=int)
+
+        for idx_inner, idx_outer in enumerate(range(len(radii) - 1)):
+            r_inner = radii[idx_inner]
+            r_outer = radii[idx_inner + 1]
+            ring_set = cumulative[idx_inner + 1] - cumulative[idx_inner]
+            regions[f"{r_inner:g} < r <= {r_outer:g} nm"] = np.array(
+                sorted(ring_set), dtype=int
+            )
+
+        return regions
+
+    @staticmethod
+    def _summarize_triangle_regions(
+        regions: dict[str, np.ndarray],
+        mean_tri: np.ndarray,
+        gaussian_tri: np.ndarray,
+    ) -> pd.DataFrame:
+        """Summarize per-triangle curvature statistics for named mesh regions."""
+        rows = []
+        for name, tri_ids in regions.items():
+            tri_ids = np.asarray(tri_ids, dtype=int)
+            if len(tri_ids) == 0:
+                rows.append(
+                    {
+                        "region": name,
+                        "n_triangles": 0,
+                        "mean_curvature_mean": np.nan,
+                        "mean_curvature_median": np.nan,
+                        "gaussian_curvature_mean": np.nan,
+                        "gaussian_curvature_median": np.nan,
+                    }
+                )
+                continue
+            mean_vals = mean_tri[tri_ids]
+            gauss_vals = gaussian_tri[tri_ids]
+            rows.append(
+                {
+                    "region": name,
+                    "n_triangles": len(tri_ids),
+                    "mean_curvature_mean": float(np.mean(mean_vals)),
+                    "mean_curvature_median": float(np.median(mean_vals)),
+                    "gaussian_curvature_mean": float(np.mean(gauss_vals)),
+                    "gaussian_curvature_median": float(np.median(gauss_vals)),
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def get_point_neighborhoods(
+        self,
+        seed_point_ids: np.ndarray,
+        radii: Sequence[float],
+    ) -> dict[str, np.ndarray]:
+        """Expand seed points on an oriented point cloud using ``surface_radii``."""
+        if not isinstance(self.surface, OrientedPointCloud):
+            raise TypeError(
+                "Point neighborhoods require an OrientedPointCloud-backed PleomorphicSurface"
+            )
+        return self.surface.get_point_neighborhoods(seed_point_ids, radii)
+
+    @staticmethod
+    def _summarize_point_regions(
+        regions: dict[str, np.ndarray],
+        normals: np.ndarray | None = None,
+    ) -> pd.DataFrame:
+        """Summarize point regions (counts; optional mean normal components)."""
+        rows = []
+        for name, point_ids in regions.items():
+            point_ids = np.asarray(point_ids, dtype=int)
+            row: dict[str, Any] = {
+                "region": name,
+                "n_points": len(point_ids),
+            }
+            if normals is not None and len(point_ids) > 0:
+                n = normals[point_ids]
+                row["normal_x_mean"] = float(np.mean(n[:, 0]))
+                row["normal_y_mean"] = float(np.mean(n[:, 1]))
+                row["normal_z_mean"] = float(np.mean(n[:, 2]))
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def _default_surface_element(self, query_type: str) -> str:
+        """Default mesh/point element for region expansion on ``self``."""
+        if query_type == "ray":
+            return "points" if isinstance(self.surface, OrientedPointCloud) else "triangles"
+        return "points" if isinstance(self.surface, OrientedPointCloud) else "vertices"
+
+    def _resolve_region_seed_ids(
+        self,
+        parsed: dict[str, np.ndarray],
+        query_type: str,
+        surface_element: str,
+        surface_seeds: str,
+    ) -> np.ndarray:
+        """Map hit rows to seed indices used for ``surface_radii`` expansion."""
+        surface_seeds = str(surface_seeds).lower()
+        aliases = {
+            "auto": "auto",
+            "default": "auto",
+            "sources": "hit_sources",
+            "source": "hit_sources",
+            "targets": "hit_targets",
+            "target": "hit_targets",
+        }
+        surface_seeds = aliases.get(surface_seeds, surface_seeds)
+
+        if surface_seeds == "auto":
+            if query_type == "ray":
+                return np.asarray(parsed["target_ids"], dtype=np.intp)
+            if surface_element in ("point", "points"):
+                return np.asarray(parsed["source_ids"], dtype=np.intp)
+            if surface_element in ("vertex", "vertices"):
+                return np.asarray(parsed["source_ids"], dtype=np.intp)
+            return np.asarray(parsed["target_ids"], dtype=np.intp)
+        if surface_seeds == "hit_sources":
+            return np.asarray(parsed["source_ids"], dtype=np.intp)
+        if surface_seeds == "hit_targets":
+            return np.asarray(parsed["target_ids"], dtype=np.intp)
+        raise ValueError(
+            "surface_seeds must be 'auto', 'hit_sources', or 'hit_targets'"
+        )
+
+    def _build_surface_regions(
+        self,
+        seed_ids: np.ndarray,
+        surface_element: str,
+        surface_radii: Sequence[float],
+        use_kdtree: bool = True,
+    ) -> dict[str, np.ndarray]:
+        """
+        Expand hit seeds on ``self`` using ``surface_radii``.
+
+        For meshes, ``vertices`` seeds are mapped to incident triangles before
+        triangle-centroid expansion. For point clouds, ``points`` use 3D ball queries.
+        """
+        element = str(surface_element).lower()
+        element = {
+            "triangle": "triangles",
+            "vertex": "vertices",
+            "point": "points",
+        }.get(element, element)
+
+        if element in ("triangles", "vertices"):
+            if not isinstance(self.surface, Mesh):
+                raise TypeError(
+                    f"surface_element='{surface_element}' requires a Mesh-backed surface"
+                )
+            seed_triangles = (
+                self._triangles_from_vertices(seed_ids)
+                if element == "vertices"
+                else np.asarray(seed_ids, dtype=np.intp)
+            )
+            return self.get_triangle_neighborhoods(
+                seed_triangles, radii=surface_radii, use_kdtree=use_kdtree
+            )
+
+        if element == "points":
+            if not isinstance(self.surface, OrientedPointCloud):
+                raise TypeError(
+                    "surface_element='points' requires an OrientedPointCloud-backed surface"
+                )
+            return self.get_point_neighborhoods(seed_ids, radii=surface_radii)
+
+        raise ValueError(
+            "surface_element must be 'triangles', 'vertices', or 'points'"
+        )
+
+    def intersection_data(
+        self,
+        result: dict[str, Any],
+        query_type: str | None = None,
+        min_distance_source_target: float | None = None,
+        max_distance_source_target: float | None = None,
+        source_id_name: str = "source_id",
+        target_id_name: str = "target_id",
+        include_curvatures: bool = True,
+        surface_radii: list[float] | None = None,
+        surface_element: str | None = None,
+        surface_seeds: str = "auto",
+        use_kdtree: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Turn raw intersection or distance-query output into analysis-ready tables.
+
+        Works with results from :meth:`ray_intersections` (mesh or point cloud target)
+        and :meth:`distance_to_pointcloud`. Optional ``surface_radii`` expansion grows
+        regions around hit sites on ``self`` (triangles/vertices on meshes, points on
+        oriented point clouds).
+
+        Parameters
+        ----------
+        result : dict
+            Output of :meth:`ray_intersections` or :meth:`distance_to_pointcloud`.
+        query_type : str, optional
+            ``'ray'`` or ``'distance_to_pointcloud'``. Inferred from ``result`` when
+            omitted.
+        min_distance_source_target, max_distance_source_target : float, optional
+            Keep hits whose source-target distance lies in this interval.
+        source_id_name, target_id_name : str
+            Column names for source and target indices in the hit table.
+        include_curvatures : bool, default=True
+            Attach curvature columns for mesh-backed ``self``.
+        surface_radii : sequence of float, optional
+            Radii for cumulative regions around hit seeds on ``self``.
+        surface_element : str, optional
+            ``'triangles'``, ``'vertices'`` (mesh only), or ``'points'`` (point cloud
+            only). Defaults: ray+mesh → triangles; distance+mesh → vertices;
+            point cloud → points.
+        surface_seeds : str, default='auto'
+            Which hit IDs seed expansion: ``'auto'``, ``'hit_sources'``, or
+            ``'hit_targets'``.
+        use_kdtree : bool, default=True
+            Passed to mesh triangle expansion.
+
+        Returns
+        -------
+        dict
+            - ``hits``: hit table
+            - ``regions``: region name → index arrays (if ``surface_radii`` set)
+            - ``region_summary``: per-region summary table
+            - ``triangle_curvatures``: per-triangle arrays (mesh-backed ``self``)
+        """
+        if query_type is None:
+            query_type = self._infer_query_type(result)
+        query_type = str(query_type).lower()
+        aliases = {
+            "rays": "ray",
+            "distance": "distance_to_pointcloud",
+            "distance_to_point_cloud": "distance_to_pointcloud",
+            "pointcloud": "distance_to_pointcloud",
+        }
+        query_type = aliases.get(query_type, query_type)
+
+        if query_type == "ray":
+            parsed = self._parse_ray_hits(
+                result, min_distance_source_target, max_distance_source_target
+            )
+        elif query_type == "distance_to_pointcloud":
+            parsed = self._parse_distance_hits(
+                result, min_distance_source_target, max_distance_source_target
+            )
+        else:
+            raise ValueError(
+                f"query_type must be 'ray' or 'distance_to_pointcloud', got '{query_type}'"
+            )
+
+        if surface_element is None:
+            surface_element = self._default_surface_element(query_type)
+
+        hits_dict: dict[str, Any] = {
+            source_id_name: parsed["source_ids"],
+            target_id_name: parsed["target_ids"],
+            "distance_nm": parsed["distances"],
+        }
+        if "hit_points" in parsed:
+            hits_dict["hit_point_x"] = parsed["hit_points"][:, 0]
+            hits_dict["hit_point_y"] = parsed["hit_points"][:, 1]
+            hits_dict["hit_point_z"] = parsed["hit_points"][:, 2]
+        if "used_reverse_normals" in parsed:
+            hits_dict["used_reverse_normals"] = parsed["used_reverse_normals"]
+
+        triangle_curvatures = None
+        if include_curvatures and isinstance(self.surface, Mesh):
+            triangle_curvatures = self._mesh_triangle_curvature_table()
+            mean_tri = triangle_curvatures["mean_curvature"]
+            gaussian_tri = triangle_curvatures["gaussian_curvature"]
+            if query_type == "ray":
+                tri_ids = parsed["target_ids"]
+                hits_dict["mean_curvature"] = mean_tri[tri_ids]
+                hits_dict["gaussian_curvature"] = gaussian_tri[tri_ids]
+            else:
+                vert_ids = parsed["source_ids"]
+                hits_dict["mean_curvature"] = self.get_mean_curvature()[vert_ids]
+                hits_dict["gaussian_curvature"] = self.get_gaussian_curvature()[
+                    vert_ids
+                ]
+
+        hits = pd.DataFrame(hits_dict)
+
+        out: dict[str, Any] = {"hits": hits}
+        if triangle_curvatures is not None:
+            out["triangle_curvatures"] = triangle_curvatures
+
+        if surface_radii is not None and len(surface_radii) > 0:
+            seed_ids = self._resolve_region_seed_ids(
+                parsed, query_type, surface_element, surface_seeds
+            )
+            regions = self._build_surface_regions(
+                seed_ids,
+                surface_element=surface_element,
+                surface_radii=surface_radii,
+                use_kdtree=use_kdtree,
+            )
+            out["regions"] = regions
+
+            element = str(surface_element).lower()
+            element = {
+                "triangle": "triangles",
+                "vertex": "vertices",
+                "point": "points",
+            }.get(element, element)
+
+            if element in ("triangles", "vertices") and triangle_curvatures is not None:
+                out["region_summary"] = self._summarize_triangle_regions(
+                    regions,
+                    triangle_curvatures["mean_curvature"],
+                    triangle_curvatures["gaussian_curvature"],
+                )
+            elif element == "points" and isinstance(self.surface, OrientedPointCloud):
+                normals = self.surface.normals if self.surface.normals is not None else None
+                out["region_summary"] = self._summarize_point_regions(regions, normals)
+
+        return out
+
+
+# =============================================================================
+# ParametricSurface — wrapper for analytic (ellipsoid) surface workflows
+# =============================================================================
+
+
+class ParametricSurface:
+    """Wrapper around :class:`QuadricsM` for the ellipsoid particle-assignment workflow.
+
+    Mirrors the static-method interface of the old ``PleomorphicSurface`` ellipsoid
+    methods but as a proper class with instance state.
+
+    Parameters
+    ----------
+    quadrics : QuadricsM
+        Already-constructed container of analytic surfaces.
+    feature_id : str
+        Column name used as the surface-object identifier.
+    """
+
+    def __init__(self, quadrics: QuadricsM, feature_id: str = "object_id"):
+        self.quadrics = quadrics
+        self.feature_id = feature_id
+
+    @classmethod
+    def from_motl(cls, input_motl, surface_type: str = "ellipsoid", feature_id: str = "object_id") -> "ParametricSurface":
+        """Fit analytic surfaces to particle groups and return a ParametricSurface.
 
         Parameters
         ----------
         input_motl : str or Motl
-            Input particle list.
-        column_name : str, default='object_id'
-            Column used to group particles (one ellipsoid per unique value).
-        output_path : str, optional
-            Path for saving the parameter table as a CSV.
+            Input particle list.  One surface is fitted per unique
+            ``(tomo_id, feature_id)`` group.
+        surface_type : str, default='ellipsoid'
+            Quadric type; currently only ``'ellipsoid'`` is supported.
+        feature_id : str, default='object_id'
+            Column used to group particles.
 
         Returns
         -------
-        pandas.DataFrame
-            One row per column_name value with columns ``tomo_id``,
-            ``{column_name}``, ``cx/cy/cz`` (centre), ``rx/ry/rz``
-            (semi-axes), ``ev1–ev3 x/y/z`` (eigenvectors), and
-            ``p1–p10`` (implicit quadric coefficients).
+        ParametricSurface
         """
-        in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(column_name=column_name)
-        el_params_all = pd.DataFrame()
+        quadrics = QuadricsM(input_motl, quadric=surface_type, feature_id=feature_id)
+        return cls(quadrics, feature_id=feature_id)
 
-        for f in features:
-            fm = in_motl.get_motl_subset(column_values=f, column_name=column_name)
-            coord = fm.get_coordinates()
-            el_params = PleomorphicSurface.load_parametric_surface(column_name=column_name)
-            center, radii, evecs, v = geom.fit_ellipsoid(coord)
-            el_params["tomo_id"] = [fm.df.iloc[0]["tomo_id"]]
-            el_params[column_name] = [f]
-            el_params[["cx", "cy", "cz"]] = [center]
-            el_params[["rx", "ry", "rz"]] = [radii]
-            el_params[["ev1x", "ev1y", "ev1z"]] = [evecs[0, :]]
-            el_params[["ev2x", "ev2y", "ev2z"]] = [evecs[1, :]]
-            el_params[["ev3x", "ev3y", "ev3z"]] = [evecs[2, :]]
-            el_params[["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]] = [v]
-            el_params_all = pd.concat([el_params_all, el_params])
-
-        el_params_all.reset_index(drop=True, inplace=True)
-
-        if output_path is not None:
-            el_params_all.to_csv(output_path, index=False)
-
-        return el_params_all
-
-    @staticmethod
-    def load_parametric_surface(parametric_surface=None, column_name="object_id"):
-        """Load or initialise the ellipsoid parameter table.
+    @classmethod
+    def from_csv(cls, path: str, surface_type: str = "ellipsoid", feature_id: str = "object_id") -> "ParametricSurface":
+        """Load analytic surface parameters from a CSV file.
 
         Parameters
         ----------
-        parametric_surface : Motl or str or numpy.ndarray or None, optional
-            Source of surface parameters:
+        path : str
+            Path to a CSV produced by :meth:`write_out`.
+        surface_type : str, default='ellipsoid'
+        feature_id : str, default='object_id'
 
-            :class:`Motl`
-                Fit ellipsoids via :meth:`get_parametric_description`.
-            ``str``
-                Read a CSV file.
-            :class:`numpy.ndarray`
-                Wrap in a DataFrame using the expected column names.
-            ``None``
-                Return an empty DataFrame with the correct columns.
-        column_name : str, default='object_id'
-            Column used as the group identifier.
+        Returns
+        -------
+        ParametricSurface
+        """
+        quadrics = QuadricsM(path, quadric=surface_type, feature_id=feature_id)
+        return cls(quadrics, feature_id=feature_id)
+
+    def write_out(self, output_path: str) -> None:
+        """Write the surface parameter table to *output_path* as CSV."""
+        self.quadrics.write_out(output_path)
+
+    def compute_point_surface_distance(
+        self,
+        input_motl,
+        output_path=None,
+        store_id: str = "geom4",
+    ):
+        """Compute the shortest distance from each particle to its assigned surface.
+
+        Parameters
+        ----------
+        input_motl : str or Motl
+            Particles with ``feature_id`` already assigned.
+        output_path : str, optional
+            Path to save the result.
+        store_id : str, default='geom4'
+            Column that receives the distance values.
+
+        Returns
+        -------
+        Motl
+            Input motl with ``store_id`` populated.
+        """
+        in_motl = cryomotl.Motl.load(input_motl)
+        features = in_motl.get_unique_values(column_name=self.feature_id)
+        assigned_motl_df = pd.DataFrame()
+
+        for f in features:
+            fm = in_motl.get_motl_subset(column_values=f, column_name=self.feature_id, reset_index=True)
+            coord = fm.get_coordinates()
+            tomo_id = fm.df["tomo_id"].values[0]
+            fm.df[store_id] = self.quadrics.distance_point_surface(tomo_id, f, coord)
+            assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
+
+        assigned_motl = cryomotl.Motl(assigned_motl_df)
+        assigned_motl.df.reset_index(drop=True, inplace=True)
+        if output_path is not None:
+            assigned_motl.write_out(output_path)
+        return assigned_motl
+
+    def assign_affiliation_distance_based(
+        self,
+        input_motl,
+        output_path=None,
+        unassigned_value=None,
+    ):
+        """Assign each particle to the nearest surface centre.
+
+        Parameters
+        ----------
+        input_motl : str or Motl
+            Particles to assign.
+        output_path : str, optional
+            Path to save the result.
+        unassigned_value : scalar, optional
+            When provided, only particles whose current ``feature_id`` equals
+            this value are re-assigned; the rest are kept unchanged.
+
+        Returns
+        -------
+        Motl
+            Motl with ``feature_id`` updated.
+        """
+        in_motl = cryomotl.Motl.load(input_motl)
+
+        if unassigned_value is not None:
+            assigned_motl = cryomotl.Motl(in_motl.df)
+            in_motl.df = in_motl.df[in_motl.df[self.feature_id] == unassigned_value]
+            in_motl.df.reset_index(drop=True, inplace=True)
+
+        tomos = in_motl.get_unique_values(column_name="tomo_id")
+        assigned_motl_df = pd.DataFrame()
+
+        for t in tomos:
+            tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id", reset_index=True)
+            coord = tm.get_coordinates()
+            closest_ids = self.quadrics.find_closest_quadric(t, coord)
+            tm.df[self.feature_id] = closest_ids
+            assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
+
+        if unassigned_value is not None:
+            assigned_motl.df.loc[assigned_motl.df[self.feature_id] == unassigned_value, :] = assigned_motl_df.values
+        else:
+            assigned_motl = cryomotl.Motl(assigned_motl_df)
+
+        assigned_motl.df.reset_index(drop=True, inplace=True)
+        if output_path is not None:
+            assigned_motl.write_out(output_path)
+        return assigned_motl
+
+    # TODO: only Ellipsoid currently supported for intersection methods
+
+    def assign_affiliation_intersection_based(
+        self,
+        input_motl,
+        output_path=None,
+        keep_unassigned: bool = True,
+    ):
+        """Assign each particle to the surface it points toward (ray casting).
+
+        A ray is cast along the negated particle normal.  The particle is
+        labelled with the identifier of the surface whose intersection is
+        closest along that ray.  Particles that lie inside a surface or have
+        no valid intersection receive ``-1``.
+
+        Parameters
+        ----------
+        input_motl : str or Motl
+            Particles to assign.  Euler angles are used to derive normals.
+        output_path : str, optional
+            Path to save the result.
+        keep_unassigned : bool, default=True
+            When ``False``, particles with ``feature_id == -1`` are removed.
+
+        Returns
+        -------
+        Motl
+            Motl with ``feature_id`` updated.
+        """
+        in_motl = cryomotl.Motl.load(input_motl)
+        tomos = in_motl.get_unique_values(column_name="tomo_id")
+        assigned_motl_df = pd.DataFrame()
+
+        for t in tomos:
+            tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id")
+            coord = tm.get_coordinates()
+            normal_vectors = -geom.euler_angles_to_normals(tm.get_angles())
+
+            tomo_keys = [(tid, fid) for (tid, fid) in self.quadrics.dict if tid == t]
+            num_points = coord.shape[0]
+            closest_ids = np.full(num_points, -1)
+            closest_distances = np.full(num_points, np.inf)
+
+            for i in range(num_points):
+                for (tid, fid) in tomo_keys:
+                    params_array = self.quadrics.dict[(tid, fid)].params
+                    _, _, d1, d2, is_inside = geom.ray_ellipsoid_intersection_3d(
+                        coord[i, :], normal_vectors[i, :], params_array
+                    )
+                    if is_inside:
+                        closest_distances[i] = np.inf
+                        closest_ids[i] = -1
+                        continue
+                    distances_pos = [p for p in [d1, d2] if not np.isnan(p) and p > 0]
+                    for d in distances_pos:
+                        if abs(d) < abs(closest_distances[i]):
+                            closest_distances[i] = d
+                            closest_ids[i] = fid
+
+            tm.df[self.feature_id] = closest_ids
+            assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
+
+        unassigned = assigned_motl_df[assigned_motl_df[self.feature_id] == -1].shape[0]
+
+        if not keep_unassigned:
+            assigned_motl_df = assigned_motl_df[assigned_motl_df[self.feature_id] != -1]
+
+        assigned_motl_df.reset_index(drop=True, inplace=True)
+        assigned_motl = cryomotl.Motl(assigned_motl_df)
+        print(f"{unassigned} particles did not have any intersection or were inside.")
+        if output_path is not None:
+            assigned_motl.write_out(output_path)
+        return assigned_motl
+
+    def compute_intersection(self, input_motl):
+        """Compute ray–ellipsoid intersection distances for each particle.
+
+        For every particle a ray is cast along ``-euler_angles_to_normals``
+        and the two intersection distances with the assigned ellipsoid are
+        returned.
+
+        Parameters
+        ----------
+        input_motl : str or Motl
+            Particles grouped by ``feature_id``.
 
         Returns
         -------
         pandas.DataFrame
-            Surface parameter table with columns matching the schema
-            produced by :meth:`get_parametric_description`.
-
-        Raises
-        ------
-        ValueError
-            When *parametric_surface* has an unsupported type.
+            Columns: ``subtomo_id``, ``feature_id``, ``d1``, ``d2``.
         """
-        columns = [
-            "tomo_id",
-            column_name,
-            "cx",
-            "cy",
-            "cz",
-            "rx",
-            "ry",
-            "rz",
-            "ev1x",
-            "ev1y",
-            "ev1z",
-            "ev2x",
-            "ev2y",
-            "ev2z",
-            "ev3x",
-            "ev3y",
-            "ev3z",
-            "p1",
-            "p2",
-            "p3",
-            "p4",
-            "p5",
-            "p6",
-            "p7",
-            "p8",
-            "p9",
-            "p10",
-        ]
+        in_motl = cryomotl.Motl.load(input_motl)
+        features = in_motl.get_unique_values(column_name=self.feature_id)
+        intersection_points = pd.DataFrame(columns=["subtomo_id", self.feature_id, "d1", "d2"])
 
-        if isinstance(parametric_surface, cryomotl.Motl):
-            el_params = PleomorphicSurface.get_parametric_description(parametric_surface, column_name=column_name)
-        elif isinstance(parametric_surface, str):
-            el_params = pd.read_csv("parametric_surface")
-        elif isinstance(parametric_surface, np.ndarray):
-            el_params = pd.DataFrame(data=parametric_surface, columns=columns)
-        elif not parametric_surface:
-            el_params = pd.DataFrame(columns=columns)
-        else:
-            raise ValueError("Invalid type of parametric surface")
+        for f in features:
+            fm = in_motl.get_motl_subset(column_values=f, column_name=self.feature_id, reset_index=True)
+            coord = fm.get_coordinates()
+            normal_vectors = -geom.euler_angles_to_normals(fm.get_angles())
+            tomo_id = fm.df["tomo_id"].values[0]
+            key = (tomo_id, f)
+            if key not in self.quadrics.dict:
+                continue
+            params_array = self.quadrics.dict[key].params
+            for i in range(coord.shape[0]):
+                _, _, d1, d2, _ = geom.ray_ellipsoid_intersection_3d(
+                    coord[i, :], normal_vectors[i, :], params_array
+                )
+                new_row = pd.Series({"subtomo_id": fm.df.iloc[i]["subtomo_id"], self.feature_id: f, "d1": d1, "d2": d2})
+                intersection_points = pd.concat([intersection_points, new_row.to_frame().T], ignore_index=True)
 
-        return el_params
+        return intersection_points
+
+    def compute_normals_angle(
+        self,
+        input_motl,
+        store_id: str = "geom4",
+        output_path=None,
+    ):
+        """Compute the angle between each particle's orientation and the ellipsoid radial normal.
+
+        The radial normal is the vector from the fitted ellipsoid centre to the
+        particle.  The stored value is the angle (degrees) between that vector
+        and the particle's orientation normal.
+
+        Parameters
+        ----------
+        input_motl : str or Motl
+            Particles grouped by ``feature_id``.
+        store_id : str, default='geom4'
+            Column that receives the angle values.
+        output_path : str, optional
+            Path to save the result.
+
+        Returns
+        -------
+        Motl
+            Input motl with ``store_id`` populated.
+        """
+        in_motl = cryomotl.Motl.load(input_motl)
+        features = in_motl.get_unique_values(column_name=self.feature_id)
+        assigned_motl_df = pd.DataFrame()
+
+        for f in features:
+            fm = in_motl.get_motl_subset(column_values=f, column_name=self.feature_id, reset_index=True)
+            coord = fm.get_coordinates()
+            normals = geom.euler_angles_to_normals(fm.get_angles())
+            tomo_id = fm.df["tomo_id"].values[0]
+            key = (tomo_id, f)
+            if key not in self.quadrics.dict:
+                assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
+                continue
+            center = self.quadrics.dict[key].center
+            normals_t = coord - np.tile(center, (coord.shape[0], 1))
+            fm.df[store_id] = geom.angle_between_n_vectors(normals, normals_t)
+            assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
+
+        assigned_motl_df.index = in_motl.df.index
+        assigned_motl = cryomotl.Motl(assigned_motl_df)
+        if output_path is not None:
+            assigned_motl.write_out(output_path)
+        return assigned_motl
+
+    def clean_by_normals(
+        self,
+        input_motl,
+        compute_normals: bool = True,
+        normals_id: str = "geom4",
+        threshold=None,
+        output_path=None,
+    ):
+        """Remove particles whose orientation deviates too far from the surface normal.
+
+        Parameters
+        ----------
+        input_motl : str or Motl
+        compute_normals : bool, default=True
+            Recompute normal angles before filtering.
+        normals_id : str, default='geom4'
+            Column holding the angle-to-normal values.
+        threshold : float, optional
+            Maximum allowed angle (degrees).  Defaults to one standard deviation.
+        output_path : str, optional
+
+        Returns
+        -------
+        Motl
+        """
+        in_motl = cryomotl.Motl.load(input_motl)
+        orig_number = in_motl.df.shape[0]
+
+        if compute_normals:
+            in_motl = self.compute_normals_angle(in_motl, store_id=normals_id)
+
+        diff_angles = in_motl.df[normals_id].values
+        to_remove = (
+            np.where(np.abs(diff_angles) > np.std(diff_angles))
+            if threshold is None
+            else np.where(np.abs(diff_angles) > threshold)
+        )
+
+        mask = np.ones(len(in_motl.df), dtype=bool)
+        mask[to_remove[0]] = False
+        in_motl.df = in_motl.df.iloc[mask]
+        in_motl.df.reset_index(drop=True, inplace=True)
+
+        print(
+            f"{orig_number - in_motl.df.shape[0]} particles "
+            f"({((orig_number - in_motl.df.shape[0]) / orig_number * 100):.2f}%) were removed from the list."
+        )
+        if output_path is not None:
+            in_motl.write_out(output_path)
+        return in_motl
+
+    def clean_by_radius(
+        self,
+        input_motl,
+        threshold=None,
+        output_path=None,
+    ):
+        """Remove particles that lie too far from the mean ellipsoid radius.
+
+        Parameters
+        ----------
+        input_motl : str or Motl
+        threshold : float, optional
+            Half-width of the allowed distance band.  Defaults to one standard deviation.
+        output_path : str, optional
+
+        Returns
+        -------
+        Motl
+        """
+        in_motl = cryomotl.Motl.load(input_motl)
+        features = in_motl.get_unique_values(column_name=self.feature_id)
+        cleaned_motl_df = pd.DataFrame()
+
+        for f in features:
+            fm = in_motl.get_motl_subset(column_values=f, column_name=self.feature_id, reset_index=True)
+            coord = fm.get_coordinates()
+            tomo_id = fm.df["tomo_id"].values[0]
+            key = (tomo_id, f)
+            if key not in self.quadrics.dict:
+                cleaned_motl_df = pd.concat([cleaned_motl_df, fm.df])
+                continue
+            el = self.quadrics.dict[key]
+            center = el.center
+            radius = float(np.mean(el.radii))
+            distances = np.linalg.norm(coord - center, axis=1)
+            thr = np.std(distances) if threshold is None else threshold
+            mask = (distances >= radius - thr) & (distances <= radius + thr)
+            fm.df = fm.df.iloc[mask]
+            cleaned_motl_df = pd.concat([cleaned_motl_df, fm.df])
+
+        cleaned_motl_df.reset_index(drop=True, inplace=True)
+        cleaned_motl = cryomotl.Motl(cleaned_motl_df)
+        print(
+            f"{in_motl.df.shape[0] - cleaned_motl.df.shape[0]} particles "
+            f"({((in_motl.df.shape[0] - cleaned_motl.df.shape[0]) / in_motl.df.shape[0] * 100):.2f}%) were removed."
+        )
+        if output_path is not None:
+            cleaned_motl.write_out(output_path)
+        return cleaned_motl
 
     @staticmethod
     def assign_affiliation_mask_based(
@@ -1045,41 +2578,31 @@ class PleomorphicSurface:
         object_motl,
         tomo_dim,
         shell_size,
-        column_name="object_id",
+        column_name: str = "object_id",
         output_path=None,
-        radius_offset=0.0,
-        motl_radius_id="geom5",
+        radius_offset: float = 0.0,
+        motl_radius_id: str = "geom5",
     ):
-        """Assign each particle to a surface object using a shell mask.
-
-        For every surface object a spherical-shell mask is placed at its
-        position.  Particles whose tomogram coordinates fall within the mask
-        are labelled with that object's ``column_name``.
+        """Assign each particle to a surface object using a spherical-shell mask.
 
         Parameters
         ----------
         input_motl : str or Motl
-            Particles to be assigned.
         object_motl : str or Motl
             Surface-object positions (one row per object).
         tomo_dim : str or array-like
             Tomogram dimensions table; see :func:`ioutils.dimensions_load`.
         shell_size : int
-            Thickness of the spherical shell used for the mask.
+            Thickness of the spherical shell mask.
         column_name : str, default='object_id'
-            Column to write the assigned object identifier into.
         output_path : str, optional
-            Path to save the assigned motl.
         radius_offset : float, default=0.0
-            Additional offset added to the object radius when building the
-            shell mask.
         motl_radius_id : str, default='geom5'
-            Column in *object_motl* that holds each object's radius.
+            Column in *object_motl* holding each object's radius.
 
         Returns
         -------
         Motl
-            Particles with ``column_name`` set to their assigned object.
         """
         in_motl = cryomotl.Motl.load(input_motl)
         object_motl = cryomotl.Motl.load(object_motl)
@@ -1091,7 +2614,6 @@ class PleomorphicSurface:
             tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id", reset_index=True)
             tm_dim = tomo_dim.loc[tomo_dim["tomo_id"] == t, ["x", "y", "z"]].values[0]
             coords = tm.get_coordinates().astype(int)
-            print(t)
             tom = object_motl.get_motl_subset(column_values=t, column_name="tomo_id")
             for o in tom.get_unique_values(column_name=column_name):
                 om = tom.get_motl_subset(column_values=o, column_name=column_name)
@@ -1111,472 +2633,29 @@ class PleomorphicSurface:
         return assigned_motl
 
     @staticmethod
-    def compute_point_surface_distance(
-        input_motl,
-        parametric_surface,
-        surface_type="ellipsoid",
-        column_name="object_id",
-        output_path=None,
-        store_id="geom4",
-    ):
-        """Compute the signed distance from each particle to its assigned surface.
-
-        Parameters
-        ----------
-        input_motl : str or Motl
-            Particles with ``column_name`` already assigned.
-        parametric_surface : str or numpy.ndarray or Motl
-            Surface parameter table; see :meth:`load_parametric_surface`.
-        surface_type : str, default='ellipsoid'
-            Quadric surface type forwarded to :class:`quadric.QuadricsM`.
-        column_name : str, default='object_id'
-            Column used to match particles to surface objects.
-        output_path : str, optional
-            Path to save the result.
-        store_id : str, default='geom4'
-            Column that receives the distance values.
-
-        Returns
-        -------
-        Motl
-            Input motl with ``store_id`` populated.
-        """
-        in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(column_name=column_name)
-        assigned_motl_df = pd.DataFrame()
-        m_qs = quadric.QuadricsM(parametric_surface, quadric=surface_type, feature_id=column_name)
-
-        for f in features:
-            fm = in_motl.get_motl_subset(column_values=f, column_name=column_name, reset_index=True)
-            coord = fm.get_coordinates()
-            fm.df[store_id] = m_qs.distance_point_surface(fm.df["tomo_id"].values[0], f, coord)
-            assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
-
-        assigned_motl = cryomotl.Motl(assigned_motl_df)
-        assigned_motl.df.reset_index(drop=True, inplace=True)
-        if output_path is not None:
-            assigned_motl.write_out(output_path)
-        return assigned_motl
-
-    @staticmethod
-    def assign_affiliation_distance_based(
-        input_motl,
-        parametric_surface,
-        surface_type="ellipsoid",
-        column_name="object_id",
-        output_path=None,
-        unassigned_value=None,
-    ):
-        """Assign each particle to the nearest surface centre.
-
-        For each particle the Euclidean distance to every surface centre
-        (``cx/cy/cz``) in the same tomogram is computed; the particle is
-        labelled with the identifier of the closest centre.
-
-        Parameters
-        ----------
-        input_motl : str or Motl
-            Particles to assign.
-        parametric_surface : str or numpy.ndarray or Motl
-            Surface parameter table; see :meth:`load_parametric_surface`.
-        surface_type : str, default='ellipsoid'
-            Quadric surface type (not used in the distance calculation itself,
-            stored for downstream compatibility).
-        column_name : str, default='object_id'
-            Column that receives the assigned surface identifier.
-        output_path : str, optional
-            Path to save the result.
-        unassigned_value : scalar, optional
-            When provided, only particles whose current ``column_name`` equals
-            this value are re-assigned; the rest are kept unchanged.
-
-        Returns
-        -------
-        Motl
-            Motl with ``column_name`` updated.
-        """
-        in_motl = cryomotl.Motl.load(input_motl)
-
-        if unassigned_value:
-            assigned_motl = cryomotl.Motl(in_motl.df)
-            in_motl.df = in_motl.df[in_motl.df[column_name] == unassigned_value]
-            in_motl.df.reset_index(drop=True, inplace=True)
-
-        el_params = PleomorphicSurface.load_parametric_surface(
-            parametric_surface=parametric_surface, column_name=column_name
-        )
-        m_qs = quadric.QuadricsM(parametric_surface, quadric=surface_type, feature_id=column_name)
-        tomos = in_motl.get_unique_values(column_name="tomo_id")
-        assigned_motl_df = pd.DataFrame()
-
-        for t in tomos:
-            tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id", reset_index=True)
-            coord = tm.get_coordinates()
-            fm_ep = el_params.loc[el_params["tomo_id"] == t, [column_name, "cx", "cy", "cz"]].values
-
-            num_points = coord.shape[0]
-            closest_ids = np.full(num_points, -1)
-            closest_distances = np.full(num_points, np.inf)
-
-            for i in range(num_points):
-                for e in range(fm_ep.shape[0]):
-                    distance = np.linalg.norm(coord[i, :] - fm_ep[e, 1:])
-                    if distance < closest_distances[i]:
-                        closest_distances[i] = distance
-                        closest_ids[i] = fm_ep[e, 0]
-
-            tm.df[column_name] = closest_ids
-            assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
-
-        if unassigned_value:
-            assigned_motl.df.loc[assigned_motl.df[column_name] == unassigned_value, :] = assigned_motl_df.values
-        else:
-            assigned_motl = cryomotl.Motl(assigned_motl_df)
-
-        assigned_motl.df.reset_index(drop=True, inplace=True)
-        if output_path is not None:
-            assigned_motl.write_out(output_path)
-        return assigned_motl
-
-    @staticmethod
-    def assign_affiliation_intersection_based(
-        input_motl,
-        parametric_surface,
-        column_name="object_id",
-        output_path=None,
-        keep_unassigned=True,
-    ):
-        """Assign each particle to the surface it points toward (ray casting).
-
-        For each particle a ray is cast along the negated particle normal
-        (``-euler_angles_to_normals``).  The particle is labelled with the
-        identifier of the surface whose intersection is closest along that ray.
-        Particles that lie inside a surface or have no valid intersection
-        receive ``-1``.
-
-        Parameters
-        ----------
-        input_motl : str or Motl
-            Particles to assign.  Euler angles are used to derive normals.
-        parametric_surface : str or numpy.ndarray or Motl
-            Surface parameter table; see :meth:`load_parametric_surface`.
-        column_name : str, default='object_id'
-            Column that receives the assigned surface identifier.
-        output_path : str, optional
-            Path to save the result.
-        keep_unassigned : bool, default=True
-            When ``False``, particles with ``column_name == -1`` are removed.
-
-        Returns
-        -------
-        Motl
-            Motl with ``column_name`` updated.  Prints the count of
-            unassigned/inside particles.
-        """
-        in_motl = cryomotl.Motl.load(input_motl)
-        el_params = PleomorphicSurface.load_parametric_surface(
-            parametric_surface=parametric_surface, column_name=column_name
-        )
-        tomos = in_motl.get_unique_values(column_name="tomo_id")
-        assigned_motl_df = pd.DataFrame()
-
-        for t in tomos:
-            tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id")
-            coord = tm.get_coordinates()
-            normal_vectors = -geom.euler_angles_to_normals(tm.get_angles())
-            fm_ep = el_params.loc[
-                el_params["tomo_id"] == t, [column_name, "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]
-            ].values
-
-            num_points = coord.shape[0]
-            closest_ids = np.full(num_points, -1)
-            closest_distances = np.full(num_points, np.inf)
-
-            for i in range(num_points):
-                for e in range(fm_ep.shape[0]):
-                    _, _, d1, d2, is_inside = geom.ray_ellipsoid_intersection_3d(
-                        coord[i, :], normal_vectors[i, :], fm_ep[e, 1:]
-                    )
-                    if is_inside:
-                        closest_distances[i] = np.inf
-                        closest_ids[i] = -1
-                        continue
-                    distances_pos = [p for p in [d1, d2] if not np.isnan(p) and p > 0]
-                    for d in distances_pos:
-                        if abs(d) < abs(closest_distances[i]):
-                            closest_distances[i] = d
-                            closest_ids[i] = fm_ep[e, 0]
-
-            tm.df[column_name] = closest_ids
-            assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
-
-        unassigned = assigned_motl_df[assigned_motl_df[column_name] == -1].shape[0]
-
-        if not keep_unassigned:
-            assigned_motl_df = assigned_motl_df[assigned_motl_df[column_name] != -1]
-
-        assigned_motl_df.reset_index(drop=True, inplace=True)
-        assigned_motl = cryomotl.Motl(assigned_motl_df)
-        print(f"{unassigned} particles did not have any intersection or were inside.")
-        if output_path is not None:
-            assigned_motl.write_out(output_path)
-        return assigned_motl
-
-    @staticmethod
-    def compute_intersection(input_motl, parametric_surface, column_name="object_id"):
-        """Compute ray–ellipsoid intersection distances for each particle.
-
-        For every particle a ray is cast along ``-euler_angles_to_normals``
-        and the two intersection distances with the assigned ellipsoid are
-        returned.
-
-        Parameters
-        ----------
-        input_motl : str or Motl
-            Particles grouped by ``column_name``.
-        parametric_surface : str or numpy.ndarray or Motl
-            Surface parameter table; see :meth:`load_parametric_surface`.
-        column_name : str, default='object_id'
-            Column used to match particles to surfaces.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Columns: ``subtomo_id``, ``column_name``, ``d1``, ``d2``
-            (the two signed intersection distances along the ray).
-        """
-        in_motl = cryomotl.Motl.load(input_motl)
-        el_params = PleomorphicSurface.load_parametric_surface(
-            parametric_surface=parametric_surface, column_name=column_name
-        )
-        features = in_motl.get_unique_values(column_name=column_name)
-        intersection_points = pd.DataFrame(columns=["subtomo_id", "column_name", "d1", "d2"])
-
-        for f in features:
-            fm = in_motl.get_motl_subset(column_values=f, column_name=column_name, reset_index=True)
-            coord = fm.get_coordinates()
-            normal_vectors = -geom.euler_angles_to_normals(fm.get_angles())
-            fm_ep = el_params.loc[
-                el_params[column_name] == f, ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]
-            ].values[0]
-            for i in np.arange(0, coord.shape[0]):
-                _, _, d1, d2, _ = geom.ray_ellipsoid_intersection_3d(coord[i, :], normal_vectors[i, :], fm_ep)
-                new_row = pd.Series({"subtomo_id": fm.df.iloc[i]["subtomo_id"], "column_name": f, "d1": d1, "d2": d2})
-                intersection_points = pd.concat([intersection_points, new_row.to_frame().T], ignore_index=True)
-
-        return intersection_points
-
-    @staticmethod
-    def compute_normals(input_motl, surface_params, column_name="object_id", store_id="geom4", output_path=None):
-        """Compute the angle between each particle's orientation and the surface normal.
-
-        The surface normal at a particle's position is approximated as the
-        vector from the fitted ellipsoid centre to the particle.  The stored
-        value is the angle (in degrees) between that radial vector and the
-        particle's orientation normal.
-
-        Parameters
-        ----------
-        input_motl : str or Motl
-            Particles grouped by ``column_name``.
-        surface_params : str or numpy.ndarray or Motl
-            Surface parameter table; see :meth:`get_parametric_description`.
-        column_name : str, default='object_id'
-            Column used to match particles to surfaces.
-        store_id : str, default='geom4'
-            Column that receives the angle values (degrees).
-        output_path : str, optional
-            Path to save the result.
-
-        Returns
-        -------
-        Motl
-            Input motl with ``store_id`` populated.
-        """
-        in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(column_name=column_name)
-        el_params = PleomorphicSurface.get_parametric_description(surface_params, column_name=column_name)
-        assigned_motl_df = pd.DataFrame()
-
-        for f in features:
-            fm = in_motl.get_motl_subset(column_values=f, column_name=column_name, reset_index=True)
-            coord = fm.get_coordinates()
-            normals = geom.euler_angles_to_normals(fm.get_angles())
-            center = el_params.loc[el_params[column_name] == f, ["cx", "cy", "cz"]].values
-            normals_t = coord - np.tile(center, (coord.shape[0], 1))
-            fm.df[store_id] = geom.angle_between_n_vectors(normals, normals_t)
-            assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
-
-        assigned_motl_df.index = in_motl.df.index
-        assigned_motl = cryomotl.Motl(assigned_motl_df)
-        if output_path is not None:
-            assigned_motl.write_out(output_path)
-        return assigned_motl
-
-    @staticmethod
-    def clean_by_normals(
-        input_motl,
-        column_name="object_id",
-        compute_normals=True,
-        surface_params=None,
-        normals_id="geom4",
-        threshold=None,
-        output_path=None,
-    ):
-        """Remove particles whose orientation deviates too far from the surface normal.
-
-        Particles are removed when their normal-angle value (column
-        *normals_id*) exceeds *threshold*.  When *threshold* is ``None``,
-        one standard deviation of the angle distribution is used.
-
-        Parameters
-        ----------
-        input_motl : str or Motl
-            Particles to clean.
-        column_name : str, default='object_id'
-            Column used to group particles (forwarded to
-            :meth:`compute_normals`).
-        compute_normals : bool, default=True
-            Recompute normal angles before filtering.  Set to ``False`` when
-            *normals_id* is already populated.
-        surface_params : str or numpy.ndarray or Motl, optional
-            Surface parameter table, required when *compute_normals* is
-            ``True``.
-        normals_id : str, default='geom4'
-            Column holding the angle-to-normal values.
-        threshold : float, optional
-            Maximum allowed angle (degrees).  Defaults to one standard
-            deviation of the distribution.
-        output_path : str, optional
-            Path to save the cleaned motl.
-
-        Returns
-        -------
-        Motl
-            Cleaned motl.  Prints the number and percentage of removed
-            particles.
-        """
-        in_motl = cryomotl.Motl.load(input_motl)
-        orig_number = in_motl.df.shape[0]
-
-        if compute_normals:
-            in_motl = PleomorphicSurface.compute_normals(
-                in_motl, surface_params, column_name=column_name, store_id=normals_id, output_path=None
-            )
-
-        diff_angles = in_motl.df[normals_id].values
-        to_remove = (
-            np.where(np.abs(diff_angles) > np.std(diff_angles))
-            if not threshold
-            else np.where(np.abs(diff_angles) > threshold)
-        )
-
-        mask = np.ones(len(in_motl.df), dtype=bool)
-        mask[to_remove[0]] = False
-        in_motl.df = in_motl.df.iloc[mask]
-        in_motl.df.reset_index(drop=True, inplace=True)
-
-        print(
-            f"{orig_number - in_motl.df.shape[0]} particles "
-            f"({((orig_number - in_motl.df.shape[0]) / orig_number * 100):.2f}%) were removed from the list."
-        )
-        if output_path is not None:
-            in_motl.write_out(output_path)
-        return in_motl
-
-    @staticmethod
-    def clean_by_radius(input_motl, column_name="object_id", threshold=None, output_path=None):
-        """Remove particles that lie too far from the mean ellipsoid radius.
-
-        For each surface group the mean radius ``(rx+ry+rz)/3`` and the
-        standard deviation of distances from the centre are computed.
-        Particles with distances outside ``[radius - thr, radius + thr]`` are
-        removed.  When *threshold* is ``None``, one standard deviation of the
-        distance distribution is used.
-
-        Parameters
-        ----------
-        input_motl : str or Motl
-            Particles to clean, grouped by ``column_name``.
-        column_name : str, default='object_id'
-            Column used to group particles.
-        threshold : float, optional
-            Half-width of the allowed distance band.  Defaults to one
-            standard deviation.
-        output_path : str, optional
-            Path to save the cleaned motl.
-
-        Returns
-        -------
-        Motl
-            Cleaned motl.  Prints the number and percentage of removed
-            particles.
-        """
-        in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(column_name=column_name)
-        el_params = PleomorphicSurface.get_parametric_description(in_motl, column_name=column_name)
-        cleaned_motl_df = pd.DataFrame()
-
-        for f in features:
-            fm = in_motl.get_motl_subset(column_values=f, column_name=column_name, reset_index=True)
-            coord = fm.get_coordinates()
-            center = el_params.loc[el_params[column_name] == f, ["cx", "cy", "cz"]].values
-            radius = np.mean(el_params.loc[el_params[column_name] == f, ["rx", "ry", "rz"]].values)
-            distances = np.linalg.norm(coord - center, axis=1)
-            to_remove = (
-                np.where((distances < radius - np.std(distances)) | (distances > radius + np.std(distances)))
-                if not threshold
-                else np.where((distances < radius - threshold) | (distances > radius + threshold))
-            )
-            fm.df = fm.df.drop(index=to_remove[0])
-            cleaned_motl_df = pd.concat([cleaned_motl_df, fm.df])
-
-        cleaned_motl_df.reset_index(drop=True, inplace=True)
-        cleaned_motl = cryomotl.Motl(cleaned_motl_df)
-        print(
-            f"{in_motl.df.shape[0] - cleaned_motl.df.shape[0]} particles "
-            f"({((in_motl.df.shape[0] - cleaned_motl.df.shape[0]) / in_motl.df.shape[0] * 100):.2f}%) were removed."
-        )
-        if output_path is not None:
-            cleaned_motl.write_out(output_path)
-        return cleaned_motl
-
-    @staticmethod
     def create_spherical_oversampling(
         input_motl,
-        motl_radius_id,
-        sampling_distance,
-        sampling_angle=360,
+        motl_radius_id: str,
+        sampling_distance: float,
+        sampling_angle: float = 360,
         output_path=None,
     ):
         """Generate oversampled particles on a sphere around each input particle.
 
-        For every input particle, sample points are placed on a cone of
-        half-opening angle *sampling_angle* at the given *sampling_distance*
-        from the particle centre.  Each sample point receives Euler angles
-        computed from its radial normal.
-
         Parameters
         ----------
         input_motl : str or Motl
-            Template particle list.  Each particle's position and the radius
-            stored in *motl_radius_id* define the sampling sphere.
         motl_radius_id : str
-            Column that holds the sphere radius for each particle.
+            Column holding the sphere radius for each particle.
         sampling_distance : float
-            Angular sampling step on the sphere (degrees or fraction,
-            forwarded to :func:`geom.sample_cone`).
+            Angular sampling step forwarded to :func:`geom.sample_cone`.
         sampling_angle : float, default=360
-            Half-opening angle of the sampling cone (degrees).  ``360``
-            samples the full sphere.
+            Half-opening angle of the sampling cone.  ``360`` samples the full sphere.
         output_path : str, optional
-            Path to save the new oversampled motl.
 
         Returns
         -------
         Motl
-            New motl with oversampled positions.  ``object_id`` is inherited
-            from the source particle; ``class`` is set to 1.
         """
         motl = cryomotl.Motl.load(input_motl)
         new_motl_df = pd.DataFrame()
