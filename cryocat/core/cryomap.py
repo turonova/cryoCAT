@@ -938,6 +938,107 @@ def normalize(input_map: MapSource) -> np.ndarray:
     return (norm_map - mean_v) / std_v
 
 
+def sample_line_profiles(
+    p1: ArrayLike,
+    p2: ArrayLike,
+    input_map: MapSource,
+    pixel_size_a: float | None = None,
+    extension_half_width_a: float = 80.0,
+) -> list[dict]:
+    """Sample intensities along line segments connecting paired 3D coordinates.
+
+    For each pair ``(p1[i], p2[i])``, a line segment is built from the midpoint,
+    extended by ``extension_half_width_a`` on each side. Intensities are sampled
+    with linear interpolation (``scipy.ndimage.map_coordinates``, ``order=1``,
+    ``mode='nearest'``). Pairs with NaN coordinates or zero-length vectors are
+    skipped silently.
+
+    Parameters
+    ----------
+    p1, p2 : ArrayLike, shape (N, 3)
+        Paired 3D coordinates in voxel units, XYZ order. Any array-coercible
+        input is accepted; normalized internally with ``np.asarray``.
+    input_map : MapSource
+        3D volume in ZYX order, or a path to an MRC/EM file.
+    pixel_size_a : float, optional
+        Voxel size in Angstroms. Used to convert ``extension_half_width_a`` to
+        voxels and stored in the output dicts for downstream rescaling. When
+        ``None``, ``extension_half_width_a`` is treated as already in voxels.
+    extension_half_width_a : float, default 80.0
+        How far to extend the sampled segment beyond the midpoint on each side,
+        in Angstroms (default 80 Å = 8 nm). Treated as voxels when no
+        ``pixel_size_a`` is given.
+
+    Returns
+    -------
+    list of dict
+        One dict per valid pair with keys:
+
+        * ``profile`` — 1-D intensity array (sampled values)
+        * ``p1``, ``p2``, ``midpoint``, ``start``, ``end`` — geometry in voxels
+        * ``pixel_size_a`` — voxel size in Angstroms (only when provided)
+    """
+    from scipy.ndimage import map_coordinates
+
+    volume = read(input_map)
+    if volume.ndim != 3:
+        raise ValueError(f"input_map must be a 3D array, got shape {volume.shape}")
+
+    p1 = np.asarray(p1, dtype=float)
+    p2 = np.asarray(p2, dtype=float)
+    if p1.ndim != 2 or p1.shape[1] != 3 or p2.shape != p1.shape:
+        raise ValueError("p1 and p2 must both be (N, 3) arrays")
+
+    if pixel_size_a is not None and np.isfinite(pixel_size_a) and pixel_size_a > 0:
+        half_width_vox = extension_half_width_a / pixel_size_a
+    else:
+        half_width_vox = extension_half_width_a
+        pixel_size_a = None  # normalise sentinel
+
+    # Filter NaN pairs
+    valid = ~(np.isnan(p1).any(axis=1) | np.isnan(p2).any(axis=1))
+    p1, p2 = p1[valid], p2[valid]
+    if len(p1) == 0:
+        return []
+
+    directions = p2 - p1
+    lengths = np.linalg.norm(directions, axis=1)
+
+    nonzero = lengths > 0
+    p1, p2 = p1[nonzero], p2[nonzero]
+    directions, lengths = directions[nonzero], lengths[nonzero]
+    if len(p1) == 0:
+        return []
+
+    unit_vectors = directions / lengths[:, np.newaxis]
+    midpoints = (p1 + p2) / 2.0
+    starts = midpoints - unit_vectors * half_width_vox
+    ends = midpoints + unit_vectors * half_width_vox
+
+    profiles = []
+    for i in range(len(p1)):
+        num_points = int(np.ceil(2 * half_width_vox + lengths[i])) + 1
+        line_points = np.linspace(starts[i], ends[i], num=num_points)
+
+        coords_zyx = line_points[:, [2, 1, 0]].T
+        intensities = map_coordinates(volume, coords_zyx, order=1, mode="nearest")
+
+        entry = {
+            "profile": intensities,
+            "p1": p1[i],
+            "p2": p2[i],
+            "midpoint": midpoints[i],
+            "start": starts[i],
+            "end": ends[i],
+        }
+        if pixel_size_a is not None:
+            entry["pixel_size_a"] = pixel_size_a
+
+        profiles.append(entry)
+
+    return profiles
+
+
 def rotate(
     input_map: MapSource,
     rotation: srot | None = None,
