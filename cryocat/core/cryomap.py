@@ -510,6 +510,82 @@ def read(
  
 
 
+def read_with_metadata(
+    input_map: MapSource,
+    transpose: bool = True,
+    data_type: np.dtype | None = None,
+) -> tuple[np.ndarray, float, tuple[float, float, float]]:
+    """Like :func:`read`, but also returns MRC/EM header metadata.
+
+    Parameters
+    ----------
+    input_map : MapSource
+        Path to an MRC or EM file, or an ndarray. For ndarrays, ``pixel_size_a``
+        defaults to ``1.0`` and ``origin_a`` to ``(0.0, 0.0, 0.0)``.
+    transpose : bool, default=True
+        Same semantics as :func:`read`.
+    data_type : numpy.dtype, optional
+        Cast the result to this dtype.
+
+    Returns
+    -------
+    data : ndarray
+        Map data (same as :func:`read`).
+    pixel_size_a : float
+        Voxel/pixel size in Ångströms (x component from MRC header).
+        Defaults to ``1.0`` for EM files and ndarrays.
+    origin_a : tuple[float, float, float]
+        Origin (x, y, z) in Ångströms from MRC header.
+        Defaults to ``(0.0, 0.0, 0.0)`` for EM files and ndarrays.
+
+    Raises
+    ------
+    ValueError
+        If the file extension is unsupported, or the input is neither a
+        path nor an ndarray.
+    """
+    if isinstance(input_map, (str, os.PathLike)):
+        path_str = os.fspath(input_map)
+
+        def valid_mrc(p: str) -> bool:
+            return bool(re.search(r"\.(mrc|ali|rec|st)(\.\d+)?$", p))
+
+        if valid_mrc(path_str):
+            with mrcfile.open(path_str, permissive=True) as mrc:
+                data = np.array(mrc.data, copy=True)
+                pixel_size_a = float(mrc.voxel_size.x)
+                origin_a = (
+                    float(mrc.header.origin.x),
+                    float(mrc.header.origin.y),
+                    float(mrc.header.origin.z),
+                )
+        elif path_str.endswith(".em"):
+            data = np.array(emfile.read(path_str)[1], copy=True)
+            pixel_size_a = 1.0
+            origin_a = (0.0, 0.0, 0.0)
+        else:
+            raise ValueError(
+                f"Unsupported file extension for input_map={path_str!r}. "
+                "Expected .mrc, .ali, .rec, .st, or .em."
+            )
+
+        if transpose:
+            data = data.transpose(2, 1, 0)
+    elif isinstance(input_map, np.ndarray):
+        data = np.array(input_map, copy=True)
+        pixel_size_a = 1.0
+        origin_a = (0.0, 0.0, 0.0)
+    else:
+        raise ValueError(
+            f"input_map must be a path or an ndarray, got {type(input_map).__name__}."
+        )
+
+    if data_type is not None:
+        data = data.astype(data_type)
+
+    return data, pixel_size_a, origin_a
+
+
 def write(
     data_to_write: np.ndarray,
     output_path: PathOrStr,
