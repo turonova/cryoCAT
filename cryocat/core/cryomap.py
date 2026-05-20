@@ -3,6 +3,7 @@ import emfile
 import mrcfile
 import re
 import os
+import warnings
 import numpy as np
 import pandas as pd
 from numpy import fft
@@ -897,7 +898,10 @@ def read_hdf5(
 
 
 def normalize(input_map: MapSource) -> np.ndarray:
-    """Normalize a given map by standardizing its values.
+    """Normalize a given map by standardizing its values (z-score).
+
+    Only finite values are used to compute the mean and standard deviation, so
+    the result is robust to NaN/Inf pixels common in real tomograms.
 
     Parameters
     ----------
@@ -908,12 +912,9 @@ def normalize(input_map: MapSource) -> np.ndarray:
     Returns
     -------
     numpy.ndarray
-        The normalized map with zero mean and unit variance.
-
-    Notes
-    -----
-    This function reads the input map, computes its mean and standard deviation,
-    and then normalizes the map by subtracting the mean and dividing by the standard deviation.
+        The normalized map with zero mean and unit variance. Returns a copy of
+        the original map (unmodified) if no finite values are found or if the
+        standard deviation is zero.
 
     Examples
     --------
@@ -921,12 +922,20 @@ def normalize(input_map: MapSource) -> np.ndarray:
     """
 
     norm_map = read(input_map)
+    values = norm_map[np.isfinite(norm_map)]
 
-    mean_v = np.mean(norm_map)
-    std_v = np.std(norm_map)
-    norm_map = (norm_map - mean_v) / std_v
+    if len(values) == 0:
+        warnings.warn("No finite values found for normalization; returning original map unchanged.")
+        return norm_map.copy()
 
-    return norm_map
+    mean_v = np.mean(values)
+    std_v = np.std(values)
+
+    if std_v == 0:
+        warnings.warn("Standard deviation is zero; returning original map unchanged.")
+        return norm_map.copy()
+
+    return (norm_map - mean_v) / std_v
 
 
 def rotate(
