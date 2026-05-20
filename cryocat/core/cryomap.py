@@ -510,29 +510,25 @@ def read(
  
 
 
-def read_with_metadata(
+def get_metadata(
     input_map: MapSource,
-    transpose: bool = True,
-    data_type: np.dtype | None = None,
-) -> tuple[np.ndarray, float, tuple[float, float, float]]:
-    """Like :func:`read`, but also returns MRC/EM header metadata.
+) -> tuple[tuple[int, ...], float, tuple[float, float, float]]:
+    """Return MRC/EM header metadata without loading the data array.
 
     Parameters
     ----------
     input_map : MapSource
-        Path to an MRC or EM file, or an ndarray. For ndarrays, ``pixel_size_a``
+        Path to an MRC or EM file, or an ndarray. For ndarrays ``pixel_size_a``
         defaults to ``1.0`` and ``origin_a`` to ``(0.0, 0.0, 0.0)``.
-    transpose : bool, default=True
-        Same semantics as :func:`read`.
-    data_type : numpy.dtype, optional
-        Cast the result to this dtype.
 
     Returns
     -------
-    data : ndarray
-        Map data (same as :func:`read`).
+    shape : tuple[int, ...]
+        Array dimensions (x, y, z) read from the file header. For MRC files
+        no data is copied; for EM files the data is loaded (no header-only API).
+        Shape is consistent with ``cryomap.read(path).shape``.
     pixel_size_a : float
-        Voxel/pixel size in Ångströms (x component from MRC header).
+        Pixel size in Ångströms (x component from MRC header).
         Defaults to ``1.0`` for EM files and ndarrays.
     origin_a : tuple[float, float, float]
         Origin (x, y, z) in Ångströms from MRC header.
@@ -552,7 +548,7 @@ def read_with_metadata(
 
         if valid_mrc(path_str):
             with mrcfile.open(path_str, permissive=True) as mrc:
-                data = np.array(mrc.data, copy=True)
+                shape = (int(mrc.header.nx), int(mrc.header.ny), int(mrc.header.nz))
                 pixel_size_a = float(mrc.voxel_size.x)
                 origin_a = (
                     float(mrc.header.origin.x),
@@ -560,7 +556,8 @@ def read_with_metadata(
                     float(mrc.header.origin.z),
                 )
         elif path_str.endswith(".em"):
-            data = np.array(emfile.read(path_str)[1], copy=True)
+            data = np.array(emfile.read(path_str)[1])
+            shape = data.shape
             pixel_size_a = 1.0
             origin_a = (0.0, 0.0, 0.0)
         else:
@@ -568,11 +565,8 @@ def read_with_metadata(
                 f"Unsupported file extension for input_map={path_str!r}. "
                 "Expected .mrc, .ali, .rec, .st, or .em."
             )
-
-        if transpose:
-            data = data.transpose(2, 1, 0)
     elif isinstance(input_map, np.ndarray):
-        data = np.array(input_map, copy=True)
+        shape = input_map.shape
         pixel_size_a = 1.0
         origin_a = (0.0, 0.0, 0.0)
     else:
@@ -580,10 +574,7 @@ def read_with_metadata(
             f"input_map must be a path or an ndarray, got {type(input_map).__name__}."
         )
 
-    if data_type is not None:
-        data = data.astype(data_type)
-
-    return data, pixel_size_a, origin_a
+    return shape, pixel_size_a, origin_a
 
 
 def write(
