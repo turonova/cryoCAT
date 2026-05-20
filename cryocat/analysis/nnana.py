@@ -467,6 +467,39 @@ class NearestNeighbors:
     def _stack_nn_results(motl_idx, column_value, qp_idx, nn_idx,
                           qp_subtomos, nn_subtomos, qp_angles, nn_angles,
                           qp_coord, nn_coord, nn_dist):
+        """Stack k-NN pair data into a single 2-D array for one feature/motl.
+
+        Parameters
+        ----------
+        motl_idx : int
+            Index of the neighbor motl (1-based) used to fill the ``motl_id`` column.
+        column_value : scalar
+            Feature value (e.g. tomo ID) shared by all pairs in this block.
+        qp_idx : numpy.ndarray, shape ``(N,)``
+            Row indices of query particles in their coordinate / angle arrays.
+        nn_idx : numpy.ndarray, shape ``(N, k)``
+            Row indices of the *k* nearest neighbors for each query particle.
+        qp_subtomos : numpy.ndarray, shape ``(N,)``
+            ``subtomo_id`` values for query particles.
+        nn_subtomos : numpy.ndarray, shape ``(M,)``
+            ``subtomo_id`` values for all candidate neighbor particles.
+        qp_angles : numpy.ndarray, shape ``(N, 3)``
+            zxz Euler angles (degrees) for query particles.
+        nn_angles : numpy.ndarray, shape ``(M, 3)``
+            zxz Euler angles (degrees) for neighbor particles.
+        qp_coord : numpy.ndarray, shape ``(N, 3)``
+            Coordinates of query particles.
+        nn_coord : numpy.ndarray, shape ``(M, 3)``
+            Coordinates of candidate neighbor particles.
+        nn_dist : numpy.ndarray, shape ``(N, k)``
+            Euclidean distances from each query particle to each of its *k* neighbors.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            2-D array of shape ``(N * k, n_cols)`` stacking all pair-level data
+            as columns.  Returns ``None`` when *k* is 0.
+        """
         nn_idx = np.atleast_2d(nn_idx)
         nn_dist = np.atleast_2d(nn_dist)
         k = nn_idx.shape[1]
@@ -490,6 +523,38 @@ class NearestNeighbors:
     def _stack_nn_results_radius(motl_idx, column_value, qp_idx, nn_idx_list,
                                  qp_subtomos, nn_subtomos, qp_angles, nn_angles,
                                  qp_coord, nn_coord):
+        """Stack radius-NN pair data into a single 2-D array for one feature/motl.
+
+        Parameters
+        ----------
+        motl_idx : int
+            Index of the neighbor motl (1-based).
+        column_value : scalar
+            Feature value shared by all pairs in this block.
+        qp_idx : list of int
+            Query-particle indices that have at least one neighbor.
+        nn_idx_list : list of numpy.ndarray
+            Per-query-particle sorted neighbor indices, as returned by
+            :func:`find_nn_within_radius`.
+        qp_subtomos : numpy.ndarray, shape ``(N,)``
+            ``subtomo_id`` values for query particles.
+        nn_subtomos : numpy.ndarray, shape ``(M,)``
+            ``subtomo_id`` values for candidate neighbor particles.
+        qp_angles : numpy.ndarray, shape ``(N, 3)``
+            zxz Euler angles (degrees) for query particles.
+        nn_angles : numpy.ndarray, shape ``(M, 3)``
+            zxz Euler angles (degrees) for neighbor particles.
+        qp_coord : numpy.ndarray, shape ``(N, 3)``
+            Coordinates of query particles.
+        nn_coord : numpy.ndarray, shape ``(M, 3)``
+            Coordinates of candidate neighbor particles.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            2-D array stacking all pair-level data as columns.  Returns ``None``
+            when ``nn_idx_list`` is empty or the total neighbor count is zero.
+        """
         if not nn_idx_list:
             return None
         counts = np.array([len(n) for n in nn_idx_list])
@@ -1254,7 +1319,34 @@ def assign_class_by_nn(motl_unassigned, motl_list, starting_class=1,
 
 
 def _get_nn_dist(kdt, query_point, dist_max, dist_min, active_points, test_value):
-    """First active point within ``[dist_min, dist_max]``, sorted by distance."""
+    """Return the nearest active point within ``[dist_min, dist_max]``.
+
+    Queries *kdt* within *dist_max*, then filters by *active_points* and
+    *dist_min*, returning the closest point that passes both criteria.
+
+    Parameters
+    ----------
+    kdt : sklearn.neighbors.KDTree
+        KD-tree built on the candidate coordinate set.
+    query_point : numpy.ndarray, shape ``(1, 3)``
+        The coordinate to search from.
+    dist_max : float
+        Maximum search radius.
+    dist_min : float
+        Minimum distance threshold; results closer than this are excluded.
+    active_points : numpy.ndarray of bool, shape ``(N,)``
+        Mask of which points are still available (not yet used in a chain).
+    test_value : bool
+        Expected value of *active_points* at candidate indices; only points
+        where ``active_points[idx] == test_value`` are considered.
+
+    Returns
+    -------
+    idx : int
+        Index of the nearest valid neighbor, or ``-1`` if none was found.
+    dist : float or list
+        Distance to the neighbor, or ``[]`` if none was found.
+    """
     id_max, dist = kdt.query_radius(query_point, dist_max,
                                     return_distance=True, sort_results=True)
     id_max = id_max[0]
@@ -1278,7 +1370,38 @@ def _get_nn_dist(kdt, query_point, dist_max, dist_min, active_points, test_value
 
 def _add_chain_suffix(chain_df, motl, traced_df, subtomo_id, current_dist,
                       store_idx1="object_id", store_idx2="geom2", store_dist="geom4"):
-    """Append the current chain after an existing one."""
+    """Append the current chain after an existing one.
+
+    Looks up the particle at *subtomo_id* in *traced_df*, finds the chain it
+    belongs to, and — if the link is the last in that chain and the new
+    distance is shorter — re-assigns the tail of the old chain to the current
+    chain or vice versa.
+
+    Parameters
+    ----------
+    chain_df : pandas.DataFrame
+        Rows representing the new chain fragment being built.
+    motl : Motl
+        The exit motl for the current feature (used to resolve ``subtomo_id``).
+    traced_df : pandas.DataFrame
+        Accumulator holding all chains traced so far for this feature.
+    subtomo_id : int
+        Row index (within *motl*) of the particle whose chain we are appending to.
+    current_dist : float
+        Distance of the new link being considered.
+    store_idx1 : str, default='object_id'
+        Column storing the chain identifier.
+    store_idx2 : str, default='geom2'
+        Column storing within-chain position (1-based).
+    store_dist : str, default='geom4'
+        Column storing link distance to the next particle.
+
+    Returns
+    -------
+    bool
+        ``True`` if the chain was successfully appended; ``False`` if the
+        existing link was shorter and the append was aborted.
+    """
     particle_id = motl.df.loc[motl.df.index[subtomo_id], "subtomo_id"]
     temp_cl_id, order_id, previous_dist = traced_df.loc[
         traced_df["subtomo_id"] == particle_id,
@@ -1307,7 +1430,43 @@ def _add_chain_suffix(chain_df, motl, traced_df, subtomo_id, current_dist,
 def _add_chain_prefix(chain_df, motl, traced_df, subtomo_id, current_dist,
                       store_idx1="object_id", store_idx2="geom2", store_dist="geom4",
                       class_max=None):
-    """Prepend the current chain before an existing one."""
+    """Prepend the current chain before an existing one.
+
+    Looks up the particle at *subtomo_id* in *traced_df* and inserts the
+    current chain fragment at the beginning of that particle's chain, shifting
+    existing within-chain positions accordingly.  If the particle is not the
+    head of its chain, the shorter-distance rule is applied to decide whether
+    the prefix operation proceeds.
+
+    Parameters
+    ----------
+    chain_df : pandas.DataFrame
+        Rows representing the new chain fragment to prepend.
+    motl : Motl
+        The entry motl for the current feature.
+    traced_df : pandas.DataFrame
+        Accumulator holding all chains traced so far for this feature.
+    subtomo_id : int
+        Row index (within *motl*) of the particle at the start of the existing chain.
+    current_dist : float
+        Distance of the new link being considered.
+    store_idx1 : str, default='object_id'
+        Column storing the chain identifier.
+    store_idx2 : str, default='geom2'
+        Column storing within-chain position (1-based).
+    store_dist : str, default='geom4'
+        Column storing link distance to the next particle.
+    class_max : tuple of int or None, default=None
+        When not ``None``, a ``(max_order, fallback_class)`` pair used when
+        both a suffix and prefix merge happen simultaneously.
+
+    Returns
+    -------
+    int or None
+        Returns ``-1`` if the existing link is shorter and the operation is
+        aborted; otherwise returns ``None`` (modifies *chain_df* and
+        *traced_df* in place).
+    """
     particle_id = motl.df.loc[motl.df.index[subtomo_id], "subtomo_id"]
     class_to_change = traced_df.loc[traced_df["subtomo_id"] == particle_id, store_idx1].values[0]
     order_id = traced_df.loc[traced_df["subtomo_id"] == particle_id, store_idx2].values[0]

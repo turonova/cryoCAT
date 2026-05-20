@@ -1,10 +1,22 @@
 import pytest
 import pandas as pd
-import tempfile
 import os
 from pathlib import Path
 import numpy as np
 from cryocat.core import mdoc
+
+
+test_data = Path(__file__).parent / "test_data"
+
+
+@pytest.fixture
+def mdoc_file():
+    return str(test_data / "frames_mdoc" / "TS_019_0000_8.0.mrc.mdoc")
+
+
+@pytest.fixture
+def mdoc_directory():
+    return str(test_data / "frames_mdoc")
 
 
 class TestMdoc:
@@ -22,30 +34,25 @@ class TestMdoc:
         assert len(mdoc_obj.project_info) > 0
         assert len(mdoc_obj.imgs) > 0
 
-    def test_write_and_read_consistency(self, mdoc_file):
+    def test_write_and_read_consistency(self, mdoc_file, tmp_path):
         original_mdoc = mdoc.Mdoc(mdoc_file)
-        with tempfile.NamedTemporaryFile(suffix='.mdoc', delete=False, mode='w') as tmp_file:
-            tmp_path = tmp_file.name
-        try:
-            original_mdoc.write(tmp_path, overwrite=True)
-            readback_mdoc = mdoc.Mdoc(tmp_path)
-            assert original_mdoc.titles == readback_mdoc.titles
-            assert original_mdoc.project_info == readback_mdoc.project_info
-            assert original_mdoc.section_id == readback_mdoc.section_id
-            original_imgs = original_mdoc.imgs.drop(columns=['Removed'], errors='ignore')
-            readback_imgs = readback_mdoc.imgs.drop(columns=['Removed'], errors='ignore')
-            assert set(original_imgs.columns) == set(readback_imgs.columns)
-            for col in original_imgs.columns:
-                if col in ['ZValue', 'FrameSet']:
-                    assert original_imgs[col].tolist() == readback_imgs[col].tolist()
-                elif col in ['TiltAngle', 'PixelSpacing']:
-                    assert original_imgs[col].astype(float).tolist() == pytest.approx(
-                        readback_imgs[col].astype(float).tolist())
-                else:
-                    assert original_imgs[col].tolist() == readback_imgs[col].tolist()
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        out_path = str(tmp_path / "test.mdoc")
+        original_mdoc.write(out_path, overwrite=True)
+        readback_mdoc = mdoc.Mdoc(out_path)
+        assert original_mdoc.titles == readback_mdoc.titles
+        assert original_mdoc.project_info == readback_mdoc.project_info
+        assert original_mdoc.section_id == readback_mdoc.section_id
+        original_imgs = original_mdoc.imgs.drop(columns=['Removed'], errors='ignore')
+        readback_imgs = readback_mdoc.imgs.drop(columns=['Removed'], errors='ignore')
+        assert set(original_imgs.columns) == set(readback_imgs.columns)
+        for col in original_imgs.columns:
+            if col in ['ZValue', 'FrameSet']:
+                assert original_imgs[col].tolist() == readback_imgs[col].tolist()
+            elif col in ['TiltAngle', 'PixelSpacing']:
+                assert original_imgs[col].astype(float).tolist() == pytest.approx(
+                    readback_imgs[col].astype(float).tolist())
+            else:
+                assert original_imgs[col].tolist() == readback_imgs[col].tolist()
 
     def test_sort_by_tilt(self, mdoc_file):
         mdoc_obj = mdoc.Mdoc(mdoc_file)
@@ -110,30 +117,23 @@ class TestMdoc:
         if "PixelSpacing" in mdoc_obj.imgs.columns:
             assert all(mdoc_obj.imgs["PixelSpacing"] == new_pixel_size)
 
-    def test_write_removed_flag(self, mdoc_file):
+    def test_write_removed_flag(self, mdoc_file, tmp_path):
         mdoc_obj = mdoc.Mdoc(mdoc_file)
         num_images = len(mdoc_obj.imgs)
         indices_to_remove = list(range(min(1, num_images)))
         if indices_to_remove:
             mdoc_obj.remove_images(indices_to_remove)
-            with tempfile.NamedTemporaryFile(suffix='.mdoc', delete=False, mode='w') as tmp_file:
-                tmp_with_removed = tmp_file.name
-            with tempfile.NamedTemporaryFile(suffix='.mdoc', delete=False, mode='w') as tmp_file:
-                tmp_without_removed = tmp_file.name
-            try:
-                mdoc_obj.write(tmp_with_removed, overwrite=True, removed=True)
-                mdoc_with_removed = mdoc.Mdoc(tmp_with_removed)
-                assert len(mdoc_with_removed.imgs) == len(mdoc_obj.imgs)
-                mdoc_obj.write(tmp_without_removed, overwrite=True, removed=False)
-                assert os.path.exists(tmp_without_removed)
-                with open(tmp_without_removed, 'r') as f:
-                    content = f.read()
-                assert len(content) > 0
-                mdoc_without_removed = mdoc.Mdoc(tmp_without_removed)
-            finally:
-                for tmp_path in [tmp_with_removed, tmp_without_removed]:
-                    if os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
+            tmp_with_removed = str(tmp_path / "with_removed.mdoc")
+            tmp_without_removed = str(tmp_path / "without_removed.mdoc")
+            mdoc_obj.write(tmp_with_removed, overwrite=True, removed=True)
+            mdoc_with_removed = mdoc.Mdoc(tmp_with_removed)
+            assert len(mdoc_with_removed.imgs) == len(mdoc_obj.imgs)
+            mdoc_obj.write(tmp_without_removed, overwrite=True, removed=False)
+            assert os.path.exists(tmp_without_removed)
+            with open(tmp_without_removed, 'r') as f:
+                content = f.read()
+            assert len(content) > 0
+            mdoc.Mdoc(tmp_without_removed)
 
     def test_remove_and_keep_cycle(self, mdoc_file):
         mdoc_obj = mdoc.Mdoc(mdoc_file)
@@ -148,54 +148,39 @@ class TestMdoc:
 
 
 class TestMdocWithFiles:
-    def test_remove_images(self, mdoc_file):
+    def test_remove_images(self, mdoc_file, tmp_path):
         mdoc_obj = mdoc.Mdoc(mdoc_file)
         num_images = len(mdoc_obj.imgs)
-        with tempfile.NamedTemporaryFile(suffix='.mdoc', delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-        try:
-            indices_to_remove = list(range(min(1, num_images)))
-            if indices_to_remove:
-                result = mdoc.remove_images(mdoc_file, indices_to_remove, output_path=tmp_path)
-                assert isinstance(result, mdoc.Mdoc)
-                assert len(result.removed_images()) == len(indices_to_remove)
-                assert os.path.exists(tmp_path)
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        out_path = str(tmp_path / "removed.mdoc")
+        indices_to_remove = list(range(min(1, num_images)))
+        if indices_to_remove:
+            result = mdoc.remove_images(mdoc_file, indices_to_remove, output_path=out_path)
+            assert isinstance(result, mdoc.Mdoc)
+            assert len(result.removed_images()) == len(indices_to_remove)
+            assert os.path.exists(out_path)
 
-    def test_get_tilt_angles(self, mdoc_file):
+    def test_get_tilt_angles(self, mdoc_file, tmp_path):
         tilt_angles = mdoc.get_tilt_angles(mdoc_file)
         assert isinstance(tilt_angles, (list, pd.Series, np.ndarray))
         assert len(tilt_angles) > 0
         assert all(isinstance(angle, (int, float)) for angle in tilt_angles)
-        with tempfile.NamedTemporaryFile(suffix='.csv', delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-        try:
-            tilt_angles = mdoc.get_tilt_angles(mdoc_file, output_path=tmp_path)
-            assert os.path.exists(tmp_path)
-            with open(tmp_path, 'r') as f:
-                content = f.read().strip()
-            assert len(content) > 0
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        csv_path = str(tmp_path / "tilt_angles.csv")
+        mdoc.get_tilt_angles(mdoc_file, output_path=csv_path)
+        assert os.path.exists(csv_path)
+        with open(csv_path, 'r') as f:
+            content = f.read().strip()
+        assert len(content) > 0
 
-    def test_sort_mdoc_by_tilt_angles(self, mdoc_file):
+    def test_sort_mdoc_by_tilt_angles(self, mdoc_file, tmp_path):
         original_mdoc = mdoc.Mdoc(mdoc_file)
         original_tilts = original_mdoc.imgs['TiltAngle'].tolist()
         result = mdoc.sort_mdoc_by_tilt_angles(mdoc_file, reset_z_value=False)
         sorted_tilts = result.imgs['TiltAngle'].tolist()
         assert sorted_tilts == sorted(original_tilts)
-        with tempfile.NamedTemporaryFile(suffix='.mdoc', delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-        try:
-            result = mdoc.sort_mdoc_by_tilt_angles(mdoc_file, reset_z_value=True, output_path=tmp_path)
-            assert os.path.exists(tmp_path)
-            assert result.imgs['ZValue'].tolist() == list(range(len(result.imgs)))
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        out_path = str(tmp_path / "sorted.mdoc")
+        result = mdoc.sort_mdoc_by_tilt_angles(mdoc_file, reset_z_value=True, output_path=out_path)
+        assert os.path.exists(out_path)
+        assert result.imgs['ZValue'].tolist() == list(range(len(result.imgs)))
 
     def test_update_mdoc_features(self, mdoc_file):
         original_mdoc = mdoc.Mdoc(mdoc_file)
@@ -227,7 +212,7 @@ class TestMdocWithFiles:
                 assert isinstance(mdoc_obj.project_info, dict)
                 assert all(isinstance(col, str) for col in mdoc_obj.imgs.columns)
 
-    def test_merge_mdoc_files(self, mdoc_directory):
+    def test_merge_mdoc_files(self, mdoc_directory, tmp_path):
         mdoc_files = list(Path(mdoc_directory).glob("*.mdoc"))
 
         first_file = mdoc_files[0]
@@ -258,21 +243,15 @@ class TestMdocWithFiles:
         )
         assert len(merged_no_reorder.imgs) == expected_total_images
 
-        with tempfile.NamedTemporaryFile(suffix='.mdoc', delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-
-        try:
-            merged_with_output = mdoc.merge_mdoc_files(
-                str(first_file.parent / prefix),
-                reorder=True,
-                output_path=tmp_path
-            )
-            assert os.path.exists(tmp_path)
-            read_back = mdoc.Mdoc(tmp_path)
-            assert len(read_back.imgs) == expected_total_images
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        merged_out_path = str(tmp_path / "merged.mdoc")
+        merged_with_output = mdoc.merge_mdoc_files(
+            str(first_file.parent / prefix),
+            reorder=True,
+            output_path=merged_out_path
+        )
+        assert os.path.exists(merged_out_path)
+        read_back = mdoc.Mdoc(merged_out_path)
+        assert len(read_back.imgs) == expected_total_images
 
         merged_stripped = mdoc.merge_mdoc_files(
             str(first_file.parent / prefix),
@@ -319,16 +298,19 @@ class TestMdocWithFiles:
         for i, path in enumerate(mdoc_obj.imgs['SubFramePath']):
             assert path == os.path.basename(original_paths[i])
 
-    def test_split_mdoc_file(self):
-        #todo
-        pass
+    def test_split_mdoc_file(self, mdoc_file):
+        original = mdoc.Mdoc(mdoc_file)
+        result = mdoc.split_mdoc_file(mdoc_file)
+        assert isinstance(result, list)
+        assert len(result) == len(original.imgs)
+        for m in result:
+            assert isinstance(m, mdoc.Mdoc)
+            assert len(m.imgs) == 1
+            assert m.titles == original.titles
+            assert m.project_info == original.project_info
 
-test_data = Path(__file__).parent / "test_data"
-@pytest.fixture
-def mdoc_file():
-    return str(test_data / "frames_mdoc" / "TS_019_0000_8.0.mrc.mdoc")
+        result_from_obj = mdoc.split_mdoc_file(original)
+        assert len(result_from_obj) == len(original.imgs)
 
-
-@pytest.fixture
-def mdoc_directory():
-    return str(test_data / "frames_mdoc")
+        with pytest.raises(ValueError):
+            mdoc.split_mdoc_file(42)

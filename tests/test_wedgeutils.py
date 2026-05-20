@@ -6,36 +6,24 @@ from pathlib import Path
 import emfile
 
 
-def test_check_data_consistency():
-    #case1, normal correct input
-    data1 = np.asarray([1,2,3])
-    data2 = np.asarray([4,5,6])
-    try:
-        check_data_consistency(data1, data2, "int", "int")
-    except Exception as e:
-        pytest.fail()
+@pytest.mark.parametrize("data1, data2, type1, type2", [
+    (np.asarray([1, 2, 3]), np.asarray([4, 5, 6]), "int", "int"),
+    (np.asarray([1, 2, 3]), np.asarray([1.1, 2.1, 3.1]), "int", "float"),
+])
+def test_check_data_consistency_valid(data1, data2, type1, type2):
+    check_data_consistency(data1, data2, type1, type2)  # should not raise
 
-    #case2, different shape
-    data1 = np.asarray([[1,2],[3,4]]) # 2x2
-    data2 = np.asarray([[5,6,7],[8,9,10]]) # 2x3
-    with pytest.raises(ValueError):
-        check_data_consistency(data1, data2, "int", "int")
 
-    #case3, different type, should be correct
-    data1 = np.asarray([1,2,3])
-    data2 = np.asarray([1.1,2.1,3.1])
-    try:
-        check_data_consistency(data1, data2, "int", "float")
-    except Exception as e:
-        pytest.fail()
+@pytest.mark.parametrize("data1, data2, type1, type2, exc_type", [
+    (np.asarray([[1, 2], [3, 4]]), np.asarray([[5, 6, 7], [8, 9, 10]]), "int", "int", ValueError),
+    ([1, 2, 3], np.asarray([1, 2, 3]), "int", "int", TypeError),
+])
+def test_check_data_consistency_invalid(data1, data2, type1, type2, exc_type):
+    with pytest.raises(exc_type):
+        check_data_consistency(data1, data2, type1, type2)
 
-    #case4: not an npndarray as input
-    data1 = [1,2,3]
-    data2 = np.asarray([1,2,3])
-    with pytest.raises(TypeError):
-        check_data_consistency(data1, data2, "int", "int")
 
-    #case5:
+# kept for backwards compatibility — empty case5 placeholder removed
 
 def compare_star_files(file1, file2):
     try:
@@ -219,14 +207,20 @@ def test_create_wedge_list_em_batch():
         os.remove(str(wedgeutils_datad / "wedge_list_1.em"))
 
 
-def test_load_wedge_list_sg():
+def test_load_wedge_list_sg_from_file():
     filename = str(Path(__file__).parent / "test_data" / "TS_017" / "017_gctf.star")
     result = load_wedge_list_sg(filename)
     assert isinstance(result, pd.DataFrame)
     assert not result.empty
+
+
+def test_load_wedge_list_sg_from_dataframe():
     input_df = pd.DataFrame({"col1": [10, 20], "col2": [30, 40]})
     result = load_wedge_list_sg(input_df)
     assert result.equals(input_df)
+
+
+def test_load_wedge_list_sg_invalid_type_raises():
     with pytest.raises(ValueError):
         load_wedge_list_sg(123)
 

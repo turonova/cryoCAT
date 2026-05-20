@@ -1,171 +1,253 @@
+"""Tests for cryocat.cli."""
+import argparse
 import pytest
-from cryocat.cli import *
+import numpy as np
+from unittest.mock import patch
+
+from cryocat.cli import (
+    parse_allowed_types,
+    parse_choices,
+    parse_doc_param,
+    parse_input_types,
+    parse_string_into_array,
+    replace_cross_references,
+    add_params_from_docstring,
+)
 
 
-class TestCLIParsingFunctions:
-    def test_parse_allowed_types_basic(self):
-        input_str = "str or int or float"
-        result = parse_allowed_types(input_str)
-        expected = ["float", "int", "str"]
-        assert result == expected
+# ---------------------------------------------------------------------------
+# parse_allowed_types
+# ---------------------------------------------------------------------------
 
-    def test_parse_allowed_types_with_unsupported(self):
-        input_str = "str, pandas.DataFrame, array-like, or int"
-        result = parse_allowed_types(input_str)
-        expected = ["array-like", "int", "str"]
-        assert result == expected
-
-    def test_parse_allowed_types_empty(self):
-        input_str = "pandas.DataFrame or pandas"
-        result = parse_allowed_types(input_str)
-        assert result == []
-
-    def test_parse_string_into_array_int(self):
-        result = parse_string_into_array("1,2,3,4")
-        expected = np.array([1, 2, 3, 4])
-        np.testing.assert_array_equal(result, expected)
-
-    def test_parse_string_into_array_float(self):
-        result = parse_string_into_array("1.1,2.2,3.3")
-        expected = np.array([1.1, 2.2, 3.3])
-        np.testing.assert_array_equal(result, expected)
-
-    def test_parse_string_into_array_str(self):
-        result = parse_string_into_array("a,b,c")
-        expected = np.array(['a', 'b', 'c'])
-        np.testing.assert_array_equal(result, expected)
-
-    def test_parse_choices_int(self):
-        result = parse_choices("{1, 2, 3}")
-        expected = [1, 2, 3]
-        assert result == expected
-
-    def test_parse_choices_float(self):
-        result = parse_choices("{0.1, 0.2, 0.3}")
-        expected = [0.1, 0.2, 0.3]
-        assert result == expected
-
-    def test_parse_choices_str(self):
-        result = parse_choices('{"gctf", "ctffind4", "warp"}')
-        expected = ["gctf", "ctffind4", "warp"]
-        assert result == expected
-
-    def test_replace_cross_references(self):
-        input_str = "See :meth:`cryocat.ioutils.tlt_load` for more info"
-        result = replace_cross_references(input_str)
-        expected = "See `cryocat.ioutils.tlt_load` for more info"
-        assert result == expected
-
-    def test_parse_input_types_single_int(self):
-        result = parse_input_types("5", ["int"])
-        assert result == 5
-        assert isinstance(result, int)
-
-    def test_parse_input_types_single_float(self):
-        result = parse_input_types("3.14", ["float"])
-        assert result == 3.14
-        assert isinstance(result, float)
-
-    def test_parse_input_types_single_str(self):
-        result = parse_input_types("hello", ["str"])
-        assert result == "hello"
-        assert isinstance(result, str)
-
-    def test_parse_input_types_array_int(self):
-        result = parse_input_types("1,2,3", ["array-like"])
-        expected = np.array([1, 2, 3])
-        np.testing.assert_array_equal(result, expected)
-
-    def test_parse_input_types_array_float(self):
-        result = parse_input_types("1.1,2.2", ["array-like"])
-        expected = np.array([1.1, 2.2])
-        np.testing.assert_array_equal(result, expected)
+@pytest.mark.parametrize(
+    "input_str, expected",
+    [
+        ("str or int or float", ["float", "int", "str"]),
+        ("str, pandas.DataFrame, array-like, or int", ["array-like", "int", "str"]),
+        ("pandas.DataFrame or pandas", []),
+        ("int", ["int"]),
+        ("str or float", ["float", "str"]),
+        ("array-like, int", ["array-like", "int"]),
+        ("pandas.DataFrame, str", ["str"]),
+        ("", []),
+        ("int, Pandas, DataFrame, float", ["float", "int"]),
+        ("int or bool", ["bool", "int"]),
+    ],
+)
+def test_parse_allowed_types(input_str, expected):
+    assert parse_allowed_types(input_str) == expected
 
 
-class TestDocParamParsing:
-    def test_parse_doc_param_required(self):
-        doc_param = [
-            "tomo_id",
-            "int",
-            ["The ID of the tomogram."]
-        ]
-        name, help_desc, required, types, default, choices = parse_doc_param(doc_param)
-        assert name == "--tomo_id"
-        assert "ID of the tomogram" in help_desc
-        assert required is True
-        assert "int" in types
+# ---------------------------------------------------------------------------
+# parse_string_into_array
+# ---------------------------------------------------------------------------
 
-    def test_parse_doc_param_with_default(self):
-        doc_param = [
-            "voltage",
-            "float, default=300.0",
-            ["The voltage of the microscope."]
-        ]
-        name, help_desc, required, types, default, choices = parse_doc_param(doc_param)
-        assert name == "--voltage"
-        assert required is False
-        assert default == 300.0
-        assert "float" in types
-
-    def test_parse_doc_param_with_choices(self):
-        doc_param = [
-            "ctf_file_type",
-            '{"gctf", "ctffind4", "warp"}',
-            ["The type of CTF file."]
-        ]
-        name, help_desc, required, types, default, choices = parse_doc_param(doc_param)
-        assert name == "--ctf_file_type"
-        assert required is False
-        assert choices == ["gctf", "ctffind4", "warp"]
-        assert default == "gctf"
+@pytest.mark.parametrize(
+    "input_str, expected",
+    [
+        ("1,2,3,4", np.array([1, 2, 3, 4])),
+        ("1.1,2.2,3.3", np.array([1.1, 2.2, 3.3])),
+        ("a,b,c", np.array(["a", "b", "c"])),
+        ("42", np.array([42])),
+    ],
+)
+def test_parse_string_into_array(input_str, expected):
+    result = parse_string_into_array(input_str)
+    np.testing.assert_array_equal(result, expected)
 
 
-class TestCLICommands:
-    def test_wedge_list_help(self):
-        try:
-            wedge_list()
-        except SystemExit:
-            pass
-
-    def test_tm_ana_help(self):
-        try:
-            tm_ana()
-        except SystemExit:
-            pass
+def test_parse_string_into_array_mixed_falls_back_to_str():
+    result = parse_string_into_array("1,two,3.0")
+    assert result.dtype.kind == "U"
 
 
-class TestEdgeCases:
-    def test_parse_input_types_invalid(self):
-        with pytest.raises(argparse.ArgumentTypeError):
-            parse_input_types("not_a_number", ["int", "float"])
-
-    def test_parse_choices_empty(self):
-        result = parse_choices("{}")
-        assert result == [] or result == ['']
-
-    def test_parse_string_into_array_single(self):
-        result = parse_string_into_array("42")
-        expected = np.array([42])
-        np.testing.assert_array_equal(result, expected)
-        assert isinstance(result, np.ndarray)
+def test_parse_string_into_array_returns_ndarray():
+    result = parse_string_into_array("42")
+    assert isinstance(result, np.ndarray)
 
 
-@pytest.mark.parametrize("input_str,expected", [
-    ("int", ["int"]),
-    ("str or float", ["float", "str"]),
-    ("array-like, int", ["array-like", "int"]),
-    ("pandas.DataFrame, str", ["str"]),
-])
-def test_parse_allowed_types_parametrized(input_str, expected):
-    result = parse_allowed_types(input_str)
+# ---------------------------------------------------------------------------
+# parse_choices
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "input_str, expected",
+    [
+        ("{1, 2, 3}", [1, 2, 3]),
+        ("{0.1, 0.2, 0.3}", [0.1, 0.2, 0.3]),
+        ('{"gctf", "ctffind4", "warp"}', ["gctf", "ctffind4", "warp"]),
+        ("{x, y}", ["x", "y"]),
+    ],
+)
+def test_parse_choices(input_str, expected):
+    assert parse_choices(input_str) == expected
+
+
+# ---------------------------------------------------------------------------
+# replace_cross_references
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "input_str, expected",
+    [
+        ("See :meth:`cryocat.ioutils.tlt_load` for more info", "See `cryocat.ioutils.tlt_load` for more info"),
+        ("Plain text unchanged", "Plain text unchanged"),
+        (":meth:`a` and :meth:`b`", "`a` and `b`"),
+        ("", ""),
+    ],
+)
+def test_replace_cross_references(input_str, expected):
+    assert replace_cross_references(input_str) == expected
+
+
+# ---------------------------------------------------------------------------
+# parse_doc_param  (cli version prepends "--" to the param name)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "doc_param, expected_name, expected_required, expected_default, expected_choices",
+    [
+        # required parameter
+        (
+            ("tomo_id", "int", ["The ID of the tomogram."]),
+            "--tomo_id", True, None, [],
+        ),
+        # optional parameter
+        (
+            ("mode", "str, optional", ["Mode of operation."]),
+            "--mode", False, None, [],
+        ),
+        # parameter with default value
+        (
+            ("voltage", "float, default=300.0", ["The voltage of the microscope."]),
+            "--voltage", False, 300.0, [],
+        ),
+        # parameter with string choices
+        (
+            ("ctf_file_type", '{"gctf", "ctffind4", "warp"}', ["Type of CTF file."]),
+            "--ctf_file_type", False, "gctf", ["gctf", "ctffind4", "warp"],
+        ),
+        # parameter with integer choices
+        (
+            ("level", "int, {1, 2, 3}", ["Level selection."]),
+            "--level", False, 1, [1, 2, 3],
+        ),
+    ],
+)
+def test_parse_doc_param(doc_param, expected_name, expected_required, expected_default, expected_choices):
+    name, help_desc, required, _types, default, choices = parse_doc_param(doc_param)
+    assert name == expected_name
+    assert required == expected_required
+    assert default == expected_default
+    assert choices == expected_choices
+    assert isinstance(help_desc, str)
+    assert len(help_desc) > 0
+
+
+def test_parse_doc_param_help_contains_description():
+    doc_param = ("param", "str", ["Detailed description text."])
+    _, help_desc, *_ = parse_doc_param(doc_param)
+    assert "Detailed description text." in help_desc
+
+
+def test_parse_doc_param_types_for_required():
+    doc_param = ("tomo_id", "int", ["ID."])
+    _, _, _, types_, _, _ = parse_doc_param(doc_param)
+    assert "int" in types_
+
+
+# ---------------------------------------------------------------------------
+# parse_input_types
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "input_value, allowed_types, expected",
+    [
+        ("5", ["int"], 5),
+        ("3.14", ["float"], 3.14),
+        ("hello", ["str"], "hello"),
+    ],
+)
+def test_parse_input_types_scalars(input_value, allowed_types, expected):
+    result = parse_input_types(input_value, allowed_types)
     assert result == expected
 
 
-@pytest.mark.parametrize("input_str,expected", [
-    ("1,2,3", np.array([1, 2, 3])),
-    ("1.5,2.5", np.array([1.5, 2.5])),
-    ("a,b,c", np.array(['a', 'b', 'c'])),
-])
-def test_parse_string_into_array_parametrized(input_str, expected):
-    result = parse_string_into_array(input_str)
+@pytest.mark.parametrize(
+    "input_value, expected",
+    [
+        ("1,2,3", np.array([1, 2, 3])),
+        ("1.1,2.2", np.array([1.1, 2.2])),
+        ("a,b,c", np.array(["a", "b", "c"])),
+    ],
+)
+def test_parse_input_types_array_like(input_value, expected):
+    result = parse_input_types(input_value, ["array-like"])
     np.testing.assert_array_equal(result, expected)
+
+
+def test_parse_input_types_single_array_like_value():
+    result = parse_input_types("7", ["array-like"])
+    assert result == 7
+
+
+def test_parse_input_types_invalid_raises():
+    with pytest.raises(argparse.ArgumentTypeError):
+        parse_input_types("not_a_number", ["int", "float"])
+
+
+# ---------------------------------------------------------------------------
+# add_params_from_docstring
+# ---------------------------------------------------------------------------
+
+def _sample_function(output_path: str, scale: float = 1.0):
+    """Sample function for CLI testing.
+
+    Parameters
+    ----------
+    output_path : str
+        Path to the output file.
+    scale : float, default=1.0
+        Scale factor applied to the data.
+    """
+    pass
+
+
+def test_add_params_from_docstring_creates_subcommand():
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="cmd")
+    add_params_from_docstring(subparsers, "sample", _sample_function)
+    args = parser.parse_args(["sample", "--output_path", "out.mrc"])
+    assert args.output_path == "out.mrc"
+
+
+def test_add_params_from_docstring_optional_has_default():
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="cmd")
+    add_params_from_docstring(subparsers, "sample", _sample_function)
+    args = parser.parse_args(["sample", "--output_path", "out.mrc"])
+    assert args.scale == pytest.approx(1.0)
+
+
+def test_add_params_from_docstring_optional_overridable():
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="cmd")
+    add_params_from_docstring(subparsers, "sample", _sample_function)
+    args = parser.parse_args(["sample", "--output_path", "out.mrc", "--scale", "2.5"])
+    assert args.scale == pytest.approx(2.5)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry points (smoke tests)
+# ---------------------------------------------------------------------------
+
+def test_wedge_list_exits_without_args():
+    with pytest.raises(SystemExit):
+        from cryocat.cli import wedge_list
+        wedge_list()
+
+
+def test_tm_ana_exits_without_args():
+    with pytest.raises(SystemExit):
+        from cryocat.cli import tm_ana
+        tm_ana()

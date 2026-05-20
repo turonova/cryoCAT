@@ -7,7 +7,25 @@ from pathlib import PureWindowsPath
 
 
 class Mdoc:
-    """Class for reading, writing, and manipulating Mdoc files."""
+    """Class for reading, writing, and manipulating Mdoc files.
+
+    Mdoc files are SerialEM metadata files associated with cryo-electron
+    tomography tilt series.  They store global acquisition parameters in a
+    header section and per-image metadata in numbered image sections.
+
+    Attributes
+    ----------
+    titles : list of str
+        Header title lines (without the surrounding ``[`` ``]`` brackets).
+    project_info : dict
+        Global key–value pairs from the mdoc header (e.g. ``PixelSpacing``,
+        ``Voltage``).
+    imgs : pandas.DataFrame
+        Per-image metadata; one row per tilt image, with a ``Removed``
+        boolean column appended during parsing.
+    section_id : str
+        The section identifier type: either ``'ZValue'`` or ``'FrameSet'``.
+    """
 
     def __init__(self, input_path=None, titles=None, project_info=None, imgs=None, section_id="ZValue"):
         """
@@ -404,6 +422,24 @@ class Mdoc:
 
     @staticmethod
     def _read_mdoc(input_path):
+        """Read and parse an mdoc file into its component parts.
+
+        Parameters
+        ----------
+        input_path : str
+            Path to the ``.mdoc`` file.
+
+        Returns
+        -------
+        titles : list of str
+            Header title lines without surrounding brackets.
+        project_info : dict
+            Global key–value pairs from the header section.
+        imgs : pandas.DataFrame
+            Per-image metadata with a ``Removed`` boolean column.
+        section_id : str
+            Detected section identifier: ``'ZValue'`` or ``'FrameSet'``.
+        """
         with open(input_path, "r") as f:
             lines = f.readlines()
 
@@ -434,6 +470,21 @@ class Mdoc:
 
     @staticmethod
     def _parse_header(header):
+        """Parse raw header lines into title list and project-info dict.
+
+        Parameters
+        ----------
+        header : list of str
+            Non-empty lines from the mdoc header (before the first image
+            section), already stripped of surrounding whitespace.
+
+        Returns
+        -------
+        titles : list of str
+            Lines enclosed in ``[`` ``]``, returned without the brackets.
+        project_info : dict
+            Key–value pairs parsed from non-bracket header lines.
+        """
         titles = []
         project_info = {}
         for line in header:
@@ -449,6 +500,23 @@ class Mdoc:
 
     @staticmethod
     def _parse_images(data, section_id):
+        """Parse image-section lines into a per-image DataFrame.
+
+        Parameters
+        ----------
+        data : list of str
+            All lines from the mdoc file starting at the first image-section
+            header (e.g. ``[ZValue = 0]``).
+        section_id : str
+            The section identifier to split on (``'ZValue'`` or ``'FrameSet'``).
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per image.  The ``section_id`` column and ``TiltAngle``
+            (when present) are cast to their appropriate numeric types, and
+            a ``Removed`` boolean column is appended.
+        """
         # split the lines into sections, each starting with line starting with "[ZValue"
         sections = []
         section = []
@@ -495,6 +563,22 @@ class Mdoc:
 
     @staticmethod
     def _format_value(value):
+        """Convert a raw string value to the most appropriate Python scalar.
+
+        Tries ``int`` first, then ``float``, and falls back to ``str`` when
+        neither conversion succeeds.
+
+        Parameters
+        ----------
+        value : str
+            Raw string value (typically the right-hand side of a
+            ``key = value`` line).
+
+        Returns
+        -------
+        int or float or str
+            The converted value.
+        """
         if value.strip().isdigit():
             formatted = int(value.strip())
         elif value.strip().replace(".", "", 1).isdigit():

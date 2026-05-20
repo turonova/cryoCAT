@@ -12,6 +12,36 @@ from skimage import exposure
 class TiltStack:
 
     def __init__(self, tilt_stack, input_order="xyz", output_order="xyz"):
+        """Load or wrap a tilt series, storing data internally in ``zyx`` order.
+
+        Parameters
+        ----------
+        tilt_stack : str or numpy.ndarray
+            Path to an MRC file or a pre-loaded NumPy array.  When a path is
+            given the file is read via :func:`cryomap.read`.  A 2-D input
+            array is promoted to 3-D (one tilt).
+        input_order : {'xyz', 'zyx'}, default='xyz'
+            Axis convention of the input array.  Ignored when loading from a
+            file (files are always read in ``zyx`` order).  For a 2-D array,
+            determines which axis the singleton tilt dimension is added on.
+        output_order : {'xyz', 'zyx'}, default='xyz'
+            Axis convention used when returning data through
+            :meth:`write_out` and :meth:`correct_order`.
+
+        Attributes
+        ----------
+        data : numpy.ndarray
+            Tilt series stored in ``zyx`` order with shape
+            ``(n_tilts, height, width)``.
+        data_type : numpy.dtype
+            Data type of the loaded array.
+        n_tilts : int
+            Number of tilt images.
+        height : int
+            Height of each tilt image (y dimension in ``zyx``).
+        width : int
+            Width of each tilt image (x dimension in ``zyx``).
+        """
 
         if not isinstance(tilt_stack, np.ndarray):  # if loading necessary, load in zyx
             self.data = cryomap.read(tilt_stack, transpose=False)

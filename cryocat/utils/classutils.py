@@ -57,6 +57,12 @@ def get_class_names_by_parent(parent_class_name: str, module_name: str, filter_c
         Name of the parent class to check against for subclasses.
     module_name : str
         Name of the module to inspect (e.g., 'my_module.submodule').
+    filter_contains : str or list of str, optional
+        Substrings that must be present in a class name to be included.
+        If ``None``, no inclusion filtering is applied.
+    filter_exclude : str or list of str, optional
+        Substrings that must be absent from a class name to be included.
+        If ``None``, no exclusion filtering is applied.
 
     Returns
     -------
@@ -64,6 +70,11 @@ def get_class_names_by_parent(parent_class_name: str, module_name: str, filter_c
         A list of class names that are subclasses of the specified parent class,
         excluding the parent class itself and only including classes defined in
         the specified module.
+
+    Raises
+    ------
+    ValueError
+        If ``parent_class_name`` is not a valid class in the given module.
     """
     module = sys.modules.get(module_name)
     if module is None:

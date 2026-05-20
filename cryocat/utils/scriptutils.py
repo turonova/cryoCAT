@@ -124,25 +124,27 @@ def parse_command_for_gui(command_string, output_dict=None):
 
 
 def process_cluster_params(script_file, cluster_params):
-    """Similar to parse_command but formats parameter names for GUI display
-    by removing dashes and capitalizing.
+    """Write SBATCH directives to a script file from a cluster-parameters mapping.
 
     Parameters
     ----------
-    command_string : str
-        The command line string to parse
-    output_dict : str, optional
-        If provided, writes the parsed dictionary as JSON to this file
+    script_file : file-like object
+        Open writable file object for the script being generated.
+    cluster_params : dict, str, or None
+        SBATCH parameters as a dictionary or a JSON string understood by
+        :func:`cryocat.utils.ioutils.dict_load`. If ``None``, the function
+        is a no-op. Keys that start with ``--`` produce ``#SBATCH key=value``
+        lines; keys that start with ``-`` produce ``#SBATCH key value`` lines.
 
     Returns
     -------
-    dict
-        Dictionary with 'Command' key and formatted parameter structures
+    None
 
     Examples
     --------
-    >>> parse_command_for_gui("program --input file.txt")
-    {'Command': 'program', 'Input': {'value': 'file.txt', 'param': '--input', 'tooltip': ''}}
+    >>> import io
+    >>> buf = io.StringIO()
+    >>> process_cluster_params(buf, None)   # no-op when cluster_params is None
     """
     # Check if cluster_params are specified
     if cluster_params is not None:

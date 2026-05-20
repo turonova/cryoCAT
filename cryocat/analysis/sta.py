@@ -271,7 +271,7 @@ def compute_alignment_statistics(
         Type of the input motl. Defaults to "stopgap".
     filter_rows : array-like, optional
         Rows to filter. Only rows that are within the filter_rows will be kept. Defaults to None which means no filtering.
-    filter_columns : str, default="subtomo_id"
+    filter_column_name : str, default="subtomo_id"
         Column names based on which the filtering is perfomed. If fitler_rows is None, no filtering will be done and
         this parameter will not be used. Defaults to "subtomo_id".
     output_path : str, optional
@@ -554,7 +554,7 @@ def evaluate_multirun_stability(input_motls, input_motl_type="stopgap"):
     ----------
     input_motls: list
         List of input motl files. At least two are required.
-    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
+    input_motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
         Type of the input motl. Defaults to "stopgap".
 
     Returns

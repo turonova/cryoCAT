@@ -444,3 +444,48 @@ class TestGenerateExposure:
         r1 = pana.generate_exposure(exposure_wedgelist, slices, weights, binning=1)
         r4 = pana.generate_exposure(exposure_wedgelist, slices, weights, binning=4)
         assert not np.allclose(r1, r4)
+
+
+# ── generate_ctf ───────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def ctf_wedgelist(simple_wedgelist):
+    wl = simple_wedgelist.copy()
+    wl["tomo_x"] = 8
+    wl["tomo_y"] = 8
+    wl["tomo_z"] = 8
+    wl["pixelsize"] = 1.35
+    wl["defocus"] = 2.0
+    wl["amp_contrast"] = 0.07
+    wl["cs"] = 2.7
+    wl["voltage"] = 300.0
+    return wl
+
+
+class TestGenerateCtf:
+    def test_output_shape(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
+        slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
+        result = pana.generate_ctf(ctf_wedgelist, slices, weights, binning=1)
+        assert result.shape == cubic_filter.shape
+
+    def test_output_nonnegative(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
+        slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
+        result = pana.generate_ctf(ctf_wedgelist, slices, weights, binning=1)
+        assert np.all(result >= 0)
+
+    def test_output_finite(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
+        slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
+        result = pana.generate_ctf(ctf_wedgelist, slices, weights, binning=1)
+        assert np.all(np.isfinite(result))
+
+    def test_binning_affects_result(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
+        slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
+        r1 = pana.generate_ctf(ctf_wedgelist, slices, weights, binning=1)
+        r2 = pana.generate_ctf(ctf_wedgelist, slices, weights, binning=2)
+        assert not np.allclose(r1, r2)
+
+    def test_pshift_column_optional(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
+        wl_no_pshift = ctf_wedgelist.drop(columns=["pshift"], errors="ignore")
+        slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
+        result = pana.generate_ctf(wl_no_pshift, slices, weights, binning=1)
+        assert result.shape == cubic_filter.shape

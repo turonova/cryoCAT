@@ -386,3 +386,171 @@ class TestDescriptor:
         assert result["NNCountTwist"] == "TwistDescriptor"
         assert result["CountSHOT"] == "SHOTDescriptor"
 
+
+# ===========================================================================
+# Particle.tangent_at_identity
+# ===========================================================================
+
+class TestParticleTangentAtIdentity:
+    def test_identity_returns_zero_vector(self, identity_particle):
+        t = identity_particle.tangent_at_identity()
+        assert t.shape == (6,)
+        np.testing.assert_allclose(t, np.zeros(6), atol=1e-10)
+
+    def test_returns_6d_finite_vector(self, simple_particle):
+        t = simple_particle.tangent_at_identity()
+        assert t.shape == (6,)
+        assert np.isfinite(t).all()
+
+
+# ===========================================================================
+# Particle.twist_vector
+# ===========================================================================
+
+class TestParticleTwistVector:
+    def test_identity_twist_self_is_zero(self, identity_particle):
+        tv = identity_particle.twist_vector(identity_particle)
+        np.testing.assert_allclose(tv, np.zeros(6), atol=1e-10)
+
+    def test_returns_6d_vector(self, simple_particle, identity_particle):
+        tv = simple_particle.twist_vector(identity_particle)
+        assert tv.shape == (6,)
+        assert np.isfinite(tv).all()
+
+    def test_invalid_input_raises(self, simple_particle):
+        with pytest.raises(ValueError):
+            simple_particle.twist_vector("not a particle")
+
+
+# ===========================================================================
+# Particle.tangent_subspace_projection
+# ===========================================================================
+
+class TestParticleTangentSubspaceProjection:
+    def test_orientation_returns_3d(self, identity_particle, simple_particle):
+        proj = identity_particle.tangent_subspace_projection(simple_particle, mode="orientation")
+        assert proj.shape == (3,)
+
+    def test_position_returns_3d(self, identity_particle, simple_particle):
+        proj = identity_particle.tangent_subspace_projection(simple_particle, mode="position")
+        assert proj.shape == (3,)
+
+    def test_mixed_returns_6d(self, identity_particle, simple_particle):
+        proj = identity_particle.tangent_subspace_projection(simple_particle, mode="mixed")
+        assert proj.shape == (6,)
+
+    def test_invalid_mode_raises(self, identity_particle, simple_particle):
+        with pytest.raises(ValueError):
+            identity_particle.tangent_subspace_projection(simple_particle, mode="bad_mode")
+
+    def test_invalid_input_raises(self, identity_particle):
+        with pytest.raises(ValueError):
+            identity_particle.tangent_subspace_projection("not a particle")
+
+    @pytest.mark.parametrize("mode", ["orientation", "position", "mixed"])
+    def test_all_valid_modes(self, identity_particle, simple_particle, mode):
+        proj = identity_particle.tangent_subspace_projection(simple_particle, mode=mode)
+        assert np.isfinite(proj).all()
+
+
+# ===========================================================================
+# Particle.add_noise
+# ===========================================================================
+
+class TestParticleAddNoise:
+    def test_orientation_noise_returns_particle(self, simple_particle):
+        noisy = simple_particle.add_noise(noise_level=0.01, mode="orientation")
+        assert isinstance(noisy, Particle)
+        assert noisy.rotation.shape == (3, 3)
+
+    def test_position_noise_changes_position(self, simple_particle):
+        rng = np.random.default_rng(0)
+        np.random.seed(0)
+        noisy = simple_particle.add_noise(noise_level=5.0, mode="position")
+        assert isinstance(noisy, Particle)
+
+    def test_mixed_noise_returns_particle(self, simple_particle):
+        noisy = simple_particle.add_noise(noise_level=0.01, mode="mixed")
+        assert isinstance(noisy, Particle)
+
+    def test_invalid_mode_raises(self, simple_particle):
+        with pytest.raises(ValueError):
+            simple_particle.add_noise(mode="bad_mode")
+
+    @pytest.mark.parametrize("mode", ["orientation", "position", "mixed"])
+    def test_valid_modes(self, simple_particle, mode):
+        noisy = simple_particle.add_noise(noise_level=0.01, mode=mode)
+        assert isinstance(noisy, Particle)
+
+
+# ===========================================================================
+# SymmParticle.similarity_symm
+# ===========================================================================
+
+class TestSymmParticleSimilaritySymm:
+    def test_self_similarity_is_one(self):
+        sp = SymmParticle(np.eye(3), np.zeros(3), symm=4)
+        assert sp.similarity_symm(sp) == pytest.approx(1.0, rel=1e-6)
+
+    def test_mismatched_symmetry_raises(self):
+        sp4 = SymmParticle(np.eye(3), np.zeros(3), symm=4)
+        sp6 = SymmParticle(np.eye(3), np.zeros(3), symm=6)
+        with pytest.raises(ValueError):
+            sp4.similarity_symm(sp6)
+
+    def test_similarity_between_zero_and_one(self):
+        sp1 = SymmParticle(np.eye(3), np.zeros(3), symm=4)
+        angles = np.array([30.0, 0.0, 0.0])
+        rot = R.from_euler("zxz", angles, degrees=True).as_matrix()
+        sp2 = SymmParticle(rot, np.zeros(3), symm=4)
+        sim = sp1.similarity_symm(sp2)
+        assert 0.0 <= sim <= 1.0
+
+    @pytest.mark.parametrize("n", [2, 3, 4, 6])
+    def test_identity_similarity_is_one_for_various_n(self, n):
+        sp = SymmParticle(np.eye(3), np.zeros(3), symm=n)
+        assert sp.similarity_symm(sp) == pytest.approx(1.0, rel=1e-6)
+
+
+# ===========================================================================
+# Descriptor.filter_features
+# ===========================================================================
+
+class TestDescriptorFilterFeatures:
+    @pytest.fixture
+    def desc_with_df(self):
+        d = Descriptor()
+        d.desc = pd.DataFrame({
+            "qp_id": [1, 2, 3],
+            "feat_a": [0.1, 0.2, 0.3],
+            "feat_b": [1.0, 2.0, 3.0],
+        })
+        return d
+
+    def test_all_returns_full_df(self, desc_with_df):
+        result = desc_with_df.filter_features(desc_with_df.desc, feature_ids="all")
+        assert set(result.columns) == set(desc_with_df.desc.columns)
+
+    def test_single_feature_includes_qp_id(self, desc_with_df):
+        result = desc_with_df.filter_features(desc_with_df.desc, feature_ids="feat_a")
+        assert "feat_a" in result.columns
+        assert "qp_id" in result.columns
+        assert "feat_b" not in result.columns
+
+    def test_list_of_features_filters(self, desc_with_df):
+        result = desc_with_df.filter_features(desc_with_df.desc, feature_ids=["feat_a"])
+        assert "feat_a" in result.columns
+        assert "feat_b" not in result.columns
+
+    def test_invalid_string_raises(self, desc_with_df):
+        with pytest.raises(ValueError):
+            desc_with_df.filter_features(desc_with_df.desc, feature_ids="nonexistent_col")
+
+    def test_invalid_type_raises(self, desc_with_df):
+        with pytest.raises(ValueError):
+            desc_with_df.filter_features(desc_with_df.desc, feature_ids=42)
+
+    def test_list_no_valid_features_raises(self, desc_with_df):
+        with pytest.raises(ValueError):
+            desc_with_df.filter_features(desc_with_df.desc, feature_ids=["nonexistent"])
+

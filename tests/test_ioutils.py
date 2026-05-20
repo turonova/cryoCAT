@@ -87,101 +87,46 @@ def test_get_files_prefix_suffix(tmp_path):
     assert result == sorted(["test_file1.txt", "test_file2.txt", "test_data.doc", "test_file1.csv"])
 
 
-# catch TypeError exception, added check for booleans?
-def test_is_float():
-    # valid float inputs
-    assert is_float(3.14) == True
-    assert is_float(0.0) == True
-    assert is_float(-5.67) == True
-    assert is_float("3.14") == True
-    # not valid inputs
-    assert is_float("hello") == False
-    assert is_float(None) == False  # None value
-    assert is_float("123abc") == False
-    assert is_float([]) == False  # raise exception
-    assert is_float({}) == False
-    assert is_float(True) == False
-    assert is_float(False) == False
+@pytest.mark.parametrize("value, expected", [
+    (3.14, True),
+    (0.0, True),
+    (-5.67, True),
+    ("3.14", True),
+    ("hello", False),
+    (None, False),
+    ("123abc", False),
+    ([], False),
+    ({}, False),
+    (True, False),
+    (False, False),
+])
+def test_is_float(value, expected):
+    assert is_float(value) == expected
 
 
-def test_get_filename_from_path():
-    # filename with extension
-    input_path = "/home/user/documents/file.txt"
-    expected = "file.txt"
-    assert get_filename_from_path(input_path) == expected
-    # filename without extension
-    input_path = "/home/user/documents/file.txt"
-    expected = "file"
-    assert get_filename_from_path(input_path, with_extension=False) == expected
-    # filename with no extension
-    input_path = "file"
-    expected = "file"
-    assert get_filename_from_path(input_path) == expected
-    # multiple directories
-    input_path = "/home/user/documents/folder/subfolder/file.txt"
-    expected = "file.txt"
-    assert get_filename_from_path(input_path) == expected
-    # multiple directories without extension
-    input_path = "/home/user/documents/folder/subfolder/file.txt"
-    expected = "file"
-    assert get_filename_from_path(input_path, with_extension=False) == expected
-    # with a file that has no extension
-    input_path = "/home/user/documents/folder/subfolder/no_extension"
-    expected = "no_extension"
-    assert get_filename_from_path(input_path) == expected
-    # containing a dot but no extension
-    input_path = "/home/user/documents/file.withoutextension"
-    expected = "file.withoutextension"
-    assert get_filename_from_path(input_path) == expected
-    # empty path
-    input_path = ""
-    expected = ""
-    assert get_filename_from_path(input_path) == expected
+@pytest.mark.parametrize("path, with_extension, expected", [
+    ("/home/user/documents/file.txt", True, "file.txt"),
+    ("/home/user/documents/file.txt", False, "file"),
+    ("file", True, "file"),
+    ("/home/user/documents/folder/subfolder/file.txt", True, "file.txt"),
+    ("/home/user/documents/folder/subfolder/file.txt", False, "file"),
+    ("/home/user/documents/folder/subfolder/no_extension", True, "no_extension"),
+    ("/home/user/documents/file.withoutextension", True, "file.withoutextension"),
+    ("", True, ""),
+    ("/home/user/documents/special@file#name!.txt", True, "special@file#name!.txt"),
+    ("/home/user/documents/file_éxample.txt", True, "file_éxample.txt"),
+    ("/home/user/documents/.hiddenfile.txt", True, ".hiddenfile.txt"),
+    ("/home/user/documents/....", True, "...."),
+    ("/home/user/documents/file with spaces.txt", True, "file with spaces.txt"),
+    ("/home/user/documents/file.with.many.dots", True, "file.with.many.dots"),
+])
+def test_get_filename_from_path(path, with_extension, expected):
+    assert get_filename_from_path(path, with_extension=with_extension) == expected
 
-    # leading/trailing spaces
-    input_path = "  /home/user/documents/file.txt  "
-    expected = "file.txt"
-    assert get_filename_from_path(input_path.strip()) == expected
 
-    # special characters in the filename
-    input_path = "/home/user/documents/special@file#name!.txt"
-    expected = "special@file#name!.txt"
-    assert get_filename_from_path(input_path) == expected
-    # unicode characters
-    input_path = "/home/user/documents/file_éxample.txt"
-    expected = "file_éxample.txt"
-    assert get_filename_from_path(input_path) == expected
-    # long file path
-    input_path = "/home/user/documents/" + "a" * 255 + ".txt"
-    expected = "a" * 255 + ".txt"
-    assert get_filename_from_path(input_path) == expected
-
-    # multiple dots but no extension
-    input_path = "/home/user/documents/file.with.many.dots"
-    expected = "file.with.many.dots"
-    assert get_filename_from_path(input_path) == expected
-
-    # TO ADD EXCEPTION, to check this edge case
-    # not a string
-    """
-    input_path = None
-    expected = None
-    assert get_filename_from_path(input_path) == expected
-    """
-
-    # edge case
-    input_path = "/home/user/documents/.hiddenfile.txt"
-    expected = ".hiddenfile.txt"
-    assert get_filename_from_path(input_path) == expected
-    # containing only dots
-    input_path = "/home/user/documents/...."
-    expected = "...."
-    assert get_filename_from_path(input_path) == expected
-
-    # spaces in filename
-    input_path = "/home/user/documents/file with spaces.txt"
-    expected = "file with spaces.txt"
-    assert get_filename_from_path(input_path) == expected
+def test_get_filename_from_path_long():
+    long_path = "/home/user/documents/" + "a" * 255 + ".txt"
+    assert get_filename_from_path(long_path) == "a" * 255 + ".txt"
 
 
 def test_get_number_of_lines_with_character():
@@ -212,31 +157,34 @@ def test_get_number_of_lines_with_character():
     os.remove(test_filename)
 
 
-def test_fileformat_replace_pattern():
-    # padding needed
-    assert fileformat_replace_pattern("some_text_$AAA_rest", 79, "A") == "some_text_079_rest"
-    # no padding needed
-    assert fileformat_replace_pattern("file_/$AAA/$B.txt", 123, "A") == "file_/123/$B.txt"
-    # number too big for pattern
+@pytest.mark.parametrize("fmt, number, letter, expected", [
+    ("some_text_$AAA_rest", 79, "A", "some_text_079_rest"),
+    ("file_/$AAA/$B.txt", 123, "A", "file_/123/$B.txt"),
+    ("file_$AA_$BB_end", 7, "A", "file_07_$BB_end"),
+    ("file_$AA_$BB_end", 5, "B", "file_$AA_05_end"),
+    ("path_$AAA/$BB/$CC_$DD.txt", 42, "A", "path_042/$BB/$CC_$DD.txt"),
+    ("path_$AAA/$BB/$CC_$DD.txt", 3, "B", "path_$AAA/03/$CC_$DD.txt"),
+    ("example_$A.txt", 2, "A", "example_2.txt"),
+    ("example_$AA/$A/$B.txt", 2, "A", "example_02/2/$B.txt"),
+])
+def test_fileformat_replace_pattern_valid(fmt, number, letter, expected):
+    assert fileformat_replace_pattern(fmt, number, letter) == expected
+
+
+def test_fileformat_replace_pattern_number_too_large():
     with pytest.raises(ValueError, match=re.escape("Number '12345' has more digits than string '$A'.")):
         fileformat_replace_pattern("file_/$A/$B.txt", 12345, "A")
-    # pattern not present -raise exception
+
+
+def test_fileformat_replace_pattern_missing_letter_raises():
     with pytest.raises(
         ValueError, match=re.escape("The format file_/$A/$B.txt does not contain any sequence of \\$ followed by C.")
     ):
         fileformat_replace_pattern("file_/$A/$B.txt", 123, "C")
-    # no error if pattern is absent and raise_error false
+
+
+def test_fileformat_replace_pattern_missing_letter_no_raise():
     assert fileformat_replace_pattern("file_/$A/$B.txt", 123, "C", raise_error=False) == "file_/$A/$B.txt"
-    # other multiple cases
-    assert fileformat_replace_pattern("file_$AA_$BB_end", 7, "A") == "file_07_$BB_end"
-    assert fileformat_replace_pattern("file_$AA_$BB_end", 5, "B") == "file_$AA_05_end"
-    # complex input and multiple patterns
-    assert fileformat_replace_pattern("path_$AAA/$BB/$CC_$DD.txt", 42, "A") == "path_042/$BB/$CC_$DD.txt"
-    assert fileformat_replace_pattern("path_$AAA/$BB/$CC_$DD.txt", 3, "B") == "path_$AAA/03/$CC_$DD.txt"
-    # single letter
-    assert fileformat_replace_pattern("example_$A.txt", 2, "A") == "example_2.txt"
-    # more than 1 pattern, what happens
-    assert fileformat_replace_pattern("example_$AA/$A/$B.txt", 2, "A") == "example_02/2/$B.txt"
 
 
 # Doesn't handle reading floats and booleans
@@ -4221,6 +4169,55 @@ def test_relion_ctffind4_read():
     file_path = Path(__file__).parent / "test_data" / "dc02t01_ctf.star"
     result = ioutils.defocus_load(input_data=str(file_path), file_type="relion_ctffind4")
     print(result)
+
+
+# ---------------------------------------------------------------------------
+# extract_defocus_data
+# ---------------------------------------------------------------------------
+
+def test_extract_defocus_data_basic():
+    df = pd.DataFrame({
+        "rlnDefocusU": [20000.0, 22000.0],
+        "rlnDefocusV": [19000.0, 21000.0],
+        "rlnDefocusAngle": [45.0, 90.0],
+        "rlnPhaseShift": [0.0, 1.0],
+    })
+    result = extract_defocus_data(df, "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", phase_col="rlnPhaseShift")
+    assert list(result.columns) == ["defocus1", "defocus2", "astigmatism", "phase_shift", "defocus_mean"]
+    assert len(result) == 2
+    np.testing.assert_allclose(result["astigmatism"].values, [45.0, 90.0])
+    np.testing.assert_allclose(result["phase_shift"].values, [0.0, 1.0])
+
+
+def test_extract_defocus_data_no_phase_col():
+    df = pd.DataFrame({
+        "defU": [10000.0],
+        "defV": [11000.0],
+        "angle": [30.0],
+    })
+    result = extract_defocus_data(df, "defU", "defV", "angle")
+    assert (result["phase_shift"] == 0.0).all()
+
+
+def test_extract_defocus_data_missing_phase_col_in_df():
+    df = pd.DataFrame({
+        "rlnDefocusU": [10000.0],
+        "rlnDefocusV": [10000.0],
+        "rlnDefocusAngle": [0.0],
+    })
+    result = extract_defocus_data(df, "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", phase_col="rlnPhaseShift")
+    assert (result["phase_shift"] == 0.0).all()
+
+
+def test_extract_defocus_data_mean_is_average():
+    df = pd.DataFrame({
+        "u": [20000.0],
+        "v": [10000.0],
+        "a": [0.0],
+    })
+    result = extract_defocus_data(df, "u", "v", "a")
+    expected_mean = (result["defocus1"].iloc[0] + result["defocus2"].iloc[0]) / 2.0
+    np.testing.assert_allclose(result["defocus_mean"].iloc[0], expected_mean)
 
 
 # ── df_load ───────────────────────────────────────────────────────────────────

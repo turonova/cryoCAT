@@ -441,13 +441,15 @@ def warp_ctf_read(input_path):
 
     Parameters
     ----------
-    input_path: str
+    input_path : str
         Path to the input WARP XML file.
 
-    Returns:
+    Returns
+    -------
     pandas.DataFrame
-        DataFrame containing the columns "defocus1", "defocus2", "astigmatism",
-        "phase_shift", "defocus_mean". All defocii values are in micrometers. The phase shift is in radians.
+        DataFrame with columns ``defocus1``, ``defocus2``, ``astigmatism``,
+        ``phase_shift``, and ``defocus_mean``. All defocus values are in
+        micrometers; phase shift is in radians.
     """
 
     df_columns = ["defocus1", "defocus2", "astigmatism", "phase_shift", "defocus_mean"]

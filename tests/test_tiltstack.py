@@ -1,4 +1,3 @@
-import matplotlib.pyplot as plt
 from cryocat.utils.ioutils import fileformat_replace_pattern
 from cryocat.core.tiltstack import *
 from pathlib import Path
@@ -222,20 +221,6 @@ def test_dose_filter_single_image():
     assert not np.allclose(image, filtered_image)
     assert not np.allclose(filtered_image, expected_result)
 
-    # plot the original, filtered, and expected images
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    axs[0].imshow(image, cmap='gray')
-    axs[0].set_title("Original Image")
-    axs[0].axis('off')
-    axs[1].imshow(filtered_image, cmap='gray')
-    axs[1].set_title("Filtered Image (Dose Filter)")
-    axs[1].axis('off')
-    axs[2].imshow(expected_result, cmap='gray')
-    axs[2].set_title("Expected Result (Gaussian Filter)")
-    axs[2].axis('off')
-    plt.tight_layout()
-    plt.show()
-
     #Test intermediate steps
     #Test fourier inverse
     image = np.random.rand(64, 64)
@@ -368,80 +353,43 @@ def test_deconvolve():
     assert np.allclose(output_mrc, expected_mrc, atol=1e-5)
     output_numpy = deconvolve(synthetic_input, pixel_size_a=3.42, defocus=4)
 
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.imshow(synthetic_input[0], cmap="gray")
-    plt.title("Original Tilt Image")
-    plt.subplot(1, 2, 2)
-    plt.imshow(output_numpy[0], cmap="gray")
-    plt.title("Deconvolved Tilt Image")
-    plt.show()
-
     assert output_numpy.shape == synthetic_input.shape
     assert np.isfinite(output_numpy).all()
     assert not np.allclose(output_numpy, synthetic_input)
     assert output_numpy.dtype == synthetic_input.dtype
     assert np.max(output_numpy) <= np.max(synthetic_input) * 2
 
-    input_fft = np.abs(np.fft.fftshift(np.fft.fftn(synthetic_input)))
-    output_fft = np.abs(np.fft.fftshift(np.fft.fftn(output_numpy)))
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.imshow(np.log1p(np.mean(input_fft, axis=0)), cmap="inferno")
-    plt.title("FFT Input")
-    plt.subplot(1, 2, 2)
-    plt.imshow(np.log1p(np.mean(output_fft, axis=0)), cmap="inferno")
-    plt.title("FFT Output (Deconvolved)")
-    plt.show()
-
-def test_equalize_histogram():
-    def plot_histograms(original, processed, title):
-        fig, ax = plt.subplots(1, 2, figsize=(12, 4))
-        ax[0].hist(original.ravel(), bins=256, color='blue', alpha=0.6, label='Original')
-        ax[1].hist(processed.ravel(), bins=256, color='red', alpha=0.6, label='Processed')
-        ax[0].set_title("Original Histogram")
-        ax[1].set_title(title)
-        ax[0].legend()
-        ax[1].legend()
-        plt.show()
-
-    def check_statistics(original, processed):
-        print("Original Min:", original.min(), "Processed Min:", processed.min())
-        print("Original Max:", original.max(), "Processed Max:", processed.max())
-        print("Original Mean:", original.mean(), "Processed Mean:", processed.mean())
-        print("Original Std:", original.std(), "Processed Std:", processed.std())
-
+def test_equalize_histogram_invalid_method():
     with pytest.raises(ValueError):
         equalize_histogram(
             tilt_stack=tilt_stack_path,
             output_path=tilt_stack_1_path,
             eh_method="notvalid"
         )
+
+
+@pytest.mark.parametrize("method", ["contrast_stretching", "equalization", "adaptive_eq"])
+def test_equalize_histogram(method):
     synthetic_input = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
     synthetic_data = TiltStack(synthetic_input).data
-    for method in ["contrast_stretching", "equalization", "adaptive_eq"]:
-        output_data = equalize_histogram(synthetic_input, eh_method=method)
-        output_data = TiltStack(output_data).data
-        assert output_data.shape == synthetic_data.shape, "Output shape mismatch"
-        assert output_data.dtype == synthetic_data.dtype, "Output data type mismatch"
-        assert np.isfinite(output_data).all(), "Output contains NaN or Inf values"
-        assert not np.allclose(output_data, synthetic_data), "Output is too similar to input"
+    output_data = equalize_histogram(synthetic_input, eh_method=method)
+    output_data = TiltStack(output_data).data
+    assert output_data.shape == synthetic_data.shape
+    assert output_data.dtype == synthetic_data.dtype
+    assert np.isfinite(output_data).all()
+    assert not np.allclose(output_data, synthetic_data)
 
-        plot_histograms(synthetic_data[0], output_data[0], f"{method} Histogram")
-        check_statistics(synthetic_data[0], output_data[0])
+    if method == "equalization":
+        hist_input, _ = np.histogram(synthetic_data.flatten(), bins=256)
+        hist_output, _ = np.histogram(output_data.flatten(), bins=256)
+        assert np.std(hist_output) < np.std(hist_input)
 
-        if method == "equalization":
-            hist_input, _ = np.histogram(synthetic_data.flatten(), bins=256)
-            hist_output, _ = np.histogram(output_data.flatten(), bins=256)
-            assert np.std(hist_output) < np.std(hist_input), "Histogram should be more uniform"
+    if method == "contrast_stretching":
+        assert np.min(output_data.astype(np.float64)) == 0
+        assert np.max(output_data.astype(np.float64)) == 1
 
-        if method == "contrast_stretching":
-            assert np.min(output_data.astype(np.float64)) == 0, "Contrast stretching failed (min)"
-            assert np.max(output_data.astype(np.float64)) == 1, "Contrast stretching failed (max)"
-
-        if method == "adaptive_eq":
-            assert np.all(output_data >= 0) and np.all(
-                output_data <= 1), "Adaptive equalization failed normalization check"
+    if method == "adaptive_eq":
+        assert np.all(output_data >= 0) and np.all(output_data <= 1)
 
 def test_cleanup():
     if os.path.exists(tilt_stack_1_path):

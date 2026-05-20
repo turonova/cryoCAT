@@ -136,6 +136,12 @@ class Particle:
         self.id = check_type(particle_id, "particle_id")
 
     def __str__(self):
+        """Return a string representation showing the rotation-translation matrix, tomo_id, and motl_fid.
+
+        Returns
+        -------
+        str
+        """
 
         rototranslation = np.hstack((self.rotation, self.position.reshape(-1, 1)))
 
@@ -151,6 +157,23 @@ class Particle:
         # return f"Particle at position \n{self.position} \nwith orientation\n{self.rotation}"
 
     def __mul__(self, other):
+        """Compose two particles via group multiplication in SE(3).
+
+        Parameters
+        ----------
+        other : Particle
+            Right-hand factor.
+
+        Raises
+        ------
+        ValueError
+            If ``other`` is not a :class:`Particle`.
+
+        Returns
+        -------
+        Particle
+            New particle representing ``self * other``.
+        """
         if isinstance(other, Particle):
             rot_product = self.rotation @ other.rotation
             pos_product = self.rotation @ other.position + self.position
@@ -159,6 +182,22 @@ class Particle:
             raise ValueError("Invalid input. Both factors need to be Particle objects.")
 
     def __eq__(self, other):
+        """Test approximate equality of rotation and exact equality of position.
+
+        Parameters
+        ----------
+        other : Particle
+            Particle to compare against.
+
+        Raises
+        ------
+        ValueError
+            If ``other`` is not a :class:`Particle`.
+
+        Returns
+        -------
+        bool
+        """
         if isinstance(other, Particle):
             rot_1 = R.from_matrix(self.rotation)
             rot_2 = R.from_matrix(other.rotation)
@@ -169,6 +208,12 @@ class Particle:
             raise ValueError("Invalid input. Both objects need to be Particle objects.")
 
     def __hash__(self):
+        """Hash based on rotation, position, and tomo_id.
+
+        Returns
+        -------
+        int
+        """
 
         rot_part = tuple(self.rotation.flatten())
         pos_part = tuple(self.position)
@@ -176,8 +221,13 @@ class Particle:
         return hash((rot_part, pos_part, self.tomo_id))
 
     def inv(self):
-        """
-        Compute inverse of input particle.
+        """Compute the group inverse of this particle in SE(3).
+
+        Returns
+        -------
+        Particle
+            New particle whose rotation is ``self.rotation.T`` and whose
+            position satisfies ``inv * self == identity``.
         """
         rot_new = self.rotation.T
         pos_new = -rot_new @ self.position
@@ -223,30 +273,38 @@ class Particle:
             raise TypeError("'scaling_factor' needs to be of type int or float.")
 
     def tangent_at_identity(self):
-        """
-        Compute tangent from identity in SE(3) pointing in direction of
-        self.
+        """Compute the tangent vector at the identity pointing toward ``self``.
+
+        Concretely returns ``logm(self.rotation)`` assembled into a 6-element
+        twist vector ``[so3_x, so3_y, so3_z, tx, ty, tz]``.
 
         Returns
         -------
-        numpy ndarray (6,)
+        numpy.ndarray of shape (6,)
+            SE(3) twist vector at the identity.
         """
         log = logm(self.rotation)
         log = log.real
         return Matrix(log).twist_from_skew_translation(self.position)
 
     def twist_vector(self, other):
-        """
-        Compute twist vector describing relative pose of input particles.
+        """Compute the twist vector describing the relative pose from ``self`` to ``other``.
+
+        Parameters
+        ----------
+        other : Particle
+            The target particle.
 
         Raises
         ------
         ValueError
-            If the input is not a Particle object.
+            If ``other`` is not a :class:`Particle` instance.
 
         Returns
         -------
-        numpy ndarray (6,)
+        numpy.ndarray of shape (6,)
+            SE(3) twist vector from ``self`` to ``other`` expressed in the
+            local frame of ``self``.
         """
         if isinstance(other, Particle):
             shift = self.inv()
@@ -433,18 +491,22 @@ class Particle:
 
     @classmethod
     def random(cls, x_range, y_range, z_range):
-        """
-        Generates a random particle with a translation vector position within bounds.
+        """Generate a random particle with position uniformly drawn from the given ranges.
 
         Parameters
         ----------
-        - x_range: Tuple of (min_x, max_x)
-        - y_range: Tuple of (min_y, max_y)
-        - z_range: Tuple of (min_z, max_z)
+        x_range : tuple of float
+            ``(min_x, max_x)`` bounds for the x position.
+        y_range : tuple of float
+            ``(min_y, max_y)`` bounds for the y position.
+        z_range : tuple of float
+            ``(min_z, max_z)`` bounds for the z position.
 
         Returns
         -------
         Particle
+            A new particle with a random SO(3) rotation and a position drawn
+            uniformly within the specified ranges.
         """
         x = np.random.uniform(x_range[0], x_range[1])
         y = np.random.uniform(y_range[0], y_range[1])
@@ -485,38 +547,36 @@ class SymmParticle(Particle):
     """
 
     def __init__(self, rotation, position, tomo_id=None, motl_fid=None, particle_id=None, symm=None, custom_rot=None):
-        """
-        Initialize Particle with a rotation and a position.
+        """Initialize a SymmParticle with rotation, position, and symmetry.
 
-        The input rotation can be:
-        - A scipy Rotation object
-        - Euler angles (sequence of three floats in 'zxz' convention)
-        - A unit quaternion (4-element array-like)
-        - A rotation matrix (3x3 array-like)
-        The input position can be:
-        - A numpy.ndarray of size 3
-        The input tomo_id (optional) can be:
-        - An integer
-        - Default is None
-        The input motl_fid (optional) can be:
-        - A float/ an int
-        - Default is None
-        The input particle_id (optional) can be:
-        - A float/ an int
-        - Default is None
-        The input symm (optional) can be:
-        - A string containing one of ['tetra', 'octa', 'cube', 'ico', 'dodeca']
-        - An integer n > 1 referring to C_n symmetry
-        - Default is None
-        The input custom_rot (optional) can be a rotation matrix for the case that
-        the given particle symmetry does not align with the canonical options
-        for platonic solids presented here. This is not needed in the case where sym == n >1.
-        Default is None.
+        Parameters
+        ----------
+        rotation : R, list, tuple, np.ndarray
+            Rotation as a scipy.Rotation object, Euler angles (3 values, 'zxz'
+            convention), a unit quaternion (4 values), or a 3×3 rotation matrix.
+        position : np.ndarray
+            1-D array of size 3 representing the particle position.
+        tomo_id : int, optional
+            Tomogram identifier.  Default is None.
+        motl_fid : str, optional
+            Column name used as an additional label.  Default is None.
+        particle_id : int, optional
+            Particle identifier.  Default is None.
+        symm : str or int, optional
+            Symmetry specification.  Accepted strings: ``'tetra'``, ``'octa'``,
+            ``'cube'``, ``'ico'``, ``'dodeca'`` for Platonic solids, or ``'cN'``
+            for cyclic C_N symmetry.  An integer ``n > 1`` specifies cyclic C_n
+            symmetry.  Default is None.
+        custom_rot : np.ndarray or scipy.spatial.transform.Rotation, optional
+            Rotation applied to Platonic-solid vertices before orienting them
+            with the particle rotation.  Not needed for cyclic (integer) symmetry.
+            Default is None.
 
         Raises
         ------
         ValueError
-            If the symmetry type is invalid or if the custom rotation is not a valid rotation object or matrix.
+            If the symmetry type is invalid or ``custom_rot`` is not a valid
+            rotation object or matrix.
         """
         super().__init__(rotation, position, tomo_id, motl_fid, particle_id=particle_id)
 
@@ -1275,18 +1335,17 @@ class TwistDescriptor(Descriptor):
         return self.df[item]
 
     def write_out(self, output_path):
-        """
-        Save self.df to CSV or Pickle depending on file extension.
-
-        Raises
-        ------
-        ValueError
-            If the file type is not supported.
+        """Save ``self.df`` to CSV or Pickle depending on the file extension.
 
         Parameters
         ----------
         output_path : str
-            File path. Must end with `.csv` or `.pkl`.
+            Destination file path.  Must end with ``.csv`` or ``.pkl``.
+
+        Raises
+        ------
+        ValueError
+            If the file extension is not ``.csv`` or ``.pkl``.
         """
         if output_path.endswith(".csv"):
             self.df.to_csv(output_path, index=False)
@@ -1297,18 +1356,21 @@ class TwistDescriptor(Descriptor):
 
     @staticmethod
     def read_in(input_path):
-        """
-        Reads in a pandas DataFrame from a CSV or Pickle file depending on file extension.
-
-        Raises
-        ------
-        ValueError
-            If the file type is not supported.
+        """Read a pandas DataFrame from a CSV or Pickle file.
 
         Parameters
         ----------
         input_path : str
-            File path. Must end with `.csv` or `.pkl`.
+            Source file path.  Must end with ``.csv`` or ``.pkl``.
+
+        Raises
+        ------
+        ValueError
+            If the file extension is not ``.csv`` or ``.pkl``.
+
+        Returns
+        -------
+        pandas.DataFrame
         """
         if input_path.endswith(".csv"):
             return pd.read_csv(input_path)
@@ -1319,18 +1381,22 @@ class TwistDescriptor(Descriptor):
 
     @classmethod
     def load(cls, input_data):
-        """
-        Create a TwistDescriptor object from input data
-
-        Raises
-        ------
-        ValueError
-            If the input data is not a valid type (TwistDescriptor or str).
+        """Create a :class:`TwistDescriptor` from a file path or an existing instance.
 
         Parameters
         ----------
         input_data : str or TwistDescriptor
-            File path or TwistDescriptor object.
+            A file path (``.csv`` or ``.pkl``) or an existing
+            :class:`TwistDescriptor` object (which is deep-copied).
+
+        Raises
+        ------
+        ValueError
+            If ``input_data`` is neither a :class:`TwistDescriptor` nor a ``str``.
+
+        Returns
+        -------
+        TwistDescriptor
         """
 
         if isinstance(input_data, TwistDescriptor):

@@ -228,8 +228,9 @@ class TestEvaluateScoresMap:
         with pytest.raises(ValueError):
             tmana.evaluate_scores_map(block_volume, threshold_type="invalid")
 
-    def test_returns_five_values_hard_central(self, block_volume):
-        result = tmana.evaluate_scores_map(block_volume, label_type="central", threshold_type="hard")
+    @pytest.mark.parametrize("threshold_type", ["hard", "triangle", "gauss"])
+    def test_returns_five_values(self, block_volume, threshold_type):
+        result = tmana.evaluate_scores_map(block_volume, label_type="central", threshold_type=threshold_type)
         assert len(result) == 5
 
     def test_peak_height_positive(self, block_volume):
@@ -254,9 +255,10 @@ class TestEvaluateScoresMap:
         )
         assert surface == []
 
-    def test_thresholded_map_shape_matches_input(self, block_volume):
+    @pytest.mark.parametrize("threshold_type", ["hard", "triangle", "gauss"])
+    def test_thresholded_map_shape_matches_input(self, block_volume, threshold_type):
         _, _, _, th_map, _ = tmana.evaluate_scores_map(
-            block_volume, label_type="central", threshold_type="hard"
+            block_volume, label_type="central", threshold_type=threshold_type
         )
         assert th_map.shape == block_volume.shape
 
@@ -382,3 +384,107 @@ class TestScoresExtractParticles:
         )
         assert len(motl.df) == 1
         assert motl.df["score"].iloc[0] == pytest.approx(0.9)
+
+
+# ── compute_gaussian_threshold ────────────────────────────────────────────────
+
+class TestComputeGaussianThreshold:
+    @pytest.fixture
+    def gaussian_volume(self):
+        """30x30x30 volume with a 4x4x4 block of 1s at the centre."""
+        vol = np.zeros((30, 30, 30))
+        vol[13:17, 13:17, 13:17] = 1.0
+        return vol
+
+    def test_returns_finite_float(self, gaussian_volume):
+        result = tmana.compute_gaussian_threshold(gaussian_volume)
+        assert isinstance(result, float)
+        assert np.isfinite(result)
+
+    def test_threshold_positive(self, gaussian_volume):
+        result = tmana.compute_gaussian_threshold(gaussian_volume)
+        assert result > 0
+
+    def test_threshold_plausible_magnitude(self, gaussian_volume):
+        result = tmana.compute_gaussian_threshold(gaussian_volume)
+        assert result < 10 * gaussian_volume.max()
+
+
+# ── get_ellipsoid_label ───────────────────────────────────────────────────────
+
+class TestGetEllipsoidLabel:
+    @pytest.fixture
+    def blob_volume(self):
+        """30x30x30 volume with a 10x10x10 cube at [10:20, 10:20, 10:20]."""
+        vol = np.zeros((30, 30, 30))
+        vol[10:20, 10:20, 10:20] = 1.0
+        return vol
+
+    def test_returns_four_values(self, blob_volume):
+        result = tmana.get_ellipsoid_label(blob_volume, (15, 15, 15))
+        assert len(result) == 4
+
+    def test_fitted_label_shape(self, blob_volume):
+        fitted_label, _, _, _ = tmana.get_ellipsoid_label(blob_volume, (15, 15, 15))
+        assert fitted_label.shape == blob_volume.shape
+
+    def test_radii_shape(self, blob_volume):
+        _, radii, _, _ = tmana.get_ellipsoid_label(blob_volume, (15, 15, 15))
+        assert radii.shape == (3,)
+
+    def test_radii_positive(self, blob_volume):
+        _, radii, _, _ = tmana.get_ellipsoid_label(blob_volume, (15, 15, 15))
+        assert np.all(radii > 0)
+
+    def test_surface_fit_shape(self, blob_volume):
+        _, _, surface_fit, _ = tmana.get_ellipsoid_label(blob_volume, (15, 15, 15))
+        assert surface_fit.shape == blob_volume.shape
+
+    def test_th_map_shape(self, blob_volume):
+        _, _, _, th_map = tmana.get_ellipsoid_label(blob_volume, (15, 15, 15))
+        assert th_map.shape == blob_volume.shape
+
+    def test_th_map_binary(self, blob_volume):
+        _, _, _, th_map = tmana.get_ellipsoid_label(blob_volume, (15, 15, 15))
+        assert set(np.unique(th_map)).issubset({0.0, 1.0})
+
+    def test_custom_threshold_background(self):
+        vol = np.zeros((30, 30, 30))
+        vol[10:20, 10:20, 10:20] = 2.0
+        fitted_label, _, _, _ = tmana.get_ellipsoid_label(vol, (15, 15, 15), map_threshold=0.0)
+        assert fitted_label.shape == vol.shape
+
+
+# ── get_central_plane_labels ──────────────────────────────────────────────────
+
+class TestGetCentralPlaneLabels:
+    @pytest.fixture
+    def cubic_blob(self):
+        """20x20x20 volume with a 4x4x4 cube at [8:12, 8:12, 8:12]."""
+        vol = np.zeros((20, 20, 20))
+        vol[8:12, 8:12, 8:12] = 1.0
+        return vol
+
+    def test_returns_two_values(self, cubic_blob):
+        result = tmana.get_central_plane_labels(cubic_blob, (10, 10, 10))
+        assert len(result) == 2
+
+    def test_mask_shape_matches_input(self, cubic_blob):
+        mask, _ = tmana.get_central_plane_labels(cubic_blob, (10, 10, 10))
+        assert mask.shape == cubic_blob.shape
+
+    def test_mask_is_binary(self, cubic_blob):
+        mask, _ = tmana.get_central_plane_labels(cubic_blob, (10, 10, 10))
+        assert set(np.unique(mask)).issubset({0.0, 1.0})
+
+    def test_half_lengths_are_three_values(self, cubic_blob):
+        _, half_lengths = tmana.get_central_plane_labels(cubic_blob, (10, 10, 10))
+        assert len(half_lengths) == 3
+
+    def test_half_lengths_positive(self, cubic_blob):
+        _, half_lengths = tmana.get_central_plane_labels(cubic_blob, (10, 10, 10))
+        assert all(h > 0 for h in half_lengths)
+
+    def test_mask_nonzero_near_peak(self, cubic_blob):
+        mask, _ = tmana.get_central_plane_labels(cubic_blob, (10, 10, 10))
+        assert mask.sum() > 0

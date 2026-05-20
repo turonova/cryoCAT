@@ -7,12 +7,39 @@ import warnings
 
 
 def _try_numeric(col):
-    """Convert a Series to numeric, returning the original Series if any value cannot be converted."""
+    """Convert a Series to numeric, returning the original if any value cannot be converted.
+
+    Parameters
+    ----------
+    col : pandas.Series
+        Input column to attempt numeric conversion on.
+
+    Returns
+    -------
+    pandas.Series
+        Numeric series if all values are convertible, otherwise the original series.
+    """
     result = pd.to_numeric(col, errors="coerce")
     return result if result.notna().all() else col
 
 
 class TokenType(Enum):
+    """Categories of lexical tokens produced by :meth:`Token.tokenize`.
+
+    Members
+    -------
+    LITERAL : 0
+        A plain data value or data-block specifier.
+    NEWLINE : 1
+        A line boundary (emitted once per input line).
+    COMMENT : 2
+        Text following a ``#`` character on a line.
+    LOOP : 3
+        The ``loop_`` keyword that begins a tabular data block.
+    PROPERTY : 4
+        A column-name token starting with ``_``.
+    """
+
     LITERAL = 0
     NEWLINE = 1
     COMMENT = 2
@@ -28,6 +55,17 @@ class Token:
     """
 
     def __init__(self, token_type: TokenType, value, location):
+        """
+        Parameters
+        ----------
+        token_type : TokenType
+            Category of this token.
+        value : str or None
+            String payload of the token (``None`` for NEWLINE tokens).
+        location : tuple of int
+            Zero-based ``(line, column)`` in the source text; stored as
+            the 1-based ``(line+1, column+1)`` pair in ``self.location``.
+        """
         self.token_type = token_type
         self.value = value
         self.location = (location[0] + 1, location[1] + 1)

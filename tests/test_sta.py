@@ -1,15 +1,10 @@
 import tempfile
 import os
-import pandas as pd
-import pytest
-from cryocat.analysis.sta import *
 import pytest
 import pandas as pd
 import numpy as np
+from cryocat.analysis.sta import *
 from cryocat.core import cryomotl
-import tempfile
-import os
-
 from cryocat.core.cryomotl import StopgapMotl
 
 
@@ -85,24 +80,40 @@ def test_get_stable_particles(sg_real_mock):
             assert particle_id not in stable_particles
 
 
-def test_get_motl_extension():
-    assert get_motl_extension("stopgap") == ".star"
-    assert get_motl_extension("relion") == ".star"
-    assert get_motl_extension("emmotl") == ".em"
+@pytest.mark.parametrize("motl_type,expected", [
+    ("stopgap", ".star"),
+    ("relion", ".star"),
+    ("emmotl", ".em"),
+])
+def test_get_motl_extension(motl_type, expected):
+    assert get_motl_extension(motl_type) == expected
 
-    try:
+
+def test_get_motl_extension_invalid():
+    with pytest.raises(ValueError):
         get_motl_extension("unsupported_type")
-    except ValueError as e:
-        assert "unsupported" in str(e).lower()
 
 
-def test_get_motl_filename():
-    assert get_motl_filename("run_", 1, "stopgap") == "run_1.star"
-    assert get_motl_filename("run_", 10, "emmotl") == "run_10.em"
+@pytest.mark.parametrize("base,it,motl_type,expected", [
+    ("run_", 1, "stopgap", "run_1.star"),
+    ("run_", 10, "emmotl", "run_10.em"),
+    ("run_it", 1, "relion", "run_it001_data.star"),
+    ("run_it", 12, "relion5", "run_it012_data.star"),
+    ("run_it", 999, "relion5_1", "run_it999_data.star"),
+])
+def test_get_motl_filename(base, it, motl_type, expected):
+    assert get_motl_filename(base, it, motl_type) == expected
 
-    assert get_motl_filename("run_it", 1, "relion") == "run_it001_data.star"
-    assert get_motl_filename("run_it", 12, "relion5") == "run_it012_data.star"
-    assert get_motl_filename("run_it", 999, "relion5_1") == "run_it999_data.star"
+
+def test_write_out_motl(sg_mock):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        df = pd.DataFrame(sg_mock)
+        motl = cryomotl.StopgapMotl(df)
+        base = os.path.join(tmpdir, "output")
+        write_out_motl(motl, base, "stopgap")
+        assert os.path.exists(base + ".star")
+        with pytest.raises(ValueError):
+            write_out_motl(motl, os.path.join(tmpdir, "bad"), "unsupported_type")
 
 
 def test_get_class_occupancy_relion():
