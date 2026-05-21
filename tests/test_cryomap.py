@@ -1346,3 +1346,24 @@ def test_calculate_masked_fsc_errors(error_case, map_a, map_b, extra_kwargs, tmp
         kwargs["output_path"] = str(tmp_path / kwargs["output_path"])
     with pytest.raises(ValueError):
         calculate_masked_fsc(map_a, map_b, n_repeats=0, **kwargs)
+
+
+def test_rotate_output_kwargs_forwarded(tmp_path):
+    volume = np.zeros((16, 16, 16), dtype=np.float32)
+    volume[8, 8, 8] = 1.0
+    out = str(tmp_path / "out.mrc")
+    rotate(volume, rotation_angles=[0, 0, 0], output_path=out, pixel_size=3.14)
+    _, ps, _ = get_metadata(out)
+    assert abs(ps - 3.14) < 0.01
+
+
+def test_rotate_raises_without_output_path():
+    volume = np.zeros((16, 16, 16), dtype=np.float32)
+    with pytest.raises(ValueError, match="output_path"):
+        rotate(volume, rotation_angles=[0, 0, 0], pixel_size=2.7)
+
+
+def test_rotate_no_output_no_kwargs():
+    volume = np.zeros((16, 16, 16), dtype=np.float32)
+    result = rotate(volume, rotation_angles=[0, 0, 0])
+    assert result.shape == volume.shape

@@ -67,7 +67,7 @@ class TiltStack:
 
         self.n_tilts, self.height, self.width = self.data.shape
 
-    def write_out(self, output_path, new_data=None):
+    def write_out(self, output_path, new_data=None, **output_kwargs):
         """Writes data to a specified output file.
 
         Parameters
@@ -76,6 +76,8 @@ class TiltStack:
             The path to the output file where data will be written.
         new_data : optional
             The data to write to the output file. If not provided, the method will use the instance's data. Default is None.
+        **output_kwargs
+            Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
         Returns
         -------
@@ -88,7 +90,9 @@ class TiltStack:
 
         if output_path:
             data_to_write = new_data if new_data is not None else self.data
-            cryomap.write(data_to_write, output_path, data_type=self.data_type, transpose=False)
+            write_kw = {"data_type": self.data_type, "transpose": False}
+            write_kw.update(output_kwargs)
+            cryomap.write(data_to_write, output_path, **write_kw)
 
     def correct_order(self, new_data=None):
         """Corrects the order of the data and ensures it is of the correct type.
@@ -123,7 +127,7 @@ class TiltStack:
             return return_data
 
 
-def crop(tilt_stack, new_width=None, new_height=None, output_path=None, input_order="xyz", output_order="xyz"):
+def crop(tilt_stack, new_width=None, new_height=None, output_path=None, input_order="xyz", output_order="xyz", **output_kwargs):
     """Crop a tilt stack to a specified width and height, and optionally save the result to a file.
 
     Parameters
@@ -141,6 +145,8 @@ def crop(tilt_stack, new_width=None, new_height=None, output_path=None, input_or
     output_order : str, default='xyz'
         The order of the output data dimensions. It does not influence order for writing the stack out, just of the
         returned array. Defaults to 'xyz'.
+    **output_kwargs
+        Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
     Returns
     -------
@@ -152,6 +158,9 @@ def crop(tilt_stack, new_width=None, new_height=None, output_path=None, input_or
     The cropping is performed around the center of the original tilt stack. The function modifies the tilt stack in
     place and saves the cropped data if an output file is specified.
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError("output_kwargs provided but output_path is None.")
 
     print(f"Cropping of the tilt stack started...")
 
@@ -183,14 +192,14 @@ def crop(tilt_stack, new_width=None, new_height=None, output_path=None, input_or
     # crop the actual images
     ts.data = ts.data[:, start_h:end_h, start_w:end_w]
 
-    ts.write_out(output_path)
+    ts.write_out(output_path, **output_kwargs)
 
     print(f"...cropping of the tilt stack successfully finished. New dimensions are {end_w-start_w}, {end_h-start_h}\n")
 
     return ts.correct_order()
 
 
-def sort_tilts_by_angle(tilt_stack, input_tilts, output_path=None, input_order="xyz", output_order="xyz"):
+def sort_tilts_by_angle(tilt_stack, input_tilts, output_path=None, input_order="xyz", output_order="xyz", **output_kwargs):
     """Sorts a stack of tilts by their angles and optionally writes the sorted data to a file.
 
     Parameters
@@ -206,6 +215,8 @@ def sort_tilts_by_angle(tilt_stack, input_tilts, output_path=None, input_order="
     output_order : str, default='xyz'
         The order of the output data dimensions. It does not influence order for writing the stack out, just of the
         returned array. Defaults to 'xyz'.
+    **output_kwargs
+        Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
     Returns
     -------
@@ -219,6 +230,9 @@ def sort_tilts_by_angle(tilt_stack, input_tilts, output_path=None, input_order="
     specified to accommodate different needs.
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError("output_kwargs provided but output_path is None.")
+
     print(f"Reordering of the tilt stack started...")
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
@@ -227,7 +241,7 @@ def sort_tilts_by_angle(tilt_stack, input_tilts, output_path=None, input_order="
     sorted_indices = np.argsort(tilt_angles)
 
     ts.data = ts.data[sorted_indices, :, :]
-    ts.write_out(output_path)
+    ts.write_out(output_path, **output_kwargs)
 
     print("...reordering of the tilt stack successfully finished.\n")
 
@@ -241,6 +255,7 @@ def remove_tilts(
     output_path=None,
     input_order="xyz",
     output_order="xyz",
+    **output_kwargs,
 ):
     """Remove specified tilts from a tilt stack and optionally save the result to a file.
 
@@ -259,6 +274,8 @@ def remove_tilts(
     output_order : str, default='xyz'
         The order of the output data dimensions. It does not influence order for writing the stack out, just of the
         returned array. Defaults to 'xyz'.
+    **output_kwargs
+        Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
     Returns
     -------
@@ -269,6 +286,9 @@ def remove_tilts(
     -----
     This function modifies the tilt stack in place and can save the result to a specified output file.
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError("output_kwargs provided but output_path is None.")
 
     print(f"Removing of specified tilts started...")
 
@@ -283,7 +303,7 @@ def remove_tilts(
                 f"One or more indices in idx_to_remove exceed bounds. " f"Valid range: 0 to {max_index - 1} (0-based)."
             )
         ts.data = np.delete(ts.data, idx_to_remove_final, axis=0)
-        ts.write_out(output_path)
+        ts.write_out(output_path, **output_kwargs)
 
         print(f"...removing of {idx_to_remove_final.shape[0]} tilts successfully finished.\n")
 
@@ -292,7 +312,7 @@ def remove_tilts(
         return ts
 
 
-def bin(tilt_stack, binning_factor, output_path=None, input_order="xyz", output_order="xyz"):
+def bin(tilt_stack, binning_factor, output_path=None, input_order="xyz", output_order="xyz", **output_kwargs):
     """Binning of a tilt stack using local mean downscaling.
 
     Parameters
@@ -308,6 +328,8 @@ def bin(tilt_stack, binning_factor, output_path=None, input_order="xyz", output_
     output_order : str, default='xyz'
         The order of the output data dimensions. It does not influence order for writing the stack out, just of the
         returned array. Defaults to 'xyz'.
+    **output_kwargs
+        Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
     Returns
     -------
@@ -321,6 +343,9 @@ def bin(tilt_stack, binning_factor, output_path=None, input_order="xyz", output_
     file path is provided.
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError("output_kwargs provided but output_path is None.")
+
     print(f"Binning tilt stack with binning factor of {str(binning_factor)} started...")
 
     # cast in case of string
@@ -328,14 +353,14 @@ def bin(tilt_stack, binning_factor, output_path=None, input_order="xyz", output_
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
     ts.data = downscale_local_mean(ts.data, (1, binning_factor, binning_factor))
-    ts.write_out(output_path)
+    ts.write_out(output_path, **output_kwargs)
 
     print("...binning finished successfully.\n")
     return ts.correct_order()
 
 
 def equalize_histogram(
-    tilt_stack, eh_method="contrast_stretching", output_path=None, input_order="xyz", output_order="xyz"
+    tilt_stack, eh_method="contrast_stretching", output_path=None, input_order="xyz", output_order="xyz", **output_kwargs
 ):
     """Equalizes the histogram of a tilt stack using specified methods.
 
@@ -356,6 +381,8 @@ def equalize_histogram(
     output_order : str, default='xyz'
         The order of the output data dimensions. It does not influence order for writing the stack out, just of the
         returned array. Defaults to 'xyz'.
+    **output_kwargs
+        Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
     Returns
     -------
@@ -368,11 +395,14 @@ def equalize_histogram(
         If an unknown histogram equalization method is specified.
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError("output_kwargs provided but output_path is None.")
+
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
     for z in range(ts.n_tilts):
         ts.data[z, :, :] = imageutils.equalize_histogram_2d(ts.data[z, :, :], method=eh_method)
 
-    ts.write_out(output_path)
+    ts.write_out(output_path, **output_kwargs)
     return ts.correct_order()
 
 
@@ -410,7 +440,7 @@ def calculate_total_dose_batch(tomo_list, prior_dose_file_format, dose_per_image
         np.savetxt(output_path, total_dose, fmt="%.6f")
 
 
-def dose_filter(tilt_stack, pixel_size, total_dose, output_path=None, input_order="xyz", output_order="xyz"):
+def dose_filter(tilt_stack, pixel_size, total_dose, output_path=None, input_order="xyz", output_order="xyz", **output_kwargs):
     """Apply a dose filter to a tilt stack of images.
 
     Parameters
@@ -428,6 +458,8 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_path=None, input_orde
     output_order : str, default='xyz'
         The order of the output data dimensions. It does not influence order for writing the stack out, just of the
         returned array. Defaults to 'xyz'.
+    **output_kwargs
+        Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
     Returns
     -------
@@ -439,6 +471,9 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_path=None, input_orde
     This function calculates a frequency array based on the pixel size and applies a dose filter to each image in the
     tilt stack. The filtered images are then saved to the specified output file if provided.
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError("output_kwargs provided but output_path is None.")
 
     print(f"Dose-filtering started...")
 
@@ -466,7 +501,7 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_path=None, input_orde
         image = ts.data[z, :, :]
         ts.data[z, :, :] = dose_filter_single_image(image, total_dose[z], frequency_array)
 
-    ts.write_out(output_path)
+    ts.write_out(output_path, **output_kwargs)
 
     print(f"...dose-filtering finished.")
 
@@ -533,6 +568,7 @@ def deconvolve(
     output_path=None,
     input_order="xyz",
     output_order="xyz",
+    **output_kwargs,
 ):
     """Deconvolution adapted from MATLAB script tom_deconv_tomo by D. Tegunov (https://github.com/dtegunov/tom_deconv)
     and adapted for the tilt series.
@@ -568,6 +604,8 @@ def deconvolve(
     output_order : str, default='xyz'
         The order of the output data dimensions. It does not influence order for writing the stack out, just of the
         returned array. Defaults to 'xyz'.
+    **output_kwargs
+        Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
     Returns
     -------
@@ -575,6 +613,9 @@ def deconvolve(
         Deconvolved tilt stack data.
 
     """
+    if output_path is None and output_kwargs:
+        raise ValueError("output_kwargs provided but output_path is None.")
+
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
     if not isinstance(defocus, (int, float)):
@@ -592,12 +633,12 @@ def deconvolve(
         )
         ts.data[z, :, :] = imageutils.apply_wiener_radial(tilt, wiener, interp_dim)
 
-    ts.write_out(output_path)
+    ts.write_out(output_path, **output_kwargs)
 
     return ts.correct_order()
 
 
-def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz", output_order="xyz"):
+def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz", output_order="xyz", **output_kwargs):
     """Splits a given tilt stack into even and odd stacks.
 
     Parameters
@@ -612,6 +653,8 @@ def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz",
     output_order : str, default='xyz'
         The order of the output data dimensions. It does not influence order for writing the stack out, just of the
         returned array. Defaults to 'xyz'.
+    **output_kwargs
+        Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
     Returns
     -------
@@ -620,6 +663,9 @@ def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz",
         the odd indexed tilts, both reordered according to `output_order`.
 
     """
+
+    if output_file_prefix is None and output_kwargs:
+        raise ValueError("output_kwargs provided but output_file_prefix is None.")
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
@@ -640,15 +686,15 @@ def split_stack_even_odd(tilt_stack, output_file_prefix=None, input_order="xyz",
         odd_stack = np.stack(odd_stack, axis=0)
 
         if output_file_prefix:
-            ts.write_out(output_file_prefix + "_even.mrc", new_data=even_stack)
-            ts.write_out(output_file_prefix + "_odd.mrc", new_data=odd_stack)
+            ts.write_out(output_file_prefix + "_even.mrc", new_data=even_stack, **output_kwargs)
+            ts.write_out(output_file_prefix + "_odd.mrc", new_data=odd_stack, **output_kwargs)
 
         return ts.correct_order(even_stack), ts.correct_order(odd_stack)
     else:
         raise ValueError(f"Stack contains only 1 tilt.")
 
 
-def merge(file_path_pattern, output_path=None, output_order="xyz"):
+def merge(file_path_pattern, output_path=None, output_order="xyz", **output_kwargs):
     """Merge multiple files matching a given pattern into a single stack.
 
     Parameters
@@ -663,6 +709,8 @@ def merge(file_path_pattern, output_path=None, output_order="xyz"):
     output_order : str, default='xyz'
         The order of the output data dimensions. It does not influence order for writing the stack out, just of the
         returned array. Defaults to 'xyz'.
+    **output_kwargs
+        Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
     Returns
     -------
@@ -680,6 +728,9 @@ def merge(file_path_pattern, output_path=None, output_order="xyz"):
     >>> merged_stack = merge("data/*.mrc", output_path="merged_output.mrc", output_order="xyz")
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError("output_kwargs provided but output_path is None.")
+
     files, wildcards = ioutils.get_all_files_matching_pattern(file_path_pattern)
     sorted_files = ioutils.sort_files_by_idx(files, wildcards, order="ascending")
 
@@ -692,12 +743,12 @@ def merge(file_path_pattern, output_path=None, output_order="xyz"):
     final_stack = np.concatenate(all_stacks, axis=0)
     final_ts = TiltStack(final_stack, input_order="zyx", output_order=output_order)
 
-    final_ts.write_out(output_path)
+    final_ts.write_out(output_path, **output_kwargs)
 
     return final_ts.correct_order()
 
 
-def flip_along_axes(tilt_stack, axes, output_path=None, input_order="xyz", output_order="xyz"):
+def flip_along_axes(tilt_stack, axes, output_path=None, input_order="xyz", output_order="xyz", **output_kwargs):
     """Flip the tilt stack along specified axes and optionally save the result to a file.
 
     Parameters
@@ -713,6 +764,8 @@ def flip_along_axes(tilt_stack, axes, output_path=None, input_order="xyz", outpu
     output_order : str, default='xyz'
         The order of the output data dimensions. It does not influence order for writing the stack out, just of the
         returned array. Defaults to 'xyz'.
+    **output_kwargs
+        Additional keyword arguments forwarded to :func:`cryocat.core.cryomap.write`.
 
     Returns
     -------
@@ -732,6 +785,9 @@ def flip_along_axes(tilt_stack, axes, output_path=None, input_order="xyz", outpu
     the result of calling clip flipxy input.mrc output.mrc!
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError("output_kwargs provided but output_path is None.")
+
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
 
     axes = as_list(axes)
@@ -746,6 +802,6 @@ def flip_along_axes(tilt_stack, axes, output_path=None, input_order="xyz", outpu
         else:
             raise ValueError(f"The axes can be 'x', 'y', or 'z'. Provided axis {a} not supported.")
 
-    ts.write_out(output_path)
+    ts.write_out(output_path, **output_kwargs)
 
     return ts.correct_order()

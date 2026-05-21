@@ -1,8 +1,10 @@
 from cryocat.utils.ioutils import fileformat_replace_pattern
 from cryocat.core.tiltstack import *
+from cryocat.core import cryomap
 from pathlib import Path
 import pytest
 import mrcfile
+import numpy as np
 from scipy.ndimage import gaussian_filter
 import os
 import shutil
@@ -428,4 +430,13 @@ def test_cleanup():
         os.remove(flipped_path)
     if os.path.exists(str(Path(__file__).parent / "test_data" / "expected_output.mrc")):
         os.remove(str(Path(__file__).parent / "test_data" / "expected_output.mrc"))
+
+
+def test_tiltstack_write_out_output_kwargs_forwarded(tmp_path):
+    data = np.ones((5, 16, 16), dtype=np.float32)
+    ts = TiltStack(data, input_order="zyx")
+    out = str(tmp_path / "ts.mrc")
+    ts.write_out(out, pixel_size=3.14)
+    _, ps, _ = cryomap.get_metadata(out)
+    assert abs(ps - 3.14) < 0.01
 

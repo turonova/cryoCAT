@@ -137,31 +137,26 @@ def add_gaussian(input_map: np.ndarray, sigma: float) -> np.ndarray:
     return imageutils.gaussian_smooth(input_map, sigma)
 
 
-def write_out(input_map: np.ndarray, output_path: PathOrStr | None, pixel_size: float = 1.0) -> None:
+def write_out(input_map: np.ndarray, output_path: PathOrStr | None, **output_kwargs) -> None:
     """Writes out the input mask to a file.
 
     Parameters
     ----------
     input_map : numpy.ndarray
         3D array with the input mask to be written out.
-    output_path : str
-        The name of the output file.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Note that .em files do not store
-        voxel size in the header and this value will be ignored for such files. Defaults to 1.0.
-
-    Returns
-    -------
-    None
-
-    Examples
-    --------
-    >>> write_out(input_map, "output_mask.mrc")
-    >>> write_out(input_map, "output_mask.em")
+    output_path : PathOrStr or None
+        The name of the output file. If None and output_kwargs are provided, raises ValueError.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters.
     """
-
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
     if output_path is not None:
-        cryomap.write(input_map, output_path, data_type=np.single, pixel_size=pixel_size)
+        cryomap.write(input_map, output_path, **{"data_type": np.single, **output_kwargs})
 
 
 def rotate(input_map: np.ndarray, angles: EulerAngles | None) -> np.ndarray:
@@ -188,7 +183,7 @@ def rotate(input_map: np.ndarray, angles: EulerAngles | None) -> np.ndarray:
         return cryomap.rotate(input_map, rotation_angles=angles)
 
 
-def postprocess(input_map: np.ndarray, gaussian: float, angles: EulerAngles | None, output_path: PathOrStr | None, pixel_size: float = 1.0) -> np.ndarray:
+def postprocess(input_map: np.ndarray, gaussian: float, angles: EulerAngles | None, output_path: PathOrStr | None, **output_kwargs) -> np.ndarray:
     """Applies set of postprocessing steps to the input_map. It can smooth the mask by applying Gaussian blur, it
     can rotate it by Euler angles defined in degrees in zxz convention and write it out if output path is specified.
 
@@ -200,10 +195,11 @@ def postprocess(input_map: np.ndarray, gaussian: float, angles: EulerAngles | No
         Sigma value of the Gaussian blur to be added. If set to 0.0, the Gaussian is not applied.
     angles : numpy.ndarray
         Euler angles in degrees in zxz convention. If all angles are 0.0, the mask is not rotated.
-    output_path : str
+    output_path : PathOrStr or None
         Name the output file to write the mask into. If None, the mask will not be written out.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -216,14 +212,20 @@ def postprocess(input_map: np.ndarray, gaussian: float, angles: EulerAngles | No
 
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
+
     mask = add_gaussian(input_map, gaussian)
     mask = rotate(mask, angles)
-    write_out(mask, output_path, pixel_size)
+    write_out(mask, output_path, **output_kwargs)
 
     return mask
 
 
-def union(mask_list: list[MapSource], output_path: PathOrStr | None = None, pixel_size: float = 1.0) -> np.ndarray:
+def union(mask_list: list[MapSource], output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Calculate the union of multiple masks. The final values are clipped to 0.0 and 1.0.
 
     Parameters
@@ -232,8 +234,9 @@ def union(mask_list: list[MapSource], output_path: PathOrStr | None = None, pixe
         A list of masks (loaded or specified by their paths, or combination of both).
     output_path : str, optional
         The name of the output file. If provided, the final mask is written out. Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -241,6 +244,12 @@ def union(mask_list: list[MapSource], output_path: PathOrStr | None = None, pixe
         3D array with the final mask.
 
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
 
     final_mask = np.zeros(cryomap.read(mask_list[0]).shape)
 
@@ -250,12 +259,12 @@ def union(mask_list: list[MapSource], output_path: PathOrStr | None = None, pixe
 
     final_mask = np.clip(final_mask, 0.0, 1.0)
 
-    write_out(final_mask, output_path, pixel_size)
+    write_out(final_mask, output_path, **output_kwargs)
 
     return final_mask
 
 
-def intersection(mask_list: list[MapSource], output_path: PathOrStr | None = None, pixel_size: float = 1.0) -> np.ndarray:
+def intersection(mask_list: list[MapSource], output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Calculate the intersection of multiple masks. The final values are clipped to 0.0 and 1.0.
 
     Parameters
@@ -264,8 +273,9 @@ def intersection(mask_list: list[MapSource], output_path: PathOrStr | None = Non
         A list of masks (loaded or specified by their paths, or combination of both).
     output_path : str, optional
         The name of the output file. If provided, the final mask is written out. Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -273,6 +283,12 @@ def intersection(mask_list: list[MapSource], output_path: PathOrStr | None = Non
         3D array with the final mask as a numpy array.
 
     """
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
+
     final_mask = np.ones(cryomap.read(mask_list[0]).shape)
 
     for m in mask_list:
@@ -280,12 +296,12 @@ def intersection(mask_list: list[MapSource], output_path: PathOrStr | None = Non
         final_mask *= mask
 
     final_mask = np.clip(final_mask, 0.0, 1.0)
-    write_out(final_mask, output_path, pixel_size)
+    write_out(final_mask, output_path, **output_kwargs)
 
     return final_mask
 
 
-def subtraction(mask_list: list[MapSource], output_path: PathOrStr | None = None, pixel_size: float = 1.0) -> np.ndarray:
+def subtraction(mask_list: list[MapSource], output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Calculate the subtraction of multiple masks. The subtraction follows the
     order in the list, i.e., the second mask is subtracted from the first one, the third one from the result of the
     first subtraction etc. The final values are clipped to 0.0 and 1.0.
@@ -296,8 +312,9 @@ def subtraction(mask_list: list[MapSource], output_path: PathOrStr | None = None
         A list of masks (loaded or specified by their paths, or combination of both).
     output_path : str, optional
         The name of the output file. If provided, the final mask is written out. Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -305,6 +322,12 @@ def subtraction(mask_list: list[MapSource], output_path: PathOrStr | None = None
         3D array with the final mask as a numpy array.
 
     """
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
+
     final_mask = cryomap.read(mask_list[0])
 
     for m in mask_list[1:]:
@@ -312,12 +335,12 @@ def subtraction(mask_list: list[MapSource], output_path: PathOrStr | None = None
         final_mask -= mask
 
     final_mask = np.clip(final_mask, 0.0, 1.0)
-    write_out(final_mask, output_path, pixel_size)
+    write_out(final_mask, output_path, **output_kwargs)
 
     return final_mask
 
 
-def difference(mask_list: list[MapSource], output_path: PathOrStr | None = None, pixel_size: float = 1.0) -> np.ndarray:
+def difference(mask_list: list[MapSource], output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Calculate the difference between multiple masks. The function first compute the union of all the masks in the
     list and then their intersection which is then substracted from the union. The final values are clipped
     to 0.0 and 1.0.
@@ -328,8 +351,9 @@ def difference(mask_list: list[MapSource], output_path: PathOrStr | None = None,
         A list of masks (loaded or specified by their paths, or combination of both).
     output_path : str, optional
         The name of the output file. If provided, the final mask is written out. Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -342,17 +366,23 @@ def difference(mask_list: list[MapSource], output_path: PathOrStr | None = None,
 
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
+
     union_mask = union(mask_list)
     inter_mask = intersection(mask_list)
 
     final_mask = union_mask - inter_mask
     final_mask = np.clip(final_mask, 0.0, 1.0)
-    write_out(final_mask, output_path, pixel_size)
+    write_out(final_mask, output_path, **output_kwargs)
 
     return final_mask
 
 
-def spherical_shell_mask(mask_size: TripletLike, shell_thickness: int | float, radius: int | None = None, center: TripletLike | None = None, gaussian: float = 0.0, output_path: PathOrStr | None = None, pixel_size: float = 1.0) -> np.ndarray:
+def spherical_shell_mask(mask_size: TripletLike, shell_thickness: int | float, radius: int | None = None, center: TripletLike | None = None, gaussian: float = 0.0, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Generate a spherical shell mask within a 3D volume.
 
     Parameters
@@ -369,8 +399,9 @@ def spherical_shell_mask(mask_size: TripletLike, shell_thickness: int | float, r
         Standard deviation for Gaussian smoothing to be applied to the shell mask. Defaults to 0.0 (no smoothing).
     output_path : str, optional
         Name of the output file to save the mask. If None, the mask is not saved.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -381,6 +412,12 @@ def spherical_shell_mask(mask_size: TripletLike, shell_thickness: int | float, r
     -----
     The function creates a spherical shell by subtracting a smaller sphere from a larger sphere, both centered at the same point.
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
 
     mask_size = geom.as_triplet(mask_size)
     center = geom.as_triplet(center, reference_size=mask_size)
@@ -395,12 +432,12 @@ def spherical_shell_mask(mask_size: TripletLike, shell_thickness: int | float, r
 
     shell_mask = sp1 - sp2
 
-    shell_mask = postprocess(shell_mask, gaussian, np.asarray([0, 0, 0]), output_path, pixel_size)
+    shell_mask = postprocess(shell_mask, gaussian, np.asarray([0, 0, 0]), output_path, **output_kwargs)
 
     return shell_mask
 
 
-def spherical_mask(mask_size: TripletLike, radius: int | None = None, center: TripletLike | None = None, gaussian: float = 0.0, gaussian_outwards: bool = True, output_path: PathOrStr | None = None, pixel_size: float = 1.0) -> np.ndarray:
+def spherical_mask(mask_size: TripletLike, radius: int | None = None, center: TripletLike | None = None, gaussian: float = 0.0, gaussian_outwards: bool = True, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Creates a spherical mask with the specified radius, center and box size. The values range from 0.0 to 1.0.
     Additionally, the mask can be blurred by applying Gaussian specified by its sigma value.
 
@@ -422,8 +459,9 @@ def spherical_mask(mask_size: TripletLike, radius: int | None = None, center: Tr
     output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out.
         Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -442,6 +480,12 @@ def spherical_mask(mask_size: TripletLike, radius: int | None = None, center: Tr
 
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
+
     mask_size = geom.as_triplet(mask_size)
     center = geom.as_triplet(center, reference_size=mask_size)
 
@@ -456,7 +500,7 @@ def spherical_mask(mask_size: TripletLike, radius: int | None = None, center: Tr
     mask[mask > 0] = 1
     mask[center[0], center[1], center[2]] = 1
 
-    mask = postprocess(mask, gaussian, np.asarray([0, 0, 0]), output_path, pixel_size)
+    mask = postprocess(mask, gaussian, np.asarray([0, 0, 0]), output_path, **output_kwargs)
 
     return mask
 
@@ -470,7 +514,7 @@ def cylindrical_mask(
     gaussian_outwards: bool = True,
     angles: EulerAngles | None = None,
     output_path: PathOrStr | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """Creates a cylindrical mask with the specified radius, height, center and box size. The values range from 0.0 to 1.0.
     Additionally, the mask can be blurred by applying Gaussian specified by its sigma value and/or
@@ -500,8 +544,9 @@ def cylindrical_mask(
     output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out.
         Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
 
     Returns
@@ -520,6 +565,12 @@ def cylindrical_mask(
         For more information on formatting the inputs.
 
     """
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
+
     mask_size = geom.as_triplet(mask_size)
     center = geom.as_triplet(center, reference_size=mask_size)
 
@@ -543,7 +594,7 @@ def cylindrical_mask(
     mask = np.zeros(mask_size)
     mask[:, :, center[2] - height : center[2] + height + 1] = np.tile(mask_xy[:, :, None], (1, 1, height * 2 + 1))
 
-    mask = postprocess(mask, gaussian, angles, output_path, pixel_size)
+    mask = postprocess(mask, gaussian, angles, output_path, **output_kwargs)
 
     return mask
 
@@ -558,7 +609,7 @@ def cylindrical_mask_from_points(
     gaussian: float = 0,
     gaussian_outwards: bool = True,
     output_path: PathOrStr | None = None,
-    output_pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """Creates a cylindrical mask whose center lies midway between two marker points and whose
     orientation follows the vector connecting them.
@@ -590,8 +641,9 @@ def cylindrical_mask_from_points(
     output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out.
         Defaults to None.
-    output_pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the output file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -602,6 +654,12 @@ def cylindrical_mask_from_points(
     -----
     Beta version.
     """
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
+
     marker1 = np.asarray(marker1)
     marker2 = np.asarray(marker2)
 
@@ -624,12 +682,12 @@ def cylindrical_mask_from_points(
 
     rot_shifted = cryomap.recenter(rot_mask, new_center=center)
     rot_shifted = cryomap.recenter(rot_mask, center)
-    
-    write_out(rot_shifted, output_path, output_pixel_size)
+
+    write_out(rot_shifted, output_path, **output_kwargs)
 
     return rot_shifted
 
-def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: TripletLike, center: TripletLike | None = None, gaussian: float = 0.0, angles: EulerAngles | None = None, output_path: PathOrStr | None = None, pixel_size: float = 1.0) -> np.ndarray:
+def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: TripletLike, center: TripletLike | None = None, gaussian: float = 0.0, angles: EulerAngles | None = None, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Generates a binary mask of an ellipsoid shell within a given mask size.
 
     Parameters
@@ -648,8 +706,9 @@ def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: 
         Angles for rotating the ellipsoid around each axis (in degrees). Defaults to None.
     output_path : str, optional
         If provided, the function will save the mask to a file with this name. Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -665,6 +724,12 @@ def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: 
     Optional Gaussian blurring and rotation can be applied to the shell mask before returning.
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
+
     mask_size = geom.as_triplet(mask_size)
     center = geom.as_triplet(center, reference_size=mask_size)
     radii = geom.as_triplet(radii, reference_size=mask_size)
@@ -676,7 +741,7 @@ def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: 
 
     shell_mask = e1 & ~e2
 
-    shell_mask = postprocess(shell_mask, gaussian, angles, output_path, pixel_size)
+    shell_mask = postprocess(shell_mask, gaussian, angles, output_path, **output_kwargs)
 
     return shell_mask
 
@@ -689,7 +754,7 @@ def ellipsoid_mask(
     output_path: PathOrStr | None = None,
     angles: EulerAngles | None = None,
     gaussian_outwards: bool = True,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """Creates an ellipsoid mask with the specified radii (for x, y, z), center and box size. The values range from
     0.0 to 1.0. Additionally, the mask can be blurred by applying Gaussian specified by its sigma value and/or
@@ -716,8 +781,9 @@ def ellipsoid_mask(
     output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out.
         Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -735,6 +801,12 @@ def ellipsoid_mask(
         For more information on formatting the inputs.
 
     """
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
+
     mask_shape = geom.as_triplet(mask_size)
     center = geom.as_triplet(center, reference_size=mask_shape)
     radii = geom.as_triplet(radii, reference_size=mask_shape)
@@ -768,7 +840,7 @@ def ellipsoid_mask(
 
     mask = distance <= 1
 
-    mask = postprocess(mask, gaussian, angles, output_path, pixel_size)
+    mask = postprocess(mask, gaussian, angles, output_path, **output_kwargs)
 
     return mask
 
@@ -819,7 +891,7 @@ def molmap_tight_mask(
     gaussian_outwards: bool = True,
     angles: EulerAngles | None = None,
     output_path: PathOrStr | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """Creates a tight mask for the density created with molmap function in Chimera(X). The mask is the same shape as
     the input map, but has values from 0.0 to 1.0. Additionally, the mask can be blurred by applying Gaussian specified
@@ -845,8 +917,9 @@ def molmap_tight_mask(
         zxz convention. If all angles are zero, no rotation is applied. Defaults to None.
     output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out. Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -860,6 +933,12 @@ def molmap_tight_mask(
 
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
+
     model = cryomap.read(input_map)
 
     dilation_size = preprocess_params(dilation_size, gaussian, gaussian_outwards)
@@ -869,7 +948,7 @@ def molmap_tight_mask(
     else:
         mask = ndimage.binary_dilation(model, iterations=dilation_size)
 
-    mask = postprocess(mask, gaussian, angles, output_path, pixel_size)
+    mask = postprocess(mask, gaussian, angles, output_path, **output_kwargs)
 
     return mask
 
@@ -883,7 +962,7 @@ def map_tight_mask(
     angles: EulerAngles | None = None,
     n_regions: int = 1,
     output_path: PathOrStr | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """Creates a tight mask for the map coming from STA/SPA (i.e., with some noise around it). The mask is the same shape as
     the input map at given threshold. It has values from 0.0 to 1.0. Additionally, the mask can be blurred by
@@ -915,8 +994,9 @@ def map_tight_mask(
         Defaults to 1.
     output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out. Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -929,6 +1009,12 @@ def map_tight_mask(
     same effect one has to set gaussian_outwards to False (default is True).
 
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
 
     mask = cryomap.read(input_map)
 
@@ -960,7 +1046,7 @@ def map_tight_mask(
     if dilation_size > 0:
         mask = ndimage.binary_dilation(mask, iterations=dilation_size)
 
-    mask = postprocess(mask, gaussian, angles, output_path, pixel_size)
+    mask = postprocess(mask, gaussian, angles, output_path, **output_kwargs)
 
     return mask
 
@@ -1041,7 +1127,7 @@ def get_mass_center(input_map: MapSource) -> np.ndarray:
     return mask_center.astype(int)
 
 
-def shrink_full_mask(input_map: MapSource, shrink_factor: int, output_path: PathOrStr | None = None, pixel_size: float = 1.0) -> np.ndarray:
+def shrink_full_mask(input_map: MapSource, shrink_factor: int, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Takes in a 3D binary mask and shrinks it by the specified shrink factor. The function first fills in all of
     the holes within each slice of the mask, then shrinks it by removing the outermost layer of voxels from each slice.
     The function returns a new shrunken binary mask.
@@ -1054,8 +1140,9 @@ def shrink_full_mask(input_map: MapSource, shrink_factor: int, output_path: Path
         Defines how much the mask should be shrunken (in voxels).
     output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out. Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
 
     Returns
@@ -1064,6 +1151,12 @@ def shrink_full_mask(input_map: MapSource, shrink_factor: int, output_path: Path
         3D array with the mask shrunken by the specified factor.
 
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
 
     input_map = cryomap.read(input_map)
 
@@ -1102,12 +1195,12 @@ def shrink_full_mask(input_map: MapSource, shrink_factor: int, output_path: Path
     filled_mask = morphology.binary_opening(filled_mask, footprint=np.ones((2, 2, 2)))
     filled_mask = morphology.binary_closing(filled_mask)
 
-    write_out(filled_mask, output_path, pixel_size)
+    write_out(filled_mask, output_path, **output_kwargs)
 
     return filled_mask
 
 
-def fill_hollow_mask(input_map: MapSource, output_path: PathOrStr | None = None, apply_opening_closing: bool = True, footprint: np.ndarray | tuple | None = None, pixel_size: float = 1.0) -> np.ndarray:
+def fill_hollow_mask(input_map: MapSource, output_path: PathOrStr | None = None, apply_opening_closing: bool = True, footprint: np.ndarray | tuple | None = None, **output_kwargs) -> np.ndarray:
     """Takes in a binary mask and returns the same mask with all holes filled in.
 
     Parameters
@@ -1123,8 +1216,9 @@ def fill_hollow_mask(input_map: MapSource, output_path: PathOrStr | None = None,
         The neighborhood for the opening operation, expressed as a 2-D array of 1s and 0s. Used only if
         apply_opening_closing is True. If footprint is None, uses footprint np.ones((2,2,2)). The footprint can
         also be provided as a sequence of smaller footprints as described on the scikit-image documentation. Default is None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
 
     Returns
@@ -1133,6 +1227,12 @@ def fill_hollow_mask(input_map: MapSource, output_path: PathOrStr | None = None,
         3D array with the input mask with the holes filled in.
 
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. "
+            f"These only apply when writing to disk."
+        )
 
     input_map = cryomap.read(input_map)
 
@@ -1166,7 +1266,7 @@ def fill_hollow_mask(input_map: MapSource, output_path: PathOrStr | None = None,
         filled_mask = morphology.binary_opening(filled_mask, footprint=footprint)
         filled_mask = morphology.binary_closing(filled_mask)
 
-    write_out(filled_mask, output_path, pixel_size)
+    write_out(filled_mask, output_path, **output_kwargs)
 
     return filled_mask
 
@@ -1222,7 +1322,7 @@ def tomogram_shell_mask(
     output_prefix: str = "",
     output_suffix: str = ".mrc",
     tomo_digits: int | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> None:
     """Generate a mask for each tomogram based on the specified shell parameters.
 
@@ -1245,8 +1345,9 @@ def tomogram_shell_mask(
         Suffix for the output file names, typically the file extension. Defaults to ".mrc".
     tomo_digits : int, optional
         Number of digits to use for zero-padding the tomogram ID in the filename. Defaults to None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` for each tomogram output file.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -1276,4 +1377,4 @@ def tomogram_shell_mask(
 
         tomo_mask = cryomap.place_object(features, tm, volume_shape=t_dim, feature_to_color="class")
 
-        cryomap.write(tomo_mask, output_prefix + str(int(t)).zfill(tomo_digits) + output_suffix, data_type=np.int8, pixel_size=pixel_size)
+        cryomap.write(tomo_mask, output_prefix + str(int(t)).zfill(tomo_digits) + output_suffix, **{"data_type": np.int8, **output_kwargs})

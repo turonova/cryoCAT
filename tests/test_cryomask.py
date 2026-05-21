@@ -6,7 +6,7 @@ from cryocat.core.cryomotl import Motl
 sys.path.append(".")
 import pytest
 from cryocat.core.cryomask import *
-from cryocat.core.cryomap import read
+from cryocat.core.cryomap import read, get_metadata
 from pathlib import Path
 # sys.path.append(".")
 test_data = str(Path(__file__).parent / "test_data")
@@ -739,3 +739,20 @@ def test_tomogram_shell_mask(tmp_path, sample_motl):
     )
 
     assert tomo_mask is None
+
+
+def test_spherical_mask_output_kwargs_forwarded(tmp_path):
+    out = str(tmp_path / "mask.mrc")
+    spherical_mask(16, output_path=out, pixel_size=2.5)
+    _, ps, _ = get_metadata(out)
+    assert abs(ps - 2.5) < 0.01
+
+
+def test_spherical_mask_raises_without_output_path():
+    with pytest.raises(ValueError, match="output_path"):
+        spherical_mask(16, pixel_size=2.7)
+
+
+def test_spherical_mask_no_output_no_kwargs():
+    mask = spherical_mask(16)
+    assert mask.shape == (16, 16, 16)

@@ -17,11 +17,12 @@ from cryocat._types import MapSource, PathOrStr, TripletLike, EulerAngles, Symme
 if TYPE_CHECKING:
     from cryocat.core import cryomotl
 
+
 def scale(
     input_map: MapSource,
     scaling_factor: float,
     output_path: PathOrStr | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """
     Scales an input map by a given scaling factor.
@@ -36,8 +37,9 @@ def scale(
     output_path : PathOrStr, optional
         Path to the output file to which to write the scaled map. If not provided,
         the scaled map will not be saved. Default is None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -50,6 +52,11 @@ def scale(
     saves the result to a specified output file. The output map is converted to `float32` if the original scaled map
     is of type `float64`.
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
 
     input_map = read(input_map)
 
@@ -64,7 +71,7 @@ def scale(
         scaled_map = scaled_map.astype(np.float32)
 
     if output_path is not None:
-        write(scaled_map, output_path, pixel_size=pixel_size)
+        write(scaled_map, output_path, **output_kwargs)
 
     return scaled_map
 
@@ -194,6 +201,7 @@ def bandpass(
     lp_gaussian: int = 3,
     hp_gaussian: int = 2,
     output_path: PathOrStr | None = None,
+    **output_kwargs,
 ) -> np.ndarray:
     """Apply a bandpass filter to an input map using specified low-pass and high-pass filter parameters.
 
@@ -219,6 +227,9 @@ def bandpass(
     output_path : PathOrStr, optional
         Path to the output file to save the filtered result. If not provided, the
         filtered map is not saved. Default is None.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -231,6 +242,11 @@ def bandpass(
     a low-pass and a high-pass filter, and then applies this mask to the Fourier transform of the input map.
     The result is transformed back to real space. If an output filename is provided, the result is saved.
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
 
     input_map = read(input_map)
     lp_radius = get_filter_radius(
@@ -246,10 +262,12 @@ def bandpass(
         target_resolution=hp_target_resolution,
         pixel_size=pixel_size,
     )
-    bandpass_filtered = imageutils.apply_bandpass(input_map, lp_radius, hp_radius, lp_gaussian=lp_gaussian, hp_gaussian=hp_gaussian)
+    bandpass_filtered = imageutils.apply_bandpass(
+        input_map, lp_radius, hp_radius, lp_gaussian=lp_gaussian, hp_gaussian=hp_gaussian
+    )
 
     if output_path is not None:
-        write(bandpass_filtered, output_path, data_type=np.single, pixel_size=pixel_size or 1.0)
+        write(bandpass_filtered, output_path, **{"data_type": np.single, **output_kwargs})
 
     return bandpass_filtered
 
@@ -261,6 +279,7 @@ def lowpass(
     pixel_size: float | None = None,
     gaussian: int = 3,
     output_path: PathOrStr | None = None,
+    **output_kwargs,
 ) -> np.ndarray:
     """Apply a lowpass filter to a given input map using Fourier transform methods.
 
@@ -280,6 +299,9 @@ def lowpass(
     output_path : PathOrStr, optional
         Path to the output file to save the filtered map. If not provided, the map
         is not saved. Default is None.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -297,6 +319,11 @@ def lowpass(
     The target resolution is 20.23 Angstroms.
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
+
     input_map = read(input_map)
     radius = get_filter_radius(
         input_map.shape[0], fourier_pixels=fourier_pixels, target_resolution=target_resolution, pixel_size=pixel_size
@@ -305,7 +332,7 @@ def lowpass(
     filtered_map = imageutils.apply_lowpass(input_map, radius, gaussian=gaussian)
 
     if output_path is not None:
-        write(filtered_map, output_path, data_type=np.single, pixel_size=pixel_size or 1.0)
+        write(filtered_map, output_path, **{"data_type": np.single, **output_kwargs})
 
     return filtered_map
 
@@ -317,6 +344,7 @@ def highpass(
     pixel_size: float | None = None,
     gaussian: int = 2,
     output_path: PathOrStr | None = None,
+    **output_kwargs,
 ) -> np.ndarray:
     """Apply a highpass filter to a given input map using Fourier transform methods.
 
@@ -336,6 +364,9 @@ def highpass(
     output_path : PathOrStr, optional
         Path to the output file to save the filtered result. If None, the filtered
         map is not saved. Default is None.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -348,6 +379,11 @@ def highpass(
     applies a spherical highpass filter in Fourier space, and optionally saves the result to a file.
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
+
     input_map = read(input_map)
     radius = get_filter_radius(
         input_map.shape[0], fourier_pixels=fourier_pixels, target_resolution=target_resolution, pixel_size=pixel_size
@@ -356,9 +392,10 @@ def highpass(
     filtered_map = imageutils.apply_highpass(input_map, radius, gaussian=gaussian)
 
     if output_path is not None:
-        write(filtered_map, output_path, data_type=np.single, pixel_size=pixel_size or 1.0)
+        write(filtered_map, output_path, **{"data_type": np.single, **output_kwargs})
 
     return filtered_map
+
 
 def read(
     input_map: MapSource,
@@ -366,11 +403,11 @@ def read(
     data_type: np.dtype | None = None,
 ) -> np.ndarray:
     """Read a volume from disk or pass through an in-memory ndarray.
- 
+
     Canonical normalizer for the :data:`cryocat._types.MapSource` type.
     Any function that accepts a MapSource should call ``cryomap.read(x)``
     at its entry point to get a plain ndarray to work with.
- 
+
     Parameters
     ----------
     input_map : MapSource
@@ -381,23 +418,23 @@ def read(
         effect on inputs that are already ndarrays. Default is True.
     data_type : numpy.dtype, optional
         Cast the result to this dtype. If None, the dtype is preserved.
- 
+
     Returns
     -------
     numpy.ndarray
         Map data as an ndarray.
- 
+
     Raises
     ------
     ValueError
         If the file extension is unsupported, or the input is neither a
         path nor an ndarray.
- 
+
     Notes
     -----
     Supported file extensions: ``.mrc``, ``.rec``, ``.st``, ``.ali``,
     ``.em``. Numbered suffixes such as ``.mrc.5`` are accepted.
- 
+
     Examples
     --------
     >>> data = read("map.mrc")
@@ -406,36 +443,32 @@ def read(
     """
     if isinstance(input_map, (str, os.PathLike)):
         path_str = os.fspath(input_map)
- 
+
         def valid_mrc(input_path: str) -> bool:
             pattern = r"\.(mrc|ali|rec|st)(\.\d+)?$"
             return bool(re.search(pattern, input_path))
- 
+
         if valid_mrc(path_str):
             data = mrcfile.open(path_str).data
         elif path_str.endswith(".em"):
             data = emfile.read(path_str)[1]
         else:
             raise ValueError(
-                f"Unsupported file extension for input_map={path_str!r}. "
-                "Expected .mrc, .ali, .rec, .st, or .em."
+                f"Unsupported file extension for input_map={path_str!r}. " "Expected .mrc, .ali, .rec, .st, or .em."
             )
- 
+
         if transpose:
             data = data.transpose(2, 1, 0)
     elif isinstance(input_map, np.ndarray):
         data = np.array(input_map)
     else:
-        raise ValueError(
-            f"input_map must be a path or an ndarray, got {type(input_map).__name__}."
-        )
- 
+        raise ValueError(f"input_map must be a path or an ndarray, got {type(input_map).__name__}.")
+
     data = np.array(data, copy=True)
     if data_type is not None:
         data = data.astype(data_type)
- 
+
     return data
- 
 
 
 def get_metadata(
@@ -487,17 +520,14 @@ def get_metadata(
             origin_a = (0.0, 0.0, 0.0)
         else:
             raise ValueError(
-                f"Unsupported file extension for input_map={path_str!r}. "
-                "Expected .mrc, .ali, .rec, .st, or .em."
+                f"Unsupported file extension for input_map={path_str!r}. " "Expected .mrc, .ali, .rec, .st, or .em."
             )
     elif isinstance(input_map, np.ndarray):
         shape = input_map.shape
         pixel_size_a = 1.0
         origin_a = (0.0, 0.0, 0.0)
     else:
-        raise ValueError(
-            f"input_map must be a path or an ndarray, got {type(input_map).__name__}."
-        )
+        raise ValueError(f"input_map must be a path or an ndarray, got {type(input_map).__name__}.")
 
     return shape, pixel_size_a, origin_a
 
@@ -546,9 +576,7 @@ def write(
     """
 
     if not isinstance(output_path, (str, os.PathLike)):
-        raise ValueError(
-            f"output_path must be a path or str, got {type(output_path).__name__}."
-        )
+        raise ValueError(f"output_path must be a path or str, got {type(output_path).__name__}.")
     file_name_str = os.fspath(output_path)
 
     if data_type is not None:
@@ -568,7 +596,7 @@ def write(
         raise ValueError("The output file name", file_name_str, "has to end with .mrc, .rec or .em!")
 
 
-def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, pixel_size: float = 1.0) -> np.ndarray:
+def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Invert the contrast of an input volume map.
 
     Parameters
@@ -579,8 +607,9 @@ def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, 
     output_path : PathOrStr, optional
         Path to the output file where the inverted volume map will be saved.
         If not provided, the output will not be saved to a file. Default is None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -594,6 +623,11 @@ def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, 
     type float64; otherwise, it will retain the original data type.
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
+
     input_map = read(input_map)
     inverted_map = input_map * (-1)
 
@@ -603,7 +637,7 @@ def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, 
         else:
             data_type = inverted_map.dtype
 
-        write(inverted_map, output_path, data_type=data_type, pixel_size=pixel_size)
+        write(inverted_map, output_path, **{"data_type": data_type, **output_kwargs})
 
     return inverted_map
 
@@ -611,9 +645,8 @@ def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, 
 def em2mrc(
     input_path: PathOrStr,
     invert: bool = False,
-    overwrite: bool = True,
-    pixel_size: float = 1.0,
     output_path: PathOrStr | None = None,
+    **output_kwargs,
 ) -> None:
     """Convert a file in EM format to MRC format.
 
@@ -623,13 +656,12 @@ def em2mrc(
         Path to the input map file to be converted (must have ``.em`` extension).
     invert : bool, default=False
         If True, the data will be inverted (multiplied by -1). Default is False.
-    overwrite : bool, default=True
-        If True, allows overwriting of the output file if it already exists. Default is True.
-    pixel_size : float, default=1.0
-        Pixel size in Angstroms to store in the header of the output MRC file. Defaults to 1.0.
     output_path : PathOrStr, optional
         Path to the output MRC file. If None, the output name will be derived from
         ``input_path`` by replacing the ``.em`` extension with ``.mrc``.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -660,14 +692,14 @@ def em2mrc(
         output_path_str = os.fspath(output_path)
         if not output_path_str.endswith(".mrc"):
             raise ValueError(f"Specified output file name must end with .mrc")
-    write(data_to_write, output_path_str, overwrite=overwrite, pixel_size=pixel_size)
+    write(data_to_write, output_path_str, **output_kwargs)
 
 
 def mrc2em(
     input_path: PathOrStr,
     invert: bool = False,
-    overwrite: bool = True,
     output_path: PathOrStr | None = None,
+    **output_kwargs,
 ) -> None:
     """Convert a file in MRC format to EM format.
 
@@ -675,11 +707,12 @@ def mrc2em(
         Path to the input map file to be converted (must have ``.mrc`` extension).
     invert : bool, default=False
         If True, the data will be inverted (multiplied by -1). Default is False.
-    overwrite : bool, default=True
-        If True, allows overwriting of the output file if it already exists. Default is True.
     output_path : PathOrStr, optional
         Path to the output EM file. If None, the output name will be derived from
         ``input_path`` by replacing the ``.mrc`` extension with ``.em``.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -711,7 +744,7 @@ def mrc2em(
         if not output_path_str.endswith(".em"):
             raise ValueError(f"Specified output_path is not .em file")
 
-    write(data_to_write, output_path_str, overwrite=overwrite)
+    write(data_to_write, output_path_str, **output_kwargs)
 
 
 def write_hdf5(
@@ -958,7 +991,7 @@ def rotate(
     degrees: bool = True,
     spline_order: int = 3,
     output_path: PathOrStr | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """Rotate a 3D input map using a specified rotation matrix or rotation angles.
 
@@ -992,8 +1025,9 @@ def rotate(
     output_path : PathOrStr, optional
         Path to the output file for the rotated structure. If not provided, the
         result is not saved. Default is None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -1005,6 +1039,11 @@ def rotate(
     ValueError
         If neither `rotation` nor `rotation_angles` is specified.
     """
+
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
 
     input_map = read(input_map)
     rot_struct = imageutils.rotate_volume(
@@ -1018,7 +1057,7 @@ def rotate(
     )
 
     if output_path is not None:
-        write(rot_struct, output_path, data_type=np.single, pixel_size=pixel_size)
+        write(rot_struct, output_path, **{"data_type": np.single, **output_kwargs})
 
     return rot_struct
 
@@ -1028,7 +1067,7 @@ def crop(
     new_size: TripletLike,
     output_path: PathOrStr | None = None,
     crop_coord: TripletLike | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """
     This function crops a given input map to a new size. If no crop coordinates are provided, the function will crop from the center of the input map. If an output file is specified, the cropped volume will be written to this file.
@@ -1047,8 +1086,9 @@ def crop(
     crop_coord : TripletLike, optional
         The (integer) center coordinates of the crop. If not provided, the function
         will crop from the center of the input map.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -1059,6 +1099,11 @@ def crop(
     -----
     see also: trim
     """
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
+
     input_map = read(input_map)
 
     new_size = geom.as_triplet(new_size)
@@ -1074,7 +1119,7 @@ def crop(
     cropped_volume = input_map[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
 
     if output_path is not None:
-        write(cropped_volume, output_path, data_type=np.single, pixel_size=pixel_size)
+        write(cropped_volume, output_path, **{"data_type": np.single, **output_kwargs})
 
     return cropped_volume
 
@@ -1083,7 +1128,7 @@ def shift(
     input_map: MapSource,
     delta: ArrayLike,
     output_path: PathOrStr | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """
     Shifts an input map by a specified delta.
@@ -1099,8 +1144,9 @@ def shift(
     output_path : PathOrStr, optional
         Path to the output file for the shifted map. The data type of the output
         will be np.single. Default is None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -1112,23 +1158,18 @@ def shift(
     The shift is applied using an affine transformation with a matrix that is the identity except for the last column, which is set to the negative of the delta. The mode of the affine transformation is "grid-wrap".
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
+
     input_map = read(input_map)
     shifted_map = imageutils.shift_array(input_map, np.asarray(delta))
 
     if output_path is not None:
-        write(shifted_map, output_path, data_type=np.single, pixel_size=pixel_size)
+        write(shifted_map, output_path, **{"data_type": np.single, **output_kwargs})
 
     return shifted_map
-
-
-def shift2(
-    input_map: MapSource,
-    delta: ArrayLike,
-    output_path: PathOrStr | None = None,
-    pixel_size: float = 1.0,
-) -> np.ndarray:
-    """Deprecated alias for :func:`shift`."""
-    return shift(input_map, delta, output_path=output_path, pixel_size=pixel_size)
 
 
 def recenter(input_map: MapSource, new_center: TripletLike) -> np.ndarray:
@@ -1246,7 +1287,7 @@ def extract_subvolume(
     subvolume_shape: TripletLike,
     enforce_shape: bool = False,
     output_path: PathOrStr | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """
     Extracts a subvolume from a given volume.
@@ -1264,8 +1305,9 @@ def extract_subvolume(
     output_path : PathOrStr, optional
         Path to the output file for the extracted subvolume. If not provided, the
         subvolume is not saved. Default is None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -1281,6 +1323,11 @@ def extract_subvolume(
     If an output file is provided, the subvolume is written to this file.
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
+
     vs, ve, ss, se = get_start_end_indices(coordinates, volume.shape, subvolume_shape)
     if enforce_shape is not False:
         subvolume = np.full(volume.shape, np.mean(volume))
@@ -1290,7 +1337,7 @@ def extract_subvolume(
         subvolume[ss[0] : se[0], ss[1] : se[1], ss[2] : se[2]] = volume[vs[0] : ve[0], vs[1] : ve[1], vs[2] : ve[2]]
 
     if output_path is not None:
-        write(subvolume, output_path, data_type=np.single, pixel_size=pixel_size)
+        write(subvolume, output_path, **{"data_type": np.single, **output_kwargs})
 
     return subvolume
 
@@ -1486,6 +1533,7 @@ def deconvolve(
     phase_flipped: bool = False,
     phaseshift: float = 0,
     output_path: PathOrStr | None = None,
+    **output_kwargs,
 ) -> np.ndarray:
     """Deconvolution adapted from MATLAB script tom_deconv_tomo by D. Tegunov (https://github.com/dtegunov/tom_deconv).
     Example for usage: deconvolve(my_map, 3.42, 6, 1.1, 1, 0.02, false, 0)
@@ -1512,6 +1560,9 @@ def deconvolve(
     output_path : PathOrStr, optional
         Path to the output file for the deconvolved tomogram. Default is None
         (tomogram will not be written).
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -1519,16 +1570,27 @@ def deconvolve(
         deconvolved tomogram
 
     """
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
+
     input_map = read(input_map)
     interp_dim = np.maximum(2048, input_map.shape[0])
     wiener = imageutils.compute_wiener_1d(
-        interp_dim, pixel_size_a, defocus, snr_falloff, deconv_strength,
-        highpass_nyquist, phase_flipped, phaseshift,
+        interp_dim,
+        pixel_size_a,
+        defocus,
+        snr_falloff,
+        deconv_strength,
+        highpass_nyquist,
+        phase_flipped,
+        phaseshift,
     )
     deconvolved_map = imageutils.apply_wiener_radial(input_map, wiener, interp_dim)
 
     if output_path is not None:
-        write(deconvolved_map, output_path, data_type=np.single, pixel_size=pixel_size_a)
+        write(deconvolved_map, output_path, **{"data_type": np.single, "pixel_size": pixel_size_a, **output_kwargs})
 
     return deconvolved_map
 
@@ -1538,7 +1600,7 @@ def trim(
     trim_start: TripletLike,
     trim_end: TripletLike,
     output_path: PathOrStr | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """
     Trims a 3D map to a specified range.
@@ -1555,8 +1617,9 @@ def trim(
     output_path : PathOrStr, optional
         Path to the output file for the trimmed map. The file will be written in
         single precision float format. Default is None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -1570,6 +1633,11 @@ def trim(
     see also: crop
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
+
     output_map = read(input_map)
 
     trim_start = np.asarray(trim_start)
@@ -1581,7 +1649,7 @@ def trim(
     output_map = output_map[ts[0] : te[0], ts[1] : te[1], ts[2] : te[2]]
 
     if output_path is not None:
-        write(output_map, output_path, data_type=np.single, pixel_size=pixel_size)
+        write(output_map, output_path, **{"data_type": np.single, **output_kwargs})
 
     return output_map
 
@@ -1590,7 +1658,7 @@ def flip(
     input_map: MapSource,
     axis: str = "z",
     output_path: PathOrStr | None = None,
-    pixel_size: float = 1.0,
+    **output_kwargs,
 ) -> np.ndarray:
     """
     Function to flip a given input map along specified axis.
@@ -1606,8 +1674,9 @@ def flip(
     output_path : PathOrStr, optional
         Path to the output file. If not provided, the function will only return
         the flipped map. Default is None.
-    pixel_size : float, default=1.0
-        Pixel/voxel size in Angstroms to store in the file header. Defaults to 1.0.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -1619,10 +1688,15 @@ def flip(
     The function reads the input map, flips it along the specified axis, and writes the output map to a file if an output name is provided.
     """
 
+    if output_path is None and output_kwargs:
+        raise ValueError(
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
+        )
+
     output_map = imageutils.flip_array(read(input_map), axis=axis)
 
     if output_path is not None:
-        write(output_map, output_path, data_type=np.single, pixel_size=pixel_size)
+        write(output_map, output_path, **{"data_type": np.single, **output_kwargs})
 
     return output_map
 
@@ -1663,50 +1737,51 @@ def calculate_masked_fsc(
     output_path: PathOrStr | None = None,
 ) -> pd.DataFrame:
     """
-    Calculate phase-randomisation corrected FSC between two half-maps.
+        Calculate phase-randomisation corrected FSC between two half-maps.
 
-    Implements the masked-corrected FSC procedure of Chen et al. (2013,
-    Ultramicroscopy 142:18-25): phases of the *unmasked* half-maps are
-    randomised beyond ``fourier_cutoff``, the mask is applied in real space
-    after the inverse FFT, and the resulting noise-floor FSC is used to
-    correct the masked FSC.
+        Implements the masked-corrected FSC procedure of Chen et al. (2013,
+        Ultramicroscopy 142:18-25): phases of the *unmasked* half-maps are
+        randomised beyond ``fourier_cutoff``, the mask is applied in real space
+        after the inverse FFT, and the resulting noise-floor FSC is used to
+        correct the masked FSC.
 
-    Parameters
-    ----------
-    input_map_even : MapSource
-        First half-map: file path or 3-D ndarray. Normalized via :func:`read`.
-    input_map_odd : MapSource
-        Second half-map: file path or 3-D ndarray. Normalized via :func:`read`.
-    pixel_size : float, optional
-        Pixel size in Angstroms. When given, the x-axis is expressed as
-        spatial frequency in 1/Ã; otherwise the Fourier shell index is used.
-    input_mask : MapSource, optional
-        Real-space mask, either as an ndarray or a path to a mask file. A
-        box-filling mask of ones is used when None. Default is None.
-    n_repeats : int, default=10
-        Number of phase-randomisation repeats (default 10).  Set to 0 or
-        None to skip phase-randomisation correction.
-    fourier_cutoff : int, optional
-        Shell index beyond which phases are randomised.  Determined from
-        box size automatically when None (box//10 for box<100, box//15 for
-        box<210, 15 otherwise).
-    output_path : PathOrStr, optional
-        File path for saving results.  Extension selects format:
-        ``.csv`` â comma-separated table; ``.xml`` â ChimeraX-compatible XML.
-        The best available FSC column (corrected or uncorrected) is written.
+        Parameters
+        ----------
+        input_map_even : MapSource
+            First half-map: file path or 3-D ndarray. Normalized via :func:`read`.
+        input_map_odd : MapSource
+            Second half-map: file path or 3-D ndarray. Normalized via :func:`read`.
+        pixel_size : float, optional
+            Pixel size in Angstroms. When given, the x-axis is expressed as
+            spatial frequency in 1/Ã
+    ; otherwise the Fourier shell index is used.
+        input_mask : MapSource, optional
+            Real-space mask, either as an ndarray or a path to a mask file. A
+            box-filling mask of ones is used when None. Default is None.
+        n_repeats : int, default=10
+            Number of phase-randomisation repeats (default 10).  Set to 0 or
+            None to skip phase-randomisation correction.
+        fourier_cutoff : int, optional
+            Shell index beyond which phases are randomised.  Determined from
+            box size automatically when None (box//10 for box<100, box//15 for
+            box<210, 15 otherwise).
+        output_path : PathOrStr, optional
+            File path for saving results.  Extension selects format:
+            ``.csv`` â comma-separated table; ``.xml`` â ChimeraX-compatible XML.
+            The best available FSC column (corrected or uncorrected) is written.
 
-    Returns
-    -------
-    pandas.DataFrame
-        Columns: ``x``, ``uncorrected_fsc`` and, when phase randomisation
-        is performed, ``corrected_fsc`` and ``mean_phase_fsc``.
+        Returns
+        -------
+        pandas.DataFrame
+            Columns: ``x``, ``uncorrected_fsc`` and, when phase randomisation
+            is performed, ``corrected_fsc`` and ``mean_phase_fsc``.
 
-    Raises
-    ------
-    ValueError
-        If half-map shapes do not match, volumes are not cubic 3-D arrays,
-        the mask shape differs from the half-maps, or an unsupported output
-        extension is provided.
+        Raises
+        ------
+        ValueError
+            If half-map shapes do not match, volumes are not cubic 3-D arrays,
+            the mask shape differs from the half-maps, or an unsupported output
+            extension is provided.
     """
     map_a = read(input_map_even)
     map_b = read(input_map_odd)
