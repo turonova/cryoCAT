@@ -6,6 +6,7 @@ from cryocat.analysis import pana
 from cryocat.utils import imageutils
 import pytest
 from pathlib import Path
+from scipy.spatial.transform import Rotation as srot
 
 # IMPORTANT: pytest-mock needs to be installed within environment to run these tests
 
@@ -476,3 +477,333 @@ class TestGenerateCtf:
         slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
         result = imageutils.generate_ctf_slice(wl_no_pshift, slices, weights, binning=1)
         assert result.shape == cubic_filter.shape
+
+
+# ── Layer 1 pure-compute functions ────────────────────────────────────────────
+
+
+def _gaussian_map(size=32, peak_sigma=3.0):
+    """Synthetic 3D Gaussian-peaked volume centred in the array."""
+    center = size // 2
+    coords = np.arange(size) - center
+    x, y, z = np.meshgrid(coords, coords, coords, indexing="ij")
+    return np.exp(-(x**2 + y**2 + z**2) / (2.0 * peak_sigma**2))
+
+
+class TestFilterTemplateDf:
+    @pytest.fixture
+    def df(self):
+        return pd.DataFrame({
+            "Structure": ["ribo", "ribo", "tric", "tric"],
+            "Boxsize": [80, 80, 64, 64],
+            "Done": [True, False, True, False],
+        })
+
+    def test_single_condition(self, df):
+        idx = pana.filter_template_df(df.copy(), {"Structure": "ribo"})
+        assert list(idx) == [0, 1]
+
+    def test_multiple_conditions(self, df):
+        idx = pana.filter_template_df(df.copy(), {"Structure": "ribo", "Done": True})
+        assert list(idx) == [0]
+
+    def test_empty_result(self, df):
+        idx = pana.filter_template_df(df.copy(), {"Structure": "none"})
+        assert len(idx) == 0
+
+    def test_sort_by(self, df):
+        idx = pana.filter_template_df(df.copy(), {"Done": False}, sort_by="Boxsize")
+        boxes = df.loc[idx, "Boxsize"].tolist()
+        assert boxes == sorted(boxes)
+
+
+class TestMaskStats:
+    def test_returns_required_keys(self):
+        soft = np.ones((10, 10, 10)) * 0.8
+        sharp = np.ones((10, 10, 10))
+        result = pana.mask_stats(soft, sharp)
+        assert set(result.keys()) == {"voxels_soft", "voxels_sharp", "bbox", "solidity"}
+
+    def test_voxels_sharp_positive(self):
+        sharp = np.zeros((10, 10, 10))
+        sharp[3:7, 3:7, 3:7] = 1.0
+        result = pana.mask_stats(sharp.copy(), sharp)
+        assert result["voxels_sharp"] > 0
+
+    def test_solidity_in_range(self):
+        sharp = np.zeros((10, 10, 10))
+        sharp[3:7, 3:7, 3:7] = 1.0
+        result = pana.mask_stats(sharp.copy(), sharp)
+        assert 0.0 <= result["solidity"] <= 1.0
+
+    def test_soft_voxels_uses_threshold(self):
+        soft = np.zeros((10, 10, 10))
+        soft[2:6, 2:6, 2:6] = 0.8  # above 0.5 → counted
+        soft[6:8, 6:8, 6:8] = 0.3  # below 0.5 → ignored
+        sharp = (soft > 0.4).astype(float)
+        result = pana.mask_stats(soft, sharp)
+        assert result["voxels_soft"] == 64  # 4×4×4
+
+
+class TestSharpMaskOverlap:
+    def test_returns_array_of_correct_length(self):
+        mask = np.zeros((16, 16, 16))
+        mask[5:11, 5:11, 5:11] = 1.0
+        rotations = [
+            srot.from_euler("z", 0, degrees=True),
+            srot.from_euler("z", 45, degrees=True),
+            srot.from_euler("z", 90, degrees=True),
+        ]
+        result = pana.sharp_mask_overlap(mask, rotations)
+        assert isinstance(result, np.ndarray)
+        assert len(result) == 3
+
+    def test_non_negative_values(self):
+        mask = np.zeros((16, 16, 16))
+        mask[5:11, 5:11, 5:11] = 1.0
+        rotations = [
+            srot.from_euler("z", 0, degrees=True),
+            srot.from_euler("z", 45, degrees=True),
+        ]
+        result = pana.sharp_mask_overlap(mask, rotations)
+        assert np.all(result >= 0)
+
+    def test_identity_rotation_max_overlap(self):
+        mask = np.zeros((16, 16, 16))
+        mask[5:11, 5:11, 5:11] = 1.0
+        ov_id = pana.sharp_mask_overlap(mask, [srot.from_euler("z", 0, degrees=True)])
+        ov_45 = pana.sharp_mask_overlap(mask, [srot.from_euler("z", 45, degrees=True)])
+        assert ov_id[0] >= ov_45[0]
+
+
+class TestFindMatchingOverlapRow:
+    @pytest.fixture
+    def df(self):
+        return pd.DataFrame({
+            "Tight mask": ["a", "a", "b", "a"],
+            "Degrees": [5.0, 5.0, 5.0, 10.0],
+            "Done": [True, False, True, True],
+        })
+
+    def test_finds_matching_rows(self, df):
+        idx = pana.find_matching_overlap_row(df, 0)
+        assert 0 in idx
+
+    def test_excludes_done_false(self, df):
+        idx = pana.find_matching_overlap_row(df, 0)
+        assert 1 not in idx  # row 1 has Done=False
+
+    def test_empty_when_no_match(self):
+        df = pd.DataFrame({
+            "Tight mask": ["unique"],
+            "Degrees": [7.0],
+            "Done": [False],
+        })
+        idx = pana.find_matching_overlap_row(df, 0)
+        assert len(idx) == 0
+
+    def test_different_mask_excluded(self, df):
+        idx = pana.find_matching_overlap_row(df, 0)
+        assert 2 not in idx  # row 2 has mask="b"
+
+
+class TestDistMapStats:
+    @pytest.fixture
+    def simple_dist_map(self):
+        dm = np.full((30, 30, 30), 20.0)
+        dm[13:18, 13:18, 13:18] = 3.0
+        dm[15, 15, 15] = 1.0
+        return dm, (15, 15, 15)
+
+    def test_returns_required_keys(self, simple_dist_map):
+        dm, center = simple_dist_map
+        result = pana.dist_map_stats(dm, center, degrees=5.0)
+        assert set(result.keys()) == {"vc", "solidity", "label", "vco", "open_label", "dim"}
+
+    def test_label_is_binary(self, simple_dist_map):
+        dm, center = simple_dist_map
+        result = pana.dist_map_stats(dm, center, degrees=5.0)
+        assert set(np.unique(result["label"])).issubset({0.0, 1.0})
+
+    def test_open_label_is_binary(self, simple_dist_map):
+        dm, center = simple_dist_map
+        result = pana.dist_map_stats(dm, center, degrees=5.0)
+        assert set(np.unique(result["open_label"])).issubset({0.0, 1.0})
+
+    def test_is_all_doubles_threshold(self):
+        # Outer ring: values 8 (5 < 8 ≤ 10), visible with is_all but not single
+        dm = np.full((30, 30, 30), 20.0)
+        dm[12:19, 12:19, 12:19] = 8.0   # within 2*degrees=10, not within degrees=5
+        dm[13:18, 13:18, 13:18] = 3.0   # within degrees=5
+        dm[15, 15, 15] = 1.0
+        res_single = pana.dist_map_stats(dm, (15, 15, 15), degrees=5.0, is_all=False)
+        res_all = pana.dist_map_stats(dm, (15, 15, 15), degrees=5.0, is_all=True)
+        assert res_all["vco"] >= res_single["vco"]
+
+
+class TestPeakStatsAndProfiles:
+    @pytest.fixture
+    def scores_vol(self):
+        return _gaussian_map(size=32, peak_sigma=3.0)
+
+    def test_returns_required_keys(self, scores_vol):
+        center = (16, 16, 16)
+        result = pana.peak_stats_and_profiles(scores_vol, center, 1.0)
+        expected_keys = {"peak_value", "line_profiles", "drop_x", "drop_y", "drop_z",
+                         "peak_x", "peak_y", "peak_z"}
+        for r in range(1, 6):
+            expected_keys |= {f"mean_{r}", f"median_{r}", f"var_{r}"}
+        assert expected_keys.issubset(set(result.keys()))
+
+    def test_line_profiles_shape(self, scores_vol):
+        center = (16, 16, 16)
+        result = pana.peak_stats_and_profiles(scores_vol, center, 1.0)
+        lp = result["line_profiles"]
+        assert lp.ndim == 2 and lp.shape[1] == 3
+
+    def test_spherical_stats_for_all_radii(self, scores_vol):
+        center = (16, 16, 16)
+        result = pana.peak_stats_and_profiles(scores_vol, center, 1.0)
+        for r in range(1, 6):
+            assert f"mean_{r}" in result and f"median_{r}" in result and f"var_{r}" in result
+
+
+class TestPeakShapes:
+    @pytest.fixture
+    def scores_vol(self):
+        return _gaussian_map(size=32, peak_sigma=4.0)
+
+    def test_returns_required_keys(self, scores_vol):
+        result = pana.peak_shapes(scores_vol)
+        assert {"tp_shape", "gp_shape", "hp_shape", "peak_value"}.issubset(set(result.keys()))
+
+    def test_peak_value_is_float(self, scores_vol):
+        result = pana.peak_shapes(scores_vol)
+        assert isinstance(result["peak_value"], float)
+
+    def test_shape_arrays_length_3(self, scores_vol):
+        result = pana.peak_shapes(scores_vol)
+        for key in ("tp_shape", "gp_shape", "hp_shape"):
+            assert len(result[key]) == 3
+
+
+class TestShapeStats:
+    def test_returns_dataframe(self):
+        mask = np.zeros((20, 20, 20))
+        mask[5:10, 5:10, 5:10] = 1.0
+        result = pana.shape_stats(mask)
+        assert isinstance(result, pd.DataFrame)
+
+    def test_has_expected_columns(self):
+        mask = np.zeros((20, 20, 20))
+        mask[5:10, 5:10, 5:10] = 1.0
+        result = pana.shape_stats(mask)
+        assert "label" in result.columns and "solidity" in result.columns
+
+    def test_one_component(self):
+        mask = np.zeros((20, 20, 20))
+        mask[5:10, 5:10, 5:10] = 1.0
+        assert len(pana.shape_stats(mask)) == 1
+
+    def test_two_components(self):
+        mask = np.zeros((30, 30, 30))
+        mask[2:6, 2:6, 2:6] = 1.0
+        mask[20:25, 20:25, 20:25] = 1.0
+        assert len(pana.shape_stats(mask)) == 2
+
+
+class TestBuildSummaryFigure:
+    @pytest.fixture
+    def minimal_inputs(self):
+        np.random.seed(0)
+        n = 10
+        rot_info = pd.DataFrame({
+            "Tight mask overlap": np.arange(n, dtype=float),
+            "ang_dist": np.linspace(0, 90, n),
+            "ccc_masked": np.random.rand(n),
+        })
+        line_profiles = pd.DataFrame({
+            "x": np.random.rand(8), "y": np.random.rand(8), "z": np.random.rand(8),
+        })
+        s2 = np.random.rand(8, 8)
+        cross_slices = [[s2, s2, s2] for _ in range(6)]
+        dicts = [[["k1", "v1"], ["k2", "v2"]], [["k3", "v3"]], [["k4", "v4"]]]
+        return dicts, rot_info, line_profiles, cross_slices
+
+    def test_returns_figure(self, minimal_inputs):
+        import plotly.graph_objects as go
+        dicts, rot_info, line_profiles, cross_slices = minimal_inputs
+        fig = pana.build_summary_figure("Test", dicts, rot_info, line_profiles, cross_slices, 1.0)
+        assert isinstance(fig, go.Figure)
+
+    def test_with_hist_returns_figure(self, minimal_inputs):
+        import plotly.graph_objects as go
+        dicts, rot_info, line_profiles, cross_slices = minimal_inputs
+        hist_info = pd.DataFrame({
+            "ang_dist": np.random.rand(100),
+            "cone_dist": np.random.rand(100),
+            "inplane_dist": np.random.rand(100),
+        })
+        hist_info2 = pd.DataFrame({
+            "ccc_masked": np.random.rand(359),
+            "cone_ccc_masked": np.random.rand(359),
+            "inplane_ccc_masked": np.random.rand(359),
+        })
+        fig = pana.build_summary_figure(
+            "Test", dicts, rot_info, line_profiles, cross_slices, 1.0,
+            hist_info=hist_info, hist_info2=hist_info2,
+        )
+        assert isinstance(fig, go.Figure)
+
+
+class TestRunAnalysisArgsFromRow:
+    @pytest.fixture
+    def tmpl_row(self):
+        return pd.Series({
+            "Structure": "ribosome",
+            "Template": "mytemplate",
+            "Mask": "mymask",
+            "Compare": "tmpl",
+            "Phi": 0.0, "Theta": 45.0, "Psi": 90.0,
+            "Symmetry": 1,
+        })
+
+    @pytest.fixture
+    def subtomo_row(self):
+        return pd.Series({
+            "Structure": "ribosome",
+            "Template": "mytemplate",
+            "Mask": "mymask",
+            "Compare": "subtomo",
+            "Tomo map": "tomofile",
+            "Tomogram": "ts_001",
+            "Apply wedge": False,
+            "Boxsize": 80,
+            "Binning": 4,
+            "Phi": 0.0, "Theta": 0.0, "Psi": 0.0,
+            "Symmetry": 1,
+        })
+
+    def test_returns_required_keys(self, tmpl_row):
+        result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
+        assert set(result.keys()) == {
+            "structure_name", "template", "mask", "tomo",
+            "wedge_tomo", "wedge_tmpl", "starting_angle", "cyclic_symmetry",
+        }
+
+    def test_tmpl_compare_tomo_equals_template(self, tmpl_row):
+        result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
+        assert result["tomo"] == result["template"]
+
+    def test_no_wedge_when_apply_wedge_false(self, subtomo_row):
+        result = pana._run_analysis_args_from_row(subtomo_row, "/base/", "/wedge/")
+        assert result["wedge_tomo"] is None
+        assert result["wedge_tmpl"] is None
+
+    def test_starting_angle_shape(self, tmpl_row):
+        result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
+        assert result["starting_angle"].shape == (1, 3)
+
+    def test_structure_name_in_result(self, tmpl_row):
+        result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
+        assert result["structure_name"] == "ribosome"

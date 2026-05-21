@@ -1,3 +1,22 @@
+"""Peak analysis (pana) — batch orchestration for template-matching peak analysis.
+
+Two-layer design
+----------------
+Layer 1  Pure-compute functions (no I/O): ``mask_stats``, ``sharp_mask_overlap``,
+         ``find_matching_overlap_row``, ``dist_map_stats``, ``peak_stats_and_profiles``,
+         ``peak_shapes``, ``shape_stats``, ``filter_template_df``,
+         ``build_summary_figure``, ``_run_analysis_args_from_row``.
+
+Layer 2  Batch wrappers that handle CSV/file I/O and delegate computation to
+         Layer 1: ``get_mask_stats``, ``compute_sharp_mask_overlap``,
+         ``check_existing_tight_mask_values``, ``compute_dist_maps_voxels``,
+         ``compute_center_peak_stats_and_profiles``, ``compute_peak_shapes``,
+         ``get_shape_stats``, ``get_indices``, ``create_summary_pdf``,
+         ``run_analysis``, ``run_angle_analysis``.
+"""
+
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 from plotly.subplots import make_subplots
@@ -17,10 +36,6 @@ from cryocat.core import cryomask
 import os
 from skimage import measure
 from skimage import morphology
-
-import warnings
-
-warnings.filterwarnings("ignore")
 
 
 def generate_exposure(wedgelist, slice_idx, slice_weight, binning):
@@ -581,6 +596,31 @@ def create_output_folder_path(folder_path, structure_name, folder_spec):
     return output_path
 
 
+def filter_template_df(df: pd.DataFrame, conditions: dict, sort_by: str | None = None) -> pd.Index:
+    """Filter an already-loaded template DataFrame and return matching indices.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Template list DataFrame (indexed by row id).
+    conditions : dict
+        Keys are column names; values are the required equality values.
+        All conditions must match (logical AND).
+    sort_by : str, optional
+        Column name to sort the filtered result by ascending value.
+
+    Returns
+    -------
+    pandas.Index
+        Index of rows satisfying all conditions, optionally sorted.
+    """
+    for key, value in conditions.items():
+        df = df.loc[df[key] == value, :]
+    if sort_by is not None:
+        df = df.sort_values(by=sort_by, ascending=True)
+    return df.index
+
+
 def get_indices(template_list, conditions, sort_by=None):
     """Get the indices of a filtered and optionally sorted template list csv file.
 
@@ -600,17 +640,7 @@ def get_indices(template_list, conditions, sort_by=None):
     pandas.Index
         Index of the filtered (and optionally sorted) rows in the template list DataFrame.
     """
-
-    temp_df = pd.read_csv(template_list, index_col=0)
-
-    for key, value in conditions.items():
-        temp_df = temp_df.loc[temp_df[key] == value, :]
-        # display(temp_df)
-
-    if sort_by is not None:
-        temp_df = temp_df.sort_values(by=sort_by, ascending=True)
-
-    return temp_df.index
+    return filter_template_df(pd.read_csv(template_list, index_col=0), conditions, sort_by=sort_by)
 
 
 def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_path):
@@ -652,7 +682,7 @@ def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_path):
     angles = m.df.loc[m.df.index[max_idx], ["phi", "theta", "psi"]].to_numpy()
 
     subvolume = cryomap.extract_subvolume(tomo, coord, subtomo_shape)
-    subvolume_sh = cryomap.shift2(subvolume, shifts)
+    subvolume_sh = cryomap.shift(subvolume, shifts)
     # subvolume_rot = cryomap.rotate(subvolume_sh,rotation_angles=angles)
 
     if output_path is not None:
@@ -717,6 +747,262 @@ def create_subtomograms_for_tm(template_list, parent_folder_path):
     return temp_df
 
 
+# ── Layer 1: pure-compute functions ─────────────────────────────────────────
+
+
+def mask_stats(soft_mask: np.ndarray, sharp_mask: np.ndarray) -> dict:
+    """Compute volume statistics for a soft/sharp mask pair.
+
+    Parameters
+    ----------
+    soft_mask : numpy.ndarray
+        Soft (smooth-boundary) mask volume.
+    sharp_mask : numpy.ndarray
+        Tight (binary) mask volume.
+
+    Returns
+    -------
+    dict
+        ``voxels_soft`` – nonzero voxels in *soft_mask* above 0.5;
+        ``voxels_sharp`` – nonzero voxels in *sharp_mask*;
+        ``bbox`` – bounding-box dimensions (x, y, z) of *sharp_mask*;
+        ``solidity`` – solidity of *sharp_mask*.
+    """
+    solidity = cryomask.compute_solidity(sharp_mask)
+    voxels, bbox = imageutils.mask_voxel_count_and_bbox(sharp_mask)
+    voxels_soft, _ = imageutils.mask_voxel_count_and_bbox(soft_mask, threshold=0.5)
+    return {"voxels_soft": voxels_soft, "voxels_sharp": voxels, "bbox": bbox, "solidity": solidity}
+
+
+def sharp_mask_overlap(mask: np.ndarray, rotations: list) -> np.ndarray:
+    """Compute the overlap between a mask and its rotated versions.
+
+    Parameters
+    ----------
+    mask : numpy.ndarray
+        Binary or near-binary mask volume.
+    rotations : sequence of scipy.spatial.transform.Rotation
+        Per-rotation objects to apply to *mask*.
+
+    Returns
+    -------
+    numpy.ndarray of int
+        Voxel count of the intersection ``mask_rotated * mask`` for each rotation.
+    """
+    voxel_count = []
+    for rot in rotations:
+        mask_rot = cryomap.rotate(mask, rotation=rot, transpose_rotation=True)
+        mask_rot = np.where(mask_rot > 0.1, 1.0, 0.0)
+        voxel_count.append(np.count_nonzero(mask_rot * mask))
+    return np.asarray(voxel_count)
+
+
+def find_matching_overlap_row(template_df: pd.DataFrame, i: int) -> pd.Index:
+    """Return indices of done rows with the same tight mask and degrees as row *i*.
+
+    Parameters
+    ----------
+    template_df : pandas.DataFrame
+        Already-loaded template list (indexed by row id).
+    i : int
+        Row index whose ``Tight mask`` and ``Degrees`` values are used as criteria.
+
+    Returns
+    -------
+    pandas.Index
+        Indices of rows where ``Done`` is truthy and both ``Tight mask`` and
+        ``Degrees`` match those of row *i*.
+    """
+    tm = template_df.at[i, "Tight mask"]
+    deg = template_df.at[i, "Degrees"]
+    match = (
+        template_df["Done"].astype(bool)
+        & (template_df["Tight mask"] == tm)
+        & (template_df["Degrees"] == deg)
+    )
+    return template_df.index[match]
+
+
+def dist_map_stats(dist_map: np.ndarray, peak_center: tuple[int, ...], degrees: float, is_all: bool = False, morph_footprint: tuple[int, ...] = (2, 2, 2)) -> dict:
+    """Compute morphological statistics for a distance map around a peak.
+
+    Parameters
+    ----------
+    dist_map : numpy.ndarray
+        Angular distance map volume.
+    peak_center : tuple of int
+        ``(z, y, x)`` voxel coordinates of the highest-CC peak.
+    degrees : float
+        Search-angle increment used to threshold the distance map.
+    is_all : bool, default False
+        When True the threshold is ``2 * degrees`` (for the combined
+        ``dist_all`` map); otherwise ``degrees`` is used directly.
+    morph_footprint : tuple of int, default (2, 2, 2)
+        Structuring element size for morphological opening.
+
+    Returns
+    -------
+    dict
+        ``vc`` – voxel count of the peak component;
+        ``solidity`` – solidity of the peak component;
+        ``label`` – binary volume isolating the peak component;
+        ``vco`` – voxel count after morphological opening;
+        ``open_label`` – binary volume after opening;
+        ``dim`` – bounding-box dimensions (x, y, z) of the opened component.
+    """
+    threshold = 2.0 * degrees if is_all else degrees
+
+    dist_map = dist_map.copy()
+    dist_map[peak_center[0], peak_center[1], peak_center[2]] = degrees
+    dist_map = np.where(dist_map <= threshold, 1.0, 0.0)
+
+    dist_label = measure.label(dist_map, connectivity=1)
+    dist_props = pd.DataFrame(measure.regionprops_table(dist_label, properties=("label", "area", "solidity")))
+
+    peak_label = dist_label[peak_center[0], peak_center[1], peak_center[2]]
+    vc = dist_props.loc[dist_props["label"] == peak_label, "area"].values
+    sol = dist_props.loc[dist_props["label"] == peak_label, "solidity"].values
+    label_binary = np.where(dist_label == peak_label, 1.0, 0.0)
+
+    open_label = morphology.binary_opening(label_binary, footprint=np.ones(morph_footprint), out=None)
+    open_label = measure.label(open_label, connectivity=1)
+    peak_label_open = open_label[peak_center[0], peak_center[1], peak_center[2]]
+    open_label_binary = np.where(open_label == peak_label_open, 1.0, 0.0)
+    vco = np.count_nonzero(open_label_binary)
+    dim = cryomask.get_mass_dimensions(open_label_binary)
+
+    return {
+        "vc": vc,
+        "solidity": sol,
+        "label": label_binary,
+        "vco": vco,
+        "open_label": open_label_binary,
+        "dim": dim,
+    }
+
+
+def peak_stats_and_profiles(scores_map: np.ndarray, peak_center: tuple[int, ...], peak_value: float) -> dict:
+    """Compute line profiles and spherical-neighborhood statistics for a scores map peak.
+
+    Parameters
+    ----------
+    scores_map : numpy.ndarray
+        Raw 3-D cross-correlation scores volume.
+    peak_center : tuple of int
+        ``(z, y, x)`` voxel coordinates of the highest-CC peak.
+    peak_value : float
+        CC score at *peak_center*.
+
+    Returns
+    -------
+    dict
+        ``line_profiles`` – 2-D array of shape ``(max_dim, 3)`` (x/y/z profiles);
+        ``drop_x``, ``drop_y``, ``drop_z`` – score drop from peak to neighbours;
+        ``peak_x``, ``peak_y``, ``peak_z`` – peak voxel coordinates;
+        ``mean_r``, ``median_r``, ``var_r`` for *r* = 1..5 – statistics over
+        spheres of increasing radius centred on *peak_center*.
+    """
+    _, _, line_profiles = tmana.create_starting_parameters_1D(scores_map)
+
+    stats = {"peak_value": peak_value, "line_profiles": line_profiles}
+
+    for j, dim in enumerate(["x", "y", "z"]):
+        drop = peak_value - (line_profiles[peak_center[j] - 1, j] + line_profiles[peak_center[j] + 1, j]) / 2.0
+        stats["drop_" + dim] = drop
+        stats["peak_" + dim] = peak_center[j]
+
+    for r in range(1, 6):
+        cc_mask = cryomask.spherical_mask(np.asarray(scores_map.shape), radius=r, center=peak_center)
+        masked_map = scores_map[np.nonzero(scores_map * cc_mask)]
+        stats[f"mean_{r}"] = np.mean(masked_map)
+        stats[f"median_{r}"] = np.median(masked_map)
+        stats[f"var_{r}"] = np.var(masked_map)
+
+    return stats
+
+
+def peak_shapes(scores_map: np.ndarray) -> dict:
+    """Evaluate peak shapes using triangle, Gaussian, and hard thresholding.
+
+    Parameters
+    ----------
+    scores_map : numpy.ndarray
+        3-D cross-correlation scores volume.
+
+    Returns
+    -------
+    dict
+        ``tp_shape``, ``gp_shape``, ``hp_shape`` – principal dimensions (x, y, z)
+        of the peak ellipsoid under each threshold method;
+        ``peak_value`` – maximum CC score;
+        ``t_map``, ``t_th_map``, ``t_surf`` – triangle-threshold outputs;
+        ``g_map``, ``g_th_map``, ``g_surf`` – Gaussian-threshold outputs;
+        ``h_map``, ``h_th_map``, ``h_surf`` – hard-threshold outputs.
+    """
+    t_map, tp_shape, peak_value, t_th_map, t_surf = tmana.evaluate_scores_map(
+        scores_map, label_type="ellipsoid", threshold_type="triangle"
+    )
+    g_map, gp_shape, _, g_th_map, g_surf = tmana.evaluate_scores_map(
+        scores_map, label_type="ellipsoid", threshold_type="gauss"
+    )
+    h_map, hp_shape, _, h_th_map, h_surf = tmana.evaluate_scores_map(
+        scores_map, label_type="ellipsoid", threshold_type="hard"
+    )
+    return {
+        "tp_shape": tp_shape,
+        "gp_shape": gp_shape,
+        "hp_shape": hp_shape,
+        "peak_value": peak_value,
+        "t_map": t_map,
+        "t_th_map": t_th_map,
+        "t_surf": t_surf,
+        "g_map": g_map,
+        "g_th_map": g_th_map,
+        "g_surf": g_surf,
+        "h_map": h_map,
+        "h_th_map": h_th_map,
+        "h_surf": h_surf,
+    }
+
+
+def shape_stats(sharp_mask: np.ndarray) -> pd.DataFrame:
+    """Compute region properties for connected components of a sharp mask.
+
+    Parameters
+    ----------
+    sharp_mask : numpy.ndarray
+        Binary tight mask volume.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per labeled region with columns: ``label``, ``area``,
+        ``area_bbox``, ``area_convex``, ``equivalent_diameter_area``,
+        ``euler_number``, ``feret_diameter_max``, ``inertia_tensor``,
+        ``solidity``.
+    """
+    mask_label = measure.label(sharp_mask, connectivity=1)
+    return pd.DataFrame(
+        measure.regionprops_table(
+            mask_label,
+            properties=(
+                "label",
+                "area",
+                "area_bbox",
+                "area_convex",
+                "equivalent_diameter_area",
+                "euler_number",
+                "feret_diameter_max",
+                "inertia_tensor",
+                "solidity",
+            ),
+        )
+    )
+
+
+# ── Layer 2: batch wrappers ───────────────────────────────────────────────────
+
+
 def get_mask_stats(template_list, indices, parent_folder_path):
     """Compute and update mask statistics for specified rows in a template list.
 
@@ -749,18 +1035,14 @@ def get_mask_stats(template_list, indices, parent_folder_path):
         soft_mask = cryomap.read(create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Mask"]))
         sharp_mask = cryomap.read(create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tight mask"]))
 
-        # calculate how compactful the mask is
-        solidity = cryomask.compute_solidity(sharp_mask)
+        stats = mask_stats(soft_mask, sharp_mask)
 
-        voxels, bbox = imageutils.mask_voxel_count_and_bbox(sharp_mask)
-        voxels_soft, _ = imageutils.mask_voxel_count_and_bbox(soft_mask, threshold=0.5)
-
-        temp_df.at[i, "Voxels"] = voxels_soft  # total vol of soft mask
-        temp_df.at[i, "Voxels TM"] = voxels  # total vol of sharp mask
-        temp_df.at[i, "Dim x"] = bbox[0]  # bounding box x for mask element
-        temp_df.at[i, "Dim y"] = bbox[1]  # bounding box y for mask element
-        temp_df.at[i, "Dim z"] = bbox[2]  # bounding box z for mask element
-        temp_df.at[i, "Solidity"] = solidity
+        temp_df.at[i, "Voxels"] = stats["voxels_soft"]
+        temp_df.at[i, "Voxels TM"] = stats["voxels_sharp"]
+        temp_df.at[i, "Dim x"] = stats["bbox"][0]
+        temp_df.at[i, "Dim y"] = stats["bbox"][1]
+        temp_df.at[i, "Dim z"] = stats["bbox"][2]
+        temp_df.at[i, "Solidity"] = stats["solidity"]
 
         temp_df.to_csv(template_list)  # save new results back to template list
 
@@ -801,20 +1083,14 @@ def compute_sharp_mask_overlap(template_list, indices, angle_list_path, parent_f
         angles = ioutils.rot_angles_load(angle_list, angles_order)
         rotations = srot.from_euler("zxz", angles, degrees=True)
 
-        voxel_count = []
-
-        # for each rotation, compute the overlapping vol w/ non-rotated mask
-        for j in rotations:
-            mask_rot = cryomap.rotate(mask, rotation=j, transpose_rotation=True)
-            mask_rot = np.where(mask_rot > 0.1, 1.0, 0.0)
-            voxel_count.append(np.count_nonzero(mask_rot * mask))
+        voxel_count = sharp_mask_overlap(mask, rotations)
 
         output_base = create_output_base_name(i)
         output_folder = create_output_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
 
         csv_name = output_folder + output_base + ".csv"
         info_df = pd.read_csv(csv_name, index_col=0)
-        info_df["Tight mask overlap"] = np.asarray(voxel_count)
+        info_df["Tight mask overlap"] = voxel_count
         info_df.to_csv(csv_name)
 
 
@@ -856,8 +1132,7 @@ def check_existing_tight_mask_values(template_list, indices, parent_folder_path,
 
         # if the value does not exist, find and copy from other "same" analysis outputs
         if "Tight mask overlap" not in rot_info.columns:
-            tm_spec = {"Done": True, "Tight mask": temp_df.at[i, "Tight mask"], "Degrees": temp_df.at[i, "Degrees"]}
-            done_idx = get_indices(template_list, tm_spec)
+            done_idx = find_matching_overlap_row(temp_df, i)
 
             for j in done_idx:
                 csv_file = (
@@ -954,56 +1229,21 @@ def compute_dist_maps_voxels(template_list, indices, parent_folder_path, morph_f
 
         for j, value in enumerate(dist_names):
             dist_map = cryomap.read(output_folder + output_base + "_angles_" + value + ".em")
+            stats = dist_map_stats(dist_map, peak_center, degrees, is_all=(j == 0), morph_footprint=morph_footprint)
 
-            # save peak coords so they don't disappear when masked (value could be > degrees)
-            dist_map[peak_center[0], peak_center[1], peak_center[2]] = degrees
-
-            # only save where the angular distance is within search angle degree
-            if j == 0:
-                dist_map = np.where(dist_map <= 2.0 * degrees, 1.0, 0.0)  #
-            else:
-                dist_map = np.where(dist_map <= degrees, 1.0, 0.0)
-
-            # label and measure each connected component in dist_map
-            dist_label = measure.label(dist_map, connectivity=1)
-            dist_props = pd.DataFrame(measure.regionprops_table(dist_label, properties=("label", "area", "solidity")))
-
-            # from all the connected components, find the ones that have highest ccc
-            peak_label = dist_label[peak_center[0], peak_center[1], peak_center[2]]
-            label_vc = dist_props.loc[dist_props["label"] == peak_label, "area"].values
-            column_name = "VC " + value  # voxel count
-            temp_df.at[i, column_name] = label_vc
-
-            label_sol = dist_props.loc[dist_props["label"] == peak_label, "solidity"].values
-            column_name = "Solidity " + value
-            temp_df.at[i, column_name] = label_sol
-
-            # save highest ccc connect components into a new vol as binary
-            dist_label = np.where(dist_label == peak_label, 1.0, 0.0)
+            temp_df.at[i, "VC " + value] = stats["vc"]
+            temp_df.at[i, "Solidity " + value] = stats["solidity"]
             cryomap.write(
-                dist_label, output_folder + output_base + "_angles_" + value + "_label.em", data_type=np.single
+                stats["label"], output_folder + output_base + "_angles_" + value + "_label.em", data_type=np.single
             )
-
-            # remove labels that are smaller than the footprint
-            open_label = morphology.binary_opening(dist_label, footprint=np.ones(morph_footprint), out=None)
-            open_label = measure.label(open_label, connectivity=1)
-            peak_label = open_label[peak_center[0], peak_center[1], peak_center[2]]
-            open_label = np.where(open_label == peak_label, 1.0, 0.0)
-
-            # count the volumes of the size filtered peaklabels
-            label_vc = np.count_nonzero(open_label)
-            column_name = "VCO " + value
-            temp_df.at[i, column_name] = label_vc
+            temp_df.at[i, "VCO " + value] = stats["vco"]
             cryomap.write(
-                open_label, output_folder + output_base + "_angles_" + value + "_label_open.em", data_type=np.single
+                stats["open_label"],
+                output_folder + output_base + "_angles_" + value + "_label_open.em",
+                data_type=np.single,
             )
-            # print(column_name, label_vc)
-
-            # get the dimensions of the bounding box for each open peak label
-            open_dim = cryomask.get_mass_dimensions(open_label)
             for d, dim in enumerate(["x", "y", "z"]):
-                column_name = "O " + value + " " + dim
-                temp_df.at[i, column_name] = open_dim[d]
+                temp_df.at[i, "O " + value + " " + dim] = stats["dim"][d]
 
         temp_df.to_csv(template_list)  # to save what was finished in case of a crush
 
@@ -1058,29 +1298,21 @@ def compute_center_peak_stats_and_profiles(template_list, indices, parent_folder
         # find the coords and values of highest cc values
         peak_center, peak_value, _ = tmana.create_starting_parameters_2D(masked_map)
 
-        # for each peak, find how the cc value changes in each x,y,z direction
-        _, _, line_profiles = tmana.create_starting_parameters_1D(scores_map)
+        stats = peak_stats_and_profiles(scores_map, peak_center, peak_value)
 
-        temp_df.at[i, "Peak value"] = peak_value
+        temp_df.at[i, "Peak value"] = stats["peak_value"]
 
-        line_pd = pd.DataFrame(data=line_profiles, columns=["x", "y", "z"])
+        line_pd = pd.DataFrame(data=stats["line_profiles"], columns=["x", "y", "z"])
         line_pd.to_csv(output_folder + output_base + "_peak_line_profiles.csv")
 
-        # for each axis, find out the value diff between peaks and surrounding pixels
-        for j, dim in enumerate(["x", "y", "z"]):
-            peak_difference = (
-                peak_value - (line_profiles[peak_center[j] - 1, j] + line_profiles[peak_center[j] + 1, j]) / 2.0
-            )
-            temp_df.at[i, "Drop " + dim] = peak_difference
-            temp_df.at[i, "Peak " + dim] = peak_center[j]  # peak coord in that axis
+        for dim in ["x", "y", "z"]:
+            temp_df.at[i, "Drop " + dim] = stats["drop_" + dim]
+            temp_df.at[i, "Peak " + dim] = stats["peak_" + dim]
 
-        # look at only the peak area (with 5 different sizes), and calculate some stats
         for r in range(1, 6):
-            cc_mask = cryomask.spherical_mask(np.asarray(scores_map.shape), radius=r, center=peak_center)
-            masked_map = scores_map[np.nonzero(scores_map * cc_mask)]
-            temp_df.at[i, "Mean " + str(r)] = np.mean(masked_map)
-            temp_df.at[i, "Median " + str(r)] = np.median(masked_map)
-            temp_df.at[i, "Var " + str(r)] = np.var(masked_map)
+            temp_df.at[i, "Mean " + str(r)] = stats[f"mean_{r}"]
+            temp_df.at[i, "Median " + str(r)] = stats[f"median_{r}"]
+            temp_df.at[i, "Var " + str(r)] = stats[f"var_{r}"]
 
         temp_df.to_csv(template_list)
 
@@ -1297,6 +1529,59 @@ def analyze_rotations(
     return res_table, final_ccc_map, final_angles_map, final_ccc_map_masked
 
 
+def _run_analysis_args_from_row(row: pd.Series, parent_folder_path: str, wedge_path: str) -> dict:
+    """Resolve file paths and rotation args for one template-list row.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        A single row of the template-list DataFrame, indexed by column name.
+    parent_folder_path : str
+        Root folder containing structure subfolders, templates, and tomograms.
+    wedge_path : str
+        Directory containing wedge mask files.
+
+    Returns
+    -------
+    dict
+        ``structure_name``, ``template``, ``mask``, ``tomo``,
+        ``wedge_tomo``, ``wedge_tmpl``, ``starting_angle`` (shape ``(1, 3)``),
+        ``cyclic_symmetry``.
+    """
+    structure_name = row["Structure"]
+    template = create_em_path(parent_folder_path, structure_name, row["Template"])
+    mask = create_em_path(parent_folder_path, structure_name, row["Mask"])
+
+    wedge_tomo = None
+    wedge_tmpl = None
+
+    if row["Compare"] == "tmpl":
+        tomo = template
+    elif row["Compare"] == "subtomo":
+        tomo = create_em_path(parent_folder_path, structure_name, row["Tomo map"])
+        tomo_number = re.findall(r"\d+", row["Tomogram"])[0]
+        if row["Apply wedge"]:
+            wedge_tomo, wedge_tmpl = create_wedge_names(
+                wedge_path, tomo_number, row["Boxsize"], row["Binning"]
+            )
+    else:
+        tomo = create_em_path(parent_folder_path, row["Compare"], row["Tomo map"])
+
+    starting_angle = row[["Phi", "Theta", "Psi"]].to_numpy().reshape(1, 3)
+    cyclic_symmetry = row["Symmetry"]
+
+    return {
+        "structure_name": structure_name,
+        "template": template,
+        "mask": mask,
+        "tomo": tomo,
+        "wedge_tomo": wedge_tomo,
+        "wedge_tmpl": wedge_tmpl,
+        "starting_angle": starting_angle,
+        "cyclic_symmetry": cyclic_symmetry,
+    }
+
+
 def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_folder_path, cc_radius_tol=10):
     """Run peak analysis based on a list with parameters and save results.
 
@@ -1366,57 +1651,33 @@ def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_fol
     temp_df = pd.read_csv(template_list, index_col=0)
 
     for i in indices:
-        structure_name = temp_df.at[i, "Structure"]
-        tmpl_name = temp_df.at[i, "Template"]
-        tmpl_folder = create_structure_path(parent_folder_path, structure_name)
-        template = create_em_path(parent_folder_path, structure_name, tmpl_name)
-        mask = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Mask"])
+        args = _run_analysis_args_from_row(temp_df.loc[i], parent_folder_path, wedge_path)
+
         angle_list = angle_list_path + temp_df.at[i, "Angles"]
-
-        wedge_tomo = None
-        wedge_tmpl = None
-
-        if temp_df.at[i, "Compare"] == "tmpl":
-            tomo = template
-
-        elif temp_df.at[i, "Compare"] == "subtomo":
-            tomo = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tomo map"])
-            tomo_number = re.findall(r"\d+", temp_df.at[i, "Tomogram"])[0]
-
-            if temp_df.at[i, "Apply wedge"]:
-                wedge_tomo, wedge_tmpl = create_wedge_names(
-                    wedge_path, tomo_number, temp_df.at[i, "Boxsize"], temp_df.at[i, "Binning"]
-                )
-        else:
-            tomo = create_em_path(parent_folder_path, temp_df.at[i, "Compare"], temp_df.at[i, "Tomo map"])
-
-        starting_angle = temp_df.loc[[i], ["Phi", "Theta", "Psi"]].to_numpy()
 
         if temp_df.at[i, "Apply angular offset"]:
             angular_offset = np.full((3,), temp_df.at[i, "Degrees"] / 2.0)
         else:
             angular_offset = np.asarray([0, 0, 0])
 
-        cyclic_symmetry = temp_df.at[i, "Symmetry"]
         output_base = create_output_base_name(i)
-        output_folder = create_output_folder_path(parent_folder_path, structure_name, i)
+        output_folder = create_output_folder_path(parent_folder_path, args["structure_name"], i)
 
         temp_df.at[i, "Output folder"] = create_output_folder_name(i)
-
         Path(output_folder).mkdir(parents=True, exist_ok=True)
 
         _ = analyze_rotations(
-            tomogram=tomo,
-            template=template,
-            template_mask=mask,
+            tomogram=args["tomo"],
+            template=args["template"],
+            template_mask=args["mask"],
             input_angles=angle_list,
-            wedge_mask_tomo=wedge_tomo,
-            wedge_mask_tmpl=wedge_tmpl,
+            wedge_mask_tomo=args["wedge_tomo"],
+            wedge_mask_tmpl=args["wedge_tmpl"],
             output_path=output_folder + "/" + output_base,
             angular_offset=angular_offset,
-            starting_angle=starting_angle,
+            starting_angle=args["starting_angle"],
             cc_radius=cc_radius_tol,
-            cyclic_symmetry=cyclic_symmetry,
+            cyclic_symmetry=args["cyclic_symmetry"],
         )[0]
 
         angles_map = output_folder + "/" + output_base + "_angles.em"
@@ -1475,31 +1736,8 @@ def run_angle_analysis(
     temp_df = pd.read_csv(template_list, index_col=0)
 
     for i in indices:
-        structure_name = temp_df.at[i, "Structure"]
-        tmpl_name = temp_df.at[i, "Template"]
-        tmpl_folder = create_structure_path(parent_folder_path, structure_name)
-        template = create_em_path(parent_folder_path, structure_name, tmpl_name)
-        mask = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Mask"])
-
-        wedge_tomo = None
-        wedge_tmpl = None
-
-        if temp_df.at[i, "Compare"] == "tmpl":
-            tomo = template
-
-        elif temp_df.at[i, "Compare"] == "subtomo":
-            tomo = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tomo map"])
-            tomo_number = re.findall(r"\d+", temp_df.at[i, "Tomogram"])[0]
-
-            if temp_df.at[i, "Apply wedge"]:
-                wedge_tomo, wedge_tmpl = create_wedge_names(
-                    wedge_path, tomo_number, temp_df.at[i, "Boxsize"], temp_df.at[i, "Binning"]
-                )
-        else:
-            tomo = create_em_path(parent_folder_path, temp_df.at[i, "Compare"], temp_df.at[i, "Tomo map"])
-
-        starting_angle = temp_df.loc[[i], ["Phi", "Theta", "Psi"]].to_numpy()
-        cyclic_symmetry = temp_df.at[i, "Symmetry"]
+        args = _run_analysis_args_from_row(temp_df.loc[i], parent_folder_path, wedge_path)
+        structure_name = args["structure_name"]
 
         results = np.zeros((angular_range, 8, 3))
 
@@ -1516,16 +1754,16 @@ def run_angle_analysis(
 
             for j in range(3):
                 res_df, cc_map, _, _ = analyze_rotations(
-                    tomogram=tomo,
-                    template=template,
-                    template_mask=mask,
+                    tomogram=args["tomo"],
+                    template=args["template"],
+                    template_mask=args["mask"],
                     input_angles=angles[j, :].reshape(1, 3),
-                    wedge_mask_tomo=wedge_tomo,
-                    wedge_mask_tmpl=wedge_tmpl,
+                    wedge_mask_tomo=args["wedge_tomo"],
+                    wedge_mask_tmpl=args["wedge_tmpl"],
                     output_path=None,
-                    starting_angle=starting_angle,
+                    starting_angle=args["starting_angle"],
                     cc_radius=cc_radius_tol,
-                    cyclic_symmetry=cyclic_symmetry,
+                    cyclic_symmetry=args["cyclic_symmetry"],
                 )
                 results[a, :, j] = res_df.values
                 hist, _ = np.histogram(cc_map, bins=n_bins, range=(0.0, 1.0))
@@ -1584,6 +1822,176 @@ def run_angle_analysis(
             hist_df.to_csv(output_base + "_gradual_angles_histograms.csv")
 
 
+def build_summary_figure(figure_title: str, dicts: list, rot_info: pd.DataFrame, line_profiles: pd.DataFrame, cross_slices: list, peak_val: float, hist_info: pd.DataFrame | None = None, hist_info2: pd.DataFrame | None = None) -> go.Figure:
+    """Build a multi-panel Plotly figure summarising one peak-analysis result.
+
+    Parameters
+    ----------
+    figure_title : str
+        Title string rendered at the top of the figure.
+    dicts : list of list of [str, str]
+        Three sub-lists, each a sequence of ``[key, value]`` pairs used to
+        populate the three summary tables in row 1.
+    rot_info : pandas.DataFrame
+        Per-rotation CC data with columns ``"Tight mask overlap"``,
+        ``"ang_dist"``, and ``"ccc_masked"``.
+    line_profiles : pandas.DataFrame
+        Line profiles along x/y/z through the peak, one column each.
+    cross_slices : list
+        Cross-section arrays from ``cryomap.get_cross_slices``.
+    peak_val : float
+        Maximum CC score; sets the upper bound of the viridis colorbar.
+    hist_info : pandas.DataFrame or None, optional
+        Histogram CSV data (row 3 is included only when not None).
+    hist_info2 : pandas.DataFrame or None, optional
+        Gradual-angles analysis CSV data (paired with *hist_info*).
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    add_hist = hist_info is not None
+
+    n_hm_rows = len(cross_slices)
+    n_top_rows = 2 + (1 if add_hist else 0)
+    total_rows = n_top_rows + n_hm_rows
+
+    specs = [
+        [{"type": "table"}, {"type": "table"}, {"type": "table"}],
+        [{"type": "xy"}, {"type": "xy"}, {"type": "xy"}],
+    ]
+    if add_hist:
+        specs.append([{"type": "xy"}, {"type": "xy"}, None])
+    for _ in range(n_hm_rows):
+        specs.append([{"type": "xy"}, {"type": "xy"}, {"type": "xy"}])
+
+    row_heights_w = [2.5, 1.2]
+    if add_hist:
+        row_heights_w.append(0.8)
+    row_heights_w.extend([1.0] * n_hm_rows)
+
+    # Calculate colorbar y positions based on row layout
+    vs = 0.02
+    content_h = 1.0 - (total_rows - 1) * vs
+    total_w = sum(row_heights_w)
+    row_h_frac = [w / total_w * content_h for w in row_heights_w]
+    row_tops, row_bottoms = [], []
+    cum = 0.0
+    for k, h in enumerate(row_h_frac):
+        top = 1.0 - cum - (vs if k > 0 else 0)
+        row_tops.append(top)
+        row_bottoms.append(top - h)
+        cum += h + (vs if k < total_rows - 1 else 0)
+
+    s = n_top_rows  # index of first heatmap row
+    ca1_y = (row_tops[s] + row_bottoms[s]) / 2
+    ca1_len = row_tops[s] - row_bottoms[s]
+    ca2_y = (row_tops[s + 1] + row_bottoms[s + 2]) / 2
+    ca2_len = row_tops[s + 1] - row_bottoms[s + 2]
+    ca3_y = (row_tops[s + 3] + row_bottoms[s + 5]) / 2
+    ca3_len = row_tops[s + 3] - row_bottoms[s + 5]
+
+    fig = make_subplots(
+        rows=total_rows, cols=3,
+        specs=specs,
+        row_heights=row_heights_w,
+        horizontal_spacing=0.03,
+        vertical_spacing=vs,
+    )
+
+    # Row 1: tables
+    for j, d in enumerate(dicts, start=1):
+        keys = [row[0] for row in d]
+        values = [row[1] for row in d]
+        fig.add_trace(
+            go.Table(
+                header=dict(values=["Parameter", "Value"], align="left",
+                            fill_color="lightgrey", font=dict(size=10)),
+                cells=dict(values=[keys, values], align="left", font=dict(size=10)),
+            ),
+            row=1, col=j,
+        )
+
+    # Row 2: scatter + line plots
+    fig.add_trace(
+        go.Scatter(x=rot_info["Tight mask overlap"], y=rot_info["ccc_masked"],
+                   mode="markers", marker=dict(size=3), showlegend=False),
+        row=2, col=1,
+    )
+    fig.update_xaxes(title_text="Tight mask overlap (in voxels)", row=2, col=1)
+    fig.update_yaxes(title_text="CCC", row=2, col=1)
+
+    fig.add_trace(
+        go.Scatter(x=rot_info["ang_dist"], y=rot_info["ccc_masked"],
+                   mode="markers", marker=dict(size=3), showlegend=False),
+        row=2, col=2,
+    )
+    fig.update_xaxes(title_text="Angular distance (in degrees)", row=2, col=2)
+
+    x_pos = list(range(len(line_profiles)))
+    for col_name in ["x", "y", "z"]:
+        fig.add_trace(
+            go.Scatter(x=x_pos, y=line_profiles[col_name], mode="lines", name=col_name),
+            row=2, col=3,
+        )
+    fig.update_xaxes(title_text="Position (in voxels)", row=2, col=3)
+
+    # Row 3 (optional): histogram line plots
+    if add_hist:
+        x100 = np.linspace(0.0, 1.0, num=100)
+        for col_name in ["ang_dist", "cone_dist", "inplane_dist"]:
+            fig.add_trace(
+                go.Scatter(x=x100, y=hist_info[col_name], mode="lines",
+                           name=col_name, showlegend=False),
+                row=3, col=1,
+            )
+        fig.update_yaxes(range=[0, 250], title_text="Number of CCC values (bin size 0.1)", row=3, col=1)
+        fig.update_xaxes(title_text="CCC", row=3, col=1)
+
+        x359 = np.linspace(0.0, 359.0, num=359)
+        for col_name in ["ccc_masked", "cone_ccc_masked", "inplane_ccc_masked"]:
+            fig.add_trace(
+                go.Scatter(x=x359, y=hist_info2[col_name], mode="lines",
+                           name=col_name, showlegend=False),
+                row=3, col=2,
+            )
+        fig.update_yaxes(title_text="CCC", row=3, col=2)
+        fig.update_xaxes(title_text="Rotation (in degrees)", row=3, col=2)
+
+    # Heatmap rows (coloraxis1=gray/tight mask, coloraxis2=viridis/scores, coloraxis3=cividis/angles)
+    for c, slice_group in enumerate(cross_slices):
+        if c == 0:
+            coloraxis, annot_fmt = "coloraxis1", None
+        elif c == 1:
+            coloraxis, annot_fmt = "coloraxis2", None
+        elif c == 2:
+            coloraxis, annot_fmt = "coloraxis2", ".2f"
+        else:  # c >= 3
+            coloraxis, annot_fmt = "coloraxis3", ".1f"
+
+        hm_row = n_top_rows + c + 1
+        visplot.add_xyz_heatmap_row(
+            fig, slice_group, row=hm_row,
+            coloraxis=coloraxis, annot_format=annot_fmt,
+        )
+
+    fig.update_layout(
+        title_text=figure_title,
+        height=max(900, 280 * total_rows),
+        coloraxis1=dict(colorscale="gray", cmin=0, cmax=1.0,
+                        colorbar=dict(title="Tight mask", thickness=12,
+                                     len=ca1_len, y=ca1_y, yanchor="middle", x=1.02)),
+        coloraxis2=dict(colorscale="viridis", cmin=0, cmax=peak_val,
+                        colorbar=dict(title="Score", thickness=12,
+                                     len=ca2_len, y=ca2_y, yanchor="middle", x=1.10)),
+        coloraxis3=dict(colorscale="cividis", cmin=0, cmax=180,
+                        colorbar=dict(title="Angle (°)", thickness=12,
+                                     len=ca3_len, y=ca3_y, yanchor="middle", x=1.18)),
+    )
+
+    return fig
+
+
 def create_summary_pdf(template_list, indices, parent_folder_path):
     """Generate a detailed summary PDF for a set of peak analysis results.
 
@@ -1626,6 +2034,13 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
         structure_name = temp_df.at[i, "Structure"]
         output_base = create_output_base_name(i)
         output_folder = create_output_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
+
+        # guard early before loading maps
+        rot_info = pd.read_csv(output_folder + output_base + ".csv", index_col=0)
+        if "Tight mask overlap" not in rot_info.columns:
+            print(i)
+            continue
+        line_profiles = pd.read_csv(output_folder + output_base + "_peak_line_profiles.csv", index_col=0)
 
         if temp_df.at[i, "Compare"] == "tmpl":
             title_end = "self"
@@ -1683,7 +2098,6 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
             dist_sol[d] = temp_df.at[i, "Solidity " + dname]
             dist_vco[d] = temp_df.at[i, "VCO " + dname]
 
-        # dist_dict['Dummy'] = 1
         dist_dict["Dist maps Solidity"] = dist_sol
         dist_dict["Dist maps VC"] = dist_vc
         dist_dict["Dist maps VC open"] = dist_vco
@@ -1691,7 +2105,6 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
         for d, dname in enumerate(dist_names):
             for j, dim in enumerate(["x", "y", "z"]):
                 values_temp[j] = temp_df.at[i, "O " + dname + " " + dim]
-
             dist_dict["Open " + dname] = values_temp.copy()
 
         values_temp = np.zeros((5,))
@@ -1702,10 +2115,7 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
             peak_dict[sts] = values_temp.copy()
 
         dicts = []
-        with np.printoptions(
-            precision=4,
-            suppress=True,
-        ):
+        with np.printoptions(precision=4, suppress=True):
             dicts.append([[k, str(v)] for k, v in tmpl_dict.items()])
             dicts.append([[k, str(v)] for k, v in peak_dict.items()])
             dicts.append([[k, str(v)] for k, v in dist_dict.items()])
@@ -1718,164 +2128,24 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
         # also extract cross sections of output maps where the cc peak centers are
         for m, ext_name in enumerate(extenstion_list):
             input_map = cryomap.read(output_folder + output_base + ext_name)
-
             if m == 0:
                 cross_slices.append(cryomap.get_cross_slices(input_map, slice_numbers=peak_center, axis=[0, 1, 2]))
-
             cross_slices.append(
                 cryomap.get_cross_slices(input_map, slice_half_dim=5, slice_numbers=peak_center, axis=[0, 1, 2])
             )
 
         hist_file = output_folder + output_base + "_gradual_angles_histograms.csv"
-        add_hist = os.path.isfile(hist_file)
-
-        n_hm_rows = len(cross_slices)  # 6
-        n_top_rows = 2 + (1 if add_hist else 0)
-        total_rows = n_top_rows + n_hm_rows
-
-        specs = [
-            [{"type": "table"}, {"type": "table"}, {"type": "table"}],
-            [{"type": "xy"}, {"type": "xy"}, {"type": "xy"}],
-        ]
-        if add_hist:
-            specs.append([{"type": "xy"}, {"type": "xy"}, None])
-        for _ in range(n_hm_rows):
-            specs.append([{"type": "xy"}, {"type": "xy"}, {"type": "xy"}])
-
-        row_heights_w = [2.5, 1.2]
-        if add_hist:
-            row_heights_w.append(0.8)
-        row_heights_w.extend([1.0] * n_hm_rows)
-
-        # Calculate colorbar y positions based on row layout
-        vs = 0.02
-        content_h = 1.0 - (total_rows - 1) * vs
-        total_w = sum(row_heights_w)
-        row_h_frac = [w / total_w * content_h for w in row_heights_w]
-        row_tops, row_bottoms = [], []
-        cum = 0.0
-        for k, h in enumerate(row_h_frac):
-            top = 1.0 - cum - (vs if k > 0 else 0)
-            row_tops.append(top)
-            row_bottoms.append(top - h)
-            cum += h + (vs if k < total_rows - 1 else 0)
-
-        s = n_top_rows  # index of first heatmap row
-        ca1_y = (row_tops[s] + row_bottoms[s]) / 2
-        ca1_len = row_tops[s] - row_bottoms[s]
-        ca2_y = (row_tops[s + 1] + row_bottoms[s + 2]) / 2
-        ca2_len = row_tops[s + 1] - row_bottoms[s + 2]
-        ca3_y = (row_tops[s + 3] + row_bottoms[s + 5]) / 2
-        ca3_len = row_tops[s + 3] - row_bottoms[s + 5]
-
-        fig = make_subplots(
-            rows=total_rows, cols=3,
-            specs=specs,
-            row_heights=row_heights_w,
-            horizontal_spacing=0.03,
-            vertical_spacing=vs,
-        )
-
-        # Row 1: tables
-        for j, d in enumerate(dicts, start=1):
-            keys = [row[0] for row in d]
-            values = [row[1] for row in d]
-            fig.add_trace(
-                go.Table(
-                    header=dict(values=["Parameter", "Value"], align="left",
-                                fill_color="lightgrey", font=dict(size=10)),
-                    cells=dict(values=[keys, values], align="left", font=dict(size=10)),
-                ),
-                row=1, col=j,
-            )
-
-        rot_info = pd.read_csv(output_folder + output_base + ".csv", index_col=0)
-        line_profiles = pd.read_csv(output_folder + output_base + "_peak_line_profiles.csv", index_col=0)
-
-        if "Tight mask overlap" not in rot_info.columns:
-            print(i)
-            continue
-
-        # Row 2: scatter + line plots
-        fig.add_trace(
-            go.Scatter(x=rot_info["Tight mask overlap"], y=rot_info["ccc_masked"],
-                       mode="markers", marker=dict(size=3), showlegend=False),
-            row=2, col=1,
-        )
-        fig.update_xaxes(title_text="Tight mask overlap (in voxels)", row=2, col=1)
-        fig.update_yaxes(title_text="CCC", row=2, col=1)
-
-        fig.add_trace(
-            go.Scatter(x=rot_info["ang_dist"], y=rot_info["ccc_masked"],
-                       mode="markers", marker=dict(size=3), showlegend=False),
-            row=2, col=2,
-        )
-        fig.update_xaxes(title_text="Angular distance (in degrees)", row=2, col=2)
-
-        x_pos = list(range(len(line_profiles)))
-        for col_name in ["x", "y", "z"]:
-            fig.add_trace(
-                go.Scatter(x=x_pos, y=line_profiles[col_name], mode="lines", name=col_name),
-                row=2, col=3,
-            )
-        fig.update_xaxes(title_text="Position (in voxels)", row=2, col=3)
-
-        # Row 3 (optional): histogram line plots
-        if add_hist:
+        if os.path.isfile(hist_file):
             hist_info = pd.read_csv(hist_file, index_col=0)
-            x100 = np.linspace(0.0, 1.0, num=100)
-            for col_name in ["ang_dist", "cone_dist", "inplane_dist"]:
-                fig.add_trace(
-                    go.Scatter(x=x100, y=hist_info[col_name], mode="lines",
-                               name=col_name, showlegend=False),
-                    row=3, col=1,
-                )
-            fig.update_yaxes(range=[0, 250], title_text="Number of CCC values (bin size 0.1)", row=3, col=1)
-            fig.update_xaxes(title_text="CCC", row=3, col=1)
-
             hist_info2 = pd.read_csv(output_folder + output_base + "_gradual_angles_analysis.csv", index_col=0)
-            x359 = np.linspace(0.0, 359.0, num=359)
-            for col_name in ["ccc_masked", "cone_ccc_masked", "inplane_ccc_masked"]:
-                fig.add_trace(
-                    go.Scatter(x=x359, y=hist_info2[col_name], mode="lines",
-                               name=col_name, showlegend=False),
-                    row=3, col=2,
-                )
-            fig.update_yaxes(title_text="CCC", row=3, col=2)
-            fig.update_xaxes(title_text="Rotation (in degrees)", row=3, col=2)
-
-        # Heatmap rows (coloraxis1=gray/tight mask, coloraxis2=viridis/scores, coloraxis3=cividis/angles)
-        for c, slice_group in enumerate(cross_slices):
-            if c == 0:
-                coloraxis, annot_fmt = "coloraxis1", None
-            elif c == 1:
-                coloraxis, annot_fmt = "coloraxis2", None
-            elif c == 2:
-                coloraxis, annot_fmt = "coloraxis2", ".2f"
-            else:  # c >= 3
-                coloraxis, annot_fmt = "coloraxis3", ".1f"
-
-            hm_row = n_top_rows + c + 1
-            visplot.add_xyz_heatmap_row(
-                fig, slice_group, row=hm_row,
-                coloraxis=coloraxis, annot_format=annot_fmt,
-            )
+        else:
+            hist_info = hist_info2 = None
 
         peak_val = temp_df.at[i, "Peak value"]
-        fig.update_layout(
-            title_text=figure_title,
-            height=max(900, 280 * total_rows),
-            coloraxis1=dict(colorscale="gray", cmin=0, cmax=1.0,
-                            colorbar=dict(title="Tight mask", thickness=12,
-                                         len=ca1_len, y=ca1_y, yanchor="middle", x=1.02)),
-            coloraxis2=dict(colorscale="viridis", cmin=0, cmax=peak_val,
-                            colorbar=dict(title="Score", thickness=12,
-                                         len=ca2_len, y=ca2_y, yanchor="middle", x=1.10)),
-            coloraxis3=dict(colorscale="cividis", cmin=0, cmax=180,
-                            colorbar=dict(title="Angle (°)", thickness=12,
-                                         len=ca3_len, y=ca3_y, yanchor="middle", x=1.18)),
+        fig = build_summary_figure(
+            figure_title, dicts, rot_info, line_profiles, cross_slices, peak_val,
+            hist_info=hist_info, hist_info2=hist_info2,
         )
-
         fig.write_html(output_folder + output_base + "_summary.html")
 
 
@@ -1927,23 +2197,7 @@ def get_shape_stats(template_list, indices, shape_type, parent_folder_path):
         structure_name = temp_df.at[i, "Structure"]
         sharp_mask = cryomap.read(create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tight mask"]))
 
-        mask_label = measure.label(sharp_mask, connectivity=1)
-        mask_stats = pd.DataFrame(
-            measure.regionprops_table(
-                mask_label,
-                properties=(
-                    "label",
-                    "area",
-                    "area_bbox",
-                    "area_convex",
-                    "equivalent_diameter_area",
-                    "euler_number",
-                    "feret_diameter_max",
-                    "inertia_tensor",
-                    "solidity",
-                ),
-            )
-        )
+        stats_df = shape_stats(sharp_mask)
 
         output_base = (
             create_structure_path(parent_folder_path, structure_name)
@@ -1952,7 +2206,7 @@ def get_shape_stats(template_list, indices, shape_type, parent_folder_path):
             + str(i)
             + "_shape_stats_"
         )
-        mask_stats.to_csv(output_base + shape_type + ".csv")
+        stats_df.to_csv(output_base + shape_type + ".csv")
 
 
 def compute_peak_shapes(template_list, indices, parent_folder_path):
@@ -1999,30 +2253,27 @@ def compute_peak_shapes(template_list, indices, parent_folder_path):
         structure_name = temp_df.at[i, "Structure"]
 
         output_base = create_output_base_name(i)
-        output_folder = create_ouptut_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
+        output_folder = create_output_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
         scores_map = cryomap.read(output_folder + output_base + "_scores.em")
 
-        t_map, tp_shape, peak_value, t_th_map, t_surf = tmana.evaluate_scores_map(
-            scores_map, label_type="ellipsoid", threshold_type="triangle"
-        )
-        g_map, gp_shape, _, g_th_map, g_surf = tmana.evaluate_scores_map(
-            scores_map, label_type="ellipsoid", threshold_type="gauss"
-        )
-        h_map, hp_shape, _, h_th_map, h_surf = tmana.evaluate_scores_map(
-            scores_map, label_type="ellipsoid", threshold_type="hard"
-        )
+        shapes = peak_shapes(scores_map)
 
         for t, p in enumerate(["x", "y", "z"]):
-            temp_df.at[i, "TP " + p] = np.round(tp_shape[t], 3)  # triangle
-            temp_df.at[i, "GP " + p] = np.round(gp_shape[t], 3)  # gaussian
-            temp_df.at[i, "HP " + p] = np.round(hp_shape[t], 3)  # hard
+            temp_df.at[i, "TP " + p] = np.round(shapes["tp_shape"][t], 3)
+            temp_df.at[i, "GP " + p] = np.round(shapes["gp_shape"][t], 3)
+            temp_df.at[i, "HP " + p] = np.round(shapes["hp_shape"][t], 3)
 
-        temp_df.at[i, "Peak value"] = peak_value
+        temp_df.at[i, "Peak value"] = shapes["peak_value"]
 
         temp_df.to_csv(template_list)  # save what was finished in case of a crush
 
         visplot.plot_scores_and_peaks(
-            [scores_map, t_th_map, t_surf, t_map, g_th_map, g_surf, g_map, h_th_map, h_surf, h_map],
+            [
+                scores_map,
+                shapes["t_th_map"], shapes["t_surf"], shapes["t_map"],
+                shapes["g_th_map"], shapes["g_surf"], shapes["g_map"],
+                shapes["h_th_map"], shapes["h_surf"], shapes["h_map"],
+            ],
             plot_title=structure_name + " id" + str(i),
             output_path=output_folder + "peaks.png",
         )

@@ -1210,10 +1210,7 @@ def mask_overlap(mask1: np.ndarray, mask2: np.ndarray, threshold: float = 1.9) -
         The sum of the overlapping voxels between the two masks that have value larger than the threshold.
 
     """
-
-    mask_overlap = np.where((mask1 + mask2) <= threshold, 0, 1)
-
-    return np.sum(mask_overlap)
+    return imageutils.mask_overlap(mask1, mask2, threshold)
 
 
 def tomogram_shell_mask(

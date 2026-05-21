@@ -183,6 +183,26 @@ def test_calculate_total_dose_batch():
         if os.path.exists(fileformat_replace_pattern(output_file_path, t, "x", raise_error=False)):
             os.remove(fileformat_replace_pattern(output_file_path, t, "x", raise_error=False))
 
+def test_compute_dose_attenuator_shape():
+    freq_array = np.linspace(0.1, 5.0, 64).reshape(8, 8)
+    q = compute_dose_attenuator(dose=1.0, freq_array=freq_array)
+    assert q.shape == freq_array.shape
+
+
+def test_compute_dose_attenuator_range():
+    freq_array = np.linspace(0.1, 5.0, 100)
+    q = compute_dose_attenuator(dose=1.0, freq_array=freq_array)
+    assert np.all(q >= 0.0)
+    assert np.all(q <= 1.0)
+
+
+def test_compute_dose_attenuator_higher_dose_more_attenuation():
+    freq_array = np.linspace(0.1, 5.0, 50)
+    q_low = compute_dose_attenuator(dose=1.0, freq_array=freq_array)
+    q_high = compute_dose_attenuator(dose=10.0, freq_array=freq_array)
+    assert np.all(q_high <= q_low)
+
+
 def test_dose_filter_single_image():
     """
     Since it is not possible to achieve same results of Grant and Grigorieff paper without using Fourier and

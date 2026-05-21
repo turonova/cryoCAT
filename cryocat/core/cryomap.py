@@ -6,7 +6,6 @@ import os
 import warnings
 import numpy as np
 import pandas as pd
-from scipy.ndimage import affine_transform
 from scipy.spatial.transform import Rotation as srot
 from typing import TYPE_CHECKING
 from cryocat.utils import ioutils
@@ -172,10 +171,7 @@ def binarize(input_map: MapSource, threshold: float = 0.5) -> np.ndarray:
     """
 
     input_map = read(input_map)
-
-    binary_map = (input_map > threshold).astype(int)
-
-    return binary_map
+    return imageutils.binarize(input_map, threshold)
 
 
 def get_filter_radius(
@@ -475,10 +471,7 @@ def get_metadata(
     if isinstance(input_map, (str, os.PathLike)):
         path_str = os.fspath(input_map)
 
-        def valid_mrc(p: str) -> bool:
-            return bool(re.search(r"\.(mrc|ali|rec|st)(\.\d+)?$", p))
-
-        if valid_mrc(path_str):
+        if bool(re.search(r"\.(mrc|ali|rec|st)(\.\d+)?$", path_str)):
             with mrcfile.open(path_str, permissive=True) as mrc:
                 shape = (int(mrc.header.nx), int(mrc.header.ny), int(mrc.header.nz))
                 pixel_size_a = float(mrc.voxel_size.x)
@@ -852,21 +845,7 @@ def normalize(input_map: MapSource) -> np.ndarray:
     >>> normalized_map = normalize(my_map)
     """
 
-    norm_map = read(input_map)
-    values = norm_map[np.isfinite(norm_map)]
-
-    if len(values) == 0:
-        warnings.warn("No finite values found for normalization; returning original map unchanged.")
-        return norm_map.copy()
-
-    mean_v = np.mean(values)
-    std_v = np.std(values)
-
-    if std_v == 0:
-        warnings.warn("Standard deviation is zero; returning original map unchanged.")
-        return norm_map.copy()
-
-    return (norm_map - mean_v) / std_v
+    return imageutils.normalize_array(read(input_map))
 
 
 def sample_line_profiles(
@@ -1028,30 +1007,15 @@ def rotate(
     """
 
     input_map = read(input_map)
-    # create translation to the center of the box
-    T = np.eye(4)
-    structure_center = np.asarray(input_map.shape) // 2
-    T[:3, -1] = structure_center
-
-    rot_matrix = np.eye(4)
-
-    if rotation is not None:
-        if transpose_rotation:
-            rot_matrix[0:3, 0:3] = rotation.as_matrix().T
-        else:
-            rot_matrix[0:3, 0:3] = rotation.as_matrix()
-
-    elif rotation_angles is not None:
-        rot = srot.from_euler(coord_space, rotation_angles, degrees=degrees)
-        rot_matrix[0:3, 0:3] = rot.as_matrix().T
-
-    else:
-        raise ValueError("Either rotation_angles or rotation has to be specified!!!")
-
-    final_matrix = T @ rot_matrix @ np.linalg.inv(T)
-
-    rot_struct = np.empty(input_map.shape)
-    affine_transform(input=input_map, output=rot_struct, matrix=final_matrix, order=spline_order)
+    rot_struct = imageutils.rotate_volume(
+        input_map,
+        rotation=rotation,
+        rotation_angles=rotation_angles,
+        coord_space=coord_space,
+        transpose_rotation=transpose_rotation,
+        degrees=degrees,
+        spline_order=spline_order,
+    )
 
     if output_path is not None:
         write(rot_struct, output_path, data_type=np.single, pixel_size=pixel_size)
@@ -1115,7 +1079,7 @@ def crop(
     return cropped_volume
 
 
-def shift2(
+def shift(
     input_map: MapSource,
     delta: ArrayLike,
     output_path: PathOrStr | None = None,
@@ -1149,18 +1113,22 @@ def shift2(
     """
 
     input_map = read(input_map)
-    delta = np.asarray(delta)
-
-    T = np.eye(4)
-    T[:3, -1] = -delta
-
-    shifted_map = np.empty(input_map.shape)
-    affine_transform(input=input_map, output=shifted_map, matrix=T, mode="grid-wrap")
+    shifted_map = imageutils.shift_array(input_map, np.asarray(delta))
 
     if output_path is not None:
         write(shifted_map, output_path, data_type=np.single, pixel_size=pixel_size)
 
     return shifted_map
+
+
+def shift2(
+    input_map: MapSource,
+    delta: ArrayLike,
+    output_path: PathOrStr | None = None,
+    pixel_size: float = 1.0,
+) -> np.ndarray:
+    """Deprecated alias for :func:`shift`."""
+    return shift(input_map, delta, output_path=output_path, pixel_size=pixel_size)
 
 
 def recenter(input_map: MapSource, new_center: TripletLike) -> np.ndarray:
@@ -1190,15 +1158,7 @@ def recenter(input_map: MapSource, new_center: TripletLike) -> np.ndarray:
 
     original_map = read(input_map)
     new_center = geom.as_triplet(new_center)
-    T = np.eye(4)
-    structure_center = np.asarray(original_map.shape) // 2
-    shift = new_center - structure_center
-    T[:3, -1] = -shift
-
-    trans_struct = np.empty(original_map.shape)
-    affine_transform(input=original_map, output=trans_struct, matrix=T)
-
-    return trans_struct
+    return imageutils.recenter_volume(original_map, new_center)
 
 
 def normalize_under_mask(input_map: MapSource, input_mask: MapSource) -> np.ndarray:
@@ -1222,21 +1182,7 @@ def normalize_under_mask(input_map: MapSource, input_mask: MapSource) -> np.ndar
         The map with the area under the mask normalized.
     """
 
-    input_map = read(input_map)
-    input_mask = read(input_mask)
-
-    # Calculate mask parameters
-    m_idx = input_mask > 0
-
-    # Calculate stats
-    ref_mean = np.mean(input_map[m_idx])
-    ref_std = np.std(input_map[m_idx])
-
-    # Normalize reference
-    norm_ref = input_map - ref_mean
-    norm_ref = norm_ref / ref_std
-
-    return norm_ref
+    return imageutils.normalize_under_mask(read(input_map), read(input_mask))
 
 
 def get_start_end_indices(
@@ -1455,26 +1401,7 @@ def pad(
 
     volume = read(input_map)
     new_size = geom.as_triplet(new_size)
-
-    if fill_value is None:
-        padded_volume = np.full(new_size, np.mean(volume))
-    else:
-        padded_volume = np.full(new_size, fill_value)
-
-    # Size of the original volume
-    vol_size = volume.shape
-
-    x_start = int(np.ceil((new_size[0] - vol_size[0]) / 2))
-    y_start = int(np.ceil((new_size[1] - vol_size[1]) / 2))
-    z_start = int(np.ceil((new_size[2] - vol_size[2]) / 2))
-
-    x_end = int(x_start + vol_size[0])
-    y_end = int(y_start + vol_size[1])
-    z_end = int(z_start + vol_size[2])
-
-    padded_volume[x_start:x_end, y_start:y_end, z_start:z_end] = volume
-
-    return padded_volume
+    return imageutils.pad_volume(volume, new_size, fill_value=fill_value)
 
 
 def place_object(
@@ -1692,16 +1619,7 @@ def flip(
     The function reads the input map, flips it along the specified axis, and writes the output map to a file if an output name is provided.
     """
 
-    output_map = read(input_map)
-
-    if "z" in axis.lower():
-        output_map = np.flip(output_map, 2)
-
-    if "y" in axis.lower():
-        output_map = np.flip(output_map, 1)
-
-    if "x" in axis.lower():
-        output_map = np.flip(output_map, 0)
+    output_map = imageutils.flip_array(read(input_map), axis=axis)
 
     if output_path is not None:
         write(output_map, output_path, data_type=np.single, pixel_size=pixel_size)
@@ -1732,26 +1650,7 @@ def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
         If the symmetry is not specified correctly
 
     """
-    input_map = read(input_map)
-
-    if isinstance(symmetry, str):
-        nfold = int(re.findall(r"\d+", symmetry)[-1])
-    elif isinstance(symmetry, (int, float)):
-        nfold = symmetry
-    else:
-        raise ValueError("The symmetry has to be specified as a string (starting with C) or as a number (only for C)!")
-
-    inplane_step = 360 / nfold
-    rotated_sum = np.empty(input_map.shape)
-
-    for inplane in range(1, nfold + 1):
-        # print('inplane',inplane, inplane*inplane_step)
-        rotated_volume = rotate(input_map, rotation_angles=[0, 0, 360 % (inplane * inplane_step)])
-        # print('rot vol',rotated_volume[0][0][0:10])
-        rotated_sum = np.add(rotated_sum, rotated_volume)
-    sym_vol = np.divide(rotated_sum, nfold)
-
-    return sym_vol
+    return imageutils.symmetrize_volume(read(input_map), symmetry)
 
 
 def calculate_masked_fsc(

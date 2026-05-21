@@ -6,7 +6,6 @@ from cryocat.utils import ioutils
 from cryocat.utils import imageutils
 from cryocat.utils.classutils import as_list
 from skimage.transform import downscale_local_mean
-from skimage import exposure
 
 
 class TiltStack:
@@ -371,19 +370,7 @@ def equalize_histogram(
 
     ts = TiltStack(tilt_stack=tilt_stack, input_order=input_order, output_order=output_order)
     for z in range(ts.n_tilts):
-        if eh_method == "contrast_stretching":
-            p2, p98 = np.percentile(ts.data[z, :, :], (2, 98))
-            ts.data[z, :, :] = exposure.rescale_intensity(ts.data[z, :, :], in_range=(p2, p98))
-        elif eh_method == "equalization":
-            # Equalization
-            ts.data[z, :, :] = exposure.equalize_hist(ts.data[z, :, :])
-        elif eh_method == "adaptive_eq":
-            # Adaptive
-            img = ts.data[z, :, :]
-            img = (img - img.min()) / (img.max() - img.min())
-            ts.data[z, :, :] = exposure.equalize_adapthist(img, clip_limit=0.03)
-        else:
-            raise ValueError(f"The {eh_method} is not known!")
+        ts.data[z, :, :] = imageutils.equalize_histogram_2d(ts.data[z, :, :], method=eh_method)
 
     ts.write_out(output_path)
     return ts.correct_order()
@@ -486,7 +473,28 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_path=None, input_orde
     return ts.correct_order()
 
 
-def dose_filter_single_image(image, dose, freq_array):
+def compute_dose_attenuator(dose: float, freq_array: np.ndarray) -> np.ndarray:
+    """Compute the exposure-dependent amplitude attenuator from Grant & Grigorieff.
+
+    Parameters
+    ----------
+    dose : float
+        Accumulated dose for this tilt image.
+    freq_array : ndarray
+        2-D frequency array with the same spatial shape as the tilt image.
+
+    Returns
+    -------
+    ndarray
+        Attenuator array with the same shape as *freq_array*.
+    """
+    a = 0.245
+    b = -1.665
+    c = 2.81
+    return np.exp((-dose) / (2 * ((a * (freq_array**b)) + c)))
+
+
+def dose_filter_single_image(image: np.ndarray, dose: float, freq_array: np.ndarray) -> np.ndarray:
     """Filter a single image based on dose and frequency array using Fourier transform.
 
     Parameters
@@ -508,23 +516,8 @@ def dose_filter_single_image(image, dose, freq_array):
     This function applies a frequency-dependent attenuation based on the dose, using parameters derived from
     the Grant and Grigorieff paper. The Fourier transform is utilized to perform the filtering in the frequency domain.
     """
-
-    # Hard-coded resolution-dependent critical exposures
-    # These parameters come from the fitted numbers in the Grant and Grigorieff paper.
-    a = 0.245
-    b = -1.665
-    c = 2.81
-
-    # Calculate Fourier transform
-    ft = np.fft.fftshift(np.fft.fft2(image))
-
-    # Calculate exposure-dependent amplitude attenuator
-    q = np.exp((-dose) / (2 * ((a * (freq_array**b)) + c)))
-
-    # Attenuate and inverse transform
-    filtered_image = np.fft.ifft2(np.fft.ifftshift(ft * q))
-
-    return filtered_image.real
+    q = compute_dose_attenuator(dose, freq_array)
+    return imageutils.apply_fft_filter(image, q)
 
 
 def deconvolve(
