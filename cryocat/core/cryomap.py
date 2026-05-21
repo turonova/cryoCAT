@@ -3,6 +3,7 @@ import emfile
 import mrcfile
 import re
 import os
+import warnings
 import numpy as np
 import pandas as pd
 from scipy.ndimage import affine_transform
@@ -441,6 +442,73 @@ def read(
  
 
 
+def get_metadata(
+    input_map: MapSource,
+) -> tuple[tuple[int, ...], float, tuple[float, float, float]]:
+    """Return MRC/EM header metadata without loading the data array.
+
+    Parameters
+    ----------
+    input_map : MapSource
+        Path to an MRC or EM file, or an ndarray. For ndarrays ``pixel_size_a``
+        defaults to ``1.0`` and ``origin_a`` to ``(0.0, 0.0, 0.0)``.
+
+    Returns
+    -------
+    shape : tuple[int, ...]
+        Array dimensions (x, y, z) read from the file header. For MRC files
+        no data is copied; for EM files the data is loaded (no header-only API).
+        Shape is consistent with ``cryomap.read(path).shape``.
+    pixel_size_a : float
+        Pixel size in Ångströms (x component from MRC header).
+        Defaults to ``1.0`` for EM files and ndarrays.
+    origin_a : tuple[float, float, float]
+        Origin (x, y, z) in Ångströms from MRC header.
+        Defaults to ``(0.0, 0.0, 0.0)`` for EM files and ndarrays.
+
+    Raises
+    ------
+    ValueError
+        If the file extension is unsupported, or the input is neither a
+        path nor an ndarray.
+    """
+    if isinstance(input_map, (str, os.PathLike)):
+        path_str = os.fspath(input_map)
+
+        def valid_mrc(p: str) -> bool:
+            return bool(re.search(r"\.(mrc|ali|rec|st)(\.\d+)?$", p))
+
+        if valid_mrc(path_str):
+            with mrcfile.open(path_str, permissive=True) as mrc:
+                shape = (int(mrc.header.nx), int(mrc.header.ny), int(mrc.header.nz))
+                pixel_size_a = float(mrc.voxel_size.x)
+                origin_a = (
+                    float(mrc.header.origin.x),
+                    float(mrc.header.origin.y),
+                    float(mrc.header.origin.z),
+                )
+        elif path_str.endswith(".em"):
+            data = np.array(emfile.read(path_str)[1])
+            shape = data.shape
+            pixel_size_a = 1.0
+            origin_a = (0.0, 0.0, 0.0)
+        else:
+            raise ValueError(
+                f"Unsupported file extension for input_map={path_str!r}. "
+                "Expected .mrc, .ali, .rec, .st, or .em."
+            )
+    elif isinstance(input_map, np.ndarray):
+        shape = input_map.shape
+        pixel_size_a = 1.0
+        origin_a = (0.0, 0.0, 0.0)
+    else:
+        raise ValueError(
+            f"input_map must be a path or an ndarray, got {type(input_map).__name__}."
+        )
+
+    return shape, pixel_size_a, origin_a
+
+
 def write(
     data_to_write: np.ndarray,
     output_path: PathOrStr,
@@ -761,7 +829,10 @@ def read_hdf5(
 
 
 def normalize(input_map: MapSource) -> np.ndarray:
-    """Normalize a given map by standardizing its values.
+    """Normalize a given map by standardizing its values (z-score).
+
+    Only finite values are used to compute the mean and standard deviation, so
+    the result is robust to NaN/Inf pixels common in real tomograms.
 
     Parameters
     ----------
@@ -772,12 +843,9 @@ def normalize(input_map: MapSource) -> np.ndarray:
     Returns
     -------
     numpy.ndarray
-        The normalized map with zero mean and unit variance.
-
-    Notes
-    -----
-    This function reads the input map, computes its mean and standard deviation,
-    and then normalizes the map by subtracting the mean and dividing by the standard deviation.
+        The normalized map with zero mean and unit variance. Returns a copy of
+        the original map (unmodified) if no finite values are found or if the
+        standard deviation is zero.
 
     Examples
     --------
@@ -785,12 +853,121 @@ def normalize(input_map: MapSource) -> np.ndarray:
     """
 
     norm_map = read(input_map)
+    values = norm_map[np.isfinite(norm_map)]
 
-    mean_v = np.mean(norm_map)
-    std_v = np.std(norm_map)
-    norm_map = (norm_map - mean_v) / std_v
+    if len(values) == 0:
+        warnings.warn("No finite values found for normalization; returning original map unchanged.")
+        return norm_map.copy()
 
-    return norm_map
+    mean_v = np.mean(values)
+    std_v = np.std(values)
+
+    if std_v == 0:
+        warnings.warn("Standard deviation is zero; returning original map unchanged.")
+        return norm_map.copy()
+
+    return (norm_map - mean_v) / std_v
+
+
+def sample_line_profiles(
+    p1: ArrayLike,
+    p2: ArrayLike,
+    input_map: MapSource,
+    pixel_size_a: float | None = None,
+    extension_half_width_a: float = 80.0,
+) -> list[dict]:
+    """Sample intensities along line segments connecting paired 3D coordinates.
+
+    For each pair ``(p1[i], p2[i])``, a line segment is built from the midpoint,
+    extended by ``extension_half_width_a`` on each side. Intensities are sampled
+    with linear interpolation (``scipy.ndimage.map_coordinates``, ``order=1``,
+    ``mode='nearest'``). Pairs with NaN coordinates or zero-length vectors are
+    skipped silently.
+
+    Parameters
+    ----------
+    p1, p2 : ArrayLike, shape (N, 3)
+        Paired 3D coordinates in voxel units, XYZ order. Any array-coercible
+        input is accepted; normalized internally with ``np.asarray``.
+    input_map : MapSource
+        3D volume in ZYX order, or a path to an MRC/EM file.
+    pixel_size_a : float, optional
+        Voxel size in Angstroms. Used to convert ``extension_half_width_a`` to
+        voxels and stored in the output dicts for downstream rescaling. When
+        ``None``, ``extension_half_width_a`` is treated as already in voxels.
+    extension_half_width_a : float, default 80.0
+        How far to extend the sampled segment beyond the midpoint on each side,
+        in Angstroms (default 80 Å = 8 nm). Treated as voxels when no
+        ``pixel_size_a`` is given.
+
+    Returns
+    -------
+    list of dict
+        One dict per valid pair with keys:
+
+        * ``profile`` — 1-D intensity array (sampled values)
+        * ``p1``, ``p2``, ``midpoint``, ``start``, ``end`` — geometry in voxels
+        * ``pixel_size_a`` — voxel size in Angstroms (only when provided)
+    """
+    from scipy.ndimage import map_coordinates
+
+    volume = read(input_map)
+    if volume.ndim != 3:
+        raise ValueError(f"input_map must be a 3D array, got shape {volume.shape}")
+
+    p1 = np.asarray(p1, dtype=float)
+    p2 = np.asarray(p2, dtype=float)
+    if p1.ndim != 2 or p1.shape[1] != 3 or p2.shape != p1.shape:
+        raise ValueError("p1 and p2 must both be (N, 3) arrays")
+
+    if pixel_size_a is not None and np.isfinite(pixel_size_a) and pixel_size_a > 0:
+        half_width_vox = extension_half_width_a / pixel_size_a
+    else:
+        half_width_vox = extension_half_width_a
+        pixel_size_a = None  # normalise sentinel
+
+    # Filter NaN pairs
+    valid = ~(np.isnan(p1).any(axis=1) | np.isnan(p2).any(axis=1))
+    p1, p2 = p1[valid], p2[valid]
+    if len(p1) == 0:
+        return []
+
+    directions = p2 - p1
+    lengths = np.linalg.norm(directions, axis=1)
+
+    nonzero = lengths > 0
+    p1, p2 = p1[nonzero], p2[nonzero]
+    directions, lengths = directions[nonzero], lengths[nonzero]
+    if len(p1) == 0:
+        return []
+
+    unit_vectors = directions / lengths[:, np.newaxis]
+    midpoints = (p1 + p2) / 2.0
+    starts = midpoints - unit_vectors * half_width_vox
+    ends = midpoints + unit_vectors * half_width_vox
+
+    profiles = []
+    for i in range(len(p1)):
+        num_points = int(np.ceil(2 * half_width_vox + lengths[i])) + 1
+        line_points = np.linspace(starts[i], ends[i], num=num_points)
+
+        coords_zyx = line_points[:, [2, 1, 0]].T
+        intensities = map_coordinates(volume, coords_zyx, order=1, mode="nearest")
+
+        entry = {
+            "profile": intensities,
+            "p1": p1[i],
+            "p2": p2[i],
+            "midpoint": midpoints[i],
+            "start": starts[i],
+            "end": ends[i],
+        }
+        if pixel_size_a is not None:
+            entry["pixel_size_a"] = pixel_size_a
+
+        profiles.append(entry)
+
+    return profiles
 
 
 def rotate(

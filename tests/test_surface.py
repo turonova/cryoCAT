@@ -1,10 +1,14 @@
-"""Tests for Ellipsoid in cryocat.core.surface."""
+"""Tests for Ellipsoid, Mesh, and OrientedPointCloud in cryocat.core.surface."""
 from __future__ import annotations
-
 
 import numpy as np
 import pytest
-from cryocat.core.surface import Ellipsoid
+import open3d as o3d
+from cryocat.core.surface import Ellipsoid, Mesh, OrientedPointCloud, DiscreteSurface
+
+# =============================================================================
+# Ellipsoid — tests
+# =============================================================================
 
 @pytest.fixture
 def axis_aligned_ellipsoid():
@@ -227,3 +231,292 @@ def test_transform_pure_translation(fitted_ellipsoid):
     M[:3, 3] = [1.0, 2.0, 3.0]
     el.transform(M)
     assert np.allclose(el.center, center + np.array([1.0, 2.0, 3.0]), atol=1e-10)
+
+
+# ===========================================================================
+# Create a unit sphere mesh
+# ===========================================================================
+
+def _make_unit_sphere_mesh() -> Mesh:
+    """Unit sphere mesh via Open3D (analytically exact vertices, outward normals)."""
+    o3d_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1.0, resolution=20)
+    o3d_sphere.compute_vertex_normals()
+    mesh = Mesh()
+    mesh.vertices = np.asarray(o3d_sphere.vertices)
+    mesh.faces = np.asarray(o3d_sphere.triangles)
+    mesh.normals = np.asarray(o3d_sphere.vertex_normals)
+    return mesh
+
+
+def _make_unit_sphere_opc() -> OrientedPointCloud:
+    """Dense oriented point cloud on the unit sphere (radially outward normals)."""
+    theta = np.linspace(0, 2 * np.pi, 60)
+    phi = np.linspace(-np.pi / 2, np.pi / 2, 60)
+    T, P = np.meshgrid(theta, phi)
+    pts = np.column_stack([
+        np.cos(T).ravel() * np.cos(P).ravel(),
+        np.sin(T).ravel() * np.cos(P).ravel(),
+        np.sin(P).ravel(),
+    ])
+    opc = OrientedPointCloud()
+    opc.vertices = pts.astype(np.float64)
+    opc.normals = pts.copy().astype(np.float64)  # radially outward on unit sphere
+    return opc
+
+
+@pytest.fixture
+def unit_sphere_mesh():
+    return _make_unit_sphere_mesh()
+
+
+@pytest.fixture
+def unit_sphere_opc():
+    return _make_unit_sphere_opc()
+
+
+@pytest.fixture
+def two_sphere_mesh():
+    """Inner (r=0.5) and outer (r=1.0) sphere merged into one mesh — for separate_surfaces.
+
+    The inner sphere normals are flipped to point inward (toward the shared centroid at
+    origin) so that separate_surfaces correctly identifies them as the inner surface.
+    The outer sphere normals point outward as usual.
+    """
+    inner = o3d.geometry.TriangleMesh.create_sphere(radius=0.5, resolution=10)
+    inner.compute_vertex_normals()
+    outer = o3d.geometry.TriangleMesh.create_sphere(radius=1.0, resolution=10)
+    outer.compute_vertex_normals()
+
+    inner_verts = np.asarray(inner.vertices)
+    inner_faces = np.asarray(inner.triangles)
+    outer_verts = np.asarray(outer.vertices)
+    outer_faces = np.asarray(outer.triangles) + len(inner_verts)
+
+    mesh = Mesh()
+    mesh.vertices = np.vstack([inner_verts, outer_verts])
+    mesh.faces = np.vstack([inner_faces, outer_faces])
+    mesh.normals = np.vstack([
+        -np.asarray(inner.vertex_normals),  # inward normals → labeled "inner"
+        np.asarray(outer.vertex_normals),   # outward normals → labeled "outer"
+    ])
+    return mesh
+
+
+# ===========================================================================
+# Mesh — tests
+# ===========================================================================
+
+def test_mesh_has_vertices_and_faces(unit_sphere_mesh):
+    assert unit_sphere_mesh.vertices is not None
+    assert unit_sphere_mesh.faces is not None
+    assert unit_sphere_mesh.vertices.shape[1] == 3
+    assert unit_sphere_mesh.faces.shape[1] == 3
+
+
+def test_mesh_get_vertices_shape(unit_sphere_mesh):
+    verts = unit_sphere_mesh.get_vertices()
+    assert verts.ndim == 2 and verts.shape[1] == 3
+
+
+def test_mesh_get_normals_shape(unit_sphere_mesh):
+    norms = unit_sphere_mesh.get_normals()
+    assert norms.shape == unit_sphere_mesh.vertices.shape
+
+
+def test_mesh_normals_are_unit_vectors(unit_sphere_mesh):
+    norms = unit_sphere_mesh.get_normals()
+    lengths = np.linalg.norm(norms, axis=1)
+    assert np.allclose(lengths, 1.0, atol=1e-5)
+
+
+def test_mesh_surface_area_unit_sphere(unit_sphere_mesh):
+    area = unit_sphere_mesh.get_surface_area()
+    # 4π ≈ 12.566; Open3D icosphere at resolution=20 approximates this within ~1%
+    assert abs(area - 4 * np.pi) < 0.1, f"expected ≈ 4π, got {area:.4f}"
+
+
+def test_mesh_distance_outside_point(unit_sphere_mesh):
+    pt = np.array([[2.0, 0.0, 0.0]], dtype=np.float32)
+    result = unit_sphere_mesh.distance_to_points(pt, compute_occupancy=True)
+    assert abs(result["distances"][0] - 1.0) < 0.02
+
+
+def test_mesh_distance_surface_point_is_zero(unit_sphere_mesh):
+    pt = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+    result = unit_sphere_mesh.distance_to_points(pt, compute_occupancy=False)
+    assert result["distances"][0] < 0.01
+
+
+def test_mesh_occupancy_inside(unit_sphere_mesh):
+    pt = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
+    result = unit_sphere_mesh.distance_to_points(pt, compute_occupancy=True)
+    assert result["n_inside"] == 1
+
+
+def test_mesh_occupancy_outside(unit_sphere_mesh):
+    pt = np.array([[2.0, 0.0, 0.0]], dtype=np.float32)
+    result = unit_sphere_mesh.distance_to_points(pt, compute_occupancy=True)
+    assert result["n_outside"] == 1
+
+
+def test_mesh_cast_rays_hits_sphere(unit_sphere_mesh):
+    # Ray from [2, 0, 0] pointing in -x direction; should hit at t ≈ 1
+    ray = np.array([[2.0, 0.0, 0.0, -1.0, 0.0, 0.0]], dtype=np.float32)
+    result = unit_sphere_mesh.cast_rays(ray)
+    assert np.isfinite(result["t_hit"][0])
+    assert abs(result["t_hit"][0] - 1.0) < 0.02
+
+
+def test_mesh_cast_rays_miss(unit_sphere_mesh):
+    # Ray from [2, 0, 0] pointing in +x direction (away from sphere) — no hit
+    ray = np.array([[2.0, 0.0, 0.0, 1.0, 0.0, 0.0]], dtype=np.float32)
+    result = unit_sphere_mesh.cast_rays(ray)
+    assert not np.isfinite(result["t_hit"][0])
+
+
+def test_mesh_translate_shifts_centroid(unit_sphere_mesh):
+    v = np.array([3.0, 1.0, -2.0])
+    unit_sphere_mesh.translate(v)
+    centroid = unit_sphere_mesh.vertices.mean(axis=0)
+    assert np.allclose(centroid, v, atol=0.01)
+
+
+def test_mesh_translate_preserves_face_count(unit_sphere_mesh):
+    n_faces = len(unit_sphere_mesh.faces)
+    unit_sphere_mesh.translate(np.array([1.0, 0.0, 0.0]))
+    assert len(unit_sphere_mesh.faces) == n_faces
+
+
+def test_mesh_rotate_identity_leaves_vertices(unit_sphere_mesh):
+    original = unit_sphere_mesh.vertices.copy()
+    unit_sphere_mesh.rotate(np.eye(3))
+    assert np.allclose(unit_sphere_mesh.vertices, original, atol=1e-10)
+
+
+def test_mesh_rotate_90_around_z(unit_sphere_mesh):
+    R = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=float)
+    original_centroid = unit_sphere_mesh.vertices.mean(axis=0)
+    unit_sphere_mesh.rotate(R)
+    new_centroid = unit_sphere_mesh.vertices.mean(axis=0)
+    assert np.allclose(new_centroid, R @ original_centroid, atol=1e-5)
+
+
+def test_mesh_oversample_returns_opc(unit_sphere_mesh):
+    result = unit_sphere_mesh.oversample(point_spacing=0.5)
+    assert isinstance(result, OrientedPointCloud)
+
+
+def test_mesh_oversample_has_normals(unit_sphere_mesh):
+    result = unit_sphere_mesh.oversample(point_spacing=0.5)
+    assert result.normals is not None
+    assert result.normals.shape == result.vertices.shape
+
+
+def test_mesh_separate_surfaces_two_labels(two_sphere_mesh):
+    labels = DiscreteSurface.separate_surfaces(two_sphere_mesh)
+    unique = np.unique(labels)
+    assert set(unique) == {0, 1}, f"expected labels {{0,1}}, got {unique}"
+
+
+def test_mesh_separate_surfaces_both_present(two_sphere_mesh):
+    labels = DiscreteSurface.separate_surfaces(two_sphere_mesh)
+    n_inner = int(np.sum(labels == 0))
+    n_outer = int(np.sum(labels == 1))
+    assert n_inner > 0 and n_outer > 0
+
+
+def test_mesh_filter_by_labels_returns_subset(two_sphere_mesh):
+    labels = DiscreteSurface.separate_surfaces(two_sphere_mesh)
+    inner = two_sphere_mesh.filter_by_labels(labels, "inner")
+    outer = two_sphere_mesh.filter_by_labels(labels, "outer")
+    # Each filtered mesh must be a strict subset of the original
+    assert len(inner.vertices) < len(two_sphere_mesh.vertices)
+    assert len(outer.vertices) < len(two_sphere_mesh.vertices)
+    # Together they account for all original vertices (labels partition exactly)
+    assert len(inner.vertices) + len(outer.vertices) <= len(two_sphere_mesh.vertices)
+
+
+# ===========================================================================
+# OrientedPointCloud — tests
+# ===========================================================================
+
+def test_opc_has_vertices_and_normals(unit_sphere_opc):
+    assert unit_sphere_opc.vertices is not None
+    assert unit_sphere_opc.normals is not None
+
+
+def test_opc_get_vertices_shape(unit_sphere_opc):
+    verts = unit_sphere_opc.get_vertices()
+    assert verts.ndim == 2 and verts.shape[1] == 3
+
+
+def test_opc_get_normals_shape(unit_sphere_opc):
+    norms = unit_sphere_opc.get_normals()
+    assert norms.shape == unit_sphere_opc.vertices.shape
+
+
+def test_opc_distance_outside_point(unit_sphere_opc):
+    pt = np.array([[2.0, 0.0, 0.0]])
+    result = unit_sphere_opc.distance_to_points(pt)
+    assert abs(result["distances"][0] - 1.0) < 0.02
+
+
+def test_opc_distance_surface_point(unit_sphere_opc):
+    pt = np.array([[1.0, 0.0, 0.0]])
+    result = unit_sphere_opc.distance_to_points(pt)
+    assert result["distances"][0] < 0.05
+
+
+def test_opc_distance_is_unsigned(unit_sphere_opc):
+    pt = np.array([[0.5, 0.0, 0.0]])
+    result = unit_sphere_opc.distance_to_points(pt)
+    assert result["distance_type"] == "unsigned"
+    assert result["distances"][0] > 0
+
+
+def test_opc_cast_rays_hits_sphere(unit_sphere_opc):
+    # Ray from [2, 0, 0] toward -x with long length; should hit at t ≈ 1
+    ray = np.array([[2.0, 0.0, 0.0, -3.0, 0.0, 0.0]], dtype=np.float32)
+    result = unit_sphere_opc.cast_rays(ray, knn_radius=0.15)
+    assert np.isfinite(result["t_hit"][0]), "expected a hit, got inf"
+    assert abs(result["t_hit"][0] - 1.0) < 0.1
+
+
+def test_opc_cast_rays_miss(unit_sphere_opc):
+    # Ray from [2, 0, 0] pointing in +x (away) — no sphere points in that direction
+    ray = np.array([[2.0, 0.0, 0.0, 3.0, 0.0, 0.0]], dtype=np.float32)
+    result = unit_sphere_opc.cast_rays(ray, knn_radius=0.15)
+    assert not np.isfinite(result["t_hit"][0])
+
+
+def test_opc_translate_shifts_centroid(unit_sphere_opc):
+    v = np.array([5.0, -1.0, 2.0])
+    unit_sphere_opc.translate(v)
+    centroid = unit_sphere_opc.vertices.mean(axis=0)
+    assert np.allclose(centroid, v, atol=0.1)
+
+
+def test_opc_rotate_identity_leaves_vertices(unit_sphere_opc):
+    original = unit_sphere_opc.vertices.copy()
+    unit_sphere_opc.rotate(np.eye(3))
+    assert np.allclose(unit_sphere_opc.vertices, original, atol=1e-10)
+
+
+def test_opc_rotate_preserves_normal_unit_length(unit_sphere_opc):
+    R = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=float)
+    unit_sphere_opc.rotate(R)
+    lengths = np.linalg.norm(unit_sphere_opc.normals, axis=1)
+    assert np.allclose(lengths, 1.0, atol=1e-5)
+
+
+def test_opc_oversample_larger_spacing_fewer_points(unit_sphere_opc):
+    n_original = len(unit_sphere_opc.vertices)
+    result = unit_sphere_opc.oversample(point_spacing=0.3)
+    assert isinstance(result, OrientedPointCloud)
+    assert len(result.vertices) < n_original
+
+
+def test_opc_oversample_preserves_normals(unit_sphere_opc):
+    result = unit_sphere_opc.oversample(point_spacing=0.3)
+    assert result.normals is not None
+    assert result.normals.shape == result.vertices.shape
