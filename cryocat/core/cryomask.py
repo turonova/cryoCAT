@@ -7,7 +7,7 @@ from cryocat.core import cryomap
 from cryocat.core import cryomotl
 from cryocat.utils import ioutils
 from cryocat.utils import geom
-from skimage import filters
+from cryocat.utils import imageutils
 from scipy import ndimage
 from scipy.spatial.transform import Rotation as srot
 from skimage import measure
@@ -134,10 +134,7 @@ def add_gaussian(input_map: np.ndarray, sigma: float) -> np.ndarray:
 
     """
 
-    if sigma == 0:
-        return input_map
-    else:
-        return filters.gaussian(input_map, sigma=sigma)
+    return imageutils.gaussian_smooth(input_map, sigma)
 
 
 def write_out(input_map: np.ndarray, output_path: PathOrStr | None, pixel_size: float = 1.0) -> None:

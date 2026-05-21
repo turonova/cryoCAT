@@ -3,6 +3,7 @@ import pandas as pd
 import os
 from glob import glob
 from cryocat.analysis import pana
+from cryocat.utils import imageutils
 import pytest
 from pathlib import Path
 
@@ -140,26 +141,26 @@ class TestCtf:
     _F = np.linspace(0.0, 0.5, 20)
 
     def test_output_shape(self):
-        result = pana._ctf(self._DEF, self._PSH, 0.07, 2.7, 300, self._F)
+        result = imageutils.compute_ctf_2d(self._DEF, self._PSH, 0.07, 2.7, 300, self._F)
         assert result.shape == (3, 20)
 
     def test_values_in_minus1_to_1(self):
-        result = pana._ctf(self._DEF, self._PSH, 0.07, 2.7, 300, self._F)
+        result = imageutils.compute_ctf_2d(self._DEF, self._PSH, 0.07, 2.7, 300, self._F)
         assert np.all(result >= -1.0) and np.all(result <= 1.0)
 
     def test_finite_at_zero_frequency(self):
         f = np.linspace(0.0, 0.5, 10)
-        result = pana._ctf(self._DEF, self._PSH, 0.07, 2.7, 300, f)
+        result = imageutils.compute_ctf_2d(self._DEF, self._PSH, 0.07, 2.7, 300, f)
         assert np.all(np.isfinite(result[:, 0]))
 
     def test_identical_defocus_same_ctf(self):
         defocus = np.array([[2.0], [2.0]])
-        result = pana._ctf(defocus, np.zeros((2, 1)), 0.07, 2.7, 300, self._F)
+        result = imageutils.compute_ctf_2d(defocus, np.zeros((2, 1)), 0.07, 2.7, 300, self._F)
         np.testing.assert_array_almost_equal(result[0], result[1])
 
     def test_different_defocus_different_ctf(self):
         defocus = np.array([[1.0], [4.0]])
-        result = pana._ctf(defocus, np.zeros((2, 1)), 0.07, 2.7, 300, self._F)
+        result = imageutils.compute_ctf_2d(defocus, np.zeros((2, 1)), 0.07, 2.7, 300, self._F)
         assert not np.allclose(result[0], result[1])
 
 
@@ -168,96 +169,82 @@ class TestCtf:
 class TestRotateImage:
     def test_output_shape_preserved_2d(self):
         img = np.random.rand(32, 32)
-        assert pana.rotate_image(img, 45).shape == img.shape
+        assert imageutils.rotate_2d(img, 45).shape == img.shape
 
     def test_output_shape_preserved_3d(self):
         vol = np.random.rand(8, 8, 8)
-        assert pana.rotate_image(vol, 30).shape == vol.shape
+        assert imageutils.rotate_2d(vol, 30).shape == vol.shape
 
     def test_zero_rotation_is_identity(self):
         img = np.random.rand(16, 16)
-        np.testing.assert_array_almost_equal(pana.rotate_image(img, 0), img)
+        np.testing.assert_array_almost_equal(imageutils.rotate_2d(img, 0), img)
 
     def test_360_rotation_is_identity(self):
         img = np.random.rand(16, 16)
-        np.testing.assert_array_almost_equal(pana.rotate_image(img, 360), img, decimal=5)
+        np.testing.assert_array_almost_equal(imageutils.rotate_2d(img, 360), img, decimal=5)
 
     def test_fill_value_at_corners(self):
         img = np.ones((20, 20))
-        rotated = pana.rotate_image(img, 45, fill_value=0.0)
+        rotated = imageutils.rotate_2d(img, 45, fill_value=0.0)
         assert rotated[0, 0] == pytest.approx(0.0)
 
     def test_180_rotation_roundtrip(self):
         img = np.random.rand(16, 16)
         np.testing.assert_array_almost_equal(
-            pana.rotate_image(pana.rotate_image(img, 180), 180), img, decimal=5
+            imageutils.rotate_2d(imageutils.rotate_2d(img, 180), 180), img, decimal=5
         )
 
 
 # ── Mask stats ─────────────────────────────────────────────────────────────────
 
-class TestGetSharpMaskStats:
-    def test_voxel_count_all_ones(self, mocker):
+class TestMaskVoxelCountAndBbox:
+    def test_voxel_count_all_ones(self):
         mask = np.ones((10, 10, 10))
-        mocker.patch("cryocat.core.cryomask.get_mass_dimensions", return_value=np.array([10, 10, 10]))
-        n_voxels, _ = pana.get_sharp_mask_stats(mask)
+        n_voxels, _ = imageutils.mask_voxel_count_and_bbox(mask)
         assert n_voxels == 1000
 
-    def test_voxel_count_partial(self, mocker):
+    def test_voxel_count_partial(self):
         mask = np.zeros((10, 10, 10))
         mask[2:5, 2:5, 2:5] = 1.0
-        mocker.patch("cryocat.core.cryomask.get_mass_dimensions", return_value=np.array([3, 3, 3]))
-        n_voxels, _ = pana.get_sharp_mask_stats(mask)
+        n_voxels, _ = imageutils.mask_voxel_count_and_bbox(mask)
         assert n_voxels == 27
 
-    def test_zero_mask(self, mocker):
+    def test_zero_mask(self):
         mask = np.zeros((8, 8, 8))
-        mocker.patch("cryocat.core.cryomask.get_mass_dimensions", return_value=np.array([0, 0, 0]))
-        n_voxels, _ = pana.get_sharp_mask_stats(mask)
+        n_voxels, bbox = imageutils.mask_voxel_count_and_bbox(mask)
         assert n_voxels == 0
+        np.testing.assert_array_equal(bbox, [0, 0, 0])
 
-    def test_bbox_is_get_mass_dimensions_return(self, mocker):
-        mask = np.ones((8, 8, 8))
-        expected_bb = np.array([5, 6, 7])
-        mocker.patch("cryocat.core.cryomask.get_mass_dimensions", return_value=expected_bb)
-        _, mask_bb = pana.get_sharp_mask_stats(mask)
-        np.testing.assert_array_equal(mask_bb, expected_bb)
+    def test_bbox_partial_mask(self):
+        mask = np.zeros((10, 10, 10))
+        mask[2:5, 2:5, 2:5] = 1.0
+        _, bbox = imageutils.mask_voxel_count_and_bbox(mask)
+        np.testing.assert_array_equal(bbox, [3, 3, 3])
 
-    def test_returns_two_values(self, mocker):
-        mocker.patch("cryocat.core.cryomask.get_mass_dimensions", return_value=np.array([8, 8, 8]))
-        assert len(pana.get_sharp_mask_stats(np.ones((8, 8, 8)))) == 2
+    def test_returns_two_values(self):
+        assert len(imageutils.mask_voxel_count_and_bbox(np.ones((8, 8, 8)))) == 2
 
-
-class TestGetSoftMaskStats:
-    def test_threshold_above_0p5_counted(self, mocker):
+    def test_soft_mask_threshold(self):
         mask = np.zeros((10, 10, 10))
         mask[2:6, 2:6, 2:6] = 0.8   # 4x4x4 = 64 voxels above 0.5
         mask[6:8, 6:8, 6:8] = 0.3   # below threshold, ignored
-        mocker.patch("cryocat.core.cryomask.get_mass_dimensions", return_value=np.array([4, 4, 4]))
-        n_voxels, _ = pana.get_soft_mask_stats(mask)
+        n_voxels, _ = imageutils.mask_voxel_count_and_bbox(mask, threshold=0.5)
         assert n_voxels == 64
 
-    def test_all_below_threshold(self, mocker):
+    def test_soft_all_below_threshold(self):
         mask = np.full((8, 8, 8), 0.3)
-        mocker.patch("cryocat.core.cryomask.get_mass_dimensions", return_value=np.array([0, 0, 0]))
-        n_voxels, _ = pana.get_soft_mask_stats(mask)
+        n_voxels, _ = imageutils.mask_voxel_count_and_bbox(mask, threshold=0.5)
         assert n_voxels == 0
 
-    def test_all_above_threshold(self, mocker):
+    def test_soft_all_above_threshold(self):
         mask = np.full((8, 8, 8), 0.9)
-        mocker.patch("cryocat.core.cryomask.get_mass_dimensions", return_value=np.array([8, 8, 8]))
-        n_voxels, _ = pana.get_soft_mask_stats(mask)
+        n_voxels, _ = imageutils.mask_voxel_count_and_bbox(mask, threshold=0.5)
         assert n_voxels == 512
 
-    def test_exactly_0p5_excluded(self, mocker):
+    def test_soft_exactly_threshold_excluded(self):
         mask = np.full((4, 4, 4), 0.5)
-        mocker.patch("cryocat.core.cryomask.get_mass_dimensions", return_value=np.array([0, 0, 0]))
-        n_voxels, _ = pana.get_soft_mask_stats(mask)
+        n_voxels, _ = imageutils.mask_voxel_count_and_bbox(mask, threshold=0.5)
         assert n_voxels == 0
-
-    def test_returns_two_values(self, mocker):
-        mocker.patch("cryocat.core.cryomask.get_mass_dimensions", return_value=np.array([8, 8, 8]))
-        assert len(pana.get_soft_mask_stats(np.ones((8, 8, 8)) * 0.9)) == 2
 
 
 # ── get_indices ────────────────────────────────────────────────────────────────
@@ -465,27 +452,27 @@ def ctf_wedgelist(simple_wedgelist):
 class TestGenerateCtf:
     def test_output_shape(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
         slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        result = pana.generate_ctf(ctf_wedgelist, slices, weights, binning=1)
+        result = imageutils.generate_ctf_slice(ctf_wedgelist, slices, weights, binning=1)
         assert result.shape == cubic_filter.shape
 
     def test_output_nonnegative(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
         slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        result = pana.generate_ctf(ctf_wedgelist, slices, weights, binning=1)
+        result = imageutils.generate_ctf_slice(ctf_wedgelist, slices, weights, binning=1)
         assert np.all(result >= 0)
 
     def test_output_finite(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
         slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        result = pana.generate_ctf(ctf_wedgelist, slices, weights, binning=1)
+        result = imageutils.generate_ctf_slice(ctf_wedgelist, slices, weights, binning=1)
         assert np.all(np.isfinite(result))
 
     def test_binning_affects_result(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
         slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        r1 = pana.generate_ctf(ctf_wedgelist, slices, weights, binning=1)
-        r2 = pana.generate_ctf(ctf_wedgelist, slices, weights, binning=2)
+        r1 = imageutils.generate_ctf_slice(ctf_wedgelist, slices, weights, binning=1)
+        r2 = imageutils.generate_ctf_slice(ctf_wedgelist, slices, weights, binning=2)
         assert not np.allclose(r1, r2)
 
     def test_pshift_column_optional(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
         wl_no_pshift = ctf_wedgelist.drop(columns=["pshift"], errors="ignore")
         slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        result = pana.generate_ctf(wl_no_pshift, slices, weights, binning=1)
+        result = imageutils.generate_ctf_slice(wl_no_pshift, slices, weights, binning=1)
         assert result.shape == cubic_filter.shape

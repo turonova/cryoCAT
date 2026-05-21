@@ -5,15 +5,14 @@ import re
 import warnings
 
 from skimage import measure
-from skimage import morphology
 
 from cryocat.core import cryomap
 from cryocat.utils import geom
+from cryocat.utils import imageutils
 from cryocat.utils import ioutils
 from cryocat.core import cryomotl
 from cryocat.core import cryomask
 
-from lmfit import models
 import skimage
 from scipy.spatial import KDTree
 from sklearn.cluster import DBSCAN
@@ -319,46 +318,7 @@ def compute_scores_map_threshold_triangle(scores_map):
       versions; the omission does not affect the threshold location.
     """
 
-    sp = np.sort(scores_map, axis=None)
-    nbins = len(sp)
-
-    # Find peak, lowest and highest gray levels.
-    arg_peak_height = np.argmax(sp)
-    peak_height = sp[arg_peak_height]
-    arg_low_level, arg_high_level = np.where(sp > 0)[0][[0, -1]]
-
-    # Flip is True if left tail is shorter.
-    flip = arg_peak_height - arg_low_level < arg_high_level - arg_peak_height
-    if flip:
-        sp = sp[::-1]
-        arg_low_level = nbins - arg_high_level - 1
-        arg_peak_height = nbins - arg_peak_height - 1
-
-    # If flip == True, arg_high_level becomes incorrect
-    # but we don't need it anymore.
-    del arg_high_level
-
-    # Set up the coordinate system.
-    width = arg_peak_height - arg_low_level
-    x1 = np.arange(width)
-    y1 = sp[x1 + arg_low_level]
-
-    # Normalize.
-    norm = np.sqrt(peak_height**2 + width**2)
-    peak_height /= norm
-    width /= norm
-
-    # Maximize the length.
-    # The ImageJ implementation includes an additional constant when calculating
-    # the length, but here we omit it as it does not affect the location of the
-    # minimum.
-    length = peak_height * x1 - width * y1
-    arg_level = np.argmax(length) + arg_low_level
-
-    if flip:
-        arg_level = nbins - arg_level - 1
-
-    return sp[arg_level]
+    return imageutils.triangle_threshold(scores_map)
 
 
 def create_starting_parameters_1D(input_map, peak_tolerance=20):
@@ -396,18 +356,10 @@ def create_starting_parameters_1D(input_map, peak_tolerance=20):
     - The spherical mask is centred on the map centre, not on the peak.
     """
 
-    peak_mask = cryomask.spherical_mask(np.asarray(input_map.shape), radius=peak_tolerance)
-    masked_map = input_map * peak_mask
-    peak_center = np.unravel_index(np.argmax(masked_map), shape=masked_map.shape)
+    peak_center = imageutils.find_peak_3d(input_map, search_radius=peak_tolerance)
     peak_height = np.amax(input_map)
-
-    x_profile = input_map[:, peak_center[1], peak_center[2]]
-    y_profile = input_map[peak_center[0], :, peak_center[2]]
-    z_profile = input_map[peak_center[0], peak_center[1], :]
-
-    profiles = np.vstack((x_profile, y_profile, z_profile))
-
-    return peak_center, peak_height, profiles.T
+    profiles = imageutils.extract_orthogonal_lines_1d(input_map, peak_center)
+    return peak_center, peak_height, profiles
 
 
 def create_starting_parameters_2D(input_map, peak_tolerance=20, peak_center=None):
@@ -447,20 +399,15 @@ def create_starting_parameters_2D(input_map, peak_tolerance=20, peak_center=None
         N is the common edge length of the cubic volume.
     """
 
-    peak_mask = cryomask.spherical_mask(np.asarray(input_map.shape), radius=peak_tolerance)
-    masked_map = input_map * peak_mask
     if peak_center is None:
-        peak_center = np.unravel_index(np.argmax(masked_map), shape=masked_map.shape)
+        peak_center = imageutils.find_peak_3d(input_map, search_radius=peak_tolerance)
         peak_height = np.amax(input_map)
     else:
-        peak_height = masked_map[peak_center[0], peak_center[1], peak_center[2]]
+        volume_center = np.asarray(input_map.shape) // 2
+        dist = np.linalg.norm(np.asarray(peak_center) - volume_center)
+        peak_height = float(input_map[peak_center[0], peak_center[1], peak_center[2]]) if dist <= peak_tolerance else 0.0
 
-    xy_plane = input_map[:, :, peak_center[2]]
-    yz_plane = input_map[peak_center[0], :, :]
-    xz_plane = input_map[:, peak_center[1], :]
-
-    slices = np.stack((xy_plane, yz_plane, xz_plane), axis=2)
-
+    slices = imageutils.extract_orthogonal_slices_2d(input_map, peak_center)
     return peak_center, peak_height, slices
 
 
@@ -491,30 +438,7 @@ def compute_gaussian_threshold(input_map):
       the detected peak position.
     """
 
-    pc, ph, profiles = create_starting_parameters_1D(input_map, peak_tolerance=20)
-
-    heights = []
-    for i in range(3):
-        rt_line = profiles[:, i]
-        x = np.linspace(0, rt_line.shape[0], rt_line.shape[0])
-        y = rt_line
-        mod = models.GaussianModel()
-
-        # params = mod.make_params(center=24, sigma=0.5)
-        params = mod.guess(rt_line, x)
-
-        # you can place min/max bounds on parameters
-        params["amplitude"].min = 0
-        params["sigma"].min = 0
-        params["center"].min = pc[i] - 1
-        params["center"].max = pc[i] + 1
-
-        # pars = mod.guess(y, x=x)
-        out = mod.fit(y, params, x=x)
-
-        heights.append(out.params["height"].value)
-
-    return np.mean(np.asarray(heights))
+    return imageutils.gaussian_threshold(input_map)
 
 
 def get_ellipsoid_label(input_map, peak_coordinates, map_threshold=0.0):
@@ -565,8 +489,8 @@ def get_ellipsoid_label(input_map, peak_coordinates, map_threshold=0.0):
 
     # shift the thresholding, otherwise only 1 label is found
     th_map = np.where(input_map == map_threshold, 2.0, 1.0)
-    labeled_th_map = measure.label(th_map, connectivity=1)
-    central_label = labeled_th_map[peak_coordinates[0], peak_coordinates[1], peak_coordinates[2]]
+    labeled_th_map = imageutils.label_connected_components(th_map)
+    central_label = imageutils.label_at_point(labeled_th_map, peak_coordinates)
     th_map = np.where(labeled_th_map == central_label, 1.0, 0.0)
 
     ellipsoid_verts, _, _, _ = measure.marching_cubes(th_map, level=0.5)
@@ -657,7 +581,7 @@ def get_central_plane_labels(input_map, peak_coordinates, map_threshold=0.0):
     size_x, size_y, size_z = (0.0, 0.0, 0.0)
 
     for i in range(3):
-        plane_label = measure.label(planes[:, :, i], connectivity=1)
+        plane_label = imageutils.label_connected_components(planes[:, :, i])
         plane_props = pd.DataFrame(
             measure.regionprops_table(
                 plane_label, properties=["label", "centroid", "axis_major_length", "axis_minor_length", "orientation"]
@@ -747,8 +671,8 @@ def get_central_label(map, peak_coordinates):
 
     # shift the thresholding, otherwise only 1 label is found
     th_map = np.where(map == 0.0, 2.0, 1.0)
-    labeled_mask = measure.label(th_map, connectivity=1)
-    central_label = labeled_mask[peak_coordinates[0], peak_coordinates[1], peak_coordinates[2]]
+    labeled_mask = imageutils.label_connected_components(th_map)
+    central_label = imageutils.label_at_point(labeled_mask, peak_coordinates)
     labeled_mask = np.where(labeled_mask == central_label, 1.0, 0.0)
 
     profile_x = np.nonzero(labeled_mask[:, peak_coordinates[1], peak_coordinates[2]])[0]
@@ -893,7 +817,7 @@ def filter_dist_maps(dist_maps, th_mask, min_angles_voxel_count):
 
     for j in range(dist_maps.shape[3]):
         dist_maps[:, :, :, j] *= th_mask
-        dist_label = measure.label(dist_maps[:, :, :, j], connectivity=1)
+        dist_label = imageutils.label_connected_components(dist_maps[:, :, :, j])
         dist_props = pd.DataFrame(measure.regionprops_table(dist_label, properties=("label", "area")))
         too_small_dist = dist_props.loc[dist_props["area"] < min_angles_voxel_count, "label"].values
         th_mask = np.where(np.isin(dist_label, too_small_dist), 0.0, dist_label)
@@ -1154,7 +1078,7 @@ def select_peaks(
 
     th_map_d = th_map
 
-    labels = measure.label(th_map, connectivity=1)
+    labels = imageutils.label_connected_components(th_map)
     props = pd.DataFrame(measure.regionprops_table(labels, properties=("label", "area")))
 
     too_small_peaks = props.loc[props["area"] < min_peak_voxel_count, "label"].values
@@ -1165,15 +1089,15 @@ def select_peaks(
 
     for j in range(n_dist_maps):
         dist_temp = np.zeros(th_map.shape)
-        dist_label = measure.label(dist_maps[:, :, :, j], connectivity=1)
-        dist_props = pd.DataFrame(measure.regionprops_table(dist_label, properties=("label", "bbox")))
+        dist_label = imageutils.label_connected_components(dist_maps[:, :, :, j])
+        dist_props = imageutils.get_label_bounding_box(dist_label)
         labels, xs, xe, ys, ye, zs, ze = dist_props[
             ["label", "bbox-0", "bbox-3", "bbox-1", "bbox-4", "bbox-2", "bbox-5"]
         ].T.to_numpy()
         for l in range(labels.shape[0]):
             label_cut = dist_label[xs[l] : xe[l], ys[l] : ye[l], zs[l] : ze[l]]
             label_cut = np.where(label_cut == labels[l], 1.0, 0.0)
-            label_open = morphology.binary_opening(label_cut, footprint=np.ones((2, 2, 2)), out=None)
+            label_open = imageutils.morphology_open_close(label_cut, footprint=np.ones((2, 2, 2)), operation="open")
             dist_temp[xs[l] : xe[l], ys[l] : ye[l], zs[l] : ze[l]] = np.where(
                 label_open == 1, dist_maps[xs[l] : xe[l], ys[l] : ye[l], zs[l] : ze[l], j], 0.0
             )
@@ -1221,8 +1145,8 @@ def select_peaks(
         overlap_voxels = np.count_nonzero(empty_label[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2]] * p_particle)
 
         if overlap_voxels == 0 and np.all(cut_coord < me):
-            th_label = measure.label(th_map[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2]] * p_particle)
-            th_label_id = th_label[cut_coord[0], cut_coord[1], cut_coord[2]]
+            th_label = imageutils.label_connected_components(th_map[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2]] * p_particle)
+            th_label_id = imageutils.label_at_point(th_label, cut_coord)
 
             if th_label_id == 0:
                 peak_area = 0
@@ -1232,8 +1156,8 @@ def select_peaks(
                 peak_area = np.count_nonzero(np.where(th_label == th_label_id, 1.0, 0.0))
                 angle_size = min_angles_voxel_count
                 for j in range(n_dist_maps):
-                    dist_label = measure.label(dist_maps[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2], j] * p_particle)
-                    dist_label_id = dist_label[cut_coord[0], cut_coord[1], cut_coord[2]]
+                    dist_label = imageutils.label_connected_components(dist_maps[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2], j] * p_particle)
+                    dist_label_id = imageutils.label_at_point(dist_label, cut_coord)
                     if dist_label_id == 0:
                         angle_size = 0
                         print(idx_3d)

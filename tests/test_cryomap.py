@@ -7,6 +7,7 @@ from cryocat.utils.geom import as_triplet
 from matplotlib import pyplot as plt
 from scipy.fft import fftn, ifftn, fftshift
 from cryocat.core.cryomap import *
+from cryocat.utils.imageutils import calculate_conjugates, calculate_flcf, compute_ctf_1d
 import pytest
 import numpy as np
 import os

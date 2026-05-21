@@ -13,6 +13,7 @@ from cryocat.utils import geom
 from cryocat.utils import starfileio
 from cryocat.core import cryomask
 from cryocat.utils import mathutils
+from cryocat.utils import imageutils
 from cryocat.utils import ioutils
 from cryocat.analysis import nnana
 from cryocat.utils import imod
@@ -664,7 +665,7 @@ class Motl:
         for f in features:
             fm = tm.loc[tm[column_name] == f]
             bin_counts, bin_edges = np.histogram(fm.loc[:, "score"], bins=hbin)
-            bn = mathutils.otsu_threshold(bin_counts)
+            bn = imageutils.otsu_threshold(bin_counts)
             # index of the first bin whose count exceeds the Otsu threshold
             ind = np.where(bin_counts == bin_counts[bin_counts > bn][0])
             cc_t = bin_edges[ind[0] + 1][0]  # upper edge of that bin = score cutoff

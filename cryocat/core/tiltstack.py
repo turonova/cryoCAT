@@ -3,8 +3,8 @@ import re
 import numpy as np
 from cryocat.core import cryomap
 from cryocat.utils import ioutils
+from cryocat.utils import imageutils
 from cryocat.utils.classutils import as_list
-from scipy.interpolate import interp1d
 from skimage.transform import downscale_local_mean
 from skimage import exposure
 
@@ -593,52 +593,11 @@ def deconvolve(
     for z in range(ts.n_tilts):
         tilt = ts.data[z, :, :]
         interp_dim = np.maximum(2048, tilt.shape[0])
-
-        # Generate highpass filter
-        highpass = np.arange(0, 1, 1 / interp_dim)
-        highpass = np.minimum(1, highpass / highpass_nyquist) * np.pi
-        highpass = 1 - np.cos(highpass)
-
-        # Calculate SNR and Wiener filter
-        snr = (
-            np.exp(np.arange(0, -1, -1 / interp_dim) * snr_falloff * 100 / pixel_size_a)
-            * (10 ** (3 * deconv_strength))
-            * highpass
+        wiener = imageutils.compute_wiener_1d(
+            interp_dim, pixel_size_a, defocus[z], snr_falloff, deconv_strength,
+            highpass_nyquist, phase_flipped, phaseshift,
         )
-        ctf = cryomap.compute_ctf_1d(
-            interp_dim,
-            pixel_size_a * 1e-10,
-            300e3,
-            2.7e-3,
-            -defocus[z] * 1e-6,
-            0.07,
-            phaseshift / 180 * np.pi,
-            0,
-        )
-        if phase_flipped:
-            ctf = np.abs(ctf)
-        wiener = ctf / (ctf * ctf + 1 / snr)
-
-        # Generate ramp filter
-        s = tilt.shape
-        x, y = np.meshgrid(
-            np.arange(-s[0] / 2, s[0] / 2),
-            np.arange(-s[1] / 2, s[1] / 2),
-            indexing="ij",
-        )
-
-        x /= abs(s[0] / 2)
-        y /= abs(s[1] / 2)
-        r = np.sqrt(x * x + y * y)
-        r = np.minimum(1, r)
-        r = np.fft.ifftshift(r)
-
-        x = np.arange(0, 1, 1 / interp_dim)
-        ramp_interp = interp1d(x, wiener, fill_value="extrapolate")
-
-        ramp = ramp_interp(r.flatten()).reshape(r.shape)
-        # Perform deconvolution
-        ts.data[z, :, :] = np.real(np.fft.ifftn(np.fft.fftn(tilt) * ramp))
+        ts.data[z, :, :] = imageutils.apply_wiener_radial(tilt, wiener, interp_dim)
 
     ts.write_out(output_path)
 

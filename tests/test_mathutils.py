@@ -3,11 +3,13 @@ import pytest
 from skimage import filters
 
 from cryocat.utils.mathutils import (
-    compute_frequency_array,
     compute_rmse,
     get_all_pairs,
     get_number_of_digits,
     get_similar_size_factors,
+)
+from cryocat.utils.imageutils import (
+    compute_frequency_array,
     otsu_threshold,
     randomize_phases,
 )

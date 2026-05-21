@@ -5,13 +5,12 @@ import re
 import os
 import numpy as np
 import pandas as pd
-from numpy import fft
 from scipy.ndimage import affine_transform
 from scipy.spatial.transform import Rotation as srot
 from typing import TYPE_CHECKING
-from cryocat.core import cryomask
-from cryocat.utils import mathutils, ioutils
+from cryocat.utils import ioutils
 from cryocat.utils import geom
+from cryocat.utils import imageutils
 from skimage import transform
 from cryocat._types import MapSource, PathOrStr, TripletLike, EulerAngles, Symmetry, ArrayLike
 
@@ -184,47 +183,8 @@ def get_filter_radius(
     target_resolution: float | None,
     pixel_size: float | None,
 ) -> int:
-    """Calculate the filter radius based on either direct Fourier pixel/voxel specification or target resolution.
-
-    Parameters
-    ----------
-    edge_size : int
-        Size of the edge of the image/map in pixels/voxels.
-    fourier_pixels : int, optional
-        Number of pixels in the Fourier space. Default is None.
-    target_resolution : float, optional
-        Desired resolution to achieve. Default is None.
-    pixel_size : float, optional
-        Size of a pixel/voxel in the image/map. Default is None.
-
-    Returns
-    -------
-    int
-        Calculated radius in pixels/voxels for the filter.
-
-    Raises
-    ------
-    ValueError
-        If neither `fourier_pixels` nor both `target_resolution` and `pixel_size` are specified.
-
-    Notes
-    -----
-    The function requires either a direct specification of the Fourier pixels or both the target resolution and pixel
-    size to compute the filter radius.
-    """
-
-    if fourier_pixels is not None:
-        radius = fourier_pixels
-        if pixel_size is not None:
-            _ = pixels2resolution(fourier_pixels=fourier_pixels, edge_size=edge_size, pixel_size=pixel_size)
-    elif target_resolution is not None and pixel_size is not None:
-        radius = resolution2pixels(target_resolution, edge_size=edge_size, pixel_size=pixel_size)
-    else:
-        raise ValueError(
-            "Either target_voxels or target_resolution in combination with pixel_size have to be specified!"
-        )
-
-    return radius
+    """Calculate the filter radius — delegates to :func:`imageutils.get_filter_radius`."""
+    return imageutils.get_filter_radius(edge_size, fourier_pixels, target_resolution, pixel_size)
 
 
 def bandpass(
@@ -289,26 +249,7 @@ def bandpass(
         target_resolution=hp_target_resolution,
         pixel_size=pixel_size,
     )
-    outer_mask = cryomask.spherical_mask(input_map.shape, lp_radius, gaussian=lp_gaussian, gaussian_outwards=False)
-    inner_mask = cryomask.spherical_mask(input_map.shape, hp_radius, gaussian=hp_gaussian, gaussian_outwards=False)
-    band_mask = fft.ifftshift(outer_mask - inner_mask)
-    bandpass_filtered = np.real(fft.ifftn(fft.fftn(input_map) * band_mask))
-
-    # lowpass_filtered = lowpass(
-    #     input_map=input_map,
-    #     fourier_pixels=lp_fourier_pixels,
-    #     target_resolution=lp_target_resolution,
-    #     pixel_size=pixel_size,
-    #     gaussian=lp_gaussian,
-    # )
-
-    # bandpass_filtered = highpass(
-    #     input_map=lowpass_filtered,
-    #     fourier_pixels=hp_fourier_pixels,
-    #     target_resolution=hp_target_resolution,
-    #     pixel_size=pixel_size,
-    #     gaussian=hp_gaussian,
-    # )
+    bandpass_filtered = imageutils.apply_bandpass(input_map, lp_radius, hp_radius, lp_gaussian=lp_gaussian, hp_gaussian=hp_gaussian)
 
     if output_path is not None:
         write(bandpass_filtered, output_path, data_type=np.single, pixel_size=pixel_size or 1.0)
@@ -364,11 +305,7 @@ def lowpass(
         input_map.shape[0], fourier_pixels=fourier_pixels, target_resolution=target_resolution, pixel_size=pixel_size
     )
 
-    lowpass_filter = fft.ifftshift(
-        cryomask.spherical_mask(input_map.shape, radius, gaussian=gaussian, gaussian_outwards=False)
-    )
-    # Apply filter
-    filtered_map = np.real(fft.ifftn(fft.fftn(input_map) * lowpass_filter))
+    filtered_map = imageutils.apply_lowpass(input_map, radius, gaussian=gaussian)
 
     if output_path is not None:
         write(filtered_map, output_path, data_type=np.single, pixel_size=pixel_size or 1.0)
@@ -419,13 +356,7 @@ def highpass(
         input_map.shape[0], fourier_pixels=fourier_pixels, target_resolution=target_resolution, pixel_size=pixel_size
     )
 
-    highpass_filter = fft.ifftshift(
-        np.ones(input_map.shape)
-        - cryomask.spherical_mask(input_map.shape, radius, gaussian=gaussian, gaussian_outwards=False)
-    )
-
-    # Apply filter
-    filtered_map = np.real(fft.ifftn(fft.fftn(input_map) * highpass_filter))
+    filtered_map = imageutils.apply_highpass(input_map, radius, gaussian=gaussian)
 
     if output_path is not None:
         write(filtered_map, output_path, data_type=np.single, pixel_size=pixel_size or 1.0)
@@ -1486,114 +1417,16 @@ def deconvolve(
     """
     input_map = read(input_map)
     interp_dim = np.maximum(2048, input_map.shape[0])
-
-    # Generate highpass filter
-    highpass = np.arange(0, 1, 1 / interp_dim)
-    highpass = np.minimum(1, highpass / highpass_nyquist) * np.pi
-    highpass = 1 - np.cos(highpass)
-
-    # Calculate SNR and Wiener filter
-    snr = (
-        np.exp(np.arange(0, -1, -1 / interp_dim) * snr_falloff * 100 / pixel_size_a)
-        * (10 ** (3 * deconv_strength))
-        * highpass
+    wiener = imageutils.compute_wiener_1d(
+        interp_dim, pixel_size_a, defocus, snr_falloff, deconv_strength,
+        highpass_nyquist, phase_flipped, phaseshift,
     )
-    ctf = compute_ctf_1d(
-        interp_dim,
-        pixel_size_a * 1e-10,
-        300e3,
-        2.7e-3,
-        -defocus * 1e-6,
-        0.07,
-        phaseshift / 180 * np.pi,
-        0,
-    )
-    if phase_flipped:
-        ctf = np.abs(ctf)
-    wiener = ctf / (ctf * ctf + 1 / snr)
-
-    # Generate ramp filter
-    s = input_map.shape
-    x, y, z = np.meshgrid(
-        np.arange(-s[0] / 2, s[0] / 2),
-        np.arange(-s[1] / 2, s[1] / 2),
-        np.arange(-s[2] / 2, s[2] / 2),
-        indexing="ij",
-    )
-
-    x /= abs(s[0] / 2)
-    y /= abs(s[1] / 2)
-    z /= max(1, abs(s[2] / 2))
-    r = np.sqrt(x * x + y * y + z * z)
-    r = np.minimum(1, r)
-    r = np.fft.ifftshift(r)
-
-    x = np.arange(0, 1, 1 / interp_dim)
-    ramp = np.interp(r.flatten(), x, wiener).reshape(r.shape)
-    # Perform deconvolution
-    deconvolved_map = np.real(np.fft.ifftn(np.fft.fftn(input_map) * ramp))
+    deconvolved_map = imageutils.apply_wiener_radial(input_map, wiener, interp_dim)
 
     if output_path is not None:
         write(deconvolved_map, output_path, data_type=np.single, pixel_size=pixel_size_a)
 
     return deconvolved_map
-
-
-def compute_ctf_1d(
-    length: int,
-    pixel_size: float,
-    voltage: float,
-    cs: float,
-    defocus: float,
-    amplitude: float,
-    phaseshift: float,
-    bfactor: float,
-) -> np.ndarray:
-    """
-    This function computes the 1D Contrast Transfer Function (CTF) for a given set of parameters.
-
-    Parameters
-    ----------
-    length : int
-        The length of the 1D array for which the CTF is computed.
-    pixel_size : float
-        The size of the pixel in the image.
-    voltage : float
-        The voltage used in the microscope.
-    cs : float
-        The spherical aberration coefficient.
-    defocus : float
-        The defocus value.
-    amplitude : float
-        The amplitude contrast.
-    phaseshift : float
-        The phase shift value.
-    bfactor : float
-        The B-factor for the envelope function.
-
-    Returns
-    -------
-    ctf : ndarray
-        The computed 1D Contrast Transfer Function.
-    """
-
-    ny = 1 / pixel_size
-    lambda_factor = 12.2643247 / np.sqrt(voltage * (1.0 + voltage * 0.978466e-6)) * 1e-10
-    lambda2 = lambda_factor * 2
-
-    points = np.arange(length)
-    points = points / (2 * length) * ny
-    k2 = points**2
-    term1 = lambda_factor**3 * cs * k2**2
-
-    w = np.pi / 2 * (term1 + lambda2 * defocus * k2) - phaseshift
-
-    acurve = np.cos(w) * amplitude
-    pcurve = -np.sqrt(1 - amplitude**2) * np.sin(w)
-    bfactor = np.exp(-bfactor * k2 * 0.25)
-    ctf = (pcurve + acurve) * bfactor
-
-    return ctf
 
 
 def trim(
@@ -1697,136 +1530,6 @@ def flip(
         write(output_map, output_path, data_type=np.single, pixel_size=pixel_size)
 
     return output_map
-
-
-def calculate_conjugates(
-    vol: np.ndarray,
-    filter: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    This function calculates the complex conjugates of a volume and its square after applying a Fourier transform and an optional filter.
-
-    Parameters
-    ----------
-    vol : ndarray
-        The input volume to be transformed and filtered.
-    filter : ndarray, optional
-        The filter to be applied to the Fourier transform of the volume. If None, no filter is applied. Default is None.
-
-    Returns
-    -------
-    conj_target : ndarray
-        The complex conjugate of the Fourier transform of the input volume after applying the filter.
-    conj_target_sq : ndarray
-        The complex conjugate of the square of the filtered volume after applying the Fourier transform.
-
-    Notes
-    -----
-    The 0-frequency peak of the Fourier transform of the input volume is set to zero before calculating the complex conjugates.
-    """
-
-    # Fourier transform tile
-    vol_fft = np.fft.fftn(vol)
-
-    # Apply filter
-    if filter is not None:
-        vol_fft = vol_fft * filter
-
-    # Set 0-frequency peak to zero
-    vol_fft[0, 0, 0] = 0
-
-    # Store complex conjugate
-    conj_target = np.conj(vol_fft)
-
-    # Filtered volume
-    filtered_volume = np.fft.ifftn(vol_fft).real
-
-    # Store complex conjugate of square
-    conj_target_sq = np.conj(np.fft.fftn(np.power(filtered_volume, 2)))
-
-    return conj_target, conj_target_sq
-
-
-def calculate_flcf(
-    vol1: np.ndarray,
-    mask: np.ndarray,
-    vol2: np.ndarray | None = None,
-    conj_target: np.ndarray | None = None,
-    conj_target_sq: np.ndarray | None = None,
-    filter: np.ndarray | None = None,
-) -> np.ndarray:
-    """
-    This function calculates the Fast Local Correlation Coefficient (FLCC) map between two volumes (3D arrays).
-
-    Parameters
-    ----------
-    vol1 : ndarray
-        The first volume for which the FLCC map is to be calculated.
-    mask : ndarray
-        The mask to be applied on the volumes.
-    vol2 : ndarray, optional
-        The second volume for which the FLCC map is to be calculated. If not provided, `conj_target` and `conj_target_sq` must be provided.
-    conj_target : ndarray, optional
-        The conjugate of the target volume. Required if `vol2` is not provided.
-    conj_target_sq : ndarray, optional
-        The square of the conjugate of the target volume. Required if `vol2` is not provided.
-    filter : ndarray, optional
-        The filter to be applied on the volumes.
-
-    Raises
-    ------
-    ValueError
-        If `vol2` is not provided, both `conj_target` and `conj_target_sq` must be provided.
-
-    Returns
-    -------
-    cc_map : ndarray
-        The calculated FLCC map, clipped between 0.0 and 1.0.
-    """
-
-    # get the size of the box and number of voxels contributing to the calculations
-    if np.isnan(vol1).any() or np.isnan(mask).any():
-        raise ValueError("Input volumes or mask contain NaN values")
-    box_size = np.array(vol1.shape)
-    n_pix = mask.sum()
-
-    # Calculate inital Fourier transfroms
-    vol1 = np.fft.fftn(vol1)
-    mask = np.fft.fftn(mask)
-
-    if vol2 is not None:
-        conj_target, conj_target_sq = calculate_conjugates(vol2, filter)
-
-    elif conj_target is None or conj_target_sq is None:
-        raise ValueError(
-            "If the second volume is NOT provided, both conj_target and conj_target_sw have to be passed as parameters."
-        )
-
-    # Calculate numerator of equation
-    numerator = np.fft.ifftn(vol1 * conj_target).real
-
-    # Calculate denominator in three steps
-    # sigma_a = np.fft.ifftn(mask*conj_target_sq).real/n_pix  # First part of denominator sigma
-    # sigma_b = np.power(np.fft.ifftn(mask*conj_target).real/n_pix,2)   # Second part of denominator sigma
-    A = np.fft.ifftn(mask * conj_target_sq)
-    B = np.fft.ifftn(mask * conj_target)
-    denominator = np.sqrt(n_pix * A - B * B).real
-
-    # Shifted FLCL map
-    cc_map = (numerator / denominator).real
-
-    # Calculate map and do a much of flips to get orientation correct...
-    # Note on the flips - normally, fftshift should directly work on cc_map, no flipping necessary
-    # but for some reason the fftshift returns "mirrored" values, i.e. for shift of 6,6,6 the peak would be in -6,-6,-6
-    # Following code corresponds to the original one from Matlab and was tested to be working despite looking ugly...
-    # TODO: maybe check (on unflipped data) fftshift, followed by transpose - that could work. fftshift followed by flip
-    # was having an offset of 1
-    # TODO: check nomenclature: flcc, flcf, flcl
-    cen = np.floor(box_size / 2).astype(int) + 1
-    cc_map = np.flip(cc_map)
-    cc_map = np.roll(cc_map, cen, (0, 1, 2))
-
-    return np.clip(cc_map, 0.0, 1.0)
 
 
 def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
@@ -1947,8 +1650,8 @@ def calculate_masked_fsc(
         if fsc_mask.shape != map_a.shape:
             raise ValueError("Mask shape does not match half-map shape.")
 
-    # Radial distance in Fourier pixels using existing mathutils function
-    dist = mathutils.compute_frequency_array(map_a.shape, 1) * box
+    # Radial distance in Fourier pixels
+    dist = imageutils.compute_frequency_array(map_a.shape, 1) * box
     shell_masks = [(dist >= r - 1) & (dist < r) for r in range(1, max_shell + 1)]
 
     def _fsc_compute(ft_a, ft_b):
@@ -1984,8 +1687,8 @@ def calculate_masked_fsc(
         mean_pr_fsc = np.zeros(max_shell)
 
         for n in range(n_repeats):
-            pr_a = mathutils.randomize_phases(map_a, fourier_cutoff) * fsc_mask
-            pr_b = mathutils.randomize_phases(map_b, fourier_cutoff) * fsc_mask
+            pr_a = imageutils.randomize_phases(map_a, fourier_cutoff) * fsc_mask
+            pr_b = imageutils.randomize_phases(map_b, fourier_cutoff) * fsc_mask
             rp_fsc = _fsc_compute(
                 np.fft.fftshift(np.fft.fftn(pr_a)),
                 np.fft.fftshift(np.fft.fftn(pr_b)),

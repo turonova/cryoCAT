@@ -8,8 +8,8 @@ from cryocat.utils import ioutils
 from cryocat.core import cryomotl
 from cryocat.analysis import tmana
 from cryocat.analysis import visplot
-from cryocat.utils import mathutils
 from cryocat.utils import wedgeutils
+from cryocat.utils import imageutils
 from scipy.spatial.transform import Rotation as srot
 import re
 from pathlib import Path
@@ -17,223 +17,10 @@ from cryocat.core import cryomask
 import os
 from skimage import measure
 from skimage import morphology
-from scipy.interpolate import RegularGridInterpolator
-from skimage.transform import rotate as skimage_rotate
 
 import warnings
 
 warnings.filterwarnings("ignore")
-
-
-def rotate_image(image, alpha, fill_mode="constant", fill_value=0.0):
-    """Rotate an ndarray image by a specified angle.
-
-    Uses 'skimage.transform.rotate' to rotate the input image without resizing
-    the output. Pixels outside the boundaries of the input are filled
-    according to the specified mode and fill value.
-
-    Some descriptions are from `scikit-image page <https://scikit-image.org>`_.
-
-    Parameters
-    ----------
-    image : ndarray
-        nD NumPy array representing the image to rotate.
-    alpha : float
-        Angle of rotation in degrees. Positive values rotate counterclockwise.
-    fill_mode : {'constant', 'edge', 'symmetric', 'reflect', 'wrap'}, default='constant'
-        Points outside the boundaries of the input are filled according to the
-        given mode.
-    fill_value : float, default=0.0
-        Value used to fill points outside the boundaries when `fill_mode`
-        is 'constant'.
-
-    Returns
-    -------
-    ndarray
-        Rotated image as a NumPy array with the same shape as the input.
-    """
-
-    return skimage_rotate(image, alpha, resize=False, mode=fill_mode, cval=fill_value)
-
-
-def _ctf(defocus, pshift, famp, cs, evk, f):
-    """Compute Contrast Transfer Function (CTF) for an acquisition scheme.
-
-        This function evaluates the 1D CTF over a 1D spatial frequency array
-        using image acquisition parameters such as defocus, spherical aberration, and
-        accelerating voltage.
-
-        Parameters
-        ----------
-        defocus : array_like, shape (N, 1)
-            Defocus values (in :math:`\mu\mathrm{m}`) for each of the N tilts.
-        pshift : array_like, shape (N, 1)
-            Phase shift values (in degrees) for each tilt. Pass zeros if no
-            phase plate is used.
-        famp : float
-            Amplitude contrast (typically between 0.0 and 0.2).
-        cs : float
-            Spherical aberration (in mm).
-        evk : float
-            Accelerating voltage (in kV).
-        f : ndarray
-            1D spatial frequency magnitude array (in :math:`\mathrm{\AA}^{-1}`)
-            at which to evaluate the CTF.  Must be 1D so it broadcasts correctly
-            against the ``(N, 1)`` defocus/pshift arrays.
-
-        Returns
-        -------
-        ctf : ndarray, shape (N, len(f))
-            CTF evaluated at each tilt (row) and each frequency (column).
-
-        Notes
-        -----
-        - The output combines both sine and cosine components weighted by
-          phase and amplitude contrast:
-
-          .. math::
-
-              \mathrm{CTF}(f) = \sqrt{1 - f_\mathrm{amp}^2} \, \sin(\chi(f)) + f_\mathrm{amp} \, \cos(\chi(f))
-
-          where :math:`\chi(f)` is the aberration phase function.
-
-        - The output has radial symmetry.
-    """
-
-    defocus = defocus * 1.0e4  # convert defocus distance from μm to Å
-    cs = cs * 1.0e7  # spherical aberration from mm to Å
-    pshift = pshift * np.pi / 180  # phase shift degree to radian
-
-    h = 6.62606957e-34  # Planck's constant (m^2*kg/s)
-    c = 299792458  # speed of light (m/s)
-    erest = 511000  # electron rest energy (eV)
-    v = evk * 1000  # accelerating voltage (V)
-    e = 1.602e-19  # unit of e- charge (C)
-
-    # de Broglie e- wavelength
-    lam = (c * h) / np.sqrt(((2 * erest * v) + (v**2)) * (e**2)) * (10**10)
-
-    # phase contrast weighting factor
-    w = (1 - (famp**2)) ** 0.5
-
-    # compute the ctf phase shift term / wave aberration equation
-    chi = (np.pi * lam * (f**2)) * (defocus - 0.5 * (lam**2) * (f**2) * cs)
-    chi += pshift
-
-    # CTF function
-    ctf = (w * np.sin(chi)) + (famp * np.cos(chi))
-
-    return ctf
-
-
-def generate_ctf(wl, slice_idx, slice_weight, binning):
-    """Generate a CTF filter for a weighted volume that is subset of a full volume.
-
-    This function computes defocus and phase shift-specific CTF filters for a template.
-
-    It does so by:
-    1. computing the frequency array of a tomogram;
-
-    2. interpolating the CTF based on the full sized frequency array and
-       defocus / pshift values;
-
-    3. fourier cropping the full size CTF values to fit the size of a template, to keep
-       only the lower frequencies;
-
-    4. applying the CTF values to the given `slice_weight` array.
-
-    Parameters
-    ----------
-    wl : pandas.DataFrame
-        Wedge list dataframe for one tomogram.  Required columns:
-        ``"tomo_x"``, ``"tomo_y"``, ``"tomo_z"`` (tomogram dimensions in voxels),
-        ``"pixelsize"`` (unbinned pixel size in Å), ``"defocus"`` (in μm),
-        ``"amp_contrast"``, ``"cs"`` (spherical aberration in mm),
-        ``"voltage"`` (in kV).  An optional ``"pshift"`` column (phase shift
-        in degrees) defaults to zeros when absent.
-    slice_idx : list of tuple of ndarray
-        Per-tilt active voxel indices in Fourier space, as returned by
-        :func:`generate_wedgemask_slices_template`.  Each element is a tuple
-        of three 1-D index arrays ``(z, y, x)`` from ``np.nonzero``.
-    slice_weight : ndarray
-        3D array of normalised frequency-domain weights (missing wedge and
-        bandpass combined), shape ``(depth, height, width)`` / ``(z, y, x)``.
-        Applied as a final multiplicative factor after the per-tilt CTF
-        accumulation.
-    binning : int or float
-        The binning factor of the tomogram. Used to scale the pixel size.
-
-    Returns
-    -------
-    ctf_filt : ndarray
-        The computed CTF filter applied on top of the weighted filter input
-        (i.e. bandpass and missing wedge), in fourier space.
-        Same shape as `slice_weight`.
-
-    Notes
-    -----
-    - If `pshift` is not provided in `wl`, it defaults to zeros.
-    """
-
-    # determine template and full tomogram sizes
-    tmpl_size = slice_weight.shape[0]
-    full_size = int(max(wl["tomo_x"].values[0], wl["tomo_y"].values[0], wl["tomo_z"].values[0]))
-    pixelsize = wl["pixelsize"].values[0] * binning
-
-    # calculate frequency arrays of tomogram and template sizes
-    freqs_full = mathutils.compute_frequency_array((full_size,), pixelsize)
-    freqs_crop = mathutils.compute_frequency_array((tmpl_size,), pixelsize)
-    freqs_crop = freqs_crop[tmpl_size // 2 :]  # only need half of the freq array
-
-    # selects the central part (len = tmpl length) of the frequency array from
-    # the full frequency array and wraps it to match FFT layout
-    f_idx = np.zeros(full_size, dtype="bool")
-    f_idx[:tmpl_size] = 1
-    f_idx = np.roll(f_idx, -tmpl_size // 2)
-    f_idx = np.nonzero(f_idx)[0]  # get the indices of selected part
-
-    # acquisition parameters
-    defocus = np.array(wl["defocus"])
-    pshift = wl.get("pshift", np.zeros_like(defocus))
-    famp = wl["amp_contrast"].values[0]
-    cs = wl["cs"].values[0]
-    evk = wl["voltage"].values[0]
-
-    # compute the 1D CTF as a function of full tomo freq magnitude array
-    full_ctf = np.abs(_ctf(defocus[:, None], pshift[:, None], famp, cs, evk, freqs_full))
-
-    # cropping the ctf that only belongs to template size from the full size ctf
-    # cropping is done in fourier space to remove high freq ctf content
-    ft_ctf = np.fft.fft(full_ctf, axis=1)
-    ft_ctf = ft_ctf[:, f_idx] * tmpl_size / full_size
-    crop_ctf = np.real(np.fft.ifft(ft_ctf, axis=1))
-    crop_ctf = crop_ctf[:, tmpl_size // 2 :]
-
-    # init an empty vol to save ctf values
-    ctf_filt = np.zeros_like(slice_weight)
-
-    # map weighted spatial components to their freq magnitudes
-    x = np.fft.ifftshift(mathutils.compute_frequency_array(slice_weight.shape, pixelsize))
-
-    # for each tilt, interpolate the CTF value for each weighted voxel
-    for ictf, sidx in zip(crop_ctf, slice_idx):
-        ip = RegularGridInterpolator(
-            (freqs_crop,),  # Grid points
-            ictf,  # Values on the grid
-            method="linear",  # Interpolation method ('linear', 'nearest')
-            bounds_error=False,  # Do not raise error for out-of-bound points
-            fill_value=0,  # Fill with 0 for out-of-bound points
-        )
-
-        # write the interpolated CTF values for all weighted voxels to an empty vol
-        ctf_filt[sidx] += ip(x[sidx])
-
-    # ? np.nan_to_num(ctf_filt)
-
-    # apply the CTF filter to input weight filter
-    ctf_filt *= slice_weight
-
-    return ctf_filt
 
 
 def generate_exposure(wedgelist, slice_idx, slice_weight, binning):
@@ -287,7 +74,7 @@ def generate_exposure(wedgelist, slice_idx, slice_weight, binning):
     a, b, c = (0.245, -1.665, 2.81)  # values that best fit the function in the paper
     pixelsize = wedgelist["pixelsize"].values[0] * binning
 
-    freq_array = np.fft.ifftshift(mathutils.compute_frequency_array(slice_weight.shape, pixelsize))
+    freq_array = np.fft.ifftshift(imageutils.compute_frequency_array(slice_weight.shape, pixelsize))
 
     exp_filt = np.zeros_like(slice_weight)
 
@@ -374,7 +161,7 @@ def generate_wedgemask_slices_template(wedgelist, template_filter):
     for alpha in wedgelist["tilt_angle"]:
 
         # rotate the ray projection img by alpha deg
-        r_img = rotate_image(img, alpha)
+        r_img = imageutils.rotate_2d(img, alpha)
 
         # after rotation, smoothing effect thus need to turn interpolated values into binary
         crop_r_img = r_img > np.exp(-2)  # e^-2 is common effective support threshold for g-blur
@@ -455,7 +242,7 @@ def generate_wedgemask_slices_tile(wedgelist, tile_filter):
 
     for alpha in wedgelist["tilt_angle"]:
 
-        r_img = rotate_image(img, alpha)
+        r_img = imageutils.rotate_2d(img, alpha)
         # tile filter?
         r_img = np.fft.fftshift(np.fft.fft2(r_img))
         new_img = np.real(np.fft.ifft2(np.fft.ifftshift(r_img)))
@@ -826,58 +613,6 @@ def get_indices(template_list, conditions, sort_by=None):
     return temp_df.index
 
 
-def get_sharp_mask_stats(input_mask):
-    """Get the boxsize of the nonzero element inside the sharp mask and the total
-    volume of the nonzero element.
-
-    Parameters
-    ----------
-    input_mask : str or numpy.ndarray
-         Input mask specified either by its path or already loaded as 3D numpy.ndarray.
-         The nonzero element in this mask has sharp edges, i.e.: the values inside
-         the mask are either 1 or 0.
-
-    Returns
-    -------
-    n_voxels : int
-        The number of voxels of where the input_mask is not zero.
-    mask_bb : tuple of int
-        The bounding box size in (x, y, z) of the nonzero element.
-    """
-
-    mask_bb = cryomask.get_mass_dimensions(input_mask)
-    n_voxels = np.count_nonzero(input_mask)
-
-    return n_voxels, mask_bb
-
-
-def get_soft_mask_stats(input_mask):
-    """Get the boxsize of the element (> 0.5) inside the soft mask and the total
-    volume of the nonzero element.
-
-    Parameters
-    ----------
-    input_mask : str or numpy.ndarray
-         Input mask specified either by its path or already loaded as 3D numpy.ndarray.
-         The nonzero element in this mask has soft edges, i.e.: the values inside
-         the mask are between 0 and 1.
-
-    Returns
-    -------
-    n_voxels : int
-        The number of voxels of where the input_mask is bigger than 0.5.
-    mask_bb : tuple of int
-        The bounding box size in (x, y, z) of the element that has values bigger than 0.5.
-    """
-
-    # mask the mask where the values are bigger than 0.5
-    mask_th = np.where(input_mask > 0.5, 1.0, 0.0)
-    mask_bb = cryomask.get_mass_dimensions(mask_th)
-    n_voxels = np.count_nonzero(mask_th)
-
-    return n_voxels, mask_bb
-
-
 def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_path):
     """Extract the highest-scoring subtomogram from a tomogram.
 
@@ -1017,8 +752,8 @@ def get_mask_stats(template_list, indices, parent_folder_path):
         # calculate how compactful the mask is
         solidity = cryomask.compute_solidity(sharp_mask)
 
-        voxels, bbox = get_sharp_mask_stats(sharp_mask)
-        voxels_soft, _ = get_soft_mask_stats(soft_mask)
+        voxels, bbox = imageutils.mask_voxel_count_and_bbox(sharp_mask)
+        voxels_soft, _ = imageutils.mask_voxel_count_and_bbox(soft_mask, threshold=0.5)
 
         temp_df.at[i, "Voxels"] = voxels_soft  # total vol of soft mask
         temp_df.at[i, "Voxels TM"] = voxels  # total vol of sharp mask
@@ -1474,9 +1209,9 @@ def analyze_rotations(
     # calculates the complex conjugate of fourier transformed tomogram
     if wedge_mask_tomo is not None:
         wedge_tomo = cryomap.read(wedge_mask_tomo)
-        conj_target, conj_target_sq = cryomap.calculate_conjugates(tomo, wedge_tomo)
+        conj_target, conj_target_sq = imageutils.calculate_conjugates(tomo, wedge_tomo)
     else:
-        conj_target, conj_target_sq = cryomap.calculate_conjugates(tomo)
+        conj_target, conj_target_sq = imageutils.calculate_conjugates(tomo)
 
     if wedge_mask_tmpl is not None:
         wedge_tmpl = cryomap.read(wedge_mask_tmpl)
@@ -1522,7 +1257,7 @@ def analyze_rotations(
         masked_ref = norm_ref * rot_mask
 
         # calculates fast local correlation coefficient
-        cc_map = cryomap.calculate_flcf(masked_ref, rot_mask, conj_target=conj_target, conj_target_sq=conj_target_sq)
+        cc_map = imageutils.calculate_flcf(masked_ref, rot_mask, conj_target=conj_target, conj_target_sq=conj_target_sq)
         z_score = (cc_map - np.mean(cc_map)) / np.std(cc_map)
 
         # find the indices where the current ccc is bigger than ccc in init/saved cc map

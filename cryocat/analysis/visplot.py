@@ -2533,7 +2533,7 @@ def plot_otsu_thresholds(
     output_path : PathOrStr, optional
         Saved with :func:`_save_mpl`.
     """
-    from cryocat.utils import mathutils  # local: visplot otherwise has no math dep
+    from cryocat.utils import imageutils  # local: visplot otherwise has no image dep
 
     features = motl.df[column_name].unique()
     n = len(features)
@@ -2545,7 +2545,7 @@ def plot_otsu_thresholds(
     for ax, f in zip(axes, features):
         scores = motl.df.loc[motl.df[column_name] == f, "score"].values
         bin_counts, bin_edges = np.histogram(scores, bins=hbin)
-        bn = mathutils.otsu_threshold(bin_counts)
+        bn = imageutils.otsu_threshold(bin_counts)
         ind = np.where(bin_counts == bin_counts[bin_counts > bn][0])
         cc_t = bin_edges[ind[0] + 1][0]
 
