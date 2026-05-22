@@ -456,20 +456,20 @@ def test_shift():
     test_map = np.zeros((5, 5, 5))
     test_map[2, 2, 2] = 1
     delta = np.array([0.5, 0.5, 0.5])
-    shifted_map = shift2(test_map, delta)
+    shifted_map = shift(test_map, delta)
     assert shifted_map.shape == test_map.shape
     assert np.count_nonzero(shifted_map) > 0
     delta = np.array([0, 0, 0])
-    shifted_map = shift2(test_map, delta)
+    shifted_map = shift(test_map, delta)
     assert np.allclose(shifted_map, test_map, atol=1e-5)
     delta = np.array([1, 0, 0])
-    shifted_map = shift2(test_map, delta)
+    shifted_map = shift(test_map, delta)
     assert np.count_nonzero(shifted_map) > 0
     delta = np.array([0.1, 0.1, 0.1])
-    shifted_map = shift2(test_map, delta)
+    shifted_map = shift(test_map, delta)
     assert np.count_nonzero(shifted_map) > 0
     delta = np.array([0.9, 0.9, 0.9])
-    shifted_map = shift2(test_map, delta)
+    shifted_map = shift(test_map, delta)
     assert np.count_nonzero(shifted_map) > 0
 
 
