@@ -2,20 +2,13 @@ from cryocat.app.logger import dash_logger
 
 import dash
 from dash import html, dcc
-from dash import Input, Output, State, callback, exceptions, callback_context, ctx, ALL
+from dash import Input, Output, State, exceptions, callback_context, ctx, ALL
 import plotly.graph_objects as go
 import pandas as pd
 import dash_bootstrap_components as dbc
 from cryocat.core import cryomotl
 from cryocat.app.apputils import make_axis_trace
 from cryocat.analysis import visplot
-
-
-# def get_colorscale(colorscale_name):
-#     if colorscale_name == "Monet":
-#         return [[0.0, "#AEC684"], [0.25, "#4EACB6"], [0.5, "#C0A3BA"], [0.75, "#7D82AB"], [1.0, "#865B96"]]
-#     else:
-#         return colorscale_name  # use Plotly built-in name
 
 
 def get_viewer_component(prefix: str):
@@ -122,13 +115,13 @@ def get_viewer_component(prefix: str):
     )
 
 
-def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="full", detailed_table=None, tabs_id="table-tabs"):
+def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_info="full", detailed_table=None, tabs_id="table-tabs", visible_on_tabs=("motl-tab", "twist-tab", "nn-motl-tab", "cluster-tab")):
 
     if detailed_table == None:
         detailed_table = f"{prefix}-data"
 
     if tabs_id is not None:
-        @callback(
+        @app.callback(
             Output(f"{prefix}-graph-menu", "style"),
             Input(tabs_id, "active_tab"),
             State(f"{prefix}-graph-menu", "style"),
@@ -139,14 +132,14 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
 
             updated_style = current_style.copy()
 
-            if active_tab in ["motl-tab", "twist-tab", "nn-motl-tab", "cluster-tab"]:
+            if active_tab in visible_on_tabs:
                 updated_style["display"] = "flex"
             else:
                 updated_style["display"] = "none"
 
             return updated_style
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-index", "data"),
         Input(f"{prefix}-prev", "n_clicks"),
         Input(f"{prefix}-next", "n_clicks"),
@@ -168,7 +161,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
             return (current_index + 1) % n
         return 0
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-color-dropdown", "options"),
         Input(f"{prefix}-data", "data"),
         prevent_initial_call=True,
@@ -181,7 +174,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
         numeric_cols = df.select_dtypes(include="number").columns.tolist()
         return [{"label": col, "value": col} for col in numeric_cols if col not in ["tomo_id"]]
 
-    @callback(
+    @app.callback(
         # Output(f"{prefix}-graph", "figure"),
         Output(f"{prefix}-graph", "figure"),
         Output(f"{prefix}-graph1-col", "width"),
@@ -274,7 +267,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
 
         return fig, graph_width, {"display": "block", "marginTop": "1rem"}, f"Tomo ID: {tomo}"
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-tomo-selector", "children"),
         Input(f"{prefix}-data", "data"),
         prevent_initial_call=True,
@@ -289,7 +282,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
             for tid in tomo_ids
         ]
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-index", "data", allow_duplicate=True),
         Input({"type": f"{prefix}-menu-item", "index": ALL}, "n_clicks"),
         State(f"{prefix}-data", "data"),
@@ -314,7 +307,7 @@ def register_viewer_callbacks(prefix: str, show_dual_graph=False, hover_info="fu
 
     if show_dual_graph:
 
-        @callback(
+        @app.callback(
             Output(f"{prefix}-graph2-container", "children"),
             Input(f"{prefix}-graph", "clickData"),
             State(f"{prefix}-data", "data"),

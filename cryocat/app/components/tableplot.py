@@ -8,17 +8,16 @@ import json
 
 import dash
 from dash import html, dcc, ctx, ALL
-from dash import Input, Output, State, callback, no_update
+from dash import Input, Output, State, no_update
 import pandas as pd
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from cryocat.analysis import visplot
 from cryocat.core.cryomotl import Motl
 from cryocat.utils.classutils import get_class_names_by_parent
-from cryocat.app.globalvars import tomo_ids
 from cryocat.app.apputils import get_print_out, save_output
-from cryocat.app.layout.customel import LabeledDropdown, InlineLabeledDropdown, InlineInputForm
-from cryocat.app.layout.graphsettings import apply_settings_to_figure, get_graph_settings_button
+from cryocat.app.components.customel import LabeledDropdown, InlineLabeledDropdown, InlineInputForm
+from cryocat.app.components.graphsettings import apply_settings_to_figure, get_graph_settings_button
 
 # motl_types = [{"label": name, "value": name} for name in get_class_names_by_parent("Motl", "cryocat.cryomotl")]
 
@@ -328,7 +327,7 @@ def get_table_plot_component(prefix: str):
     )
 
 
-def register_table_plot_callbacks(prefix: str, connected_store_id, special_graphs=None, table_grid_id=None):
+def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_graphs=None, table_grid_id=None):
 
     graph_options = [
         "Line plot",
@@ -342,7 +341,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
     if special_graphs is not None:
         graph_options = graph_options + special_graphs
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-graph-options-dropdown", "options"),
         Input("url", "pathname"),
     )
@@ -350,7 +349,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
 
         return graph_options
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-graph-options", "style"),
         Output(f"{prefix}-plot-column-options-x-dropdown", "options"),
         Output(f"{prefix}-scatter2D-row-options", "style"),
@@ -416,7 +415,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
             y_axis_options,
         )
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-same-range", "disabled"),
         Output(f"{prefix}-plot-grid-dropdown", "disabled"),
         Output(f"{prefix}-histogram2D-same-scale", "disabled"),
@@ -430,7 +429,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
         else:
             return True, True, True
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-clear-graph-btn", "disabled"),
         Input(f"{prefix}-graph-area", "children"),
     )
@@ -440,7 +439,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
         else:
             return False
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-plot-separately", "disabled"),
         Input(f"{prefix}-plot-column-options-x-dropdown", "value"),
         State(f"{prefix}-graph-options-dropdown", "value"),
@@ -454,7 +453,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
         else:
             return True
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-graph-area", "children"),
         Output(f"{prefix}-modal-text-area", "children"),
         Output(f"{prefix}-graph-meta-store", "data"),
@@ -678,7 +677,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
 
         return no_update, no_update, no_update, no_update
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-modal-main", "is_open"),
         Input(f"{prefix}-modal-main-close", "n_clicks"),
         Input(f"{prefix}-modal-text-area", "children"),
@@ -697,7 +696,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
 
         return False
 
-    @callback(
+    @app.callback(
         Output({"type": f"{prefix}-graph", "index": ALL}, "figure"),
         Input("graph-settings-store", "data"),
         State({"type": f"{prefix}-graph", "index": ALL}, "figure"),
@@ -711,7 +710,7 @@ def register_table_plot_callbacks(prefix: str, connected_store_id, special_graph
 
     if table_grid_id is not None:
 
-        @callback(
+        @app.callback(
             Output(table_grid_id, "selectedRows"),
             Input({"type": f"{prefix}-graph", "index": ALL}, "clickData"),
             Input({"type": f"{prefix}-graph", "index": ALL}, "selectedData"),

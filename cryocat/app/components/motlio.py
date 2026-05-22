@@ -6,15 +6,14 @@ import os
 import numpy as np
 
 from dash import html, dcc
-from dash import Input, Output, State, callback, no_update
+from dash import Input, Output, State, no_update
 import pandas as pd
 import dash_bootstrap_components as dbc
 from cryocat.core.cryomotl import Motl
 from cryocat.utils.ioutils import dimensions_load
 from cryocat.utils.classutils import get_class_names_by_parent
-from cryocat.app.globalvars import tomo_ids
 from cryocat.app.apputils import get_print_out, save_output, save_motl
-from cryocat.app.layout.customel import InlineLabeledDropdown, InlineInputForm
+from cryocat.app.components.customel import InlineLabeledDropdown, InlineInputForm
 
 
 # motl_types = [{"label": name, "value": name} for name in get_class_names_by_parent("Motl", "cryocat.cryomotl")]
@@ -350,10 +349,10 @@ def get_motl_simple_save_component(prefix: str):
     )
 
 
-def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connected_input_motl_prefix: str):
+def register_motl_simple_save_callbacks(app, prefix: str, data_store_id: str, connected_input_motl_prefix: str):
     """Callbacks for the simplified save dialog (no class/column selection)."""
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-save-output-modal", "is_open", allow_duplicate=True),
         Input(f"{prefix}-save-output-btn", "n_clicks"),
         prevent_initial_call=True,
@@ -361,7 +360,7 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
     def open_modal(_):
         return True
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-save-motl-relion-version-dropdown", "value", allow_duplicate=True),
         Output(f"{prefix}-save-motl-relion-version-dropdown-topdiv", "className", allow_duplicate=True),
         Output(f"{prefix}-save-motl-relion-options", "className", allow_duplicate=True),
@@ -373,7 +372,7 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
             return 3.0, "flex", "flex"
         return 3.0, "hidden", "hidden"
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-relion5-tomos-store", "data", allow_duplicate=True),
         Output(f"{prefix}-relion5-tomos-filename", "data", allow_duplicate=True),
         Input(f"{prefix}-save-relion-tomos-input", "contents"),
@@ -392,7 +391,7 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
         os.remove(tmp_path)
         return rln_tomos.to_dict("records"), filename
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-save-motl-relion-options", "className", allow_duplicate=True),
         Output(f"{prefix}-save-relion-tomos-loaded", "className", allow_duplicate=True),
         Output(f"{prefix}-save-relion-tomos-loaded", "children", allow_duplicate=True),
@@ -432,7 +431,7 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
         else:  # all other versions — show options but hide tomos
             return "flex", "hidden", "", "hidden", button_title, *disable_original
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-status-label", "children", allow_duplicate=True),
         Output(f"{prefix}-save-output-modal", "is_open", allow_duplicate=True),
         Input(f"{prefix}-save-output-file", "n_clicks"),
@@ -478,11 +477,11 @@ def register_motl_simple_save_callbacks(prefix: str, data_store_id: str, connect
         return status, False
 
 
-def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id, connected_input_motl_prefix):
+def register_motl_save_callbacks(app, prefix: str, stored_outputs, connected_store_id, connected_input_motl_prefix):
 
     store_states = [State(store_id, "data") for store_id in stored_outputs.values()]
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-datasave-dropdown", "options", allow_duplicate=True),
         Output(f"{prefix}-save-output-modal", "is_open", allow_duplicate=True),
         Input(f"{prefix}-save-output-btn", "n_clicks"),
@@ -499,7 +498,7 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
 
         return existing_data_options, True
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-classes-checklist", "value"),
         Input(f"{prefix}-data-save-dropdown", "value"),
         prevent_initial_call=True,
@@ -507,7 +506,7 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
     def reset_checklist_value(class_value):
         return []  # Clear checklist selection
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-classes-checklist", "options"),
         Input(f"{prefix}-data-save-dropdown", "value"),
         State(f"{prefix}-datasave-dropdown", "value"),
@@ -527,7 +526,7 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
 
         return options
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-save-motl-relion-version-dropdown", "value", allow_duplicate=True),
         Output(f"{prefix}-save-motl-relion-version-dropdown-topdiv", "className", allow_duplicate=True),
         Output(f"{prefix}-save-motl-relion-options", "className", allow_duplicate=True),
@@ -540,7 +539,7 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
         else:
             return 3.0, "hidden", "hidden"
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-relion5-tomos-store", "data", allow_duplicate=True),
         Output(f"{prefix}-relion5-tomos-filename", "data", allow_duplicate=True),
         Input(f"{prefix}-save-relion-tomos-input", "contents"),
@@ -563,7 +562,7 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
 
         return rln_tomos.to_dict("records"), filename
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-save-motl-relion-options", "className", allow_duplicate=True),
         Output(f"{prefix}-save-relion-tomos-loaded", "className", allow_duplicate=True),
         Output(f"{prefix}-save-relion-tomos-loaded", "children", allow_duplicate=True),
@@ -603,7 +602,7 @@ def register_motl_save_callbacks(prefix: str, stored_outputs, connected_store_id
         else:  # all other versions — show options, hide tomos
             return "flex", "hidden", "", "hidden", button_title, *disable_original_entries
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-status-label", "children", allow_duplicate=True),
         Input(f"{prefix}-save-output-file", "n_clicks"),
         State(f"{prefix}-datasave-dropdown", "value"),
@@ -864,9 +863,9 @@ def get_motl_load_component(prefix: str, display_option="block"):
     )
 
 
-def register_motl_load_callbacks(prefix: str):
+def register_motl_load_callbacks(app, prefix: str):
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-relion5-tomos-store", "data", allow_duplicate=True),
         Output(f"{prefix}-tomo-load-status", "children"),
         Output(f"{prefix}-relion5-tomos-filename", "data", allow_duplicate=True),
@@ -882,7 +881,7 @@ def register_motl_load_callbacks(prefix: str):
         decoded = base64.b64decode(content_string)
         return decoded.decode("utf-8"), f"Tomograms loaded: {file_name}", file_name
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-motl-data-store", "data", allow_duplicate=True),
         Output(f"{prefix}-motl-extra-data-store", "data", allow_duplicate=True),
         Output(f"{prefix}-relion-optics-store", "data", allow_duplicate=True),
@@ -973,9 +972,6 @@ def register_motl_load_callbacks(prefix: str):
 
         os.remove(tmp_file_path)
 
-        global tomo_ids
-        tomo_ids = motl.get_unique_values("tomo_id")
-
         # Log the equivalent cryoCAT load command
         if motl_type not in ("relion", "relion5", "relion5_1"):
             dash_logger.write(f'motl = Motl.load("{filename}", "{motl_type}")', source="cryocat")
@@ -991,7 +987,7 @@ def register_motl_load_callbacks(prefix: str):
 
         return table_data, extra_data, relion_optics, relion_tomos, motl_type, relion_params
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-motl-relion-version-dropdown", "value", allow_duplicate=True),
         Output(f"{prefix}-motl-relion-version", "className", allow_duplicate=True),
         Output(f"{prefix}-motl-relion-options", "className", allow_duplicate=True),
@@ -1004,7 +1000,7 @@ def register_motl_load_callbacks(prefix: str):
         else:
             return "Version 3.0", "hidden", "hidden"
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-motl-relion-options", "className", allow_duplicate=True),
         Output(f"{prefix}-motl-relion-tomos-display", "className", allow_duplicate=True),
         Input(f"{prefix}-motl-relion-version-dropdown", "value"),

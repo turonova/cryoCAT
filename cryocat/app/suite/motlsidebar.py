@@ -4,13 +4,12 @@ import os
 import pandas as pd
 
 import dash
-from dash import html, dcc, Input, Output, State, callback, no_update, ctx, ALL
+from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 from cryocat.core.cryomotl import Motl
 from cryocat.utils.ioutils import dimensions_load
-from cryocat.app.layout.motlio import get_motl_load_component, register_motl_load_callbacks
+from cryocat.app.components.motlio import get_motl_load_component, register_motl_load_callbacks
 from cryocat.app.apputils import generate_motl_op_form, generate_kwargs, get_motl_operation_methods
-from cryocat.core.cryomotl import Motl
 from cryocat.app.logger import dash_logger
 
 MAX_MOTLS = 8
@@ -174,12 +173,12 @@ def get_motl_editor_sidebar():
     )
 
 
-def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
+def register_motl_editor_sidebar_callbacks(app, max_motls=MAX_MOTLS):
 
-    register_motl_load_callbacks("me-load")
+    register_motl_load_callbacks(app, "me-load")
 
     # Route newly loaded motl from the shared load form to the next free slot.
-    @callback(
+    @app.callback(
         *[Output(f"me-{i}-motl-data-store", "data", allow_duplicate=True) for i in range(max_motls)],
         *[Output(f"me-{i}-motl-extra-data-store", "data", allow_duplicate=True) for i in range(max_motls)],
         *[Output(f"me-{i}-motl-data-type", "data", allow_duplicate=True) for i in range(max_motls)],
@@ -229,7 +228,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         if relion_params:
             parts = []
 
-            def _scalar(v):
+            def _scalar_local(v):
                 if v is None:
                     return None
                 try:
@@ -239,8 +238,8 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
                 except (TypeError, ValueError, IndexError):
                     return None
 
-            ps = _scalar(relion_params.get("pixel_size"))
-            bn = _scalar(relion_params.get("binning"))
+            ps = _scalar_local(relion_params.get("pixel_size"))
+            bn = _scalar_local(relion_params.get("binning"))
             if ps is not None:
                 parts.append(f"pixel size: {ps:.4g} Å")
             if bn is not None:
@@ -264,7 +263,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         )
 
     # Populate the column dropdown from the first loaded motl's columns.
-    @callback(
+    @app.callback(
         Output("me-op-column-select", "options"),
         Output("me-op-column-select", "value"),
         Input("motls-registry", "data"),
@@ -281,7 +280,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         return [], None
 
     # Refresh the motl list and multi-op selector whenever the registry changes.
-    @callback(
+    @app.callback(
         Output("me-motl-list", "children"),
         Output("me-op-motl-select", "options"),
         Input("motls-registry", "data"),
@@ -345,7 +344,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         return dbc.ListGroup(items, flush=True), options
 
     # Clicking a list item activates the corresponding main tab.
-    @callback(
+    @app.callback(
         Output("me-tabs", "active_tab"),
         Input({"type": "me-motl-list-item", "index": ALL}, "n_clicks"),
         prevent_initial_call=True,
@@ -359,7 +358,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         raise dash.exceptions.PreventUpdate
 
     # Remove a motl slot by clearing its data and marking inactive in registry.
-    @callback(
+    @app.callback(
         *[Output(f"me-{i}-motl-data-store", "data", allow_duplicate=True) for i in range(max_motls)],
         Output("motls-registry", "data", allow_duplicate=True),
         Input({"type": "me-close-motl", "index": ALL}, "n_clicks"),
@@ -384,7 +383,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         return (*slot_data, new_registry)
 
     # Merge selected motls into the results store.
-    @callback(
+    @app.callback(
         Output("me-results-store", "data", allow_duplicate=True),
         Output("me-results-label-store", "data", allow_duplicate=True),
         Output("me-multiop-status", "children", allow_duplicate=True),
@@ -406,7 +405,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         return merged.to_dict("records"), label, f"Merged {len(dfs)} motls: {len(merged)} particles total."
 
     # Find rows whose value in the selected column appears in ALL selected motls.
-    @callback(
+    @app.callback(
         Output("me-results-store", "data", allow_duplicate=True),
         Output("me-results-label-store", "data", allow_duplicate=True),
         Output("me-multiop-status", "children", allow_duplicate=True),
@@ -445,7 +444,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         )
 
     # Find rows whose value in the selected column appears in exactly one motl.
-    @callback(
+    @app.callback(
         Output("me-results-store", "data", allow_duplicate=True),
         Output("me-results-label-store", "data", allow_duplicate=True),
         Output("me-multiop-status", "children", allow_duplicate=True),
@@ -485,7 +484,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         )
 
     # Generate form when a method is selected from the dropdown.
-    @callback(
+    @app.callback(
         Output("me-op-func-form", "children"),
         Input("me-op-func-select", "value"),
         prevent_initial_call=True,
@@ -496,7 +495,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         return generate_motl_op_form(method_name)
 
     # Apply the selected method to the active slot's motl.
-    @callback(
+    @app.callback(
         *[Output(f"me-{i}-motl-data-store", "data", allow_duplicate=True) for i in range(max_motls)],
         *[Output(f"me-{i}-undo-store", "data", allow_duplicate=True) for i in range(max_motls)],
         Output("me-op-status", "children", allow_duplicate=True),
@@ -554,7 +553,7 @@ def register_motl_editor_sidebar_callbacks(max_motls=MAX_MOTLS):
         return (*data_out, *undo_out, status)
 
     # Undo the last operation on the active slot.
-    @callback(
+    @app.callback(
         *[Output(f"me-{i}-motl-data-store", "data", allow_duplicate=True) for i in range(max_motls)],
         *[Output(f"me-{i}-undo-store", "data", allow_duplicate=True) for i in range(max_motls)],
         Output("me-op-status", "children", allow_duplicate=True),

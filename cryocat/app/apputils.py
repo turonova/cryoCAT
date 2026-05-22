@@ -362,6 +362,34 @@ def generate_kwargs(ids_dict, values):
     return new_kwargs
 
 
+def _scalar(v):
+    if v is None:
+        return None
+    try:
+        if hasattr(v, "__len__"):
+            v = v[0] if len(v) > 0 else None
+        return float(v) if v is not None else None
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _format_relion_params(params):
+    if not params:
+        return ""
+    parts = [f"Relion {params.get('version', '')}"]
+    ps = _scalar(params.get("pixel_size"))
+    bn = _scalar(params.get("binning"))
+    if ps is not None:
+        parts.append(f"pixel size: {ps:.4g} Å")
+    if bn is not None:
+        parts.append(f"binning: {bn:.4g}")
+    if params.get("tomo_format"):
+        parts.append(f"tomo format: {params['tomo_format']}")
+    if params.get("subtomo_format"):
+        parts.append(f"subtomo format: {params['subtomo_format']}")
+    return "  |  ".join(parts)
+
+
 def get_relevant_features(desc_name, all_features):
 
     avail_features = [s for s in all_features if not s.endswith(desc_name)]

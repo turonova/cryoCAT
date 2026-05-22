@@ -1,6 +1,6 @@
 from cryocat.app.logger import dash_logger, print_dash
 
-from dash import html, dcc, Input, Output, State, callback, exceptions, MATCH, ALL, no_update, ctx
+from dash import html, dcc, Input, Output, State, exceptions, MATCH, ALL, no_update, ctx
 import base64
 import tempfile
 import os
@@ -9,8 +9,8 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from cryocat.core import cryomotl
 from cryocat.app.apputils import save_output, save_motl
-from cryocat.app.layout.tableplot import get_table_plot_component
-from cryocat.app.layout.customel import InlineLabeledDropdown, InlineInputForm
+from cryocat.app.components.tableplot import get_table_plot_component
+from cryocat.app.components.customel import InlineLabeledDropdown, InlineInputForm
 from cryocat.utils.ioutils import dimensions_load
 
 
@@ -316,13 +316,13 @@ def get_table_component(prefix: str, connected_motl_prefix=None, show_create_fro
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
 
-def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=None, slot_idx=None, max_motls=None):
+def register_table_callbacks(app, prefix: str, csv_only=True, connected_motl_prefix=None, slot_idx=None, max_motls=None):
 
     motl_mode = connected_motl_prefix is not None
 
     # ── Always-present callbacks ───────────────────────────────────────────────
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-plot-graph-panel", "is_open", allow_duplicate=True),
         Input(f"{prefix}-plot-graphs-btn", "n_clicks"),
         prevent_initial_call=True,
@@ -330,7 +330,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
     def open_offcanvas(n_clicks):
         return True
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-grid", "columnDefs", allow_duplicate=True),
         Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
         Input(f"{prefix}-global-data-store", "data"),
@@ -357,7 +357,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
 
         return col_defs, df.to_dict("records")
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-grid", "columnSize"),
         Input(f"{prefix}-grid", "columnDefs"),
         Input(f"{prefix}-grid", "rowData"),
@@ -366,7 +366,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
     def adapt_column_size(col, rows):
         return "sizeToFit"
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-global-data-store", "data", allow_duplicate=True),
         Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
         Input(f"{prefix}-apply-btn", "n_clicks"),
@@ -386,7 +386,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
         filtered = df.to_dict("records")
         return filtered, filtered
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
         Input(f"{prefix}-remove-rows-btn", "n_clicks"),
         State(f"{prefix}-grid", "rowData"),
@@ -399,7 +399,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
         selected_set = {frozenset(row.items()) for row in selected}
         return [row for row in all_rows if frozenset(row.items()) not in selected_set]
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-grid", "columnDefs", allow_duplicate=True),
         Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
         Input(f"{prefix}-remove-cols-btn", "n_clicks"),
@@ -419,7 +419,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
         new_col_defs = [{"field": col, "headerName": col, "checkboxSelection": True} for col in df.columns]
         return new_col_defs, df.to_dict("records")
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-filters-container", "children"),
         Input(f"{prefix}-global-data-store", "data"),
     )
@@ -501,7 +501,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
 
         return [dbc.Row(col_components, className="gx-1 gy-0")]
 
-    @callback(
+    @app.callback(
         Output({"type": f"{prefix}-filter-slider", "column": MATCH}, "value", allow_duplicate=True),
         Output({"type": f"{prefix}-filter-min", "column": MATCH}, "value", allow_duplicate=True),
         Output({"type": f"{prefix}-filter-max", "column": MATCH}, "value", allow_duplicate=True),
@@ -534,7 +534,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
 
         raise exceptions.PreventUpdate
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
         Input(f"{prefix}-global-data-store", "data"),
         Input({"type": f"{prefix}-filter-slider", "column": ALL}, "value"),
@@ -553,7 +553,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
 
     # ── CSV save (always available) ────────────────────────────────────────────
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-csv-modal", "is_open", allow_duplicate=True),
         Input(f"{prefix}-save-csv-btn", "n_clicks"),
         prevent_initial_call=True,
@@ -561,7 +561,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
     def open_csv_modal(_):
         return True
 
-    @callback(
+    @app.callback(
         Output(f"{prefix}-csv-modal", "is_open", allow_duplicate=True),
         Output(f"{prefix}-csv-status-label", "children"),
         Input(f"{prefix}-csv-save-btn", "n_clicks"),
@@ -582,7 +582,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
 
     if motl_mode:
 
-        @callback(
+        @app.callback(
             Output(f"{prefix}-save-modal", "is_open", allow_duplicate=True),
             Input(f"{prefix}-save-btn", "n_clicks"),
             prevent_initial_call=True,
@@ -590,7 +590,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
         def open_save_as_modal(_):
             return True
 
-        @callback(
+        @app.callback(
             Output(f"{prefix}-save-rln-version-dropdown", "value", allow_duplicate=True),
             Output(f"{prefix}-save-rln-version-dropdown-topdiv", "className", allow_duplicate=True),
             Output(f"{prefix}-save-rln-options", "className", allow_duplicate=True),
@@ -602,7 +602,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
                 return 3.0, "flex", "hidden"
             return 3.0, "hidden", "hidden"
 
-        @callback(
+        @app.callback(
             Output(f"{prefix}-save-rln5-tomos-store", "data", allow_duplicate=True),
             Output(f"{prefix}-save-rln5-tomos-filename", "data", allow_duplicate=True),
             Input(f"{prefix}-save-rln5-tomos-upload", "contents"),
@@ -621,7 +621,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
             os.remove(tmp_path)
             return rln_tomos.to_dict("records"), filename
 
-        @callback(
+        @app.callback(
             Output(f"{prefix}-save-rln-options", "className", allow_duplicate=True),
             Output(f"{prefix}-save-rln5-tomos-status", "className", allow_duplicate=True),
             Output(f"{prefix}-save-rln5-tomos-status", "children", allow_duplicate=True),
@@ -669,7 +669,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
 
         _update_registry_on_save = slot_idx is not None
 
-        @callback(
+        @app.callback(
             Output(f"{prefix}-save-modal", "is_open", allow_duplicate=True),
             Output(f"{prefix}-save-status-label", "children", allow_duplicate=True),
             Output(f"{prefix}-last-save-params-store", "data"),
@@ -758,7 +758,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
 
             return False, status, params
 
-        @callback(
+        @app.callback(
             Output(f"{prefix}-overwrite-modal", "is_open"),
             Output(f"{prefix}-overwrite-body-text", "children"),
             Output(f"{prefix}-overwrite-yes-btn", "disabled"),
@@ -771,7 +771,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
                 return True, "No output path set. Please use 'Save As' first to specify the file.", True
             return True, f"Overwrite '{params['path']}'?", False
 
-        @callback(
+        @app.callback(
             Output(f"{prefix}-overwrite-modal", "is_open", allow_duplicate=True),
             Input(f"{prefix}-overwrite-yes-btn", "n_clicks"),
             Input(f"{prefix}-overwrite-no-btn", "n_clicks"),
@@ -814,7 +814,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
 
         if slot_idx is not None and max_motls is not None:
 
-            @callback(
+            @app.callback(
                 *[Output(f"me-{i}-motl-data-store", "data", allow_duplicate=True) for i in range(max_motls)],
                 *[Output(f"me-{i}-motl-data-type", "data", allow_duplicate=True) for i in range(max_motls)],
                 Output("motls-registry", "data", allow_duplicate=True),

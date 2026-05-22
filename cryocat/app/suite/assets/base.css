@@ -1,0 +1,356 @@
+/* following 2 prevent jitter for tooltips */
+/* Modern browsers */
+:root { scrollbar-gutter: stable; }
+
+/* Fallback for older browsers */
+html, body { overflow-y: scroll; }  /* always reserve space for the scrollbar */
+
+.hidden {
+  display: none !important;
+}
+
+.flex {
+  display: flex !important;
+}
+
+.label-dark {
+  color: var(--color9);
+}
+
+/* === Track (background bar) === */
+.rc-slider-track {
+  background-color: var(--color6);
+}
+
+/* === Handle (the knob) === */
+.rc-slider-handle {
+  background-color:  var(--color11);
+  border: 2px solid  var(--color6);
+  box-shadow: none;
+}
+
+/* === Hover/focus state for handle === */
+.rc-slider-handle:hover,
+.rc-slider-handle:focus {
+  border-color: var(--color6);
+}
+
+/* general settings for accordion in not selected, not open stated */
+.accordion-button {
+    background-color: var(--color11);
+    border-radius: 8px;
+    color: var(--color10);
+}
+
+
+/* settings for open, i.e. active state of the button */
+.accordion-button:not(.collapsed) {
+  color: var(--color11);
+  background-color: var(--color10);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.125);
+}
+
+/* highlighing of the selected, active button */
+.accordion-button:focus {
+  z-index: 3;
+  border-color: var(--color11);
+  outline: 0;
+  box-shadow: none;
+}
+.accordion-item {
+    background-color: var(--color6);
+    color: var(--color10);
+    border: none;
+}
+
+.accordion-header {
+    background-color: var(--color2);
+}
+
+h6, .h6, h5, .h5, h4, .h4, h3, .h3, h2, .h2, h1, .h1 {
+    color: var(--color12);
+}
+
+label {
+  color: var(--color10);
+}
+
+input[type="text"],
+input[type="number"] {
+  background-color: var(--color11);
+    padding-left: 8px;
+}
+
+/* Reduce horizontal padding inside header cells */
+.ag-theme-balham .ag-header-cell {
+    padding-left: 4px !important;
+    padding-right: 4px !important;
+}
+
+/* Optional: shrink the label wrapper inside the cell */
+.ag-theme-balham .ag-header-cell-label {
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.sidebar-checklist input[type="checkbox"]:checked {
+  accent-color: var(--color10);
+}
+
+
+.Select-input{
+    height: 25px !important;
+    line-height: 25px !important;
+    align-items: center;
+    padding-top: 0px;
+    padding-right: 0px;
+    padding-bottom: 0px;
+    padding-left: 0px;
+}
+
+.Select-control{
+    height: 25px !important;
+    line-height: 25px !important;
+    align-items: center;
+}
+
+.Select-placeholder, .Select--single > .Select-control .Select-value {
+    line-height: 25px !important;
+    display: flex;
+    align-items: center;
+}
+
+.Select-option {
+    padding-top: 0px;
+    padding-bottom: 0px;
+    line-height: 25px !important;
+    height: 25px !important;
+    align-items: center;
+}
+
+.VirtualizedSelectOption {
+
+    padding-top: 0px !important;
+    padding-bottom: 0px !important;
+    display: flex !important;
+    align-items: center !important;
+}
+
+.Select-menu-outer, .Select-menu {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin-top: 0 !important;
+}
+
+.ag-theme-alpine {
+    font-size: 10px;
+}
+
+.Select-multi-value-wrapper {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+.Select-placeholder {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+.Select-arrow-zone {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+.Select-clear-zone {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+.Select-control {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+/* The dropdown menu */
+.VirtualizedSelectOption {
+    background-color: var(--color11);
+    color: var(--color12);
+}
+
+/* Highlight on hover */
+.VirtualizedSelectOption:hover {
+    background-color: var(--color7);
+    color: var(--color12);
+}
+
+/* Selected item in menu */
+.Select-option.is-selected {
+    background-color: var(--color7);
+    font-weight: bold;
+}
+
+/* Selected label text */
+.Select-value-label {
+    background-color: var(--color11) !important;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    overflow-x: hidden;
+    font-size: 11px;
+    color: var(--color12) !important;
+}
+
+.btn {
+    font-size: 11px;
+    padding: 4px 8px;
+}
+
+.sidebar {
+    background-color: var(--color13);
+    height: fit-content;
+    padding: 10px;
+    color: white;
+    margin-left: 0px;
+    width: 100%;
+    left : 0px;
+}
+
+/* Override danger button */
+.btn-danger {
+    background-color: var(--color10) !important;
+    border-color: var(--color9) !important;
+    color: var(--color11) !important;
+}
+
+.section-title {
+    margin-top: 2rem;
+    margin-bottom: 0.5rem;
+    font-weight: bold;
+}
+
+.upload-button, .run-button, .save-button {
+    width: 100%;
+    margin-bottom: 1rem;
+}
+
+.data-section {
+    padding: 20px;
+}
+
+.table-header {
+    background-color: var(--color2);
+    color: white;
+}
+
+.custom-radius-button {
+    background-color: var(--color4);
+    border: none;
+    color: white;
+}
+
+.custom-radius-button:hover {
+    background-color: var(--color5);
+}
+
+.scrollable-dropdown .dropdown-menu {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+/* ── Compact filter range sliders ─────────────────────────────────────────── */
+
+/* Allow tooltip/input to escape the track div without being clipped */
+.rc-slider {
+    overflow: visible !important;
+    padding-top: 3px !important;
+    padding-bottom: 3px !important;
+}
+
+/* Tooltip bubble */
+.rc-slider-tooltip {
+    padding: 2px 0 !important;
+    z-index: 10 !important;
+}
+.rc-slider-tooltip-inner {
+    min-height: unset !important;
+    height: 18px !important;
+    font-size: 10px !important;
+    padding: 0 5px !important;
+    line-height: 18px !important;
+    border-radius: 3px !important;
+}
+
+/* Editable number inputs inside the tooltip */
+.rc-slider-tooltip-inner input[type="number"],
+.rc-slider-tooltip input[type="number"] {
+    height: 18px !important;
+    width: 54px !important;
+    font-size: 10px !important;
+    padding: 0 3px !important;
+    line-height: 18px !important;
+    box-sizing: border-box !important;
+    background-color: var(--color11);
+    border: 1px solid var(--color6);
+    border-radius: 2px;
+    margin: 0 !important;
+}
+
+/* Hide built-in RangeSlider inputs inside filter sliders (replaced by explicit inputs) */
+.filter-slider-wrapper .dash-slider-container input[type="number"] {
+    display: none !important;
+}
+
+/* Reduce gap between inputs and slider track */
+.dash-slider-container {
+    gap: 2px !important;
+    align-items: center !important;
+}
+
+/* Explicit filter min/max inputs */
+.filter-range-input {
+    height: 18px !important;
+    width: 52px !important;
+    font-size: 10px !important;
+    padding: 0 3px !important;
+    line-height: 18px !important;
+    box-sizing: border-box !important;
+    background-color: var(--color11);
+    border: 1px solid var(--color6);
+    border-radius: 2px;
+    margin-left: 2px !important;
+    margin-right: 2px !important;
+}
+
+.spinner-frame {
+  position: absolute;
+  width: 80px;
+  height: 80px;
+  transition: opacity 0.4s ease-in-out;
+}
+
+.frame1 {
+  animation: fade1 1s infinite alternate;
+}
+
+.frame2 {
+  animation: fade2 1s infinite alternate;
+}
+
+@keyframes fade1 {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes fade2 {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.graph-settings-modal .modal-dialog {
+    margin-left: 2rem;
+    margin-right: auto;
+}

@@ -1,4 +1,4 @@
-from dash import html, dcc, callback, Input, Output, State, no_update, ctx, ALL
+from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 
 GRAPH_SETTINGS_DEFAULTS = {
@@ -129,8 +129,8 @@ def get_graph_settings_button(prefix: str):
     )
 
 
-def register_graph_settings_callbacks():
-    @callback(
+def register_graph_settings_callbacks(app):
+    @app.callback(
         Output("graph-settings-modal", "is_open"),
         Input({"type": "open-graph-settings-btn", "index": ALL}, "n_clicks"),
         Input("gs-close-btn", "n_clicks"),
@@ -148,7 +148,7 @@ def register_graph_settings_callbacks():
             return False
         return no_update
 
-    @callback(
+    @app.callback(
         Output("graph-settings-store", "data"),
         Output("gs-status", "children"),
         Input("gs-apply-btn", "n_clicks"),

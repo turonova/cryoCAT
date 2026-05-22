@@ -47,7 +47,7 @@ def InlineLabeledDropdown(id_, label, default_visibility="flex", tooltip_text=""
                 label,
                 id=f"{id_}-lbl",
                 html_for=id_,
-                className=f"label-dark mb-0 me-2",  # right margin so it doesn’t stick to dropdown
+                className=f"label-dark mb-0 me-2",  # right margin so it doesn't stick to dropdown
                 style={"whiteSpace": "nowrap"},  # keep label on one line
             ),
             dcc.Dropdown(
@@ -82,7 +82,7 @@ def InlineInputForm(id_, label, default_visibility="flex", **input_kwargs):
             dbc.Label(
                 label,
                 html_for=id_,
-                className="label-dark mb-0 me-2",  # right margin so it doesn’t stick to dropdown
+                className="label-dark mb-0 me-2",  # right margin so it doesn't stick to dropdown
                 style={"whiteSpace": "nowrap"},  # keep label on one line
             ),
             dbc.Input(
