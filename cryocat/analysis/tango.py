@@ -51,7 +51,7 @@ class Particle:
         tomo_id : int, optional
             An optional identifier for the tomography, must be an integer or float. Default is None.
         motl_fid : str, optional
-            An optional motl column_name for the particle that will be used as additional label. Default is None.
+            An optional motl feature id (column name) for the particle that will be used as additional label. Default is None.
         degrees : bool, default=True
             A flag indicating whether the rotation is provided in degrees. Ddefault is True.
         particle_id : int, default=0
@@ -748,14 +748,14 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
         The path to the input Motl file or Motl object to be loaded.
     motl_fid : str, optional
         The column name in the Motl dataframe that should be used as motl_fid.
-        If None, motl_fids will be set to None for all particles. Default is None.
+        If None, the motl_fid attribute will be set to None for all particles. Default is None.
     subset_tomo_id : int or list, optional
         A tomo_id(s) that should be used. If None, the entire Motl will be used. Default is None.
-    symm: int or str, optional
+    symm : int or str, optional
         Specifies symmetry of a particle. If int is passed, cyclic (C) symmetry is assumed. See SymParticle for more
         details on str specifications. If specified, list of SymmParticle objects is created, instead of list of
         Particle objects. Default is None.
-    custom_rot: np.array, optional
+    custom_rot : np.array, optional
         The input custom_rot can be a rotation matrix for the case that the given particle symmetry does not align with
         the canonical options for platonic solids as defined in geom. This is not needed in the case where sym == n >1.
         It is used only if symm is specified. Default to None.
@@ -1054,8 +1054,8 @@ class Descriptor:
         pca_components : int, optional
             The number of PCA components to compute. Default is None.
         feature_ids : str or list, default="all"
-            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns from input_df.
-            Default is "all".
+            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns of
+            ``self.desc``. Default is "all".
         nan_drop : str, {"row", "column"}
             The axis to drop NaN values from. Default is "row".
 
@@ -1100,8 +1100,8 @@ class Descriptor:
         pca_dict : dict, optional
             A dictionary containing PCA parameters. If None, PCA is not applied. Default is None.
         feature_ids : str or list, default="all"
-            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns from input_df.
-            Default is "all".
+            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns of
+            ``self.desc``. Default is "all".
         scale_data : bool, default=True
             Whether to scale the data before clustering. Default is True.
 

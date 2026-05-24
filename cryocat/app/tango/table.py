@@ -559,8 +559,8 @@ def register_tango_table_callbacks(app):
         State("tabv-motl-global-data-store", "data"),
         State("symmetry-dropdown", "value"),
         State("c-symmetry-value", "value"),
-        State({"type": "twist-forms-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "value"),
-        State({"type": "twist-forms-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "id"),
+        State({"type": "twist-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "twist-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         prevent_initial_call=True,
     )
     def compute_twist_vector(trigger, motl_df, symm_type, symm_value, param_values, param_ids):

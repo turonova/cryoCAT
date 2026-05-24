@@ -1764,15 +1764,14 @@ class Mesh(DiscreteSurface):
     def convex_hull(self):
         """
         Compute convex hull of the mesh.
-        
-        Parameters
-        ----------
-        return_hull : bool, default=False
-            If True, return the convex hull mesh as well as statistics
-        
+
         Returns
         -------
-        Hull mesh, Statistics dict
+        hull : open3d.geometry.TriangleMesh
+            The convex hull mesh.
+        stats : dict
+            Hull statistics: volume, surface area, vertex/face counts,
+            bounding-box extent, compactness, and ratios to the original mesh.
         """
         mesh_o3d = self._to_open3d()
         hull, _ = mesh_o3d.compute_convex_hull()
@@ -1919,11 +1918,9 @@ class Mesh(DiscreteSurface):
         ----------
         number_of_points : int, optional
             Target number of points to sample. If None, uses init_factor * num_vertices
-        init_factor : int, default=5
+        init_factor : int, default=1
             Multiplier for number_of_points if not specified: init_factor * num_vertices
-        inplace : bool, default=False
-            If True, modify in place. If False, return new OrientedPointCloud instance
-        
+
         Returns
         -------
         OrientedPointCloud
@@ -2339,21 +2336,17 @@ class Mesh(DiscreteSurface):
         """
         Extract dual surface from segmentation using marching cubes.
 
-        Maintains float precision throughout. Optionally validates that vertices
-        lie on the segmentation boundary using sub-voxel interpolation.
+        Maintains float precision throughout.
 
         Parameters
         ----------
         segmentation : ndarray
             3D binary segmentation volume (0=background, 1=membrane)
         pixel_size : float
-            Pixel/voxel pixel_size in physical units or normalized pixel/voxel units
+            Voxel size in physical units, used to scale the marching-cubes
+            output to world coordinates.
         level : float, default=0.5
             Iso-level for marching cubes
-        validate : bool, default=True
-            Whether to validate vertices are on boundary
-        tolerance : float, default=0.1
-            Sub-pixel/voxel validation tolerance
 
         Returns
         -------
@@ -2365,8 +2358,6 @@ class Mesh(DiscreteSurface):
             Nx3 array of vertex normals
         vertices_pixel : ndarray
             Nx3 array in voxel coordinates, float precision
-        validation_stats : dict
-            Validation statistics
         """
 
         # Run marching cubes
@@ -4517,16 +4508,14 @@ class OrientedPointCloud(DiscreteSurface):
     def convex_hull(self):
         """
         Compute convex hull of the point cloud.
-        
-        Parameters
-        ----------
-        return_hull : bool, default=False
-            If True, return the convex hull mesh as well as statistics
-        
+
         Returns
         -------
-        tuple
-            Hull mesh, Statistics dict
+        hull : open3d.geometry.TriangleMesh
+            The convex hull mesh.
+        stats : dict
+            Hull statistics: volume, surface area, vertex/face counts, and
+            bounding-box extent.
         """
         pcd_o3d = self._to_open3d()
         hull, _ = pcd_o3d.compute_convex_hull()

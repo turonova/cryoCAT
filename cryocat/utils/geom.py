@@ -1435,7 +1435,7 @@ def cone_inplane_distance(
         Rotation describing orientation of particle. Normalized via :func:`as_rotation`.
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
-    degrees :bool, optional
+    degrees : bool, optional
         Return angular distance in degrees (True) or radians (False). Defaults to True.
     cyclic_symmetry : Symmetry, default=1
         Cyclic rotational symmetry specifier of underlying particles; normalized

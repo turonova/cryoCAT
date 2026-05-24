@@ -127,9 +127,9 @@ def get_similar_size_factors(number, order="ascending"):
 
     Parameters
     ----------
-    number: int
+    number : int
         The number for which to find factors.
-    order: str, default="ascending"
+    order : str, default="ascending"
         Order in which the numbers should be returned.
 
     Returns

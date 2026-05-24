@@ -14,7 +14,7 @@ import dash_bootstrap_components as dbc
 
 import plotly.graph_objects as go
 
-from cryocat.utils.classutils import process_method_docstring
+from cryocat.utils.classutils import TYPE_HANDLERS
 from cryocat.core.cryomotl import Motl, EmMotl, StopgapMotl, RelionMotl, RelionMotlv5, DynamoMotl
 
 # mport dash_html_components as html
@@ -197,169 +197,20 @@ def get_print_out(to_print):
     # return single_line_output
 
 
-def generate_form_from_untyped_init(cls_name, exclude_params=None):
+def generate_kwargs(ids, values):
+    """Round-trip GUI form values to a kwargs dict via the central type table.
 
-    cls = get_class_by_name(cls_name)
-    sig = inspect.signature(cls.__init__)
-    inputs = []
-
-    if exclude_params is not None:
-        exclude_params.append("self")
-    else:
-        exclude_params = ["self"]
-
-    for name, param in sig.parameters.items():
-        if name in exclude_params:
-            continue
-
-        default = param.default if param.default != inspect.Parameter.empty else ""
-
-        print(name, param)
-        inputs.append({"name": name, "param": param, "default": default})
-
-    return inputs
-
-
-def generate_form_from_docstring(cls_name, id_type, id_name, exclude_params=None, module_path="cryocat.analysis.tango"):
-
-    def correct_form(value):
-
-        if isinstance(value.get("types"), type):
-            value["types"] = [value["types"].__name__]
-
-        form_id = {"type": id_type, "cls_name": id_name, "param": value["name"], "p_type": value["types"][0]}
-        if len(value["options"]) > 0:
-            value_form = (
-                dcc.Dropdown(
-                    id=form_id,
-                    options=value["options"],
-                    multi=False,
-                    value=value["options"][0],
-                    style={
-                        "width": "100%",
-                    },
-                ),
-            )
-        elif value["types"][0] == "bool":
-            value_form = (
-                dcc.Dropdown(
-                    id=form_id,
-                    options=["True", "False"],
-                    multi=False,
-                    value=str(value["default"]),
-                    style={"width": "100%"},
-                ),
-            )
-        elif value["types"][0] in ["float", "int"]:
-            value_form = (
-                dcc.Input(
-                    type="number",
-                    value=value["default"],
-                    id=form_id,
-                    style={"width": "100%"},
-                ),
-            )
-        elif value["types"][0] == "numpy.ndarray":
-            value_form = (
-                dcc.Input(
-                    type="text",
-                    value="0,0,1",
-                    id=form_id,
-                    style={"width": "100%"},
-                ),
-            )
-        else:
-            value_form = (
-                dcc.Input(
-                    type="text",
-                    value=value["default"] if value["default"] is not None else None,
-                    placeholder="Optional" if not value["required"] and value["default"] is None else "",
-                    id=form_id,
-                    style={"width": "100%"},
-                ),
-            )
-
-        return value_form
-
-    cls = get_class_by_name(cls_name, module_path=module_path)
-    params_dict = process_method_docstring(cls, "__init__", pretty_print=True)
-
-    if exclude_params is None:
-        exclude_params = []
-
-    forms = []
-
-    label_style = {
-        "marginRight": "0.5rem",
-        "width": "40%",
-        "display": "flex",
-        "alignItems": "center",
-        "boxSizing": "border-box",
-    }
-    param_style = {
-        "marginRight": "0.0rem",
-        "marginBottom": "0.2rem",
-        "width": "60%",
-    }
-
-    for key, value in params_dict.items():
-        if value["name"] in exclude_params:
-            continue
-        else:
-            label_id = f"{cls_name}-{value['name']}"
-            form = html.Div(
-                [
-                    html.Div(
-                        [
-                            html.Label(key, id=label_id),
-                            dbc.Tooltip(value["desc"], target=label_id, placement="top"),
-                        ],
-                        style=label_style,
-                    ),
-                    html.Div(
-                        correct_form(value),
-                        style=param_style,
-                    ),
-                ],
-                style={
-                    "display": "flex",
-                    "flexDirection": "row",
-                    "boxSizing": "border-box",
-                    "width": "100%",
-                    "marginBottom": "0.2rem",
-                },
-            )
-            forms.append(form)
-
-    return forms
-
-
-def generate_kwargs(ids_dict, values):
-
-    def parse_array_string(s):
-        # Remove brackets if present and strip spaces
-        s_clean = s.strip().lstrip("[").rstrip("]")
-        # Split by comma and convert to float or int
-        elements = [float(x) if "." in x else int(x) for x in s_clean.split(",") if x.strip()]
-        return np.array(elements)
-
-    new_kwargs = {}
-
-    for id, value in zip(ids_dict, values):
-
-        if id["p_type"] == "numpy.ndarray":
-            new_kwargs[id["param"]] = parse_array_string(value)
-
-        elif value == "True":
-            new_kwargs[id["param"]] = True
-
-        elif value == "False":
-            new_kwargs[id["param"]] = False
-
-        else:
-            new_kwargs[id["param"]] = value
-
-    return new_kwargs
+    Each control id carries the resolved handler ``tag`` (set by
+    :func:`cryocat.app.formgen.build_form`); the matching ``TYPE_HANDLERS``
+    entry's ``parse`` turns the widget value into the python value. Render and
+    parse therefore read the *same* table and cannot drift.
+    """
+    out = {}
+    for id_, value in zip(ids, values):
+        tag = id_["tag"]
+        parse = TYPE_HANDLERS[tag]["parse"]
+        out[id_["param"]] = parse(value, id_.get("choices")) if tag == "Literal" else parse(value)
+    return out
 
 
 def _scalar(v):
@@ -398,86 +249,18 @@ def get_relevant_features(desc_name, all_features):
 
 
 def get_motl_operation_methods():
-    """Return dropdown options for all public Motl instance methods that have documented parameters."""
+    """Dropdown options for the editor's operation menu.
+
+    Lists only the Motl methods marked with ``@gui_exposed`` — the decorator
+    (not docstring scraping) is the authority for what appears in the GUI.
+    """
     from cryocat.core.cryomotl import Motl
 
     options = []
-    for name, _ in sorted(inspect.getmembers(Motl, predicate=inspect.isfunction)):
-        if name.startswith("_"):
+    for name, fn in inspect.getmembers(Motl, predicate=inspect.isfunction):
+        gui = getattr(fn, "_gui", None)
+        if gui is None:
             continue
-        try:
-            sig = inspect.signature(getattr(Motl, name))
-        except (ValueError, TypeError):
-            continue
-        params = list(sig.parameters.keys())
-        if not params or params[0] != "self":
-            continue  # skip static methods
-        label = name.replace("_", " ").capitalize()
-        options.append({"label": label, "value": name})
+        options.append({"label": gui["label"], "value": name})
     return options
 
-
-def generate_motl_op_form(method_name):
-    """Generate Dash form elements for a Motl method based on its NumPy-style docstring."""
-    from cryocat.core.cryomotl import Motl
-
-    params_dict = process_method_docstring(Motl, method_name, pretty_print=True)
-
-    if not params_dict:
-        return [html.Div("No parameters required.", style={"fontSize": "0.85rem", "color": "var(--color9)", "padding": "2px 0"})]
-
-    label_style = {"width": "45%", "display": "flex", "alignItems": "center", "boxSizing": "border-box", "paddingRight": "4px"}
-    input_style = {"width": "55%"}
-    row_style = {"display": "flex", "flexDirection": "row", "marginBottom": "0.25rem", "width": "100%", "alignItems": "center"}
-
-    forms = []
-    for key, value in params_dict.items():
-        raw_name = value["name"]
-
-        # Docstrings often use "name: type" (no spaces) which NumpyDocString
-        # absorbs into the name field with an empty type string.  Split it out.
-        if ":" in raw_name:
-            actual_name, embedded_type = [s.strip() for s in raw_name.split(":", 1)]
-        else:
-            actual_name, embedded_type = raw_name, ""
-
-        raw_types = value.get("types")
-        if isinstance(raw_types, type):
-            p_type = raw_types.__name__
-        elif raw_types:
-            p_type = raw_types[0]
-        else:
-            p_type = embedded_type if embedded_type else "str"
-        form_id = {"type": "me-op-param", "param": actual_name, "p_type": p_type}
-
-        if value["options"]:
-            inp = dcc.Dropdown(id=form_id, options=value["options"], multi=False,
-                               value=value["options"][0], style={"width": "100%"})
-        elif p_type == "bool":
-            inp = dcc.Dropdown(id=form_id, options=["True", "False"],
-                               value=str(value["default"]), style={"width": "100%"})
-        elif p_type in ("float", "int"):
-            inp = dcc.Input(type="number", value=value["default"], id=form_id, style={"width": "100%"})
-        elif p_type == "numpy.ndarray":
-            inp = dcc.Input(type="text", value="", placeholder="e.g. 1,2,3", id=form_id, style={"width": "100%"})
-        else:
-            default_str = str(value["default"]) if value["default"] is not None else ""
-            placeholder = "" if value["required"] else "Optional"
-            inp = dcc.Input(type="text", value=default_str, placeholder=placeholder,
-                            id=form_id, style={"width": "100%"})
-
-        label_id = f"me-op-lbl-{actual_name}"
-        row = html.Div(
-            [
-                html.Div(
-                    [html.Label(key, id=label_id, style={"fontSize": "0.85rem", "margin": 0}),
-                     dbc.Tooltip(value["desc"], target=label_id, placement="right")],
-                    style=label_style,
-                ),
-                html.Div(inp, style=input_style),
-            ],
-            style=row_style,
-        )
-        forms.append(row)
-
-    return forms

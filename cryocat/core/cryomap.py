@@ -1753,8 +1753,7 @@ def calculate_masked_fsc(
             Second half-map: file path or 3-D ndarray. Normalized via :func:`read`.
         pixel_size : float, optional
             Pixel size in Angstroms. When given, the x-axis is expressed as
-            spatial frequency in 1/Ã
-    ; otherwise the Fourier shell index is used.
+            spatial frequency in 1/Angstrom; otherwise the Fourier shell index is used.
         input_mask : MapSource, optional
             Real-space mask, either as an ndarray or a path to a mask file. A
             box-filling mask of ones is used when None. Default is None.
@@ -1767,7 +1766,7 @@ def calculate_masked_fsc(
             box<210, 15 otherwise).
         output_path : PathOrStr, optional
             File path for saving results.  Extension selects format:
-            ``.csv`` â comma-separated table; ``.xml`` â ChimeraX-compatible XML.
+            ``.csv`` - comma-separated table; ``.xml`` - ChimeraX-compatible XML.
             The best available FSC column (corrected or uncorrected) is written.
 
         Returns

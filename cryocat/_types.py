@@ -62,7 +62,7 @@ Per-tomogram metadata sources
     TomoList                -- many forms; normalize with ioutils.tlt_load
 
 Generic structured-data sources
-    DataFrameSource         -- df | path | ndarray (for ioutils.df_load)
+    DataSource              -- path | ndarray | df (bulk array/table data)
     DictSource              -- path | dict (for ioutils.dict_load)
 
 Symmetry
@@ -98,7 +98,7 @@ Normalizers (boundary helpers that take a polymorphic input -> canonical form)
     MotlSource              -> cryocat.core.cryomotl.as_motl(x)
     TomoDimensions          -> cryocat.utils.ioutils.dimensions_load(x)
     TomoList                -> cryocat.utils.ioutils.tlt_load(x)
-    DataFrameSource         -> cryocat.utils.ioutils.df_load(x)
+    DataSource              -> cryocat.utils.ioutils.df_load(x)  (tabular) / np.asarray (arrays)
     DictSource              -> cryocat.utils.ioutils.dict_load(x)
 """
 
@@ -253,10 +253,13 @@ Normalize with :func:`cryocat.utils.ioutils.tlt_load`.
 # Generic structured-data sources (used by I/O helpers in ioutils.py)
 # ===========================================================================
 
-type DataFrameSource = pd.DataFrame | PathOrStr | npt.NDArray
-"""Generic tabular input.
+type DataSource = PathOrStr | npt.NDArray | pd.DataFrame
+"""Bulk array/table data: an in-memory object OR a path to load from.
 
-Normalize with :func:`cryocat.utils.ioutils.df_load`.
+Unlike TripletLike / EulerAngles / short ListLike, no compact literal is a
+reasonable inline input, so the GUI renders a path field and the CLI takes a
+path string. Normalize at the boundary with the relevant loader
+(ioutils.df_load for tabular, np.asarray for arrays, etc.).
 """
 
 type DictSource = PathOrStr | dict

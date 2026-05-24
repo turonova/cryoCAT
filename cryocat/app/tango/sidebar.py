@@ -19,7 +19,8 @@ from cryocat.analysis.nnana import NearestNeighbors
 from cryocat.analysis.tango import TwistDescriptor, Descriptor, CustomDescriptor
 from cryocat.analysis import visplot
 
-from cryocat.app.apputils import generate_form_from_docstring, generate_kwargs
+from cryocat.app.apputils import generate_kwargs
+from cryocat.app.formgen import build_form
 
 descriptors = get_class_names_by_parent("Descriptor", "cryocat.analysis.tango")
 features = get_class_names_by_parent("Feature", "cryocat.analysis.tango")
@@ -98,14 +99,11 @@ def get_sidebar():
                             html.Div(
                                 [
                                     html.Div(
-                                        generate_form_from_docstring(
-                                            "NearestNeighbors",
+                                        build_form(
+                                            NearestNeighbors,
                                             id_type="nn-forms-params",
-                                            id_name="nn-params",
-                                            exclude_params=[
-                                                "input_data",
-                                            ],
-                                            module_path="cryocat.analysis.nnana",
+                                            id_extra={"cls_name": "nn-params"},
+                                            exclude=["input_data"],
                                         ),
                                     ),
                                     dbc.Col(
@@ -142,11 +140,11 @@ def get_sidebar():
                                     html.Div(
                                         [
                                             html.Div(
-                                                generate_form_from_docstring(
-                                                    "TwistDescriptor",
+                                                build_form(
+                                                    TwistDescriptor,
                                                     id_type="twist-forms-params",
-                                                    id_name="twist-params",
-                                                    exclude_params=[
+                                                    id_extra={"cls_name": "twist-params"},
+                                                    exclude=[
                                                         "input_twist",
                                                         "input_motl",
                                                         "build_unique_desc",
@@ -426,8 +424,8 @@ def register_tango_sidebar_callbacks(app):
         State("main-motl-data-store", "data"),
         State("nn-motl-data-store", "data"),
         State("use-nn-motl-checkbox", "value"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "value"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "id"),
+        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         prevent_initial_call=True,
     )
     def show_nn_motl_option(n_clicks, main_motl_df, nn_motl_df, use_single_motl, nn_values, nn_ids):
@@ -486,8 +484,11 @@ def register_tango_sidebar_callbacks(app):
         if not class_name:
             return []
 
-        forms = generate_form_from_docstring(
-            class_name, id_type="support-params", id_name=class_name, exclude_params=["twist_desc"]
+        forms = build_form(
+            get_classes_from_names(class_name, "cryocat.analysis.tango"),
+            id_type="support-params",
+            id_extra={"cls_name": class_name},
+            exclude=["twist_desc"],
         )
         return forms
 
@@ -505,12 +506,13 @@ def register_tango_sidebar_callbacks(app):
         if not class_name:
             return [], "", [], [], {"width": "100%", "display": "none"}
 
+        desc_cls = get_classes_from_names(class_name, "cryocat.analysis.tango")
         if class_name == "TwistDescriptor":
-            forms = generate_form_from_docstring(
-                class_name,
+            forms = build_form(
+                desc_cls,
                 id_type="desc-params",
-                id_name=class_name,
-                exclude_params=[
+                id_extra={"cls_name": class_name},
+                exclude=[
                     "input_twist",
                     "input_motl",
                     "nn_radius",
@@ -522,8 +524,11 @@ def register_tango_sidebar_callbacks(app):
                 ],
             )
         else:
-            forms = generate_form_from_docstring(
-                class_name, id_type="desc-params", id_name=class_name, exclude_params=["twist_df", "build_unique_desc"]
+            forms = build_form(
+                desc_cls,
+                id_type="desc-params",
+                id_extra={"cls_name": class_name},
+                exclude=["twist_df", "build_unique_desc"],
             )
 
         if class_name == "CustomDescriptor":
@@ -561,11 +566,11 @@ def register_tango_sidebar_callbacks(app):
 
             if feat_desc_map[cls_name] not in used_desc_list:
                 forms.extend(
-                    generate_form_from_docstring(
-                        feat_desc_map[cls_name],
+                    build_form(
+                        get_classes_from_names(feat_desc_map[cls_name], "cryocat.analysis.tango"),
                         id_type="feat-params",
-                        id_name=cls_name,
-                        exclude_params=["twist_df", "build_unique_desc"],
+                        id_extra={"cls_name": cls_name},
+                        exclude=["twist_df", "build_unique_desc"],
                     )
                 )
                 used_desc_list.append(feat_desc_map[cls_name])
@@ -581,12 +586,12 @@ def register_tango_sidebar_callbacks(app):
         State("support-dropdown", "value"),
         State("feat-multi-dropdown", "value"),
         State("tabv-twist-global-data-store", "data"),
-        State({"type": "support-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "value"),
-        State({"type": "support-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "id"),
-        State({"type": "desc-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "value"),
-        State({"type": "desc-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "id"),
-        State({"type": "feat-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "value"),
-        State({"type": "feat-params", "cls_name": ALL, "param": ALL, "p_type": ALL}, "id"),
+        State({"type": "support-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "support-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": "desc-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "desc-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": "feat-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "feat-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         prevent_initial_call=True,
     )
     def process_selection(

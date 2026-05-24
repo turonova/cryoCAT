@@ -202,7 +202,7 @@ def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
     Raises
     -------
     ValueError
-        If file does not exist or if specified from file_path is not readable
+        If the directory specified by ``dir_path`` does not exist.
 
     Examples
     --------
@@ -280,14 +280,15 @@ def get_filename_from_path(input_path, with_extension=True):
 
     Parameters
     ----------
-    input_path: str
+    input_path : str
         The input path from which the filename is to be extracted.
-    with_extension: bool, default=True
+    with_extension : bool, default=True
         Flag to indicate whether to include the file extension in the filename. Default is True.
 
-    Returns:
-        str
-            The extracted filename from the input path.
+    Returns
+    -------
+    str
+        The extracted filename from the input path.
     """
 
     # Get the filename without the path
@@ -375,11 +376,11 @@ def get_data_from_warp_xml(xml_file_path, node_name, node_level=1):
 
     Parameters
     ----------
-    xml_file_path: str
+    xml_file_path : str
         The path to the XML file.
-    node_name: str
+    node_name : str
         The XPath expression to find elements in the XML file.
-    node_level: int, default=1
+    node_level : int, default=1
         The level of extraction. Default is 1 which works for nodes that have values without further tags (i.e.,
         one value per line without a xml tag). The other allowed level is 2 which should be used for all tags that have
         values stored in Node tags (such as GridCTF).
@@ -553,7 +554,7 @@ def gctf_read(input_path):
 
     Parameters
     ----------
-    input_path: str
+    input_path : str
         Path to the gctf star file that contains values for all tilts in the tilt series. The columns to be read in are
         "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", and "rlnPhaseShift" (if present, otherwise the phase shift
         is set to 0.0). The defocii values are converted to micrometers.
@@ -582,7 +583,7 @@ def ctffind4_read(input_path):
 
     Parameters
     ----------
-    input_path: str
+    input_path : str
         Path to the ctffind4 file (typically in .txt format) that contains values for all tilts in the tilt series.
         The defocii values are converted to micrometers.
 
@@ -632,9 +633,9 @@ def one_value_per_line_read(input_path, data_type=np.float32):
 
     Parameters
     ----------
-    input_path: str
+    input_path : str
         Path to the file where on each line there is expected to be a one value of the type specified by data_type.
-    data_type: dtype, default=np.float32
+    data_type : dtype, default=np.float32
         A typde of the data to be read in.
 
     Returns
@@ -948,7 +949,7 @@ def z_shift_load(input_shift):
 
     Parameters
     ----------
-    input_dims : str or number or pandas.DataFrame or array-like
+    input_shift : str or number or pandas.DataFrame or array-like
         Either a path to a file with z-shift, single number, pandas.DataFrame or numpy.ndarray. If the z-shift should
         be loaded for more than one tomogram and is different for each tomogram the shape of the input should be Nx2
         where N is number of tomograms. In the first column should be tomogram id, in the second one corresponding
@@ -1054,15 +1055,15 @@ def remove_lines(input_path, lines_to_remove, start_str_to_skip=None, number_sta
     ----------
     input_path : str
         The name of the file to remove the lines from.
-    lines_to_remove: int or array-like
+    lines_to_remove : int or array-like
         Array/list (or single int) with numbers of lines to be removed. If start_str_to_skip is empty, the indices
         corresponds to the line numbers.
-    start_str_to_skip: str or array-like
+    start_str_to_skip : str or array-like
         Array/list of strings (or single string). The lines starting with any of those strings will be ignored. The indices
         from lines_to_remove will be applied to filter only the remaining lines. Dafaults to None.
-    number_start: int. default=0
+    number_start : int, default=0
         Whether the line numbers provied start counting at 0 or 1. Defaults to 0.
-    output_path: str
+    output_path : str
         Path to a file to write out the content into. Defaults to None (no file will be written out).
 
     Returns

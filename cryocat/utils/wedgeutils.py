@@ -7,6 +7,7 @@ from cryocat.utils import starfileio
 from cryocat.utils import geom
 from cryocat.core import cryomask
 from cryocat.core import cryomap
+from cryocat._types import CTFFileType, DataSource, PathOrStr, TomoDimensions, TomoList
 import emfile
 import math
 
@@ -48,19 +49,19 @@ def check_data_consistency(data1, data2, data_type1, data_type2):
 
 
 def create_wedge_list_sg(
-    tomo_id,
-    tomo_dim,
-    pixel_size,
-    tlt_file,
-    z_shift=0.0,
-    ctf_file=None,
-    ctf_file_type="gctf",
-    dose_file=None,
-    voltage=300.0,
-    amp_contrast=0.07,
-    cs=2.7000,
-    output_path=None,
-    drop_nan_columns=True,
+    tomo_id: int,
+    tomo_dim: TomoDimensions,
+    pixel_size: float,
+    tlt_file: DataSource,
+    z_shift: float = 0.0,
+    ctf_file: DataSource | None = None,
+    ctf_file_type: CTFFileType = "gctf",
+    dose_file: DataSource | None = None,
+    voltage: float = 300.0,
+    amp_contrast: float = 0.07,
+    cs: float = 2.7000,
+    output_path: PathOrStr | None = None,
+    drop_nan_columns: bool = True,
 ):
     """Create a wedge list dataframe for a single tomogram/tilt series in STOPGAP format.
 
@@ -165,20 +166,20 @@ def create_wedge_list_sg(
 
 
 def create_wedge_list_sg_batch(
-    tomo_list,
-    pixel_size,
-    tlt_file_format,
-    tomo_dim=None,
-    tomo_dim_file_format=None,
-    z_shift=0.0,
-    z_shift_file_format=None,
-    ctf_file_format=None,
-    ctf_file_type="gctf",
-    dose_file_format=None,
-    voltage=300.0,
-    amp_contrast=0.07,
-    cs=2.7000,
-    output_path=None,
+    tomo_list: TomoList,
+    pixel_size: float,
+    tlt_file_format: str,
+    tomo_dim: TomoDimensions | None = None,
+    tomo_dim_file_format: str | None = None,
+    z_shift: float = 0.0,
+    z_shift_file_format: str | None = None,
+    ctf_file_format: str | None = None,
+    ctf_file_type: CTFFileType = "gctf",
+    dose_file_format: str | None = None,
+    voltage: float = 300.0,
+    amp_contrast: float = 0.07,
+    cs: float = 2.7000,
+    output_path: PathOrStr | None = None,
 ):
     """Create a wedge list dataframe in STOPGAP format for all tomograms/tilt series specified in tomo_list.
 
@@ -482,16 +483,16 @@ def wedge_list_sg_to_em(input_path, output_path, write_out=True):
 
     Parameters
     ----------
-    input_path: str
+    input_path : str
         Path to a STOPGAP star wedge list.
-    output_path: str
+    output_path : str
         Path to save the new em format wedge list.
-    write_out: bool, default=True
+    write_out : bool, default=True
         Whether to save the output. Default is True.
 
-    Return
+    Returns
     -------
-    wedge_list_em: pd.DataFrame
+    wedge_list_em : pd.DataFrame
         Pandas Dataframe with the 3 columns mentioned above.
     """
 

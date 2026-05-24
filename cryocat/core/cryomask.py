@@ -77,7 +77,7 @@ def generate_mask(mask_shape: str, mask_size: int | None = None, mask_expansion:
     mask_size : int, optional
         The size of the mask array. If None, it is automatically determined based on the maximum dimension in `specs`
         plus an expansion factor. Defaults to None.
-    mask_expansion: int, default=4
+    mask_expansion : int, default=4
         If mask_size is not specified, the maximum dimension plus this expansion is used to define the mask size.
         Defaults to 4.
 

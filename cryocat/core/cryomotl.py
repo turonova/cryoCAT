@@ -18,6 +18,7 @@ from cryocat.utils import ioutils
 from cryocat.analysis import nnana
 from cryocat.utils import imod
 from cryocat._types import ArrayLike, MapSource, MotlType, PathOrStr, RotationLike, Symmetry, TomoDimensions
+from cryocat.utils.classutils import gui_exposed
 from typing import Dict, List, Optional, Tuple, Union
 
 from math import ceil
@@ -62,21 +63,21 @@ class Motl:
     --------
     Load a motl from an EM file::
 
-        motl = Motl.load(âpath_to_em_fileâ)
+        motl = Motl.load('path_to_em_file')
 
     Clean by Otsu threshold and save::
 
-        motl.clean_by_otsu(4, histogram_bin=20).write_out(âoutput.emâ)
+        motl.clean_by_otsu(4, histogram_bin=20).write_out('output.em')
     """
 
     # Motl module example usage
     #
     # Initialize a Motl instance from an emfile
-    #   `motl = Motl.load(âpath_to_em_fileâ)`
+    #   `motl = Motl.load('path_to_em_file')`
     # Run clean_by_otsu and write the result to a new file
-    #   `motl.clean_by_otsu(4, histogram_bin=20).write_to_emfile(âpath_to_output_em_fileâ)`
+    #   `motl.clean_by_otsu(4, histogram_bin=20).write_to_emfile('path_to_output_em_file')`
     # Run class_consistency on multiple Motl instances
-    #   `motl_intersect, motl_bad, cl_overlap = Motl.class_consistency(Motl.load(âemfile1â, âemfile2â, âemfile3â))`
+    #   `motl_intersect, motl_bad, cl_overlap = Motl.class_consistency(Motl.load('emfile1', 'emfile2', 'emfile3'))`
     motl_columns = [
         "score",
         "geom1",
@@ -186,6 +187,7 @@ class Motl:
         else:
             raise ValueError("Both objects need to be instances of Motl class.")
 
+    @gui_exposed(category="Geometry")
     def adapt_to_trimming(self, trim_coord_start: ArrayLike, trim_coord_end: ArrayLike) -> None:
         """The adapt_to_trimming function takes in the trim_coord_start and trim_coord_end values, which are the
         coordinates used for trimming the tomogram, and changes particle coordinates to correspond to the trimmed
@@ -193,10 +195,12 @@ class Motl:
 
         Parameters
         ----------
-        trim_coord_start : numpy.ndarray
-            Starting coordinates of the trimming used on the tomogram. The order of coordinates is x, y, z.
-        trim_coord_end : numpy.ndarray
-            Ending coordinates of the trimming used on the tomogramThe order of coordinates is x, y, z.
+        trim_coord_start : ArrayLike
+            Starting coordinates of the trimming used on the tomogram, as a
+            3-element array-like in x, y, z order. Normalized via ``np.asarray``.
+        trim_coord_end : ArrayLike
+            Ending coordinates of the trimming used on the tomogram, as a
+            3-element array-like in x, y, z order. Normalized via ``np.asarray``.
 
         Returns
         -------
@@ -222,13 +226,17 @@ class Motl:
             :,
         ]
 
+    @gui_exposed(category="Geometry")
     def apply_rotation(self, input_rotation: RotationLike) -> None:
-        """The apply_rotation function applies a input_rotation to the angles in the DataFrame.
+        """The apply_rotation function applies a rotation to the angles in the DataFrame.
 
         Parameters
         ----------
-        input_rotation : `scipy.spatial.transform._rotation.Rotation`
-            A scipy input_rotation object representing the input_rotation.
+        input_rotation : RotationLike
+            The rotation to apply. Accepts anything coercible to a SciPy
+            ``Rotation`` -- a ``Rotation`` object, Euler angles, a rotation
+            matrix, or a quaternion. Normalized via
+            :func:`cryocat.utils.geom.as_rotation`.
 
         Returns
         -------
@@ -244,7 +252,7 @@ class Motl:
         >>> # you can use ChimeraX fit function to fit the average to the reference. In the log file you will get output
         >>> # that looks like this:
         >>> #
-        >>> # Matrix input_rotation and translation
+        >>> # Matrix rotation and translation
         >>> # 0.50840235 0.86106603 -0.00960989 -17.20630613
         >>> # -0.86111334 0.50832424 -0.00950164 65.37276832
         >>> # -0.00329660 0.01310586 0.99990868 -0.66904104
@@ -253,7 +261,7 @@ class Motl:
         >>> # Rotation angle (degrees) 59.44816674
         >>> # Shift along axis 0.20350209
         >>> #
-        >>> # To apply this input_rotation on the motl that corresponds to the fitted average you run:
+        >>> # To apply this rotation on the motl that corresponds to the fitted average you run:
         >>> from scipy.spatial.transform import Rotation as R
         >>> motl = Motl.load("/path/to/the/motl.em")
         >>> # Create the matrix from the ChimeraX output by leaving out the last column
@@ -301,6 +309,7 @@ class Motl:
             if paired_key in input_df.columns:
                 self.df[em_key] = pd.to_numeric(input_df[paired_key])
 
+    @gui_exposed(category="Cleaning")
     def clean_by_distance(
         self,
         distance_in_voxels: float,
@@ -316,16 +325,17 @@ class Motl:
         distance_in_voxels : float
             The distance cutoff in voxels.
         column_name : str
-            The ID of the feature by which the particles are grouped before cleaning.
+            Name of the column by which the particles are grouped before cleaning.
         metric_column_name : str, default='score'
-            The ID of the metric to decide which particles to keep. Defaults to "score". The particle with the greater
-            value is kept.
-        keep_greater: bool, default=True
-            Whether to keep the particles with great (True) or lower (False) value. Default is True.
-        dist_mask : str or ndarray
-            Binary mask/map (or path to it) for directional cleaning. If provided the distance_in_voxels is used to
-            find all points within this radius and then those points in the region where the mask is 1
-            will be cleaned. Defaults to None.
+            Name of the column whose value decides which particle to keep. Defaults to "score". The particle
+            with the greater value is kept.
+        keep_greater : bool, default=True
+            Whether to keep the particles with greater (True) or lower (False) value. Default is True.
+        dist_mask : MapSource, optional
+            Binary mask/map (ndarray or path to a map file) for directional cleaning. If provided the
+            distance_in_voxels is used to find all points within this radius and then those points in the
+            region where the mask is 1 will be cleaned. Normalized via :func:`cryocat.core.cryomap.read`.
+            Defaults to None.
 
         Returns
         -------
@@ -349,7 +359,7 @@ class Motl:
             feature_m = self.get_motl_subset(f, column_name=column_name, reset_index=True)
 
             if dist_mask is None:
-                # Classic radius-based cleaning â delegate to nnana.
+                # Classic radius-based cleaning - delegate to nnana.
                 temp_keep = nnana.nms_by_distance(
                     coords=feature_m.get_coordinates(),
                     scores=feature_m.df[metric_column_name].values,
@@ -394,16 +404,16 @@ class Motl:
 
         Parameters
         ----------
-        points : DataFrame
-            DataFrame containing the coordinates of points to check against. It has to contain column specified by the
-            param column_name and also columns x,y,z.
+        points : pandas.DataFrame
+            DataFrame containing the coordinates of points to check against. It has to contain the column specified
+            by ``column_name`` and also columns x, y, z.
         radius_in_voxels : float
             The radius within which points will be considered for removal, in voxel units.
         column_name : str, default="tomo_id"
-            The column name that identifies how the particles in motl should be grouped. Defaults to 'tomo_id'.
+            Name of the column that identifies how the particles in motl should be grouped. Defaults to 'tomo_id'.
         inplace : bool, default=True
             If True, modifies the motl in place. If False, returns a new Motl object. Defaults to True.
-        output_path : str or None, optional
+        output_path : PathOrStr, optional
             If specified, the cleaned Motl object will be written to this file. Defaults to None.
 
         Returns
@@ -490,21 +500,22 @@ class Motl:
 
         Parameters
         ----------
-        tomo_list : str, array-like, or int
-            Tomogram indices specifying the masks provided. See :meth:`cryocat.utils.ioutils.tlt_load` for more information
-            on formatting.
-        tomo_masks : list, array-like or str
-            List of paths to tomogram masks list of np.ndarrays with the masks loaded. If a single path/np.ndarray is
-            specified (instead of the list) the same mask will be used for all tomograms specified in the tomo_list.
+        tomo_list : TomoDimensions
+            Tomogram indices specifying the masks provided. See :func:`cryocat.utils.ioutils.tlt_load` for more
+            information on formatting.
+        tomo_masks : MapSource or list of MapSource
+            A tomogram mask, or a list of them, as ndarrays or paths to map files. If a single mask is given
+            (instead of a list) the same mask is used for all tomograms in ``tomo_list``. Each is normalized
+            via :func:`cryocat.core.cryomap.read`.
         inplace : bool, default=True
-            If true, the original instance of the motl is changed. If False, the instance of Motl is created and returned,
-            the original motive list remains unchanged. Defaults to True.
-        boundary_type : {"center", "whole"}
+            If True, the original instance of the motl is changed. If False, a new Motl instance is created and
+            returned, the original motive list remains unchanged. Defaults to True.
+        boundary_type : {"center", "whole"}, default="center"
             Specify whether only the center should be part of the mask ("center") or the whole
-            box ("whole"). In the latter case, the box_size have to be specified as well. Defaults to "center".
+            box ("whole"). In the latter case, ``box_size`` has to be specified as well. Defaults to "center".
         box_size : int, optional
             Size of the subtomogram box. Required if `boundary_type` is set to "whole". Defaults to None.
-        output_path : str, optional
+        output_path : PathOrStr, optional
             Path to save the cleaned motive list. If not provided, the motive list is not saved. Defaults to None.
 
         Returns
@@ -577,18 +588,20 @@ class Motl:
             return None
         return cleaned_motl
 
+    @gui_exposed(category="Cleaning")
     def clean_by_otsu(self, column_name: str, histogram_bin: Optional[int] = None, global_level: bool = False) -> None:
         """Clean the DataFrame by applying Otsu's thresholding algorithm on the scores.
 
         Parameters
         ----------
         column_name : str
-            The feature ID to be used to group particles for cleaning.
+            Name of the column used to group particles for cleaning.
         histogram_bin : int, optional
-            The number of bins for the histogram. If not provided, a default value will be used based on the feature ID.
-            Defaults to None.
+            The number of bins for the histogram. If not provided, a default value is used based on
+            ``column_name``. Defaults to None.
         global_level : bool, default=False
-            Flag to indicate whether to compute the Otsu threshold grouping the particles based on column_name on the dataset-level instead of on a tomogram-basis
+            Flag to indicate whether to compute the Otsu threshold grouping the particles based on
+            ``column_name`` at the dataset level instead of per tomogram. Defaults to False.
 
         Returns
         -------
@@ -601,8 +614,8 @@ class Motl:
         Raises
         ------
         UserInputError
-        If the selected feature ID does not correspond to either "tomo_id" or "object_id",
-        and histogram_bin is not specified.
+            If ``column_name`` does not correspond to either "tomo_id" or "object_id",
+            and ``histogram_bin`` is not specified.
 
         """
 
@@ -637,20 +650,20 @@ class Motl:
         self.df = cleaned_motl.reset_index(drop=True)
 
     def compute_otsu_threshold(self, column_name: str, hbin: int) -> pd.DataFrame:
-        """Compute Otsu threshold on the Motl 'score' value after grouping the particles by a desired feature.
-        This function generates a plot of the particle distribution for each value of the feature and overlays the threshold value.
+        """Compute Otsu threshold on the Motl 'score' value after grouping the particles by a desired column.
+        This function generates a plot of the particle distribution for each value of the column and overlays the threshold value.
 
         Parameters
         ----------
-            column_name : str
-               The feature ID to be used to group particles.
-            hbin : int
-               The number of bins for the histogram.
+        column_name : str
+            Name of the column used to group particles.
+        hbin : int
+            The number of bins for the histogram.
 
         Returns
-        --------
-            pandas.DataFrame
-                Dataframe in Motl format containing the particles filtered according to the Otsu threshold.
+        -------
+        pandas.DataFrame
+            Dataframe in Motl format containing the particles filtered according to the Otsu threshold.
 
         Examples
         --------
@@ -804,12 +817,13 @@ class Motl:
 
         self.df = self.df.fillna(0.0)
 
+    @gui_exposed(category="Subsets", output="motl")
     def get_random_subset(self, number_of_particles: int) -> "Motl":
         """Generate a random subset of particles from the motl.
 
         Parameters
         ----------
-        number_of_particles: int
+        number_of_particles : int
             Number of particles to select randomly.
 
         Returns
@@ -824,12 +838,13 @@ class Motl:
 
         return new_motl
 
+    @gui_exposed(category="Classes")
     def assign_random_classes(self, number_of_classes: int) -> None:
         """Assign a random class to each point in the motl.
 
         Parameters
         ----------
-        number_of_classes: int
+        number_of_classes : int
             The total number of classes to choose from.
 
         Returns
@@ -844,14 +859,16 @@ class Motl:
         r_classes = np.random.randint(1, number_of_classes + 1, size=self.df.shape[0])
         self.df["class"] = r_classes
 
+    @gui_exposed(category="Geometry")
     def flip_handedness(self, tomo_dimensions: Optional[TomoDimensions] = None) -> None:
         """Flip the handedness of the particles in the motl.
 
         Parameters
         ----------
-        tomo_dimensions : str or pandas.DataFrame or array-like, optional
-            Dimensions of tomograms in the motl. If not provided, only the orientation is changed. For specification on
-            tomo_dimensions format see :meth:`cryocat.utils.ioutils.dimensions_load`. Defaults to None.
+        tomo_dimensions : TomoDimensions, optional
+            Dimensions of tomograms in the motl (path, DataFrame, or array-like). If not provided, only the
+            orientation is changed. For the accepted formats see
+            :func:`cryocat.utils.ioutils.dimensions_load`. Defaults to None.
 
         Notes
         -----
@@ -963,8 +980,9 @@ class Motl:
 
         Returns
         -------
-        list
-            List of rotations (with type `scipy.spatial.transform._rotation.Rotation`) for all particles.
+        scipy.spatial.transform.Rotation or list
+            A SciPy ``Rotation`` stacking the rotations of all selected particles,
+            or an empty list when there are no particles.
 
         """
         angles = self.get_angles(tomo_number)
@@ -974,6 +992,7 @@ class Motl:
 
         return rotations
 
+    @gui_exposed(category="Geometry")
     def make_angles_canonical(self) -> None:
         """Convert Euler angles to their canonical zxz representation in-place.
 
@@ -992,9 +1011,9 @@ class Motl:
 
         Parameters
         ----------
-        idx : array-like
+        idx : ArrayLike
             Array (type `int`) with indices of particles to be used for the analysis.
-        nn_idx : array-like
+        nn_idx : ArrayLike
             Array (type `int`) with indices of nearest neigbors to be used to compute the barycentric coordinates.
             The dimensions are (N, x) where N corresponds to the number of particles (same as in idx) and x is the
             number of nearest neigbors. If x equals 1, the barycentric coordinates are computed between two points
@@ -1039,7 +1058,7 @@ class Motl:
 
         Parameters
         ----------
-        idx : array-like
+        idx : ArrayLike
             Row indices into ``self.df`` whose ``tomo_id`` and ``object_id``
             are inherited. Length must equal ``new_coords.shape[0]``.
         new_coords : numpy.ndarray
@@ -1074,8 +1093,8 @@ class Motl:
 
         Parameters
         ----------
-        column_name : str
-            The column name to get the values for.
+        column_name : str or list of str
+            The column name (or list of column names) to get the values for.
 
         Returns
         -------
@@ -1108,18 +1127,19 @@ class Motl:
     #     raise UserInputError(f"The class Motl does not contain column with name {feature_id}")
 
     def get_motl_subset(self, column_values: Union[ArrayLike, int, float], column_name: str = "tomo_id", return_df: bool = False, reset_index: bool = True) -> Union["Motl", pd.DataFrame]:
-        """Get a subset of the Motl object based on specified feature values.
+        """Get a subset of the Motl object based on specified column values.
 
         Parameters
         ----------
-        column_values : array-like or int
-            The feature values to filter the Motl object by.
+        column_values : ArrayLike, int, or float
+            The column values to filter the Motl object by.
         column_name : str, default="tomo_id"
-            The name of the feature column to filter by. Defaults to "tomo_id".
+            The name of the column to filter by. Defaults to "tomo_id".
         return_df : bool, default=False
             Whether to return the filtered subset as a DataFrame. Defaults to False.
         reset_index : bool, default=True
             Whether to reset the index of the filtered subset. Defaults to True.
+
         Returns
         -------
         `pandas.DataFrame` or :class:`Motl`
@@ -1154,7 +1174,7 @@ class Motl:
         motl2 : :class:`Motl`
             Second motl.
         column_name : str, default="subtomo_id"
-            Feature ID to use for intersection. Defaults to "subtomo_id".
+            Name of the column to use for the intersection. Defaults to "subtomo_id".
 
         Returns
         -------
@@ -1177,7 +1197,7 @@ class Motl:
 
         Parameters
         ----------
-        starting_number: int, default=1
+        starting_number : int, default=1
             The starting number for renumbering objects. The default is 1.
 
         Notes
@@ -1210,9 +1230,9 @@ class Motl:
 
         Parameters
         ----------
-        idx : array-like
+        idx : ArrayLike
             Indices of particles to be used for the analysis.
-        nn_idx : array-like
+        nn_idx : ArrayLike
             Indices of nearest neigbors of particles specified in idx.
 
         Returns
@@ -1221,7 +1241,7 @@ class Motl:
             A new Motl object with coordinates corresponding to the center between the particles and their nearest
             neighbors.
         numpy.ndarray
-            The qpânn direction vectors expressed in the local frame of each query particle.
+            The qp-to-nn direction vectors expressed in the local frame of each query particle.
         """
         coords = self.get_coordinates()
         coord1 = coords[idx, :]
@@ -1243,7 +1263,7 @@ class Motl:
         Parameters
         ----------
         column_name : str
-            The ID of the feature.
+            Name of the column.
 
         Returns
         -------
@@ -1260,12 +1280,13 @@ class Motl:
 
         Parameters
         ----------
-        input_motl : pandas.DataFrame or Motl
-            Either path to the motl or pandas.DataFrame in the format corresponding
-            to general motl_df or in the format specific to the motl_type.
-        motl_type : str, {'emmotl', 'dynamo', 'relion', 'stopgap', 'modmotl'}
-            A string indicating what type of Motl input should be loaded (emmotl, relion, stopgap, dynamo, mod).
-            Defaults to emmotl.
+        input_motl : MotlSource
+            A :class:`Motl`, a pandas.DataFrame (in the general motl_df format or
+            the format specific to ``motl_type``), or a path to a motl file.
+        motl_type : MotlType, default="emmotl"
+            Which Motl format to load: one of ``"emmotl"``, ``"relion"``,
+            ``"relion5"``, ``"relion5_1"``, ``"stopgap"``, ``"dynamo"``, ``"mod"``.
+            Defaults to "emmotl".
         **kwargs : dict
             Additional keyword arguments to pass to the constructor of the specified Motl subclass.
             Implemented for RelionMotl; additional arguments: version, pixel_size, binning, optics_data
@@ -1306,15 +1327,16 @@ class Motl:
         else:
             raise UserInputError(f"Provided motl file {input_motl} has format that is currently not supported.")
 
+    @gui_exposed(category="Cleaning")
     def remove_feature(self, column_name: str, column_values: Union[ArrayLike, int, float]) -> None:
-        """The function removes particles based on their feature (i.e. tomo number).
+        """The function removes particles based on a column value (e.g. tomo number).
 
         Parameters
         ----------
         column_name : str
-            Specify the feature based on which the particles will be removed.
-        column_values : array-like
-            Specify which particles should be removed.
+            Name of the column based on which the particles will be removed.
+        column_values : ArrayLike, int, or float
+            Values in ``column_name`` whose particles should be removed.
 
 
         Returns
@@ -1330,6 +1352,7 @@ class Motl:
         column_values = np.atleast_1d(column_values)
         self.df = self.df.loc[~self.df[column_name].isin(column_values)]
 
+    @gui_exposed(category="Subsets")
     def renumber_particles(self) -> None:
         """This function renumbers the particles in a motl. This is useful when you want to reorder the particles in a
         motl, or if you have deleted some of them and need to renumber the remaining ones. The function takes no
@@ -1351,6 +1374,7 @@ class Motl:
         """
         self.df.loc[:, "subtomo_id"] = list(range(1, len(self.df) + 1))
 
+    @gui_exposed(category="Geometry")
     def scale_coordinates(self, scaling_factor: float) -> None:
         """Scales coordinates (including shifts) by the scaling factor.
 
@@ -1377,10 +1401,10 @@ class Motl:
         Parameters
         ----------
         column_name : str
-            Specify the feature based on which the motl will be split.
+            Name of the column based on which the motl will be split.
         write_out : bool, default=False
             Whether to write out the motls. Defaults to False.
-        output_prefix : bool, default=""
+        output_prefix : str, default=""
             Prefix (including the path) of the motls to be written out. Used only if write_out is True. No
             separation character will be added - it has to be specified as the last character. Defaults to empty `str`.
 
@@ -1418,10 +1442,12 @@ class Motl:
 
         Parameters
         ----------
-        output_path : str
+        output_path : PathOrStr
             The path to write the motl file to.
-        motl_type : str, {'emmotl', 'dynamo', 'relion', 'stopgap'}
-            The type of motl file to write. Defaults to "emmotl".
+        motl_type : MotlType, default="emmotl"
+            The type of motl file to write: one of ``"emmotl"``, ``"relion"``,
+            ``"relion5"``, ``"relion5_1"``, ``"stopgap"``, ``"dynamo"``, ``"mod"``.
+            Defaults to "emmotl".
 
         Returns
         -------
@@ -1457,17 +1483,17 @@ class Motl:
         Parameters
         ----------
         column_name : str
-            Name of the feature (column) to split by.
+            Name of the column to split by.
         output_base : str
-            The base for the output files. The final name of each mod file will have a form of
-            {output_base}_{column_name}_{feature_id_value} where the feature_id_value will be pad with zeros.
+            The base for the output files. The final name of each mod file will have the form
+            {output_base}_{column_name}_{column_value} where the column value is padded with zeros.
         point_size : int
-            Size of the point that should be used
+            Size of the point that should be used.
         binning : float, default=1.0
             Scaling factor to apply to coordinates. Defaults to 1.0 which corresponds to no binning.
         zero_padding : int, optional
-            Defines the zero padding for the feature_id_value for the output names (see
-            above). In None, the length of the maximum value in column_name is used. Defaults to None.
+            Defines the zero padding for the column value in the output names (see
+            above). When None, the length of the maximum value in column_name is used. Defaults to None.
 
         Returns
         -------
@@ -1518,6 +1544,7 @@ class Motl:
                 ]
             )
 
+    @gui_exposed(category="Geometry")
     def update_coordinates(self) -> None:
         """Aplies the existing shifts to x, y, z positions, rounds the new coordinates and stores them as integer
         positions in x, y, z and stores the rest into shifts. After the positions are updated, new extraction of
@@ -1557,7 +1584,7 @@ class Motl:
         Internal helper shared by :meth:`merge_and_renumber` and
         :meth:`merge_and_drop_duplicates`. Empty motls are skipped with a
         warning. The returned Motl has its index reset but has not been
-        renumbered or deduplicated â the caller applies whichever finalizer
+        renumbered or deduplicated - the caller applies whichever finalizer
         it needs.
         """
         if not isinstance(motl_list, list) or len(motl_list) == 0:
@@ -1595,8 +1622,8 @@ class Motl:
 
         Parameters
         ----------
-        motl_list : list
-            A list of Motl instances or paths.
+        motl_list : list of MotlSource
+            A list of Motl instances, DataFrames, or paths to motl files.
 
         Returns
         -------
@@ -1620,13 +1647,13 @@ class Motl:
 
         Parameters
         ----------
-        motl_list : list
-            A list of Motl instances or paths.
+        motl_list : list of MotlSource
+            A list of Motl instances, DataFrames, or paths to motl files.
 
         Returns
         -------
         Motl instance
-            The merged Motl instance (or instance of the input class) with renumbered objects and particles.
+            The merged Motl instance (or instance of the input class) with duplicate particles dropped.
 
         Raises
         ------
@@ -1639,16 +1666,18 @@ class Motl:
         merged_motl.df.reset_index(inplace=True, drop=True)
         return merged_motl
 
+    @gui_exposed(category="Cleaning")
     def remove_out_of_bounds_particles(self, dimensions: TomoDimensions, boundary_type: str = "center", box_size: Optional[int] = None) -> None:
         """Removes particles that are out of tomogram bounds.
 
         Parameters
         ----------
-        dimensions : str
-            Filepath or ndarray specifying tomograms' dimensions.
-        boundary_type : str, {"center", "whole"}
+        dimensions : TomoDimensions
+            Tomogram dimensions: a path, DataFrame, or array-like. Normalized via
+            :func:`cryocat.utils.ioutils.dimensions_load`.
+        boundary_type : {"center", "whole"}, default="center"
             Specify whether only the center should be part of the tomogram ("center") or the whole
-            box ("whole"). In the latter case, the box_size have to be specified as well. Defaults to "center".
+            box ("whole"). In the latter case, ``box_size`` has to be specified as well. Defaults to "center".
         box_size : int, optional
             Size of the box/subtomogram. It has to be specified if boundary_type is "whole". Defaults to None.
 
@@ -1696,16 +1725,17 @@ class Motl:
         print(f"Removed {original_size - len(self.df)} particles.")
         print(f"Original size {original_size}, new_size {len(self.df)}")
 
+    @gui_exposed(category="Cleaning")
     def drop_duplicates(self, column_name: str = "subtomo_id", decision_column_name: str = "score", decision_sort_ascending: bool = False) -> None:
         """Drop duplicates based on a specified column and keep the first occurrence with the highest/lowest score.
 
         Parameters
         ----------
-        column_name: str, default="subtomo_id"
+        column_name : str, default="subtomo_id"
             The column based on which duplicates will be dropped. Defaults to subtomo_id.
-        decision_column_name: str, default="score"
+        decision_column_name : str, default="score"
             The column used to decide which duplicate to keep. Defaults to score.
-        decision_sort_ascending: bool, default=False
+        decision_sort_ascending : bool, default=False
             Whether to sort the decision column in ascending order. Defaults to False (i.e., it will sort in
             descending order.)
 
@@ -1748,17 +1778,20 @@ class Motl:
 
         Parameters
         ----------
-        input_motl: Motl or str or Pandas.DataFrame
-            Input motl to apply the recentering to (see :meth:`cryocat.core.cryomotl.Motl.load` for more details on format)
-        input_map : str
-            Binary mask specified either as a file path or ndarray. The box size of the mask
+        input_motl : MotlSource
+            Input motl to apply the recentering to: a :class:`Motl`, a DataFrame, or a path
+            (see :meth:`cryocat.core.cryomotl.Motl.load` for more details on the format).
+        input_map : MapSource
+            Binary mask specified either as a file path or an ndarray. The box size of the mask
             should correspond to the box size of the reference on which the mask was placed.
-        input_rotation : scipy.spatial.transform._rotation.Rotation
-            Rotation to apply on the new positions. Defaults to None.
-        motl_type : str, optional
-            Type of motl to load if not standard Motl.
-        kwargs : dict
-            Additional keyword arguments passed to `Motl.load`.
+            Normalized via :func:`cryocat.core.cryomap.read`.
+        input_rotation : RotationLike, optional
+            Rotation to apply on the new positions (Rotation, Euler angles, matrix, or
+            quaternion). Defaults to None.
+        motl_type : MotlType, default="emmotl"
+            Type of motl to load when ``input_motl`` is a path/DataFrame. Defaults to "emmotl".
+        **kwargs : dict
+            Additional keyword arguments passed to :meth:`Motl.load`.
 
         Notes
         -----
@@ -1796,11 +1829,11 @@ class Motl:
 
         Parameters
         ----------
-        rotation_angles : array-like
+        rotation_angles : ArrayLike
             Rotation angles in degrees corresponding to rotation around x, y, and z axis.
         tomo_id : int
             Tomo ID of the particles that should be rotated and shifted.
-        tomo_dim : array-like
+        tomo_dim : ArrayLike
             Dimensions of the tomogram in x, y, z.
 
         Returns
@@ -1841,14 +1874,15 @@ class Motl:
 
         return feature_motl
 
+    @gui_exposed(category="Geometry", hide=("inplace",))
     def shift_positions(self, shift: ArrayLike, inplace: bool = True) -> Optional["Motl"]:
         """Shifts the coordinates by the provided shift.
 
         Parameters
         ----------
-        shift : numpy.ndarray
-            3D shift to be applied to the coordinates.
-        inplace : boolean, default=True
+        shift : ArrayLike
+            3-element shift to be applied to the coordinates. Normalized via ``np.asarray``.
+        inplace : bool, default=True
             Whether to return a new instance of the motl with shifted coordinates (False) or perform the shift on `df`
             directly (True). Defaults to True.
 
@@ -1880,12 +1914,13 @@ class Motl:
 
         Parameters
         ----------
-        symmetry : str or number
-            Symmetry to be used. Currently cyclic and dihedral symmetry are supported. Cx or
-            cx specify the cyclic symmetry of order x, Dx or dx dihedral symmetry of order x. If symmetry is specified
-            as int/float, cyclic symmetry is assumed.
-        xyz_shift : numpy.ndarray
-            Shift by which the center of current particles should be shifted to be centered at first
+        symmetry : Symmetry
+            Symmetry to be used. Currently cyclic and dihedral symmetry are supported. ``Cx`` or
+            ``cx`` specify the cyclic symmetry of order x, ``Dx`` or ``dx`` dihedral symmetry of order x. If
+            symmetry is specified as an int, cyclic symmetry is assumed. Normalized via
+            :func:`cryocat.utils.geom.as_symmetry`.
+        xyz_shift : ArrayLike
+            Shift by which the center of current particles should be shifted to be centered at the first
             subunit.
 
         Returns
@@ -2006,6 +2041,7 @@ class EmMotl(Motl):
         Parameters
         ----------
         input_df : pandas.DataFrame
+            DataFrame expected to already be in the standard motl format.
 
         Returns
         -------
@@ -2026,7 +2062,7 @@ class EmMotl(Motl):
 
         Parameters
         ----------
-        input_path : str
+        input_path : PathOrStr
             The path to the EM file.
 
         Returns
@@ -2061,7 +2097,7 @@ class EmMotl(Motl):
 
         Parameters
         ----------
-        output_path : str
+        output_path : PathOrStr
             Name of the file to be written out (including the path).
 
         Returns
@@ -2088,9 +2124,9 @@ class RelionMotl(Motl):
         RELION version (e.g. ``3.1``, ``4.0``).  Inferred from the file when
         ``None``.
     pixel_size : float, optional
-        Voxel size in ÃngstrÃ¶ms.  Read from the star file when ``None``.
+        Voxel size in Angstroms.  Read from the star file when ``None``.
     binning : float, optional
-        Binning factor applied to the coordinates.  Required for version â¥ 4.0.
+        Binning factor applied to the coordinates.  Required for version >= 4.0.
     optics_data : pandas.DataFrame, optional
         Pre-loaded optics group data.
     tomo_format : str, default=''
@@ -2102,7 +2138,7 @@ class RelionMotl(Motl):
     ------
     UserInputError
         If ``input_motl`` is of an unsupported type, or if ``binning`` is not
-        provided for RELION version â¥ 4.0.
+        provided for RELION version >= 4.0.
     """
 
     default_version = 3.1
@@ -2260,10 +2296,10 @@ class RelionMotl(Motl):
         elif self.optics_data is not None:
             if "rlnImagePixelSize" in self.optics_data.columns and "rlnOpticsGroup" in self.optics_data.columns:
                 if len(self.optics_data) == 1:
-                    # Single optics group â scalar pixel size
+                    # Single optics group -to- scalar pixel size
                     self.pixel_size = self.optics_data["rlnImagePixelSize"].iloc[0]
                 else:
-                    # Multiple optics groups â assign per-particle from optics group
+                    # Multiple optics groups -to- assign per-particle from optics group
                     merged = self.relion_df.merge(
                         self.optics_data[["rlnOpticsGroup", "rlnImagePixelSize"]],
                         on="rlnOpticsGroup",
@@ -2756,9 +2792,12 @@ class RelionMotl(Motl):
             Version of Relion DataFrame. Defaults to None.
         optics_df : pandas.DataFrame, optional
             DataFrame with optics data. Defaults to None
-        subtomo_format : string
-
-        tomo_format: string
+        subtomo_format : str, default=""
+            Format specifying the subtomogram name in the RELION DataFrame.
+            See :meth:`prepare_particles_data` for the format syntax.
+        tomo_format : str, default=""
+            Format specifying the tomogram name in the RELION DataFrame.
+            See :meth:`prepare_particles_data` for the format syntax.
 
         Notes
         -----
@@ -2976,6 +3015,10 @@ class RelionMotl(Motl):
             be used. Defaults to None.
         subtomo_size : int, optional
             The size of the subtomograms. If not provided, it will be set to "NaN". Defaults to None.
+        binning : float, optional
+            Binning factor applied to the coordinates. Used when constructing
+            optics for RELION version >= 4.0. Defaults to None.
+
         Returns
         -------
         pandas.DataFrame
@@ -3344,7 +3387,7 @@ class RelionMotl(Motl):
             Determine whether to use (True) the original entries stored in `self.relion_df` or not (False). If True, all
             relion entries that are not used in motl (e.g., rlnCtfImage, rlnHelicalTubeID) are fetched from the original
             relion dataframe. Coordinates, rotations, classes etc. will be updated. Defaults to False.
-        keep_all_entries: bool, default=False
+        keep_all_entries : bool, default=False
             Used only if use_original_entries is True. If True, it will keep all the entries as they were loaded including
             coordinates, rotations and classes. Essentially, it should be set to True only if some selection on particles
             was done and nothing changed. Defaults to False.
@@ -3451,7 +3494,7 @@ class RelionMotl(Motl):
 
         Parameters
         ----------
-        ouput_path : str
+        output_path : str
             The output path to the starfile to be written out.
         write_optics : bool, default=True
             Whether to include optics data in the starfile or not. Defaults to True.
@@ -3465,7 +3508,7 @@ class RelionMotl(Motl):
             Determine whether to use (True) the original entries stored in `self.relion_df` or not (False). If True, all
             relion entries that are not used in motl (e.g., rlnCtfImage, rlnHelicalTubeID) are fetched from the original
             relion dataframe. Coordinates, rotations, classes etc. will be updated. Defaults to False.
-        keep_all_entries: bool, default=False
+        keep_all_entries : bool, default=False
             Used only if use_original_entries is True. If True, it will keep all the entries as they were loaded including
             coordinates, rotations and classes. Essentially, it should be set to True only if some selection on particles
             was done and nothing changed. Defaults to False.
@@ -3546,7 +3589,7 @@ class RelionMotlv5(RelionMotl, Motl):
     tomo_idx : str or array-like, optional
         Subset of tomogram IDs to load.
     pixel_size : float, optional
-        Voxel size in ÃngstrÃ¶ms.
+        Voxel size in Angstroms.
     binning : float, default=1.0
         Binning factor.  Should always be set explicitly for RELION 5.
     optics_data : pandas.DataFrame, optional
@@ -3792,10 +3835,14 @@ class RelionMotlv5(RelionMotl, Motl):
         ----------
         relion_df : pandas.DataFrame
             DataFrame in relion format.
-        version : float, optional
-            Version of Relion DataFrame. Defaults to None.
         optics_df : pandas.DataFrame, optional
-            DataFrame with optics data. Defaults to None
+            DataFrame with optics data. Defaults to None.
+        tomo_format : str, default=""
+            Format specifying the tomogram name. See
+            :meth:`prepare_particles_data` for the format syntax.
+        subtomo_format : str, default=""
+            Format specifying the subtomogram name. See
+            :meth:`prepare_particles_data` for the format syntax.
 
         Notes
         -----
@@ -3865,7 +3912,7 @@ class RelionMotlv5(RelionMotl, Motl):
         return merged_df
 
     def convert_coordinates_merge(self, relion_df):
-        """Convert RELION 5 centered ÃngstrÃ¶m coordinates to pixel coordinates.
+        """Convert RELION 5 centered Angstrom coordinates to pixel coordinates.
 
         Merges tomogram dimensions from ``self.tomo_df`` and computes
         ``rlnCoordinateX/Y/Z`` as ``tomo_size/2 + centered_coord/pixel_size``.
@@ -3902,7 +3949,7 @@ class RelionMotlv5(RelionMotl, Motl):
         return merged_df
 
     def convert_coordinates_ang_merge(self, relion_df):
-        """Convert pixel coordinates to RELION 5 centered ÃngstrÃ¶m coordinates.
+        """Convert pixel coordinates to RELION 5 centered Angstrom coordinates.
 
         Merges tomogram dimensions from ``self.tomo_df`` and computes
         ``rlnCenteredCoordinateXAngst/YAngst/ZAngst`` as
@@ -4103,12 +4150,12 @@ class RelionMotlv5(RelionMotl, Motl):
         Parameters
         ----------
         tomo_format : str, default=''
-            Format string for ``rlnTomoName``.  Use ``$xâ¦x`` placeholders
+            Format string for ``rlnTomoName``.  Use ``$x...x`` placeholders
             (number of ``x`` characters sets zero-padding width).  An empty
             string stores the raw integer ``tomo_id``.
         subtomo_format : str, default=''
-            Format string for ``rlnTomoParticleName``.  Supports ``$yâ¦y`` for
-            subtomo ID and ``$xâ¦x`` for tomo ID.  An empty string stores the
+            Format string for ``rlnTomoParticleName``.  Supports ``$y...y`` for
+            subtomo ID and ``$x...x`` for tomo ID.  An empty string stores the
             raw integer ``subtomo_id``.
 
         Returns
@@ -4193,7 +4240,7 @@ class RelionMotlv5(RelionMotl, Motl):
         Parameters
         ----------
         pixel_size : float, optional
-            Binned pixel size in ÃngstrÃ¶ms.  Defaults to ``self.pixel_size``.
+            Binned pixel size in Angstroms.  Defaults to ``self.pixel_size``.
         subtomo_size : int, optional
             Subtomogram box size in pixels.  Stored as ``rlnImageSize``.
             Defaults to ``'NaN'``.
@@ -4399,7 +4446,7 @@ class RelionMotlv5(RelionMotl, Motl):
         binning : float, optional
             Coordinate scaling factor override.
         pixel_size : float, optional
-            Pixel size override in ÃngstrÃ¶ms.
+            Pixel size override in Angstroms.
         optics_data : str or dict or pandas.DataFrame, optional
             Override optics source (see :meth:`prepare_optics_data`).
         subtomo_size : int, optional
@@ -4447,7 +4494,7 @@ class RelionMotlv5_1:
     tomo_idx : str or array-like, optional
         Subset of tomogram IDs to load.
     pixel_size : float, optional
-        Voxel size in ÃngstrÃ¶ms.
+        Voxel size in Angstroms.
     binning : float, optional
         Binning factor.
     optics_data : pandas.DataFrame, optional
@@ -4572,7 +4619,7 @@ class StopgapMotl(Motl):
 
         Parameters
         ----------
-        input_path : str
+        input_path : PathOrStr
             The path to the starfile in stopgap format.
 
         Returns
@@ -4606,7 +4653,14 @@ class StopgapMotl(Motl):
         ----------
         stopgap_df : pandas.DataFrame
             The Stopgap DataFrame to be converted.
+        keep_halfsets : bool, default=False
+            Whether to derive ``subtomo_id`` from the A/B halfset assignment.
+            When True and two halfsets are present, the original ``subtomo_num``
+            is preserved in the "geom3" column instead.
 
+        Returns
+        -------
+        None
 
         Warnings
         --------
@@ -4617,10 +4671,6 @@ class StopgapMotl(Motl):
         Notes
         -----
         This method modifies the `df` attribute of the object.
-
-        Returns
-        -------
-        None
 
         """
 
@@ -4709,7 +4759,7 @@ class StopgapMotl(Motl):
 
         Parameters
         ----------
-        output_path : str
+        output_path : PathOrStr
             The path to save the star or em file.
         update_coord : bool, default=False
             Whether to update the coordinates before writing. Defaults to False.
@@ -4728,7 +4778,7 @@ class StopgapMotl(Motl):
         Examples
         --------
         >>> obj = StopgapMotl()
-        >>> obj.write("output.star", update_coord=True, reset_index=True)
+        >>> obj.write_out("output.star", update_coord=True, reset_index=True)
 
         """
 
@@ -4785,7 +4835,7 @@ class DynamoMotl(Motl):
 
         Parameters
         ----------
-        input_path : str
+        input_path : PathOrStr
             The path to the input file.
 
         Returns
@@ -4797,9 +4847,6 @@ class DynamoMotl(Motl):
         ------
         ValueError
             If the provided file does not exist.
-
-        Notes
-        -----
 
         """
 
@@ -4818,13 +4865,13 @@ class DynamoMotl(Motl):
         dynamo_df : pandas.DataFrame
             The dynamo DataFrame to be converted.
 
-        Notes
-        -----
-        This method modifies the `df` attribute of the object.
-
         Returns
         -------
         None
+
+        Notes
+        -----
+        This method modifies the `df` attribute of the object.
 
         """
 
@@ -4892,7 +4939,7 @@ class DynamoMotl(Motl):
 
         Parameters
         ----------
-        output_path : str
+        output_path : PathOrStr
             The path to the output file where the data should be written.
 
         Returns
@@ -4960,7 +5007,7 @@ class ModMotl(Motl):
 
         Parameters
         ----------
-        input_path : str
+        input_path : PathOrStr
             The path to a IMOD mod file or to the directory containing the model files.
         mod_prefix : str, default=""
             The prefix to add to each file name before reading. Defaults to an empty string.
@@ -4984,9 +5031,13 @@ class ModMotl(Motl):
 
         Parameters
         ----------
-        mod_df : DataFrame
+        mod_df : pandas.DataFrame
             A DataFrame containing columns for 'object_id', 'x', 'y', 'z', 'mod_id', 'contour_id', and optionally
             'object_radius'. This DataFrame should represent objects and their contours with coordinates.
+
+        Returns
+        -------
+        None
 
         Raises
         ------
@@ -5098,6 +5149,20 @@ class ModMotl(Motl):
 
     @staticmethod
     def convert_to_mod_motl(motl_df: pd.DataFrame) -> pd.DataFrame:
+        """Convert a standard motl DataFrame to an IMOD model DataFrame.
+
+        Parameters
+        ----------
+        motl_df : pandas.DataFrame
+            Source DataFrame with standard :attr:`~Motl.motl_columns` columns.
+
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame with the IMOD model columns (:attr:`ModMotl.columns`).
+            The ``mod_id`` column is left at zero; it is filled from the output
+            filename by :meth:`write_out`.
+        """
         mod_df = pd.DataFrame(data=np.zeros((motl_df.shape[0], 7)), columns=ModMotl.columns)
         mod_df["object_id"] = motl_df["object_id"]
         mod_df["x"] = motl_df["x"]
@@ -5115,10 +5180,16 @@ class ModMotl(Motl):
 
         Parameters
         ----------
-        output_path : str
-            The name of the output .mod file.
-        df : DataFrame
-            The pd DataFram
+        output_path : PathOrStr
+            The name of the output .mod file. The numeric part of the filename
+            is parsed and stored as the ``mod_id`` column.
+        motl_type : str, default="mod_motl"
+            Output format selector. Currently only the IMOD model format is
+            supported.
+
+        Returns
+        -------
+        None
         """
 
         self.mod_df = ModMotl.convert_to_mod_motl(self.df)
@@ -5439,7 +5510,7 @@ def emmotl2mod(input_motl: "MotlSource", output_path: Optional[PathOrStr] = None
     ----------
     input_motl : str or pandas.DataFrame or EmMotl
         Path to the input EM MOTL file or an already loaded EmMotl object.
-    output_mod_path : str, optional
+    output_path : str, optional
         If provided, the converted mod will be written to this path.
     mod_prefix : str, default=""
         Prefix for the mod file (used by ModMotl internally).

@@ -4,19 +4,21 @@ import sys
 from unittest.mock import patch, MagicMock
 import numpy as np
 
+import inspect
+import typing
+
 from cryocat.utils.classutils import (
     filter_strings,
     get_class_names_by_parent,
     get_class_names_by_prefix,
     get_classes_from_names,
-    parse_allowed_types,
-    parse_choices,
-    parse_doc_param,
-    parse_string_into_array,
+    gui_exposed,
     process_method_docstring,
-    replace_cross_references,
+    resolve_param_type,
+    TYPE_HANDLERS,
     as_list,
 )
+from cryocat._types import MapSource, TripletLike, Symmetry, MotlType
 
 
 # ---------------------------------------------------------------------------
@@ -49,121 +51,91 @@ def test_filter_strings(input_list, filter_contains, filter_exclude, expected):
 
 
 # ---------------------------------------------------------------------------
-# parse_allowed_types
+# gui_exposed
+# ---------------------------------------------------------------------------
+
+def test_gui_exposed_bare():
+    @gui_exposed
+    def my_op(self):
+        pass
+
+    assert my_op._gui is not None
+    assert my_op._gui["label"] == "My op"
+    assert my_op._gui["hide"] == {"self"}
+    assert my_op._gui["category"] is None
+    assert my_op._gui["output"] is None
+
+
+def test_gui_exposed_with_metadata():
+    @gui_exposed(label="Custom", category="Cleaning", hide=("x",), output="motl")
+    def my_op(self, x, y):
+        pass
+
+    assert my_op._gui["label"] == "Custom"
+    assert my_op._gui["category"] == "Cleaning"
+    assert my_op._gui["hide"] == {"self", "x"}
+    assert my_op._gui["output"] == "motl"
+
+
+def test_gui_exposed_undecorated_has_no_gui():
+    def plain():
+        pass
+
+    assert getattr(plain, "_gui", None) is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_param_type
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
-    "input_str, expected",
+    "annotation, expected_tag",
     [
-        ("int, float, str", ["float", "int", "str"]),
-        ("int and float or str", ["float", "int", "str"]),
-        ("int, pandas, dataframe, float", ["float", "int"]),
-        ("", []),
-        ("int, Pandas, DataFrame, float", ["float", "int"]),
-        ("array-like", ["array-like"]),
-        ("str", ["str"]),
+        (inspect.Parameter.empty, "str"),
+        (None, "str"),
+        (int, "int"),
+        (float, "float"),
+        (bool, "bool"),
+        (str, "str"),
+        (int | None, "int"),
+        (MapSource, "MapSource"),
+        (TripletLike, "TripletLike"),
+        (Symmetry, "Symmetry"),
+        (MapSource | None, "MapSource"),
+        (typing.Literal["a", "b"], "Literal"),
     ],
 )
-def test_parse_allowed_types(input_str, expected):
-    assert parse_allowed_types(input_str) == expected
+def test_resolve_param_type_tag(annotation, expected_tag):
+    tag, _ = resolve_param_type(annotation)
+    assert tag == expected_tag
+
+
+def test_resolve_param_type_literal_alias_choices():
+    tag, extra = resolve_param_type(MotlType)
+    assert tag == "Literal"
+    assert "emmotl" in extra["choices"]
 
 
 # ---------------------------------------------------------------------------
-# parse_string_into_array
+# TYPE_HANDLERS
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize(
-    "input_str, expected_values, expected_dtype_check",
-    [
-        ("1,2,3,4", [1, 2, 3, 4], np.integer),
-        ("1.1,2.2,3.3", [1.1, 2.2, 3.3], np.floating),
-        ("a,b,c", ["a", "b", "c"], np.str_),
-        ("1,2.2,hello", ["1", "2.2", "hello"], np.str_),
-        ("42", [42], np.integer),
-    ],
-)
-def test_parse_string_into_array(input_str, expected_values, expected_dtype_check):
-    result = parse_string_into_array(input_str)
-    assert np.array_equal(result, np.array(expected_values))
-    assert np.issubdtype(result.dtype, expected_dtype_check)
+def test_type_handlers_shape():
+    for tag, entry in TYPE_HANDLERS.items():
+        assert set(entry) == {"widget", "parse", "argparse"}
+        assert isinstance(entry["widget"], str)
+        assert callable(entry["parse"])
+        assert "type" in entry["argparse"]
 
 
-# ---------------------------------------------------------------------------
-# parse_choices
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "input_str, expected",
-    [
-        ("{1, 2, 3}", [1, 2, 3]),
-        ("{1.1, 2.2, 3.3}", [1.1, 2.2, 3.3]),
-        ('{"a", "b", "c"}', ["a", "b", "c"]),
-        ("{a, b, c}", ["a", "b", "c"]),
-    ],
-)
-def test_parse_choices(input_str, expected):
-    assert parse_choices(input_str) == expected
-
-
-# ---------------------------------------------------------------------------
-# replace_cross_references
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "input_str, expected",
-    [
-        ("Use :meth:`some_method` for processing", "Use `some_method` for processing"),
-        ("This is a normal string", "This is a normal string"),
-        (":meth:`first` and :meth:`second`", "`first` and `second`"),
-        ("No markers here", "No markers here"),
-    ],
-)
-def test_replace_cross_references(input_str, expected):
-    assert replace_cross_references(input_str) == expected
-
-
-# ---------------------------------------------------------------------------
-# parse_doc_param
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "doc_param, add_prefix, expected",
-    [
-        # optional parameter
-        (
-            ("param1", "int, optional", ["Some description"]),
-            "",
-            ("param1", "Some description", False, ["int"], None, []),
-        ),
-        # parameter with default
-        (
-            ("param2", "float, default=1.0", ["Description here"]),
-            "",
-            ("param2", "Description here", False, ["float"], 1.0, []),
-        ),
-        # required parameter
-        (
-            ("param3", "str", ["Required parameter"]),
-            "",
-            ("param3", "Required parameter", True, ["str"], None, []),
-        ),
-        # parameter with choices (int)
-        (
-            ("param4", "int, {1, 2, 3}", ["Choice parameter"]),
-            "",
-            ("param4", "Choice parameter", False, int, 1, [1, 2, 3]),
-        ),
-        # with prefix
-        (
-            ("param5", "str", ["Prefixed"]),
-            "test_",
-            ("test_param5", "Prefixed", True, ["str"], None, []),
-        ),
-    ],
-)
-def test_parse_doc_param(doc_param, add_prefix, expected):
-    result = parse_doc_param(doc_param, add_prefix=add_prefix)
-    assert result == expected
+def test_type_handlers_parse_roundtrip():
+    assert TYPE_HANDLERS["bool"]["parse"]("True") is True
+    assert TYPE_HANDLERS["bool"]["parse"]("False") is False
+    assert TYPE_HANDLERS["int"]["parse"]("5") == 5
+    assert TYPE_HANDLERS["TripletLike"]["parse"]("1,2,3") == [1, 2, 3]
+    assert TYPE_HANDLERS["TripletLike"]["parse"]("64") == 64
+    assert TYPE_HANDLERS["MapSource"]["parse"]("") is None
+    assert TYPE_HANDLERS["Literal"]["parse"]("b", ["a", "b"]) == "b"
 
 
 # ---------------------------------------------------------------------------
@@ -328,48 +300,26 @@ class _SampleClass:
 
 
 class TestProcessMethodDocstring:
+    # process_method_docstring now supplies parameter *descriptions* only —
+    # types/required/default come from the signature, not the docstring.
 
-    def test_required_param_detected(self):
+    def test_returns_descriptions(self):
         result = process_method_docstring(_SampleClass, "documented")
-        assert "param1" in result
-        assert result["param1"]["required"] is True
-        assert result["param1"]["types"] == ["int"]
-
-    def test_optional_param_with_default(self):
-        result = process_method_docstring(_SampleClass, "documented")
-        assert "param2" in result
-        assert result["param2"]["required"] is False
-        assert result["param2"]["default"] == "default"
-        assert result["param2"]["types"] == ["str"]
+        assert result["param1"] == "First required parameter."
+        assert result["param2"] == "Second optional parameter."
 
     def test_empty_docstring_returns_empty_dict(self):
         result = process_method_docstring(_SampleClass, "undocumented")
         assert result == {}
 
-    def test_pretty_print_capitalizes_name(self):
-        class _Helper:
-            def method(self, my_param: int):
-                """Desc.
-
-                Parameters
-                ----------
-                my_param : int
-                    A parameter.
-                """
-                pass
-
-        result = process_method_docstring(_Helper, "method", pretty_print=True)
-        # capitalize() + replace("_", " ") → "My param"
-        assert "My param" in result
-
     def test_result_keys_match_param_names(self):
         result = process_method_docstring(_SampleClass, "documented")
         assert set(result.keys()) == {"param1", "param2"}
 
-    def test_metadata_keys_present(self):
-        result = process_method_docstring(_SampleClass, "documented")
-        for key in ("desc", "required", "types", "default", "options", "name"):
-            assert key in result["param1"]
+    def test_accepts_callable_directly(self):
+        # method_name=None -> the first argument is the callable itself.
+        result = process_method_docstring(_SampleClass.documented)
+        assert set(result.keys()) == {"param1", "param2"}
 
 
 # ---------------------------------------------------------------------------

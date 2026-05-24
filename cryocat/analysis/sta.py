@@ -26,6 +26,7 @@ def get_stable_particles(motl_base_name, start_it, end_it, motl_type="emmotl", l
         Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
         Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
         `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
+
     Returns
     -------
     list
@@ -80,33 +81,33 @@ def evaluate_alignment(
 
     Parameters
     ----------
-    motl_base_names  : str or list
+    motl_base_names : str or list
         List of MOTL base names or a single motl base name to perform the evaluation on. Base name means without the
         iteration number and extension. For example for name motl_shift_3.em the base name is motl_shift\_.
-    start_it  : int
+    start_it : int
         Starting iteration number.
-    end_it  : int
+    end_it : int
         Ending iteration number.
-    motl_type  : str (stopgap|emmotl|relion), default="stopgap"
+    motl_type : str (stopgap|emmotl|relion), default="stopgap"
         Type of the input motl. Defaults to "stopgap".
-    write_out_stats  : bool, default=False
+    write_out_stats : bool, default=False
         Whether to write out stats. If True, the stats will be written to the motl_base_name + _as_motlID.csv where the
         motlID is given by its position in the motl_base_names list. For example, for motl_shift_3.em the final will
         be motl_shift_as_1.em if the motl_shift\_ is the first motl in the motl_base_names. Defaults to False.
-    plot_values  : bool, default=True
+    plot_values : bool, default=True
         Whether to plot values. Defaults to True.
-    filter_rows  : array-like or list of array-like, optional
+    filter_rows : array-like or list of array-like, optional
         Rows to filter. Only rows that are within the filter_rows will be kept. Defaults to None which means no filtering.
-    filter_column_name  : str or list, default="subtomo_id"
-        Column names based on which the filtering is perfomed. If fitler_rows is None, no filtering will be done and
+    filter_column_name : str or list, default="subtomo_id"
+        Column names based on which the filtering is perfomed. If filter_rows is None, no filtering will be done and
         this parameter will not be used. Defaults to "subtomo_id".
-    labels  : str or list, optional
+    labels : str or list, optional
         Labels for the plot. Should have the same length as the motl_base_names. In case of None, the labels will
         be automatically set as motl_base_names (in case those names contain paths, the paths will be removed).
         Used only if plot_values is True. Defaults to None.
-    graph_title  : str, default="Alignment stability"
+    graph_title : str, default="Alignment stability"
         Title of the graph. Used only if plot_values is True. Defaults to "Alignment stability".
-    graph_output_file  : str, optional
+    graph_output_file : str, optional
         Output file for the graph. Used only if plot_values is True. If None no file will be written out. Defaults to None.
     load_kwargs : dict, optional
         Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
@@ -272,7 +273,7 @@ def compute_alignment_statistics(
     filter_rows : array-like, optional
         Rows to filter. Only rows that are within the filter_rows will be kept. Defaults to None which means no filtering.
     filter_column_name : str, default="subtomo_id"
-        Column names based on which the filtering is perfomed. If fitler_rows is None, no filtering will be done and
+        Column names based on which the filtering is perfomed. If filter_rows is None, no filtering will be done and
         this parameter will not be used. Defaults to "subtomo_id".
     output_path : str, optional
         Output file for the statistics. If None no file will be written out. Defaults to None.
@@ -552,7 +553,7 @@ def evaluate_multirun_stability(input_motls, input_motl_type="stopgap"):
 
     Parameters
     ----------
-    input_motls: list
+    input_motls : list
         List of input motl files. At least two are required.
     input_motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
         Type of the input motl. Defaults to "stopgap".
@@ -670,15 +671,16 @@ def evaluate_classification(
     output_file_stats : str, optional
         Name of the file into which the results will be written out. If None, no results will be written out. Defaults
         to None.
-    plot_results: bool, default=False
+    plot_results : bool, default=False
         Whether to plot the results. Defaults to False.
-    output_file_graphs: str, optional
+    output_file_graphs : str, optional
         Name of the file into which the plotted graphs will be written out. If None, the graphs will not be written out.
         If plot_results is False, this parameter is unused. Defaults to None.
     load_kwargs : dict, optional
         Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
         Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
         `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
+
     Returns
     -------
     occupancy : dict

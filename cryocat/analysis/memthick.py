@@ -4533,8 +4533,6 @@ def run_full_pipeline(
         Direct specification of membrane labels as {name: value} pairs.
         Example: {"plasma_membrane": 1, "nuclear_envelope": 2}.
         Overrides config_path if both are provided.
-
-    **Surface Processing Parameters:**
     mesh_sampling : int, default 1
         Step size for marching cubes algorithm. Larger values reduce
         computation time but may miss fine surface details.
@@ -4557,8 +4555,6 @@ def run_full_pipeline(
     flip_normals : bool, default True
         Whether to flip refined normals to point inward toward
         the membrane interior. Typically desired for bilayer analysis.
-
-    **Thickness Measurement Parameters:**
     max_thickness : float, default 8.0
         Maximum allowed thickness in nanometers. Typical membrane
         thicknesses range from 4-8 nm. Larger values may include
@@ -4578,8 +4574,6 @@ def run_full_pipeline(
     save_thickness_mrc : bool, default False
         Whether to save thickness volume as MRC file where voxel values
         represent thickness measurements.
-
-    **Performance Parameters:**
     batch_size : int, default 2000
         Processing batch size for normal refinement. Larger batches
         are more memory-efficient but may cause memory issues.
@@ -4589,8 +4583,6 @@ def run_full_pipeline(
     num_cpu_threads : int, optional
         Number of CPU threads for parallel processing. If None,
         uses all available cores.
-
-    **Intensity Profiling Parameters:**
     extract_intensity_profiles : bool, default True
         Whether to perform intensity profile analysis after thickness
         measurement. Requires tomo_path to be specified.

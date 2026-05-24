@@ -21,7 +21,7 @@ import plotly.io as pio
 from scipy.stats import gaussian_kde
 from cryocat.utils import geom
 from cryocat.utils import ioutils
-from cryocat._types import ArrayLike, ColumnNames, DataFrameSource, PathOrStr, RotationLike
+from cryocat._types import ArrayLike, ColumnNames, DataSource, PathOrStr, RotationLike
 
 Color = str  # hex like "#1f77b4" or "rgb(…)"
 Colorscale = List[Tuple[float, Color]]  # [(0.0, "#..."), (1.0, "#...")]
@@ -1571,7 +1571,7 @@ class KDEBuilder(Hist2DBuilder):
 
 
 def plot_histogram(
-    input_data: DataFrameSource,
+    input_data: DataSource,
     column_names_x: ColumnNames = None,
     bins: int = 20,
     separate_graphs: bool = False,
@@ -1587,7 +1587,7 @@ def plot_histogram(
 
     Parameters
     ----------
-    input_data : DataFrameSource
+    input_data : DataSource
         Data to histogram. Normalized via :func:`cryocat.utils.ioutils.df_load`.
     column_names_x : list of str, optional
         Column labels. Defaults to the DataFrame's own columns.
@@ -1634,9 +1634,9 @@ def plot_histogram(
 
 
 def plot_histogram_2d(
-    input_data: DataFrameSource,
+    input_data: DataSource,
     column_names_x: ColumnNames = None,
-    second_axis_data: Optional[DataFrameSource] = None,
+    second_axis_data: Optional[DataSource] = None,
     column_names_y: ColumnNames = None,
     nbinsx: int = 40,
     nbinsy: int = 40,
@@ -1655,11 +1655,11 @@ def plot_histogram_2d(
 
     Parameters
     ----------
-    input_data : DataFrameSource
+    input_data : DataSource
         X-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
     column_names_x : list of str, optional
         Column labels for X data.
-    second_axis_data : DataFrameSource, optional
+    second_axis_data : DataSource, optional
         Y-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
     column_names_y : list of str, optional
         Column labels for Y data.
@@ -1719,7 +1719,7 @@ def plot_histogram_2d(
 
 
 def plot_spherical_density_2d(
-    input_data: DataFrameSource,
+    input_data: DataSource,
     column_names_x: ColumnNames = None,
     nbinsx: int = 10,
     nbinsy: int = 10,
@@ -1740,7 +1740,7 @@ def plot_spherical_density_2d(
 
     Parameters
     ----------
-    input_data : DataFrameSource
+    input_data : DataSource
         Cartesian coordinates. Must contain a multiple-of-3 number of columns
         (x, y, z for each set) when given as a DataFrame or CSV. Normalized
         via :func:`cryocat.utils.ioutils.df_load`.
@@ -1860,9 +1860,9 @@ def plot_spherical_density_2d(
 
 
 def plot_scatter_2d(
-    input_data: DataFrameSource,
+    input_data: DataSource,
     column_names_x: ColumnNames = None,
-    second_axis_data: Optional[DataFrameSource] = None,
+    second_axis_data: Optional[DataSource] = None,
     column_names_y: ColumnNames = None,
     separate_graphs: bool = False,
     same_range_for_separate: bool = False,
@@ -1876,11 +1876,11 @@ def plot_scatter_2d(
 
     Parameters
     ----------
-    input_data : DataFrameSource
+    input_data : DataSource
         X-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
     column_names_x : list of str, optional
         Column labels for X data.
-    second_axis_data : DataFrameSource, optional
+    second_axis_data : DataSource, optional
         Y-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
     column_names_y : list of str, optional
         Column labels for Y data.
@@ -1926,7 +1926,7 @@ def plot_scatter_2d(
 
 
 def plot_line(
-    input_data: DataFrameSource,
+    input_data: DataSource,
     column_names_x: ColumnNames = None,
     separate_graphs: bool = False,
     same_range_for_separate: bool = False,
@@ -1938,7 +1938,7 @@ def plot_line(
 
     Parameters
     ----------
-    input_data : DataFrameSource
+    input_data : DataSource
         Y-axis data. X is the sequential row index. Normalized via
         :func:`cryocat.utils.ioutils.df_load`.
     column_names_x : list of str, optional
@@ -1975,7 +1975,7 @@ def plot_line(
 
 
 def plot_scatter_xyz_panels(
-    data: DataFrameSource,
+    data: DataSource,
     coord_columns: ColumnNames = None,
     group_by: Optional[str] = None,
     hover_column_name: Optional[str] = None,
@@ -1996,7 +1996,7 @@ def plot_scatter_xyz_panels(
 
     Parameters
     ----------
-    data : DataFrameSource
+    data : DataSource
         Source data with at least three columns of coordinates. Normalized
         via :func:`cryocat.utils.ioutils.df_load`.
     coord_columns : list of str, optional
@@ -2098,7 +2098,7 @@ def plot_scatter_xyz_panels(
 
 
 def plot_scatter_3d(
-    data: DataFrameSource,
+    data: DataSource,
     coord_columns: ColumnNames = None,
     color_column_name: Optional[str] = None,
     color_label: str = "Group",
@@ -2111,7 +2111,7 @@ def plot_scatter_3d(
 
     Parameters
     ----------
-    data : DataFrameSource
+    data : DataSource
         Source data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
     coord_columns : list of str, optional
         Three column names for x, y, z. Defaults to the first three columns.
@@ -2166,7 +2166,7 @@ def plot_scatter_3d(
 
 
 def plot_grouped_box(
-    data: DataFrameSource,
+    data: DataSource,
     group_column_name: str,
     value_column_name: str,
     title: Optional[str] = None,
@@ -2183,7 +2183,7 @@ def plot_grouped_box(
 
     Parameters
     ----------
-    data : DataFrameSource
+    data : DataSource
         Long-format data: one row per observation. Normalized via
         :func:`cryocat.utils.ioutils.df_load`.
     group_column_name : str
@@ -2726,7 +2726,7 @@ def plot_classification_convergence(
 
 
 def plot_alignment_stability(
-    input_dfs: Sequence[DataFrameSource],
+    input_dfs: Sequence[DataSource],
     labels: Optional[Sequence[str]] = None,
     graph_title: str = "Alignment stability",
     output_path: Optional[PathOrStr] = None,
@@ -2738,7 +2738,7 @@ def plot_alignment_stability(
 
     Parameters
     ----------
-    input_dfs : sequence of DataFrameSource
+    input_dfs : sequence of DataSource
         Each element is normalized via :func:`cryocat.utils.ioutils.df_load`.
         All sources must share the same columns (alignment parameters) and
         the same number of rows (iterations).
@@ -3001,9 +3001,9 @@ def plot_pca_summary(
 
 
 def plot_kde(
-    input_data: DataFrameSource,
+    input_data: DataSource,
     column_names_x: ColumnNames = None,
-    second_axis_data: Optional[DataFrameSource] = None,
+    second_axis_data: Optional[DataSource] = None,
     column_names_y: ColumnNames = None,
     nbinsx: int = 200,
     nbinsy: int = 200,
@@ -3020,11 +3020,11 @@ def plot_kde(
 
     Parameters
     ----------
-    input_data : DataFrameSource
+    input_data : DataSource
         X-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
     column_names_x : list of str, optional
         Column labels for X data.
-    second_axis_data : DataFrameSource, optional
+    second_axis_data : DataSource, optional
         Y-axis data. Normalized via :func:`cryocat.utils.ioutils.df_load`.
     column_names_y : list of str, optional
         Column labels for Y data.

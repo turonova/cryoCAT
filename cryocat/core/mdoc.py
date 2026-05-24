@@ -60,7 +60,7 @@ class Mdoc:
         Parameters
         ----------
         out_path : str, optional
-            Output file path.  Defaults to ``self.file_path`` when ``None``.
+            Output file path.  Defaults to ``self.input_path`` when ``None``.
         overwrite : bool, default=False
             Allow overwriting an existing file.
         removed : bool, default=False
@@ -72,7 +72,7 @@ class Mdoc:
             If the output file already exists and ``overwrite`` is ``False``.
         """
         if not out_path:
-            out_path = self.file_path
+            out_path = self.input_path
         if path.isfile(out_path) and not overwrite:
             raise FileExistsError("File {} already exists. Set overwrite=True to overwrite.".format(out_path))
 

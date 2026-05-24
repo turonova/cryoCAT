@@ -12,29 +12,31 @@ from cryocat.utils import imageutils
 from cryocat.utils import ioutils
 from cryocat.core import cryomotl
 from cryocat.core import cryomask
+from cryocat._types import DataSource, MapSource, MotlType, PathOrStr, Symmetry
 
 import skimage
+from typing import Literal
 from scipy.spatial import KDTree
 from sklearn.cluster import DBSCAN
 
 
 def scores_extract_particles(
-    scores_map,
-    angles_map,
-    angles_list,
-    tomo_id,
-    particle_diameter,
-    object_id=None,
-    scores_threshold=None,
-    sigma_threshold=None,
-    cluster_size=None,
-    n_particles=None,
-    output_path=None,
-    output_type="emmotl",
-    angles_order="zxz",
-    symmetry="c1",
-    angles_numbering=0,
-    tomo_mask=None,
+    scores_map: MapSource,
+    angles_map: MapSource,
+    angles_list: DataSource,
+    tomo_id: int,
+    particle_diameter: float,
+    object_id: int | None = None,
+    scores_threshold: float | None = None,
+    sigma_threshold: float | None = None,
+    cluster_size: int | None = None,
+    n_particles: int | None = None,
+    output_path: PathOrStr | None = None,
+    output_type: MotlType = "emmotl",
+    angles_order: Literal["zxz", "zzx"] = "zxz",
+    symmetry: Symmetry = "c1",
+    angles_numbering: int = 0,
+    tomo_mask: MapSource | None = None,
 ):
     """Extract particles from template-matching scores maps produced by GAPSTOP(TM) or STOPGAP.
 
