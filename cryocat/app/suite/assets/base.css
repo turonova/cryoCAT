@@ -219,6 +219,35 @@ html, body {
     left : 0px;
 }
 
+/* Suite top tool selector — dark navy bar (matches active accordion), larger font. */
+.suite-nav-bar {
+    background-color: var(--color10);
+    padding: 0.5rem 1rem;
+}
+
+.suite-nav.nav-pills {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.suite-nav.nav-pills .nav-link {
+    color: white;
+    font-size: 1.15rem;
+    font-weight: 500;
+    padding: 0.6rem 1.1rem;
+    border-radius: 4px;
+}
+
+.suite-nav.nav-pills .nav-link:hover {
+    background-color: var(--color9);
+    color: white;
+}
+
+.suite-nav.nav-pills .nav-link.active {
+    background-color: var(--color7);
+    color: white;
+}
+
 /* Override danger button */
 .btn-danger {
     background-color: var(--color10) !important;

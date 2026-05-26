@@ -61,7 +61,7 @@ def test_gui_exposed_bare():
 
     assert my_op._gui is not None
     assert my_op._gui["label"] == "My op"
-    assert my_op._gui["hide"] == {"self"}
+    assert my_op._gui["hide"] == {"self", "cls"}
     assert my_op._gui["category"] is None
     assert my_op._gui["output"] is None
 
@@ -73,7 +73,7 @@ def test_gui_exposed_with_metadata():
 
     assert my_op._gui["label"] == "Custom"
     assert my_op._gui["category"] == "Cleaning"
-    assert my_op._gui["hide"] == {"self", "x"}
+    assert my_op._gui["hide"] == {"self", "cls", "x"}
     assert my_op._gui["output"] == "motl"
 
 

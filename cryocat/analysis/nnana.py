@@ -25,11 +25,14 @@ the ``NearestNeighbors`` class; downstream chain analysis (occupancies,
 chain stats, etc.) lives in ``cryocat.analysis.structure.Chain``.
 """
 
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 import sklearn.neighbors as sn
 from scipy.spatial.transform import Rotation as srot
 
+from cryocat._types import MotlColumn, NNType, RotationDistanceType
 from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.utils import geom
@@ -347,16 +350,27 @@ class NearestNeighbors:
     Parameters
     ----------
     input_data : str, Motl or list of (str / Motl), optional
-        A single motl (or path) or a list of motls.  If a single motl is
+        A single motl (or path) or a list of motls. If a single motl is
         given, NN search is run on that motl against itself (with
-        ``remove_qp`` forced to True).  If a list is given, the first
+        ``remove_qp`` forced to True). If a list is given, the first
         element is the query and each subsequent element is searched
         against the query.
-    feature_id : str, default='tomo_id'
-    nn_type : str, {'closest_dist', 'radius'}, default='closest_dist'
+    column_name : str, default='tomo_id'
+        Column name used to partition particles before NN search; only
+        particles sharing the same value (e.g. same tomogram) are paired.
+    nn_type : NNType, default='closest_dist'
+        Search mode -- one of {"closest_dist", "radius"}.
     type_param : int or float, optional
+        Parameter for the search mode. For ``"closest_dist"`` it is the
+        number K of nearest neighbours to keep per query (cast to int).
+        For ``"radius"`` it is the search radius in voxels. Defaults to 1
+        (or 1 voxel) when omitted.
     remove_qp : bool, optional
+        Drop the query particle from its own neighbour set. Forced True
+        when ``input_data`` is a single motl. Defaults to None (False
+        unless self-pairing).
     remove_duplicates : bool, default=False
+        Drop duplicate ``(qp_id, nn_id)`` pairs from the resulting table.
     paired : bool, default=False
         If True, angles are taken from ``motl_a`` only (entry/exit pairs).
     """
@@ -371,12 +385,12 @@ class NearestNeighbors:
     def __init__(
         self,
         input_data=None,
-        column_name="tomo_id",
-        nn_type="closest_dist",
-        type_param=None,
-        remove_qp=None,
-        remove_duplicates=False,
-        paired=False,
+        column_name: MotlColumn = "tomo_id",
+        nn_type: NNType = "closest_dist",
+        type_param: Optional[float] = None,
+        remove_qp: Optional[bool] = None,
+        remove_duplicates: bool = False,
+        paired: bool = False,
     ):
         if input_data is None:
             self.features = None
@@ -425,7 +439,9 @@ class NearestNeighbors:
                 nn_angles = qp_angles if paired else fm_nn.get_angles()
 
                 if nn_type == "closest_dist":
-                    nn_count = type_param or 1
+                    # type_param is the K of K-nearest neighbours; sklearn's
+                    # kneighbors needs an int, but the GUI form yields a float.
+                    nn_count = int(type_param) if type_param else 1
                     qp_idx, nn_idx, nn_dist, _ = find_nn_indices(
                         qp_coord, nn_coord, k=nn_count, remove_qp=single_motl or paired
                     )
@@ -704,12 +720,12 @@ class NearestNeighbors:
             self.df[self._NN_ANGLE_COLS].to_numpy(),
         )
 
-    def get_angular_distances(self, rotation_type="all"):
+    def get_angular_distances(self, rotation_type: RotationDistanceType = "angular_distance"):
         """Return per-pair angular distances between qp and nn orientations.
 
         Parameters
         ----------
-        rotation_type : str, default='all'
+        rotation_type : RotationDistanceType, default='angular_distance'
             One of ``{"all", "angular_distance", "cone_distance",
             "in_plane_distance"}``.  ``"all"`` returns a tuple of three
             arrays.

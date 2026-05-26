@@ -51,7 +51,7 @@ class Particle:
         tomo_id : int, optional
             An optional identifier for the tomography, must be an integer or float. Default is None.
         motl_fid : str, optional
-            An optional motl feature id (column name) for the particle that will be used as additional label. Default is None.
+            An optional motl column name for the particle that will be used as additional label. Default is None.
         degrees : bool, default=True
             A flag indicating whether the rotation is provided in degrees. Ddefault is True.
         particle_id : int, default=0

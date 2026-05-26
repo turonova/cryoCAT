@@ -287,7 +287,7 @@ def test_evaluate_alignment_2(sg_mock):
         assert len(stats_dfs) == 1
 
         #t3
-        graph_file = os.path.join(tmpdir, "test_output.png")
+        graph_file = os.path.join(tmpdir, "test_output.html")
         stats_dfs = evaluate_alignment(
             motl_base, 1, 3,
             motl_type="stopgap",

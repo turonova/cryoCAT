@@ -162,8 +162,12 @@ def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
     except (ValueError, TypeError):
         return [html.Div("No parameters.", style=_HINT_STYLE)]
 
-    descriptions = process_method_docstring(fn, "__init__") if inspect.isclass(fn) \
-        else process_method_docstring(fn)
+    # For classes, parameter descriptions normally live in the *class* docstring
+    # (numpydoc convention). Try __init__ first, fall back to the class itself.
+    if inspect.isclass(fn):
+        descriptions = process_method_docstring(fn, "__init__") or process_method_docstring(fn)
+    else:
+        descriptions = process_method_docstring(fn)
 
     rows = []
     for name, param in sig.parameters.items():

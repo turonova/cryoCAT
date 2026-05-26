@@ -300,7 +300,7 @@ type MotlColumn = Literal[
 """The fixed 20-column motl schema (see :attr:`Motl.motl_columns`).
 
 Use this when a parameter must name one of the standard columns
-(e.g. ``metric_id="score"``). For parameters that may also name a
+(e.g. ``metric_column_name="score"``). For parameters that may also name a
 user-added column, use :data:`FeatureName` instead.
 """
 
@@ -313,6 +313,34 @@ type BoundaryType = Literal["center", "whole"]
 
 type CTFFileType = Literal["gctf", "ctffind4", "warp", "relion"]
 """CTF estimation file format (input to :func:`defocus_load`)."""
+
+type NNType = Literal["closest_dist", "radius"]
+"""Nearest-neighbor search mode for :class:`cryocat.analysis.nnana.NearestNeighbors`.
+
+* ``"closest_dist"`` -- take the K closest neighbors (``type_param`` = K, default 1).
+* ``"radius"`` -- take every neighbor within a radius (``type_param`` = radius in voxels).
+"""
+
+type RotationDistanceType = Literal[
+    "all", "angular_distance", "cone_distance", "in_plane_distance"
+]
+"""Angular-distance metric between two zxz Euler triples.
+
+Used by :func:`cryocat.analysis.nnana.angular_distances` and
+:meth:`cryocat.analysis.nnana.NearestNeighbors.get_angular_distances`.
+
+* ``"angular_distance"`` -- full SO(3) geodesic angle.
+* ``"cone_distance"`` -- tilt away from the reference axis only.
+* ``"in_plane_distance"`` -- rotation about the reference axis only.
+* ``"all"`` -- returns the three above as a tuple.
+"""
+
+type ProjectionType = Literal["stereo", "lambert", "equidistant"]
+"""Sphere-to-plane projection algorithm for orientational plots.
+
+Used by :func:`cryocat.utils.geom.create_projection` and consumed by
+:func:`cryocat.analysis.visplot.plot_orientational_distribution`.
+"""
 
 
 

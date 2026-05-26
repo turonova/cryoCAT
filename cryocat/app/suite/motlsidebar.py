@@ -23,7 +23,12 @@ import dash_bootstrap_components as dbc
 
 from cryocat.core.cryomotl import Motl
 from cryocat.app.components.motlio import get_motl_load_component, register_motl_load_callbacks
-from cryocat.app.apputils import generate_kwargs, get_motl_operation_methods
+from cryocat.app.components.motlsource import (
+    get_multi_motl_picker, register_multi_motl_picker_callbacks,
+)
+from cryocat.app.apputils import (
+    generate_kwargs, get_single_motl_methods, get_multi_motl_methods,
+)
 from cryocat.app.formgen import build_form
 from cryocat.app.logger import dash_logger
 
@@ -32,7 +37,12 @@ from cryocat.app.logger import dash_logger
 N_SLOTS = 5
 
 # Fetched once at import time from the live Motl class — no hardcoding.
-_MOTL_METHODS = get_motl_operation_methods()
+_MOTL_METHODS = get_single_motl_methods()
+_MULTI_MOTL_METHODS = get_multi_motl_methods()
+# Lookup of `method_name -> _gui["motls"]` spec for the run callback. Built from
+# the same collector so adding a new multi-motl op (decorator change only) flows
+# through with no edits here.
+_MULTI_MOTL_SPECS = {m["value"]: m["motls"] for m in _MULTI_MOTL_METHODS}
 
 _NONE_OPT = "__none__"  # dropdown sentinel for an empty slot
 
@@ -157,50 +167,30 @@ def get_motl_editor_sidebar():
                         dbc.AccordionItem(
                             [
                                 dcc.Dropdown(
-                                    id="me-op-motl-select",
-                                    multi=True,
-                                    placeholder="Select motls",
+                                    id="me-multi-op-select",
+                                    options=_MULTI_MOTL_METHODS,
+                                    placeholder="Select operation",
                                     style={"marginBottom": "0.5rem"},
                                 ),
-                                dcc.Dropdown(
-                                    id="me-op-column-select",
-                                    placeholder="Match column (common/unique)",
-                                    style={"marginBottom": "0.75rem"},
+                                get_multi_motl_picker("me-multi"),
+                                html.Div(id="me-multi-form", style={"marginBottom": "0.5rem"}),
+                                dbc.Button(
+                                    "Run",
+                                    id="me-multi-run-btn",
+                                    color="primary",
+                                    size="sm",
+                                    style={"width": "100%"},
                                 ),
                                 html.Div(
-                                    [
-                                        dbc.Button(
-                                            "Merge",
-                                            id="me-merge-btn",
-                                            color="primary",
-                                            size="sm",
-                                            className="mb-1",
-                                            style={"width": "100%"},
-                                        ),
-                                        dbc.Button(
-                                            "Common rows",
-                                            id="me-intersect-btn",
-                                            color="secondary",
-                                            size="sm",
-                                            className="mb-1",
-                                            style={"width": "100%"},
-                                        ),
-                                        dbc.Button(
-                                            "Unique rows",
-                                            id="me-unique-btn",
-                                            color="secondary",
-                                            size="sm",
-                                            style={"width": "100%"},
-                                        ),
-                                    ],
-                                ),
-                                html.Div(
-                                    id="me-multiop-status",
-                                    style={"marginTop": "0.5rem", "fontSize": "0.9rem", "color": "var(--color9)"},
+                                    id="me-multi-op-status",
+                                    style={
+                                        "marginTop": "0.5rem", "fontSize": "0.9rem",
+                                        "color": "var(--color9)", "wordBreak": "break-word",
+                                    },
                                 ),
                             ],
-                            title="Multi-Motl Operations",
-                            item_id="me-sidebar-ops",
+                            title="Multiple motl operations",
+                            item_id="me-sidebar-multimotl",
                         ),
                     ],
                     always_open=True,
@@ -355,35 +345,15 @@ def register_motl_editor_sidebar_callbacks(app):
 
         return registry, pool_motls, pool_extra, pool_meta, next_id + 1, slot_map, active_tab, status
 
-    # ── Match-column options (from the first pool motl) ────────────────────────
-    @app.callback(
-        Output("me-op-column-select", "options"),
-        Output("me-op-column-select", "value"),
-        Input("pool-registry", "data"),
-        State("pool-motls", "data"),
-        prevent_initial_call=True,
-    )
-    def update_column_options(registry, pool_motls):
-        pool_motls = pool_motls or {}
-        for rows in pool_motls.values():
-            if rows:
-                cols = list(pd.DataFrame(rows).columns)
-                options = [{"label": c, "value": c} for c in cols]
-                default = "subtomo_id" if "subtomo_id" in cols else cols[0]
-                return options, default
-        return [], None
-
-    # ── Pool motl list + multi-op selector ─────────────────────────────────────
+    # ── Pool motl list ─────────────────────────────────────────────────────────
     @app.callback(
         Output("me-motl-list", "children"),
-        Output("me-op-motl-select", "options"),
         Input("pool-registry", "data"),
         prevent_initial_call=True,
     )
     def update_motl_list(registry):
         registry = registry or {}
         items = []
-        options = []
         for mid, meta in registry.items():
             if not meta.get("active", True):
                 continue
@@ -420,14 +390,13 @@ def register_motl_editor_sidebar_callbacks(app):
                     },
                 )
             )
-            options.append({"label": label, "value": mid})
 
         if not items:
-            return (
-                html.Div("No motls loaded.", style={"color": "var(--color9)", "fontSize": "0.9rem", "padding": "4px"}),
-                [],
+            return html.Div(
+                "No motls loaded.",
+                style={"color": "var(--color9)", "fontSize": "0.9rem", "padding": "4px"},
             )
-        return dbc.ListGroup(items, flush=True), options
+        return dbc.ListGroup(items, flush=True)
 
     # ── Slot-assignment dropdowns: render from slot_map + registry ─────────────
     @app.callback(
@@ -559,106 +528,182 @@ def register_motl_editor_sidebar_callbacks(app):
 
         return registry, pool_motls, pool_extra, pool_meta, new_map, new_active
 
-    # ── Multi-motl operations (write the Results tab) ──────────────────────────
-    @app.callback(
-        Output("me-results-store", "data", allow_duplicate=True),
-        Output("me-results-label-store", "data", allow_duplicate=True),
-        Output("me-multiop-status", "children", allow_duplicate=True),
-        Input("me-merge-btn", "n_clicks"),
-        State("me-op-motl-select", "value"),
-        State("pool-motls", "data"),
-        prevent_initial_call=True,
-    )
-    def merge_motls(n_clicks, selected, pool_motls):
-        if not n_clicks or not selected:
-            raise dash.exceptions.PreventUpdate
-        pool_motls = pool_motls or {}
-        dfs = [pd.DataFrame(pool_motls[m]) for m in selected if pool_motls.get(m)]
-        if not dfs:
-            return no_update, no_update, "No data in selected motls."
-        merged = pd.concat(dfs, ignore_index=True)
-        label = f"Merged ({len(merged)} particles)"
-        dash_logger.write(
-            f"merged = pd.concat([{', '.join(selected)}], ignore_index=True)", source="cryocat"
-        )
-        return merged.to_dict("records"), label, f"Merged {len(dfs)} motls: {len(merged)} particles total."
+    # ── Multiple-motl operations: collector-driven (pair / list) ───────────────
+    register_multi_motl_picker_callbacks(app, "me-multi")
 
     @app.callback(
-        Output("me-results-store", "data", allow_duplicate=True),
-        Output("me-results-label-store", "data", allow_duplicate=True),
-        Output("me-multiop-status", "children", allow_duplicate=True),
-        Input("me-intersect-btn", "n_clicks"),
-        State("me-op-motl-select", "value"),
-        State("me-op-column-select", "value"),
-        State("pool-motls", "data"),
-        prevent_initial_call=True,
+        Output("me-multi-pair-picker", "style"),
+        Output("me-multi-list-picker", "style"),
+        Output("me-multi-list-label", "children"),
+        Input("me-multi-op-select", "value"),
     )
-    def intersect_motls(n_clicks, selected, match_col, pool_motls):
-        if not n_clicks or not selected or len(selected) < 2:
-            raise dash.exceptions.PreventUpdate
-        if not match_col:
-            return no_update, no_update, "Select a column to match on."
-        pool_motls = pool_motls or {}
-        dfs = [pd.DataFrame(pool_motls[m]) for m in selected if pool_motls.get(m)]
-        if len(dfs) < 2:
-            return no_update, no_update, "Need at least 2 motls with data."
-        if match_col not in dfs[0].columns:
-            return no_update, no_update, f"Column '{match_col}' not found in motl."
-        common_vals = set(dfs[0][match_col])
-        for df in dfs[1:]:
-            common_vals &= set(df[match_col])
-        result = dfs[0][dfs[0][match_col].isin(common_vals)].reset_index(drop=True)
-        label = f"Common rows ({len(result)} particles)"
-        dash_logger.write(
-            f"# Common rows on '{match_col}' across [{', '.join(selected)}]\n"
-            f"common_vals = set.intersection(*[set(m['{match_col}']) for m in [{', '.join(selected)}]])\n"
-            f"result = {selected[0]}[{selected[0]}['{match_col}'].isin(common_vals)]",
-            source="cryocat",
-        )
-        return (
-            result.to_dict("records"),
-            label,
-            f"Found {len(result)} rows with common '{match_col}' across {len(dfs)} motls.",
-        )
+    def _toggle_multi_picker(method_name):
+        if not method_name:
+            return {"display": "none"}, {"display": "none"}, "Motls"
+        spec = _MULTI_MOTL_SPECS.get(method_name) or {}
+        arity = spec.get("arity")
+        if arity == "pair":
+            return {"display": "block"}, {"display": "none"}, "Motls"
+        if arity == "list":
+            label = (
+                "Motls (first = kept on duplicates)"
+                if spec.get("main_first") else
+                "Motls to merge (order preserved)"
+            )
+            return {"display": "none"}, {"display": "block"}, label
+        return {"display": "none"}, {"display": "none"}, "Motls"
 
     @app.callback(
-        Output("me-results-store", "data", allow_duplicate=True),
-        Output("me-results-label-store", "data", allow_duplicate=True),
-        Output("me-multiop-status", "children", allow_duplicate=True),
-        Input("me-unique-btn", "n_clicks"),
-        State("me-op-motl-select", "value"),
-        State("me-op-column-select", "value"),
+        Output("me-multi-form", "children"),
+        Input("me-multi-op-select", "value"),
+    )
+    def _build_multi_form(method_name):
+        # Scalar params only — the motl params (motl1/motl2 for pair ops,
+        # motls.param for list ops) are supplied by the picker, not the form.
+        if not method_name:
+            return []
+        spec = _MULTI_MOTL_SPECS.get(method_name) or {}
+        if spec.get("arity") == "pair":
+            exclude = ("motl1", "motl2")
+        elif spec.get("arity") == "list":
+            exclude = (spec.get("param", "motl_list"),)
+        else:
+            exclude = ()
+        fn = getattr(Motl, method_name)
+        return build_form(fn, id_type="me-multi-param", exclude=exclude)
+
+    @app.callback(
+        Output("pool-registry", "data", allow_duplicate=True),
+        Output("pool-motls", "data", allow_duplicate=True),
+        Output("pool-extra", "data", allow_duplicate=True),
+        Output("pool-meta", "data", allow_duplicate=True),
+        Output("pool-next-id", "data", allow_duplicate=True),
+        Output("me-slot-map", "data", allow_duplicate=True),
+        Output("me-tabs", "active_tab", allow_duplicate=True),
+        Output("me-multi-op-status", "children", allow_duplicate=True),
+        Input("me-multi-run-btn", "n_clicks"),
+        State("me-multi-op-select", "value"),
+        State("me-multi-main-select", "value"),
+        State("me-multi-second-select", "value"),
+        State("me-multi-list-select", "value"),
+        State({"type": "me-multi-param", "param": ALL, "tag": ALL}, "value"),
+        State({"type": "me-multi-param", "param": ALL, "tag": ALL}, "id"),
+        State("pool-registry", "data"),
         State("pool-motls", "data"),
+        State("pool-extra", "data"),
+        State("pool-meta", "data"),
+        State("pool-next-id", "data"),
+        State("me-slot-map", "data"),
         prevent_initial_call=True,
     )
-    def unique_motls(n_clicks, selected, match_col, pool_motls):
-        if not n_clicks or not selected or len(selected) < 2:
+    def run_multi_op(
+        n_clicks, method_name, main_id, second_id, list_ids,
+        param_values, param_ids,
+        registry, pool_motls, pool_extra, pool_meta, next_id, slot_map,
+    ):
+        pool_noup = (no_update,) * 7
+
+        def _err(msg):
+            return (*pool_noup, msg)
+
+        if not n_clicks or not method_name:
             raise dash.exceptions.PreventUpdate
-        if not match_col:
-            return no_update, no_update, "Select a column to match on."
+
+        spec = _MULTI_MOTL_SPECS.get(method_name)
+        if spec is None:
+            return _err(f"Operation '{method_name}' is not registered as multi-motl.")
+
         pool_motls = pool_motls or {}
-        dfs = [pd.DataFrame(pool_motls[m]) for m in selected if pool_motls.get(m)]
-        if len(dfs) < 2:
-            return no_update, no_update, "Need at least 2 motls with data."
-        if match_col not in dfs[0].columns:
-            return no_update, no_update, f"Column '{match_col}' not found in motl."
-        all_val_sets = [set(df[match_col]) for df in dfs]
-        common = all_val_sets[0].intersection(*all_val_sets[1:])
-        unique_vals = set().union(*all_val_sets) - common
-        result = pd.concat([df[df[match_col].isin(unique_vals)] for df in dfs], ignore_index=True)
-        label = f"Unique rows ({len(result)} particles)"
+
+        # 1) Resolve selected motl_ids -> Motl instances, preserving order.
+        try:
+            if spec["arity"] == "pair":
+                if not main_id or not second_id:
+                    return _err("Select both Main and Second motls.")
+                if main_id == second_id:
+                    return _err("Main and Second motl must differ.")
+                ordered_ids = [main_id, second_id]
+            else:  # list
+                if not list_ids or len(list_ids) < 2:
+                    return _err("Select at least two motls for this operation.")
+                ordered_ids = list(list_ids)
+
+            motls = []
+            for mid in ordered_ids:
+                rows = pool_motls.get(mid)
+                if not rows:
+                    return _err(f"Pool entry '{mid}' has no data.")
+                motls.append(Motl(pd.DataFrame(rows)))
+        except Exception as exc:
+            return _err(f"Error preparing motls: {exc}")
+
+        # 2) Scalar kwargs from the auto-form.
+        kwargs = generate_kwargs(param_ids, param_values) if param_ids else {}
+
+        # 3) Build + run the call. These ops are classmethods on Motl.
+        try:
+            fn = getattr(Motl, method_name)
+            if spec["arity"] == "pair":
+                result = fn(*motls, **kwargs)
+            else:
+                list_param = spec.get("param", "motl_list")
+                result = fn(**{list_param: motls}, **kwargs)
+        except Exception as exc:
+            return _err(f"Error running '{method_name}': {exc}")
+
+        if not isinstance(result, Motl):
+            return _err(f"'{method_name}' did not return a Motl (got {type(result).__name__}).")
+
+        # 4) Add the new motl to the pool and assign to a free slot.
+        registry = dict(registry or {})
+        pool_motls = dict(pool_motls or {})
+        pool_extra = dict(pool_extra or {})
+        pool_meta = dict(pool_meta or {})
+        next_id = next_id or 0
+        slot_map = list(slot_map or [None] * N_SLOTS)
+        while len(slot_map) < N_SLOTS:
+            slot_map.append(None)
+
+        new_rows = result.df.to_dict("records")
+        gui = getattr(getattr(Motl, method_name).__func__, "_gui", {})
+        op_label = gui.get("label", method_name)
+        src_labels = [(registry.get(mid) or {}).get("label", mid) for mid in ordered_ids]
+        mid = f"motl-{next_id}"
+        registry[mid] = {
+            "label": f"{op_label} of {' + '.join(src_labels)}",
+            "type": "emmotl",
+            "n_rows": len(new_rows),
+            "active": True,
+        }
+        pool_motls[mid] = new_rows
+        pool_extra[mid] = None
+        pool_meta[mid] = {
+            "data_type": None, "relion_optics": None, "relion5_tomos": None,
+            "relion5_tomos_filename": None, "relion_params": None,
+        }
+
+        free = _first_free_slot(slot_map)
+        if free is not None:
+            slot_map[free] = mid
+            active = f"me-tab-{free}"
+            status = (
+                f"'{op_label}' -> new motl in slot {free + 1} "
+                f"({len(new_rows)} particles, from {len(motls)} input motl(s))."
+            )
+        else:
+            active = no_update
+            status = (
+                f"'{op_label}' -> new motl in the pool "
+                f"({len(new_rows)} particles; no free slot, use 'Slot assignment')."
+            )
+
         dash_logger.write(
-            f"# Unique rows on '{match_col}' across [{', '.join(selected)}]\n"
-            f"all_sets = [set(m['{match_col}']) for m in [{', '.join(selected)}]]\n"
-            f"unique_vals = set.union(*all_sets) - set.intersection(*all_sets)\n"
-            f"result = pd.concat([m[m['{match_col}'].isin(unique_vals)] for m in [{', '.join(selected)}]])",
+            f"# {op_label} on [{', '.join(ordered_ids)}]\n"
+            f"result = Motl.{method_name}({'main, second' if spec['arity'] == 'pair' else 'motl_list'})",
             source="cryocat",
         )
-        return (
-            result.to_dict("records"),
-            label,
-            f"Found {len(result)} rows with unique '{match_col}' across {len(dfs)} motls.",
-        )
+
+        return registry, pool_motls, pool_extra, pool_meta, next_id + 1, slot_map, active, status
 
     # ── Single-motl operation form ─────────────────────────────────────────────
     @app.callback(

@@ -10,7 +10,7 @@ from cryocat.core import cryomotl
 # for test creation
 for f in ["tomo_id", "object_id"]:
     for i in ["angular_distance", "cone_distance", "in_plane_distance"]:
-        df = nnana.get_nn_stats(m, m, feature_id=f, nn_number=2, rotation_type=i)
+        df = nnana.get_nn_stats(m, m, column_name=f, nn_number=2, rotation_type=i)
         if f == "object_id":
             df=df.sort_values(by="distance")
         df = df.iloc[31:]
@@ -22,7 +22,7 @@ for f in ["tomo_id", "object_id"]:
 # for radius
 for f in ["tomo_id", "object_id"]:
     for r in [0.1, 0.51, 1.0]:
-        df = nnana.get_nn_stats_within_radius(m, nn_radius=r, feature=f)
+        df = nnana.get_nn_stats_within_radius(m, nn_radius=r, column_name=f)
         #df = df.iloc[31:]
         #df=df.sort_values(by="subtomo_idx")
         df = df.round(4)
@@ -39,7 +39,7 @@ def motl():
 
 
 @pytest.mark.parametrize(
-    "feature_id, expected_res",
+    "column_name, expected_res",
     [
         (
             "tomo_id",
@@ -51,18 +51,18 @@ def motl():
         ),
     ],
 )
-def test_get_nn_within_radius(motl, feature_id, expected_res):
+def test_get_nn_within_radius(motl, column_name, expected_res):
 
     # expected_res = np.asarray(
     #    [7, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 3, 3, 4, 4, 4, 4, 4, 4, 2, 3, 3, 3, 3, 2, 4, 5, 6, 6, 6, 7]
     # )
-    res = nnana.get_nn_within_radius(motl, motl, nn_radius=0.6, column_name=feature_id)
+    res = nnana.get_nn_within_radius(motl, motl, nn_radius=0.6, column_name=column_name)
 
     np.testing.assert_array_equal(expected_res, res)
 
 
 @pytest.mark.parametrize(
-    "feature_id, rotation_type",
+    "column_name, rotation_type",
     [
         ("tomo_id", "angular_distance"),
         ("tomo_id", "cone_distance"),
@@ -72,11 +72,11 @@ def test_get_nn_within_radius(motl, feature_id, expected_res):
         ("object_id", "in_plane_distance"),
     ],
 )
-def test_get_nn_stats(motl, feature_id, rotation_type):
+def test_get_nn_stats(motl, column_name, rotation_type):
 
-    df = nnana.get_nn_stats(motl, motl, column_name=feature_id, nn_number=2, rotation_type=rotation_type)
-    exp_df = pd.read_csv(f"./tests/test_data/nnana_data/nn_{feature_id}_{rotation_type}.csv")
-    if feature_id == "object_id":
+    df = nnana.get_nn_stats(motl, motl, column_name=column_name, nn_number=2, rotation_type=rotation_type)
+    exp_df = pd.read_csv(f"./tests/test_data/nnana_data/nn_{column_name}_{rotation_type}.csv")
+    if column_name == "object_id":
         df = df.sort_values(by="distance")
     df = df.iloc[31:]
     df = df.sort_values(by="subtomo_idx")
@@ -87,7 +87,7 @@ def test_get_nn_stats(motl, feature_id, rotation_type):
 
 
 @pytest.mark.parametrize(
-    "feature_id, radius",
+    "column_name, radius",
     [
         ("tomo_id", 0.1),
         ("tomo_id", 0.51),
@@ -97,10 +97,10 @@ def test_get_nn_stats(motl, feature_id, rotation_type):
         ("object_id", 1.0),
     ],
 )
-def test_get_nn_stats_within_radius(motl, feature_id, radius):
+def test_get_nn_stats_within_radius(motl, column_name, radius):
 
-    df = nnana.get_nn_stats_within_radius(motl, nn_radius=radius, column_name=feature_id)
-    exp_df = pd.read_csv(f"./tests/test_data/nnana_data/nn_stats_radius_{feature_id}_{str(radius)}.csv")
+    df = nnana.get_nn_stats_within_radius(motl, nn_radius=radius, column_name=column_name)
+    exp_df = pd.read_csv(f"./tests/test_data/nnana_data/nn_stats_radius_{column_name}_{str(radius)}.csv")
     df = df.round(4)
     pd.testing.assert_frame_equal(df, exp_df, atol=1e-10, check_dtype=False)
 

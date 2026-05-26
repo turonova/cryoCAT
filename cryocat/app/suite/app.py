@@ -65,7 +65,7 @@ def _tool_selector(active_path):
             for t in TOOLS
         ],
         pills=True,
-        className="p-2",
+        className="suite-nav",
     )
 
 
@@ -75,7 +75,7 @@ app.layout = dbc.Container(
         dcc.Location(id="suite-url"),
         *POOL_STORES,
         *get_graph_settings_components(),
-        html.Div(id="suite-tool-selector"),
+        html.Div(id="suite-tool-selector", className="suite-nav-bar"),
         html.Div(id="suite-page-content"),
     ],
     fluid=True,

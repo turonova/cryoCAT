@@ -3,15 +3,9 @@ import numpy as np
 import pandas as pd
 import math
 import re
-import matplotlib.pyplot as plt
-from matplotlib import colors
-from matplotlib import gridspec
-from matplotlib import cm
-import matplotlib.ticker as mticker
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from collections import defaultdict
-from matplotlib.colors import Normalize
 import plotly.express as px
 from dataclasses import dataclass, field, asdict
 from contextlib import contextmanager
@@ -21,7 +15,7 @@ import plotly.io as pio
 from scipy.stats import gaussian_kde
 from cryocat.utils import geom
 from cryocat.utils import ioutils
-from cryocat._types import ArrayLike, ColumnNames, DataSource, PathOrStr, RotationLike
+from cryocat._types import ArrayLike, ColumnNames, DataSource, PathOrStr, ProjectionType, RotationLike
 
 Color = str  # hex like "#1f77b4" or "rgb(…)"
 Colorscale = List[Tuple[float, Color]]  # [(0.0, "#..."), (1.0, "#...")]
@@ -42,16 +36,6 @@ def _save_plotly(fig: go.Figure, output_path: Optional[PathOrStr]) -> None:
     else:
         fig.write_image(p)
 
-
-def _save_mpl(fig, output_path: Optional[PathOrStr]) -> None:
-    """Save a matplotlib figure to disk via :meth:`~matplotlib.figure.Figure.savefig`.
-
-    No-op when *output_path* is ``None``. The figure's own ``dpi`` is preserved
-    by passing ``dpi=fig.dpi``.
-    """
-    if output_path is None:
-        return
-    fig.savefig(str(output_path), dpi=fig.dpi)
 
 # ---------- Example usage --------------------
 # # 1) Set global defaults for the session
@@ -2233,6 +2217,25 @@ def plot_grouped_box(
 
 
 
+def _hemisphere_distance_traces(theta_r, distances, colorscale, marker_size, cmin, cmax, show_cbar):
+    """Build a Scatterpolar trace for one hemisphere of NN-distance points."""
+    return go.Scatterpolar(
+        r=theta_r[:, 1],
+        theta=np.degrees(theta_r[:, 0]),
+        mode="markers",
+        marker=dict(
+            color=distances,
+            colorscale=colorscale,
+            cmin=cmin,
+            cmax=cmax,
+            size=marker_size,
+            showscale=show_cbar,
+            colorbar=dict(title="NN distance") if show_cbar else None,
+        ),
+        showlegend=False,
+    )
+
+
 def plot_polar_nn_distances(
     coordinates: ArrayLike,
     distances: ArrayLike,
@@ -2241,11 +2244,11 @@ def plot_polar_nn_distances(
     colormap: str = "viridis_r",
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
-) -> None:
+) -> go.Figure:
     """Plot nearest-neighbour distances in polar (stereographic) projection.
 
-    Renders two polar axes — northern and southern hemispheres — with each
-    point coloured by its nearest-neighbour distance.
+    Two polar subplots (northern and southern hemisphere) with each point
+    coloured by its nearest-neighbour distance.
 
     Parameters
     ----------
@@ -2254,16 +2257,21 @@ def plot_polar_nn_distances(
     distances : array-like
         Per-point distances, shape ``(N,)``.
     max_radius : float, optional
-        Maximum radial extent for both polar axes. Defaults to the data
+        Maximum radial extent for both polar subplots. Defaults to the data
         maximum.
     marker_size : int, default=3
         Scatter marker size.
     colormap : str, default="viridis_r"
-        Matplotlib colormap name.
+        Colorscale name resolved via :func:`resolve_colorscale`.
     graph_title : str, optional
-        Figure suptitle.
+        Figure title.
     output_path : PathOrStr, optional
-        Saved with :func:`_save_mpl`.
+        Saved with :func:`_save_plotly` (``.html`` interactive; other
+        extensions need *kaleido*).
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
     """
     coordinates = np.asarray(coordinates)
     distances = np.asarray(distances)
@@ -2272,236 +2280,227 @@ def plot_polar_nn_distances(
 
     theta_r_pos, _, theta_r_neg, _ = geom.create_projection(coord_sorted)
 
-    dist_neg = dist_sorted[0 : theta_r_neg.shape[0]]
-    dist_pos = dist_sorted[theta_r_neg.shape[0] :]
+    dist_neg = dist_sorted[0: theta_r_neg.shape[0]]
+    dist_pos = dist_sorted[theta_r_neg.shape[0]:]
 
     if max_radius is None:
-        max_radius = np.amax(np.hstack((theta_r_pos[:, 1], theta_r_neg[:, 1])))
+        max_radius = float(np.amax(np.hstack((theta_r_pos[:, 1], theta_r_neg[:, 1]))))
 
-    fig = plt.figure(figsize=(13, 5))
-    gs = gridspec.GridSpec(1, 3, width_ratios=[12, 12, 1])
-    ax1 = plt.subplot(gs[0], projection="polar")
-    ax1.set_yticklabels([])
-    ax1.scatter(theta_r_pos[:, 0], theta_r_pos[:, 1], c=dist_pos, s=marker_size, cmap=colormap)
-    ax1.set_xlabel("Northern hemisphere")
+    colorscale = resolve_colorscale(colormap)
+    cmin = float(np.amin(distances))
+    cmax = float(np.amax(distances))
 
-    ax2 = plt.subplot(gs[1], projection="polar")
-    ax2.set_yticklabels([])
-    ax2.scatter(theta_r_neg[:, 0], theta_r_neg[:, 1], c=dist_neg, s=marker_size, cmap=colormap)
-    ax2.set_xlabel("Southern hemisphere")
-
-    ax3 = plt.subplot(gs[2])
-
-    norm = colors.Normalize(vmin=np.amin(distances), vmax=np.amax(distances))
-    sm = plt.cm.ScalarMappable(cmap=colormap, norm=norm)
-    plt.colorbar(sm, cax=ax3)
-
+    fig = make_subplots(
+        rows=1, cols=2,
+        specs=[[{"type": "polar"}, {"type": "polar"}]],
+        subplot_titles=("Northern hemisphere", "Southern hemisphere"),
+        horizontal_spacing=0.1,
+    )
+    fig.add_trace(
+        _hemisphere_distance_traces(theta_r_pos, dist_pos, colorscale, marker_size, cmin, cmax, show_cbar=False),
+        row=1, col=1,
+    )
+    fig.add_trace(
+        _hemisphere_distance_traces(theta_r_neg, dist_neg, colorscale, marker_size, cmin, cmax, show_cbar=True),
+        row=1, col=2,
+    )
+    fig.update_polars(
+        radialaxis=dict(range=[0, max_radius], showticklabels=False),
+        angularaxis=dict(direction="counterclockwise"),
+    )
     if graph_title is not None:
-        fig.suptitle(graph_title)
-    plt.show()
+        fig.update_layout(title=graph_title)
 
-    _save_mpl(fig, output_path)
-
-
-def _fill_wedge(r1, r2, theta1, theta2, theta_step, **kargs):
-    """Fill an annular sector in a polar axes.
-
-    Parameters
-    ----------
-    r1 : float
-        Inner radius.
-    r2 : float
-        Outer radius.
-    theta1 : float
-        Start angle in radians.
-    theta2 : float
-        End angle in radians.
-    theta_step : int
-        Number of angular interpolation points.
-    **kargs
-        Additional keyword arguments forwarded to
-        :func:`matplotlib.pyplot.fill_between`.
-    """
-    # draw annular sector in polar coordinates
-    theta = np.linspace(theta1, theta2, theta_step)
-    cr1 = np.full_like(theta, r1)
-    cr2 = np.full_like(theta, r2)
-    plt.fill_between(theta, cr1, cr2, **kargs)
-
-
-def _create_smooth_polar_histogram(ax, histogram, hist_norm_value=None, colormap="viridis_r"):
-    """Render a 2-D histogram as filled wedges on a polar axes.
-
-    Each bin is drawn as a coloured annular sector.
-
-    Parameters
-    ----------
-    ax : matplotlib.axes.Axes
-        A polar-projection axes object.
-    histogram : tuple
-        Output of :func:`numpy.histogram2d`: ``(counts, x_edges, y_edges)``.
-    hist_norm_value : float, optional
-        Value used to normalise bin counts to ``[0, 1]``.  Defaults to the
-        maximum count in *histogram*.
-    colormap : str, default="viridis_r"
-        Matplotlib colormap name.
-    """
-    # unpack histogram
-    h, x_bins, y_bins = histogram
-
-    # create colormap
-    space = np.linspace(0.0, 1.0, 100)
-    rgb = cm.get_cmap(colormap)(space)
-
-    # set normalization to hist max unless specified differently
-    if hist_norm_value is None:
-        hist_norm_value = np.amax(h)
-
-    wedge_draw_step = int(360 / (len(x_bins) - 1))
-    # fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
-    for yi, r_start in enumerate(y_bins[:-1]):
-        r_end = y_bins[yi + 1]
-        for xi, theta_start in enumerate(x_bins[:-1]):
-            theta_end = x_bins[xi + 1]
-            color = rgb[int(h[xi, yi] / hist_norm_value * (len(space) - 1))]
-            _fill_wedge(r_start, r_end, theta_start, theta_end, wedge_draw_step, color=color)
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
 
 
 def plot_rotation_normals(
     input_rotation: RotationLike,
     color_map: Optional[str] = None,
-    marker_size: int = 20,
+    marker_size: int = 4,
     alpha: float = 1.0,
     radius: float = 1.0,
-) -> None:
-    """Plot z-normals of input input_rotation as a 3-D scatter.
+    graph_title: Optional[str] = None,
+    output_path: Optional[PathOrStr] = None,
+) -> go.Figure:
+    """Plot z-normals of ``input_rotation`` as a 3-D scatter on a sphere.
 
-    Each rotation is applied to ``(0, 0, radius)`` and the resulting points
-    are scattered on a sphere of the given radius. This is the plotting
-    counterpart of :func:`cryocat.utils.geom.rotations_to_z_normals`.
+    Each rotation is applied to ``(0, 0, radius)`` and the resulting points are
+    scattered on a sphere of the given radius. Plotting counterpart of
+    :func:`cryocat.utils.geom.rotations_to_z_normals`.
 
     Parameters
     ----------
     input_rotation : RotationLike
-        Orientations to plot. Normalized via
-        :func:`cryocat.utils.geom.as_rotation`.
+        Orientations to plot. Normalized via :func:`cryocat.utils.geom.as_rotation`.
     color_map : str, optional
-        Color or matplotlib colormap name passed to ``scatter`` as ``c``.
-    marker_size : int, default=20
+        Colorscale name resolved via :func:`resolve_colorscale`, used to colour
+        points by their ``z`` coordinate. ``None`` uses a single solid color
+        from the default colorway.
+    marker_size : int, default=4
         Scatter marker size.
     alpha : float, default=1.0
-        Marker transparency.
+        Marker opacity.
     radius : float, default=1.0
-        Sphere radius. Sets the reference vector length and axis limits.
+        Sphere radius. Sets the reference vector length and axis ranges.
+    graph_title : str, optional
+        Figure title.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
     """
     new_points = geom.rotations_to_z_normals(input_rotation, radius=radius)
 
-    fig = plt.figure()
-    ax = fig.add_subplot(projection="3d")
-
-    scatter_kwargs = dict(s=marker_size, alpha=alpha)
+    marker = dict(size=marker_size, opacity=alpha)
     if color_map is not None:
-        scatter_kwargs["c"] = color_map
+        marker["color"] = new_points[:, 2]
+        marker["colorscale"] = resolve_colorscale(color_map)
+        marker["showscale"] = True
+    else:
+        marker["color"] = resolve_palette(DEFAULTS.colorway)[0]
 
-    ax.scatter(new_points[:, 0], new_points[:, 1], new_points[:, 2], **scatter_kwargs)
-    ax.set_xlim3d(-radius, radius)
-    ax.set_ylim3d(-radius, radius)
-    ax.set_zlim3d(-radius, radius)
+    fig = go.Figure(
+        data=[
+            go.Scatter3d(
+                x=new_points[:, 0], y=new_points[:, 1], z=new_points[:, 2],
+                mode="markers", marker=marker, showlegend=False,
+            )
+        ]
+    )
+    axis_kw = dict(range=[-radius, radius], showspikes=False)
+    fig.update_scenes(
+        xaxis=axis_kw, yaxis=axis_kw, zaxis=axis_kw,
+        aspectmode="cube",
+    )
+    if graph_title is not None:
+        fig.update_layout(title=graph_title)
+
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
 
 
 def plot_orientational_distribution(
     coordinates: ArrayLike,
-    projection: str = "stereo",
+    projection: ProjectionType = "stereo",
     graph_title: Optional[str] = None,
     theta_bin: int = 73,
     radius_bin: int = 33,
     max_radius: Optional[float] = None,
     colormap: str = "viridis_r",
     output_path: Optional[PathOrStr] = None,
-    show: bool = True,
-) -> "plt.Figure":
-    """Plot the orientational distribution of unit vectors as a polar histogram.
+) -> go.Figure:
+    """Polar histogram of unit vectors, both hemispheres side by side.
 
-    Both hemispheres are shown side by side using coloured annular-sector bins.
+    Vectors are projected to polar coordinates, binned into a
+    ``theta_bin`` × ``radius_bin`` grid, and rendered as filled annular sectors
+    via :class:`plotly.graph_objects.Barpolar`.
 
     Parameters
     ----------
     coordinates : array-like
         Unit vectors (or vectors that will be projected), shape ``(N, 3)``.
     projection : {'stereo', 'lambert', 'equidistant'}, default="stereo"
-        Projection algorithm.
+        Projection algorithm passed to :func:`cryocat.utils.geom.create_projection`.
     graph_title : str, optional
-        Figure suptitle.
+        Figure title.
     theta_bin : int, default=73
-        Number of angular bins.
+        Number of angular bin edges. ``theta_bin - 1`` sectors per radial ring.
     radius_bin : int, default=33
-        Number of radial bins.
+        Number of radial bin edges. ``radius_bin - 1`` rings per hemisphere.
     max_radius : float, optional
         Maximum projected radius. Defaults to the data maximum.
     colormap : str, default="viridis_r"
-        Matplotlib colormap name.
+        Colorscale name resolved via :func:`resolve_colorscale`.
     output_path : PathOrStr, optional
-        Saved with :func:`_save_mpl`.
-    show : bool, default=True
-        Call :func:`matplotlib.pyplot.show`.
+        Saved with :func:`_save_plotly`.
 
     Returns
     -------
-    -------
-    matplotlib.figure.Figure
+    plotly.graph_objects.Figure
     """
     theta_r_pos, _, theta_r_neg, _ = geom.create_projection(coordinates, projection_type=projection)
 
     if max_radius is None:
-        max_radius = np.amax(np.hstack((theta_r_pos[:, 1], theta_r_neg[:, 1])))
+        max_radius = float(np.amax(np.hstack((theta_r_pos[:, 1], theta_r_neg[:, 1]))))
 
     radius_bins = np.linspace(0, max_radius, radius_bin)
 
-    if theta_r_pos.shape[0] > 0:
-        theta_bins_pos = np.linspace(np.amin(theta_r_pos[:, 0]), np.amin(theta_r_pos[:, 0]) + 2 * np.pi, theta_bin)
-        hist_pos = np.histogram2d(theta_r_pos[:, 0], theta_r_pos[:, 1], bins=(theta_bins_pos, radius_bins))
-        max_pos = np.amax(hist_pos[0])
-    else:
-        max_pos = 0
+    def _bin_hemisphere(theta_r):
+        if theta_r.shape[0] == 0:
+            return None, None, 0
+        theta_bins = np.linspace(
+            np.amin(theta_r[:, 0]), np.amin(theta_r[:, 0]) + 2 * np.pi, theta_bin
+        )
+        h, x_edges, y_edges = np.histogram2d(theta_r[:, 0], theta_r[:, 1], bins=(theta_bins, radius_bins))
+        return (h, x_edges, y_edges), theta_bins, float(np.amax(h))
 
-    if theta_r_neg.shape[0] > 0:
-        theta_bins_neg = np.linspace(np.amin(theta_r_neg[:, 0]), np.amin(theta_r_neg[:, 0]) + 2 * np.pi, theta_bin)
-        hist_neg = np.histogram2d(theta_r_neg[:, 0], theta_r_neg[:, 1], bins=(theta_bins_neg, radius_bins))
-        max_neg = np.amax(hist_neg[0])
-    else:
-        max_neg = 0
+    hist_pos, _, max_pos = _bin_hemisphere(theta_r_pos)
+    hist_neg, _, max_neg = _bin_hemisphere(theta_r_neg)
+    hist_max = max(max_pos, max_neg) or 1.0
 
-    hist_max = max(max_pos, max_neg)
-    # hist_max = np.amax(np.vstack((hist_pos[0], hist_neg[0])))
+    colorscale = resolve_colorscale(colormap)
 
-    fig = plt.figure(figsize=(13, 5))
-    gs = gridspec.GridSpec(1, 3, width_ratios=[12, 12, 1])
-    ax1 = plt.subplot(gs[0], projection="polar")
-    ax1.set_yticklabels([])
-    if theta_r_pos.shape[0] > 0:
-        _create_smooth_polar_histogram(ax1, hist_pos, hist_norm_value=hist_max)
-    ax1.set_xlabel("Northern hemisphere")
+    def _barpolar_traces(hist, show_cbar):
+        if hist is None:
+            return []
+        h, x_edges, y_edges = hist
+        n_theta, n_r = h.shape
+        # one Barpolar trace per radial ring (base + width define the ring)
+        traces = []
+        for ri in range(n_r):
+            r_start = y_edges[ri]
+            r_end = y_edges[ri + 1]
+            theta_centers = np.degrees(0.5 * (x_edges[:-1] + x_edges[1:]))
+            theta_widths = np.degrees(np.diff(x_edges))
+            counts = h[:, ri]
+            traces.append(
+                go.Barpolar(
+                    r=np.full(n_theta, r_end - r_start),
+                    base=np.full(n_theta, r_start),
+                    theta=theta_centers,
+                    width=theta_widths,
+                    marker=dict(
+                        color=counts,
+                        cmin=0,
+                        cmax=hist_max,
+                        colorscale=colorscale,
+                        showscale=show_cbar and (ri == n_r - 1),
+                        colorbar=dict(title="count") if (show_cbar and ri == n_r - 1) else None,
+                        line=dict(width=0),
+                    ),
+                    opacity=1.0,
+                    showlegend=False,
+                )
+            )
+        return traces
 
-    ax2 = plt.subplot(gs[1], projection="polar")
-    ax2.set_yticklabels([])
-    if theta_r_neg.shape[0] > 0:
-        _create_smooth_polar_histogram(ax2, hist_neg, hist_norm_value=hist_max)
-    ax2.set_xlabel("Southern hemisphere")
+    fig = make_subplots(
+        rows=1, cols=2,
+        specs=[[{"type": "polar"}, {"type": "polar"}]],
+        subplot_titles=("Northern hemisphere", "Southern hemisphere"),
+        horizontal_spacing=0.1,
+    )
+    for tr in _barpolar_traces(hist_pos, show_cbar=False):
+        fig.add_trace(tr, row=1, col=1)
+    for tr in _barpolar_traces(hist_neg, show_cbar=True):
+        fig.add_trace(tr, row=1, col=2)
 
-    ax3 = plt.subplot(gs[2])
-
-    norm = colors.Normalize(vmin=0, vmax=hist_max)
-    sm = plt.cm.ScalarMappable(cmap=colormap, norm=norm)
-    plt.colorbar(sm, cax=ax3, aspect=1)
-
+    fig.update_polars(
+        radialaxis=dict(range=[0, max_radius], showticklabels=False),
+        angularaxis=dict(direction="counterclockwise"),
+        bargap=0,
+    )
     if graph_title is not None:
-        fig.suptitle(graph_title)
+        fig.update_layout(title=graph_title)
 
-    if show:
-        plt.show()
-
-    _save_mpl(fig, output_path)
-
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
     return fig
 
 
@@ -2511,14 +2510,12 @@ def plot_otsu_thresholds(
     hbin: int,
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
-) -> None:
-    """Plot per-group score histograms with their Otsu thresholds overlaid.
+) -> go.Figure:
+    """Per-group score histograms with their Otsu thresholds overlaid.
 
-    This is the visual companion to :meth:`cryocat.core.cryomotl.Motl.compute_otsu_threshold`:
-    the threshold and the per-group histogram are computed with exactly the
-    same logic, but here the figure is the deliverable instead of the filtered
-    motl. Particles are grouped by ``column_name`` and one panel is drawn per
-    group, with the threshold marked as a vertical red line.
+    Visual companion to :meth:`cryocat.core.cryomotl.Motl.compute_otsu_threshold`:
+    same per-group histogram and threshold computation, rendered as a grid of
+    Plotly subplots (one per group) with the threshold as a dashed vertical line.
 
     Parameters
     ----------
@@ -2529,52 +2526,91 @@ def plot_otsu_thresholds(
     hbin : int
         Number of histogram bins per group.
     graph_title : str, optional
-        Figure suptitle.
+        Figure title.
     output_path : PathOrStr, optional
-        Saved with :func:`_save_mpl`.
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
     """
     from cryocat.utils import imageutils  # local: visplot otherwise has no image dep
 
     features = motl.df[column_name].unique()
     n = len(features)
-    n_cols = min(3, n)
-    n_rows = (n + n_cols - 1) // n_cols
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), squeeze=False)
-    axes = axes.flatten()
+    n_cols = min(3, max(n, 1))
+    n_rows = (n + n_cols - 1) // n_cols if n else 1
 
-    for ax, f in zip(axes, features):
+    titles = []
+    panels = []
+    for f in features:
         scores = motl.df.loc[motl.df[column_name] == f, "score"].values
         bin_counts, bin_edges = np.histogram(scores, bins=hbin)
         bn = imageutils.otsu_threshold(bin_counts)
         ind = np.where(bin_counts == bin_counts[bin_counts > bn][0])
-        cc_t = bin_edges[ind[0] + 1][0]
+        cc_t = float(bin_edges[ind[0] + 1][0])
+        titles.append(f"{column_name}={f} | threshold={cc_t:.3f}")
+        panels.append((bin_edges, bin_counts, cc_t))
 
-        ax.bar(bin_edges[:-1], bin_counts, width=np.diff(bin_edges), align="edge", color="steelblue")
-        ax.axvline(cc_t, color="r", linewidth=1.5)
-        ax.set_title(f"{column_name}={f}\nthreshold={cc_t:.3f}", fontsize=10)
-        ax.set_xlabel("score")
-        ax.set_ylabel("count")
+    fig = make_subplots(
+        rows=n_rows, cols=n_cols,
+        subplot_titles=titles or None,
+        horizontal_spacing=0.08,
+        vertical_spacing=0.18,
+    )
 
-    # blank out unused panels
-    for ax in axes[len(features):]:
-        ax.set_visible(False)
+    bar_color = resolve_palette(DEFAULTS.colorway)[0]
+    for idx, (bin_edges, bin_counts, cc_t) in enumerate(panels):
+        r = idx // n_cols + 1
+        c = idx % n_cols + 1
+        widths = np.diff(bin_edges)
+        centers = bin_edges[:-1] + widths / 2.0
+        fig.add_trace(
+            go.Bar(
+                x=centers, y=bin_counts, width=widths,
+                marker=dict(color=bar_color, line=dict(width=0)),
+                showlegend=False,
+            ),
+            row=r, col=c,
+        )
+        fig.add_vline(x=cc_t, line=dict(color="red", dash="dash", width=1.5), row=r, col=c)
+        fig.update_xaxes(title_text="score", row=r, col=c)
+        fig.update_yaxes(title_text="count", row=r, col=c)
 
     if graph_title is not None:
-        fig.suptitle(graph_title)
-    fig.tight_layout()
+        fig.update_layout(title=graph_title)
 
-    _save_mpl(fig, output_path)
+    fig = apply_defaults(fig, bargap=0)
+    _save_plotly(fig, output_path)
+    return fig
+
+
+def _class_lines(values_by_class: dict, palette: Sequence[Color]) -> List[go.Scatter]:
+    """Build one ``lines+markers`` trace per class id; axis titles are set by the caller."""
+    traces = []
+    for i, c in enumerate(sorted(values_by_class)):
+        ys = list(values_by_class[c])
+        xs = list(range(1, len(ys) + 1))
+        color = palette[i % len(palette)] if palette else None
+        traces.append(
+            go.Scatter(
+                x=xs, y=ys, mode="lines+markers",
+                name=f"Class {c}",
+                line=dict(color=color) if color else None,
+                marker=dict(color=color) if color else None,
+            )
+        )
+    return traces
 
 
 def plot_class_occupancy(
     occupancy_dic: dict,
     color_scheme: Optional[Union[str, Sequence[Color]]] = None,
-    ax: Optional["plt.Axes"] = None,
     show_legend: bool = True,
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
-) -> None:
-    """Plot per-class particle counts over alignment iterations.
+) -> go.Figure:
+    """Per-class particle counts over alignment iterations.
 
     Parameters
     ----------
@@ -2584,55 +2620,40 @@ def plot_class_occupancy(
     color_scheme : str or list of str, optional
         Plotly palette name or explicit list of colors. ``None`` falls back to
         ``DEFAULTS.colorway``.
-    ax : matplotlib.axes.Axes, optional
-        Axes to draw on. A new figure is created when ``None``.
     show_legend : bool, default=True
         Display the class legend.
     graph_title : str, optional
-        Axes title. Defaults to ``"Class occupancy progress"``.
+        Figure title. Defaults to ``"Class occupancy progress"``.
     output_path : PathOrStr, optional
-        Saved with :func:`_save_mpl`. Ignored when *ax* is provided.
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
     """
-    ax_provided = True
-    if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(6, 4))
-        ax_provided = False
-    color_classes = resolve_colors_any(color_scheme, color_type="palette", n=len(occupancy_dic))
-
-    for i, c in enumerate(sorted(occupancy_dic)):
-        ax.plot(range(1, len(occupancy_dic[c]) + 1), occupancy_dic[c], label="Class " + str(c), color=color_classes[i])
-
-    ax.set_xlabel("Iteration")
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-    ax.set_xlim(1, len(occupancy_dic[c]))
-    ax.set_ylabel("Number of particles")
-    ax.set_ylim(
-        0,
+    palette = resolve_colors_any(color_scheme, color_type="palette", n=len(occupancy_dic))
+    fig = go.Figure()
+    for tr in _class_lines(occupancy_dic, palette):
+        fig.add_trace(tr)
+    fig.update_layout(
+        title=graph_title or "Class occupancy progress",
+        xaxis=dict(title="Iteration", dtick=1),
+        yaxis=dict(title="Number of particles", rangemode="tozero"),
+        showlegend=show_legend,
     )
-    if graph_title is None:
-        ax.set_title("Class occupancy progress")
-    else:
-        ax.set_title(graph_title)
-    if show_legend:
-        ax.legend(loc="upper left")
-
-    if not ax_provided:
-        plt.tight_layout()
-        plt.show()
-
-    if not ax_provided:
-        _save_mpl(fig, output_path)
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
 
 
 def plot_class_stability(
     subtomo_changes: dict,
     color_scheme: Optional[Union[str, Sequence[Color]]] = None,
-    ax: Optional["plt.Axes"] = None,
     show_legend: bool = True,
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
-) -> None:
-    """Plot the number of particles that changed class at each iteration.
+) -> go.Figure:
+    """Number of particles that changed class at each iteration.
 
     Parameters
     ----------
@@ -2641,45 +2662,30 @@ def plot_class_stability(
     color_scheme : str or list of str, optional
         Plotly palette name or explicit list of colors. ``None`` falls back to
         ``DEFAULTS.colorway``.
-    ax : matplotlib.axes.Axes, optional
-        Axes to draw on. A new figure is created when ``None``.
     show_legend : bool, default=True
         Display the class legend.
     graph_title : str, optional
-        Axes title. Defaults to ``"Stability of classes"``.
+        Figure title. Defaults to ``"Stability of classes"``.
     output_path : PathOrStr, optional
-        Saved with :func:`_save_mpl`. Ignored when *ax* is provided.
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
     """
-    ax_provided = True
-    if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(6, 4))
-        ax_provided = False
-
-    color_classes = resolve_colors_any(color_scheme, color_type="palette", n=len(subtomo_changes))
-
-    for cls, values in sorted(subtomo_changes.items()):
-        ax.plot(range(1, len(values) + 1), values, label="Class " + str(cls), color=color_classes[cls - 1])
-
-    ax.set_xlabel("Iteration")
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-    ax.set_xlim(1, len(values))
-    ax.set_ylabel("Particles changing their class")
-    ax.set_ylim(
-        0,
+    palette = resolve_colors_any(color_scheme, color_type="palette", n=len(subtomo_changes))
+    fig = go.Figure()
+    for tr in _class_lines(subtomo_changes, palette):
+        fig.add_trace(tr)
+    fig.update_layout(
+        title=graph_title or "Stability of classes",
+        xaxis=dict(title="Iteration", dtick=1),
+        yaxis=dict(title="Particles changing their class", rangemode="tozero"),
+        showlegend=show_legend,
     )
-    if graph_title is None:
-        ax.set_title("Stability of classes")
-    else:
-        ax.set_title(graph_title)
-    if show_legend:
-        ax.legend(ncol=2)
-
-    if not ax_provided:
-        plt.tight_layout()
-        plt.show()
-
-    if not ax_provided:
-        _save_mpl(fig, output_path)
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
 
 
 def plot_classification_convergence(
@@ -2688,41 +2694,51 @@ def plot_classification_convergence(
     color_scheme: Optional[Union[str, Sequence[Color]]] = None,
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
-) -> None:
-    """Plot class occupancy and class stability side by side.
+) -> go.Figure:
+    """Class occupancy and class stability side by side.
 
     Parameters
     ----------
     occupancy_dic : dict
-        Mapping ``{class_id: list_of_counts}`` (forwarded to
-        :func:`plot_class_occupancy`).
+        Mapping ``{class_id: list_of_counts}`` for the occupancy panel.
     subtomo_changes_dic : dict
-        Mapping ``{class_id: list_of_changes}`` (forwarded to
-        :func:`plot_class_stability`).
+        Mapping ``{class_id: list_of_changes}`` for the stability panel.
     color_scheme : str or list of str, optional
         Plotly palette name or explicit list of colors. ``None`` falls back to
         ``DEFAULTS.colorway``.
     graph_title : str, optional
-        Overall figure suptitle.
+        Overall figure title.
     output_path : PathOrStr, optional
-        Saved with :func:`_save_mpl`.
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
     """
-    # Create subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+    n_classes = max(len(occupancy_dic), len(subtomo_changes_dic))
+    palette = resolve_colors_any(color_scheme, color_type="palette", n=n_classes)
 
-    plot_class_occupancy(occupancy_dic, color_scheme=color_scheme, ax=ax1, show_legend=False)
-    plot_class_stability(subtomo_changes_dic, color_scheme=color_scheme, ax=ax2, show_legend=True)
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=("Class occupancy progress", "Stability of classes"),
+        horizontal_spacing=0.12,
+    )
+    for tr in _class_lines(occupancy_dic, palette):
+        tr.showlegend = False
+        fig.add_trace(tr, row=1, col=1)
+    for tr in _class_lines(subtomo_changes_dic, palette):
+        fig.add_trace(tr, row=1, col=2)
 
-    # Adjust layout
-    plt.tight_layout()
-
-    # Show the plot
+    fig.update_xaxes(title_text="Iteration", dtick=1, row=1, col=1)
+    fig.update_xaxes(title_text="Iteration", dtick=1, row=1, col=2)
+    fig.update_yaxes(title_text="Number of particles", rangemode="tozero", row=1, col=1)
+    fig.update_yaxes(title_text="Particles changing their class", rangemode="tozero", row=1, col=2)
     if graph_title is not None:
-        fig.suptitle(graph_title, y=1.02)
+        fig.update_layout(title=graph_title)
 
-    plt.show()
-
-    _save_mpl(fig, output_path)
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
 
 
 def plot_alignment_stability(
@@ -2730,61 +2746,72 @@ def plot_alignment_stability(
     labels: Optional[Sequence[str]] = None,
     graph_title: str = "Alignment stability",
     output_path: Optional[PathOrStr] = None,
-) -> None:
-    """Plot per-parameter alignment statistics over iterations.
+) -> go.Figure:
+    """Per-parameter alignment statistics over iterations.
 
-    Creates a 3×4 grid of line plots, one panel per DataFrame column. Each
+    Creates a 3x4 grid of line plots, one panel per DataFrame column. Each
     series in *input_dfs* is drawn on the same panel.
 
     Parameters
     ----------
     input_dfs : sequence of DataSource
         Each element is normalized via :func:`cryocat.utils.ioutils.df_load`.
-        All sources must share the same columns (alignment parameters) and
-        the same number of rows (iterations).
+        All sources must share the same columns and number of rows.
     labels : sequence of str, optional
         Series labels for the legend. Defaults to ``input_dfs[0].columns``
         with the legend hidden.
     graph_title : str, default="Alignment stability"
-        Figure suptitle.
+        Figure title.
     output_path : PathOrStr, optional
-        Saved with :func:`_save_mpl`.
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
     """
     input_dfs = [ioutils.df_load(d) for d in input_dfs]
     x_axis = np.arange(input_dfs[0].shape[0])
 
-    n_rows = 3
-    n_cols = 4
-
-    # Set labels
+    n_rows, n_cols = 3, 4
+    columns = list(input_dfs[0].columns)
     if labels is None:
-        labels = input_dfs[0].columns
+        labels = list(columns)
         show_legend = False
     else:
+        labels = list(labels)
         show_legend = True
 
-    # Create subplots
-    fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(20, 10), dpi=300)
+    fig = make_subplots(
+        rows=n_rows, cols=n_cols,
+        subplot_titles=[columns[i] if i < len(columns) else "" for i in range(n_rows * n_cols)],
+        horizontal_spacing=0.07,
+        vertical_spacing=0.12,
+    )
+    palette = resolve_palette(DEFAULTS.colorway)
 
-    for i in range(n_rows):  # number of rows
-        for j in range(n_cols):  # number of columns
-            current_ax = axes[i, j]
-            df_idx = i * n_cols + j
-            if df_idx >= input_dfs[0].shape[1]:
-                continue
-            for dfi, df in enumerate(input_dfs):
-                current_ax.plot(x_axis, df.iloc[:, df_idx], label=f"{labels[dfi]}")
-                current_ax.set_xlabel("Iteration")
-                current_ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-                current_ax.set_ylabel(input_dfs[0].columns[df_idx])
-                if show_legend:
-                    current_ax.legend()
+    for col_idx in range(len(columns)):
+        r = col_idx // n_cols + 1
+        c = col_idx % n_cols + 1
+        for dfi, df in enumerate(input_dfs):
+            color = palette[dfi % len(palette)] if palette else None
+            fig.add_trace(
+                go.Scatter(
+                    x=x_axis, y=df.iloc[:, col_idx],
+                    mode="lines",
+                    name=str(labels[dfi]),
+                    legendgroup=str(labels[dfi]),
+                    showlegend=show_legend and col_idx == 0,
+                    line=dict(color=color) if color else None,
+                ),
+                row=r, col=c,
+            )
+        fig.update_xaxes(title_text="Iteration", dtick=1, row=r, col=c)
+        fig.update_yaxes(title_text=columns[col_idx], row=r, col=c)
 
-    # Show the plot
-    fig.suptitle(graph_title)
-    plt.show()
-
-    _save_mpl(fig, output_path)
+    fig.update_layout(title=graph_title)
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
 
 
 def plot_scatter_with_histogram(
@@ -2799,124 +2826,115 @@ def plot_scatter_with_histogram(
     axis_title_x: Optional[str] = None,
     axis_title_y: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
-) -> None:
+) -> go.Figure:
     """Scatter plot with marginal histograms on the top and right.
 
     Parameters
     ----------
-    data_x : array-like
-        X data.
-    data_y : array-like
-        Y data.
-    bins_x : int, optional
-        Number of bins for the X-marginal histogram. Defaults to ``30``.
-    bins_y : int, optional
-        Number of bins for the Y-marginal histogram. Defaults to ``30``.
-    colors_x : str or list of str, optional
-        Color(s) for the X histogram bars. A single string is treated as a
-        named color; a string paired with *edges_x* is treated as a colormap.
-    colors_y : str or list of str, optional
-        Color(s) for the Y histogram bars.
-    edges_x : list of float, optional
-        Bin-edge thresholds for conditional colouring of the X histogram.
-    edges_y : list of float, optional
-        Bin-edge thresholds for conditional colouring of the Y histogram.
-    axis_title_x : str, optional
-        X-axis label for the scatter panel.
-    axis_title_y : str, optional
-        Y-axis label for the scatter panel.
+    data_x, data_y : array-like
+        X / Y data.
+    bins_x, bins_y : int, optional
+        Number of bins for the X- and Y-marginal histograms. Defaults to ``30``.
+    colors_x, colors_y : str or list of str, optional
+        Color spec for the marginal histogram bars. A list is used directly;
+        a string with matching ``edges_*`` is treated as a palette/colorscale
+        name resolved via :func:`resolve_colors_any`.
+    edges_x, edges_y : list of float, optional
+        Bin-edge thresholds for conditional colouring of each marginal.
+    axis_title_x, axis_title_y : str, optional
+        Scatter-panel axis labels.
     output_path : PathOrStr, optional
-        Saved with :func:`_save_mpl`.
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
     """
-    if not bins_x:
-        bins_x = 30
-    if not bins_y:
-        bins_y = 30
+    data_x = np.asarray(data_x)
+    data_y = np.asarray(data_y)
+    bins_x = bins_x or 30
+    bins_y = bins_y or 30
 
-    x_bins = np.linspace(min(data_x), max(data_x), bins_x)
-    y_bins = np.linspace(min(data_y), max(data_y), bins_y)
+    x_bins = np.linspace(float(np.min(data_x)), float(np.max(data_x)), bins_x)
+    y_bins = np.linspace(float(np.min(data_y)), float(np.max(data_y)), bins_y)
+    hist_x, edges_x_h = np.histogram(data_x, bins=x_bins)
+    hist_y, edges_y_h = np.histogram(data_y, bins=y_bins)
 
-    def assign_colors(colors, edges):
-        if not colors:
-            colors = ["cornflowerblue"]
-        else:
-            if isinstance(colors, list):
-                pass
-            elif isinstance(colors, str) and edges:  # assuming colormap
-                cmap = plt.get_cmap(colors, len(edges))
-                colors = [cmap(i) for i in range(len(edges))]
-            elif isinstance(colors, str):
-                colors = [colors]
-            else:
-                raise ValueError(
-                    f"The colors have to be either a list of colors, name of a single color or name of a colormap ."
-                )
+    def _resolve(spec, edges):
+        if spec is None:
+            return [resolve_palette(DEFAULTS.colorway)[0]]
+        if isinstance(spec, (list, tuple)):
+            return list(spec)
+        if edges:
+            # named scale -> sample as many colors as we have edges
+            return resolve_colors_any(spec, color_type="palette", n=len(edges))
+        # single named color (e.g. "cornflowerblue")
+        return [spec]
 
-        return colors
+    cols_x = _resolve(colors_x, edges_x)
+    cols_y = _resolve(colors_y, edges_y)
 
-    colors_x = assign_colors(colors=colors_x, edges=edges_x)
-    colors_y = assign_colors(colors=colors_y, edges=edges_y)
-
-    def get_color(value, colors, edges):
+    def _bar_colors(values, edges, palette):
         if not edges:
-            colors[0]
-        else:
+            return [palette[0]] * len(values)
+        out = []
+        for v in values:
+            color = palette[-1]
             for i, e in enumerate(edges):
-                if value < e:
-                    return colors[i]
+                if v < e:
+                    color = palette[min(i, len(palette) - 1)]
+                    break
+            out.append(color)
+        return out
 
-    # Create figure and grid layout
-    fig = plt.figure(figsize=(20, 10), dpi=300)
-    gs = fig.add_gridspec(4, 4, hspace=0, wspace=0)
+    centers_x = edges_x_h[:-1] + np.diff(edges_x_h) / 2.0
+    centers_y = edges_y_h[:-1] + np.diff(edges_y_h) / 2.0
+    bar_colors_x = _bar_colors(edges_x_h[:-1], edges_x, cols_x)
+    bar_colors_y = _bar_colors(edges_y_h[:-1], edges_y, cols_y)
 
-    # Scatter plot (main plot)
-    ax_scatter = fig.add_subplot(gs[1:, :-1])
-    ax_scatter.scatter(data_x, data_y, alpha=0.5)
+    # 2x2 layout: top-left x-hist (shared x with scatter), bottom-left scatter,
+    # bottom-right y-hist (shared y with scatter); top-right empty.
+    fig = make_subplots(
+        rows=2, cols=2,
+        row_heights=[0.25, 0.75], column_widths=[0.78, 0.22],
+        shared_xaxes=True, shared_yaxes=True,
+        horizontal_spacing=0.02, vertical_spacing=0.02,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=centers_x, y=hist_x, width=np.diff(edges_x_h),
+            marker=dict(color=bar_colors_x, line=dict(color="black", width=0.4)),
+            opacity=0.85, showlegend=False,
+        ),
+        row=1, col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=data_x, y=data_y, mode="markers",
+            marker=dict(opacity=0.5, color=resolve_palette(DEFAULTS.colorway)[0]),
+            showlegend=False,
+        ),
+        row=2, col=1,
+    )
+    fig.add_trace(
+        go.Bar(
+            y=centers_y, x=hist_y, orientation="h", width=np.diff(edges_y_h),
+            marker=dict(color=bar_colors_y, line=dict(color="black", width=0.4)),
+            opacity=0.85, showlegend=False,
+        ),
+        row=2, col=2,
+    )
 
     if axis_title_x:
-        ax_scatter.set_xlabel(axis_title_x)
+        fig.update_xaxes(title_text=axis_title_x, row=2, col=1)
     if axis_title_y:
-        ax_scatter.set_ylabel(axis_title_y)
+        fig.update_yaxes(title_text=axis_title_y, row=2, col=1)
+    fig.update_yaxes(title_text="Count", row=1, col=1)
+    fig.update_xaxes(title_text="Count", row=2, col=2)
 
-    # Histogram on top (X distribution)
-    ax_histx = fig.add_subplot(gs[0, :-1], sharex=ax_scatter)
-    hist_x, bin_edges_x = np.histogram(data_x, bins=x_bins)
-
-    for i in range(len(bin_edges_x) - 1):
-        ax_histx.bar(
-            bin_edges_x[i],
-            hist_x[i],
-            width=bin_edges_x[1] - bin_edges_x[0],
-            color=get_color(bin_edges_x[i], colors_x, edges_x),
-            alpha=0.7,
-            align="edge",
-            edgecolor="black",
-        )
-
-    ax_histx.set_ylabel("Count")
-    ax_histx.xaxis.set_tick_params(labelbottom=False)  # Hide x labels
-
-    # Histogram on right (Y distribution)
-    ax_histy = fig.add_subplot(gs[1:, -1], sharey=ax_scatter)
-    hist_y, bin_edges_y = np.histogram(data_y, bins=y_bins)
-
-    for i in range(len(bin_edges_y) - 1):
-        ax_histy.barh(
-            bin_edges_y[i],
-            hist_y[i],
-            height=bin_edges_y[1] - bin_edges_y[0],
-            color=get_color(bin_edges_y[i], colors_y, edges_y),
-            alpha=0.7,
-            align="edge",
-            edgecolor="black",
-        )
-
-    ax_histy.set_xlabel("Count")
-    ax_histy.yaxis.set_tick_params(labelleft=False)  # Hide y labels
-
-    _save_mpl(fig, output_path)
-
-    plt.show()
+    fig = apply_defaults(fig, bargap=0)
+    _save_plotly(fig, output_path)
+    return fig
 
 
 def plot_pca_summary(

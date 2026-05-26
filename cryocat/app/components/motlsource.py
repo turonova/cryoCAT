@@ -1,5 +1,16 @@
 """Pool-aware motl picker — a reusable Suite component.
 
+Two pickers live here:
+
+* :func:`get_motl_source` — the standard single-or-multi pool dropdown (one
+  call site per consumer tool).
+* :func:`get_multi_motl_picker` — composed picker for multi-motl operations
+  driven by the ``motls`` spec on ``@gui_exposed``. It always renders **both**
+  a pair picker (Main + Second single dropdowns) and an ordered list picker
+  (multi-select that preserves selection order). The consumer toggles
+  visibility based on the selected op's ``motls["arity"]`` — see
+  ``cryocat.app.suite.motlsidebar``.
+
 A tool drops ``get_motl_source(prefix, ...)`` into its layout and calls
 ``register_motl_source_callbacks(app, prefix, ...)`` in its ``register_callbacks``.
 The picker reads the suite-global motl pool (``pool-registry`` / ``pool-motls``,
@@ -126,3 +137,91 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
             f"{prefix}-src-tabv-global-data-store",
             table_grid_id=f"{prefix}-src-tabv-grid",
         )
+
+
+# ── Multi-motl picker (pair + ordered list) ─────────────────────────────────────
+
+def get_multi_motl_picker(prefix):
+    """Layout for the multi-motl picker.
+
+    Renders *both* a pair picker and a list picker. The consumer toggles each
+    container's ``display`` via callback based on the selected op's
+    ``motls["arity"]``. Labels are also consumer-driven (e.g. swap "Motls
+    (order preserved)" for "Motls (first = kept on duplicates)").
+
+    Key ids:
+      * ``f"{prefix}-pair-picker"``    — wrapper for the pair controls.
+      * ``f"{prefix}-main-select"``    — pair: Main motl (motl1).
+      * ``f"{prefix}-second-select"``  — pair: Second motl (motl2).
+      * ``f"{prefix}-list-picker"``    — wrapper for the list control.
+      * ``f"{prefix}-list-label"``     — list-picker label (consumer rewrites
+        the text based on ``main_first``).
+      * ``f"{prefix}-list-select"``    — ordered multi-select; ``value`` is a
+        list of ``motl_id`` in the order the user picked them.
+    """
+    label_style = {"fontSize": "0.85rem", "marginBottom": "2px", "color": "var(--color11)"}
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.Label("Main motl", style=label_style),
+                    dcc.Dropdown(
+                        id=f"{prefix}-main-select",
+                        placeholder="Main motl (motl1)",
+                        style={"marginBottom": "0.4rem"},
+                    ),
+                    html.Label("Second motl", style=label_style),
+                    dcc.Dropdown(
+                        id=f"{prefix}-second-select",
+                        placeholder="Second motl (motl2)",
+                        style={"marginBottom": "0.5rem"},
+                    ),
+                ],
+                id=f"{prefix}-pair-picker",
+                style={"display": "none"},
+            ),
+            html.Div(
+                [
+                    html.Label(
+                        "Motls (order preserved)",
+                        id=f"{prefix}-list-label",
+                        style=label_style,
+                    ),
+                    dcc.Dropdown(
+                        id=f"{prefix}-list-select",
+                        multi=True,
+                        placeholder="Pick pool motls — selection order is preserved",
+                        style={"marginBottom": "0.5rem"},
+                    ),
+                ],
+                id=f"{prefix}-list-picker",
+                style={"display": "none"},
+            ),
+        ],
+        id=f"{prefix}-multi-motl-picker",
+    )
+
+
+def register_multi_motl_picker_callbacks(app, prefix):
+    """Populate the multi-motl picker dropdowns from the pool registry.
+
+    All three dropdowns (pair Main, pair Second, list multi-select) share the
+    same option set — every active pool entry. Default values are left as
+    ``None`` so visibility-toggling and the consumer's op-change callback can
+    set them.
+    """
+
+    @app.callback(
+        Output(f"{prefix}-main-select", "options"),
+        Output(f"{prefix}-second-select", "options"),
+        Output(f"{prefix}-list-select", "options"),
+        Input("pool-registry", "data"),
+    )
+    def _populate(registry):
+        registry = registry or {}
+        options = [
+            {"label": meta.get("label", mid), "value": mid}
+            for mid, meta in registry.items()
+            if meta.get("active", True)
+        ]
+        return options, options, options

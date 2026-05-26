@@ -52,34 +52,34 @@ def sample_motl_data1():
     }
     return pd.DataFrame(data)
 
-@pytest.mark.parametrize("feature_id", ["missing"])
-def test_get_feature_not_existing(motl, feature_id):
+@pytest.mark.parametrize("column_name", ["missing"])
+def test_get_feature_not_existing(motl, column_name):
     with pytest.raises(UserInputError):
-        motl.get_feature(feature_id)
+        motl.get_feature(column_name)
 
 def test_get_feature(sample_motl_data1):
     motl = Motl(copy.deepcopy(sample_motl_data1))
 
-    # Test with valid feature_id (single string)
-    feature_values = motl.get_feature("tomo_id")
+    # Test with valid column_name (single string)
+    column_values = motl.get_feature("tomo_id")
     expected_values = sample_motl_data1["tomo_id"].values.reshape(-1, 1) # Reshape to 2D
-    assert np.array_equal(feature_values, expected_values)
+    assert np.array_equal(column_values, expected_values)
 
-    # Test with valid feature_id (list of strings)
-    feature_values_list = motl.get_feature(["tomo_id", "x"])
+    # Test with valid column_name (list of strings)
+    column_values_list = motl.get_feature(["tomo_id", "x"])
     expected_values_list = sample_motl_data1[["tomo_id", "x"]].values
-    assert np.array_equal(feature_values_list, expected_values_list)
+    assert np.array_equal(column_values_list, expected_values_list)
 
-    # Test with valid feature_id (single string, other column)
-    feature_values_score = motl.get_feature("score")
+    # Test with valid column_name (single string, other column)
+    column_values_score = motl.get_feature("score")
     expected_values_score = sample_motl_data1["score"].values.reshape(-1, 1) # Reshape to 2D
-    assert np.array_equal(feature_values_score, expected_values_score)
+    assert np.array_equal(column_values_score, expected_values_score)
 
-    # Test with invalid feature_id
+    # Test with invalid column_name
     with pytest.raises(UserInputError):
         motl.get_feature("non_existent_column")
 
-    # Test with invalid feature_id within a list
+    # Test with invalid column_name within a list
     with pytest.raises(UserInputError):
         motl.get_feature(["tomo_id", "non_existent_column"])
 
@@ -110,12 +110,12 @@ def test_remove_feature(sample_motl_data1):
     expected_array = sample_motl_data1[~sample_motl_data1["tomo_id"].isin(np.array([1, 2]))].reset_index(drop=True)
     assert np.array_equal(motl_array.df.values, expected_array.values)
 
-    # Test with empty feature_values
+    # Test with empty column_values
     motl_empty_values = copy.deepcopy(motl)
     motl_empty_values.remove_feature("tomo_id", [])
     assert np.array_equal(motl_empty_values.df.values, sample_motl_data1.values)
 
-    # Test with non-existent feature_id
+    # Test with non-existent column_name
     with pytest.raises(KeyError):
         motl.remove_feature("non_existent_feature", 1)
 
@@ -857,7 +857,7 @@ class TestMotl:
         assert cleaned_motl.df.shape[0] == 2
         assert motl3.df.shape[0] == original_particle_count
 
-        # Test with different feature_id
+        # Test with different column_name
         points_data2 = {
             "class": [1, 2],
             "x": [10, 30],
@@ -1224,27 +1224,27 @@ class TestMotl:
         return Motl(copy.deepcopy(sample_motl_data1))
 
     def test_get_max_number_digits(self, sample_motl_object):
-        # Test with default feature_id ("tomo_id")
+        # Test with default column_name ("tomo_id")
         max_digits_tomo_id = sample_motl_object.get_max_number_digits()
         assert max_digits_tomo_id == 1  # max tomo_id is 2
 
-        # Test with a different feature_id ("subtomo_id")
+        # Test with a different column_name ("subtomo_id")
         max_digits_subtomo_id = sample_motl_object.get_max_number_digits(column_name="subtomo_id")
         assert max_digits_subtomo_id == 1  # max subtomo_id is 6
 
-        # Test with a different feature_id ("score")
+        # Test with a different column_name ("score")
         max_digits_score = sample_motl_object.get_max_number_digits(column_name="score")
         assert max_digits_score == 3 # max score is 0.9
 
-        # Test with a different feature_id ("x")
+        # Test with a different column_name ("x")
         max_digits_x = sample_motl_object.get_max_number_digits(column_name="x")
         assert max_digits_x == 2 # max x is 40
 
-        # Test with a different feature_id ("y")
+        # Test with a different column_name ("y")
         max_digits_y = sample_motl_object.get_max_number_digits(column_name="y")
         assert max_digits_y == 2 # max y is 40
 
-        # Test with a different feature_id ("z")
+        # Test with a different column_name ("z")
         max_digits_z = sample_motl_object.get_max_number_digits(column_name="z")
         assert max_digits_z == 2 # max z is 40
 
@@ -1359,7 +1359,7 @@ class TestMotl:
 
         assert np.allclose(subset_motl_single_df.values, expected_df_single.values)
 
-        # Test with list of feature_values
+        # Test with list of column_values
         subset_motl_list = motl.get_motl_subset([1, 2])
         expected_df_list = sample_motl_data1[sample_motl_data1["tomo_id"].isin([1, 2])].reset_index(drop=True)
 
@@ -1367,7 +1367,7 @@ class TestMotl:
 
         assert np.allclose(subset_motl_list_df.values, expected_df_list.values)
 
-        # Test with different feature_id
+        # Test with different column_name
         subset_motl_score = motl.get_motl_subset(0.9, column_name="score")
         expected_df_score = sample_motl_data1[sample_motl_data1["score"] == 0.9].reset_index(drop=True)
 
@@ -1423,12 +1423,12 @@ class TestMotl:
         motl1 = Motl(copy.deepcopy(sample_motl_data1))
         motl2 = Motl(copy.deepcopy(sample_motl_data2))
 
-        # Test with default feature_id ("subtomo_id")
+        # Test with default column_name ("subtomo_id")
         intersection_motl = Motl.get_motl_intersection(motl1, motl2)
         expected_df = pd.merge(sample_motl_data1, sample_motl_data2[["subtomo_id"]], how="inner").reset_index(drop=True)
         assert np.allclose(intersection_motl.df.values, expected_df.values)
 
-        # Test with different feature_id ("tomo_id")
+        # Test with different column_name ("tomo_id")
         intersection_motl_tomo = Motl.get_motl_intersection(motl1, motl2, column_name="tomo_id")
         expected_df_tomo = pd.merge(sample_motl_data1, sample_motl_data2[["tomo_id"]], how="inner").reset_index(drop=True)
         assert np.allclose(intersection_motl_tomo.df.values, expected_df_tomo.values)

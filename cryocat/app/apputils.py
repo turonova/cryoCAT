@@ -248,19 +248,58 @@ def get_relevant_features(desc_name, all_features):
     return avail_features
 
 
-def get_motl_operation_methods():
-    """Dropdown options for the editor's operation menu.
+def _iter_gui_methods():
+    """Yield ``(name, gui_dict)`` for every ``@gui_exposed`` method on ``Motl``.
 
-    Lists only the Motl methods marked with ``@gui_exposed`` — the decorator
-    (not docstring scraping) is the authority for what appears in the GUI.
+    Walks instance methods *and* class/static methods. Class/staticmethods are
+    bound to ``Motl`` when accessed via the class, so ``inspect.ismethod``
+    catches them and ``__func__`` exposes the underlying function where
+    ``_gui`` is stored (see :func:`cryocat.utils.classutils.gui_exposed`).
     """
     from cryocat.core.cryomotl import Motl
 
-    options = []
-    for name, fn in inspect.getmembers(Motl, predicate=inspect.isfunction):
-        gui = getattr(fn, "_gui", None)
-        if gui is None:
-            continue
-        options.append({"label": gui["label"], "value": name})
-    return options
+    members = inspect.getmembers(
+        Motl,
+        predicate=lambda o: inspect.isfunction(o) or inspect.ismethod(o),
+    )
+    for name, fn in members:
+        target = getattr(fn, "__func__", fn)
+        gui = getattr(target, "_gui", None)
+        if gui is not None:
+            yield name, gui
+
+
+def get_single_motl_methods():
+    """Dropdown options for the editor's *single-motl* operation menu.
+
+    A method is single-motl iff its ``_gui["motls"]`` is None (the default for
+    ``@gui_exposed``). Multi-motl ops (those carrying a ``motls=...`` spec) are
+    excluded — they live in their own section, see
+    :func:`get_multi_motl_methods`.
+    """
+    return [
+        {"label": g["label"], "value": n}
+        for n, g in _iter_gui_methods()
+        if not g.get("motls")
+    ]
+
+
+def get_multi_motl_methods():
+    """Dropdown options for the editor's *multiple-motl* operation menu.
+
+    Returns the methods marked ``motls={...}``; each option carries the spec
+    so the sidebar can drive the picker layout (arity, ordering, main-first).
+    """
+    return [
+        {"label": g["label"], "value": n, "motls": g["motls"]}
+        for n, g in _iter_gui_methods()
+        if g.get("motls")
+    ]
+
+
+# Backwards-compatible alias: the editor's single-motl dropdown used to call
+# this. Multi-motl ops were not in the registry then, so the old behaviour
+# matches the new single-only filter.
+def get_motl_operation_methods():
+    return get_single_motl_methods()
 

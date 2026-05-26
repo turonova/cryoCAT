@@ -173,7 +173,7 @@ def get_class_names_by_prefix(prefix):
 # @gui_exposed — mark a method as GUI-exposable + carry presentation metadata
 # ===========================================================================
 
-def gui_exposed(_fn=None, *, label=None, category=None, hide=(), output=None):
+def gui_exposed(_fn=None, *, label=None, category=None, hide=(), output=None, motls=None):
     """Mark a method as GUI-exposable and carry presentation metadata.
 
     Parameters
@@ -183,25 +183,47 @@ def gui_exposed(_fn=None, *, label=None, category=None, hide=(), output=None):
     category : str, optional
         Grouping for the dropdown (e.g. "Cleaning", "Geometry"). None = ungrouped.
     hide : iterable of str, optional
-        Parameter names the GUI/CLI should NOT surface (beyond ``self``, which is
-        always hidden).
+        Parameter names the GUI/CLI should NOT surface (beyond ``self`` / ``cls``,
+        which are always hidden).
     output : {"motl", "figure", "dataframe", None}, optional
         What the method returns, so the GUI knows how to route the result
         ("motl" -> wire to send-to-editor; "figure"/"dataframe" -> display;
         None -> in-place / no surfaced result).
+    motls : dict, optional
+        Marks a MULTI-motl operation. Keys:
+          - ``"arity"``: ``"pair"`` (exactly 2) or ``"list"`` (N >= 2).
+          - ``"ordered"``: bool — when True the user's selection order is
+            preserved and passed through (the GUI surfaces it as numbered chips
+            so it stays editable).
+          - ``"main_first"``: bool — when True the first selected motl is the
+            *privileged* one (lead ``motl1``, or the duplicate kept on
+            collision) and the GUI labels it "Main". Distinct from ``ordered``:
+            an op can preserve order without any entry being privileged
+            (e.g. ``merge_and_renumber`` — order matters, but no motl is "main").
+          - ``"param"``: the function parameter that receives the motls
+            (``"motl_list"`` for list ops; pair ops pass two motls positionally
+            so this is omitted).
+        ``None`` (default) => single-motl operation.
 
     Notes
     -----
     A function is GUI-exposed iff ``getattr(fn, "_gui", None) is not None``.
-    A bare ``@gui_exposed`` (no parentheses) works.
+    A bare ``@gui_exposed`` (no parentheses) works. When stacking with
+    ``@classmethod``, place ``@gui_exposed`` **above** so ``_gui`` lands on the
+    underlying function; the collector unwraps via ``__func__``.
     """
 
     def wrap(fn):
-        fn._gui = {
-            "label": label or fn.__name__.replace("_", " ").capitalize(),
+        # When stacked above @classmethod / @staticmethod, `fn` is the descriptor
+        # but `_gui` must land on the underlying function so the collector can
+        # read it through `__func__`.
+        target = fn.__func__ if isinstance(fn, (classmethod, staticmethod)) else fn
+        target._gui = {
+            "label": label or target.__name__.replace("_", " ").capitalize(),
             "category": category,
-            "hide": set(hide) | {"self"},
+            "hide": set(hide) | {"self", "cls"},
             "output": output,
+            "motls": motls,
         }
         return fn
 
@@ -218,7 +240,10 @@ _ALIAS_TAGS = {
     "TripletLike", "EulerAngles", "ListLike", "Symmetry", "ArrayLike",
 }
 # PEP-695 aliases whose value is a Literal[...] — resolved to ("Literal", choices).
-_LITERAL_ALIASES = {"MotlType", "MotlColumn", "BoundaryType", "CTFFileType"}
+_LITERAL_ALIASES = {
+    "MotlType", "MotlColumn", "BoundaryType", "CTFFileType", "NNType",
+    "RotationDistanceType", "ProjectionType",
+}
 
 
 def resolve_param_type(annotation) -> tuple[str, dict]:
@@ -315,6 +340,29 @@ def _parse_bool(v):
     return v in (True, "True", "true", "1", 1)
 
 
+def _parse_int(v):
+    """GUI number field -> int. Empty/None -> None; floats and numeric strings
+    are coerced via float() to tolerate things like ``"33.0"``."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return None
+    return int(float(v))
+
+
+def _parse_float(v):
+    """GUI number field -> float, with empty/None tolerated."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return None
+    return float(v)
+
+
 def _parse_triplet(v):
     """A GUI triplet field (``"64,64,64"`` or ``"64"``). The receiving function
     normalizes with :func:`cryocat.utils.geom.as_triplet`."""
@@ -372,8 +420,8 @@ TYPE_HANDLERS = {
     "Symmetry":       {"widget": "text",     "parse": str,             "argparse": {"type": str}},
     "Literal":        {"widget": "dropdown", "parse": _parse_literal,  "argparse": {"type": str}},
     "bool":           {"widget": "bool",     "parse": _parse_bool,     "argparse": {"type": _arg_bool}},
-    "int":            {"widget": "number",   "parse": int,             "argparse": {"type": int}},
-    "float":          {"widget": "number",   "parse": float,           "argparse": {"type": float}},
+    "int":            {"widget": "number",   "parse": _parse_int,      "argparse": {"type": int}},
+    "float":          {"widget": "number",   "parse": _parse_float,    "argparse": {"type": float}},
     "str":            {"widget": "text",     "parse": str,             "argparse": {"type": str}},
 }
 

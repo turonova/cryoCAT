@@ -17,7 +17,7 @@ from cryocat.utils import imageutils
 from cryocat.utils import ioutils
 from cryocat.analysis import nnana
 from cryocat.utils import imod
-from cryocat._types import ArrayLike, MapSource, MotlType, PathOrStr, RotationLike, Symmetry, TomoDimensions
+from cryocat._types import ArrayLike, BoundaryType, MapSource, MotlColumn, MotlType, PathOrStr, RotationLike, Symmetry, TomoDimensions
 from cryocat.utils.classutils import gui_exposed
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -313,8 +313,8 @@ class Motl:
     def clean_by_distance(
         self,
         distance_in_voxels: float,
-        column_name: str,
-        metric_column_name: str = "score",
+        column_name: MotlColumn,
+        metric_column_name: MotlColumn = "score",
         keep_greater: bool = True,
         dist_mask: Optional[MapSource] = None,
     ) -> None:
@@ -395,7 +395,7 @@ class Motl:
         self,
         points: pd.DataFrame,
         radius_in_voxels: float,
-        column_name: str = "tomo_id",
+        column_name: MotlColumn = "tomo_id",
         inplace: bool = True,
         output_path: Optional[PathOrStr] = None,
     ) -> Optional["Motl"]:
@@ -471,7 +471,7 @@ class Motl:
             return cleaned_motl
 
     @staticmethod
-    def _boundary_from_type(boundary_type: str, box_size: Optional[int]) -> int:
+    def _boundary_from_type(boundary_type: BoundaryType, box_size: Optional[int]) -> int:
         """Resolve ``(boundary_type, box_size)`` into a numeric per-axis boundary.
 
         Internal helper shared by :meth:`clean_by_tomo_mask` and
@@ -492,7 +492,7 @@ class Motl:
         tomo_list: TomoDimensions,
         tomo_masks: Union[MapSource, List[MapSource]],
         inplace: bool = True,
-        boundary_type: str = "center",
+        boundary_type: BoundaryType = "center",
         box_size: Optional[int] = None,
         output_path: Optional[PathOrStr] = None,
     ) -> Optional["Motl"]:
@@ -589,7 +589,7 @@ class Motl:
         return cleaned_motl
 
     @gui_exposed(category="Cleaning")
-    def clean_by_otsu(self, column_name: str, histogram_bin: Optional[int] = None, global_level: bool = False) -> None:
+    def clean_by_otsu(self, column_name: MotlColumn, histogram_bin: Optional[int] = None, global_level: bool = False) -> None:
         """Clean the DataFrame by applying Otsu's thresholding algorithm on the scores.
 
         Parameters
@@ -649,7 +649,7 @@ class Motl:
         print(f"Cleaned {self.df.shape[0] - cleaned_motl.shape[0]} particles.")
         self.df = cleaned_motl.reset_index(drop=True)
 
-    def compute_otsu_threshold(self, column_name: str, hbin: int) -> pd.DataFrame:
+    def compute_otsu_threshold(self, column_name: MotlColumn, hbin: int) -> pd.DataFrame:
         """Compute Otsu threshold on the Motl 'score' value after grouping the particles by a desired column.
         This function generates a plot of the particle distribution for each value of the column and overlays the threshold value.
 
@@ -953,7 +953,7 @@ class Motl:
 
         return coord
 
-    def get_max_number_digits(self, column_name: str = "tomo_id") -> int:
+    def get_max_number_digits(self, column_name: MotlColumn = "tomo_id") -> int:
         """This function returns the maximum number of digits in the column specified by column_name.
 
         Parameters
@@ -1088,7 +1088,7 @@ class Motl:
         new_motl.update_coordinates()
         return new_motl
 
-    def get_feature(self, column_name: Union[str, List[str]]) -> np.ndarray:
+    def get_feature(self, column_name: Union[MotlColumn, List[MotlColumn]]) -> np.ndarray:
         """Returns the values from the column in self.df specified by column_name.
 
         Parameters
@@ -1126,7 +1126,7 @@ class Motl:
     # else:
     #     raise UserInputError(f"The class Motl does not contain column with name {feature_id}")
 
-    def get_motl_subset(self, column_values: Union[ArrayLike, int, float], column_name: str = "tomo_id", return_df: bool = False, reset_index: bool = True) -> Union["Motl", pd.DataFrame]:
+    def get_motl_subset(self, column_values: Union[ArrayLike, int, float], column_name: MotlColumn = "tomo_id", return_df: bool = False, reset_index: bool = True) -> Union["Motl", pd.DataFrame]:
         """Get a subset of the Motl object based on specified column values.
 
         Parameters
@@ -1163,8 +1163,12 @@ class Motl:
         else:
             return Motl(motl_df=new_df)
 
+    @gui_exposed(
+        label="Intersection of two motls", category="Combine", output="motl",
+        motls={"arity": "pair", "ordered": True, "main_first": True},
+    )
     @classmethod
-    def get_motl_intersection(cls, motl1: "Motl", motl2: "Motl", column_name: str = "subtomo_id") -> "Motl":
+    def get_motl_intersection(cls, motl1: "Motl", motl2: "Motl", column_name: MotlColumn = "subtomo_id") -> "Motl":
         """Creates motl intersection of two motls based on column_name.
 
         Parameters
@@ -1257,7 +1261,7 @@ class Motl:
         new_motl = self._build_subset_motl(idx, new_coord, rot_angles)
         return new_motl, rotated_coord
 
-    def get_unique_values(self, column_name: str) -> np.ndarray:
+    def get_unique_values(self, column_name: MotlColumn) -> np.ndarray:
         """Get unique values from a specific feature.
 
         Parameters
@@ -1328,7 +1332,7 @@ class Motl:
             raise UserInputError(f"Provided motl file {input_motl} has format that is currently not supported.")
 
     @gui_exposed(category="Cleaning")
-    def remove_feature(self, column_name: str, column_values: Union[ArrayLike, int, float]) -> None:
+    def remove_feature(self, column_name: MotlColumn, column_values: Union[ArrayLike, int, float]) -> None:
         """The function removes particles based on a column value (e.g. tomo number).
 
         Parameters
@@ -1395,7 +1399,7 @@ class Motl:
         cols = ["x", "y", "z", "shift_x", "shift_y", "shift_z"]
         self.df[cols] = self.df[cols] * scaling_factor
 
-    def split_by_feature(self, column_name: str, write_out: bool = False, output_prefix: str = "") -> List["Motl"]:
+    def split_by_feature(self, column_name: MotlColumn, write_out: bool = False, output_prefix: str = "") -> List["Motl"]:
         """Splits motl by the column_name and writes them out.
 
         Parameters
@@ -1475,7 +1479,7 @@ class Motl:
         else:
             raise UserInputError(f"Provided motl file {output_path} has format that is currently not supported.")
 
-    def write_to_model_file(self, column_name: str, output_base: str, point_size: int, binning: float = 1.0, zero_padding: Optional[int] = None) -> None:
+    def write_to_model_file(self, column_name: MotlColumn, output_base: str, point_size: int, binning: float = 1.0, zero_padding: Optional[int] = None) -> None:
         """It splits the dataframe based on column_name and writes them out as mod files (from IMOD). The values in "class"
         column are used to created different objects, the countour is always the same. This function requires IMOD's
         point2model function to exist and being in PATH.
@@ -1615,6 +1619,10 @@ class Motl:
         merged_motl.df.reset_index(inplace=True, drop=True)
         return merged_motl
 
+    @gui_exposed(
+        label="Merge and renumber", category="Combine", output="motl",
+        motls={"arity": "list", "ordered": True, "main_first": False, "param": "motl_list"},
+    )
     @classmethod
     def merge_and_renumber(cls, motl_list: List["MotlSource"]) -> "Motl":
         """Merge a list of Motl instances or paths to motl files to a single motl. It renumbers its particles and objects
@@ -1640,6 +1648,10 @@ class Motl:
         merged_motl.renumber_particles()
         return merged_motl
 
+    @gui_exposed(
+        label="Merge and drop duplicates", category="Combine", output="motl",
+        motls={"arity": "list", "ordered": True, "main_first": True, "param": "motl_list"},
+    )
     @classmethod
     def merge_and_drop_duplicates(cls, motl_list: List["MotlSource"]) -> "Motl":
         """Merge a list of Motl instances or paths to motl files to a single motl. Does not renumber particles - uniqueness
@@ -1667,7 +1679,7 @@ class Motl:
         return merged_motl
 
     @gui_exposed(category="Cleaning")
-    def remove_out_of_bounds_particles(self, dimensions: TomoDimensions, boundary_type: str = "center", box_size: Optional[int] = None) -> None:
+    def remove_out_of_bounds_particles(self, dimensions: TomoDimensions, boundary_type: BoundaryType = "center", box_size: Optional[int] = None) -> None:
         """Removes particles that are out of tomogram bounds.
 
         Parameters
@@ -1726,7 +1738,7 @@ class Motl:
         print(f"Original size {original_size}, new_size {len(self.df)}")
 
     @gui_exposed(category="Cleaning")
-    def drop_duplicates(self, column_name: str = "subtomo_id", decision_column_name: str = "score", decision_sort_ascending: bool = False) -> None:
+    def drop_duplicates(self, column_name: MotlColumn = "subtomo_id", decision_column_name: MotlColumn = "score", decision_sort_ascending: bool = False) -> None:
         """Drop duplicates based on a specified column and keep the first occurrence with the highest/lowest score.
 
         Parameters
