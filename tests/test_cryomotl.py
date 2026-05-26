@@ -4210,6 +4210,48 @@ class TestRelionMotl:
         motl.parse_subtomo_id(relion_df)
         assert motl.df.loc[0, "subtomo_id"] == 3.0
 
+    def test_comparison31_51(self):
+        tomo_id = 51
+        object_id = 1
+        peak_scores = [0.11143651, 0.12118517, 0.13057162, 0.09601331, 0.1197384, 0.14313099, 0.14886369, 0.12868747,
+                       0.16131872]
+        theta = [104.03, 43.34, 112.57, 74.17, 38.01, 88.26, 21.68, 78.34, 69.91]
+        psi = [83.45, -157.29, -151.44, -89.44, 97.66, -29.25, -27.45, 153.11, 28.]
+        phi = [57.6, 43.2, 0., 259.2, 14.4, 0., 316.8, 100.8, 172.8]
+        peak_coords = np.array([
+            [136, 126, 49],
+            [80, 155, 89],
+            [71, 164, 45],
+            [50, 129, 67],
+            [121, 132, 91],
+            [71, 90, 54],
+            [80, 109, 96],
+            [115, 165, 61],
+            [115, 91, 70]
+        ])
+        motl = cryomotl.Motl()
+        motl.fill(
+            {
+                "x": peak_coords[:, 0] + 1,
+                "y": peak_coords[:, 1] + 1,
+                "z": peak_coords[:, 2] + 1,
+                "score": peak_scores,
+                "class": 1,
+                "tomo_id": tomo_id,
+                "object_id": object_id,
+                "phi": phi,
+                "theta": theta,
+                "psi": psi,
+                "subtomo_id": np.arange(1, peak_coords.shape[0] + 1),
+            }
+        )
+        output_path = "/home/pasquale/Desktop/test_51.star"
+        output_path_1=  "/home/pasquale/Desktop/test_31.star"
+        rln_motl_v51 = cryomotl.emmotl2relion(motl.df, relion_version=5.1, output_motl_path=output_path,
+                                              load_kwargs={"pixel_size": 9.656, "binning": 4.0, })
+        rln_motl_v31 = cryomotl.emmotl2relion(motl.df, relion_version=3.1, output_motl_path=output_path_1,
+                                              load_kwargs={"pixel_size": 9.656, "binning": 4.0, })
+
 class TestStopgapMotl:
     @pytest.fixture
     def sample_stopgap_data(self):

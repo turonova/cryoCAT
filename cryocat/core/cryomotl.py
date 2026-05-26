@@ -3011,7 +3011,7 @@ class RelionMotl(Motl):
             relion_df = pd.DataFrame(
                 data=np.zeros((self.df.shape[0], len(self.columns_v3_0))), columns=self.columns_v3_0
             )
-        elif version == 3.1:
+        elif version == 3.1 or version == 5.1:
             relion_df = pd.DataFrame(
                 data=np.zeros((self.df.shape[0], len(self.columns_v3_1))), columns=self.columns_v3_1
             )
@@ -3090,9 +3090,9 @@ class RelionMotl(Motl):
                 )
         else:
             # TODO add support for 3.0
-            if version == 3.1:
+            if version == 3.1 or version == 5.1:
                 optics_df = self.create_optics_group_v3_1(pixel_size=pixel_size, subtomo_size=subtomo_size)
-            elif version > 3.1:
+            elif version > 3.1 and version != 5.1:
                 optics_df = self.create_optics_group_v4(
                     pixel_size=pixel_size, subtomo_size=subtomo_size, binning=binning
                 )
@@ -3256,7 +3256,7 @@ class RelionMotl(Motl):
 
         relion_df.loc[:, shifts_name] = np.zeros((relion_df.shape[0], 3))
 
-        if version < 4.0:
+        if version < 4.0 or version == 5.1:
             relion_df["rlnPixelSize"] = pixel_size
 
         # assign group number
@@ -3493,7 +3493,7 @@ class RelionMotl(Motl):
         if add_subunit_id:
             relion_df["ccSubunitName"] = self.df["geom2"].to_numpy()
 
-        if binning != 1.0 and version >= 4.0:
+        if binning != 1.0 and version >= 4.0 and version != 5.1:
             for coord in ("X", "Y", "Z"):
                 relion_df["rlnCoordinate" + coord] = relion_df["rlnCoordinate" + coord] * binning
 
