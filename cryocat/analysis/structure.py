@@ -14,7 +14,7 @@ from cryocat.utils import mathutils
 from cryocat.analysis import nnana
 from cryocat.utils import ioutils
 from cryocat._types import PathOrStr
-from surface import (
+from cryocat.core.surface import (
     Surface,
     DiscreteSurface,
     Mesh,
