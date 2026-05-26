@@ -2318,7 +2318,9 @@ class TestRelionMotl:
             test_data + "/motl_data/out_3_1.star",
             test_data + "/motl_data/out_4_0.star",
             test_data + "/motl_data/out_3_1_optics.star",
-            test_data + "/motl_data/out_4_0_optics.star"
+            test_data + "/motl_data/out_4_0_optics.star",
+            test_data + "/motl_data/out_test_51.star",
+            test_data + "/motl_data/out_test_31.star"
         ]
         for file_path in output_files_to_remove:
             if os.path.exists(file_path):
@@ -4245,12 +4247,16 @@ class TestRelionMotl:
                 "subtomo_id": np.arange(1, peak_coords.shape[0] + 1),
             }
         )
-        output_path = "/home/pasquale/Desktop/test_51.star"
-        output_path_1=  "/home/pasquale/Desktop/test_31.star"
+        output_path = test_data + "/motl_data/out_test_51.star"
+        output_path_1=  test_data + "/motl_data/out_test_31.star"
         rln_motl_v51 = cryomotl.emmotl2relion(motl.df, relion_version=5.1, output_motl_path=output_path,
                                               load_kwargs={"pixel_size": 9.656, "binning": 4.0, })
         rln_motl_v31 = cryomotl.emmotl2relion(motl.df, relion_version=3.1, output_motl_path=output_path_1,
                                               load_kwargs={"pixel_size": 9.656, "binning": 4.0, })
+        pd.testing.assert_frame_equal(rln_motl_v51.df, rln_motl_v31.df)
+        pd.testing.assert_frame_equal(rln_motl_v51.relion_df, rln_motl_v31.relion_df)
+        print(rln_motl_v31.optics_data)
+        #pd.testing.assert_frame_equal(rln_motl_v51.optics_data, rln_motl_v31.optics_data)
 
 class TestStopgapMotl:
     @pytest.fixture
