@@ -6,6 +6,7 @@ import open3d as o3d
 from abc import ABC, abstractmethod
 from pathlib import Path
 import copy
+import logging
 import warnings
 from tqdm import tqdm
 import multiprocessing as mp
@@ -21,7 +22,7 @@ from sklearn.decomposition import PCA
 from cryocat.core import cryomap
 from cryocat.utils import geom
 from cryocat.core import cryomotl
-from cryocat._types import PathOrStr
+from cryocat._types import PathOrStr, MapSource
 
 
 def _axis_aligned_bbox_from_input(bbox: o3d.geometry.AxisAlignedBoundingBox | dict[str, Any]) -> o3d.geometry.AxisAlignedBoundingBox:
@@ -246,12 +247,22 @@ class DiscreteSurface(Surface):
 
     @abstractmethod
     def get_vertices(self):
-        """Return surface vertices."""
+        """Return surface vertices.
+
+        Returns
+        -------
+        np.ndarray, shape (N, 3)
+        """
         pass
 
     @abstractmethod
     def get_normals(self):
-        """Return surface normals."""
+        """Return surface normals.
+
+        Returns
+        -------
+        np.ndarray, shape (N, 3)
+        """
         pass
 
     @abstractmethod
@@ -279,52 +290,152 @@ class DiscreteSurface(Surface):
         """Crop surface to axis-aligned bounding box."""
         pass
 
-    @staticmethod
-    def separate_surfaces(surface, threshold_angle: float = 90.0, reference_point: np.ndarray | None = None) -> np.ndarray:
+    def separate_closed_surface(self, threshold_angle: float = 90.0, reference_point: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
         """
-        Separate inner and outer surfaces based on normal direction relative to reference point.
-        
-        Works for both Mesh and OrientedPointCloud since both have vertices and normals.
-        
+        Separate inner and outer surfaces of a closed volume based on normal direction.
+
+        Use this for enclosed geometries (vesicles, organelles) where normals radiate
+        outward from a central region. For surfaces with flatter geometry, use
+        :meth:`separate_planar_surface` instead.
+
         Parameters
         ----------
-        surface : Mesh or OrientedPointCloud
-            DiscreteSurface object with vertices and normals
         threshold_angle : float, default=90.0
-            Angle threshold in degrees. Normals with angle < threshold to reference direction
-            are considered inner (pointing toward reference).
+            Angle threshold in degrees. Normals with angle < threshold to the direction
+            toward the reference point are considered inner (pointing inward).
         reference_point : np.ndarray (3,), optional
             Reference point for classification. If None, uses centroid of vertices.
-            
+
         Returns
         -------
-        vertex_labels : np.ndarray
-            Array of shape (N,) where 0 = inner, 1 = outer
+        inner_mask, outer_mask : (N,) bool ndarray each
+            ``inner_mask`` is True for vertices whose normals point toward the reference
+            point; ``outer_mask`` is True for the rest.
         """
-        vertices = surface.get_vertices()
-        normals = surface.get_normals()
-        
-        # Use provided reference point or compute centroid
+        vertices = self.get_vertices()
+        normals = self.get_normals()
+
         if reference_point is None:
             reference_point = np.mean(vertices, axis=0)
         else:
             reference_point = np.asarray(reference_point)
-        
-        # Vector from each vertex to reference point
+
         to_reference = reference_point - vertices
         to_reference_norm = np.linalg.norm(to_reference, axis=1, keepdims=True)
         to_reference_normalized = to_reference / (to_reference_norm + 1e-12)
-        
-        # Dot product between normals and direction to reference
+
         dot_products = np.sum(normals * to_reference_normalized, axis=1)
-        
-        # Convert to angle
         angles = np.degrees(np.arccos(np.clip(dot_products, -1, 1)))
-        
-        # Classify: inner if angle < threshold (normal points toward reference)
         vertex_labels = np.where(angles < threshold_angle, 0, 1)  # 0=inner, 1=outer
-        
-        return vertex_labels
+
+        return vertex_labels == 0, vertex_labels == 1
+
+    def separate_planar_surface(self) -> tuple[np.ndarray, np.ndarray]:
+        """Separate the two halves of a surface with flat or low-curvature geometry via PCA on normals.
+
+        The PCA finds the axis along which the two opposing normal populations are most
+        separated (the least-variance direction of the normal cloud). Points whose
+        projection onto that axis is non-negative form ``surface1``; the rest form
+        ``surface2``.
+
+        Use :meth:`separate_closed_surface` instead for enclosed volumes (vesicles,
+        organelles) where normals radiate from a centroid.
+
+        Returns
+        -------
+        surface1_mask, surface2_mask : (N,) bool ndarray each
+            Both are all-False if either half contains fewer than 10 % of total
+            points, indicating that separation failed.
+        """
+        normals = np.asarray(self.get_normals(), dtype=np.float64)
+        vertices = np.asarray(self.get_vertices(), dtype=np.float64)
+        pca = PCA(n_components=3)
+        pca.fit(vertices)
+        principal_axis = pca.components_[2]   # least-variance geometric direction ≈ membrane thickness axis
+        projections = normals @ principal_axis
+        s1 = projections >= 0
+        s2 = ~s1
+        n = len(normals)
+        if s1.sum() < 0.1 * n or s2.sum() < 0.1 * n:
+            return np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
+        return s1, s2
+
+    def orient_normals_globally(
+        self,
+        max_neighbors: int = 10,
+        inplace: bool = True,
+    ) -> "DiscreteSurface | None":
+        """Globally orient normals via minimum spanning tree traversal.
+
+        Propagates a consistent orientation decision across the surface by building a
+        KNN adjacency graph (edge weights = ``|dot(n_i, n_j)|``) and traversing its
+        minimum spanning tree. Normals that disagree with their MST parent's direction
+        are flipped.
+
+        This is an **orientation** operation, not a **smoothing** operation — normal
+        directions are not averaged. Call :meth:`refine_normals` afterwards to denoise.
+        For normals computed entirely from scratch, use :meth:`compute_normals` (which
+        delegates to Open3D's tangent-plane method) instead.
+
+        Parameters
+        ----------
+        max_neighbors : int
+            Maximum KNN edges per vertex for the adjacency graph.
+        inplace : bool
+            If True, update ``self.normals`` in place and return ``self``.
+            If False, return a deep copy with updated normals.
+        """
+        from scipy.sparse import lil_matrix
+        from scipy.sparse.csgraph import minimum_spanning_tree
+
+        target = self if inplace else copy.deepcopy(self)
+        pts = np.asarray(target.get_vertices(), dtype=np.float64)
+        nrm = np.asarray(target.get_normals(), dtype=np.float64)
+        n = len(pts)
+
+        # --- Build weighted adjacency (weight = |dot(n_i, n_j)|) ---
+        tree = cKDTree(pts)
+        k = min(max_neighbors + 1, n)
+        dists, indices = tree.query(pts, k=k)
+
+        adj = lil_matrix((n, n), dtype=np.float32)
+        for i in range(n):
+            for j_idx, j in enumerate(indices[i]):
+                if j == i:
+                    continue
+                weight = float(np.abs(np.dot(nrm[i], nrm[j])))
+                # MST minimises, so convert similarity → dissimilarity.
+                # Add epsilon so perfectly-aligned edges are != 0 in the sparse matrix.
+                adj[i, j] = max(1.0 - weight, 1e-8)
+
+        adj_csr = adj.tocsr()
+        mst = minimum_spanning_tree(adj_csr)
+
+        # --- BFS from highest-degree node ---
+        degrees = np.diff(adj_csr.indptr)
+        start = int(np.argmax(degrees))
+
+        visited = np.zeros(n, dtype=bool)
+        queue = [start]
+        visited[start] = True
+        oriented = nrm.copy()
+
+        while queue:
+            i = queue.pop(0)
+            _, neighbours = tree.query(pts[i], k=k)
+            for j in neighbours:
+                if j == i or visited[j]:
+                    continue
+                # Only traverse MST edges
+                if mst[min(i, j), max(i, j)] == 0 and mst[max(i, j), min(i, j)] == 0:
+                    continue
+                visited[j] = True
+                if np.dot(oriented[i], oriented[j]) < 0:
+                    oriented[j] = -oriented[j]
+                queue.append(j)
+
+        target.normals = oriented
+        return target if not inplace else None
 
     @staticmethod
     def refine_normals_from_arrays(
@@ -535,7 +646,7 @@ class DiscreteSurface(Surface):
             invalidate()
         return target
 
-    def filter_by_normals(self, angle_threshold: float = 90.0, reference_normal: np.ndarray | None = None, inplace: bool = False) -> "DiscreteSurface" | None:
+    def apply_normals_mask(self, angle_threshold: float = 90.0, reference_normal: np.ndarray | None = None, inplace: bool = False) -> "DiscreteSurface" | None:
         """
         Remove vertices/points whose normal deviates more than ``angle_threshold`` degrees
         from the mean (or a supplied reference) normal direction.
@@ -576,29 +687,37 @@ class DiscreteSurface(Surface):
         new_surface._apply_filter_mask(keep_mask)
         return new_surface
     
-    def _apply_filter_mask(self, keep_mask):
-        """Apply filtering mask to surface."""
+    @abstractmethod
+    def _apply_filter_mask(self, keep_mask: np.ndarray) -> None:
+        """Apply a boolean keep-mask to the surface (must be overridden by subclasses)."""
         pass
     
-    def filter_by_mask(self, mask: np.ndarray | str, transpose: bool = True, mask_origin: np.ndarray | None = None, mask_pixel_spacing: float | np.ndarray = 1.0, inplace: bool = False) -> "DiscreteSurface" | None:
+    def apply_volume_mask(self, mask: MapSource, transpose: bool = True, mask_origin: np.ndarray | None = None, mask_pixel_spacing: float | np.ndarray = 1.0, inplace: bool = False) -> "DiscreteSurface" | None:
         """
-        Filter vertices/points based on 3D binary mask.
+        Filter vertices/points to those that fall inside a 3D binary mask.
 
         Parameters
         ----------
-        mask : np.ndarray or str
-            3D binary mask array, or path to .mrc file
+        mask : MapSource
+            3D binary mask — either a pre-loaded ndarray or a path to an .mrc/.em file.
         transpose : bool, default=True
+            Transpose the mask array on load (passed to ``cryomap.read``). Usually
+            required to match the axis convention of the mesh coordinates.
         mask_origin : array-like (3,), optional
-            If None, assumes mask origin is at [0, 0, 0]
+            World-space coordinate of voxel (0, 0, 0) in the mask. Defaults to the
+            origin ``[0, 0, 0]``.
         mask_pixel_spacing : float or array-like (3,), default=1.0
-            If array-like, should be [x, y, z] spacing.
+            Voxel spacing of the mask in the same units as the surface vertices.
+            A scalar is broadcast to all three axes; an array sets ``[x, y, z]``
+            spacing independently.
         inplace : bool, default=False
-        
+            If True, modify this surface in place and return None.
+            If False, return a new instance.
+
         Returns
         -------
-        DiscreteSurface instance or None
-            New instance if inplace=False, else None
+        DiscreteSurface or None
+            New filtered instance if ``inplace=False``, else None.
         """
         vertices = self.get_vertices()
         
@@ -684,7 +803,7 @@ class Mesh(DiscreteSurface):
             self.compute_normals()
         return self.normals
 
-    def transform(self, transformation_matrix: np.ndarray) -> "Mesh":
+    def transform(self, transformation_matrix: np.ndarray) -> None:
         """Apply 4x4 transformation matrix to vertices and normals."""
         if transformation_matrix.shape != (4, 4):
             raise ValueError("Transformation matrix must be 4x4")
@@ -704,21 +823,21 @@ class Mesh(DiscreteSurface):
         # Invalidate cached properties
         self._invalidate_cache()
 
-    def translate(self, translation_vector: np.ndarray) -> "Mesh":
+    def translate(self, translation_vector: np.ndarray) -> None:
         """Translate vertices by given vector."""
         translation_vector = np.asarray(translation_vector)
         if translation_vector.shape != (3,):
             raise ValueError("Translation vector must be 3D")
         self.vertices += translation_vector
         
-    def rotate(self, rotation_matrix: np.ndarray) -> "Mesh":
+    def rotate(self, rotation_matrix: np.ndarray) -> None:
         """
-        Apply 3x3 rotation matrix to vertices and normals.
-        
+        Apply 3x3 rotation matrix to vertices and normals in place.
+
         Parameters
         ----------
         rotation_matrix : array_like (3, 3)
-            Rotation matrix (should be orthogonal)
+            Rotation matrix (should be orthogonal).
         """
         rotation_matrix = np.asarray(rotation_matrix)
         if rotation_matrix.shape != (3, 3):
@@ -850,6 +969,19 @@ class Mesh(DiscreteSurface):
 
         Per-vertex arrays (normals and, when requested, curvature fields) are copied for the
         vertices referenced by ``triangle_ids`` and faces are remapped to the new vertex order.
+
+        Parameters
+        ----------
+        triangle_ids : np.ndarray
+            Integer indices of triangles to keep.
+        preserve_curvatures : bool, default=True
+            Copy cached curvature arrays (principal/mean/Gaussian curvatures, principal
+            directions, curvature tensors) to the new submesh when available.
+
+        Returns
+        -------
+        Mesh
+            New mesh containing only the selected triangles and their referenced vertices.
         """
         if self.vertices is None or self.faces is None:
             raise ValueError("Mesh must have vertices and faces")
@@ -912,8 +1044,20 @@ class Mesh(DiscreteSurface):
         sub._invalidate_neighbor_cache()
         return sub
     
-    def compute_normals(self, **kwargs):
-        """Compute vertex normals from face connectivity."""
+    def compute_normals(self, **kwargs) -> None:
+        """Compute vertex normals from face connectivity and store them in-place.
+
+        Accepts (and silently ignores) keyword arguments used by
+        :meth:`OrientedPointCloud.compute_normals` so that shared call sites can pass a
+        uniform ``**kwargs`` to either surface type without raising a ``TypeError``.
+        Unrecognised keywords beyond those listed below raise ``TypeError``.
+
+        Parameters
+        ----------
+        **kwargs
+            Silently consumed: ``knn``, ``orient_normals``, ``tangent_plane_knn``,
+            ``inplace``, ``refine``.  All other keys raise ``TypeError``.
+        """
 
         kwargs.pop('knn', None)
         kwargs.pop('orient_normals', None)
@@ -953,6 +1097,28 @@ class Mesh(DiscreteSurface):
     ) -> dict[str, Any]:
         """
         Point-to-mesh distances using Open3D RaycastingScene (unsigned/signed distance, occupancy).
+
+        Parameters
+        ----------
+        target : np.ndarray, shape (N, 3)
+            Query points to measure distances from.
+        compute_occupancy : bool, default=True
+            Compute inside/outside occupancy for each query point.
+        compute_signed : bool, default=False
+            Compute signed distances (negative inside the mesh). Forces
+            ``compute_occupancy=True``.
+        return_closest_points : bool, default=False
+            Include the closest surface point and its triangle id for each query point.
+
+        Returns
+        -------
+        dict
+            Always contains ``n_total``, ``distances`` (N,), ``distance_type``
+            (``'signed'`` or ``'unsigned'``).
+            With ``compute_occupancy``: adds ``occupancy`` (N,), ``inside_mask`` (N,),
+            ``outside_mask`` (N,), ``n_inside``, ``n_outside``.
+            With ``return_closest_points``: adds ``closest_points`` (N, 3),
+            ``primitive_ids`` (N,), ``closest_distances`` (N,).
         """
         target = np.atleast_2d(np.asarray(target, dtype=np.float32))
         rs = self._get_raycasting_scene()
@@ -998,7 +1164,24 @@ class Mesh(DiscreteSurface):
         rays: np.ndarray,
         one_hit_per_target: bool = False,
     ) -> dict[str, Any]:
-        """Ray-mesh intersection using cached RaycastingScene."""
+        """Ray-mesh intersection using cached RaycastingScene.
+
+        Parameters
+        ----------
+        rays : np.ndarray, shape (R, 6)
+            Each row is ``[ox, oy, oz, dx, dy, dz]``: ray origin and direction vector.
+            The direction magnitude is used as the maximum ray travel length.
+        one_hit_per_target : bool, default=False
+            If True, annotate the result with the globally shortest hit across all rays
+            (see :meth:`DiscreteSurface._annotate_shortest_ray_hit`).
+
+        Returns
+        -------
+        dict
+            Keys: ``t_hit`` (R,), ``geometry_ids`` (R,), ``primitive_ids`` (R,),
+            ``primitive_normals`` (R, 3), ``primitive_uvs`` (R, 2), ``hit_points`` (R, 3).
+            Misses have ``t_hit=inf`` and ``hit_points=nan``.
+        """
         rays = np.atleast_2d(np.asarray(rays, dtype=np.float32))
         scene = self._get_raycasting_scene()
         rays_tensor = o3d.core.Tensor(rays, dtype=o3d.core.Dtype.Float32)
@@ -1038,7 +1221,37 @@ class Mesh(DiscreteSurface):
         bidirectional: bool = False,
         one_hit_per_target: bool = False,
     ) -> dict[str, Any]:
-        """Cast rays along mesh normals and intersect a target point cloud."""
+        """Cast rays along mesh normals and intersect a target point cloud.
+
+        Rays originate from each mesh vertex and travel in the vertex normal direction
+        (or its reverse). Target points within ``knn_radius`` of each ray are reported
+        as hits.
+
+        Parameters
+        ----------
+        target : OrientedPointCloud
+            Point cloud to measure distances to.
+        ray_length : float, optional
+            Maximum ray travel distance. Defaults to ``max_distance`` when set,
+            otherwise to a large value (1e10).
+        max_distance : float, optional
+            Discard hits beyond this distance. Applied after ray casting.
+        reverse_normals : bool, default=False
+            Cast rays in the opposite normal direction.
+        bidirectional : bool, default=False
+            Also cast in the opposite direction and keep the closer of the two hits.
+        one_hit_per_target : bool, default=False
+            Keep only the closest source hit per target point.
+
+        Returns
+        -------
+        dict
+            Keys: ``distances`` (N,), ``closest_points`` (N, 3),
+            ``closest_indices`` (N,), ``hit_mask`` (N,),
+            and optionally ``closest_normals`` (N, 3) and ``used_reverse_normals`` (N,)
+            when ``bidirectional=True``. Also contains ``stats`` with ``n_source``,
+            ``n_target``, ``n_hits``, and distance statistics.
+        """
         if not isinstance(target, OrientedPointCloud):
             raise TypeError(
                 f"target must be OrientedPointCloud, got {type(target).__name__}"
@@ -1202,8 +1415,18 @@ class Mesh(DiscreteSurface):
             return bytes(item).decode("utf-8", errors="replace")
         return str(item)
     
-    def smooth(self, iterations: int = 1, recompute_normals: bool = True, repair_nonfinite: bool = True) -> "Mesh":
-        """Smooth the mesh using the Taubin filter to prevent shrinkage of the mesh when using Laplacian filtering."""
+    def smooth(self, iterations: int = 1, recompute_normals: bool = True, repair_nonfinite: bool = True) -> None:
+        """Smooth the mesh in place using the Taubin filter (prevents shrinkage vs. Laplacian).
+
+        Parameters
+        ----------
+        iterations : int, default=1
+            Number of Taubin smoothing iterations.
+        recompute_normals : bool, default=True
+            Recompute vertex normals after smoothing.
+        repair_nonfinite : bool, default=True
+            Remove non-finite vertices before and after smoothing rather than raising.
+        """
         if repair_nonfinite:
             self.remove_nonfinite_vertices(inplace=True, recompute_normals=False)
         elif self.vertices is not None and not np.isfinite(self.vertices).all():
@@ -1368,6 +1591,21 @@ class Mesh(DiscreteSurface):
         triangles, or simplifying connectivity changes the local mesh geometry.
         Normal refinement is intentionally separate; call ``refine_normals`` after
         cleanup/smoothing when neighborhood-smoothed normals are needed.
+
+        Parameters
+        ----------
+        simplify_mesh : bool, default=False
+            Reduce triangle count via quadric decimation after topology repair.
+        target_number_of_triangles : int, default=500000
+            Target face count for simplification (only used when ``simplify_mesh=True``).
+        recompute_normals : bool, default=True
+            Recompute vertex normals after cleanup. When False, normals are cleared and
+            recomputed lazily on the next :meth:`get_normals` call.
+
+        Returns
+        -------
+        Mesh
+            ``self`` (method modifies in-place and returns self for chaining).
         """
         self.remove_nonfinite_vertices(inplace=True, recompute_normals=False)
         o3d_mesh = self._to_open3d()
@@ -1394,7 +1632,24 @@ class Mesh(DiscreteSurface):
         return self
 
     def remove_disconnected_components(self, min_component_size: int = 100, logger: logging.Logger | None = None) -> "Mesh":
-        """Remove small disconnected components that are likely artifacts."""
+        """Remove small disconnected components that are likely artifacts.
+
+        Uses face connectivity to identify connected components via NetworkX. Components
+        with fewer than ``min_component_size`` vertices are removed. Requires the optional
+        ``networkx`` package; silently skips if not installed.
+
+        Parameters
+        ----------
+        min_component_size : int, default=100
+            Minimum number of vertices a component must have to be kept.
+        logger : logging.Logger, optional
+            Logger for progress messages. Falls back to ``print`` when None.
+
+        Returns
+        -------
+        Mesh
+            ``self`` (method modifies in-place and returns self for chaining).
+        """
         log_msg = lambda msg: logger.info(msg) if logger else print(msg)
         
         if self.vertices is None or self.faces is None:
@@ -1458,6 +1713,7 @@ class Mesh(DiscreteSurface):
         Returns
         -------
         Mesh
+            ``self`` (method modifies in-place and returns self for chaining).
         """
         if self.vertices is None or self.faces is None:
             print("Warning: No mesh to clean")
@@ -1596,36 +1852,30 @@ class Mesh(DiscreteSurface):
         vertices_to_keep = np.where(keep_mask)[0]
         self._filter_by_vertex_set(vertices_to_keep)
 
-    def filter_by_labels(self, vertex_labels: np.ndarray, surface_type: str = 'inner', inplace: bool = False) -> "Mesh" | None:
-        """
-        Create a new mesh containing only inner or outer vertices based on labels.
-        
+    def apply_vertex_mask(self, mask: np.ndarray, inplace: bool = False) -> "Mesh | None":
+        """Return a mesh containing only vertices where ``mask`` is True.
+
         Parameters
         ----------
-        vertex_labels : np.ndarray
-            Labels from separate_surfaces (0=inner, 1=outer)
-        surface_type : str, default='inner'
-            Which surface to extract: 'inner' or 'outer'
-        inplace : bool, default=False
-            If True, modify in place. If False, return new instance.
-            
+        mask : np.ndarray
+            Boolean array of shape (N,) aligned with ``self.vertices``. Pass one of
+            the masks returned by :meth:`separate_planar_surface` or
+            :meth:`~DiscreteSurface.separate_closed_surface`.
+        inplace : bool, default False
+            Modify this instance when True; return a new Mesh when False.
+
         Returns
         -------
         Mesh or None
-            New mesh instance if inplace=False, else None
+            New Mesh instance if ``inplace=False``, else None.
         """
-        # Determine which label to keep
-        target_label = 0 if surface_type == 'inner' else 1
-        mask = (vertex_labels == target_label)
         vertices_to_keep = np.where(mask)[0]
-        
         if inplace:
             self._filter_by_vertex_set(vertices_to_keep)
             return None
-        else:
-            new_mesh = copy.deepcopy(self)
-            new_mesh._filter_by_vertex_set(vertices_to_keep)
-            return new_mesh
+        new_mesh = copy.deepcopy(self)
+        new_mesh._filter_by_vertex_set(vertices_to_keep)
+        return new_mesh
 
     def get_euler_characteristic(self):
         """
@@ -1918,9 +2168,11 @@ class Mesh(DiscreteSurface):
         ----------
         number_of_points : int, optional
             Target number of points to sample. If None, uses init_factor * num_vertices
-        init_factor : int, default=1
+        init_factor : int, default=5
             Multiplier for number_of_points if not specified: init_factor * num_vertices
-
+        inplace : bool, default=False
+            If True, modify in place. If False, return new OrientedPointCloud instance
+        
         Returns
         -------
         OrientedPointCloud
@@ -2086,8 +2338,16 @@ class Mesh(DiscreteSurface):
         else:
             self.normals = None
 
-    def to_oriented_points(self):
-        """Convert mesh to oriented point representation."""
+    def to_oriented_points(self) -> "OrientedPointCloud":
+        """Convert this mesh to an oriented point cloud.
+
+        Each mesh vertex becomes a point; per-vertex normals are preserved.
+
+        Returns
+        -------
+        OrientedPointCloud
+            Point cloud with the same vertex positions and normals as this mesh.
+        """
         return OrientedPointCloud.from_mesh(self)
 
     @classmethod
@@ -2234,11 +2494,12 @@ class Mesh(DiscreteSurface):
         return mesh
 
     @classmethod
-    def from_mrc(cls, input_path: PathOrStr, transpose: bool = True, labels_dict: dict | None = None, level: float = 0.5, pixel_size: float = 1.0, 
-                smooth_sigma: float | None = None) -> "Mesh":
+    def from_mrc(cls, input_path: MapSource, transpose: bool = True, labels_dict: dict | None = None, level: float = 0.5, pixel_size: float = 1.0,
+                smooth_sigma: float | None = None, step_size: int = 1) -> "Mesh | dict[str, Mesh]":
         """
-        Create mesh from MRC segmentation file (marching cubes + optional Gaussian smoothing).
+        Create mesh from a segmentation source (marching cubes + optional Gaussian smoothing).
 
+        Accepts either a path to an MRC/EM file or an already-loaded ndarray.
         Vertex normals come from marching cubes. For smoother or more globally consistent normals,
         call :meth:`refine_normals` on the returned mesh (see that method for ``radius_hit``,
         ``batch_size``, and ``n_iter``).
@@ -2247,20 +2508,21 @@ class Mesh(DiscreteSurface):
 
         1. Physical Units (for software expecting real-world coordinates)
             - Set `pixel_size` to the physical pixel/voxel size (e.g., `pixel_size=0.7884`)
-            - Set `sampling_distance` in the same physical units (e.g., `sampling_distance=0.55` for 0.55 nm)
             - Output coordinates are in physical units (nm)
 
         2. Pixel/voxel Units (for software expecting pixel_size=1)
             - Set `pixel_size=1` (normalized)
-            - Set `sampling_distance` in pixel/voxel units (e.g., scaling factor `sampling_distance=0.55/0.7884`)
             - Output coordinates are in pixel/voxel units
 
         Parameters
         ----------
-        input_path : str
-            Path to MRC file
+        input_path : PathOrStr or np.ndarray
+            Path to MRC/EM file, or an already-loaded segmentation array.
+            When an ndarray is passed, ``transpose`` has no effect (the array
+            is used as-is).
         transpose : bool, default=True
-            Whether to transpose the segmentation data
+            Whether to transpose the segmentation data when loading from file.
+            Ignored when ``input_path`` is an ndarray.
         labels_dict : dict, optional
             Dictionary mapping membrane names to label values.
             If None, treats as binary segmentation.
@@ -2274,39 +2536,39 @@ class Mesh(DiscreteSurface):
             Gaussian smoothing sigma (in pixel/voxel units) to apply before meshing.
             Typical values: 0.5-2.0. Reduces step-like artifacts from marching cubes.
             If None, no smoothing is applied.
-
-        Notes
-        -----
-        Segmentation volumes load only via :func:`cryocat.core.cryomap.read`. If loading fails due
-        to a malformed or non-standard MRC header, repair the file before calling this method.
+        step_size : int, default=1
+            Step size for marching cubes. Larger values reduce resolution but run
+            faster. ``1`` = full resolution.
 
         Returns
         -------
-        Mesh or dict
+        Mesh or dict[str, Mesh]
             Single mesh if ``labels_dict`` is None, else dict mapping each membrane name to a
             :class:`Mesh`.
         """
-
-        segmentation = cryomap.read(input_path, transpose=transpose)
+        if isinstance(input_path, np.ndarray):
+            segmentation = input_path
+            transpose = False  # already in memory — no transposition applied
+        else:
+            segmentation = cryomap.read(input_path, transpose=transpose)
 
         if labels_dict is None:
-            # Single binary segmentation
             return cls._create_mesh_from_seg(
-                segmentation, level, pixel_size, smooth_sigma, transpose)
+                segmentation, level, pixel_size, smooth_sigma, transpose, step_size=step_size)
         else:
-            # Multiple labels
             meshes = {}
             for membrane_name, label_value in labels_dict.items():
                 membrane_mask = (segmentation == label_value).astype(float)
-                if membrane_mask.sum() > 0:  # Only create mesh if label exists
+                if membrane_mask.sum() > 0:
                     mesh = cls._create_mesh_from_seg(
-                        membrane_mask, level, pixel_size, smooth_sigma, transpose)
+                        membrane_mask, level, pixel_size, smooth_sigma, transpose, step_size=step_size)
                     meshes[membrane_name] = mesh
             return meshes
 
     @classmethod
     def _create_mesh_from_seg(cls, segmentation: np.ndarray, level: float, pixel_size: float,
-                            smooth_sigma: float | None = None, transpose: bool = True) -> "Mesh":
+                            smooth_sigma: float | None = None, transpose: bool = True,
+                            step_size: int = 1) -> "Mesh":
         """Create mesh from segmentation volume with marching cubes."""
 
         # Apply Gaussian smoothing to reduce step-like artifacts from marching cubes
@@ -2316,7 +2578,7 @@ class Mesh(DiscreteSurface):
             print(f"Smoothed field range: [{segmentation.min():.3f}, {segmentation.max():.3f}]")
 
         vertices_world, faces, normals, vertices_pixel = cls._extract_surface_points(
-            segmentation, pixel_size, level)
+            segmentation, pixel_size, level, step_size=step_size)
 
         if vertices_world is None or len(vertices_world) == 0:
             raise ValueError("DiscreteSurface extraction failed - no valid vertices found")
@@ -2332,21 +2594,27 @@ class Mesh(DiscreteSurface):
         return mesh
 
     @staticmethod
-    def _extract_surface_points(segmentation: np.ndarray, pixel_size: float, level: float = 0.5):
+    def _extract_surface_points(segmentation: np.ndarray, pixel_size: float, level: float = 0.5, step_size: int = 1):
         """
         Extract dual surface from segmentation using marching cubes.
 
-        Maintains float precision throughout.
+        Maintains float precision throughout. Optionally validates that vertices
+        lie on the segmentation boundary using sub-voxel interpolation.
 
         Parameters
         ----------
         segmentation : ndarray
             3D binary segmentation volume (0=background, 1=membrane)
         pixel_size : float
-            Voxel size in physical units, used to scale the marching-cubes
-            output to world coordinates.
+            Pixel/voxel pixel_size in physical units or normalized pixel/voxel units
         level : float, default=0.5
             Iso-level for marching cubes
+        step_size : int, default=1
+            Step size for marching cubes (larger = lower resolution, faster).
+        validate : bool, default=True
+            Whether to validate vertices are on boundary
+        tolerance : float, default=0.1
+            Sub-pixel/voxel validation tolerance
 
         Returns
         -------
@@ -2358,12 +2626,15 @@ class Mesh(DiscreteSurface):
             Nx3 array of vertex normals
         vertices_pixel : ndarray
             Nx3 array in voxel coordinates, float precision
+        validation_stats : dict
+            Validation statistics
         """
 
         # Run marching cubes
-        print(f"Running marching cubes (level={level})...")
+        print(f"Running marching cubes (level={level}, step_size={step_size})...")
         vertices_world, faces, normals, _ = skimage.measure.marching_cubes(
-            segmentation, level=level, spacing=(pixel_size, pixel_size, pixel_size)
+            segmentation, level=level, spacing=(pixel_size, pixel_size, pixel_size),
+            step_size=step_size,
         )
 
         # Convert to voxel coordinates (keep float precision!)
@@ -2680,6 +2951,17 @@ class Mesh(DiscreteSurface):
         """
         Save mesh vertices (and optionally normals) to CSV, including both
         pixel/voxel indices and world coordinates.
+
+        Parameters
+        ----------
+        output_path : PathOrStr
+            Destination CSV file path.
+        include_normals : bool, default=True
+            Append ``normal_x``, ``normal_y``, ``normal_z`` columns to the CSV.
+
+        Returns
+        -------
+        None
         """
         self._check_segmentation_metadata()
 
@@ -2711,6 +2993,18 @@ class Mesh(DiscreteSurface):
     def save_vertices_mrc(self, output_path: PathOrStr):
         """
         Save a binary vertex-occupancy volume as MRC.
+
+        Rasterises mesh vertices onto a voxel grid matching the original segmentation
+        shape, marks occupied voxels as 1, and writes the result as an MRC file.
+
+        Parameters
+        ----------
+        output_path : PathOrStr
+            Destination MRC file path.
+
+        Returns
+        -------
+        None
         """
 
         self._check_segmentation_metadata()
@@ -3732,16 +4026,24 @@ class OrientedPointCloud(DiscreteSurface):
     def get_normals(self):
         return self.normals
 
-    def transform(self, transformation_matrix: np.ndarray):
-        """Apply 4x4 transformation matrix to vertices and normals."""
+    def transform(self, transformation_matrix: np.ndarray) -> None:
+        """Apply 4x4 transformation matrix to vertices and normals in place.
+
+        Parameters
+        ----------
+        transformation_matrix : np.ndarray, shape (4, 4)
+            Homogeneous transformation matrix. The translation component is applied to
+            vertices only; the rotation component is applied to both vertices and normals.
+            Normals are re-normalised after transformation.
+        """
         if transformation_matrix.shape != (4, 4):
             raise ValueError("Transformation matrix must be 4x4")
-        
+
         # Transform vertices (homogeneous coordinates)
         vertices_homo = np.hstack([self.vertices, np.ones((len(self.vertices), 1))])
         transformed_vertices = (transformation_matrix @ vertices_homo.T).T
         self.vertices = transformed_vertices[:, :3]
-        
+
         # Transform normals (only rotation part, no translation)
         if self.normals is not None:
             rotation_matrix = transformation_matrix[:3, :3]
@@ -3749,13 +4051,33 @@ class OrientedPointCloud(DiscreteSurface):
             # Renormalize
             self.normals = self.normals / np.linalg.norm(self.normals, axis=1, keepdims=True)
 
-    def translate(self, translation_vector: np.ndarray):
-        """Translate all points."""
+    def translate(self, translation_vector: np.ndarray) -> None:
+        """Translate all points in place.
+
+        Parameters
+        ----------
+        translation_vector : array_like, shape (3,)
+            (x, y, z) offset to add to every vertex. Normals are not affected.
+        """
         translation_vector = np.asarray(translation_vector)
         self.vertices += translation_vector
 
-    def translate_along_normals(self, distance: float, inplace: bool = False):
-        """Translate points along their normal vectors. Default is to return a new object."""
+    def translate_along_normals(self, distance: float, inplace: bool = False) -> "OrientedPointCloud | None":
+        """Translate each point along its own normal vector by ``distance``.
+
+        Parameters
+        ----------
+        distance : float
+            Signed displacement along each point's normal. Positive moves in the
+            normal direction; negative moves against it.
+        inplace : bool, default=False
+            If True, modify in place and return None. If False, return a new instance.
+
+        Returns
+        -------
+        OrientedPointCloud or None
+            New instance if ``inplace=False``, else None.
+        """
         if inplace:
             self.vertices += distance * self.normals
             return None
@@ -3764,24 +4086,22 @@ class OrientedPointCloud(DiscreteSurface):
             new_obj.vertices += distance * new_obj.normals
             return new_obj
 
-    def rotate(self, rotation_matrix: np.ndarray):
+    def rotate(self, rotation_matrix: np.ndarray) -> None:
         """
-        Apply 3x3 rotation matrix to vertices and normals.
-        
+        Apply 3x3 rotation matrix to vertices and normals in place.
+
         Parameters
         ----------
         rotation_matrix : array_like (3, 3)
-            Rotation matrix (should be orthogonal)
+            Rotation matrix (should be orthogonal).
         """
         rotation_matrix = np.asarray(rotation_matrix)
         if rotation_matrix.shape != (3, 3):
             raise ValueError("Rotation matrix must be 3x3")
-        
-        # Build 4x4 transformation matrix
+
         T = np.eye(4)
         T[:3, :3] = rotation_matrix
-        
-        return self.transform(T)
+        self.transform(T)
 
     def flip_normals(self, inplace: bool = True, **kwargs):
         """
@@ -3855,6 +4175,19 @@ class OrientedPointCloud(DiscreteSurface):
 
         Provide either integer ``point_ids`` or a boolean ``mask`` with one value per point.
         Normals are copied when present.
+
+        Parameters
+        ----------
+        point_ids : np.ndarray, optional
+            Integer indices of points to extract. Mutually exclusive with ``mask``.
+        mask : np.ndarray of bool, optional
+            Boolean selection mask with one entry per point. Mutually exclusive with
+            ``point_ids``.
+
+        Returns
+        -------
+        OrientedPointCloud
+            New point cloud containing the selected points and (when present) their normals.
         """
         if self.vertices is None:
             raise ValueError("Point cloud must have vertices")
@@ -4389,7 +4722,23 @@ class OrientedPointCloud(DiscreteSurface):
             - 'ply': point cloud geometry (with normals when present)
             - 'motl' or 'em': motive list using normals as orientations
         **kwargs
-            Forwarded to the selected format helper.
+            Forwarded to the selected format helper:
+
+            *PLY* (``format='ply'``):
+
+            - ``write_ascii`` : bool, default=False — write ASCII rather than binary PLY.
+
+            *MOTL / EM* (``format='motl'`` or ``'em'``):
+
+            - ``input_dict`` : dict, optional — extra motive-list columns to fill.
+            - ``subtomo_ids`` : array-like, shape (N,), optional — per-point subtomogram IDs;
+              sequential IDs (1, 2, …) are assigned when None.
+            - ``tomo_id`` : int, float, or array-like, optional — tomogram ID; scalar applies
+              to all points, array assigns per-point IDs.
+
+        Returns
+        -------
+        None
         """
         output_path = Path(output_path)
         fmt = output_path.suffix.lower().lstrip(".") if format is None else str(format).lower()
@@ -4505,17 +4854,17 @@ class OrientedPointCloud(DiscreteSurface):
         o3d.io.write_point_cloud(str(output_path), pcd_o3d, write_ascii=write_ascii)
         print(f"Saved point cloud with normals to {output_path}")
 
-    def convex_hull(self):
+    def convex_hull(self) -> tuple:
         """
-        Compute convex hull of the point cloud.
+        Compute the convex hull of the point cloud.
 
         Returns
         -------
         hull : open3d.geometry.TriangleMesh
             The convex hull mesh.
         stats : dict
-            Hull statistics: volume, surface area, vertex/face counts, and
-            bounding-box extent.
+            Hull statistics: ``volume``, ``surface_area``, ``hull_vertices``,
+            ``hull_faces``, ``bounding_box_extent``.
         """
         pcd_o3d = self._to_open3d()
         hull, _ = pcd_o3d.compute_convex_hull()
@@ -4585,6 +4934,21 @@ class OrientedPointCloud(DiscreteSurface):
         Nearest-neighbor distance from query points to this point cloud (unsigned only).
 
         Occupancy and signed-distance queries are not supported; use :class:`Mesh` for those.
+
+        Parameters
+        ----------
+        target : np.ndarray or list of float, shape (N, 3)
+            Query points to measure distances from.
+        return_closest_points : bool, default=False
+            Include the nearest point cloud vertex and its index for each query point.
+
+        Returns
+        -------
+        dict
+            Always contains ``n_total``, ``distances`` (N,), ``distance_type``
+            (always ``'unsigned'``).
+            With ``return_closest_points``: adds ``closest_points`` (N, 3),
+            ``primitive_ids`` (N,), ``closest_distances`` (N,).
         """
         target = np.atleast_2d(np.asarray(target, dtype=np.float32))
         result: dict[str, Any] = {"n_total": len(target)}
@@ -4605,7 +4969,28 @@ class OrientedPointCloud(DiscreteSurface):
         one_hit_per_target: bool = False,
     ) -> dict[str, Any]:
         """
-        Approximate ray intersection: KDTree-guided search along rays (not triangle ray casting).
+        Approximate ray-to-point-cloud intersection via KDTree search along each ray.
+
+        Unlike mesh ray casting, this does not use triangle geometry. For each ray, the
+        nearest point cloud vertex within ``knn_radius`` of the ray is reported as a hit.
+
+        Parameters
+        ----------
+        rays : np.ndarray, shape (R, 6)
+            Each row is ``[ox, oy, oz, dx, dy, dz]``: ray origin and direction vector.
+            The direction magnitude sets the maximum ray travel length.
+        knn_radius : float, default=10.0
+            Maximum perpendicular distance from a ray to a candidate point for it to
+            count as a hit, in the same units as ``self.vertices``.
+        one_hit_per_target : bool, default=False
+            If True, annotate the result with the globally shortest hit across all rays
+            (see :meth:`DiscreteSurface._annotate_shortest_ray_hit`).
+
+        Returns
+        -------
+        dict
+            Keys: ``t_hit`` (R,), ``hit_points`` (R, 3), ``primitive_ids`` (R,),
+            ``hit_normals`` (R, 3). Entries for misses are ``inf`` / ``nan`` / ``-1``.
         """
         rays = np.atleast_2d(np.asarray(rays, dtype=np.float32))
         n_rays = len(rays)
@@ -4693,6 +5078,34 @@ class OrientedPointCloud(DiscreteSurface):
         ``method='nn_unoriented'`` uses nearest-neighbor distances and ignores normals.
         ``method='nn_oriented'`` casts rays along this point cloud's normals and finds
         target points near each ray.
+
+        Parameters
+        ----------
+        target : OrientedPointCloud
+            The target point cloud to measure distances to.
+        method : str, default='nn_unoriented'
+            Distance strategy. ``'nn_unoriented'`` (aliases: ``'nn'``, ``'nearest'``) —
+            Euclidean nearest-neighbor. ``'nn_oriented'`` (alias: ``'ray'``) — ray cast
+            along source normals; only hits within ``max_distance`` / ``ray_length`` and
+            ``knn_radius`` are counted.
+        max_distance : float, optional
+            Maximum hit distance. Hits beyond this threshold are discarded.
+        ray_length : float, optional
+            Explicit ray length for ``'nn_oriented'`` mode. Defaults to ``max_distance``
+            if set, otherwise to a large value.
+        reverse_normals : bool, default=False
+            If True, cast rays in the opposite normal direction.
+        knn_radius : float, default=10.0
+            Lateral search radius around each ray for ``'nn_oriented'`` mode.
+        one_hit_per_target : bool, default=False
+            If True, keep only the closest source hit per target point.
+
+        Returns
+        -------
+        dict
+            Keys include ``distances`` (N,), ``closest_points`` (N, 3),
+            ``closest_indices`` (N,), ``hit_mask`` (N,), and ``stats`` (summary dict
+            with ``n_source``, ``n_target``, ``n_hits``, and distance statistics).
         """
         if not isinstance(target, OrientedPointCloud):
             raise TypeError(
@@ -4848,6 +5261,21 @@ class OrientedPointCloud(DiscreteSurface):
 
         Always includes ``"hit points"`` (unique seeds). For each radius ``r``,
         adds ``"r <= {r} nm"`` and annulus bands between consecutive radii.
+
+        Parameters
+        ----------
+        seed_point_ids : np.ndarray
+            Integer indices of the seed points within this point cloud.
+        radii : list of float
+            Increasing radii (in the same units as ``self.vertices``) defining the
+            concentric shells. Must be non-empty to produce radius-based regions.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Mapping from region label to sorted integer array of point indices.
+            Keys: ``"hit points"`` (the seeds), ``"r <= {r} nm"`` for each radius, and
+            ``"{r_inner} < r <= {r_outer} nm"`` for each consecutive pair of radii.
         """
         seeds = np.unique(np.asarray(seed_point_ids, dtype=np.intp))
         vertices = np.asarray(self.vertices, dtype=np.float64)
@@ -4991,39 +5419,33 @@ class OrientedPointCloud(DiscreteSurface):
         if self.normals is not None:
             self.normals = self.normals[keep_mask]
 
-    def filter_by_labels(self, vertex_labels: np.ndarray, surface_type: str = 'inner', inplace: bool = False) -> "OrientedPointCloud" | None:
-        """
-        Create a new point cloud containing only inner or outer points based on labels.
-        
+    def apply_vertex_mask(self, mask: np.ndarray, inplace: bool = False) -> "OrientedPointCloud | None":
+        """Return a point cloud containing only points where ``mask`` is True.
+
         Parameters
         ----------
-        vertex_labels : np.ndarray
-            Labels from separate_surfaces (0=inner, 1=outer)
-        surface_type : str, default='inner'
-            Which surface to extract: 'inner' or 'outer'
-        inplace : bool, default=False
-            If True, modify in place. If False, return new instance.
-            
+        mask : np.ndarray
+            Boolean array of shape (N,) aligned with ``self.vertices``. Pass one of
+            the masks returned by :meth:`~DiscreteSurface.separate_planar_surface` or
+            :meth:`~DiscreteSurface.separate_closed_surface`.
+        inplace : bool, default False
+            Modify this instance when True; return a new OrientedPointCloud when False.
+
         Returns
         -------
         OrientedPointCloud or None
-            New point cloud instance if inplace=False, else None
+            New instance if ``inplace=False``, else None.
         """
-        # Determine which label to keep
-        target_label = 0 if surface_type == 'inner' else 1
-        mask = (vertex_labels == target_label)
-        
         if inplace:
             self.vertices = self.vertices[mask]
             if self.normals is not None:
                 self.normals = self.normals[mask]
             return None
-        else:
-            new_pcd = copy.deepcopy(self)
-            new_pcd.vertices = self.vertices[mask].copy()
-            if self.normals is not None:
-                new_pcd.normals = self.normals[mask].copy()
-            return new_pcd
+        new_pcd = copy.deepcopy(self)
+        new_pcd.vertices = self.vertices[mask].copy()
+        if self.normals is not None:
+            new_pcd.normals = self.normals[mask].copy()
+        return new_pcd
 
     def compute_nearest_neighbor_distances(self, k: int = 1, return_indices: bool = False) -> dict[str, Any]:
         """
@@ -5086,64 +5508,6 @@ class OrientedPointCloud(DiscreteSurface):
         
         if return_indices:
             stats['neighbor_indices'] = neighbor_indices
-        
-        return stats
-
-    def distance_to_pointcloud(self, other_pcd: "OrientedPointCloud", return_distances: bool = False) -> dict[str, Any]:
-        """
-        Compute distances from this point cloud to another point cloud.
-        
-        Parameters
-        ----------
-        other_pcd : OrientedPointCloud
-            Target point cloud
-        return_distances : bool, default=False
-            If True, return individual point distances
-        
-        Returns
-        -------
-        dict
-            Distance statistics and analysis
-        """
-        pcd1_o3d = self._to_open3d()
-        pcd2_o3d = other_pcd._to_open3d()
-        
-        # Compute distances from pcd1 to pcd2
-        distances = pcd1_o3d.compute_point_cloud_distance(pcd2_o3d)
-        distances = np.asarray(distances)
-        
-        # Statistics
-        mean_dist = np.mean(distances)
-        std_dist = np.std(distances)
-        min_dist = np.min(distances)
-        max_dist = np.max(distances)
-        median_dist = np.median(distances)
-        
-        # Percentiles for detailed analysis
-        percentiles = np.percentile(distances, [25, 75, 90, 95, 99])
-        
-        # Registration quality metrics
-        rmse = np.sqrt(np.mean(distances**2))
-        
-        stats = {
-            'mean_distance': mean_dist,
-            'std_distance': std_dist,
-            'min_distance': min_dist,
-            'max_distance': max_dist,
-            'median_distance': median_dist,
-            'rmse': rmse,
-            'percentiles': {
-                'p25': percentiles[0],
-                'p75': percentiles[1],
-                'p90': percentiles[2],
-                'p95': percentiles[3],
-                'p99': percentiles[4]
-            },
-            'num_points': len(distances)
-        }
-        
-        if return_distances:
-            stats['distances'] = distances
         
         return stats
 
