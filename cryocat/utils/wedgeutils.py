@@ -5,9 +5,11 @@ import pandas as pd
 from cryocat.utils import ioutils
 from cryocat.utils import starfileio
 from cryocat.utils import geom
+from cryocat.utils import imageutils
 from cryocat.core import cryomask
 from cryocat.core import cryomap
-from cryocat._types import CTFFileType, DataSource, PathOrStr, TomoDimensions, TomoList
+from cryocat._types import CTFFileType, DataSource, PathOrStr, TomoDimensions, TomoList, TripletLike
+from cryocat.utils.classutils import gui_exposed
 import emfile
 import math
 
@@ -609,3 +611,210 @@ def apply_wedge_mask(wedge_mask, in_map, rotation_zxz=None, output_path=None):
         cryomap.write(out_map, output_path)
 
     return out_map
+
+
+# ── Wedge-mask generation from wedge lists ────────────────────────────────────
+
+
+def _generate_exposure(
+    wedgelist: pd.DataFrame, slice_idx: list, slice_weight: np.ndarray, binning: int | float
+) -> np.ndarray:
+    r"""Generate an exposure-based filter to account for frequency-dependent signal
+    attenuation due to electron dose in cryo-electron tomography.
+
+    Parameters
+    ----------
+    wedgelist : pandas.DataFrame
+        Metadata table containing at least ``"exposure"`` and ``"pixelsize"`` columns.
+    slice_idx : list of tuple of ndarray
+        Per-tilt active voxel indices in Fourier space.
+    slice_weight : numpy.ndarray
+        3D array of normalised frequency-domain weights.
+    binning : int or float
+        The binning factor of the tomogram.
+
+    Returns
+    -------
+    exp_filt : numpy.ndarray
+        3D exposure filter of the same shape as ``slice_weight``.
+    """
+    expo = wedgelist["exposure"].values
+    a, b, c = (0.245, -1.665, 2.81)
+    pixelsize = wedgelist["pixelsize"].values[0] * binning
+
+    freq_array = np.fft.ifftshift(imageutils.compute_frequency_array(slice_weight.shape, pixelsize))
+
+    exp_filt = np.zeros_like(slice_weight)
+    for expi, idx in zip(expo, slice_idx):
+        freqs = freq_array[idx]
+        exp_filt[idx] += np.exp(-expi / (2 * ((a * freqs**b) + c)))
+
+    exp_filt *= slice_weight
+    return exp_filt
+
+
+def _generate_wedgemask_slices_template(wedgelist: pd.DataFrame, template_filter: np.ndarray) -> tuple:
+    """Generate missing-wedge masks and weights for a cubic template in Fourier space.
+
+    Parameters
+    ----------
+    wedgelist : pandas.DataFrame
+        Table with a ``"tilt_angle"`` column.
+    template_filter : ndarray
+        3D frequency-filtered template; must be cubic.
+
+    Returns
+    -------
+    active_slices_idx : list of tuple of ndarrays
+    wedge_slices_weights : ndarray
+    wedge_slices : ndarray
+    """
+    template_size = np.array(template_filter.shape)
+    assert len(template_size) == 3, "The template is not 3D!"
+    assert len(np.unique(template_size)) == 1, "The template is not cubic in shape!"
+
+    mx = np.max(template_size[[2, 0]])
+    img = np.zeros((mx, mx))
+    img[:, mx // 2] = 1.0
+
+    bpf_idx = template_filter > 0
+
+    active_slices_idx = []
+    wedge_slices_weights = np.zeros_like(template_filter)
+    weight = np.zeros_like(template_filter)
+
+    for alpha in wedgelist["tilt_angle"]:
+        r_img = imageutils.rotate_2d(img, alpha)
+        crop_r_img = r_img > np.exp(-2)
+        slice_vol = np.fft.ifftshift(np.transpose(np.tile(crop_r_img, (mx, 1, 1)), (2, 0, 1)))
+        slice_idx = slice_vol & bpf_idx
+        weight += slice_idx
+        active_slices_idx.append(np.nonzero(slice_idx))
+
+    w_idx = np.nonzero(weight)
+    wedge_slices_weights[w_idx] = 1.0 / weight[w_idx]
+
+    wedge_slices = np.zeros_like(weight)
+    wedge_slices[w_idx] = 1.0
+
+    return active_slices_idx, wedge_slices_weights, wedge_slices
+
+
+def _generate_wedgemask_slices_tile(wedgelist: pd.DataFrame, tile_filter: np.ndarray) -> np.ndarray:
+    """Generate a missing-wedge mask for a subtomo or tile in Fourier space.
+
+    Parameters
+    ----------
+    wedgelist : pandas.DataFrame
+        Table with a ``"tilt_angle"`` column.
+    tile_filter : ndarray
+        3D frequency-filtered tile; must be cubic.
+
+    Returns
+    -------
+    wedge_slices : ndarray
+        Binary 3D mask of the same shape as ``tile_filter``.
+    """
+    tile_size = np.array(tile_filter.shape)
+    assert len(tile_size) == 3, "The tile is not 3D!"
+    assert len(np.unique(tile_size)) == 1, "The tile is not cubic in shape!"
+
+    mx = np.max(tile_size[[2, 0]])
+    img = np.zeros((mx, mx))
+    img[:, mx // 2] = 1.0
+
+    tile_bin_slice = np.zeros(tile_size[[2, 0]], dtype="float32")
+
+    for alpha in wedgelist["tilt_angle"]:
+        r_img = imageutils.rotate_2d(img, alpha)
+        r_img = np.fft.fftshift(np.fft.fft2(r_img))
+        new_img = np.real(np.fft.ifft2(np.fft.ifftshift(r_img)))
+        new_img /= np.max(new_img)
+        tile_bin_slice += new_img > np.exp(-2)
+
+    tile_bin_slice = (tile_bin_slice > 0).astype("float32")
+    wedge_slices = np.fft.ifftshift(np.transpose(np.tile(tile_bin_slice, (tile_size[1], 1, 1)), (2, 0, 1)))
+    return wedge_slices
+
+
+@gui_exposed(
+    label="Generate wedge mask",
+    category="Mask",
+    output="map",
+    hide=("output_path",),
+)
+def generate_wedge_mask(
+    map_size: TripletLike | int,
+    wedgelist: DataSource,
+    tomo_number: int,
+    *,
+    binning: int = 1,
+    low_pass_filter: int | None = None,
+    high_pass_filter: int | None = None,
+    ctf_weighting: bool = False,
+    exposure_weighting: bool = False,
+    output_path: PathOrStr | None = None,
+) -> dict:
+    """Generate a Fourier-space wedge mask for one volume of size ``map_size``.
+
+    Builds the per-tomogram missing-wedge mask from a wedge-list row, optionally
+    weighted by CTF and exposure terms.  The result is a single 3D array — no
+    template/target pairing, no analysis-specific structure.  Callers that need
+    both a template-side and a target-side mask call this function twice with
+    different ``map_size`` values.
+
+    Parameters
+    ----------
+    map_size : TripletLike or int
+        Output volume shape.  A scalar is treated as cubic; a triplet is
+        ``(x, y, z)``.  A ``TripletLike`` is a scalar or a 3-element sequence.
+    wedgelist : DataSource
+        Path to a STOPGAP wedge list (.star) or a preloaded DataFrame.
+        A ``DataSource`` is a path to a file or an ndarray / DataFrame.
+    tomo_number : int
+        Tomogram number to select from the wedge list.
+    binning : int, default 1
+        Pixel-size binning factor used for exposure and CTF computations.
+    low_pass_filter : int, optional
+        Low-pass cutoff in Fourier pixels; ``None`` disables the filter.
+    high_pass_filter : int, optional
+        High-pass cutoff in Fourier pixels; ``None`` disables the filter.
+    ctf_weighting : bool, default False
+        Apply CTF weighting to the mask.
+    exposure_weighting : bool, default False
+        Apply exposure weighting to the mask.
+    output_path : PathOrStr, optional
+        Where to write the mask.  ``None`` → returned in memory only.
+        A ``PathOrStr`` is a :class:`str` or :class:`pathlib.Path`.
+
+    Returns
+    -------
+    dict
+        ``mask`` : ndarray — the wedge mask, shaped ``map_size`` (transposed to
+        xyz convention before return);
+        ``output_path`` : str or None — path the mask was written to.
+    """
+    size_triplet = geom.as_triplet(map_size)
+    filt = np.ones(size_triplet)
+
+    wl = load_wedge_list_sg(wedgelist)
+    wl = wl.loc[wl["tomo_num"] == tomo_number]
+
+    if low_pass_filter is not None:
+        filt = cryomap.lowpass(filt, fourier_pixels=low_pass_filter)
+    if high_pass_filter is not None:
+        filt = cryomap.highpass(filt, fourier_pixels=high_pass_filter)
+
+    active_slices_idx, wedge_slices_weights, wedge_slices = _generate_wedgemask_slices_template(wl, filt)
+    mask = wedge_slices * filt
+
+    if exposure_weighting:
+        mask *= _generate_exposure(wl, active_slices_idx, wedge_slices_weights, binning)
+
+    if ctf_weighting:
+        mask *= imageutils.generate_ctf_slice(wl, active_slices_idx, wedge_slices_weights, binning)
+
+    if output_path is not None:
+        cryomap.write(mask, output_path, transpose=False, data_type=np.single)
+
+    return {"mask": mask.transpose(2, 1, 0), "output_path": output_path}

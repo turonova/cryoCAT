@@ -9,6 +9,7 @@ from cryocat.core import mdoc
 import xml.etree.ElementTree as ET
 
 from cryocat.utils.exceptions import UserInputError
+from cryocat._types import EulerAngles, PathOrStr
 
 
 def get_file_encoding(input_path):
@@ -798,6 +799,49 @@ def rot_angles_load(input_angles, angles_order="zxz"):
         raise ValueError("The input_angles have to be either a valid path to a file or numpy array!!!")
 
     return angles
+
+
+def angles_save(
+    angles: EulerAngles,
+    output_path: PathOrStr,
+    **output_kwargs,
+) -> None:
+    """Write Euler angles to a headerless three-column CSV file.
+
+    The output format is compatible with :func:`rot_angles_load`: each row
+    contains three whitespace/comma-separated values (phi, theta, psi) with no
+    header line and no row index.
+
+    Parameters
+    ----------
+    angles : array-like, shape (N, 3)
+        Euler angles to write. Each row is one angle triplet. Values are
+        written as-is (no unit conversion).
+    output_path : str or path-like
+        Destination file path. Parent directories must exist. The ``.csv``
+        extension is conventional but not enforced.
+    **output_kwargs
+        Extra keyword arguments forwarded to :func:`pandas.DataFrame.to_csv`
+        (e.g. ``sep``, ``float_format``).
+
+    Raises
+    ------
+    ValueError
+        If ``angles`` cannot be converted to a two-dimensional array with
+        exactly three columns.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> angles = np.array([[0.0, 45.0, 90.0], [30.0, 60.0, 120.0]])
+    >>> angles_save(angles, "output_angles.csv")
+    """
+    arr = np.asarray(angles, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] != 3:
+        raise ValueError(
+            f"angles must be a (N, 3) array; got shape {arr.shape}."
+        )
+    pd.DataFrame(arr).to_csv(output_path, header=False, index=False, **output_kwargs)
 
 
 def tlt_load(input_tlt, sort_angles=True):

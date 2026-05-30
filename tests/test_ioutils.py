@@ -3358,6 +3358,41 @@ def test_rot_angles_load():
         os.remove(Path(__file__).parent / "test_data" / "TS_018" / "angles_test.csv")
 
 
+def test_angles_save_round_trip(tmp_path):
+    """angles_save + rot_angles_load are inverse operations."""
+    from cryocat.utils.ioutils import angles_save, rot_angles_load
+
+    angles = np.array([[0.0, 45.0, 90.0], [30.0, 60.0, 120.0], [180.0, 0.0, 270.0]])
+    out = tmp_path / "angles.csv"
+    angles_save(angles, str(out))
+
+    loaded = rot_angles_load(str(out))
+    np.testing.assert_allclose(loaded, angles, atol=1e-9)
+
+
+def test_angles_save_single_row(tmp_path):
+    """angles_save handles a single-row array."""
+    from cryocat.utils.ioutils import angles_save, rot_angles_load
+
+    angles = np.array([[10.0, 20.0, 30.0]])
+    out = tmp_path / "single.csv"
+    angles_save(angles, str(out))
+
+    loaded = rot_angles_load(str(out))
+    np.testing.assert_allclose(loaded, angles, atol=1e-9)
+
+
+def test_angles_save_invalid_shape(tmp_path):
+    """angles_save raises ValueError for arrays that are not (N, 3)."""
+    from cryocat.utils.ioutils import angles_save
+
+    with pytest.raises(ValueError):
+        angles_save(np.array([1.0, 2.0, 3.0]), str(tmp_path / "bad.csv"))  # 1-D
+
+    with pytest.raises(ValueError):
+        angles_save(np.array([[1.0, 2.0], [3.0, 4.0]]), str(tmp_path / "bad2.csv"))  # 2 cols
+
+
 def test_tlt_load():
     current_dir = Path(__file__).parent / "test_data" / "TS_018"
     angles = [

@@ -13,6 +13,7 @@ drift.
 """
 
 import inspect
+import typing
 
 from dash import html, dcc
 import dash_bootstrap_components as dbc
@@ -26,6 +27,11 @@ _LABEL_STYLE = {"width": "45%", "display": "flex", "alignItems": "center",
 _INPUT_STYLE = {"width": "55%"}
 _ROW_STYLE = {"display": "flex", "flexDirection": "row", "marginBottom": "0.25rem",
               "width": "100%", "alignItems": "center"}
+_COMPACT_INPUT_STYLE = {
+    "width": "100%", "height": "22px", "minHeight": "22px",
+    "padding": "0 6px", "fontSize": "11px", "lineHeight": "20px",
+    "boxSizing": "border-box", "borderRadius": "3px",
+}
 
 
 def _empty(default):
@@ -44,14 +50,32 @@ def _mk_id(id_type, name, tag, id_extra):
     return cid
 
 
+# ── Smart dropdown helper ────────────────────────────────────────────────────
+
+def make_dropdown(cid, options, value, clearable=False, **kwargs):
+    """Create a dcc.Dropdown; search is enabled automatically when > 10 options."""
+    return dcc.Dropdown(
+        id=cid, options=options, value=value,
+        clearable=clearable,
+        searchable=len(options) > 10,
+        style={"width": "100%"},
+        **kwargs,
+    )
+
+
 # ── Widget factories: descriptor string -> Dash component ───────────────────
+
+def _truly_optional(required, default):
+    """True only when the parameter has an explicit None default (can be left blank)."""
+    return not required and _empty(default)
+
 
 def _text_field(cid, default, required, choices=None):
     return dcc.Input(
         type="text", id=cid,
         value="" if _empty(default) else str(default),
-        placeholder="" if required else "Optional",
-        style={"width": "100%"},
+        placeholder="Optional" if _truly_optional(required, default) else "",
+        style=_COMPACT_INPUT_STYLE,
     )
 
 
@@ -59,22 +83,23 @@ def _number_field(cid, default, required, choices=None):
     return dcc.Input(
         type="number", id=cid,
         value=None if _empty(default) else default,
-        placeholder="" if required else "Optional",
-        style={"width": "100%"},
+        placeholder="Optional" if _truly_optional(required, default) else "",
+        style=_COMPACT_INPUT_STYLE,
     )
 
 
 def _bool_dropdown(cid, default, required, choices=None):
     val = "True" if default is True else "False" if default is False else None
-    return dcc.Dropdown(id=cid, options=["True", "False"], value=val, style={"width": "100%"})
+    return make_dropdown(cid, ["True", "False"], val)
 
 
 def _path_field(cid, default, required, choices=None):
+    suffix = " (optional)" if _truly_optional(required, default) else ""
     return dcc.Input(
         type="text", id=cid,
         value="" if _empty(default) else str(default),
-        placeholder="path to file" + ("" if required else " (optional)"),
-        style={"width": "100%"},
+        placeholder=f"path to file{suffix}",
+        style=_COMPACT_INPUT_STYLE,
     )
 
 
@@ -88,21 +113,70 @@ def _triplet_field(cid, default, required, choices=None):
     return dcc.Input(
         type="text", id=cid, value=val,
         placeholder="e.g. 64,64,64 or 64",
-        style={"width": "100%"},
+        style=_COMPACT_INPUT_STYLE,
     )
 
 
 def _choice_dropdown(cid, default, required, choices=None):
     choices = list(choices or [])
-    if not _empty(default):
-        val = default
+    val = default if not _empty(default) else (choices[0] if choices else None)
+    return make_dropdown(
+        cid,
+        [{"label": str(c), "value": c} for c in choices],
+        val,
+    )
+
+
+def _rotation_field(cid, default, required, choices=None):
+    from cryocat.app.components.rotationbuilder import get_rotation_builder_panel
+    type_ = cid.get("type", "x") if isinstance(cid, dict) else str(cid)
+    param_ = cid.get("param", "x") if isinstance(cid, dict) else "x"
+    builder_ = cid.get("builder", "") if isinstance(cid, dict) else ""
+    rprefix = (
+        f"rotfld-{builder_}-{type_}-{param_}" if builder_
+        else f"rotfld-{type_}-{param_}"
+    )
+    if _empty(default):
+        val = ""
+    elif isinstance(default, (list, tuple)):
+        val = ",".join(str(x) for x in default)
     else:
-        val = choices[0] if choices else None
-    return dcc.Dropdown(
-        id=cid,
-        options=[{"label": str(c), "value": c} for c in choices],
-        value=val,
-        style={"width": "100%"},
+        val = str(default)
+    return html.Div(
+        [
+            dbc.InputGroup(
+                [
+                    dbc.Input(
+                        id=cid,
+                        type="text",
+                        value=val,
+                        placeholder="phi,theta,psi (zxz, degrees)",
+                    ),
+                    dbc.Button("Build…", id=f"{rprefix}-build-btn", color="secondary", size="sm"),
+                ]
+            ),
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(dbc.ModalTitle("Build rotation")),
+                    dbc.ModalBody(get_rotation_builder_panel(f"{rprefix}-inner")),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button(
+                                "Use this rotation",
+                                id=f"{rprefix}-use-btn",
+                                color="primary",
+                                className="me-2",
+                            ),
+                            dbc.Button("Close", id=f"{rprefix}-close-btn", color="secondary"),
+                        ]
+                    ),
+                ],
+                id=f"{rprefix}-modal",
+                size="lg",
+                is_open=False,
+                centered=True,
+            ),
+        ]
     )
 
 
@@ -114,12 +188,14 @@ _WIDGET_FACTORIES = {
     "number":   _number_field,
     "bool":     _bool_dropdown,
     "dropdown": _choice_dropdown,
+    "rotation": _rotation_field,
 }
 
 
-def _form_row(name, widget, description, required):
-    label_id = f"formgen-lbl-{name}"
-    label_text = name.replace("_", " ").capitalize() + ("" if required else " (opt.)")
+def _form_row(name, widget, description, truly_optional=False, label_id=None):
+    if label_id is None:
+        label_id = f"formgen-lbl-{name}"
+    label_text = name.replace("_", " ").capitalize() + (" (opt.)" if truly_optional else "")
     label = html.Div(
         [
             html.Label(label_text, id=label_id, style={"fontSize": "0.85rem", "margin": 0}),
@@ -162,6 +238,14 @@ def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
     except (ValueError, TypeError):
         return [html.Div("No parameters.", style=_HINT_STYLE)]
 
+    # `from __future__ import annotations` (PEP 563) makes all annotations lazy
+    # strings. `get_type_hints` evaluates them back to live types so
+    # resolve_param_type sees e.g. Optional[float], not the string "Optional[float]".
+    try:
+        hints = typing.get_type_hints(fn)
+    except Exception:
+        hints = {}
+
     # For classes, parameter descriptions normally live in the *class* docstring
     # (numpydoc convention). Try __init__ first, fall back to the class itself.
     if inspect.isclass(fn):
@@ -176,15 +260,21 @@ def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
         if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
             continue
 
-        tag, extra = resolve_param_type(param.annotation)
+        annotation = hints.get(name, param.annotation)
+        tag, extra = resolve_param_type(annotation)
         required = param.default is inspect.Parameter.empty
         default = None if required else param.default
+        truly_optional = not required and default is None
         choices = extra.get("choices", [])
 
         handler = TYPE_HANDLERS[tag]
         cid = _mk_id(id_type, name, tag, id_extra)
         widget = _WIDGET_FACTORIES[handler["widget"]](cid, default, required, choices=choices)
-        rows.append(_form_row(name, widget, descriptions.get(name, ""), required))
+        # Build a label ID that is unique across all mounted pages by incorporating
+        # id_type and all id_extra values (sorted for stability).
+        extra_str = "_".join(str(v) for _, v in sorted((id_extra or {}).items()))
+        lbl_id = f"formgen-lbl_{id_type}_{extra_str}_{name}" if extra_str else f"formgen-lbl_{id_type}_{name}"
+        rows.append(_form_row(name, widget, descriptions.get(name, ""), truly_optional, label_id=lbl_id))
 
     if not rows:
         return [html.Div("No parameters required.", style=_HINT_STYLE)]

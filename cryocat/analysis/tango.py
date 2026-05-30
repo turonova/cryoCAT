@@ -23,6 +23,7 @@ import sklearn.neighbors as sn
 
 from cryocat.utils import geom
 from cryocat.analysis import nnana
+from cryocat.analysis import clustering as clustering_mod
 from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.utils.geom import Matrix
@@ -849,13 +850,7 @@ class Descriptor:
         -------
         pandas.DataFrame
         """
-
-        if axis_type == "row":
-            return df.dropna(axis=0)
-        elif axis_type == "column":
-            return df.dropna(axis=1)
-        else:
-            raise ValueError("axis_type must be either 'row' or 'column'")
+        return clustering_mod.drop_nans(df, axis_type=axis_type)
 
     @staticmethod
     def build_descriptor_feature_map(desc_list, feat_list):
@@ -924,24 +919,10 @@ class Descriptor:
 
         Returns
         -------
-        pandas.DataFrame
-            A DataFrame containing the feature importance scores.
+        pandas.Series
+            Feature importance scores sorted descending.
         """
-
-        # Square of loadings → proportion of variance that each feature contributes to each PC
-        components_matrix = pca.components_  # shape: (n_components, n_features)
-        loadings = components_matrix[:n_components, :] ** 2
-
-        # Sum contributions across selected components
-        feature_scores = loadings.sum(axis=0)
-
-        # Create a series with feature names
-        feature_importance = pd.Series(feature_scores, index=input_df.columns)
-
-        # Sort if you want to see most important features
-        important_features = feature_importance.sort_values(ascending=False)
-
-        return important_features
+        return clustering_mod.pca_feature_importance(pca, list(input_df.columns))
 
     def pca_analysis(
         self, variance_threshold=0.95, show_fig=True, nan_drop="row", scatter_kwargs=None, bar_kwargs=None
@@ -1026,25 +1007,7 @@ class Descriptor:
         pandas.DataFrame
             The filtered DataFrame containing only the specified features.
         """
-
-        if isinstance(feature_ids, str):
-            if feature_ids == "all":
-                filtered_df = input_df
-            elif feature_ids in input_df.columns:
-                filtered_df = input_df[[feature_ids, "qp_id"]]
-            else:
-                raise ValueError(f"{feature_ids} is not a valid option for feature_ids parameter.")
-        elif isinstance(feature_ids, list):
-            features = [feature for feature in feature_ids if feature in input_df.columns]
-            features.append("qp_id")
-            if len(features) <= 1:
-                raise ValueError("None of the provided features (columns) is in this descriptor catalogue.")
-            else:
-                filtered_df = input_df[features]
-        else:
-            raise ValueError("The feature_ids has to be a name of a computed feature, list of features or 'all'.")
-
-        return filtered_df
+        return clustering_mod.filter_feature_columns(input_df, feature_ids=feature_ids, id_columns=("qp_id",))
 
     def compute_pca(self, pca_components=None, feature_ids="all", nan_drop="row"):
         """Compute PCA on the descriptor DataFrame.
@@ -1067,26 +1030,12 @@ class Descriptor:
         - qp_ids : numpy.ndarray
             The array of query point indices corresponding to the PCA components.
         """
-
-        pca_df = self.remove_nans(self.desc, axis_type=nan_drop)
-        pca_df = self.filter_features(pca_df, feature_ids=feature_ids)
-
-        pca_components = pca_components or self.pca_components
-        pca_components = min(pca_components, len(pca_df.columns) - 1)
-
-        qp_ids = pca_df["qp_id"].to_numpy()
-        pca_df = pca_df.drop(columns=["qp_id"])
-
-        if "nn_id" in pca_df.columns:
-            pca_df = pca_df.drop(columns=["nn_id"])
-
-        pca = PCA(n_components=pca_components)
-        X_pca = pca.fit_transform(pca_df)
-
-        important_features = self.get_important_features(pca, pca_df, n_components=pca_components)
-        columns = important_features.head(pca_components).index.tolist()
-
-        return pd.DataFrame(X_pca, columns=columns), qp_ids
+        return clustering_mod.compute_pca(
+            self.desc,
+            n_components=pca_components or self.pca_components,
+            feature_ids=feature_ids,
+            nan_drop=nan_drop,
+        )
 
     def k_means_clustering(self, n_clusters, nan_drop="row", pca_dict=None, feature_ids="all", scale_data=True):
         """Perform k-means clustering on the descriptor DataFrame.
@@ -1099,6 +1048,8 @@ class Descriptor:
             The axis to drop NaN values from. Default is "row".
         pca_dict : dict, optional
             A dictionary containing PCA parameters. If None, PCA is not applied. Default is None.
+            Keys map to :func:`~cryocat.analysis.clustering.compute_pca` kwargs; use
+            ``"n_components"`` for the number of components.
         feature_ids : str or list, default="all"
             The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns of
             ``self.desc``. Default is "all".
@@ -1110,37 +1061,14 @@ class Descriptor:
         pandas.DataFrame
             A DataFrame containing the clustering results, including the cluster labels and query point IDs.
         """
-
-        if pca_dict is None:
-            km_data = self.remove_nans(self.desc, axis_type=nan_drop)
-            km_data = self.filter_features(km_data, feature_ids=feature_ids)
-            qp_ids = km_data["qp_id"].to_numpy()
-            km_data = km_data.drop(columns=["qp_id"])
-            if "nn_id" in km_data.columns:
-                km_data = km_data.drop(columns=["nn_id"])
-        else:
-            km_data, qp_ids = self.compute_pca(**pca_dict, feature_ids=feature_ids, nan_drop=nan_drop)
-
-        # sanity check:
-        print(f"Num clusters: {n_clusters}, {type(n_clusters)}")
-
-        # Run k-means
-        kmeans = KMeans(n_clusters=n_clusters, n_init="auto")
-
-        # Scale data
-        if scale_data:
-            scaler = StandardScaler()
-            scaled_data = scaler.fit_transform(km_data)
-            clusters = kmeans.fit_predict(scaled_data)
-        else:
-            clusters = kmeans.fit_predict(km_data)
-
-        # Make DataFrame
-        result_df = pd.DataFrame(km_data, columns=km_data.columns)
-        result_df["cluster"] = clusters
-        result_df["qp_id"] = qp_ids
-
-        return result_df
+        return clustering_mod.kmeans_cluster(
+            self.desc,
+            n_clusters=n_clusters,
+            feature_ids=feature_ids,
+            nan_drop=nan_drop,
+            pca_dict=pca_dict,
+            scale_data=scale_data,
+        )
 
     def plot_k_means(self, color_column_name):
         """Plot the k-means clustering results in 3D.
@@ -1183,32 +1111,12 @@ class Descriptor:
         list
             A list of connected components, each represented as a subgraph of the original graph.
         """
-
-        qp_idx = self.df["qp_id"]
-        nn_idx = self.df["nn_id"]
-
-        edges = list(zip(qp_idx, nn_idx))
-
-        G = nx.Graph()
-
-        G.add_edges_from(edges)
-
-        n = nx.number_connected_components(G)
-
-        if size_connected_components is None or not isinstance(size_connected_components, int):
-
-            if num_connected_components >= n:
-                num_connected_components = n
-
-            S = [G.subgraph(c).copy() for c in sorted(nx.connected_components(G), key=len, reverse=True)]
-
-            return S[:num_connected_components]
-
-        elif isinstance(size_connected_components, int):
-
-            S = [G.subgraph(c).copy() for c in nx.connected_components(G) if len(c) >= size_connected_components]
-
-            return S
+        return clustering_mod.connected_component_clusters(
+            self.df["qp_id"],
+            self.df["nn_id"],
+            num_components=num_connected_components,
+            min_size=size_connected_components,
+        )
 
     def build_descriptor(self):
         """Builds a descriptor DataFrame by merging computed features based on unique 'qp_id' values.

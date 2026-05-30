@@ -1,3 +1,17 @@
+# Dispatch convention for cryocat operations:
+#
+#   Preview callbacks (live-recompute, fires on every form-value change, updates a plot):
+#       Call the cryocat function directly.  NOT through run_operation.
+#       These callbacks run many times per second; logging each call floods the
+#       session script with duplicate lines.  Only the final "commit" call matters.
+#
+#   Commit callbacks (Create, Save, Apply, Add to pool — one explicit user action):
+#       Route through run_operation (or run_operation_to_pool for Motl outputs).
+#       This is the single chokepoint: it writes one runnable line to the session
+#       script, logs ▶/✓/✗ to the log pane, and records result Motl sources.
+#
+# Never log plot calls or diagnostic queries.
+
 from cryocat.app.logger import dash_logger, print_dash
 
 import numpy as np
@@ -248,6 +262,21 @@ def get_relevant_features(desc_name, all_features):
     return avail_features
 
 
+def iter_standalone_builders() -> list[dict]:
+    """Return descriptor dicts for every ``@gui_exposed`` builder with ``standalone=True``.
+
+    Each entry is a dict with keys ``id`` (function name), ``label``, ``fn``
+    (the callable), and ``preview`` (plot style string or None).
+
+    The registry is populated at decoration time by :data:`cryocat.utils.classutils
+    ._GUI_BUILDER_REGISTRY`. Importing the builder modules here ensures their
+    decorators fire before the registry is read.
+    """
+    import cryocat.utils.geom  # noqa: ensure @gui_exposed decorators run
+    from cryocat.utils.classutils import _GUI_BUILDER_REGISTRY
+    return list(_GUI_BUILDER_REGISTRY)
+
+
 def _iter_gui_methods():
     """Yield ``(name, gui_dict)`` for every ``@gui_exposed`` method on ``Motl``.
 
@@ -302,4 +331,20 @@ def get_multi_motl_methods():
 # matches the new single-only filter.
 def get_motl_operation_methods():
     return get_single_motl_methods()
+
+
+# ── Dispatch helpers ──────────────────────────────────────────────────────────
+
+def run_operation(fn, kwargs: dict):
+    """Invoke a cryocat function through the logging chokepoint.
+
+    Use in **commit callbacks** only (Create, Save, Apply, Add to pool).
+    Preview callbacks that re-run on every form change must call the function
+    directly so the session script is not flooded with redundant lines.
+
+    Writes one runnable line to the session script, logs ▶/✓/✗ to the pane,
+    and records any Motl result in the source side-table.
+    """
+    from cryocat.app.logger import invoke_operation
+    return invoke_operation(fn, kwargs)
 

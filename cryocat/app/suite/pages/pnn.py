@@ -1,17 +1,13 @@
 """Nearest-neighbor analysis tool.
 
-Computation is decoupled from plotting:
+Computation is decoupled from clustering:
 
 * **Compute NN analysis** -- builds the per-pair table from the suite-pool
   motl(s) using ``NearestNeighbors`` with the auto-generated parameter form,
   optionally adds angular-distance columns, and renders the xyz panels.
-* **Plot orientational distribution** / **Plot polar NN distances** -- each
-  reads the already-computed coordinates from ``nn-coords-store`` and renders
-  into its own graph area, so the user can tweak plot params and re-render
-  without recomputing NN.
-
-Each plot block has a checkbox that toggles its parameter form's visibility;
-the plot button next to the checkbox triggers the render.
+* **Clustering** -- K-means or proximity clustering on the NN result columns.
+  Select the clustering type in the sidebar accordion; parameters and results
+  appear in the main area below the scatter panels.
 
 Contract: exposes ``layout`` and ``register_callbacks(app)``.
 """
@@ -20,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 import dash
-from dash import html, dcc, Input, Output, State, ALL, no_update
+from dash import html, dcc, ctx, Input, Output, State, ALL, no_update
 import dash_bootstrap_components as dbc
 
 from cryocat.core.cryomotl import Motl
@@ -29,41 +25,104 @@ from cryocat.analysis import visplot
 from cryocat.app.apputils import generate_kwargs
 from cryocat.app.formgen import build_form
 from cryocat.app.components.motlsource import get_motl_source, register_motl_source_callbacks
-from cryocat.app.components.motlsink import get_send_to_editor_button, register_send_to_editor_callbacks
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
-from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
+from cryocat.app.components.tablecluster import register_table_cluster_callbacks
 
 
-# Params each plot helper computes itself (coordinates/distances come from
-# the stored compute result; titles/output_path stay GUI-managed) -- exclude
-# them from the auto-form.
-_ORIENT_EXCLUDE = ["coordinates", "graph_title", "output_path"]
-_POLAR_EXCLUDE = ["coordinates", "distances", "graph_title", "output_path"]
+
+_MOTL_COL_OPTIONS = [{"label": c, "value": c} for c in Motl.motl_columns]
 
 
 # ── Layout ──────────────────────────────────────────────────────────────────────
 
-def _plot_block(toggle_id, toggle_label, wrap_id, plot_btn_id, form_children):
-    """Checkbox + (hidden) form + plot button row."""
-    return [
-        dbc.Checkbox(
-            id=toggle_id, label=toggle_label, value=False,
-            style={"marginBottom": "0.4rem"},
-        ),
-        html.Div(
-            [
-                html.Div(form_children),
-                dbc.Button(
-                    f"Plot",
-                    id=plot_btn_id, color="primary", size="sm",
-                    style={"width": "100%", "marginTop": "0.4rem"},
-                ),
-            ],
-            id=wrap_id,
-            style={"display": "none"},
-        ),
-    ]
+def _create_motl_sidebar_content():
+    """Sidebar content for the 'Create motl from selection' accordion item."""
+    hint = {"fontSize": "0.8rem", "color": "var(--color9)", "marginBottom": "0.4rem"}
+    lbl = {"fontWeight": "bold", "fontSize": "0.85rem", "marginBottom": "0.2rem"}
+    return html.Div(
+        [
+            html.Div(id="nn-sel-motl-info", style=hint),
+            html.Label("Motls to include:", style=lbl),
+            html.P(
+                "Order matters — first = query-particle motl, subsequent = neighbor motls.",
+                style=hint,
+            ),
+            dcc.Checklist(
+                id="nn-sel-motl-checklist",
+                options=[],
+                value=[],
+                labelStyle={"display": "block", "marginBottom": "0.2rem", "fontSize": "0.85rem"},
+            ),
+            html.Div(
+                [
+                    html.Hr(style={"margin": "0.4rem 0"}),
+                    html.Label("Use particle IDs from:", style=lbl),
+                    dbc.RadioItems(
+                        id="nn-sel-motl-id-type",
+                        options=[
+                            {"label": "Query particle (qp_subtomo_id)", "value": "qp"},
+                            {"label": "Neighbor (nn_subtomo_id)", "value": "nn"},
+                        ],
+                        value="qp",
+                        inline=False,
+                        className="sidebar-checklist",
+                        labelStyle={"fontSize": "0.85rem"},
+                    ),
+                ],
+                id="nn-sel-motl-id-type-wrap",
+                style={"display": "none"},
+            ),
+            html.Div(
+                [
+                    html.Hr(style={"margin": "0.4rem 0"}),
+                    html.Label("Source-motl index column:", style=lbl),
+                    dcc.Dropdown(
+                        id="nn-sel-motl-id-col",
+                        options=_MOTL_COL_OPTIONS,
+                        placeholder="Select column…",
+                        style={"marginBottom": "0.4rem"},
+                    ),
+                ],
+                id="nn-sel-motl-id-col-wrap",
+                style={"display": "none"},
+            ),
+            html.Hr(style={"margin": "0.4rem 0"}),
+            html.Label("Save to file:", style=lbl),
+            dbc.Input(
+                id="nn-sel-motl-save-path",
+                placeholder="Output file path (.em, .csv, …)",
+                size="sm",
+                style={"marginBottom": "0.3rem"},
+            ),
+            dbc.Button(
+                "Save",
+                id="nn-sel-motl-save-btn",
+                color="secondary",
+                size="sm",
+                style={"width": "100%", "marginBottom": "0.5rem"},
+            ),
+            html.Label("Send to editor:", style=lbl),
+            dbc.Input(
+                id="nn-sel-motl-editor-label",
+                placeholder="Label (optional)",
+                size="sm",
+                style={"marginBottom": "0.3rem"},
+            ),
+            dbc.Button(
+                "Send to editor",
+                id="nn-sel-motl-send-btn",
+                color="primary",
+                size="sm",
+                style={"width": "100%"},
+            ),
+            html.Div(
+                id="nn-sel-motl-status",
+                style={"fontSize": "0.85rem", "color": "var(--color9)",
+                       "marginTop": "0.4rem", "wordBreak": "break-word"},
+            ),
+        ]
+    )
 
 
 def _sidebar():
@@ -123,62 +182,13 @@ def _sidebar():
                             item_id="nn-acc-params",
                         ),
                         dbc.AccordionItem(
-                            [
-                                *_plot_block(
-                                    toggle_id="nn-orient-toggle",
-                                    toggle_label="Plot orientational distribution",
-                                    wrap_id="nn-orient-form-wrap",
-                                    plot_btn_id="nn-orient-plot-btn",
-                                    form_children=build_form(
-                                        visplot.plot_orientational_distribution,
-                                        id_type="nn-forms-params",
-                                        id_extra={"cls_name": "nn-orient"},
-                                        exclude=_ORIENT_EXCLUDE,
-                                    ),
-                                ),
-                                html.Hr(style={"margin": "0.5rem 0"}),
-                                *_plot_block(
-                                    toggle_id="nn-polar-toggle",
-                                    toggle_label="Plot polar NN distances",
-                                    wrap_id="nn-polar-form-wrap",
-                                    plot_btn_id="nn-polar-plot-btn",
-                                    form_children=build_form(
-                                        visplot.plot_polar_nn_distances,
-                                        id_type="nn-forms-params",
-                                        id_extra={"cls_name": "nn-polar"},
-                                        exclude=_POLAR_EXCLUDE,
-                                    ),
-                                ),
-                                html.Div(
-                                    id="nn-plot-status",
-                                    style={
-                                        "fontSize": "0.85rem",
-                                        "color": "var(--color9)",
-                                        "marginTop": "0.5rem",
-                                        "wordBreak": "break-word",
-                                    },
-                                ),
-                            ],
-                            title="Plots",
-                            item_id="nn-acc-plots",
-                        ),
-                        dbc.AccordionItem(
-                            get_send_to_editor_button("nn"),
-                            title="Send result to editor",
-                            item_id="nn-acc-output",
+                            _create_motl_sidebar_content(),
+                            title="Create motl from selection",
+                            item_id="nn-acc-create",
                         ),
                     ],
                     always_open=True,
-                    active_item=["nn-acc-input", "nn-acc-params", "nn-acc-plots"],
-                ),
-                html.Div(
-                    dbc.Button(
-                        "Show log",
-                        id="nn-open-log-btn",
-                        className="custom-radius-button",
-                        style={"width": "100%"},
-                    ),
-                    style={"padding": "0.5rem", "marginTop": "auto"},
+                    active_item=["nn-acc-input", "nn-acc-params"],
                 ),
             ],
             className="sidebar",
@@ -199,13 +209,10 @@ def _main():
     return dbc.Col(
         html.Div(
             [
-                html.H4("Nearest Neighbor Analysis", style={"marginBottom": "1rem"}),
                 dcc.Store(id="nn-out-tabv-global-data-store"),
                 get_table_component("nn-out-tabv"),
                 html.Hr(style={"margin": "0.5rem 0"}),
                 html.Div(id="nn-xyz-graph-area"),
-                html.Div(id="nn-orient-graph-area"),
-                html.Div(id="nn-polar-graph-area"),
             ],
             style={"padding": "0.5rem"},
         ),
@@ -217,11 +224,9 @@ def _main():
 layout = html.Div(
     [
         dcc.Store(id="nn-result"),
-        # Cached compute result: normalized NN coords + per-pair distances.
-        # Plot callbacks consume this without recomputing NN.
-        dcc.Store(id="nn-coords-store"),
+        # Ordered list of pool motl-ids used in the last NN run, plus is_multi flag.
+        dcc.Store(id="nn-used-motls-store"),
         dbc.Row([_sidebar(), _main()], className="g-0", style={"margin": "0", "padding": "0"}),
-        *get_log_panel("nn-log"),
     ],
     style={"margin": "0", "padding": "0"},
 )
@@ -239,54 +244,34 @@ def _kwargs_by_cls(param_ids, param_values, target_cls):
     return generate_kwargs(ids, vals) if ids else {}
 
 
-def _coords_from_store(store):
-    """Extract normalized coords + optional nn_dist from the compute store."""
-    if not store:
-        return None, None
-    coords = np.asarray(store.get("coords") or [])
-    nn_dist = store.get("nn_dist")
-    nn_dist = np.asarray(nn_dist) if nn_dist is not None else None
-    return coords, nn_dist
-
-
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
 def register_callbacks(app):
     register_motl_source_callbacks(app, "nn", multi=True)
-    register_send_to_editor_callbacks(app, "nn", "nn-result")
     register_table_callbacks(app, "nn-out-tabv", csv_only=True)
     register_table_plot_callbacks(
-        app, "nn-out-tabv-table-plot", "nn-out-tabv-global-data-store", table_grid_id="nn-out-tabv-grid"
+        app, "nn-out-tabv-table-plot", "nn-out-tabv-global-data-store",
+        special_graphs=["Orientational distribution", "Polar NN distances"],
+        table_grid_id="nn-out-tabv-grid",
     )
-    register_log_panel_callbacks(app, "nn-log")
-
-    # Visibility for the three checkbox-gated form blocks.
+    register_table_cluster_callbacks(
+        app, "nn-out-tabv-table-cluster", "nn-out-tabv-global-data-store",
+        table_grid_id="nn-out-tabv-grid",
+    )
     @app.callback(
         Output("nn-angular-form-wrap", "style"),
-        Output("nn-orient-form-wrap", "style"),
-        Output("nn-polar-form-wrap", "style"),
         Input("nn-angular-toggle", "value"),
-        Input("nn-orient-toggle", "value"),
-        Input("nn-polar-toggle", "value"),
     )
-    def _toggle_forms(angular_on, orient_on, polar_on):
-        show = {"display": "block"}
-        hide = {"display": "none"}
-        return (
-            show if angular_on else hide,
-            show if orient_on else hide,
-            show if polar_on else hide,
-        )
+    def _toggle_angular_form(angular_on):
+        return {"display": "block"} if angular_on else {"display": "none"}
 
-    # ── Compute NN: fills the table, the xyz panel, and the coords store. ────
+    # ── Compute NN: fills the table and the xyz panel. ────────────────────────
     @app.callback(
         Output("nn-xyz-graph-area", "children"),
         Output("nn-out-tabv-global-data-store", "data"),
         Output("nn-stats-text", "children"),
         Output("nn-result", "data"),
-        Output("nn-coords-store", "data"),
-        Output("nn-orient-graph-area", "children", allow_duplicate=True),
-        Output("nn-polar-graph-area", "children", allow_duplicate=True),
+        Output("nn-used-motls-store", "data"),
         Input("nn-compute-btn", "n_clicks"),
         State("nn-motl-select", "value"),
         State("pool-motls", "data"),
@@ -302,14 +287,14 @@ def register_callbacks(app):
         pool_motls = pool_motls or {}
         if not selected:
             return (no_update, no_update, "Select at least one motl from the pool.",
-                    no_update, no_update, no_update, no_update)
+                    no_update, no_update)
         if isinstance(selected, str):
             selected = [selected]
 
         motls = [Motl(pd.DataFrame(pool_motls[m])) for m in selected if pool_motls.get(m)]
         if not motls:
             return (no_update, no_update, "The selected motls have no data.",
-                    no_update, no_update, no_update, no_update)
+                    no_update, no_update)
 
         nn_kwargs = _kwargs_by_cls(param_ids, param_values, "nn-params")
         angular_kwargs = _kwargs_by_cls(param_ids, param_values, "nn-angular")
@@ -318,9 +303,10 @@ def register_callbacks(app):
             nn_input = motls[0] if len(motls) == 1 else motls
             nn_stats = NearestNeighbors(nn_input, **nn_kwargs)
             normalized = nn_stats.get_normalized_coord(add_to_df=True)
+            nn_stats.get_rotated_coord(add_to_df=True)
         except Exception as exc:
             return (no_update, no_update, f"Error: {exc}",
-                    no_update, no_update, no_update, no_update)
+                    no_update, no_update)
 
         status_bits = []
         if nn_kwargs.get("nn_type") == "closest_dist" and "nn_dist" in nn_stats.df:
@@ -358,61 +344,155 @@ def register_callbacks(app):
             )
         )
 
-        coords_store = {
-            "coords": np.asarray(normalized).tolist(),
-            "nn_dist": (
-                nn_stats.df["nn_dist"].tolist()
-                if "nn_dist" in nn_stats.df.columns else None
-            ),
-        }
+        used_motls_store = {"names": selected, "is_multi": len(selected) > 1}
 
-        # Re-running compute clears the dependent plot panels.
-        return xyz_graph, table_data, " | ".join(status_bits), table_data, coords_store, [], []
+        return (
+            xyz_graph, table_data, " | ".join(status_bits), table_data,
+            used_motls_store,
+        )
 
-    # ── Plot orientational distribution (uses the coords store). ──────────────
+    # ── Create motl from selection (sidebar) ────────────────────────────────────
+
     @app.callback(
-        Output("nn-orient-graph-area", "children", allow_duplicate=True),
-        Output("nn-plot-status", "children", allow_duplicate=True),
-        Input("nn-orient-plot-btn", "n_clicks"),
-        State("nn-coords-store", "data"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        Output("nn-sel-motl-checklist", "options"),
+        Output("nn-sel-motl-checklist", "value"),
+        Output("nn-sel-motl-id-type-wrap", "style"),
+        Output("nn-sel-motl-info", "children"),
+        Input("nn-used-motls-store", "data"),
+        State("pool-registry", "data"),
         prevent_initial_call=True,
     )
-    def plot_orient(n_clicks, store, param_values, param_ids):
-        if not n_clicks:
-            raise dash.exceptions.PreventUpdate
-        coords, _ = _coords_from_store(store)
-        if coords is None or len(coords) == 0:
-            return no_update, "Run Compute NN first."
-        try:
-            kwargs = _kwargs_by_cls(param_ids, param_values, "nn-orient")
-            fig = visplot.plot_orientational_distribution(coords, **kwargs)
-        except Exception as exc:
-            return no_update, f"Orientational distribution failed: {exc}"
-        return dcc.Graph(figure=fig), "Orientational distribution rendered."
+    def _populate_sel_panel(used_motls, registry):
+        if not used_motls:
+            return [], [], {"display": "none"}, "Run NN analysis first."
 
-    # ── Plot polar NN distances (needs nn_dist from a closest_dist run). ──────
+        names = used_motls.get("names", [])
+        is_multi = used_motls.get("is_multi", False)
+        registry = registry or {}
+
+        options = []
+        for i, name in enumerate(names):
+            lbl = registry.get(name, {}).get("label", name)
+            role = "qp — query particle" if i == 0 else f"nn #{i} — neighbor"
+            options.append({"label": f"{i + 1}.  {lbl}  ({role})", "value": name})
+
+        info = (
+            "Single-motl analysis — choose query-particle or neighbor IDs."
+            if not is_multi
+            else (
+                f"Multi-motl analysis — {len(names)} motl(s). "
+                "First uses qp_subtomo_id; subsequent use nn_subtomo_id."
+            )
+        )
+        id_type_style = {"display": "block"} if not is_multi else {"display": "none"}
+        return options, list(names), id_type_style, info
+
     @app.callback(
-        Output("nn-polar-graph-area", "children", allow_duplicate=True),
-        Output("nn-plot-status", "children", allow_duplicate=True),
-        Input("nn-polar-plot-btn", "n_clicks"),
-        State("nn-coords-store", "data"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        Output("nn-sel-motl-id-col-wrap", "style"),
+        Input("nn-sel-motl-checklist", "value"),
+    )
+    def _toggle_id_col_wrap(checked):
+        return {"display": "block"} if checked and len(checked) > 1 else {"display": "none"}
+
+    @app.callback(
+        Output("nn-sel-motl-status", "children"),
+        Output("pool-registry", "data", allow_duplicate=True),
+        Output("pool-motls", "data", allow_duplicate=True),
+        Output("pool-next-id", "data", allow_duplicate=True),
+        Input("nn-sel-motl-save-btn", "n_clicks"),
+        Input("nn-sel-motl-send-btn", "n_clicks"),
+        State("nn-out-tabv-grid", "selectedRows"),
+        State("nn-sel-motl-checklist", "value"),
+        State("nn-used-motls-store", "data"),
+        State("nn-sel-motl-id-type", "value"),
+        State("nn-sel-motl-id-col", "value"),
+        State("nn-sel-motl-save-path", "value"),
+        State("nn-sel-motl-editor-label", "value"),
+        State("pool-motls", "data"),
+        State("pool-registry", "data"),
+        State("pool-next-id", "data"),
         prevent_initial_call=True,
     )
-    def plot_polar(n_clicks, store, param_values, param_ids):
-        if not n_clicks:
-            raise dash.exceptions.PreventUpdate
-        coords, nn_dist = _coords_from_store(store)
-        if coords is None or len(coords) == 0:
-            return no_update, "Run Compute NN first."
-        if nn_dist is None:
-            return no_update, "Polar NN distances need nn_type='closest_dist'."
-        try:
-            kwargs = _kwargs_by_cls(param_ids, param_values, "nn-polar")
-            fig = visplot.plot_polar_nn_distances(coords, nn_dist, **kwargs)
-        except Exception as exc:
-            return no_update, f"Polar NN distances failed: {exc}"
-        return dcc.Graph(figure=fig), "Polar NN distances rendered."
+    def _build_and_act(
+        _save_click, _send_click,
+        selected_rows, checked_motls, used_motls, id_type, id_col,
+        save_path, editor_label, pool_motls, registry, next_id,
+    ):
+        trigger = ctx.triggered_id
+        if not selected_rows:
+            return "No rows selected in the table.", no_update, no_update, no_update
+        if not checked_motls:
+            return "No motls checked.", no_update, no_update, no_update
+        if not used_motls:
+            return "Run NN analysis first.", no_update, no_update, no_update
+
+        all_names = used_motls.get("names", [])
+        is_multi = used_motls.get("is_multi", False)
+        pool_motls = pool_motls or {}
+        sel_df = pd.DataFrame(selected_rows)
+
+        parts = []
+        for i, motl_name in enumerate(all_names):
+            if motl_name not in checked_motls:
+                continue
+            pool_data = pool_motls.get(motl_name)
+            if not pool_data:
+                continue
+
+            motl_df = pd.DataFrame(pool_data)
+
+            if is_multi:
+                if i == 0:
+                    ids = set(sel_df["qp_subtomo_id"].dropna().astype(float).values)
+                else:
+                    mask = sel_df["motl_id"].astype(float) == float(i)
+                    ids = set(sel_df.loc[mask, "nn_subtomo_id"].dropna().astype(float).values)
+            else:
+                col = "qp_subtomo_id" if (id_type or "qp") == "qp" else "nn_subtomo_id"
+                ids = set(sel_df[col].dropna().astype(float).values)
+
+            subset = motl_df[motl_df["subtomo_id"].isin(ids)].copy()
+            if len(subset) == 0:
+                continue
+            if id_col and len(checked_motls) > 1:
+                subset[id_col] = float(i)
+            parts.append(subset)
+
+        if not parts:
+            return (
+                "No particles matched the selection. "
+                "Make sure rows are selected and the motl IDs align.",
+                no_update, no_update, no_update,
+            )
+
+        merged_df = pd.concat(parts, ignore_index=True)
+
+        if trigger == "nn-sel-motl-save-btn":
+            if not save_path:
+                return "Specify an output file path.", no_update, no_update, no_update
+            try:
+                Motl(merged_df).write_out(save_path)
+            except Exception as exc:
+                return f"Save failed: {exc}", no_update, no_update, no_update
+            return (
+                f"Saved {len(merged_df)} particles to {save_path}.",
+                no_update, no_update, no_update,
+            )
+
+        if trigger == "nn-sel-motl-send-btn":
+            registry = dict(registry or {})
+            pool_out = dict(pool_motls)
+            next_id = next_id or 0
+            new_id = f"motl-{next_id}"
+            display_label = editor_label or f"Motl {next_id + 1}"
+            registry[new_id] = {
+                "label": display_label, "type": "emmotl",
+                "n_rows": len(merged_df), "active": True,
+            }
+            pool_out[new_id] = merged_df.to_dict("records")
+            return (
+                f"Sent '{display_label}' ({len(merged_df)} particles) to the editor.",
+                registry, pool_out, next_id + 1,
+            )
+
+        return no_update, no_update, no_update, no_update

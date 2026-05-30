@@ -10,6 +10,7 @@ import pandas as pd
 from cryocat.core import cryomotl
 from cryocat.app.apputils import save_output, save_motl
 from cryocat.app.components.tableplot import get_table_plot_component
+from cryocat.app.components.tablecluster import get_table_cluster_component
 from cryocat.app.components.customel import InlineLabeledDropdown, InlineInputForm
 from cryocat.utils.ioutils import dimensions_load
 
@@ -248,6 +249,22 @@ def get_table_component(prefix: str, connected_motl_prefix=None, show_create_fro
             style={"width": "1100px"},
             is_open=False,
         ),
+        dbc.Button(
+            "Cluster",
+            id=f"{prefix}-cluster-btn",
+            color="primary",
+            className="me-1",
+            n_clicks=0,
+        ),
+        dbc.Offcanvas(
+            [get_table_cluster_component(f"{prefix}-table-cluster")],
+            id=f"{prefix}-cluster-panel",
+            title="Clustering options",
+            placement="end",
+            scrollable=True,
+            style={"width": "700px"},
+            is_open=False,
+        ),
     ]
 
     extra_children = [_csv_save_modal(prefix)]
@@ -328,6 +345,14 @@ def register_table_callbacks(app, prefix: str, csv_only=True, connected_motl_pre
         prevent_initial_call=True,
     )
     def open_offcanvas(n_clicks):
+        return True
+
+    @app.callback(
+        Output(f"{prefix}-cluster-panel", "is_open", allow_duplicate=True),
+        Input(f"{prefix}-cluster-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def open_cluster_panel(n_clicks):
         return True
 
     @app.callback(

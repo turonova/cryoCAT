@@ -10,7 +10,8 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import splprep, splev
 from scipy.optimize import fsolve
 
-from cryocat._types import RotationLike, Symmetry, TripletLike, EulerAngles, ArrayLike
+from cryocat._types import RotationLike, Symmetry, TripletLike, EulerAngles, ArrayLike, PathOrStr
+from cryocat.utils.classutils import gui_exposed
 
 
 # Constants
@@ -1160,7 +1161,7 @@ def euler_angles_to_normals(angles: EulerAngles) -> np.ndarray:
     """
     rotations = srot.from_euler("zxz", angles=angles, degrees=True)
     points = rotations_to_z_normals(rotations)
-    n_length = np.linalg.norm(points)
+    n_length = np.linalg.norm(points, axis=1, keepdims=True)  # per-row norm; shape (N, 1)
     normalized_normal_vectors = points / n_length
 
     return normalized_normal_vectors
@@ -1685,14 +1686,69 @@ def sample_cone(
     return np.stack(sampled_points, axis=0)
 
 
+def apply_starting_and_offset(
+    angles: EulerAngles,
+    starting_angle: EulerAngles | None = None,
+    angular_offset: EulerAngles | None = None,
+    angles_order: str = "zxz",
+) -> np.ndarray:
+    """Compose ``starting_angle`` and ``angular_offset`` onto a list of Euler angles.
+
+    For each row ``a`` in *angles*, computes
+    ``R(a) * R(starting_angle) * R(angular_offset)`` in *angles_order*
+    (default ``'zxz'``) and returns the result as Euler angles in degrees.
+
+    Parameters
+    ----------
+    angles : EulerAngles
+        Input angle list, shape ``(N, 3)``, degrees.  ``EulerAngles`` is a
+        ``(3,)`` triple or an ``(N, 3)`` ndarray.
+    starting_angle : EulerAngles, optional
+        Reference orientation.  ``None`` or ``(0, 0, 0)`` leaves *angles*
+        unchanged.
+    angular_offset : EulerAngles, optional
+        Additional rotation applied after *starting_angle*.  ``None`` or
+        ``(0, 0, 0)`` is a no-op.
+    angles_order : str, default ``'zxz'``
+        Euler-angle convention accepted by
+        :meth:`scipy.spatial.transform.Rotation.from_euler`.
+
+    Returns
+    -------
+    np.ndarray
+        Transformed Euler angles, shape ``(N, 3)``, degrees.
+    """
+    angles = np.asarray(angles, dtype=float).reshape(-1, 3)
+    if starting_angle is None:
+        starting_angle = np.zeros(3)
+    starting_angle = np.asarray(starting_angle, dtype=float)
+    if np.any(starting_angle):
+        rots = srot.from_euler(angles_order, angles=angles, degrees=True)
+        add = srot.from_euler(angles_order, angles=starting_angle, degrees=True)
+        angles = (rots * add).as_euler(angles_order, degrees=True)
+    if angular_offset is not None and np.any(np.asarray(angular_offset)):
+        rots = srot.from_euler(angles_order, angles=angles, degrees=True)
+        add = srot.from_euler(angles_order, angles=angular_offset, degrees=True)
+        angles = (rots * add).as_euler(angles_order, degrees=True)
+    return angles
+
+
+@gui_exposed(
+    label="Generate angle list",
+    category="builder",
+    standalone=True,
+    preview="orientational",
+    hide=("output_path",),
+)
 def generate_angles(
     cone_angle: float,
     cone_sampling: float,
     inplane_angle: float = 360.0,
     inplane_sampling: float | None = None,
     starting_angles: EulerAngles | None = None,
-    symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
     angle_order: str = "zxz",
+    output_path: PathOrStr | None = None,
 ) -> np.ndarray:
     """Compute Euler angles from sample for normal vectors on sphere.
     Sphere sample corresponds to cone-angles.
@@ -1715,6 +1771,9 @@ def generate_angles(
         :func:`as_symmetry`.
     angle_order : str, optional
         Convention for Euler angles. Defaults to "zxz".
+    output_path : str or path-like, optional
+        If provided, the generated angles are saved to this file via
+        :func:`~cryocat.utils.ioutils.angles_save`. Defaults to None.
 
     Returns
     -------
@@ -1769,6 +1828,10 @@ def generate_angles(
         ],
         axis=1,
     )
+
+    if output_path is not None:
+        from cryocat.utils.ioutils import angles_save
+        angles_save(angular_array, output_path)
 
     return angular_array
 

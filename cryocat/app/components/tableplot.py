@@ -34,6 +34,9 @@ hist_types = ["Count", "Sum", "Avg", "Min", "Max"]
 def get_table_plot_component(prefix: str):
     return html.Div(
         children=[
+            # One-shot store: non-None initial value causes load_graph_options to
+            # fire once at mount time without depending on any URL component.
+            dcc.Store(id=f"{prefix}-options-init", data=True),
             dbc.Col(
                 children=[
                     dbc.Row(
@@ -343,10 +346,9 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
 
     @app.callback(
         Output(f"{prefix}-graph-options-dropdown", "options"),
-        Input("url", "pathname"),
+        Input(f"{prefix}-options-init", "data"),
     )
     def load_graph_options(_):
-
         return graph_options
 
     @app.callback(
@@ -400,6 +402,24 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             histogram2D_options = {"display": "none"}
             scatter_2D_options = {"display": "flex"}
             y_axis_options = pd.DataFrame(data).columns
+        elif graph_type in ("Orientational distribution", "Polar NN distances"):
+            histogram_options = {"display": "none"}
+            histogram2D_options = {"display": "none"}
+            scatter_2D_options = {"display": "flex"} if graph_type == "Polar NN distances" else {"display": "none"}
+            all_data_cols = list(x_axis_options)
+            triplet_options = []
+            seen_pfx = set()
+            for col in all_data_cols:
+                if col.endswith("_x"):
+                    pfx = col[:-2]
+                    if pfx not in seen_pfx:
+                        seen_pfx.add(pfx)
+                        opt = get_spherical_columns(pfx)
+                        if opt:
+                            triplet_options.append(opt)
+            x_axis_options = triplet_options
+            if graph_type == "Polar NN distances":
+                y_axis_options = all_data_cols
         else:
             histogram_options = {"display": "none"}
             histogram2D_options = {"display": "none"}
@@ -597,6 +617,24 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                     same_range_for_separate=same_range,
                     grid_spec=grid_spec,
                 )
+            elif graph_type == "Orientational distribution":
+                all_ids = []
+                for s in x_values:
+                    all_ids.extend(json.loads(s))
+                coords = input_data[all_ids].to_numpy()
+                fig = visplot.plot_orientational_distribution(
+                    coords, projection="stereo", colormap="viridis_r", theta_bin=12, radius_bin=5
+                )
+            elif graph_type == "Polar NN distances":
+                all_ids = []
+                for s in x_values:
+                    all_ids.extend(json.loads(s))
+                coords = input_data[all_ids].to_numpy()
+                if not y_values:
+                    return graph_area, "Select a distance column for the Y axis.", no_update, no_update
+                dist_col = y_values[0] if isinstance(y_values, list) else y_values
+                nn_dist = input_data[dist_col].to_numpy()
+                fig = visplot.plot_polar_nn_distances(coords, nn_dist, colormap="viridis_r", marker_size=7)
             elif graph_type == "Line plot":  # , "Scatter plot 1D", "Scatter plot 2D""
                 fig = visplot.plot_line(
                     input_data=input_data,

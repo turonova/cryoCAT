@@ -8,6 +8,7 @@ from dash import Input, Output, State, ALL, ctx, no_update
 from cryocat.app.components.tomoview import get_viewer_component, register_viewer_callbacks
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
+from cryocat.app.components.tablecluster import register_table_cluster_callbacks
 
 from cryocat.analysis.tango import TwistDescriptor
 from cryocat.core.cryomotl import Motl
@@ -367,6 +368,12 @@ def register_tango_table_callbacks(app):
         app, "tabv-twist-table-plot", "tabv-twist-global-data-store", special_graphs=["Spherical histogram"], table_grid_id="tabv-twist-grid"
     )
     register_table_plot_callbacks(app, "tabv-desc-table-plot", "tabv-desc-global-data-store", table_grid_id="tabv-desc-grid")
+
+    register_table_cluster_callbacks(app, "tabv-motl-table-cluster", "tabv-motl-global-data-store", table_grid_id="tabv-motl-grid")
+    register_table_cluster_callbacks(app, "tabv-motl-nn-table-cluster", "tabv-motl-nn-global-data-store", table_grid_id="tabv-motl-nn-grid")
+    register_table_cluster_callbacks(app, "tabv-nn-table-cluster", "tabv-nn-global-data-store", table_grid_id="tabv-nn-grid")
+    register_table_cluster_callbacks(app, "tabv-twist-table-cluster", "tabv-twist-global-data-store", table_grid_id="tabv-twist-grid")
+    register_table_cluster_callbacks(app, "tabv-desc-table-cluster", "tabv-desc-global-data-store", table_grid_id="tabv-desc-grid")
 
     @app.callback(
         Output("main-relion-params-inline", "children"),

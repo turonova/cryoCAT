@@ -1,6 +1,8 @@
 from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 
+from cryocat.app.components.paletteloader import get_palette_loader, register_palette_loader_callbacks
+
 GRAPH_SETTINGS_DEFAULTS = {
     "font_family": "Arial",
     "font_size": 12,
@@ -20,8 +22,6 @@ _LINE_DASHES = [
     {"label": "Dash-dot", "value": "dashdot"},
     {"label": "Long dash", "value": "longdash"},
 ]
-_DISCRETE_PALETTES = ["Monet", "Plotly", "D3", "G10", "Vivid", "Bold", "Pastel", "Safe"]
-_CONTINUOUS_PALETTES = ["Viridis", "Plasma", "Inferno", "Magma", "Cividis", "Jet", "Hot", "Blues", "RdBu"]
 _BG_COLORS = [
     {"label": "White", "value": "white"},
     {"label": "Light grey", "value": "#f5f5f5"},
@@ -88,18 +88,20 @@ def get_graph_settings_components():
                         value=GRAPH_SETTINGS_DEFAULTS["line_dash"],
                         clearable=False,
                     )),
-                    _setting_row("Discrete palette", dcc.Dropdown(
-                        id="gs-discrete-palette",
-                        options=_DISCRETE_PALETTES,
-                        value=GRAPH_SETTINGS_DEFAULTS["discrete_palette"],
-                        clearable=False,
-                    )),
-                    _setting_row("Continuous palette", dcc.Dropdown(
-                        id="gs-continuous-palette",
-                        options=_CONTINUOUS_PALETTES,
-                        value=GRAPH_SETTINGS_DEFAULTS["continuous_palette"],
-                        clearable=False,
-                    )),
+                    html.Div([
+                        html.Label("Discrete palette", style={"fontSize": "0.85rem", "marginBottom": "0.2rem"}),
+                        get_palette_loader(
+                            "gs-discrete-pal", mode="discrete",
+                            default=GRAPH_SETTINGS_DEFAULTS["discrete_palette"],
+                        ),
+                    ], style={"marginBottom": "0.75rem"}),
+                    html.Div([
+                        html.Label("Continuous palette", style={"fontSize": "0.85rem", "marginBottom": "0.2rem"}),
+                        get_palette_loader(
+                            "gs-continuous-pal", mode="continuous",
+                            default=GRAPH_SETTINGS_DEFAULTS["continuous_palette"],
+                        ),
+                    ], style={"marginBottom": "0.75rem"}),
                     _setting_row("Background", dcc.Dropdown(
                         id="gs-bg-color",
                         options=_BG_COLORS,
@@ -130,6 +132,8 @@ def get_graph_settings_button(prefix: str):
 
 
 def register_graph_settings_callbacks(app):
+    register_palette_loader_callbacks(app, "gs-discrete-pal", mode="discrete")
+    register_palette_loader_callbacks(app, "gs-continuous-pal", mode="continuous")
     @app.callback(
         Output("graph-settings-modal", "is_open"),
         Input({"type": "open-graph-settings-btn", "index": ALL}, "n_clicks"),
@@ -157,8 +161,8 @@ def register_graph_settings_callbacks(app):
         State("gs-marker-size", "value"),
         State("gs-line-width", "value"),
         State("gs-line-dash", "value"),
-        State("gs-discrete-palette", "value"),
-        State("gs-continuous-palette", "value"),
+        State("gs-discrete-pal-value", "data"),
+        State("gs-continuous-pal-value", "data"),
         State("gs-bg-color", "value"),
         prevent_initial_call=True,
     )

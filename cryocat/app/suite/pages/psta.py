@@ -1,14 +1,16 @@
 """STA tool — subtomogram-averaging iteration analysis.
 
-Two input paths:
-  * a **pattern bulk-loader** — given a filename core + iteration count, loads
-    the per-iteration motls from disk and stores per-iteration aggregate
-    summaries in the page-local ``sta-batch`` store. This batch is never
-    surfaced as per-motl table/viewer surfaces (it is aggregate-plots-only).
+Three input paths:
+  * **From parameter file** — load a novaSTA (.txt) or STOPGAP (.star) parameter
+    file; the iteration range, motl base name and motl type are read from the
+    file automatically, and the per-iteration motls are loaded from disk.
+  * **Iteration batch (bulk loader)** — given a filename core + iteration count,
+    loads per-iteration motls from disk.
   * ``get_motl_source("sta-single")`` — pick one motl from the suite pool.
 
 The main area shows aggregate plots over the batch (particle count and score
-statistics per iteration).
+statistics per iteration) and, when a parameter file was loaded, a table of the
+parameter values stored in the file.
 
 Contract: exposes ``layout`` and ``register_callbacks(app)``.
 """
@@ -16,17 +18,82 @@ Contract: exposes ``layout`` and ``register_callbacks(app)``.
 import os
 
 import dash
+import dash_ag_grid as dag
 from dash import html, dcc, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 
 from cryocat.core.cryomotl import Motl
+from cryocat.analysis.sta import StaParameters, get_motl_filename
 from cryocat.app.components.motlsource import get_motl_source, register_motl_source_callbacks
 from cryocat.app.components.motlsink import get_send_to_editor_button, register_send_to_editor_callbacks
 from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
 
 
-# ── Layout ──────────────────────────────────────────────────────────────────────
+# ── Layout helpers ───────────────────────────────────────────────────────────────
+
+def _param_file_loader():
+    lbl = {"fontSize": "0.85rem", "marginBottom": "2px"}
+    return html.Div(
+        [
+            html.Label("Parameter file path", style=lbl),
+            dbc.Input(
+                id="sta-param-path",
+                type="text",
+                placeholder="path/to/params.txt  or  .star",
+                size="sm",
+                style={"marginBottom": "0.4rem"},
+            ),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            html.Label("File type", style=lbl),
+                            dcc.Dropdown(
+                                id="sta-param-type",
+                                options=[
+                                    {"label": "Auto-detect", "value": "auto"},
+                                    {"label": "novaSTA (.txt)", "value": "novasta"},
+                                    {"label": "STOPGAP (.star)", "value": "stopgap"},
+                                ],
+                                value="auto",
+                                clearable=False,
+                                searchable=False,
+                                style={"fontSize": "0.8rem"},
+                            ),
+                        ],
+                        width=7,
+                    ),
+                    dbc.Col(
+                        [
+                            html.Label("Motl separator", style=lbl),
+                            dbc.Input(id="sta-param-sep", type="text", value="_", size="sm"),
+                        ],
+                        width=5,
+                    ),
+                ],
+                className="g-1",
+                style={"marginBottom": "0.4rem"},
+            ),
+            dbc.Button(
+                "Load from parameter file",
+                id="sta-param-load-btn",
+                color="primary",
+                size="sm",
+                style={"width": "100%", "marginTop": "0.25rem"},
+            ),
+            html.Div(
+                id="sta-param-status",
+                style={
+                    "fontSize": "0.8rem",
+                    "color": "var(--color9)",
+                    "marginTop": "0.4rem",
+                    "wordBreak": "break-word",
+                },
+            ),
+        ]
+    )
+
 
 def _bulk_loader():
     lbl = {"fontSize": "0.85rem", "marginBottom": "2px"}
@@ -81,6 +148,11 @@ def _sidebar():
                 dbc.Accordion(
                     [
                         dbc.AccordionItem(
+                            _param_file_loader(),
+                            title="From parameter file",
+                            item_id="sta-acc-params",
+                        ),
+                        dbc.AccordionItem(
                             _bulk_loader(),
                             title="Iteration batch (bulk loader)",
                             item_id="sta-acc-batch",
@@ -97,7 +169,7 @@ def _sidebar():
                         ),
                     ],
                     always_open=True,
-                    active_item=["sta-acc-batch", "sta-acc-single"],
+                    active_item=["sta-acc-params"],
                 ),
                 html.Div(
                     dbc.Button(
@@ -123,11 +195,41 @@ def _sidebar():
     )
 
 
+def _params_table_section():
+    """Collapsible section that shows the parameter df when a param file is loaded."""
+    return dbc.Collapse(
+        html.Div(
+            [
+                html.H6("Parameter file contents", style={"marginBottom": "0.3rem"}),
+                dag.AgGrid(
+                    id="sta-params-grid",
+                    rowData=[],
+                    columnDefs=[],
+                    defaultColDef={
+                        "resizable": True,
+                        "sortable": True,
+                        "filter": False,
+                        "flex": 1,
+                        "minWidth": 80,
+                    },
+                    style={"height": "220px"},
+                    className="ag-theme-balham",
+                    dashGridOptions={"suppressMovableColumns": True},
+                ),
+                html.Hr(style={"margin": "0.5rem 0"}),
+            ],
+            style={"marginBottom": "0.5rem"},
+        ),
+        id="sta-params-collapse",
+        is_open=False,
+    )
+
+
 def _main():
     return dbc.Col(
         html.Div(
             [
-                html.H4("STA — Iteration Analysis", style={"marginBottom": "1rem"}),
+                _params_table_section(),
                 dcc.Graph(id="sta-progress-graph"),
                 html.Hr(style={"margin": "0.5rem 0"}),
                 dcc.Graph(id="sta-score-graph"),
@@ -141,8 +243,9 @@ def _main():
 
 layout = html.Div(
     [
-        dcc.Store(id="sta-batch"),     # per-iteration aggregate summaries (never surfaced)
-        dcc.Store(id="sta-result"),    # future: an edited motl to hand to the editor
+        dcc.Store(id="sta-batch"),         # per-iteration aggregate summaries
+        dcc.Store(id="sta-result"),        # future: edited motl for editor
+        dcc.Store(id="sta-params-store"),  # serialised params df for the table
         dbc.Row([_sidebar(), _main()], className="g-0", style={"margin": "0", "padding": "0"}),
         *get_log_panel("sta-log"),
     ],
@@ -150,15 +253,115 @@ layout = html.Div(
 )
 
 
-# ── Callbacks ───────────────────────────────────────────────────────────────────
+# ── Callbacks ────────────────────────────────────────────────────────────────────
 
 def register_callbacks(app):
     register_motl_source_callbacks(app, "sta-single")
     register_send_to_editor_callbacks(app, "sta", "sta-result")
-    register_log_panel_callbacks(app, "sta-log")
+    register_log_panel_callbacks(app, "sta-log", open_btn_id="sta-open-log-btn")
+
+    # ── Load from parameter file ──────────────────────────────────────────────
 
     @app.callback(
-        Output("sta-batch", "data"),
+        Output("sta-batch", "data", allow_duplicate=True),
+        Output("sta-params-store", "data"),
+        Output("sta-param-status", "children"),
+        Input("sta-param-load-btn", "n_clicks"),
+        State("sta-param-path", "value"),
+        State("sta-param-type", "value"),
+        State("sta-param-sep", "value"),
+        prevent_initial_call=True,
+    )
+    def load_from_params(n_clicks, path, sta_type, separator):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        if not path:
+            return no_update, no_update, "Provide a parameter file path."
+
+        separator = separator or "_"
+        sta_type_arg = None if sta_type == "auto" else sta_type
+
+        try:
+            params = StaParameters.load(path.strip(), sta_type=sta_type_arg)
+        except Exception as exc:
+            return no_update, no_update, f"Failed to load parameter file: {exc}"
+
+        motl_base = params.get_motl_base_name(separator)
+        if motl_base is None:
+            return no_update, no_update, "Parameter file has no motl path — cannot locate motl files."
+
+        motl_type = params.motl_type
+        start_it  = params.start_iteration
+        end_it    = params.end_iteration
+
+        if start_it is None or end_it is None:
+            return no_update, no_update, "Parameter file contains no alignment iterations."
+
+        batch = []
+        missing = []
+        for i in range(start_it, end_it + 1):
+            fname = get_motl_filename(motl_base, i, motl_type)
+            if not os.path.isfile(fname):
+                missing.append(i)
+                continue
+            try:
+                motl = Motl.load(fname, motl_type=motl_type)
+                df = motl.df
+                batch.append(
+                    {
+                        "iteration": i,
+                        "n_particles": int(df.shape[0]),
+                        "score_mean":   float(df["score"].mean())   if "score" in df else None,
+                        "score_median": float(df["score"].median()) if "score" in df else None,
+                        "score_std":    float(df["score"].std())    if "score" in df else None,
+                    }
+                )
+            except Exception:
+                missing.append(i)
+
+        # Serialise params df for the table
+        params_data = {
+            "records": params.df.to_dict("records"),
+            "columns": list(params.df.columns),
+        }
+
+        if not batch:
+            status = (
+                f"No motl files found for iterations {start_it}–{end_it} "
+                f"at '{motl_base}*' (type: {motl_type})."
+            )
+            return no_update, params_data, status
+
+        status = (
+            f"Loaded {len(batch)} iteration motl(s) "
+            f"[{motl_type}, iterations {start_it}–{end_it}]."
+        )
+        if missing:
+            status += f" Missing: {missing}."
+        return batch, params_data, status
+
+    # ── Populate params table ─────────────────────────────────────────────────
+
+    @app.callback(
+        Output("sta-params-grid", "rowData"),
+        Output("sta-params-grid", "columnDefs"),
+        Output("sta-params-collapse", "is_open"),
+        Input("sta-params-store", "data"),
+        prevent_initial_call=True,
+    )
+    def update_params_table(data):
+        if not data or not data.get("columns"):
+            return [], [], False
+        col_defs = [
+            {"field": c, "headerName": c, "flex": 1, "minWidth": 80}
+            for c in data["columns"]
+        ]
+        return data["records"], col_defs, True
+
+    # ── Load iteration batch (existing) ───────────────────────────────────────
+
+    @app.callback(
+        Output("sta-batch", "data", allow_duplicate=True),
         Output("sta-load-status", "children"),
         Input("sta-load-btn", "n_clicks"),
         State("sta-core-input", "value"),
@@ -190,12 +393,12 @@ def register_callbacks(app):
                     {
                         "iteration": i,
                         "n_particles": int(df.shape[0]),
-                        "score_mean": float(df["score"].mean()) if "score" in df else None,
+                        "score_mean":   float(df["score"].mean())   if "score" in df else None,
                         "score_median": float(df["score"].median()) if "score" in df else None,
-                        "score_std": float(df["score"].std()) if "score" in df else None,
+                        "score_std":    float(df["score"].std())    if "score" in df else None,
                     }
                 )
-            except Exception as exc:
+            except Exception:
                 missing.append(i)
 
         if not batch:
@@ -205,6 +408,8 @@ def register_callbacks(app):
         if missing:
             status += f" Skipped iterations: {missing}."
         return batch, status
+
+    # ── Plot batch (shared by both loaders) ───────────────────────────────────
 
     @app.callback(
         Output("sta-progress-graph", "figure"),
@@ -217,10 +422,10 @@ def register_callbacks(app):
         if not batch:
             raise dash.exceptions.PreventUpdate
 
-        iters = [row["iteration"] for row in batch]
+        iters       = [row["iteration"]  for row in batch]
         n_particles = [row["n_particles"] for row in batch]
-        score_mean = [row.get("score_mean") for row in batch]
-        score_std = [row.get("score_std") or 0.0 for row in batch]
+        score_mean  = [row.get("score_mean")  for row in batch]
+        score_std   = [row.get("score_std") or 0.0 for row in batch]
 
         progress = go.Figure(
             go.Scatter(x=iters, y=n_particles, mode="lines+markers", name="Particles")

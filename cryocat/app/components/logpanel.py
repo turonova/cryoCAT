@@ -3,15 +3,33 @@ import dash
 import dash_bootstrap_components as dbc
 from cryocat.app.logger import dash_logger
 
+_SOURCE_STYLE = {
+    "error":  {"color": "#e05252", "fontWeight": "bold"},
+    "cryocat": {"color": "var(--color9)"},
+    "dash":   {"color": "#888888"},
+}
+
+
+def _entry_spans(entries):
+    """Convert [(msg, source), ...] to a list of html.Div elements."""
+    spans = []
+    for msg, source in entries:
+        style = dict(_SOURCE_STYLE.get(source, {}))
+        style["whiteSpace"] = "pre-wrap"
+        style["wordBreak"] = "break-word"
+        style["marginBottom"] = "2px"
+        style["fontFamily"] = "monospace"
+        style["fontSize"] = "0.82rem"
+        spans.append(html.Div(msg, style=style))
+    return spans
+
 
 def get_log_panel(prefix: str):
-    """Returns the log offcanvas + open button store components.
-
-    prefix should be 'log' for Tango or 'me-log' for Suite.
-    """
+    """Returns the log offcanvas + stores + poll interval as a list of components."""
     return [
         dcc.Store(id=f"{prefix}-index", data=0),
         dcc.Store(id=f"{prefix}-save-path-store"),
+        dcc.Interval(id=f"{prefix}-poll", interval=3000, n_intervals=0),
         dbc.Offcanvas(
             [
                 html.Div(
@@ -24,7 +42,7 @@ def get_log_panel(prefix: str):
                     style={"display": "flex", "alignItems": "center", "marginBottom": "0.5rem"},
                 ),
                 html.Hr(style={"margin": "0.5rem 0"}),
-                html.Pre(id=f"{prefix}-output"),
+                html.Div(id=f"{prefix}-output", style={"overflowY": "auto"}),
                 dbc.Modal(
                     [
                         dbc.ModalHeader(dbc.ModalTitle("Save Log As")),
@@ -53,37 +71,49 @@ def get_log_panel(prefix: str):
     ]
 
 
-def register_log_panel_callbacks(app, prefix: str):
-    """Register the 4 log callbacks with the given app and prefix.
+def register_log_panel_callbacks(app, prefix: str, open_btn_id: str | None = None):
+    """Register log panel callbacks.
 
-    For Tango: prefix='log', open button id='open-log-btn'
-    For Suite: prefix='me-log', open button id='me-open-log-btn'
+    Parameters
+    ----------
+    open_btn_id : str or None
+        ID of the button that opens the panel.  When None the panel can only be
+        opened automatically (on error) or via the poll interval.
     """
-    # Determine the open button id based on convention
-    if prefix == "log":
-        open_btn_id = "open-log-btn"
-    else:
-        open_btn_id = f"{prefix.replace('log', 'open-log')}-btn"
+    inputs = [Input(f"{prefix}-poll", "n_intervals")]
+    if open_btn_id is not None:
+        inputs.append(Input(open_btn_id, "n_clicks"))
 
     @app.callback(
         Output(f"{prefix}-output", "children"),
         Output(f"{prefix}-index", "data"),
         Output(f"{prefix}-panel", "is_open"),
-        Input(open_btn_id, "n_clicks"),
+        *inputs,
         State(f"{prefix}-index", "data"),
         State(f"{prefix}-panel", "is_open"),
         prevent_initial_call=True,
     )
-    def update_log(open_clicks, last_index, is_open):
+    def update_log(*cb_args):
+        # Unpack positional args: (n_intervals [, n_clicks], last_index, is_open)
+        last_index = cb_args[-2]
+        is_open = cb_args[-1]
+
         triggered = ctx.triggered_id
-        new_logs, new_index, has_dash_logs = dash_logger.get_logs(last_index)
-        full_log = dash_logger.get_all_logs()
+        entries, new_index, new_dash, new_error = dash_logger.get_logs(last_index)
 
-        if triggered == open_btn_id:
-            return full_log, new_index, True
+        # Button click → show full log, open panel
+        if open_btn_id is not None and triggered == open_btn_id:
+            all_entries, all_index, _, _ = dash_logger.get_logs(0)
+            return _entry_spans(all_entries), all_index, True
 
-        if has_dash_logs:
-            return new_logs, new_index, True
+        # Auto-open on error; update display when there are new entries
+        if new_error:
+            all_entries, all_index, _, _ = dash_logger.get_logs(0)
+            return _entry_spans(all_entries), all_index, True
+
+        if new_dash or entries:
+            all_entries, all_index, _, _ = dash_logger.get_logs(0)
+            return _entry_spans(all_entries), all_index, is_open
 
         raise dash.exceptions.PreventUpdate
 

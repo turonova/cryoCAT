@@ -15,6 +15,7 @@ Model
   "Slot assignment" dropdowns.
 """
 
+import inspect
 import pandas as pd
 
 import dash
@@ -30,7 +31,7 @@ from cryocat.app.apputils import (
     generate_kwargs, get_single_motl_methods, get_multi_motl_methods,
 )
 from cryocat.app.formgen import build_form
-from cryocat.app.logger import dash_logger
+from cryocat.app.logger import dash_logger, invoke_operation
 
 # Number of editor *view slots* (rendered table/viewer surfaces). The motl pool
 # itself is unbounded — this only caps how many motls are open as tabs at once.
@@ -196,15 +197,6 @@ def get_motl_editor_sidebar():
                     always_open=True,
                     active_item=["me-sidebar-load", "me-sidebar-list"],
                 ),
-                html.Div(
-                    dbc.Button(
-                        "Show log",
-                        id="me-open-log-btn",
-                        className="custom-radius-button",
-                        style={"width": "100%"},
-                    ),
-                    style={"padding": "0.5rem", "marginTop": "auto"},
-                ),
             ],
             className="sidebar",
             style={
@@ -263,9 +255,57 @@ def _relion_params_summary(relion_params):
     return ("  |  " + ",  ".join(parts)) if parts else ""
 
 
+def _register_rotation_fields_for_form(app, id_type: str, methods: list) -> None:
+    """Pre-register rotation-builder modal callbacks for @gui_exposed Motl methods
+    that have RotationLike parameters and use the given id_type."""
+    import typing
+    from cryocat.utils.classutils import resolve_param_type
+    from cryocat.app.components.rotationbuilder import register_rotation_builder_callbacks
+
+    for method_info in methods:
+        fn = getattr(Motl, method_info["value"], None)
+        if fn is None:
+            continue
+        try:
+            hints = typing.get_type_hints(fn)
+        except Exception:
+            hints = {}
+        for param, ann in hints.items():
+            tag, _ = resolve_param_type(ann)
+            if tag != "RotationLike":
+                continue
+            rprefix = f"rotfld-{id_type}-{param}"
+            register_rotation_builder_callbacks(app, f"{rprefix}-inner")
+
+            def _register(rprefix_=rprefix, param_=param, id_type_=id_type):
+                @app.callback(
+                    Output(f"{rprefix_}-modal", "is_open"),
+                    Input(f"{rprefix_}-build-btn", "n_clicks"),
+                    Input(f"{rprefix_}-close-btn", "n_clicks"),
+                    Input(f"{rprefix_}-use-btn", "n_clicks"),
+                    State(f"{rprefix_}-modal", "is_open"),
+                    prevent_initial_call=True,
+                )
+                def _toggle(_open, _close, _use, is_open):
+                    return not is_open
+
+                @app.callback(
+                    Output({"type": id_type_, "param": param_, "tag": "RotationLike"}, "value", allow_duplicate=True),
+                    Input(f"{rprefix_}-use-btn", "n_clicks"),
+                    State(f"{rprefix_}-inner-rot-euler-store", "data"),
+                    prevent_initial_call=True,
+                )
+                def _use(_n, euler_str):
+                    return euler_str or no_update
+
+            _register()
+
+
 def register_motl_editor_sidebar_callbacks(app):
 
     register_motl_load_callbacks(app, "me-load")
+    _register_rotation_fields_for_form(app, "me-op-param", _MOTL_METHODS)
+    _register_rotation_fields_for_form(app, "me-multi-param", _MULTI_MOTL_METHODS)
 
     # ── Load → pool ────────────────────────────────────────────────────────────
     # A freshly loaded motl is appended to the pool with a new motl_id and
@@ -328,6 +368,7 @@ def register_motl_editor_sidebar_callbacks(app):
             "relion5_tomos": r5t,
             "relion5_tomos_filename": r5tn,
             "relion_params": relion_params,
+            "script_expr": f"cryomotl.Motl.load({(filename or label)!r}, {(dtype or 'emmotl')!r})",
         }
 
         free = _first_free_slot(slot_map)
@@ -349,9 +390,10 @@ def register_motl_editor_sidebar_callbacks(app):
     @app.callback(
         Output("me-motl-list", "children"),
         Input("pool-registry", "data"),
+        Input("me-slot-map", "data"),
         prevent_initial_call=True,
     )
-    def update_motl_list(registry):
+    def update_motl_list(registry, _slot_map):
         registry = registry or {}
         items = []
         for mid, meta in registry.items():
@@ -633,7 +675,11 @@ def register_motl_editor_sidebar_callbacks(app):
                 rows = pool_motls.get(mid)
                 if not rows:
                     return _err(f"Pool entry '{mid}' has no data.")
-                motls.append(Motl(pd.DataFrame(rows)))
+                motl_obj = Motl(pd.DataFrame(rows))
+                src_expr = (pool_meta.get(mid) or {}).get("script_expr")
+                if src_expr:
+                    dash_logger.record_motl_source(motl_obj, src_expr)
+                motls.append(motl_obj)
         except Exception as exc:
             return _err(f"Error preparing motls: {exc}")
 
@@ -644,10 +690,12 @@ def register_motl_editor_sidebar_callbacks(app):
         try:
             fn = getattr(Motl, method_name)
             if spec["arity"] == "pair":
-                result = fn(*motls, **kwargs)
+                sig_params = list(inspect.signature(fn).parameters.keys())
+                full_kwargs = {sig_params[0]: motls[0], sig_params[1]: motls[1], **kwargs}
             else:
                 list_param = spec.get("param", "motl_list")
-                result = fn(**{list_param: motls}, **kwargs)
+                full_kwargs = {list_param: motls, **kwargs}
+            result = invoke_operation(fn, full_kwargs)
         except Exception as exc:
             return _err(f"Error running '{method_name}': {exc}")
 
@@ -680,6 +728,7 @@ def register_motl_editor_sidebar_callbacks(app):
         pool_meta[mid] = {
             "data_type": None, "relion_optics": None, "relion5_tomos": None,
             "relion5_tomos_filename": None, "relion_params": None,
+            "script_expr": dash_logger.last_script_line,
         }
 
         free = _first_free_slot(slot_map)
@@ -696,12 +745,6 @@ def register_motl_editor_sidebar_callbacks(app):
                 f"'{op_label}' -> new motl in the pool "
                 f"({len(new_rows)} particles; no free slot, use 'Slot assignment')."
             )
-
-        dash_logger.write(
-            f"# {op_label} on [{', '.join(ordered_ids)}]\n"
-            f"result = Motl.{method_name}({'main, second' if spec['arity'] == 'pair' else 'motl_list'})",
-            source="cryocat",
-        )
 
         return registry, pool_motls, pool_extra, pool_meta, next_id + 1, slot_map, active, status
 
@@ -772,10 +815,14 @@ def register_motl_editor_sidebar_callbacks(app):
         kwargs = generate_kwargs(param_ids, param_values) if param_ids else {}
 
         try:
+            slot_mid = slot_map[slot_idx] if slot_idx < len(slot_map or []) else None
+            src_expr = (pool_meta.get(slot_mid) or {}).get("script_expr") if slot_mid else None
             motl = Motl(pd.DataFrame(current_data))
-            result = getattr(motl, method_name)(**kwargs)
-        except Exception as exc:
-            return _ret(nochange, nochange, f"Error: {exc}")
+            if src_expr:
+                dash_logger.record_motl_source(motl, src_expr)
+            result = invoke_operation(getattr(motl, method_name), kwargs)
+        except Exception:
+            return _ret(nochange, nochange, f"Error running '{method_name}' — see log.")
 
         gui = getattr(getattr(Motl, method_name), "_gui", {})
 
@@ -804,6 +851,7 @@ def register_motl_editor_sidebar_callbacks(app):
             pool_meta[mid] = {
                 "data_type": None, "relion_optics": None, "relion5_tomos": None,
                 "relion5_tomos_filename": None, "relion_params": None,
+                "script_expr": dash_logger.last_script_line,
             }
             free = next((i for i in range(N_SLOTS) if not slot_map[i]), None)
             if free is not None:

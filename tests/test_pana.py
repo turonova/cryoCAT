@@ -4,6 +4,7 @@ import os
 from glob import glob
 from cryocat.analysis import pana
 from cryocat.utils import imageutils
+from cryocat.utils import wedgeutils
 import pytest
 from pathlib import Path
 from scipy.spatial.transform import Rotation as srot
@@ -296,189 +297,6 @@ class TestGetIndices:
         idx = pana.get_indices(str(test_data_dir / "test_template_list_0.csv"), {"Structure": "ribosome"})
         assert len(idx) == 2
 
-
-# ── Wedge mask generation ──────────────────────────────────────────────────────
-
-@pytest.fixture
-def simple_wedgelist():
-    return pd.DataFrame({"tilt_angle": np.arange(-30, 31, 10, dtype=float)})
-
-
-@pytest.fixture
-def cubic_filter():
-    return np.ones((8, 8, 8))
-
-
-class TestGenerateWedgeMaskSlicesTemplate:
-    def test_returns_three_values(self, simple_wedgelist, cubic_filter):
-        assert len(pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)) == 3
-
-    def test_active_slices_count_matches_tilts(self, simple_wedgelist, cubic_filter):
-        active_slices, _, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        assert len(active_slices) == len(simple_wedgelist)
-
-    def test_wedge_slices_binary(self, simple_wedgelist, cubic_filter):
-        _, _, wedge_slices = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        assert set(np.unique(wedge_slices)).issubset({0.0, 1.0})
-
-    def test_output_shapes_match_filter(self, simple_wedgelist, cubic_filter):
-        _, weights, wedge_slices = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        assert weights.shape == cubic_filter.shape
-        assert wedge_slices.shape == cubic_filter.shape
-
-    def test_weights_nonnegative(self, simple_wedgelist, cubic_filter):
-        _, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        assert np.all(weights >= 0)
-
-    def test_non_cubic_filter_raises(self, simple_wedgelist):
-        with pytest.raises(AssertionError):
-            pana.generate_wedgemask_slices_template(simple_wedgelist, np.ones((8, 8, 4)))
-
-    def test_2d_filter_raises(self, simple_wedgelist):
-        with pytest.raises(AssertionError):
-            pana.generate_wedgemask_slices_template(simple_wedgelist, np.ones((8, 8)))
-
-    def test_more_tilts_more_coverage(self, cubic_filter):
-        wl_few = pd.DataFrame({"tilt_angle": [-30.0, 0.0, 30.0]})
-        wl_many = pd.DataFrame({"tilt_angle": np.arange(-60, 61, 3, dtype=float)})
-        _, _, ws_few = pana.generate_wedgemask_slices_template(wl_few, cubic_filter)
-        _, _, ws_many = pana.generate_wedgemask_slices_template(wl_many, cubic_filter)
-        assert ws_many.sum() >= ws_few.sum()
-
-    def test_zero_filter_gives_empty_mask(self, simple_wedgelist):
-        _, _, wedge_slices = pana.generate_wedgemask_slices_template(
-            simple_wedgelist, np.zeros((8, 8, 8))
-        )
-        assert wedge_slices.sum() == 0
-
-    def test_nonempty_for_ones_filter(self, simple_wedgelist, cubic_filter):
-        _, _, wedge_slices = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        assert wedge_slices.sum() > 0
-
-
-class TestGenerateWedgeMaskSlicesTile:
-    def test_returns_ndarray(self, simple_wedgelist, cubic_filter):
-        assert isinstance(pana.generate_wedgemask_slices_tile(simple_wedgelist, cubic_filter), np.ndarray)
-
-    def test_output_shape_matches_filter(self, simple_wedgelist, cubic_filter):
-        result = pana.generate_wedgemask_slices_tile(simple_wedgelist, cubic_filter)
-        assert result.shape == cubic_filter.shape
-
-    def test_binary_output(self, simple_wedgelist, cubic_filter):
-        result = pana.generate_wedgemask_slices_tile(simple_wedgelist, cubic_filter)
-        assert set(np.unique(result)).issubset({0.0, 1.0})
-
-    def test_non_cubic_raises(self, simple_wedgelist):
-        with pytest.raises(AssertionError):
-            pana.generate_wedgemask_slices_tile(simple_wedgelist, np.ones((8, 8, 4)))
-
-    def test_2d_filter_raises(self, simple_wedgelist):
-        with pytest.raises(AssertionError):
-            pana.generate_wedgemask_slices_tile(simple_wedgelist, np.ones((8, 8)))
-
-    def test_nonempty_for_nonzero_tilts(self, simple_wedgelist, cubic_filter):
-        assert pana.generate_wedgemask_slices_tile(simple_wedgelist, cubic_filter).sum() > 0
-
-    def test_full_tilt_range_high_coverage(self, cubic_filter):
-        wl_full = pd.DataFrame({"tilt_angle": np.arange(-90, 90, 1, dtype=float)})
-        result = pana.generate_wedgemask_slices_tile(wl_full, cubic_filter)
-        assert result.mean() > 0.5
-
-
-# ── generate_exposure ──────────────────────────────────────────────────────────
-
-@pytest.fixture
-def exposure_wedgelist():
-    n = 5
-    return pd.DataFrame({
-        "tilt_angle": np.linspace(-20, 20, n),
-        "pixelsize": np.full(n, 1.35),
-        "exposure": np.linspace(1.0, 10.0, n),
-    })
-
-
-class TestGenerateExposure:
-    def test_output_shape(self, exposure_wedgelist):
-        filt = np.ones((8, 8, 8))
-        slices, weights, _ = pana.generate_wedgemask_slices_template(exposure_wedgelist, filt)
-        result = pana.generate_exposure(exposure_wedgelist, slices, weights, binning=1)
-        assert result.shape == filt.shape
-
-    def test_output_nonnegative(self, exposure_wedgelist):
-        filt = np.ones((8, 8, 8))
-        slices, weights, _ = pana.generate_wedgemask_slices_template(exposure_wedgelist, filt)
-        result = pana.generate_exposure(exposure_wedgelist, slices, weights, binning=1)
-        assert np.all(result >= 0)
-
-    def test_output_bounded_by_one(self, exposure_wedgelist):
-        filt = np.ones((8, 8, 8))
-        slices, weights, _ = pana.generate_wedgemask_slices_template(exposure_wedgelist, filt)
-        result = pana.generate_exposure(exposure_wedgelist, slices, weights, binning=1)
-        assert np.all(result <= 1.0 + 1e-9)
-
-    def test_higher_exposure_lower_filter(self):
-        filt = np.ones((8, 8, 8))
-        wl_low = pd.DataFrame({"tilt_angle": [0.0], "pixelsize": [1.35], "exposure": [1.0]})
-        wl_high = pd.DataFrame({"tilt_angle": [0.0], "pixelsize": [1.35], "exposure": [200.0]})
-        sl_low, w_low, _ = pana.generate_wedgemask_slices_template(wl_low, filt)
-        sl_high, w_high, _ = pana.generate_wedgemask_slices_template(wl_high, filt)
-        r_low = pana.generate_exposure(wl_low, sl_low, w_low, binning=1)
-        r_high = pana.generate_exposure(wl_high, sl_high, w_high, binning=1)
-        assert r_low.sum() >= r_high.sum()
-
-    def test_binning_affects_result(self, exposure_wedgelist):
-        filt = np.ones((8, 8, 8))
-        slices, weights, _ = pana.generate_wedgemask_slices_template(exposure_wedgelist, filt)
-        r1 = pana.generate_exposure(exposure_wedgelist, slices, weights, binning=1)
-        r4 = pana.generate_exposure(exposure_wedgelist, slices, weights, binning=4)
-        assert not np.allclose(r1, r4)
-
-
-# ── generate_ctf ───────────────────────────────────────────────────────────────
-
-@pytest.fixture
-def ctf_wedgelist(simple_wedgelist):
-    wl = simple_wedgelist.copy()
-    wl["tomo_x"] = 8
-    wl["tomo_y"] = 8
-    wl["tomo_z"] = 8
-    wl["pixelsize"] = 1.35
-    wl["defocus"] = 2.0
-    wl["amp_contrast"] = 0.07
-    wl["cs"] = 2.7
-    wl["voltage"] = 300.0
-    return wl
-
-
-class TestGenerateCtf:
-    def test_output_shape(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
-        slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        result = imageutils.generate_ctf_slice(ctf_wedgelist, slices, weights, binning=1)
-        assert result.shape == cubic_filter.shape
-
-    def test_output_nonnegative(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
-        slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        result = imageutils.generate_ctf_slice(ctf_wedgelist, slices, weights, binning=1)
-        assert np.all(result >= 0)
-
-    def test_output_finite(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
-        slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        result = imageutils.generate_ctf_slice(ctf_wedgelist, slices, weights, binning=1)
-        assert np.all(np.isfinite(result))
-
-    def test_binning_affects_result(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
-        slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        r1 = imageutils.generate_ctf_slice(ctf_wedgelist, slices, weights, binning=1)
-        r2 = imageutils.generate_ctf_slice(ctf_wedgelist, slices, weights, binning=2)
-        assert not np.allclose(r1, r2)
-
-    def test_pshift_column_optional(self, ctf_wedgelist, simple_wedgelist, cubic_filter):
-        wl_no_pshift = ctf_wedgelist.drop(columns=["pshift"], errors="ignore")
-        slices, weights, _ = pana.generate_wedgemask_slices_template(simple_wedgelist, cubic_filter)
-        result = imageutils.generate_ctf_slice(wl_no_pshift, slices, weights, binning=1)
-        assert result.shape == cubic_filter.shape
-
-
 # ── Layer 1 pure-compute functions ────────────────────────────────────────────
 
 
@@ -574,6 +392,54 @@ class TestSharpMaskOverlap:
         ov_id = pana.sharp_mask_overlap(mask, [srot.from_euler("z", 0, degrees=True)])
         ov_45 = pana.sharp_mask_overlap(mask, [srot.from_euler("z", 45, degrees=True)])
         assert ov_id[0] >= ov_45[0]
+
+
+class TestComputeSharpMaskOverlapSingle:
+    @pytest.fixture
+    def mask_and_angles(self):
+        mask = np.zeros((16, 16, 16))
+        mask[5:11, 5:11, 5:11] = 1.0
+        angles = np.array([[0.0, 0.0, 0.0], [45.0, 0.0, 0.0]])
+        return mask, angles
+
+    def test_returns_dict_with_overlap(self, mask_and_angles):
+        mask, angles = mask_and_angles
+        result = pana.compute_sharp_mask_overlap_single(mask, angles)
+        assert "overlap" in result
+        assert "angles" in result
+
+    def test_overlap_length_matches_angles(self, mask_and_angles):
+        mask, angles = mask_and_angles
+        result = pana.compute_sharp_mask_overlap_single(mask, angles)
+        assert len(result["overlap"]) == len(angles)
+
+    def test_identity_angle_has_max_overlap(self, mask_and_angles):
+        mask, angles = mask_and_angles
+        result = pana.compute_sharp_mask_overlap_single(mask, angles)
+        assert result["overlap"][0] >= result["overlap"][1]
+
+
+class TestComputeShapeStatsSingle:
+    @pytest.fixture
+    def scores_vol(self):
+        return _gaussian_map(size=32, peak_sigma=4.0)
+
+    def test_returns_dict_with_required_keys(self, scores_vol):
+        result = pana.compute_shape_stats_single(scores_vol)
+        assert {"tp_shape", "gp_shape", "hp_shape", "peak_value", "shape_type"}.issubset(result.keys())
+
+    def test_peak_value_is_float(self, scores_vol):
+        result = pana.compute_shape_stats_single(scores_vol)
+        assert isinstance(result["peak_value"], float)
+
+    def test_shape_arrays_have_length_3(self, scores_vol):
+        result = pana.compute_shape_stats_single(scores_vol)
+        for k in ("tp_shape", "gp_shape", "hp_shape"):
+            assert len(result[k]) == 3
+
+    def test_shape_type_echoed(self, scores_vol):
+        result = pana.compute_shape_stats_single(scores_vol, shape_type="loose")
+        assert result["shape_type"] == "loose"
 
 
 class TestFindMatchingOverlapRow:
@@ -787,17 +653,17 @@ class TestRunAnalysisArgsFromRow:
     def test_returns_required_keys(self, tmpl_row):
         result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
         assert set(result.keys()) == {
-            "structure_name", "template", "mask", "tomo",
-            "wedge_tomo", "wedge_tmpl", "starting_angle", "cyclic_symmetry",
+            "structure_name", "template", "mask", "target_map",
+            "wedge_target", "wedge_tmpl", "starting_angle", "cyclic_symmetry",
         }
 
     def test_tmpl_compare_tomo_equals_template(self, tmpl_row):
         result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
-        assert result["tomo"] == result["template"]
+        assert result["target_map"] == result["template"]
 
     def test_no_wedge_when_apply_wedge_false(self, subtomo_row):
         result = pana._run_analysis_args_from_row(subtomo_row, "/base/", "/wedge/")
-        assert result["wedge_tomo"] is None
+        assert result["wedge_target"] is None
         assert result["wedge_tmpl"] is None
 
     def test_starting_angle_shape(self, tmpl_row):
@@ -807,3 +673,512 @@ class TestRunAnalysisArgsFromRow:
     def test_structure_name_in_result(self, tmpl_row):
         result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
         assert result["structure_name"] == "ribosome"
+
+
+# ── Layer 2 single-case functions ─────────────────────────────────────────────
+
+
+def _make_angles_map(size=24, n_angles=5, peak_angle_0based=2, cc_radius=5):
+    """Synthetic angles_map: peak_angle_0based at centre cube, -1 elsewhere."""
+    amap = np.full((size, size, size), -1.0)
+    c = size // 2
+    r = cc_radius
+    amap[c - r : c + r + 1, c - r : c + r + 1, c - r : c + r + 1] = float(peak_angle_0based)
+    # a few corner voxels with a different (non-peak) angle
+    other = float((peak_angle_0based + 1) % n_angles)
+    amap[0:2, 0:2, 0:2] = other
+    return amap
+
+
+class TestResolveWriteDir:
+    def test_overwrite_creates_dir(self, tmp_path):
+        d = pana._resolve_write_dir(tmp_path, "mycase", "overwrite")
+        assert d.is_dir() and d.name == "mycase"
+
+    def test_overwrite_idempotent(self, tmp_path):
+        d1 = pana._resolve_write_dir(tmp_path, "mycase", "overwrite")
+        d2 = pana._resolve_write_dir(tmp_path, "mycase", "overwrite")
+        assert d1 == d2
+
+    def test_error_raises_when_artifact_exists(self, tmp_path):
+        case_dir = tmp_path / "mycase"
+        case_dir.mkdir()
+        (case_dir / "scores.em").write_bytes(b"")
+        with pytest.raises(FileExistsError):
+            pana._resolve_write_dir(tmp_path, "mycase", "error")
+
+    def test_error_succeeds_when_no_artifacts(self, tmp_path):
+        d = pana._resolve_write_dir(tmp_path, "fresh_case", "error")
+        assert d.is_dir()
+
+    def test_timestamp_creates_run_subdir(self, tmp_path):
+        d = pana._resolve_write_dir(tmp_path, "mycase", "timestamp")
+        assert d.name.startswith("run_") and d.parent.name == "mycase"
+
+    def test_timestamp_two_calls_differ(self, tmp_path):
+        import time
+        d1 = pana._resolve_write_dir(tmp_path, "mycase", "timestamp")
+        time.sleep(1.1)
+        d2 = pana._resolve_write_dir(tmp_path, "mycase", "timestamp")
+        assert d1 != d2
+
+
+class TestComputeDistanceMap:
+    N_ANGLES = 5
+    SIZE = 24
+    PEAK_0BASED = 2
+
+    @pytest.fixture
+    def angles(self):
+        a = np.zeros((self.N_ANGLES, 3))
+        for i in range(self.N_ANGLES):
+            a[i] = [i * 15, 0, 0]
+        return a
+
+    @pytest.fixture
+    def angles_map(self):
+        return _make_angles_map(
+            size=self.SIZE,
+            n_angles=self.N_ANGLES,
+            peak_angle_0based=self.PEAK_0BASED,
+        )
+
+    def test_returns_dict_with_required_keys(self, angles_map, angles):
+        result = pana.compute_distance_map(angles_map, angles)
+        assert isinstance(result, dict)
+        for k in ("dist_all", "dist_normals", "dist_inplane"):
+            assert k in result
+            assert isinstance(result[k], np.ndarray)
+
+    def test_output_shape_matches_input(self, angles_map, angles):
+        result = pana.compute_distance_map(angles_map, angles)
+        assert result["dist_all"].shape == angles_map.shape
+        assert result["dist_normals"].shape == angles_map.shape
+        assert result["dist_inplane"].shape == angles_map.shape
+
+    def test_unset_voxels_have_zero_distance(self, angles_map, angles):
+        result = pana.compute_distance_map(angles_map, angles)
+        assert np.all(result["dist_all"][angles_map < 0] == 0.0)
+
+    def test_default_reference_is_zero_rotation(self):
+        """starting_angle=None → reference is (0,0,0); voxels with idx=0 get dist_all=0."""
+        angles = np.array([[0.0, 0.0, 0.0], [30.0, 0.0, 0.0]])
+        amap = np.full((8, 8, 8), -1.0)
+        c = 4
+        amap[c-1:c+2, c-1:c+2, c-1:c+2] = 0.0  # index 0 → (0°,0,0)
+        amap[0, 0, 0] = 1.0                       # index 1 → (30°,0,0)
+
+        result = pana.compute_distance_map(amap, angles)  # starting_angle=None
+        np.testing.assert_allclose(result["dist_all"][amap == 0.0], 0.0, atol=1e-5)
+        assert result["dist_all"][0, 0, 0] > 0.0
+
+    def test_explicit_starting_angle_yields_zero_at_matching_angle(self):
+        """Voxels whose angle equals starting_angle have dist_all ≈ 0."""
+        angles = np.array([[0.0, 0.0, 0.0], [30.0, 0.0, 0.0]])
+        amap = np.full((8, 8, 8), -1.0)
+        c = 4
+        amap[c-1:c+2, c-1:c+2, c-1:c+2] = 1.0  # index 1 → (30°,0,0)
+        amap[0, 0, 0] = 0.0                       # index 0 → (0°,0,0)
+
+        result = pana.compute_distance_map(amap, angles, starting_angle=[30.0, 0.0, 0.0])
+        np.testing.assert_allclose(result["dist_all"][amap == 1.0], 0.0, atol=1e-5)
+        assert result["dist_all"][0, 0, 0] > 0.0
+
+    def test_writes_three_distance_files_with_output_dir(self, tmp_path, angles_map, angles):
+        pana.compute_distance_map(angles_map, angles, output_dir=str(tmp_path))
+        assert (tmp_path / "distance_map_all.em").exists()
+        assert (tmp_path / "distance_map_normals.em").exists()
+        assert (tmp_path / "distance_map_inplane.em").exists()
+
+    def test_labels_none_without_scores(self, angles_map, angles):
+        result = pana.compute_distance_map(angles_map, angles)
+        assert result["labels_all"] is None
+        assert result["labels_normals"] is None
+        assert result["labels_inplane"] is None
+
+    def test_no_cc_radius_parameter(self, angles_map, angles):
+        """cc_radius was removed; passing it must raise TypeError."""
+        with pytest.raises(TypeError):
+            pana.compute_distance_map(angles_map, angles, cc_radius=5)
+
+
+class TestComputePeakStats:
+    SIZE = 32
+
+    @pytest.fixture
+    def scores_vol(self):
+        return _gaussian_map(size=self.SIZE, peak_sigma=3.0)
+
+    @pytest.fixture
+    def dist_maps(self):
+        dm = np.full((self.SIZE, self.SIZE, self.SIZE), 20.0)
+        c = self.SIZE // 2
+        dm[c - 3 : c + 4, c - 3 : c + 4, c - 3 : c + 4] = 2.0
+        return dm, dm.copy(), dm.copy()
+
+    def test_returns_required_top_level_keys(self, scores_vol, dist_maps):
+        da, dn, di = dist_maps
+        result = pana.compute_peak_stats(scores_vol, da, dn, di, degrees=5.0)
+        assert "peak_stats" in result and "dist_maps" in result
+
+    def test_dist_maps_subkeys(self, scores_vol, dist_maps):
+        da, dn, di = dist_maps
+        result = pana.compute_peak_stats(scores_vol, da, dn, di, degrees=5.0)
+        assert set(result["dist_maps"].keys()) == {"dist_all", "dist_normals", "dist_inplane"}
+
+    def test_peak_stats_has_required_fields(self, scores_vol, dist_maps):
+        da, dn, di = dist_maps
+        result = pana.compute_peak_stats(scores_vol, da, dn, di, degrees=5.0)
+        ps = result["peak_stats"]
+        required = {"peak_value", "peak_x", "peak_y", "peak_z",
+                    "drop_x", "drop_y", "drop_z"}
+        for r in range(1, 6):
+            required |= {f"mean_{r}", f"median_{r}", f"var_{r}"}
+        assert required.issubset(set(ps.keys()))
+
+    def test_peak_value_positive(self, scores_vol, dist_maps):
+        da, dn, di = dist_maps
+        result = pana.compute_peak_stats(scores_vol, da, dn, di, degrees=5.0)
+        assert result["peak_stats"]["peak_value"] > 0.0
+
+    def test_each_dist_entry_has_required_fields(self, scores_vol, dist_maps):
+        da, dn, di = dist_maps
+        result = pana.compute_peak_stats(scores_vol, da, dn, di, degrees=5.0)
+        for name in ["dist_all", "dist_normals", "dist_inplane"]:
+            assert {"vc", "solidity", "vco", "dim"}.issubset(result["dist_maps"][name].keys())
+
+    def test_writes_files_with_output_dir(self, tmp_path, scores_vol, dist_maps):
+        import json as _json
+        da, dn, di = dist_maps
+        pana.compute_peak_stats(scores_vol, da, dn, di, degrees=5.0, output_dir=str(tmp_path))
+        stats_file = tmp_path / "stats.json"
+        assert stats_file.is_file()
+        with open(stats_file) as f:
+            data = _json.load(f)
+        assert "peak_stats" in data and "dist_maps" in data
+        assert (tmp_path / "peak_line_profiles.csv").is_file()
+
+    def test_returns_peak_line_profiles_dataframe(self, scores_vol, dist_maps):
+        import pandas as pd
+        da, dn, di = dist_maps
+        result = pana.compute_peak_stats(scores_vol, da, dn, di, degrees=5.0)
+        assert "peak_line_profiles" in result
+        assert isinstance(result["peak_line_profiles"], pd.DataFrame)
+        assert list(result["peak_line_profiles"].columns) == ["x", "y", "z"]
+
+
+class TestVisualizeResults:
+    SIZE = 32
+
+    @pytest.fixture
+    def scores_vol(self):
+        return _gaussian_map(size=self.SIZE, peak_sigma=3.0)
+
+    @pytest.fixture
+    def angles_map_vol(self):
+        amap = np.full((self.SIZE,) * 3, -1.0)
+        c = self.SIZE // 2
+        amap[c - 3 : c + 4, c - 3 : c + 4, c - 3 : c + 4] = 2.0
+        return amap
+
+    @pytest.fixture
+    def dist_vol(self):
+        return _gaussian_map(size=self.SIZE, peak_sigma=3.0) * 20.0
+
+    def test_returns_dict(self, scores_vol):
+        result = pana.visualize_results(scores=scores_vol)
+        assert isinstance(result, dict)
+
+    def test_no_args_returns_empty_dict(self):
+        result = pana.visualize_results()
+        assert result == {}
+
+    def test_score_panels_present(self, scores_vol):
+        result = pana.visualize_results(scores=scores_vol)
+        assert "score_slices" in result
+        assert "line_profiles" in result
+
+    def test_distance_panel_present(self, dist_vol):
+        result = pana.visualize_results(dist_all_map=dist_vol)
+        assert "distance_slices_all" in result
+
+    def test_angle_distribution_present(self, angles_map_vol):
+        result = pana.visualize_results(angles_map=angles_map_vol)
+        assert "angle_distribution" in result
+
+    def test_loads_peak_stats_from_json(self, tmp_path, scores_vol):
+        import json as _json
+        c = self.SIZE // 2
+        stats = {"peak_stats": {"peak_x": c, "peak_y": c, "peak_z": c}}
+        stats_path = tmp_path / "stats.json"
+        with open(stats_path, "w") as f:
+            _json.dump(stats, f)
+        result = pana.visualize_results(scores=scores_vol, peak_stats=stats_path)
+        assert "score_slices" in result
+
+
+class TestRunSingleCase:
+    SIZE = 16
+
+    @pytest.fixture
+    def syn_data(self):
+        size = self.SIZE
+        scores = _gaussian_map(size=size)
+        n_angles = 4
+        amap = np.full((size, size, size), -1.0)
+        c = size // 2
+        amap[c - 2 : c + 3, c - 2 : c + 3, c - 2 : c + 3] = 2.0
+        angles = np.array([[i * 20.0, 0.0, 0.0] for i in range(n_angles)])
+        return scores, amap.astype(float), angles
+
+    def test_creates_case_subdir(self, tmp_path, mocker, syn_data):
+        scores, amap, angles = syn_data
+        mocker.patch("cryocat.analysis.pana.analyze_rotations",
+                     return_value=(pd.DataFrame(), scores, amap, scores))
+        mocker.patch("cryocat.core.cryomap.write")
+        pana.run_single_case(
+            target_map=scores, template=scores, template_mask=scores,
+            input_angles=angles, output_dir=tmp_path, case_name="run1",
+            compute_distance_map=False, compute_peak_stats=False,
+        )
+        assert (tmp_path / "run1").is_dir()
+
+    def test_returns_required_keys(self, tmp_path, mocker, syn_data):
+        scores, amap, angles = syn_data
+        mocker.patch("cryocat.analysis.pana.analyze_rotations",
+                     return_value=(pd.DataFrame(), scores, amap, scores))
+        mocker.patch("cryocat.core.cryomap.write")
+        result = pana.run_single_case(
+            target_map=scores, template=scores, template_mask=scores,
+            input_angles=angles, output_dir=tmp_path, case_name="run2",
+            compute_distance_map=False, compute_peak_stats=False,
+        )
+        assert {"res_table", "scores_map", "angles_map", "write_dir"}.issubset(result.keys())
+
+    def test_dist_map_keys_in_result_when_enabled(self, tmp_path, mocker, syn_data):
+        scores, amap, angles = syn_data
+        mocker.patch("cryocat.analysis.pana.analyze_rotations",
+                     return_value=(pd.DataFrame(), scores, amap, scores))
+        mocker.patch("cryocat.core.cryomap.write")
+        result = pana.run_single_case(
+            target_map=scores, template=scores, template_mask=scores,
+            input_angles=angles, output_dir=tmp_path, case_name="run3",
+            compute_distance_map=True, compute_peak_stats=False,
+        )
+        assert {"dist_all_map", "dist_normals_map", "dist_inplane_map"}.issubset(result.keys())
+
+    def test_if_exists_error_raises_on_existing_artifact(self, tmp_path, syn_data):
+        scores, amap, angles = syn_data
+        case_dir = tmp_path / "run_err"
+        case_dir.mkdir()
+        (case_dir / "scores.em").write_bytes(b"")
+        with pytest.raises(FileExistsError):
+            pana.run_single_case(
+                target_map=scores, template=scores, template_mask=scores,
+                input_angles=angles, output_dir=tmp_path, case_name="run_err",
+                compute_distance_map=False, compute_peak_stats=False,
+                if_exists="error",
+            )
+
+    def test_if_exists_timestamp_creates_run_subdir(self, tmp_path, mocker, syn_data):
+        scores, amap, angles = syn_data
+        mocker.patch("cryocat.analysis.pana.analyze_rotations",
+                     return_value=(pd.DataFrame(), scores, amap, scores))
+        mocker.patch("cryocat.core.cryomap.write")
+        result = pana.run_single_case(
+            target_map=scores, template=scores, template_mask=scores,
+            input_angles=angles, output_dir=tmp_path, case_name="run_ts",
+            compute_distance_map=False, compute_peak_stats=False,
+            if_exists="timestamp",
+        )
+        write_dir = result["write_dir"]
+        assert write_dir.name.startswith("run_") and write_dir.parent.name == "run_ts"
+
+    def test_starting_angle_forwarded_to_compute_distance_map(self, tmp_path, mocker, syn_data):
+        """run_single_case must pass its starting_angle to _compute_distance_map."""
+        scores, amap, angles = syn_data
+        starting_angle = np.array([30.0, 0.0, 0.0])
+        mocker.patch("cryocat.analysis.pana.analyze_rotations",
+                     return_value=(pd.DataFrame(), scores, amap, scores))
+        mocker.patch("cryocat.core.cryomap.write")
+        mock_cdm = mocker.patch(
+            "cryocat.analysis.pana._compute_distance_map",
+            return_value={
+                "dist_all": amap, "dist_normals": amap, "dist_inplane": amap,
+                "labels_all": None, "labels_normals": None, "labels_inplane": None,
+                "labels_all_open": None, "labels_normals_open": None, "labels_inplane_open": None,
+                "output_dir": None,
+            },
+        )
+        pana.run_single_case(
+            target_map=scores, template=scores, template_mask=scores,
+            input_angles=angles, output_dir=tmp_path, case_name="fwd_sa",
+            starting_angle=starting_angle,
+            compute_distance_map=True, compute_peak_stats=False,
+        )
+        assert mock_cdm.called
+        call_kwargs = mock_cdm.call_args[1]
+        np.testing.assert_array_equal(call_kwargs["starting_angle"], starting_angle)
+
+
+# ── angles.em 0-based indexing invariant ─────────────────────────────────────
+
+def test_analyze_rotations_angles_map_is_zero_based(tmp_path):
+    """angles.em must use 0-based indices; index 0 must appear for the first angle."""
+    size = 16
+    tomogram = np.zeros((size, size, size), dtype=np.single)
+    # Place signal at centre so the first angle (identity) is preferred
+    c = size // 2
+    tomogram[c, c, c] = 1.0
+    reference = tomogram.copy()
+    # Two angles: identity [0,0,0] and 90° rotation — identity should win
+    angles = np.array([[0.0, 0.0, 0.0], [0.0, 90.0, 0.0]])
+    angles_path = tmp_path / "angles.csv"
+    import pandas as pd
+    pd.DataFrame(angles).to_csv(str(angles_path), header=False, index=False)
+    mask = np.ones((size, size, size), dtype=np.single)
+    _, _, angles_map, _ = pana.analyze_rotations(
+        target_map=tomogram,
+        template=reference,
+        template_mask=mask,
+        input_angles=str(angles_path),
+        output_path=str(tmp_path / "out"),
+        starting_angle=[0.0, 0.0, 0.0],
+    )
+    valid = angles_map[angles_map >= 0]
+    assert len(valid) > 0, "No voxels were updated in angles_map"
+    assert valid.min() >= 0, "angles.em contains negative values (1-based off-by-one?)"
+    assert valid.max() < len(angles), "angles.em index exceeds number of angles"
+
+
+# ── extract_best_subtomogram ──────────────────────────────────────────────────
+
+
+class TestExtractBestSubtomogram:
+    SIZE = 24
+
+    @pytest.fixture
+    def tomo_arr(self):
+        arr = np.zeros((self.SIZE,) * 3, dtype=np.single)
+        c = self.SIZE // 2
+        arr[c, c, c] = 1.0
+        return arr
+
+    @pytest.fixture
+    def motl_df(self):
+        return pd.DataFrame({
+            "x": [self.SIZE // 2], "y": [self.SIZE // 2], "z": [self.SIZE // 2],
+            "shift_x": [0.0], "shift_y": [0.0], "shift_z": [0.0],
+            "phi": [0.0], "theta": [0.0], "psi": [0.0],
+            "score": [1.0],
+        })
+
+    def test_returns_required_keys(self, tomo_arr, motl_df, mocker):
+        mocker.patch("cryocat.analysis.pana.cut_the_best_subtomo",
+                     return_value=(tomo_arr, np.array([0.0, 0.0, 0.0])))
+        result = pana.extract_best_subtomogram(tomo_arr, motl_df, box_size=16)
+        assert set(result.keys()) == {"subtomogram", "rotation", "output_path"}
+
+    def test_output_path_none_by_default(self, tomo_arr, motl_df, mocker):
+        mocker.patch("cryocat.analysis.pana.cut_the_best_subtomo",
+                     return_value=(tomo_arr, np.array([0.0, 0.0, 0.0])))
+        result = pana.extract_best_subtomogram(tomo_arr, motl_df, box_size=16)
+        assert result["output_path"] is None
+
+    def test_output_path_forwarded(self, tomo_arr, motl_df, mocker, tmp_path):
+        out = str(tmp_path / "subtomo.em")
+        mocker.patch("cryocat.analysis.pana.cut_the_best_subtomo",
+                     return_value=(tomo_arr, np.array([0.0, 0.0, 0.0])))
+        result = pana.extract_best_subtomogram(tomo_arr, motl_df, box_size=16, output_path=out)
+        assert result["output_path"] == out
+
+    def test_subtomogram_is_ndarray(self, tomo_arr, motl_df, mocker):
+        mocker.patch("cryocat.analysis.pana.cut_the_best_subtomo",
+                     return_value=(tomo_arr, np.array([10.0, 20.0, 30.0])))
+        result = pana.extract_best_subtomogram(tomo_arr, motl_df, box_size=16)
+        assert isinstance(result["subtomogram"], np.ndarray)
+
+    def test_rotation_is_ndarray(self, tomo_arr, motl_df, mocker):
+        rot = np.array([10.0, 20.0, 30.0])
+        mocker.patch("cryocat.analysis.pana.cut_the_best_subtomo",
+                     return_value=(tomo_arr, rot))
+        result = pana.extract_best_subtomogram(tomo_arr, motl_df, box_size=16)
+        np.testing.assert_array_equal(result["rotation"], rot)
+
+    def test_scalar_box_size_treated_as_cubic(self, tomo_arr, motl_df, mocker):
+        captured = {}
+        def _fake_cut(tomo, motl, shape, path):
+            captured["shape"] = shape
+            return tomo_arr, np.zeros(3)
+        mocker.patch("cryocat.analysis.pana.cut_the_best_subtomo", side_effect=_fake_cut)
+        pana.extract_best_subtomogram(tomo_arr, motl_df, box_size=20)
+        np.testing.assert_array_equal(captured["shape"], [20, 20, 20])
+
+# ── run_single_case: wedgelist kwarg pinned as removed ───────────────────────
+
+
+def test_run_single_case_rejects_wedgelist_kwarg():
+    """run_single_case must not accept wedgelist/tomo_number — those belong
+    to generate_wedge_masks_single or the batch path."""
+    arr = np.ones((8,) * 3, dtype=np.single)
+    angles = np.zeros((2, 3))
+    with pytest.raises(TypeError):
+        pana.run_single_case(arr, arr, arr, angles,
+                             output_dir="/tmp", case_name="x",
+                             wedgelist="fake.star", tomo_number=1)
+
+
+# ── wedgeutils.generate_wedge_mask parity ─────────────────────────────────────
+
+_WL_STAR = Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_list.star"
+
+
+def test_generate_wedge_mask_template_side_shape_and_range():
+    # generate_wedge_mask replaced the template-side branch of the old
+    # pana.generate_wedge_masks.  Verify it produces a correctly-shaped,
+    # unit-interval float mask for a cubic template volume.
+    template_size = 32
+    result = wedgeutils.generate_wedge_mask(template_size, str(_WL_STAR), 17)
+    mask = result["mask"]
+    assert mask.shape == (template_size,) * 3
+    assert mask.dtype in (np.float32, np.float64)
+    assert mask.min() >= 0.0
+    assert mask.max() <= 1.0 + 1e-6
+
+
+# ── Docstring alias invariant ─────────────────────────────────────────────────
+
+import inspect
+import re
+
+_ALIAS_TOKENS = {"MapSource", "DataSource", "EulerAngles", "Symmetry", "PathOrStr", "TripletLike"}
+
+
+def _params_section(doc):
+    m = re.search(
+        r"Parameters\n\s*-{3,}\n(.*?)(?:\n\s*(?:Returns|Raises|Notes|Examples)\n\s*-{3,}|$)",
+        doc or "",
+        re.S,
+    )
+    return m.group(1) if m else ""
+
+
+def test_docstrings_use_type_aliases():
+    for name in (
+        "analyze_rotations",
+        "run_single_case",
+        "compute_distance_map",
+        "compute_peak_stats",
+        "visualize_results",
+    ):
+        fn = getattr(pana, name)
+        sig = inspect.signature(fn)
+        doc_params = _params_section(fn.__doc__)
+        for p in sig.parameters.values():
+            ann = str(p.annotation)
+            for alias in _ALIAS_TOKENS:
+                if alias in ann:
+                    assert alias in doc_params, (
+                        f"{name}: parameter '{p.name}' uses {alias} in its annotation "
+                        f"but the docstring Parameters section does not name it."
+                    )

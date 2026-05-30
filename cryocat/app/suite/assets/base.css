@@ -17,22 +17,32 @@ html, body { overflow-y: scroll; }  /* always reserve space for the scrollbar */
   color: var(--color9);
 }
 
-/* === Track (background bar) === */
-.rc-slider-track {
-  background-color: var(--color6);
+/* === Dash 4.x slider — track rail (unfilled) === */
+.dash-slider-track {
+  background-color: var(--color11) !important;
 }
 
-/* === Handle (the knob) === */
-.rc-slider-handle {
-  background-color:  var(--color11);
-  border: 2px solid  var(--color6);
-  box-shadow: none;
+/* === Dash 4.x slider — range (filled/active bar) === */
+.dash-slider-range {
+  background-color: var(--color5) !important;
 }
 
-/* === Hover/focus state for handle === */
-.rc-slider-handle:hover,
-.rc-slider-handle:focus {
-  border-color: var(--color6);
+/* === Dash 4.x slider — thumb (the knob) === */
+.dash-slider-thumb {
+  background-color: var(--color5) !important;
+  border-color: var(--color11) !important;
+}
+
+/* === Focus ring === */
+.dash-slider-thumb:focus {
+  outline-color: var(--color5) !important;
+}
+
+/* === Tooltip bubble === */
+.dash-slider-tooltip {
+  background-color: var(--color5) !important;
+  color: #fff !important;
+  border-color: var(--color5) !important;
 }
 
 /* general settings for accordion in not selected, not open stated */
@@ -75,11 +85,31 @@ label {
   color: var(--color10);
 }
 
+/* ── Unified compact form controls (global, all pages) ──────────────────── */
+
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+input[type="email"],
+input[type="password"],
+.form-control,
+.form-control-sm {
   background-color: var(--color11);
-    padding-left: 8px;
+  height: 22px !important;
+  min-height: 22px !important;
+  padding: 0 6px !important;
+  line-height: 20px !important;
+  font-size: 11px !important;
+  box-sizing: border-box !important;
+  border-radius: 3px !important;
 }
+
+/* Hide native number-input spinners — keeps number fields the same height as text */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] { -moz-appearance: textfield; }
 
 /* Reduce horizontal padding inside header cells */
 .ag-theme-balham .ag-header-cell {
@@ -98,100 +128,36 @@ input[type="number"] {
 }
 
 
-.Select-input{
-    height: 25px !important;
-    line-height: 25px !important;
-    align-items: center;
-    padding-top: 0px;
-    padding-right: 0px;
-    padding-bottom: 0px;
-    padding-left: 0px;
-}
-
-.Select-control{
-    height: 25px !important;
-    line-height: 25px !important;
-    align-items: center;
-}
-
-.Select-placeholder, .Select--single > .Select-control .Select-value {
-    line-height: 25px !important;
-    display: flex;
-    align-items: center;
-}
-
-.Select-option {
-    padding-top: 0px;
-    padding-bottom: 0px;
-    line-height: 25px !important;
-    height: 25px !important;
-    align-items: center;
-}
-
-.VirtualizedSelectOption {
-
-    padding-top: 0px !important;
-    padding-bottom: 0px !important;
-    display: flex !important;
-    align-items: center !important;
-}
-
-.Select-menu-outer, .Select-menu {
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-    margin-top: 0 !important;
+/* === Dash 4.x dcc.Dropdown — compact trigger === */
+/* Built-in min-height is 32px; override to match the 22px form-control height. */
+.dash-dropdown-trigger {
+    min-height: 22px !important;
+    height: 22px !important;
+    padding: 0 6px !important;
+    font-size: 11px !important;
 }
 
 .ag-theme-alpine {
     font-size: 10px;
 }
 
-.Select-multi-value-wrapper {
-    background-color: var(--color11);
-    color: var(--color12);
-}
-
-.Select-placeholder {
-    background-color: var(--color11);
-    color: var(--color12);
-}
-
-.Select-arrow-zone {
-    background-color: var(--color11);
-    color: var(--color12);
-}
-
-.Select-clear-zone {
-    background-color: var(--color11);
-    color: var(--color12);
-}
-
-.Select-control {
-    background-color: var(--color11);
-    color: var(--color12);
-}
-
-/* The dropdown menu */
-.VirtualizedSelectOption {
-    background-color: var(--color11);
-    color: var(--color12);
-}
-
-/* Highlight on hover */
-.VirtualizedSelectOption:hover {
-    background-color: var(--color7);
-    color: var(--color12);
-}
-
-/* Selected item in menu */
-.Select-option.is-selected {
-    background-color: var(--color7);
-    font-weight: bold;
-}
-
-/* Selected label text */
-.Select-value-label {
+/* === Dash 4.x dcc.Dropdown — theme colours === */
+.dash-dropdown {
     background-color: var(--color11) !important;
+    color: var(--color12) !important;
+    border-color: var(--color6) !important;
+}
+
+.dash-dropdown-content {
+    background-color: var(--color11) !important;
+    color: var(--color12) !important;
+    border-color: var(--color6) !important;
+}
+
+.dash-dropdown-option:focus,
+.dash-dropdown-option[data-highlighted] {
+    background-color: var(--color7) !important;
+    color: var(--color12) !important;
 }
 
 html, body {
@@ -300,32 +266,11 @@ html, body {
 }
 
 /* Tooltip bubble */
-.rc-slider-tooltip {
-    padding: 2px 0 !important;
-    z-index: 10 !important;
-}
-.rc-slider-tooltip-inner {
-    min-height: unset !important;
-    height: 18px !important;
+.dash-slider-tooltip {
+    padding: 2px 4px !important;
     font-size: 10px !important;
-    padding: 0 5px !important;
-    line-height: 18px !important;
     border-radius: 3px !important;
-}
-
-/* Editable number inputs inside the tooltip */
-.rc-slider-tooltip-inner input[type="number"],
-.rc-slider-tooltip input[type="number"] {
-    height: 18px !important;
-    width: 54px !important;
-    font-size: 10px !important;
-    padding: 0 3px !important;
-    line-height: 18px !important;
-    box-sizing: border-box !important;
-    background-color: var(--color11);
-    border: 1px solid var(--color6);
-    border-radius: 2px;
-    margin: 0 !important;
+    z-index: 10 !important;
 }
 
 /* Hide built-in RangeSlider inputs inside filter sliders (replaced by explicit inputs) */
@@ -383,3 +328,38 @@ html, body {
     margin-left: 2rem;
     margin-right: auto;
 }
+
+/* ── dbc.Select (select.form-select) ─────────────────────────────────────── */
+select.form-select {
+    height: 22px !important;
+    padding: 0 6px !important;
+    font-size: 11px !important;
+    line-height: 20px !important;
+}
+
+/* ── Checkbox & radio vertical alignment ──────────────────────────────────── */
+/* Bootstrap 5 sets .form-check-input { float: left; margin-left: -1.5em }.
+   float is ignored in a flex parent, but margin-left still applies and shifts
+   the input 1.5em to the left. Zero it out explicitly. */
+.form-check-input {
+    margin-top: 0 !important;
+    margin-left: 0 !important;
+    vertical-align: middle !important;
+    flex-shrink: 0;
+}
+.form-check {
+    display: flex !important;
+    align-items: center !important;
+    gap: 0.4rem !important;
+    min-height: unset !important;
+    margin-bottom: 0.15rem !important;
+    padding-left: 0 !important;
+}
+
+/* ── Dash 4.x dcc.RadioItems / dcc.Checklist — inner item alignment ── */
+/* Each option is inline-flex with default align-items: stretch, which can
+   leave the radio circle and text at different vertical positions. */
+.dash-options-list-option {
+    align-items: center !important;
+}
+

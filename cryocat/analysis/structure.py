@@ -2,6 +2,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import warnings
+
+# pandas ≥ 2.2 excludes grouping columns from apply() frames by default.
+# Pass include_groups=False explicitly so the behaviour is stable across versions.
+_PD_HAS_INCLUDE_GROUPS: bool = tuple(int(x) for x in pd.__version__.split(".")[:2]) >= (2, 2)
 import decimal
 import os
 from scipy.spatial.transform import Rotation as srot
@@ -216,9 +220,12 @@ class Chain:
         qp_angles = df[["phi", "theta", "psi"]].values[0:-1, :]
         rotated = nnana.rotated_nn_coords(centered, qp_angles)
 
+        n_steps = entry_coord.shape[0]
+        chain_size = np.full((n_steps, 1), df.shape[0])  # true chain length, repeated per step
+
         return np.hstack(
             [
-                df[self.column_name].values[:-1].reshape(-1, 1),
+                chain_size,
                 chain_dist,
                 centered,
                 rotated,
@@ -256,8 +263,13 @@ class Chain:
         if df.empty:
             return pd.DataFrame()
 
-        dist_stats = df.groupby([self.column_name, self.chain_id_col]).apply(self._step_distances_and_rotated_coords)
-        rot_stats = df.groupby([self.column_name, self.chain_id_col]).apply(self._step_rotations)
+        _kw = {"include_groups": False} if _PD_HAS_INCLUDE_GROUPS else {}
+        dist_stats = df.groupby([self.column_name, self.chain_id_col]).apply(
+            self._step_distances_and_rotated_coords, **_kw
+        )
+        rot_stats = df.groupby([self.column_name, self.chain_id_col]).apply(
+            self._step_rotations, **_kw
+        )
 
         dist_stats = np.vstack(dist_stats.values)
         rot_stats = np.vstack(rot_stats.values)

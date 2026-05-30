@@ -84,6 +84,54 @@ def test_gui_exposed_undecorated_has_no_gui():
     assert getattr(plain, "_gui", None) is None
 
 
+def test_gui_exposed_defaults_standalone_preview():
+    """Bare @gui_exposed must carry standalone=False and preview=None."""
+    @gui_exposed
+    def my_op(self):
+        pass
+
+    assert my_op._gui["standalone"] is False
+    assert my_op._gui["preview"] is None
+
+
+def test_gui_exposed_standalone_and_preview_fields():
+    """Custom standalone/preview values land on fn._gui."""
+    @gui_exposed(category="builder", standalone=True, preview="orientational")
+    def my_builder(x):
+        pass
+
+    assert my_builder._gui["standalone"] is True
+    assert my_builder._gui["preview"] == "orientational"
+    assert my_builder._gui["category"] == "builder"
+
+
+def test_gui_exposed_builder_registered():
+    """A builder with standalone=True is added to _GUI_BUILDER_REGISTRY."""
+    from cryocat.utils.classutils import _GUI_BUILDER_REGISTRY
+
+    @gui_exposed(category="builder", standalone=True, preview="test")
+    def _test_registry_builder(x):
+        pass
+
+    ids = [e["id"] for e in _GUI_BUILDER_REGISTRY]
+    assert "_test_registry_builder" in ids
+    entry = next(e for e in _GUI_BUILDER_REGISTRY if e["id"] == "_test_registry_builder")
+    assert entry["preview"] == "test"
+    assert entry["fn"] is _test_registry_builder
+
+
+def test_gui_exposed_non_standalone_not_registered():
+    """A builder without standalone=True must NOT appear in the registry."""
+    from cryocat.utils.classutils import _GUI_BUILDER_REGISTRY
+
+    @gui_exposed(category="builder", standalone=False)
+    def _test_non_standalone(x):
+        pass
+
+    ids = [e["id"] for e in _GUI_BUILDER_REGISTRY]
+    assert "_test_non_standalone" not in ids
+
+
 # ---------------------------------------------------------------------------
 # resolve_param_type
 # ---------------------------------------------------------------------------

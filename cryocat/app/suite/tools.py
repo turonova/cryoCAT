@@ -12,10 +12,12 @@ Each entry:
 """
 
 TOOLS = [
-    {"id": "editor", "label": "Motl Editor",      "path": "/motl", "module": "cryocat.app.suite.pages.pmotl"},
-    {"id": "sta",    "label": "STA",              "path": "/sta",  "module": "cryocat.app.suite.pages.psta"},
-    {"id": "pana",   "label": "Peak Analysis",    "path": "/pana", "module": "cryocat.app.suite.pages.ppana"},
-    {"id": "nn",     "label": "Nearest Neighbor", "path": "/nn",   "module": "cryocat.app.suite.pages.pnn"},
+    {"id": "editor",    "label": "Motl Editor",       "path": "/motl",      "module": "cryocat.app.suite.pages.pmotl"},
+    {"id": "nn",        "label": "Nearest Neighbor",  "path": "/nn",        "module": "cryocat.app.suite.pages.pnn"},
+    {"id": "sta",       "label": "STA",               "path": "/sta",       "module": "cryocat.app.suite.pages.psta"},
+    {"id": "pana",      "label": "Peak Analysis",     "path": "/pana",      "module": "cryocat.app.suite.pages.ppana"},
+    {"id": "volume",    "label": "Mask generation",   "path": "/volume",    "module": "cryocat.app.suite.pages.pvolume"},
+    {"id": "utilities", "label": "Utilities",         "path": "/utilities", "module": "cryocat.app.suite.pages.putilities"},
     # Uncomment as the page module is created (see suite_information_architecture.md §7):
     # {"id": "structure", "label": "Structure", "path": "/structure", "module": "cryocat.app.suite.pages.pstructure"},
 ]

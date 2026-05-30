@@ -2240,7 +2240,7 @@ def plot_polar_nn_distances(
     coordinates: ArrayLike,
     distances: ArrayLike,
     max_radius: Optional[float] = None,
-    marker_size: int = 3,
+    marker_size: int = 7,
     colormap: str = "viridis_r",
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
@@ -2389,8 +2389,8 @@ def plot_orientational_distribution(
     coordinates: ArrayLike,
     projection: ProjectionType = "stereo",
     graph_title: Optional[str] = None,
-    theta_bin: int = 73,
-    radius_bin: int = 33,
+    theta_bin: int = 12,
+    radius_bin: int = 5,
     max_radius: Optional[float] = None,
     colormap: str = "viridis_r",
     output_path: Optional[PathOrStr] = None,
@@ -2409,9 +2409,9 @@ def plot_orientational_distribution(
         Projection algorithm passed to :func:`cryocat.utils.geom.create_projection`.
     graph_title : str, optional
         Figure title.
-    theta_bin : int, default=73
+    theta_bin : int, default=12
         Number of angular bin edges. ``theta_bin - 1`` sectors per radial ring.
-    radius_bin : int, default=33
+    radius_bin : int, default=5
         Number of radial bin edges. ``radius_bin - 1`` rings per hemisphere.
     max_radius : float, optional
         Maximum projected radius. Defaults to the data maximum.

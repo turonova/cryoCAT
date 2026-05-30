@@ -682,3 +682,188 @@ def test_project_points_on_sphere_invalid_raises():
     pts = np.array([[0.0, 0.0, 1.0]])
     with pytest.raises(ValueError):
         project_points_on_sphere(pts, projection_type="gnomonic")
+
+
+# ---------------------------------------------------------------------------
+# generate_angles — decoration + basic shape
+# ---------------------------------------------------------------------------
+
+def test_generate_angles_gui_exposed():
+    """generate_angles must carry the correct @gui_exposed metadata."""
+    from cryocat.utils.geom import generate_angles
+    gui = getattr(generate_angles, "_gui", None)
+    assert gui is not None, "generate_angles is not decorated with @gui_exposed"
+    assert gui["label"] == "Generate angle list"
+    assert gui["category"] == "builder"
+    assert gui["standalone"] is True
+    assert gui["preview"] == "orientational"
+
+
+def test_generate_angles_registered_as_builder():
+    """generate_angles must appear in the standalone builder registry."""
+    import cryocat.utils.geom  # noqa: ensure decorator fires
+    from cryocat.utils.classutils import _GUI_BUILDER_REGISTRY
+    ids = [e["id"] for e in _GUI_BUILDER_REGISTRY]
+    assert "generate_angles" in ids
+
+
+def test_generate_angles_shape():
+    """generate_angles returns (N, 3) for a small cone."""
+    angles = generate_angles(cone_angle=30.0, cone_sampling=10.0)
+    assert angles.ndim == 2
+    assert angles.shape[1] == 3
+    assert angles.shape[0] > 0
+
+
+def test_generate_angles_symmetry():
+    """Applying symmetry=2 halves the in-plane range."""
+    a1 = generate_angles(cone_angle=0.0, cone_sampling=10.0, symmetry=1)
+    a2 = generate_angles(cone_angle=0.0, cone_sampling=10.0, symmetry=2)
+    assert a2.shape[0] == pytest.approx(a1.shape[0] / 2, abs=2)
+
+
+# ---------------------------------------------------------------------------
+# generate_angles with output_path — save-to-file behaviour
+# ---------------------------------------------------------------------------
+
+def test_generate_angles_saves_file(tmp_path):
+    """generate_angles with output_path must write a headerless 3-column CSV."""
+    import pandas as pd
+    out = tmp_path / "angles.csv"
+    angles = generate_angles(cone_angle=30.0, cone_sampling=10.0, output_path=str(out))
+    assert out.exists(), "output file was not created"
+    df = pd.read_csv(out, header=None)
+    assert df.shape[1] == 3, "CSV must have exactly 3 columns"
+    assert df.shape[0] == len(angles), "row count must match returned array"
+    assert len(angles) > 0
+
+
+def test_generate_angles_saved_matches_returned(tmp_path):
+    """Saved CSV content must match the returned ndarray."""
+    import pandas as pd
+    out = tmp_path / "angles.csv"
+    angles = generate_angles(cone_angle=20.0, cone_sampling=8.0, output_path=str(out))
+    saved = pd.read_csv(out, header=None).to_numpy()
+    assert saved.shape == angles.shape
+    assert np.allclose(saved, angles, atol=1e-6)
+
+
+def test_generate_angles_output_path_hidden_in_gui():
+    """output_path must be excluded from the auto-generated form."""
+    gui = getattr(generate_angles, "_gui", None)
+    assert gui is not None, "generate_angles is not decorated with @gui_exposed"
+    assert "output_path" in gui.get("hide", ())
+
+
+# ---------------------------------------------------------------------------
+# euler_angles_to_normals — regression: per-row normalization
+# ---------------------------------------------------------------------------
+
+def test_euler_angles_to_normals_unit_length_batch():
+    """Every output row must be a unit vector (regression for scalar-norm bug)."""
+    from cryocat.utils import geom as _geom
+    angles = np.array([
+        [0.0,   0.0,   0.0],
+        [30.0,  45.0,  10.0],
+        [120.0, 90.0,  0.0],
+        [200.0, 15.0,  350.0],
+    ])
+    normals = _geom.euler_angles_to_normals(angles)
+    assert normals.shape == (4, 3)
+    np.testing.assert_allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-6)
+
+
+def test_euler_angles_to_normals_single_triple():
+    """Single (3,) input must produce a (1, 3) unit-length output."""
+    from cryocat.utils import geom as _geom
+    normals = _geom.euler_angles_to_normals(np.array([0.0, 0.0, 0.0]))
+    assert normals.shape == (1, 3)
+    np.testing.assert_allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-6)
+
+
+def test_euler_angles_to_normals_zero_rotation_is_plus_z():
+    """zxz (0, 0, 0) applied to the z-axis must stay at (0, 0, 1)."""
+    from cryocat.utils import geom as _geom
+    normals = _geom.euler_angles_to_normals(np.array([0.0, 0.0, 0.0]))
+    np.testing.assert_allclose(normals[0], [0.0, 0.0, 1.0], atol=1e-6)
+
+
+def test_rotations_to_z_normals_unit_length():
+    """rotations_to_z_normals rows must each have length == radius (default 1)."""
+    from cryocat.utils import geom as _geom
+    from scipy.spatial.transform import Rotation as srot
+    angles = np.array([[0.0, 0.0, 0.0], [30.0, 45.0, 90.0], [120.0, 10.0, 200.0]])
+    rots = srot.from_euler("zxz", angles=angles, degrees=True)
+    pts = _geom.rotations_to_z_normals(rots, radius=1.0)
+    assert pts.shape == (3, 3)
+    np.testing.assert_allclose(np.linalg.norm(pts, axis=1), 1.0, atol=1e-6)
+
+
+def test_rotations_to_z_normals_custom_radius():
+    """Row length should equal the given radius."""
+    from cryocat.utils import geom as _geom
+    from scipy.spatial.transform import Rotation as srot
+    rots = srot.from_euler("zxz", angles=np.array([[0.0, 0.0, 0.0]]), degrees=True)
+    pts = _geom.rotations_to_z_normals(rots, radius=3.0)
+    np.testing.assert_allclose(np.linalg.norm(pts, axis=1), 3.0, atol=1e-6)
+
+
+# ── apply_starting_and_offset ─────────────────────────────────────────────────
+
+class TestApplyStartingAndOffset:
+    _ANGLES = np.array([[10.0, 20.0, 30.0], [45.0, 60.0, 90.0]])
+
+    def test_none_none_returns_input_unchanged(self):
+        from cryocat.utils.geom import apply_starting_and_offset
+        result = apply_starting_and_offset(self._ANGLES)
+        np.testing.assert_allclose(result, self._ANGLES, atol=1e-10)
+
+    def test_zero_starting_angle_is_identity(self):
+        from cryocat.utils.geom import apply_starting_and_offset
+        result = apply_starting_and_offset(self._ANGLES, starting_angle=(0.0, 0.0, 0.0))
+        np.testing.assert_allclose(result, self._ANGLES, atol=1e-10)
+
+    def test_zero_offset_is_identity(self):
+        from cryocat.utils.geom import apply_starting_and_offset
+        result = apply_starting_and_offset(self._ANGLES, angular_offset=(0.0, 0.0, 0.0))
+        np.testing.assert_allclose(result, self._ANGLES, atol=1e-10)
+
+    def test_nonzero_starting_angle_matches_explicit_srot(self):
+        from cryocat.utils.geom import apply_starting_and_offset
+        sa = np.array([15.0, 0.0, 0.0])
+        expected = (
+            srot.from_euler("zxz", self._ANGLES, degrees=True)
+            * srot.from_euler("zxz", sa, degrees=True)
+        ).as_euler("zxz", degrees=True)
+        result = apply_starting_and_offset(self._ANGLES, starting_angle=sa)
+        np.testing.assert_allclose(result, expected, atol=1e-10)
+
+    def test_nonzero_offset_matches_explicit_srot(self):
+        from cryocat.utils.geom import apply_starting_and_offset
+        ao = np.array([0.0, 10.0, 0.0])
+        expected = (
+            srot.from_euler("zxz", self._ANGLES, degrees=True)
+            * srot.from_euler("zxz", ao, degrees=True)
+        ).as_euler("zxz", degrees=True)
+        result = apply_starting_and_offset(self._ANGLES, angular_offset=ao)
+        np.testing.assert_allclose(result, expected, atol=1e-10)
+
+    def test_both_nonzero_matches_explicit_two_step_srot(self):
+        from cryocat.utils.geom import apply_starting_and_offset
+        sa = np.array([15.0, 0.0, 0.0])
+        ao = np.array([0.0, 10.0, 5.0])
+        step1 = (
+            srot.from_euler("zxz", self._ANGLES, degrees=True)
+            * srot.from_euler("zxz", sa, degrees=True)
+        ).as_euler("zxz", degrees=True)
+        expected = (
+            srot.from_euler("zxz", step1, degrees=True)
+            * srot.from_euler("zxz", ao, degrees=True)
+        ).as_euler("zxz", degrees=True)
+        result = apply_starting_and_offset(self._ANGLES, starting_angle=sa, angular_offset=ao)
+        np.testing.assert_allclose(result, expected, atol=1e-10)
+
+    def test_output_shape(self):
+        from cryocat.utils.geom import apply_starting_and_offset
+        result = apply_starting_and_offset(self._ANGLES, starting_angle=(5.0, 10.0, 0.0))
+        assert result.shape == self._ANGLES.shape

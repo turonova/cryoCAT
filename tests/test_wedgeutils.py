@@ -1,8 +1,10 @@
 from cryocat.utils.wedgeutils import *
 from cryocat.utils.ioutils import *
+from cryocat.core import cryomap
 import numpy as np
 import pytest
 from pathlib import Path
+import os
 import emfile
 
 
@@ -381,4 +383,85 @@ def test_wedge_list_sg_to_em_invalid_input(tmp_path):
     with pytest.raises(Exception):
         wedge_list_sg_to_em(str(invalid_file_path), tmp_path / "output.em")
 
+
+# ── generate_wedge_mask ────────────────────────────────────────────────────────
+
+_WL_PATH = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_list.star")
+_TOMO_NUM = 17
+
+
+def test_generate_wedge_mask_cubic_shape():
+    result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
+    assert result["mask"].shape == (32, 32, 32)
+
+
+def test_generate_wedge_mask_triplet_shape():
+    result = generate_wedge_mask((20, 20, 20), _WL_PATH, _TOMO_NUM)
+    assert result["mask"].shape == (20, 20, 20)
+
+
+def test_generate_wedge_mask_output_path_roundtrip(tmp_path):
+    out = tmp_path / "mask.em"
+    result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, output_path=str(out))
+    assert out.exists()
+    assert result["output_path"] == str(out)
+    loaded = cryomap.read(str(out))
+    assert np.allclose(loaded, result["mask"])
+
+
+def test_generate_wedge_mask_no_output_path():
+    result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
+    assert result["output_path"] is None
+
+
+def test_generate_wedge_mask_values_in_unit_interval():
+    result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
+    assert result["mask"].min() >= 0.0
+    assert result["mask"].max() <= 1.0 + 1e-6
+
+
+def test_generate_wedge_mask_lowpass_not_all_ones():
+    result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, low_pass_filter=8)
+    assert not np.allclose(result["mask"], 1.0)
+
+
+@pytest.fixture
+def exposure_wedgelist():
+    import pandas as pd
+    tilts = np.arange(-52, 54, 2, dtype=float)
+    n = len(tilts)
+    return pd.DataFrame({
+        "tomo_num": [1] * n,
+        "tilt_angle": tilts,
+        "pixelsize": [2.4] * n,
+        "exposure": np.linspace(0.1, 5.0, n),
+        "tomo_x": [512] * n,
+        "tomo_y": [512] * n,
+        "tomo_z": [200] * n,
+        "defocus": [3.5] * n,
+        "voltage": [300.0] * n,
+        "amp_contrast": [0.07] * n,
+        "cs": [2.7] * n,
+    })
+
+
+def test_generate_wedge_mask_exposure_weighting(exposure_wedgelist):
+    result_plain = generate_wedge_mask(32, exposure_wedgelist, 1)
+    result_exp = generate_wedge_mask(32, exposure_wedgelist, 1, exposure_weighting=True)
+    assert result_exp["mask"].shape == (32, 32, 32)
+    assert not np.allclose(result_plain["mask"], result_exp["mask"])
+
+
+def test_generate_wedge_mask_ctf_weighting():
+    result_plain = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
+    result_ctf = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, ctf_weighting=True)
+    assert result_ctf["mask"].shape == (32, 32, 32)
+    assert not np.allclose(result_plain["mask"], result_ctf["mask"])
+
+
+def test_generate_wedge_mask_two_sizes_independent():
+    r_small = generate_wedge_mask(16, _WL_PATH, _TOMO_NUM)
+    r_large = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
+    assert r_small["mask"].shape == (16, 16, 16)
+    assert r_large["mask"].shape == (32, 32, 32)
 

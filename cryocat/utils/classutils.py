@@ -173,7 +173,21 @@ def get_class_names_by_prefix(prefix):
 # @gui_exposed — mark a method as GUI-exposable + carry presentation metadata
 # ===========================================================================
 
-def gui_exposed(_fn=None, *, label=None, category=None, hide=(), output=None, motls=None):
+_GUI_BUILDER_REGISTRY: list[dict] = []
+"""Registry of ``@gui_exposed`` functions with ``category="builder"`` and ``standalone=True``."""
+
+
+def gui_exposed(
+    _fn=None,
+    *,
+    label=None,
+    category=None,
+    hide=(),
+    output=None,
+    motls=None,
+    standalone: bool = False,
+    preview: str | None = None,
+):
     """Mark a method as GUI-exposable and carry presentation metadata.
 
     Parameters
@@ -182,6 +196,8 @@ def gui_exposed(_fn=None, *, label=None, category=None, hide=(), output=None, mo
         Display name in the operation dropdown. Defaults to the function name.
     category : str, optional
         Grouping for the dropdown (e.g. "Cleaning", "Geometry"). None = ungrouped.
+        Use ``"builder"`` to flag a value-producing function (e.g. an angle-list
+        generator) that should not appear in the main tool dropdown.
     hide : iterable of str, optional
         Parameter names the GUI/CLI should NOT surface (beyond ``self`` / ``cls``,
         which are always hidden).
@@ -204,6 +220,14 @@ def gui_exposed(_fn=None, *, label=None, category=None, hide=(), output=None, mo
             (``"motl_list"`` for list ops; pair ops pass two motls positionally
             so this is omitted).
         ``None`` (default) => single-motl operation.
+    standalone : bool, default=False
+        When ``True`` (and ``category="builder"``), the function is also listed
+        on the Utilities page as a standalone panel. Registered in
+        :data:`_GUI_BUILDER_REGISTRY` at decoration time.
+    preview : str, optional
+        Name of the preview plot style to render in the builder panel
+        (e.g. ``"orientational"``). Passed through as-is; the panel component
+        interprets the value.
 
     Notes
     -----
@@ -218,13 +242,23 @@ def gui_exposed(_fn=None, *, label=None, category=None, hide=(), output=None, mo
         # but `_gui` must land on the underlying function so the collector can
         # read it through `__func__`.
         target = fn.__func__ if isinstance(fn, (classmethod, staticmethod)) else fn
+        gui_label = label or target.__name__.replace("_", " ").capitalize()
         target._gui = {
-            "label": label or target.__name__.replace("_", " ").capitalize(),
+            "label": gui_label,
             "category": category,
             "hide": set(hide) | {"self", "cls"},
             "output": output,
             "motls": motls,
+            "standalone": standalone,
+            "preview": preview,
         }
+        if category == "builder" and standalone:
+            _GUI_BUILDER_REGISTRY.append({
+                "id": target.__name__,
+                "label": gui_label,
+                "fn": target,
+                "preview": preview,
+            })
         return fn
 
     return wrap(_fn) if _fn is not None else wrap
@@ -238,6 +272,7 @@ def gui_exposed(_fn=None, *, label=None, category=None, hide=(), output=None, mo
 _ALIAS_TAGS = {
     "MapSource", "DataSource", "TiltStack", "TomoList", "TomoDimensions",
     "TripletLike", "EulerAngles", "ListLike", "Symmetry", "ArrayLike",
+    "RotationLike",
 }
 # PEP-695 aliases whose value is a Literal[...] — resolved to ("Literal", choices).
 _LITERAL_ALIASES = {
@@ -387,6 +422,13 @@ def _parse_literal(v, choices=None):
 
 
 # argparse ``type=`` helpers (CLI string -> python value).
+def _parse_str(v):
+    """GUI text field -> str. None stays None (not converted to the string 'None')."""
+    if v is None:
+        return None
+    return str(v)
+
+
 def _arg_bool(s):
     return _parse_bool(s)
 
@@ -417,12 +459,13 @@ TYPE_HANDLERS = {
     "TripletLike":    {"widget": "triplet",  "parse": _parse_triplet,  "argparse": {"type": _arg_triplet}},
     "EulerAngles":    {"widget": "triplet",  "parse": _parse_triplet,  "argparse": {"type": _arg_triplet}},
     "ListLike":       {"widget": "csv_text", "parse": _parse_listlike, "argparse": {"type": _arg_listlike}},
-    "Symmetry":       {"widget": "text",     "parse": str,             "argparse": {"type": str}},
+    "Symmetry":       {"widget": "text",     "parse": _parse_str,      "argparse": {"type": str}},
+    "RotationLike":   {"widget": "rotation", "parse": _parse_str,      "argparse": {"type": str}},
     "Literal":        {"widget": "dropdown", "parse": _parse_literal,  "argparse": {"type": str}},
     "bool":           {"widget": "bool",     "parse": _parse_bool,     "argparse": {"type": _arg_bool}},
     "int":            {"widget": "number",   "parse": _parse_int,      "argparse": {"type": int}},
     "float":          {"widget": "number",   "parse": _parse_float,    "argparse": {"type": float}},
-    "str":            {"widget": "text",     "parse": str,             "argparse": {"type": str}},
+    "str":            {"widget": "text",     "parse": _parse_str,      "argparse": {"type": str}},
 }
 
 

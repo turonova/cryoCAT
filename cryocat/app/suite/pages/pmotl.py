@@ -27,8 +27,8 @@ from cryocat.app.suite.motlsidebar import (
 from cryocat.app.components.tomoview import get_viewer_component, register_viewer_callbacks
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
+from cryocat.app.components.tablecluster import register_table_cluster_callbacks
 from cryocat.app.components.motlio import get_motl_simple_save_component, register_motl_simple_save_callbacks
-from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
 from cryocat.app.apputils import _format_relion_params
 
 
@@ -39,7 +39,7 @@ from cryocat.app.apputils import _format_relion_params
 
 def _make_stores():
     stores = [
-        dcc.Store(id="me-slot-map", data=[None] * N_SLOTS),
+        dcc.Store(id="me-slot-map", data=[None] * N_SLOTS, storage_type="session"),
         dcc.Store(id="me-results-store"),
         dcc.Store(id="me-results-label-store"),
         dcc.Store(id="me-load-motl-data-store"),
@@ -145,7 +145,6 @@ layout = html.Div(
             className="g-0",
             style={"margin": "0", "padding": "0"},
         ),
-        *get_log_panel("me-log"),
     ],
     style={"margin": "0", "padding": "0"},
 )
@@ -173,12 +172,19 @@ def register_callbacks(app):
             f"me-{_i}-tabv-global-data-store",
             table_grid_id=f"me-{_i}-tabv-grid",
         )
+        register_table_cluster_callbacks(
+            app,
+            f"me-{_i}-tabv-table-cluster",
+            f"me-{_i}-tabv-global-data-store",
+            table_grid_id=f"me-{_i}-tabv-grid",
+        )
         register_motl_simple_save_callbacks(app, f"me-{_i}-save", f"me-{_i}-tabv-global-data-store", f"me-{_i}")
 
     # Results tab
     register_viewer_callbacks(app, "me-res-tv", tabs_id=None)
     register_table_callbacks(app, "me-res-tabv", csv_only=False, connected_motl_prefix="me-res")
     register_table_plot_callbacks(app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store")
+    register_table_cluster_callbacks(app, "me-res-tabv-table-cluster", "me-res-tabv-global-data-store")
 
     _register_pool_sync(app)
     _register_create_from_selected(app)
@@ -225,7 +231,6 @@ def register_callbacks(app):
         display_label = label or "Results"
         return False, data, data, display_label, "me-tab-results"
 
-    register_log_panel_callbacks(app, "me-log")
 
 
 # ── Pool <-> slot synchronisation ────────────────────────────────────────────────

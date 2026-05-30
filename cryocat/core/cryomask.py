@@ -15,6 +15,7 @@ import pandas as pd
 import decimal
 from skimage import morphology
 from cryocat._types import MapSource, PathOrStr, TripletLike, EulerAngles, ArrayLike, TomoDimensions
+from cryocat.utils.classutils import gui_exposed
 
 
 def parse_shape_string(shape_string: str) -> tuple[str, list[int]]:
@@ -382,6 +383,8 @@ def difference(mask_list: list[MapSource], output_path: PathOrStr | None = None,
     return final_mask
 
 
+@gui_exposed(label="Spherical shell", category="Mask", output="mask",
+             hide=("mask_size", "output_path"))
 def spherical_shell_mask(mask_size: TripletLike, shell_thickness: int | float, radius: int | None = None, center: TripletLike | None = None, gaussian: float = 0.0, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Generate a spherical shell mask within a 3D volume.
 
@@ -437,6 +440,8 @@ def spherical_shell_mask(mask_size: TripletLike, shell_thickness: int | float, r
     return shell_mask
 
 
+@gui_exposed(label="Sphere", category="Mask", output="mask",
+             hide=("mask_size", "output_path"))
 def spherical_mask(mask_size: TripletLike, radius: int | None = None, center: TripletLike | None = None, gaussian: float = 0.0, gaussian_outwards: bool = True, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Creates a spherical mask with the specified radius, center and box size. The values range from 0.0 to 1.0.
     Additionally, the mask can be blurred by applying Gaussian specified by its sigma value.
@@ -505,6 +510,8 @@ def spherical_mask(mask_size: TripletLike, radius: int | None = None, center: Tr
     return mask
 
 
+@gui_exposed(label="Cylinder", category="Mask", output="mask",
+             hide=("mask_size", "output_path"))
 def cylindrical_mask(
     mask_size: TripletLike,
     radius: int | None = None,
@@ -687,6 +694,8 @@ def cylindrical_mask_from_points(
 
     return rot_shifted
 
+@gui_exposed(label="Ellipsoid shell", category="Mask", output="mask",
+             hide=("mask_size", "output_path"))
 def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: TripletLike, center: TripletLike | None = None, gaussian: float = 0.0, angles: EulerAngles | None = None, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Generates a binary mask of an ellipsoid shell within a given mask size.
 
@@ -746,6 +755,8 @@ def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: 
     return shell_mask
 
 
+@gui_exposed(label="Ellipsoid", category="Mask", output="mask",
+             hide=("mask_size", "output_path"))
 def ellipsoid_mask(
     mask_size: TripletLike,
     radii: TripletLike | None = None,
@@ -953,6 +964,8 @@ def molmap_tight_mask(
     return mask
 
 
+@gui_exposed(label="Tight (from map)", category="Mask", output="mask",
+             hide=("mask_size", "output_path", "input_map", "threshold"))
 def map_tight_mask(
     input_map: MapSource,
     threshold: float | None = None,
