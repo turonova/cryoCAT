@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import numpy as np
 import pandas as pd
 import warnings
@@ -981,7 +982,43 @@ class PleomorphicSurface:
             - "point_cloud_from_mrc": segmentation-to-point-cloud via
               :meth:`OrientedPointCloud.from_mrc`
         **kwargs
-            Forwarded to the selected loader.
+            Forwarded to the selected loader. Accepted keywords depend on ``method``:
+
+            *"mesh"* and *"mesh_curvatures"*:
+
+            - ``units`` : str, optional — coordinate units (``'nm'``, ``'angstrom'``, ``'pixel'``, …).
+
+            *"mesh_from_mrc"*:
+
+            - ``transpose`` : bool, default=True — transpose the segmentation array on load.
+            - ``labels_dict`` : dict, optional — map label names to integer values; binary if None.
+            - ``level`` : float, default=0.5 — marching-cubes iso-level.
+            - ``pixel_size`` : float, default=1.0 — voxel size for coordinate scaling.
+            - ``smooth_sigma`` : float, optional — Gaussian pre-smooth sigma.
+            - ``step_size`` : int, default=1 — marching-cubes step size.
+
+            *"point_cloud"*:
+
+            - ``recompute_normals`` : bool, default=False — recompute even if file has normals.
+            - ``knn`` : int, default=30 — neighbors for normal estimation.
+            - ``orient_normals`` : bool, default=True — orient normals consistently.
+            - ``tangent_plane_knn`` : int, default=50 — neighbors for normal orientation.
+
+            *"point_cloud_from_mrc"*:
+
+            - ``labels_dict`` : dict, optional — map label names to integer values; binary if None.
+            - ``pixel_size`` : float or array-like, optional — voxel size.
+            - ``compute_normals`` : bool, default=True — estimate normals after extraction.
+            - ``knn`` : int, default=30 — neighbors for normal estimation.
+            - ``orient_normals`` : bool, default=True — orient normals consistently.
+            - ``tangent_plane_knn`` : int, default=50 — neighbors for normal orientation.
+            - ``transpose`` : bool, default=True — transpose the segmentation array on load.
+            - ``smooth_sigma`` : float, optional — Gaussian pre-smooth sigma.
+
+        Returns
+        -------
+        PleomorphicSurface
+            Wrapped surface loaded from ``input_path``.
         """
         method = str(method).lower()
         aliases = {
@@ -1050,26 +1087,51 @@ class PleomorphicSurface:
         """Set coordinate units on the wrapped mesh or oriented point cloud."""
         self.surface.units = value
 
-    def get_principal_curvatures(self):
-        """Return mesh principal curvatures."""
+    def get_principal_curvatures(self) -> np.ndarray:
+        """Return per-vertex principal curvatures for a mesh-backed surface.
+
+        Returns
+        -------
+        np.ndarray, shape (N, 2)
+            Columns are the two principal curvature values k1 and k2 at each vertex.
+        """
         if not isinstance(self.surface, Mesh):
             raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
         return self.surface.get_principal_curvatures()
 
-    def get_mean_curvature(self):
-        """Return mesh mean curvature."""
+    def get_mean_curvature(self) -> np.ndarray:
+        """Return per-vertex mean curvature for a mesh-backed surface.
+
+        Returns
+        -------
+        np.ndarray, shape (N,)
+            Mean curvature H = (k1 + k2) / 2 at each vertex.
+        """
         if not isinstance(self.surface, Mesh):
             raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
         return self.surface.get_mean_curvature()
 
-    def get_gaussian_curvature(self):
-        """Return mesh Gaussian curvature."""
+    def get_gaussian_curvature(self) -> np.ndarray:
+        """Return per-vertex Gaussian curvature for a mesh-backed surface.
+
+        Returns
+        -------
+        np.ndarray, shape (N,)
+            Gaussian curvature K = k1 * k2 at each vertex.
+        """
         if not isinstance(self.surface, Mesh):
             raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
         return self.surface.get_gaussian_curvature()
 
-    def get_curvature_directions(self):
-        """Return mesh principal curvature directions."""
+    def get_curvature_directions(self) -> np.ndarray:
+        """Return per-vertex principal curvature direction vectors for a mesh-backed surface.
+
+        Returns
+        -------
+        np.ndarray, shape (N, 3, 2)
+            Direction vectors at each vertex: ``[:, :, 0]`` is the first principal direction
+            (k1), ``[:, :, 1]`` is the second (k2).
+        """
         if not isinstance(self.surface, Mesh):
             raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
         return self.surface.get_curvature_directions()
@@ -1083,18 +1145,63 @@ class PleomorphicSurface:
             )
         return self.surface.get_surface_area()
 
-    def save(self, output_path: PathOrStr, format: str | None = None, **kwargs):
+    def save(self, output_path: PathOrStr, format: str | None = None, **kwargs) -> None:
         """
         Save the wrapped surface.
 
         If ``format`` is None, the wrapped surface may infer it from ``output_path``.
         Additional keyword arguments are forwarded to the concrete surface save method.
+
+        Parameters
+        ----------
+        output_path : PathOrStr
+            Destination file path.
+        format : str, optional
+            Output format (e.g. ``'ply'``, ``'vtp'``, ``'motl'``, ``'em'``).
+            If None, inferred from the file suffix.
+        **kwargs
+            Forwarded to the concrete save method. Accepted keywords depend on ``format``:
+
+            *Mesh* (``format='ply'`` or ``'vtp'``):
+
+            - ``include_curvatures`` : bool, default=False — embed per-vertex curvature scalars
+              and principal-direction vectors; requires curvatures to have been computed and
+              ``format='vtp'``.
+
+            *OrientedPointCloud — PLY* (``format='ply'``):
+
+            - ``write_ascii`` : bool, default=False — write ASCII rather than binary PLY.
+
+            *OrientedPointCloud — MOTL / EM* (``format='motl'`` or ``'em'``):
+
+            - ``input_dict`` : dict, optional — extra motive-list columns to fill.
+            - ``subtomo_ids`` : array-like, shape (N,), optional — per-point subtomogram IDs;
+              sequential IDs are assigned when None.
+            - ``tomo_id`` : int, float, or array-like, optional — tomogram ID; scalar applies to
+              all points, array assigns per-point IDs.
+
+        Returns
+        -------
+        None
         """
         return self.surface.save(output_path, format=format, **kwargs)
 
     def compute_normals(self, **kwargs) -> "PleomorphicSurface":
         """
-        Delegates to ``Mesh.compute_normals`` or ``OrientedPointCloud.compute_normals``.
+        Delegates to :meth:`Mesh.compute_normals` or :meth:`OrientedPointCloud.compute_normals`.
+
+        Parameters
+        ----------
+        **kwargs
+            *Mesh*: no keywords are used; unknown keys are silently consumed.
+
+            *OrientedPointCloud*:
+
+            - ``knn`` : int, default=30 — neighbors for normal estimation.
+            - ``orient_normals`` : bool, default=True — orient normals consistently.
+            - ``tangent_plane_knn`` : int, default=50 — neighbors for normal orientation.
+            - ``inplace`` : bool, default=True — update in place; if False, wrap and return a
+              new :class:`PleomorphicSurface`.
 
         Returns
         -------
@@ -1107,12 +1214,23 @@ class PleomorphicSurface:
             return self
         return PleomorphicSurface(out)
 
-    def flip_normals(self, inplace=True, **kwargs) -> "PleomorphicSurface" | None:
+    def flip_normals(self, inplace: bool = True, **kwargs) -> "PleomorphicSurface" | None:
         """
         Delegate normal-direction flipping to the wrapped surface.
 
-        For meshes, keyword arguments such as ``flip_faces`` are passed through to
-        :meth:`Mesh.flip_normals`.
+        Parameters
+        ----------
+        inplace : bool, default=True
+            If True, modify the wrapped surface in place and return ``self``.
+            If False, return a new :class:`PleomorphicSurface` wrapping a flipped copy.
+        **kwargs
+            *Mesh* only:
+
+            - ``flip_faces`` : bool, default=True — also reverse triangle winding so that
+              normals recomputed from faces keep the flipped orientation.
+
+            *OrientedPointCloud*: no extra keywords are accepted; passing any raises
+            :exc:`TypeError`.
 
         Returns
         -------
@@ -1130,7 +1248,7 @@ class PleomorphicSurface:
         batch_size: int = 2000,
         n_iter: int = 1,
         mask: np.ndarray | None = None,
-        logger=None,
+        logger: logging.Logger | None = None,
         inplace: bool = True,
         **kwargs,
     ) -> "PleomorphicSurface":
@@ -1150,7 +1268,7 @@ class PleomorphicSurface:
             Number of refinement passes.
         mask : np.ndarray, optional
             Boolean mask of vertices/samples to update. If None, all are refined.
-        logger : optional
+        logger : logging.Logger, optional
             Logger passed through to the delegate.
         inplace : bool, default=True
             If True, update the wrapped surface in place. If False, return a new wrapper.
@@ -1184,7 +1302,23 @@ class PleomorphicSurface:
         """
         Remove NaN/Inf vertices or point samples from the wrapped surface.
 
-        Mesh inputs also drop affected faces and remap connectivity.
+        For meshes, affected faces are also dropped and vertex connectivity is remapped.
+
+        Parameters
+        ----------
+        inplace : bool, default=True
+            If True, modify the wrapped surface in place and return ``self``.
+            If False, return a new :class:`PleomorphicSurface` wrapping a repaired copy.
+        **kwargs
+            - ``recompute_normals`` : bool — recompute normals after filtering.
+              Default is ``True`` for :class:`Mesh`, ``False`` for
+              :class:`OrientedPointCloud`.
+
+        Returns
+        -------
+        PleomorphicSurface
+            ``self`` when ``inplace=True``; a new wrapper around the repaired surface when
+            ``inplace=False``.
         """
         out = self.surface.remove_nonfinite_vertices(inplace=inplace, **kwargs)
         if inplace:
@@ -1193,18 +1327,46 @@ class PleomorphicSurface:
 
     def oversample(self, **kwargs) -> "PleomorphicSurface":
         """
-        Delegate to ``oversample`` on :attr:`surface` (mesh vs point cloud semantics differ).
+        Delegate to ``oversample`` on :attr:`surface`; mesh and point-cloud semantics differ.
+
+        Parameters
+        ----------
+        **kwargs
+            *Mesh* (:meth:`Mesh.oversample`):
+
+            - ``oversample_factor`` : float, optional — desired factor increase in vertices.
+              Defaults to 1.0 (no change) when both this and ``point_spacing`` are None.
+            - ``point_spacing`` : float, optional — desired spacing between sampled points
+              (same units as mesh coordinates). Uses two-pass Poisson-disk calibration.
+            - ``poisson_init_factor`` : int, default=5 — initial candidate factor for
+              Poisson-disk sampling (larger → more uniform distribution).
+
+            *OrientedPointCloud* (:meth:`OrientedPointCloud.oversample`):
+
+            - ``oversample_factor`` : float, optional — desired factor increase in points.
+              Defaults to 1.0 when both this and ``point_spacing`` are None.
+            - ``point_spacing`` : float, optional — desired spacing; uses greedy Poisson-disk
+              sampling to enforce spacing directly.
+            - ``random_seed`` : int, optional — seed for reproducible sampling.
 
         Returns
         -------
         PleomorphicSurface
-            Wrapped result.
+            New wrapper around the resampled surface.
         """
         return PleomorphicSurface(self.surface.oversample(**kwargs))
 
-    def crop(self, bbox, inplace=False):
+    def crop(self, bbox: Any, inplace: bool = False) -> "PleomorphicSurface | None":
         """
         Delegate to :meth:`Mesh.crop` / :meth:`OrientedPointCloud.crop`.
+
+        Parameters
+        ----------
+        bbox : open3d.geometry.AxisAlignedBoundingBox or dict
+            Bounding box for cropping. When a dict, must have ``'min_bound'`` and
+            ``'max_bound'`` keys.
+        inplace : bool, default=False
+            If True, modify in place and return None. If False, return a new wrapper.
 
         Returns
         -------
@@ -1223,6 +1385,27 @@ class PleomorphicSurface:
         For meshes, ``element='triangles'`` extracts a triangle submesh and preserves
         per-vertex curvature fields by default. For point clouds, ``element='points'``
         extracts selected points; ``element='mask'`` treats ``indices`` as a boolean mask.
+
+        Parameters
+        ----------
+        indices : np.ndarray
+            Integer indices of the elements to keep, or a boolean mask when
+            ``element='mask'``.
+        element : str, default='triangles'
+            Which surface primitive ``indices`` refers to:
+
+            - ``'triangles'`` (Mesh only): select by triangle index.
+            - ``'points'`` (OrientedPointCloud only): select by point index.
+            - ``'mask'`` (OrientedPointCloud only): boolean selection mask.
+
+        **kwargs
+            Forwarded to :meth:`Mesh.extract_submesh` or
+            :meth:`OrientedPointCloud.extract_points`.
+
+        Returns
+        -------
+        PleomorphicSurface
+            New wrapper containing only the extracted elements.
         """
         element = str(element).lower()
         if isinstance(self.surface, Mesh):
@@ -1242,8 +1425,18 @@ class PleomorphicSurface:
 
         raise TypeError(f"Unsupported surface type: {type(self.surface)}")
 
-    def convex_hull(self):
-        """Return convex hull as a :class:`PleomorphicSurface` wrapping a :class:`Mesh`."""
+    def convex_hull(self) -> "PleomorphicSurface":
+        """Return the convex hull as a :class:`PleomorphicSurface` wrapping a :class:`Mesh`.
+
+        Works for both Mesh and OrientedPointCloud backing surfaces. The per-hull
+        statistics (volume, surface area, etc.) returned by Open3D are discarded; call
+        :meth:`Mesh.convex_hull` directly if you need them.
+
+        Returns
+        -------
+        PleomorphicSurface
+            New wrapper whose backing surface is a :class:`Mesh` of the convex hull.
+        """
         if isinstance(self.surface, Mesh):
             hull_o3d, _ = self.surface._to_open3d().compute_convex_hull()
         elif isinstance(self.surface, OrientedPointCloud):
@@ -1255,7 +1448,19 @@ class PleomorphicSurface:
         return PleomorphicSurface(hull_mesh)
 
     def clean_by_normals(self, max_angle_deg: float = 90.0) -> "PleomorphicSurface":
-        """Remove points whose normal deviates more than ``max_angle_deg`` from the mean direction."""
+        """Remove points whose normal deviates more than ``max_angle_deg`` from the mean direction.
+
+        Parameters
+        ----------
+        max_angle_deg : float, default=90.0
+            Maximum allowed angle (degrees) between a point's normal and the mean
+            normal of the surface. Points exceeding this threshold are removed.
+
+        Returns
+        -------
+        PleomorphicSurface
+            ``self`` (modified in-place).
+        """
         self.surface.filter_by_normal_orientation(
             angle_threshold=max_angle_deg,
             inplace=True,
@@ -1263,51 +1468,91 @@ class PleomorphicSurface:
         print("Cleaned by normals (angle vs mean)")
         return self
 
-    def separate_surfaces(self, threshold_angle: float = 90.0, reference_point: np.ndarray | None = None) -> np.ndarray:
+    def separate_surfaces(
+        self,
+        surface_type: str = 'closed',
+        threshold_angle: float = 90.0,
+        reference_point: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Separate inner and outer surfaces based on normal direction.
-        
-        Works for both Mesh and OrientedPointCloud.
-        
+        Separate the two halves of a Mesh or OrientedPointCloud surface.
+
         Parameters
         ----------
+        surface_type : str, default='closed'
+            Strategy for separation:
+
+            ``'closed'``
+                For enclosed volumes (vesicles, organelles). Classifies each
+                vertex by whether its normal points toward or away from a
+                reference point (default: centroid).
+                Returns ``(inner_mask, outer_mask)``.
+                Calls :meth:`~DiscreteSurface.separate_closed_surface`.
+
+            ``'planar'``
+                For surfaces with lower curvature or flatter geometry. Uses
+                PCA on normals to find the axis of greatest normal spread and
+                splits by projection sign.
+                Returns ``(surface1_mask, surface2_mask)`` — no inherent
+                inner/outer meaning; inspect spatially to assign labels.
+                Calls :meth:`~DiscreteSurface.separate_planar_surface`.
+
         threshold_angle : float, default=90.0
-            Angle threshold in degrees
+            Angle threshold in degrees. Only used when ``surface_type='closed'``.
         reference_point : np.ndarray (3,), optional
-            Reference point. If None, uses centroid.
-            
+            Reference point for ``'closed'`` separation. Defaults to centroid.
+            Ignored for ``'planar'``.
+
         Returns
         -------
-        vertex_labels : np.ndarray
-            Labels: 0=inner, 1=outer
+        mask1, mask2 : (N,) bool ndarray each
+            For ``'closed'``: ``(inner_mask, outer_mask)``.
+            For ``'planar'``: ``(surface1_mask, surface2_mask)``.
+            Pass either mask directly to :meth:`apply_vertex_mask`.
         """
-        return DiscreteSurface.separate_surfaces(
-            self.surface, threshold_angle, reference_point
-        )
+        if surface_type == 'closed':
+            return self.surface.separate_closed_surface(threshold_angle, reference_point)
+        elif surface_type == 'planar':
+            return self.surface.separate_planar_surface()
+        else:
+            raise ValueError(
+                f"Unknown surface_type {surface_type!r}. "
+                "Use 'closed' (enclosed volumes) or 'planar' (flatter surfaces)."
+            )
 
-    def filter_by_labels(self, vertex_labels: np.ndarray, surface_type: str = 'inner', inplace: bool = False) -> "PleomorphicSurface" | None:
+    def apply_vertex_mask(self, mask: np.ndarray, inplace: bool = False) -> "PleomorphicSurface | None":
         """
-        Create a new surface containing only inner or outer vertices/points.
-        
+        Return a surface containing only vertices where ``mask`` is True.
+
+        Pass one of the boolean masks returned by :meth:`separate_surfaces`:
+
+        - For ``surface_type='closed'``: pass ``inner_mask`` or ``outer_mask``.
+        - For ``surface_type='planar'``: pass ``surface1_mask`` or ``surface2_mask``.
+
+        Example::
+
+            inner_mask, outer_mask = ps.separate_surfaces(surface_type='closed')
+            inner = ps.apply_vertex_mask(inner_mask)
+
+            s1_mask, s2_mask = ps.separate_surfaces(surface_type='planar')
+            half1 = ps.apply_vertex_mask(s1_mask)
+
         Parameters
         ----------
-        vertex_labels : np.ndarray
-            Labels from separate_surfaces_by_normals (0=inner, 1=outer)
-        surface_type : str, default='inner'
-            Which surface to extract: 'inner' or 'outer'
+        mask : np.ndarray
+            Boolean array of shape (N,) aligned with ``self.surface.vertices``.
         inplace : bool, default=False
-            If True, modify in place. If False, return new instance.
-            
+            If True, modify this instance in place and return None.
+            If False, return a new PleomorphicSurface.
+
         Returns
         -------
         PleomorphicSurface or None
-            New instance if inplace=False, else None
+            New instance if ``inplace=False``, else None.
         """
         if not isinstance(self.surface, (Mesh, OrientedPointCloud)):
             raise TypeError(f"Unsupported surface type: {type(self.surface)}")
-        filtered_surface = self.surface.filter_by_labels(
-            vertex_labels, surface_type, inplace=inplace
-        )
+        filtered_surface = self.surface.apply_vertex_mask(mask, inplace=inplace)
         if inplace:
             return None
         return PleomorphicSurface(filtered_surface)
@@ -1468,13 +1713,32 @@ class PleomorphicSurface:
             raise ValueError(f"Unknown method: {method}. Use 'topology' or 'radius'")
 
     def get_connected_triangles(self, triangle_id: int, max_hops: int = 1) -> set:
-        """Return edge-connected neighboring triangle IDs for a mesh-backed surface."""
+        """Return edge-connected neighboring triangle IDs for a mesh-backed surface.
+
+        Parameters
+        ----------
+        triangle_id : int
+            Seed triangle index.
+        max_hops : int, default=1
+            Number of edge-traversal steps from the seed. ``max_hops=1`` returns only
+            immediate face-neighbors; higher values expand the region.
+        """
         if not isinstance(self.surface, Mesh):
             raise TypeError(f"Triangle neighbors only available for Mesh, not {type(self.surface).__name__}")
         return self.surface.get_connected_triangles(triangle_id, max_hops=max_hops)
 
     def get_triangles_within_radius(self, triangle_id: int, radius: float, use_kdtree: bool = True) -> dict:
-        """Return triangle-neighborhood query result for a mesh-backed surface."""
+        """Return triangle-neighborhood query result for a mesh-backed surface.
+
+        Parameters
+        ----------
+        triangle_id : int
+            Seed triangle index.
+        radius : float
+            Maximum centroid-to-centroid distance for a triangle to be included.
+        use_kdtree : bool, default=True
+            Use a KDTree for fast radius queries (recommended for large meshes).
+        """
         if not isinstance(self.surface, Mesh):
             raise TypeError(f"Triangle neighbors only available for Mesh, not {type(self.surface).__name__}")
         return self.surface.get_triangles_within_radius(
@@ -1529,8 +1793,25 @@ class PleomorphicSurface:
         
         Returns
         -------
-        result : dict
-            Dictionary containing intersection results. See docstring for details.
+        dict
+            Always contains:
+
+            - ``t_hit`` (R,): ray travel distance to the intersection; ``inf`` for misses.
+            - ``primitive_ids`` (R,): triangle index (Mesh) or point index (OrientedPointCloud)
+              of the hit; ``-1`` for misses.
+            - ``hit_points`` (R, 3): 3-D coordinates of hit points; NaN for misses.
+            - ``primitive_normals`` (R, 3): surface normals at hit points (Mesh only); NaN for
+              misses or when the backing surface is an OrientedPointCloud.
+            - ``geometry_ids`` (R,): geometry identifier (Mesh only).
+
+            When ``return_orientations=True``, also adds:
+
+            - ``ray_directions`` (R, 3): normalized ray direction vectors.
+            - ``surface_orientations`` (R, 3): surface orientation vectors at hit points;
+              NaN for misses.
+            - ``angles_deg`` (R,): angle in degrees between the ray and surface orientation;
+              NaN for misses.
+            - ``dot_products`` (R,): cosine of that angle; NaN for misses.
         """
         surface = self.surface
         rays = np.atleast_2d(rays).astype(np.float32)
@@ -1611,7 +1892,7 @@ class PleomorphicSurface:
         
         return result
 
-    def invalidate_caches(self):
+    def invalidate_caches(self) -> None:
         """Invalidate cached geometry on the wrapped surface (mesh ray scene, neighbor trees, etc.)."""
         if isinstance(self.surface, Mesh):
             self.surface._invalidate_cache()
@@ -1822,10 +2103,28 @@ class PleomorphicSurface:
         use_kdtree: bool = True,
     ) -> dict[str, np.ndarray]:
         """
-        Expand seed triangles on the mesh using ``surface_radii`` (centroid distance).
+        Expand seed triangles on the mesh using centroid-distance radii.
 
-        Always includes ``"hit triangles"``. For each radius ``r``, adds ``"r <= {r} nm"``
-        and annulus bands ``"{r_inner} < r <= {r_outer} nm"`` between consecutive radii.
+        Always includes the ``"hit triangles"`` key. For each radius ``r`` in ``radii``,
+        adds a cumulative ``"r <= {r} nm"`` key and an annulus band
+        ``"{r_inner} < r <= {r_outer} nm"`` between consecutive radii.
+
+        Parameters
+        ----------
+        seed_triangle_ids : np.ndarray
+            Integer indices of the seed triangles to expand from.
+        radii : Sequence[float]
+            Expansion radii in the same units as the mesh coordinates. Each entry
+            produces a cumulative shell and (for consecutive pairs) an annulus band.
+        use_kdtree : bool, default=True
+            If True, use a KD-tree for centroid lookups; otherwise use brute-force search.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Keys: ``"hit triangles"``, ``"r <= {r} nm"`` for each radius, and
+            ``"{r_inner} < r <= {r_outer} nm"`` for each consecutive pair.
+            Values are sorted integer arrays of triangle indices.
         """
         if not isinstance(self.surface, Mesh):
             raise TypeError(
@@ -1903,7 +2202,27 @@ class PleomorphicSurface:
         seed_point_ids: np.ndarray,
         radii: Sequence[float],
     ) -> dict[str, np.ndarray]:
-        """Expand seed points on an oriented point cloud using ``surface_radii``."""
+        """
+        Expand seed points on an oriented point cloud using surface radii.
+
+        Delegates to :meth:`OrientedPointCloud.get_point_neighborhoods`. The returned
+        dict always includes ``"hit points"``; for each radius ``r``, adds ``"r <= {r} nm"``
+        and annulus bands ``"{r_inner} < r <= {r_outer} nm"`` between consecutive radii.
+
+        Parameters
+        ----------
+        seed_point_ids : np.ndarray
+            Integer indices of the seed points to expand from.
+        radii : Sequence[float]
+            Expansion radii in the same units as the point-cloud coordinates.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Keys: ``"hit points"``, ``"r <= {r} nm"`` for each radius, and
+            ``"{r_inner} < r <= {r_outer} nm"`` for each consecutive pair.
+            Values are sorted integer arrays of point indices.
+        """
         if not isinstance(self.surface, OrientedPointCloud):
             raise TypeError(
                 "Point neighborhoods require an OrientedPointCloud-backed PleomorphicSurface"
@@ -2227,8 +2546,14 @@ class ParametricSurface:
         quadrics = QuadricsM(path, quadric=surface_type, feature_id=feature_id)
         return cls(quadrics, feature_id=feature_id)
 
-    def write_out(self, output_path: str) -> None:
-        """Write the surface parameter table to *output_path* as CSV."""
+    def write_out(self, output_path: PathOrStr) -> None:
+        """Write the surface parameter table to *output_path* as CSV.
+
+        Parameters
+        ----------
+        output_path : PathOrStr
+            Destination CSV file path.
+        """
         self.quadrics.write_out(output_path)
 
     def compute_point_surface_distance(
