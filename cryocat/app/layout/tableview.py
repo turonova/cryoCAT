@@ -367,6 +367,7 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
         prevent_initial_call=True,
     )
     def apply_filters(_, global_data, slider_values, slider_ids):
+
         if not global_data:
             raise exceptions.PreventUpdate
         df = pd.DataFrame(global_data)
@@ -375,6 +376,9 @@ def register_table_callbacks(prefix: str, csv_only=True, connected_motl_prefix=N
             if col in df.columns:
                 df = df[df[col].between(min_val, max_val)]
         filtered = df.to_dict("records")
+        # sanity check
+        print(f"Amounnt of rows in global data after filtering: {len(pd.DataFrame(global_data))}")
+        #
         return filtered, filtered
 
     @callback(
