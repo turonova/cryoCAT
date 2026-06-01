@@ -2151,27 +2151,41 @@ def plot_scatter_3d(
 
 def plot_ply_mesh(
     ply_paths: PathOrStr | list[PathOrStr],
-    names: list[str] | None = None,
+    mesh_names: list[str] | None = None,
     colors: str | list[Color] | None = None,
     opacity: float = 0.5,
+    overlay_points: ArrayLike | list[ArrayLike] | None = None,
+    overlay_names: list[str] | None = None,
+    overlay_colors: str | list[Color] | None = None,
+    overlay_marker_size: int = 3,
     title: str | None = None,
     output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Display one or more ``.ply`` mesh files as interactive 3-D surfaces.
 
     Each file is loaded via ``open3d.io.read_triangle_mesh`` and rendered as a
-    semi-transparent :class:`plotly.graph_objects.Mesh3d` trace.
+    semi-transparent :class:`plotly.graph_objects.Mesh3d` trace. Point clouds
+    passed via ``overlay_points`` are added as :class:`plotly.graph_objects.Scatter3d`
+    traces on top of the mesh(es).
 
     Parameters
     ----------
     ply_paths : PathOrStr or list of PathOrStr
         Path(s) to ``.ply`` mesh file(s).
-    names : list of str, optional
+    mesh_names : list of str, optional
         Legend labels, one per mesh. Defaults to the filename stems.
     colors : str or list of str, optional
         Color palette specification. Resolved via :func:`resolve_colors_any`.
     opacity : float, default=0.5
         Mesh opacity (0–1).
+    overlay_points : N×3 array or list of N×3 arrays, optional
+        One or more point clouds to overlay as ``Scatter3d`` markers.
+    overlay_names : list of str, optional
+        Legend labels for each overlay point cloud.
+    overlay_colors : str or list of str, optional
+        Colors for the overlay point clouds. Resolved via :func:`resolve_colors_any`.
+    overlay_marker_size : int, default=3
+        Marker size for overlay point clouds.
     title : str, optional
         Figure title.
     output_path : PathOrStr, optional
@@ -2192,13 +2206,13 @@ def plot_ply_mesh(
         ply_paths = [ply_paths]
 
     n = len(ply_paths)
-    if names is None:
-        names = [_Path(p).stem for p in ply_paths]
+    if mesh_names is None:
+        mesh_names = [_Path(p).stem for p in ply_paths]
 
     palette = resolve_colors_any(colors, color_type="palette", n=n)
 
     fig = go.Figure()
-    for path, name, color in zip(ply_paths, names, palette):
+    for path, name, color in zip(ply_paths, mesh_names, palette):
         mesh = o3d.io.read_triangle_mesh(str(path))
         if not mesh.has_vertices():
             continue
@@ -2213,6 +2227,23 @@ def plot_ply_mesh(
             showlegend=True,
         ))
 
+    if overlay_points is not None:
+        if isinstance(overlay_points, np.ndarray) and overlay_points.ndim == 2:
+            overlay_points = [overlay_points]
+        n_ov = len(overlay_points)
+        if overlay_names is None:
+            overlay_names = [f"overlay {i + 1}" for i in range(n_ov)]
+        ov_palette = resolve_colors_any(overlay_colors, color_type="palette", n=n_ov)
+        for pts, ov_name, ov_color in zip(overlay_points, overlay_names, ov_palette):
+            pts = np.asarray(pts)
+            fig.add_trace(go.Scatter3d(
+                x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                mode="markers",
+                marker=dict(size=overlay_marker_size, color=ov_color),
+                name=ov_name,
+                showlegend=True,
+            ))
+
     if title is not None:
         fig.update_layout(title=title)
     fig.update_layout(scene=dict(aspectmode="data"))
@@ -2224,11 +2255,15 @@ def plot_ply_mesh(
 def plot_vtp_mesh(
     vtp_paths: PathOrStr | list[PathOrStr],
     color_by: str | None = None,
-    names: list[str] | None = None,
+    mesh_names: list[str] | None = None,
     colors: str | list[Color] | None = None,
     colorscale: str = "RdBu_r",
     colorscale_range: tuple[float, float] | None = None,
     opacity: float = 0.9,
+    overlay_points: ArrayLike | list[ArrayLike] | None = None,
+    overlay_names: list[str] | None = None,
+    overlay_colors: str | list[Color] | None = None,
+    overlay_marker_size: int = 3,
     title: str | None = None,
     output_path: PathOrStr | None = None,
 ) -> go.Figure:
@@ -2241,6 +2276,10 @@ def plot_vtp_mesh(
     ``intensity`` array using a diverging colorscale. A single colorbar is shown
     when coloring a single mesh; multi-mesh plots share the same scale.
 
+    Point clouds passed via ``overlay_points`` are added as
+    :class:`plotly.graph_objects.Scatter3d` traces on top of the mesh(es),
+    which is useful for overlaying particle positions.
+
     Parameters
     ----------
     vtp_paths : PathOrStr or list of PathOrStr
@@ -2249,7 +2288,7 @@ def plot_vtp_mesh(
         Name of a point-data scalar field stored in the file, e.g.
         ``"mean_curvature"``. When ``None`` each mesh is drawn with a flat color
         from ``colors``.
-    names : list of str, optional
+    mesh_names : list of str, optional
         Legend labels, one per mesh. Defaults to the filename stems.
     colors : str or list of str, optional
         Flat-color palette used when ``color_by`` is ``None``.
@@ -2261,6 +2300,14 @@ def plot_vtp_mesh(
         multiple meshes on a shared scale or for clipping outliers.
     opacity : float, default=0.9
         Mesh opacity (0–1).
+    overlay_points : N×3 array or list of N×3 arrays, optional
+        One or more point clouds to overlay as ``Scatter3d`` markers.
+    overlay_names : list of str, optional
+        Legend labels for each overlay point cloud.
+    overlay_colors : str or list of str, optional
+        Colors for the overlay point clouds. Resolved via :func:`resolve_colors_any`.
+    overlay_marker_size : int, default=3
+        Marker size for overlay point clouds.
     title : str, optional
         Figure title.
     output_path : PathOrStr, optional
@@ -2281,8 +2328,8 @@ def plot_vtp_mesh(
         vtp_paths = [vtp_paths]
 
     n = len(vtp_paths)
-    if names is None:
-        names = [_Path(p).stem for p in vtp_paths]
+    if mesh_names is None:
+        mesh_names = [_Path(p).stem for p in vtp_paths]
 
     palette = resolve_colors_any(colors, color_type="palette", n=n)
 
@@ -2299,7 +2346,7 @@ def plot_vtp_mesh(
             global_max = hi if global_max is None else max(global_max, hi)
 
     fig = go.Figure()
-    for mesh, name, color in zip(meshes, names, palette):
+    for mesh, name, color in zip(meshes, mesh_names, palette):
         verts = np.asarray(mesh.points)
         # pyvista face array: [n_verts, v0, v1, v2, ...]
         faces = mesh.faces.reshape(-1, 4)[:, 1:]
@@ -2327,6 +2374,24 @@ def plot_vtp_mesh(
             trace_kwargs["color"] = color
 
         fig.add_trace(go.Mesh3d(**trace_kwargs))
+
+    # Overlay point clouds
+    if overlay_points is not None:
+        if isinstance(overlay_points, np.ndarray) and overlay_points.ndim == 2:
+            overlay_points = [overlay_points]
+        n_ov = len(overlay_points)
+        if overlay_names is None:
+            overlay_names = [f"overlay {i + 1}" for i in range(n_ov)]
+        ov_palette = resolve_colors_any(overlay_colors, color_type="palette", n=n_ov)
+        for pts, ov_name, ov_color in zip(overlay_points, overlay_names, ov_palette):
+            pts = np.asarray(pts)
+            fig.add_trace(go.Scatter3d(
+                x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                mode="markers",
+                marker=dict(size=overlay_marker_size, color=ov_color),
+                name=ov_name,
+                showlegend=True,
+            ))
 
     if title is not None:
         fig.update_layout(title=title)
