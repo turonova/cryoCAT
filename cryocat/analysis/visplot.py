@@ -2149,6 +2149,183 @@ def plot_scatter_3d(
     return fig
 
 
+def plot_ply_mesh(
+    ply_paths: PathOrStr | list[PathOrStr],
+    names: list[str] | None = None,
+    colors: str | list[Color] | None = None,
+    opacity: float = 0.5,
+    title: str | None = None,
+    output_path: PathOrStr | None = None,
+) -> go.Figure:
+    """Display one or more ``.ply`` mesh files as interactive 3-D surfaces.
+
+    Each file is loaded via ``open3d.io.read_triangle_mesh`` and rendered as a
+    semi-transparent :class:`plotly.graph_objects.Mesh3d` trace.
+
+    Parameters
+    ----------
+    ply_paths : PathOrStr or list of PathOrStr
+        Path(s) to ``.ply`` mesh file(s).
+    names : list of str, optional
+        Legend labels, one per mesh. Defaults to the filename stems.
+    colors : str or list of str, optional
+        Color palette specification. Resolved via :func:`resolve_colors_any`.
+    opacity : float, default=0.5
+        Mesh opacity (0–1).
+    title : str, optional
+        Figure title.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    try:
+        import open3d as o3d
+    except ImportError:
+        raise ImportError("open3d is required for plot_ply_mesh. Install with: pip install open3d")
+
+    from pathlib import Path as _Path
+
+    if not isinstance(ply_paths, (list, tuple)):
+        ply_paths = [ply_paths]
+
+    n = len(ply_paths)
+    if names is None:
+        names = [_Path(p).stem for p in ply_paths]
+
+    palette = resolve_colors_any(colors, color_type="palette", n=n)
+
+    fig = go.Figure()
+    for path, name, color in zip(ply_paths, names, palette):
+        mesh = o3d.io.read_triangle_mesh(str(path))
+        if not mesh.has_vertices():
+            continue
+        verts = np.asarray(mesh.vertices)
+        faces = np.asarray(mesh.triangles)
+        fig.add_trace(go.Mesh3d(
+            x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
+            i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+            color=color,
+            opacity=opacity,
+            name=name,
+            showlegend=True,
+        ))
+
+    if title is not None:
+        fig.update_layout(title=title)
+    fig.update_layout(scene=dict(aspectmode="data"))
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
+
+
+def plot_points_with_normals(
+    points: ArrayLike | list[ArrayLike],
+    normals: ArrayLike | list[ArrayLike] | None = None,
+    names: list[str] | None = None,
+    colors: str | list[Color] | None = None,
+    sample_fraction: float = 1.0,
+    show_normals: bool = True,
+    normal_scale: float = 5.0,
+    marker_size: int = 3,
+    title: str | None = None,
+    output_path: PathOrStr | None = None,
+) -> go.Figure:
+    """Display one or more oriented point clouds as interactive 3-D scatter plots.
+
+    Each point cloud is shown as a :class:`plotly.graph_objects.Scatter3d` trace.
+    When *normals* are provided and *show_normals* is ``True``, surface normals are
+    drawn as :class:`plotly.graph_objects.Cone` traces, giving an approximate view
+    of particle or surface orientation.
+
+    Parameters
+    ----------
+    points : array-like of shape (N, 3) or list of such arrays
+        Spatial coordinates, one array per point cloud.
+    normals : array-like of shape (N, 3) or list of such arrays, optional
+        Surface normals aligned with *points*. Required when *show_normals=True*.
+    names : list of str, optional
+        Legend labels, one per point cloud.
+    colors : str or list of str, optional
+        Color palette specification. Resolved via :func:`resolve_colors_any`.
+    sample_fraction : float, default=1.0
+        Fraction of points to display (random subsample). Values in ``(0, 1]``.
+        Useful for large dense meshes; the already-sparse oversampled clouds
+        (~1 500 points) can be shown at full resolution.
+    show_normals : bool, default=True
+        When ``True`` and *normals* are provided, draw each normal as a cone.
+    normal_scale : float, default=5.0
+        Absolute cone length in the same units as *points*.
+    marker_size : int, default=3
+        Scatter marker size in pixels.
+    title : str, optional
+        Figure title.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    if not isinstance(points, list):
+        points = [points]
+    if normals is not None and not isinstance(normals, list):
+        normals = [normals]
+
+    n = len(points)
+    if names is None:
+        names = [f"Surface {i + 1}" for i in range(n)]
+    if normals is None:
+        normals = [None] * n
+
+    palette = resolve_colors_any(colors, color_type="palette", n=n)
+    rng = np.random.default_rng(42)
+
+    fig = go.Figure()
+    for pts, nrm, name, color in zip(points, normals, names, palette):
+        pts = np.asarray(pts)
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError(f"Each points array must be shape (N, 3); got {pts.shape}.")
+
+        idx = np.arange(len(pts))
+        if 0 < sample_fraction < 1.0:
+            n_keep = max(1, int(len(pts) * sample_fraction))
+            idx = rng.choice(len(pts), size=n_keep, replace=False)
+            idx.sort()
+
+        sub_pts = pts[idx]
+
+        fig.add_trace(go.Scatter3d(
+            x=sub_pts[:, 0], y=sub_pts[:, 1], z=sub_pts[:, 2],
+            mode="markers",
+            marker=dict(size=marker_size, color=color, opacity=0.8),
+            name=name,
+            showlegend=True,
+        ))
+
+        if show_normals and nrm is not None:
+            sub_nrm = np.asarray(nrm)[idx]
+            fig.add_trace(go.Cone(
+                x=sub_pts[:, 0], y=sub_pts[:, 1], z=sub_pts[:, 2],
+                u=sub_nrm[:, 0], v=sub_nrm[:, 1], w=sub_nrm[:, 2],
+                sizemode="absolute",
+                sizeref=normal_scale,
+                colorscale=[[0, color], [1, color]],
+                showscale=False,
+                name=f"{name} normals",
+                showlegend=False,
+            ))
+
+    if title is not None:
+        fig.update_layout(title=title)
+    fig.update_layout(scene=dict(aspectmode="data"))
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
+
+
 def plot_grouped_box(
     data: DataSource,
     group_column_name: str,
@@ -2240,7 +2417,7 @@ def plot_polar_nn_distances(
     coordinates: ArrayLike,
     distances: ArrayLike,
     max_radius: Optional[float] = None,
-    marker_size: int = 7,
+    marker_size: int = 3,
     colormap: str = "viridis_r",
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
@@ -2389,8 +2566,8 @@ def plot_orientational_distribution(
     coordinates: ArrayLike,
     projection: ProjectionType = "stereo",
     graph_title: Optional[str] = None,
-    theta_bin: int = 12,
-    radius_bin: int = 5,
+    theta_bin: int = 73,
+    radius_bin: int = 33,
     max_radius: Optional[float] = None,
     colormap: str = "viridis_r",
     output_path: Optional[PathOrStr] = None,
@@ -2409,9 +2586,9 @@ def plot_orientational_distribution(
         Projection algorithm passed to :func:`cryocat.utils.geom.create_projection`.
     graph_title : str, optional
         Figure title.
-    theta_bin : int, default=12
+    theta_bin : int, default=73
         Number of angular bin edges. ``theta_bin - 1`` sectors per radial ring.
-    radius_bin : int, default=5
+    radius_bin : int, default=33
         Number of radial bin edges. ``radius_bin - 1`` rings per hemisphere.
     max_radius : float, optional
         Maximum projected radius. Defaults to the data maximum.
