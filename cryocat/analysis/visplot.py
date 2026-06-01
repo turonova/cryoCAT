@@ -2221,6 +2221,121 @@ def plot_ply_mesh(
     return fig
 
 
+def plot_vtp_mesh(
+    vtp_paths: PathOrStr | list[PathOrStr],
+    color_by: str | None = None,
+    names: list[str] | None = None,
+    colors: str | list[Color] | None = None,
+    colorscale: str = "RdBu_r",
+    colorscale_range: tuple[float, float] | None = None,
+    opacity: float = 0.9,
+    title: str | None = None,
+    output_path: PathOrStr | None = None,
+) -> go.Figure:
+    """Display one or more ``.vtp`` meshes, optionally colored by a curvature field.
+
+    Each file is loaded via ``pyvista.read`` and rendered as a
+    :class:`plotly.graph_objects.Mesh3d` trace. When ``color_by`` is given, a
+    per-vertex scalar field (e.g. ``"mean_curvature"``, ``"gaussian_curvature"``,
+    ``"k1"``, ``"k2"``, ``"curvature_anisotropy"``) is mapped to the trace's
+    ``intensity`` array using a diverging colorscale. A single colorbar is shown
+    when coloring a single mesh; multi-mesh plots share the same scale.
+
+    Parameters
+    ----------
+    vtp_paths : PathOrStr or list of PathOrStr
+        Path(s) to ``.vtp`` mesh file(s).
+    color_by : str, optional
+        Name of a point-data scalar field stored in the file, e.g.
+        ``"mean_curvature"``. When ``None`` each mesh is drawn with a flat color
+        from ``colors``.
+    names : list of str, optional
+        Legend labels, one per mesh. Defaults to the filename stems.
+    colors : str or list of str, optional
+        Flat-color palette used when ``color_by`` is ``None``.
+    colorscale : str, default ``"RdBu_r"``
+        Plotly colorscale name used when ``color_by`` is set.
+    colorscale_range : tuple of (float, float), optional
+        Explicit ``(cmin, cmax)`` for the colorscale. When ``None`` the range is
+        derived from the data across all loaded meshes. Useful for comparing
+        multiple meshes on a shared scale or for clipping outliers.
+    opacity : float, default=0.9
+        Mesh opacity (0–1).
+    title : str, optional
+        Figure title.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    try:
+        import pyvista as pv
+    except ImportError:
+        raise ImportError("pyvista is required for plot_vtp_mesh. Install with: pip install pyvista")
+
+    from pathlib import Path as _Path
+
+    if not isinstance(vtp_paths, (list, tuple)):
+        vtp_paths = [vtp_paths]
+
+    n = len(vtp_paths)
+    if names is None:
+        names = [_Path(p).stem for p in vtp_paths]
+
+    palette = resolve_colors_any(colors, color_type="palette", n=n)
+
+    # Collect global min/max from data unless the caller supplied an explicit range.
+    meshes = []
+    global_min, global_max = (colorscale_range if colorscale_range is not None else (None, None))
+    for path in vtp_paths:
+        mesh = pv.read(str(path))
+        meshes.append(mesh)
+        if colorscale_range is None and color_by is not None and color_by in mesh.point_data:
+            vals = np.asarray(mesh.point_data[color_by])
+            lo, hi = float(vals.min()), float(vals.max())
+            global_min = lo if global_min is None else min(global_min, lo)
+            global_max = hi if global_max is None else max(global_max, hi)
+
+    fig = go.Figure()
+    for mesh, name, color in zip(meshes, names, palette):
+        verts = np.asarray(mesh.points)
+        # pyvista face array: [n_verts, v0, v1, v2, ...]
+        faces = mesh.faces.reshape(-1, 4)[:, 1:]
+
+        trace_kwargs: dict = dict(
+            x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
+            i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+            opacity=opacity,
+            name=name,
+            showlegend=True,
+        )
+
+        if color_by is not None and color_by in mesh.point_data:
+            vals = np.asarray(mesh.point_data[color_by])
+            trace_kwargs.update(dict(
+                intensity=vals,
+                intensitymode="vertex",
+                colorscale=colorscale,
+                cmin=global_min,
+                cmax=global_max,
+                showscale=(n == 1),
+                colorbar=dict(title=color_by) if n == 1 else None,
+            ))
+        else:
+            trace_kwargs["color"] = color
+
+        fig.add_trace(go.Mesh3d(**trace_kwargs))
+
+    if title is not None:
+        fig.update_layout(title=title)
+    fig.update_layout(scene=dict(aspectmode="data"))
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
+
+
 def plot_points_with_normals(
     points: ArrayLike | list[ArrayLike],
     normals: ArrayLike | list[ArrayLike] | None = None,
