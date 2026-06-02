@@ -1,4 +1,5 @@
 import os
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -8,7 +9,7 @@ from cryocat.utils import geom
 from cryocat.utils import imageutils
 from cryocat.core import cryomask
 from cryocat.core import cryomap
-from cryocat._types import CTFFileType, DataSource, PathOrStr, TomoDimensions, TomoList, TripletLike
+from cryocat._types import CTFFileType, DataSource, PathOrStr, TomoDimensions, TomoList, TripletLike, WedgeMaskMethod
 from cryocat.utils.classutils import gui_exposed
 import emfile
 import math
@@ -622,6 +623,10 @@ def _generate_exposure(
     r"""Generate an exposure-based filter to account for frequency-dependent signal
     attenuation due to electron dose in cryo-electron tomography.
 
+    Each tilt's accumulated dose is mapped through the Grant & Grigorieff
+    attenuator :func:`cryocat.utils.imageutils.dose_attenuator` over the
+    tilt's active Fourier slice.
+
     Parameters
     ----------
     wedgelist : pandas.DataFrame
@@ -639,49 +644,58 @@ def _generate_exposure(
         3D exposure filter of the same shape as ``slice_weight``.
     """
     expo = wedgelist["exposure"].values
-    a, b, c = (0.245, -1.665, 2.81)
     pixelsize = wedgelist["pixelsize"].values[0] * binning
 
     freq_array = np.fft.ifftshift(imageutils.compute_frequency_array(slice_weight.shape, pixelsize))
 
     exp_filt = np.zeros_like(slice_weight)
     for expi, idx in zip(expo, slice_idx):
-        freqs = freq_array[idx]
-        exp_filt[idx] += np.exp(-expi / (2 * ((a * freqs**b) + c)))
+        # Per-tilt attenuator evaluated on this tilt's active frequencies.
+        exp_filt[idx] += imageutils.dose_attenuator(expi, freq_array[idx])
 
     exp_filt *= slice_weight
     return exp_filt
 
 
-def _generate_wedgemask_slices_template(wedgelist: pd.DataFrame, template_filter: np.ndarray) -> tuple:
-    """Generate missing-wedge masks and weights for a cubic template in Fourier space.
+def _geometric_wedgemask_slices(wedgelist: pd.DataFrame, map_filter: np.ndarray) -> tuple:
+    """Geometric wedge-mask slab union via rotation-and-threshold of a 2D seed line.
+
+    Each slab is the thresholded interpolation halo of the rotated line,
+    extruded along the tilt axis. Note: slab content is bounded by the 2D
+    image's extent, so the region near the volume corner may be uncovered
+    for large boxes — use ``method="analytic"`` (see
+    :func:`_analytical_wedgemask_slices`) to avoid this.
 
     Parameters
     ----------
     wedgelist : pandas.DataFrame
         Table with a ``"tilt_angle"`` column.
-    template_filter : ndarray
-        3D frequency-filtered template; must be cubic.
+    map_filter : ndarray
+        3D frequency-filtered volume; must be cubic.
 
     Returns
     -------
     active_slices_idx : list of tuple of ndarrays
+        Per-tilt active voxel indices into ``map_filter`` (the support of the
+        rotated tilt slice intersected with the band-pass support).
     wedge_slices_weights : ndarray
+        Reciprocal of the per-voxel coverage count; zero where no tilt covered.
     wedge_slices : ndarray
+        Binary union of all tilt slices (1 inside the wedge, 0 outside).
     """
-    template_size = np.array(template_filter.shape)
-    assert len(template_size) == 3, "The template is not 3D!"
-    assert len(np.unique(template_size)) == 1, "The template is not cubic in shape!"
+    map_size = np.array(map_filter.shape)
+    assert len(map_size) == 3, "The map is not 3D!"
+    assert len(np.unique(map_size)) == 1, "The map is not cubic in shape!"
 
-    mx = np.max(template_size[[2, 0]])
+    mx = np.max(map_size[[2, 0]])
     img = np.zeros((mx, mx))
     img[:, mx // 2] = 1.0
 
-    bpf_idx = template_filter > 0
+    bpf_idx = map_filter > 0
 
     active_slices_idx = []
-    wedge_slices_weights = np.zeros_like(template_filter)
-    weight = np.zeros_like(template_filter)
+    wedge_slices_weights = np.zeros_like(map_filter)
+    weight = np.zeros_like(map_filter)
 
     for alpha in wedgelist["tilt_angle"]:
         r_img = imageutils.rotate_2d(img, alpha)
@@ -700,41 +714,89 @@ def _generate_wedgemask_slices_template(wedgelist: pd.DataFrame, template_filter
     return active_slices_idx, wedge_slices_weights, wedge_slices
 
 
-def _generate_wedgemask_slices_tile(wedgelist: pd.DataFrame, tile_filter: np.ndarray) -> np.ndarray:
-    """Generate a missing-wedge mask for a subtomo or tile in Fourier space.
+def _analytical_wedgemask_slices(
+    wedgelist: pd.DataFrame,
+    template_filter: np.ndarray,
+    thickness: float | None = None,
+) -> tuple:
+    """Analytic wedge-mask slab union via perpendicular-distance thresholding.
+
+    Each tilt's slab is the set of Fourier voxels within ``thickness`` pixels
+    of the slab plane. Slabs extend across the full Fourier volume — no
+    bound-by-2D-image-extent truncation.
+
+    Slab plane convention: ``sin(α)·kx − cos(α)·kz = 0``, where α is the tilt
+    angle. The sign matches :func:`cryocat.utils.imageutils.rotate_2d`:
+    positive α rotates the slab clockwise in image-display coordinates. For
+    symmetric tilt lists (paired ±α) the sign is invisible; for asymmetric
+    lists it sets the bow-tie orientation and must match the rest of the
+    pipeline.
+
+    Output is in FFT layout (DC at index 0,0,0), matching the geometric
+    version.
 
     Parameters
     ----------
     wedgelist : pandas.DataFrame
-        Table with a ``"tilt_angle"`` column.
-    tile_filter : ndarray
-        3D frequency-filtered tile; must be cubic.
+        Wedge list filtered to a single tomogram. Required column:
+        ``tilt_angle``.
+    template_filter : ndarray, shape (nx, ny, nz)
+        Bandpass filter array; its shape defines the output mask shape, and
+        its support (``template_filter > 0``) restricts which voxels each
+        slab contributes to.
+    thickness : float, optional
+        Slab half-width in Fourier pixels. When ``None`` (default), chosen
+        so adjacent slabs stay overlapping at the volume's Nyquist radius:
+        ``max(1.0, (max(shape) / 2) * sin(max_gap_deg) / 2)``, where
+        ``max_gap_deg`` is the largest angular gap between consecutive tilts.
 
     Returns
     -------
-    wedge_slices : ndarray
-        Binary 3D mask of the same shape as ``tile_filter``.
+    active_slices_idx : list of tuple of ndarrays
+        Per-tilt nonzero indices of the slab intersected with the bandpass
+        support, one entry per row of ``wedgelist``. Same shape and meaning
+        as the geometric version, so CTF / exposure weighting code consumes
+        it identically.
+    wedge_slices_weights : ndarray, float32
+        ``1 / overlap_count`` where any slab is present; zero elsewhere.
+    wedge_slices : ndarray, float32
+        Binary union mask (1 where any slab is present).
     """
-    tile_size = np.array(tile_filter.shape)
-    assert len(tile_size) == 3, "The tile is not 3D!"
-    assert len(np.unique(tile_size)) == 1, "The tile is not cubic in shape!"
+    shape = template_filter.shape
+    nx, _ny, nz = shape
+    bpf_idx = template_filter > 0
 
-    mx = np.max(tile_size[[2, 0]])
-    img = np.zeros((mx, mx))
-    img[:, mx // 2] = 1.0
+    # Auto-thickness: keep adjacent slabs overlapping at Nyquist.
+    if thickness is None:
+        tilts_sorted = np.sort(wedgelist["tilt_angle"].to_numpy(dtype=float))
+        max_gap_deg = (
+            float(np.max(np.diff(tilts_sorted))) if len(tilts_sorted) > 1 else 1.0
+        )
+        nyq = max(shape) / 2.0
+        thickness = max(1.0, nyq * np.sin(np.deg2rad(max_gap_deg)) / 2.0)
 
-    tile_bin_slice = np.zeros(tile_size[[2, 0]], dtype="float32")
+    # FFT-layout pixel coordinates (DC at index 0).
+    kx = np.fft.fftfreq(nx, d=1.0) * nx
+    kz = np.fft.fftfreq(nz, d=1.0) * nz
+    KX, KZ = np.meshgrid(kx, kz, indexing="ij")
 
+    weight = np.zeros(shape, dtype=np.int32)
+    active_slices_idx: list = []
     for alpha in wedgelist["tilt_angle"]:
-        r_img = imageutils.rotate_2d(img, alpha)
-        r_img = np.fft.fftshift(np.fft.fft2(r_img))
-        new_img = np.real(np.fft.ifft2(np.fft.ifftshift(r_img)))
-        new_img /= np.max(new_img)
-        tile_bin_slice += new_img > np.exp(-2)
+        a = np.deg2rad(float(alpha))
+        # Slab plane sin(α)·kx − cos(α)·kz = 0; sign matches rotate_2d.
+        d = np.abs(np.cos(a) * KX - np.sin(a) * KZ) 
+        slab_2d = d < thickness                          # (nx, nz)
+        slab_3d = np.broadcast_to(slab_2d[:, None, :], shape) & bpf_idx
+        weight += slab_3d
+        active_slices_idx.append(np.nonzero(slab_3d))
 
-    tile_bin_slice = (tile_bin_slice > 0).astype("float32")
-    wedge_slices = np.fft.ifftshift(np.transpose(np.tile(tile_bin_slice, (tile_size[1], 1, 1)), (2, 0, 1)))
-    return wedge_slices
+    w_idx = np.nonzero(weight)
+    wedge_slices_weights = np.zeros(shape, dtype=np.float32)
+    wedge_slices_weights[w_idx] = 1.0 / weight[w_idx]
+    wedge_slices = (weight > 0).astype(np.float32)
+
+    return active_slices_idx, wedge_slices_weights, wedge_slices
 
 
 @gui_exposed(
@@ -748,6 +810,8 @@ def generate_wedge_mask(
     wedgelist: DataSource,
     tomo_number: int,
     *,
+    method: WedgeMaskMethod = "geometric",
+    thickness: float | None = None,
     binning: int = 1,
     low_pass_filter: int | None = None,
     high_pass_filter: int | None = None,
@@ -763,6 +827,21 @@ def generate_wedge_mask(
     both a template-side and a target-side mask call this function twice with
     different ``map_size`` values.
 
+    Two construction methods are available, selected via ``method``:
+
+    - ``"geometric"`` (default): build each slab by rotating a 2D seed line
+      and thresholding the interpolation halo. Matches the historical
+      cryoCAT behaviour exactly. Slab content is bounded by the 2D image
+      extent, so high frequencies near the volume corner may be uncovered
+      for large boxes.
+    - ``"analytic"``: build each slab as the set of Fourier voxels within
+      ``thickness`` pixels of the slab plane. Slabs extend across the full
+      Fourier volume. For dense tilt lists, leave ``thickness=None``
+      (default) so adjacent slabs stay overlapping at Nyquist.
+
+    Both methods return masks in FFT layout (DC at index 0,0,0) and use the
+    same slab orientation convention.
+
     Parameters
     ----------
     map_size : TripletLike or int
@@ -773,6 +852,17 @@ def generate_wedge_mask(
         A ``DataSource`` is a path to a file or an ndarray / DataFrame.
     tomo_number : int
         Tomogram number to select from the wedge list.
+    method : WedgeMaskMethod, default "geometric"
+        Slab-construction algorithm. ``"geometric"`` matches the historical
+        cryoCAT output exactly; ``"analytic"`` extends slabs across the full
+        Fourier volume so high-frequency corners stay covered. See the
+        paragraph above for details.
+    thickness : float, optional
+        Slab half-width in Fourier pixels. Used only when
+        ``method="analytic"``; passing it with ``method="geometric"`` emits a
+        :class:`UserWarning` and the value is ignored. ``None`` (default)
+        triggers auto-scaling based on the largest angular gap between
+        consecutive tilts and the volume's Nyquist radius.
     binning : int, default 1
         Pixel-size binning factor used for exposure and CTF computations.
     low_pass_filter : int, optional
@@ -793,6 +883,11 @@ def generate_wedge_mask(
         ``mask`` : ndarray — the wedge mask, shaped ``map_size`` (transposed to
         xyz convention before return);
         ``output_path`` : str or None — path the mask was written to.
+
+    Raises
+    ------
+    ValueError
+        If ``method`` is neither ``"geometric"`` nor ``"analytic"``.
     """
     size_triplet = geom.as_triplet(map_size)
     filt = np.ones(size_triplet)
@@ -805,7 +900,24 @@ def generate_wedge_mask(
     if high_pass_filter is not None:
         filt = cryomap.highpass(filt, fourier_pixels=high_pass_filter)
 
-    active_slices_idx, wedge_slices_weights, wedge_slices = _generate_wedgemask_slices_template(wl, filt)
+    if method == "geometric":
+        if thickness is not None:
+            warnings.warn(
+                "thickness is only used when method='analytic'; ignoring.",
+                stacklevel=2,
+            )
+        active_slices_idx, wedge_slices_weights, wedge_slices = (
+            _geometric_wedgemask_slices(wl, filt)
+        )
+    elif method == "analytic":
+        active_slices_idx, wedge_slices_weights, wedge_slices = (
+            _analytical_wedgemask_slices(wl, filt, thickness=thickness)
+        )
+    else:
+        raise ValueError(
+            f"Unknown method {method!r}; expected 'geometric' or 'analytic'."
+        )
+
     mask = wedge_slices * filt
 
     if exposure_weighting:

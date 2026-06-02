@@ -34,6 +34,7 @@ from cryocat.app.apputils import run_operation, generate_kwargs
 from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
 from cryocat.app.components.anglesfield import get_angles_field, register_angles_field_callbacks
 from cryocat.utils.wedgeutils import generate_wedge_mask
+from cryocat.app.components.wedgepreview import wedge_xz_figure
 
 
 # ── Form helpers ─────────────────────────────────────────────────────────────
@@ -112,16 +113,39 @@ def _wedge_mask_modal() -> dbc.Modal:
                         size="sm",
                         style={"marginBottom": "0.4rem"},
                     ),
-                    dbc.Button(
-                        "Generate mask",
-                        id="ppana-wedge-generate-btn",
-                        color="secondary",
-                        size="sm",
-                        style={"width": "100%", "marginBottom": "0.4rem"},
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                dbc.Button(
+                                    "Preview (XZ slice)",
+                                    id="ppana-wedge-preview-btn",
+                                    color="secondary",
+                                    size="sm",
+                                    style={"width": "100%"},
+                                ),
+                                width=6,
+                            ),
+                            dbc.Col(
+                                dbc.Button(
+                                    "Generate mask",
+                                    id="ppana-wedge-generate-btn",
+                                    color="primary",
+                                    size="sm",
+                                    style={"width": "100%"},
+                                ),
+                                width=6,
+                            ),
+                        ],
+                        className="g-1",
+                        style={"marginBottom": "0.4rem"},
                     ),
                     html.Div(
                         id="ppana-wedge-modal-status",
                         style={**_HINT, "wordBreak": "break-word"},
+                    ),
+                    html.Div(
+                        id="ppana-wedge-preview-area",
+                        style={"marginTop": "0.5rem"},
                     ),
                     dcc.Store(id="ppana-wedge-params"),
                     dcc.Store(id="ppana-wedge-created-path"),
@@ -546,6 +570,36 @@ def register_callbacks(app):
             return f"Generated → {out_path}", out_path
         except Exception as exc:
             return f"Error: {exc}", no_update
+
+    # ── wedge mask builder: in-modal XZ preview (no disk write) ──────────────
+    @app.callback(
+        Output("ppana-wedge-preview-area", "children"),
+        Output("ppana-wedge-modal-status", "children", allow_duplicate=True),
+        Input("ppana-wedge-preview-btn", "n_clicks"),
+        State("ppana-wedge-params", "data"),
+        prevent_initial_call=True,
+    )
+    def _preview_wedge_mask(n_clicks, params):
+        if not n_clicks:
+            raise PreventUpdate
+        if not params:
+            return no_update, "Fill in the form parameters first."
+        required = ["map_size", "wedgelist", "tomo_number"]
+        missing = [r for r in required if params.get(r) is None]
+        if missing:
+            return no_update, f"Missing required fields: {', '.join(missing)}."
+        try:
+            # In-memory only -- drop output_path so the preview never writes to disk.
+            kwargs = {k: v for k, v in params.items() if v is not None and k != "output_path"}
+            result = generate_wedge_mask(**kwargs)
+            mask = result["mask"] if isinstance(result, dict) else result
+            graph = dcc.Graph(
+                figure=wedge_xz_figure(mask),
+                style={"height": "420px", "width": "100%"},
+            )
+            return graph, f"Preview rendered (mask shape {mask.shape})."
+        except Exception as exc:
+            return no_update, f"Preview error: {exc}"
 
     # ── wedge mask modal: open / close / use ─────────────────────────────────
     @app.callback(

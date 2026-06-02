@@ -342,6 +342,18 @@ Used by :func:`cryocat.utils.geom.create_projection` and consumed by
 :func:`cryocat.analysis.visplot.plot_orientational_distribution`.
 """
 
+type WedgeMaskMethod = Literal["geometric", "analytic"]
+"""Slab-construction algorithm for :func:`cryocat.utils.wedgeutils.generate_wedge_mask`.
+
+* ``"geometric"`` -- rotate a 2D seed line and threshold the interpolation
+  halo (historical cryoCAT behaviour). Slabs are bounded by the 2D image
+  extent, so high frequencies near the volume corner may be uncovered for
+  large boxes.
+* ``"analytic"`` -- perpendicular-distance thresholding to the slab plane.
+  Slabs extend across the full Fourier volume; pair with ``thickness=None``
+  (default) so adjacent slabs stay overlapping at Nyquist.
+"""
+
 
 
 # ===========================================================================

@@ -277,7 +277,7 @@ _ALIAS_TAGS = {
 # PEP-695 aliases whose value is a Literal[...] — resolved to ("Literal", choices).
 _LITERAL_ALIASES = {
     "MotlType", "MotlColumn", "BoundaryType", "CTFFileType", "NNType",
-    "RotationDistanceType", "ProjectionType",
+    "RotationDistanceType", "ProjectionType", "WedgeMaskMethod",
 }
 
 

@@ -508,27 +508,6 @@ def dose_filter(tilt_stack, pixel_size, total_dose, output_path=None, input_orde
     return ts.correct_order()
 
 
-def compute_dose_attenuator(dose: float, freq_array: np.ndarray) -> np.ndarray:
-    """Compute the exposure-dependent amplitude attenuator from Grant & Grigorieff.
-
-    Parameters
-    ----------
-    dose : float
-        Accumulated dose for this tilt image.
-    freq_array : ndarray
-        2-D frequency array with the same spatial shape as the tilt image.
-
-    Returns
-    -------
-    ndarray
-        Attenuator array with the same shape as *freq_array*.
-    """
-    a = 0.245
-    b = -1.665
-    c = 2.81
-    return np.exp((-dose) / (2 * ((a * (freq_array**b)) + c)))
-
-
 def dose_filter_single_image(image: np.ndarray, dose: float, freq_array: np.ndarray) -> np.ndarray:
     """Filter a single image based on dose and frequency array using Fourier transform.
 
@@ -548,10 +527,11 @@ def dose_filter_single_image(image: np.ndarray, dose: float, freq_array: np.ndar
 
     Notes
     -----
-    This function applies a frequency-dependent attenuation based on the dose, using parameters derived from
-    the Grant and Grigorieff paper. The Fourier transform is utilized to perform the filtering in the frequency domain.
+    Applies the Grant & Grigorieff frequency-dependent attenuation in the
+    Fourier domain. The attenuator itself is the shared primitive
+    :func:`cryocat.utils.imageutils.dose_attenuator`.
     """
-    q = compute_dose_attenuator(dose, freq_array)
+    q = imageutils.dose_attenuator(dose, freq_array)
     return imageutils.apply_fft_filter(image, q)
 
 

@@ -452,6 +452,50 @@ def compute_ctf_2d(defocus: np.ndarray, pshift: np.ndarray, famp: float, cs: flo
     return ctf
 
 
+# Grant & Grigorieff (2015) dose-attenuator parameters.
+# Grant T, Grigorieff N. "Measuring the optimal exposure for single particle
+# cryo-EM using a 2.6 A reconstruction of rotavirus VP6", eLife 4, e06980.
+# https://doi.org/10.7554/eLife.06980
+_DOSE_ATTENUATOR_A = 0.245
+_DOSE_ATTENUATOR_B = -1.665
+_DOSE_ATTENUATOR_C = 2.81
+
+
+def dose_attenuator(dose: float, freq_array: np.ndarray) -> np.ndarray:
+    """Grant & Grigorieff dose-dependent amplitude attenuator.
+
+    For an accumulated electron dose, returns the frequency-dependent
+    attenuator ``exp(-dose / (2 * (a * f**b + c)))`` with the parameters from
+    Grant & Grigorieff (2015). Shared primitive consumed by
+    :func:`cryocat.core.tiltstack.dose_filter_single_image` and
+    :func:`cryocat.utils.wedgeutils._generate_exposure`.
+
+    Parameters
+    ----------
+    dose : float
+        Accumulated dose (e-/A^2) for this tilt image.
+    freq_array : numpy.ndarray
+        Frequency array of any dimensionality; the formula is evaluated
+        element-wise.
+
+    Returns
+    -------
+    numpy.ndarray
+        Attenuator with the same shape as ``freq_array``. Each value lies in
+        ``(0, 1]``; ``dose=0`` degenerates to all ones.
+    """
+    return np.exp(
+        -dose
+        / (
+            2.0
+            * (
+                _DOSE_ATTENUATOR_A * (freq_array ** _DOSE_ATTENUATOR_B)
+                + _DOSE_ATTENUATOR_C
+            )
+        )
+    )
+
+
 def generate_ctf_slice(wl: pd.DataFrame, slice_idx: list, slice_weight: np.ndarray, binning: int | float) -> np.ndarray:
     """Generate a CTF filter for a weighted volume that is subset of a full volume.
 

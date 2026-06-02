@@ -29,8 +29,12 @@ from cryocat.app.components.anglesbuilder import (
     _ID_TYPE as _ANGLES_ID_TYPE,
 )
 from cryocat.app.components.graphsettings import apply_settings_to_figure
+from cryocat.app.components.wedgepreview import wedge_xz_figure
 from cryocat.utils.geom import generate_angles
 from cryocat.utils.wedgeutils import generate_wedge_mask
+
+
+_OUTPUT_AREA_ID = "util-output-area"
 
 
 _WEDGE_ID_TYPE = "wedge-util-param"
@@ -81,6 +85,13 @@ def _wedge_mask_sidebar_content(prefix: str) -> html.Div:
                 style={"marginBottom": "0.4rem"},
             ),
             dbc.Button(
+                "Preview (middle XZ slice)",
+                id=f"{prefix}-preview-btn",
+                color="secondary",
+                size="sm",
+                style={"width": "100%", "marginBottom": "0.4rem"},
+            ),
+            dbc.Button(
                 "Generate wedge mask",
                 id=f"{prefix}-generate",
                 color="primary",
@@ -96,25 +107,9 @@ def _wedge_mask_sidebar_content(prefix: str) -> html.Div:
     )
 
 
-def _main_content(builder: dict) -> html.Div:
-    prefix = f"util-{builder['id']}"
-    if builder["id"] == "generate_angles":
-        graphs = dbc.Row(
-            [
-                dbc.Col(
-                    dcc.Graph(id=f"{prefix}-preview", style={"height": "460px"}),
-                    width=6,
-                ),
-                dbc.Col(
-                    dcc.Graph(id=f"{prefix}-inplane-preview", style={"height": "460px"}),
-                    width=6,
-                ),
-            ],
-            className="g-1",
-        )
-    else:
-        graphs = html.Div()
-    return html.Div(graphs, id=f"util-main-{builder['id']}")
+# The main area is a single shared output: whichever builder ran most recently
+# writes its figure(s) here, replacing whatever was previously displayed. We
+# never pre-allocate per-builder graphs.
 
 
 # ── Layout builders ────────────────────────────────────────────────────────────
@@ -176,7 +171,13 @@ def _main(builders: list) -> dbc.Col:
             style={"color": "grey"},
         )
     else:
-        body = html.Div([_main_content(b) for b in builders])
+        body = html.Div(
+            id=_OUTPUT_AREA_ID,
+            children=html.P(
+                "Run a builder from the sidebar to display its result here.",
+                style={"color": "grey"},
+            ),
+        )
 
     return dbc.Col(
         html.Div(
@@ -216,6 +217,12 @@ def _err_fig(msg: str) -> go.Figure:
     return fig
 
 
+def _err_panel(msg: str) -> html.Div:
+    """Plain text panel for cases where we want a message rather than a figure
+    in the shared output area."""
+    return html.Div(msg, style={"color": "grey", "padding": "0.5rem"})
+
+
 def register_callbacks(app) -> None:
     from cryocat.analysis import visplot
 
@@ -228,8 +235,7 @@ def register_callbacks(app) -> None:
 
             @app.callback(
                 Output(f"{prefix}-angles", "data"),
-                Output(f"{prefix}-preview", "figure"),
-                Output(f"{prefix}-inplane-preview", "figure"),
+                Output(_OUTPUT_AREA_ID, "children", allow_duplicate=True),
                 Input(f"{prefix}-preview-btn", "n_clicks"),
                 State({"type": _ANGLES_ID_TYPE, "builder": prefix, "param": ALL, "tag": ALL}, "value"),
                 State({"type": _ANGLES_ID_TYPE, "builder": prefix, "param": ALL, "tag": ALL}, "id"),
@@ -242,15 +248,13 @@ def register_callbacks(app) -> None:
 
                 params = generate_kwargs(ids, values) if (values and ids) else {}
                 if params.get("cone_angle") is None or params.get("cone_sampling") is None:
-                    msg = "Set cone_angle and cone_sampling first."
-                    return dash.no_update, _err_fig(msg), _err_fig(msg)
+                    return dash.no_update, _err_panel("Set cone_angle and cone_sampling first.")
 
                 try:
                     kwargs = {k: v for k, v in params.items() if v is not None}
                     angles = generate_angles(**kwargs)
                 except Exception as exc:
-                    msg = f"Error generating angles: {exc}"
-                    return dash.no_update, _err_fig(msg), _err_fig(msg)
+                    return dash.no_update, _err_panel(f"Error generating angles: {exc}")
 
                 angles_list = angles.tolist()
 
@@ -276,7 +280,14 @@ def register_callbacks(app) -> None:
                 except Exception as exc:
                     inplane_fig = _err_fig(f"Inplane plot error: {exc}")
 
-                return angles_list, sphere_fig, inplane_fig
+                output = dbc.Row(
+                    [
+                        dbc.Col(dcc.Graph(figure=sphere_fig, style={"height": "460px"}), width=6),
+                        dbc.Col(dcc.Graph(figure=inplane_fig, style={"height": "460px"}), width=6),
+                    ],
+                    className="g-1",
+                )
+                return angles_list, output
 
         elif b["id"] == "generate_wedge_mask":
             _register_wedge_mask_callbacks(app, prefix)
@@ -292,6 +303,37 @@ def _register_wedge_mask_callbacks(app, prefix: str) -> None:
         if not values or not ids:
             raise PreventUpdate
         return generate_kwargs(ids, values)
+
+    @app.callback(
+        Output(_OUTPUT_AREA_ID, "children", allow_duplicate=True),
+        Output(f"{prefix}-status", "children", allow_duplicate=True),
+        Input(f"{prefix}-preview-btn", "n_clicks"),
+        State(f"{prefix}-params", "data"),
+        prevent_initial_call=True,
+    )
+    def _preview(n_clicks, params):
+        if not n_clicks:
+            raise PreventUpdate
+        if not params:
+            return _err_panel("Fill in the form parameters first."), "Preview needs the form filled."
+        required = ["map_size", "wedgelist", "tomo_number"]
+        missing = [r for r in required if not params.get(r)]
+        if missing:
+            msg = f"Missing required fields: {', '.join(missing)}."
+            return _err_panel(msg), msg
+        try:
+            # In-memory only: drop any output_path the user typed for the actual generate.
+            kwargs = {k: v for k, v in params.items() if v is not None and k != "output_path"}
+            result = generate_wedge_mask(**kwargs)
+            mask = result["mask"] if isinstance(result, dict) else result
+            output = dcc.Graph(
+                figure=wedge_xz_figure(mask),
+                style={"height": "520px", "width": "520px", "maxWidth": "100%"},
+            )
+            return output, f"Preview rendered (mask shape {mask.shape})."
+        except Exception as exc:
+            msg = f"Preview error: {exc}"
+            return _err_panel(msg), msg
 
     @app.callback(
         Output(f"{prefix}-status", "children"),

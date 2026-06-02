@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from cryocat.utils.imageutils import (
+    dose_attenuator,
     generate_ctf_slice,
     apply_bandpass,
     apply_highpass,
@@ -967,3 +968,32 @@ def test_mask_overlap_threshold():
     assert mask_overlap(a, b, threshold=1.9) == 0
     # with lower threshold → all voxels overlap
     assert mask_overlap(a, b, threshold=1.0) == 4 * 4 * 4
+
+
+# ── dose_attenuator (Grant & Grigorieff primitive) ─────────────────────────────
+
+
+def test_dose_attenuator_zero_dose_is_ones():
+    """At dose=0 the exponent is 0, so the attenuator degenerates to all ones."""
+    freq = np.linspace(0.1, 5.0, 32).reshape(4, 8)
+    q = dose_attenuator(0.0, freq)
+    assert q.shape == freq.shape
+    assert np.allclose(q, 1.0)
+
+
+def test_dose_attenuator_monotonic_in_dose():
+    """At fixed frequencies the attenuator decreases monotonically with dose."""
+    freq = np.linspace(0.05, 5.0, 100)
+    prev = dose_attenuator(0.0, freq)
+    for d in (0.5, 1.0, 5.0, 20.0):
+        cur = dose_attenuator(d, freq)
+        assert np.all(cur <= prev + 1e-12)
+        prev = cur
+
+
+def test_dose_attenuator_pins_grant_grigorieff_constants():
+    """Pin the (a, b, c) constants by comparing against the explicit formula."""
+    freq = np.linspace(0.1, 4.0, 64)
+    dose = 7.5
+    expected = np.exp(-dose / (2.0 * (0.245 * freq ** -1.665 + 2.81)))
+    np.testing.assert_allclose(dose_attenuator(dose, freq), expected, rtol=0, atol=0)

@@ -1,6 +1,7 @@
 from cryocat.utils.ioutils import fileformat_replace_pattern
 from cryocat.core.tiltstack import *
 from cryocat.core import cryomap
+from cryocat.utils.imageutils import dose_attenuator
 from pathlib import Path
 import pytest
 import mrcfile
@@ -187,21 +188,21 @@ def test_calculate_total_dose_batch():
 
 def test_compute_dose_attenuator_shape():
     freq_array = np.linspace(0.1, 5.0, 64).reshape(8, 8)
-    q = compute_dose_attenuator(dose=1.0, freq_array=freq_array)
+    q = dose_attenuator(dose=1.0, freq_array=freq_array)
     assert q.shape == freq_array.shape
 
 
 def test_compute_dose_attenuator_range():
     freq_array = np.linspace(0.1, 5.0, 100)
-    q = compute_dose_attenuator(dose=1.0, freq_array=freq_array)
+    q = dose_attenuator(dose=1.0, freq_array=freq_array)
     assert np.all(q >= 0.0)
     assert np.all(q <= 1.0)
 
 
 def test_compute_dose_attenuator_higher_dose_more_attenuation():
     freq_array = np.linspace(0.1, 5.0, 50)
-    q_low = compute_dose_attenuator(dose=1.0, freq_array=freq_array)
-    q_high = compute_dose_attenuator(dose=10.0, freq_array=freq_array)
+    q_low = dose_attenuator(dose=1.0, freq_array=freq_array)
+    q_high = dose_attenuator(dose=10.0, freq_array=freq_array)
     assert np.all(q_high <= q_low)
 
 
