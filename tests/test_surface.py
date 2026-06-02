@@ -413,26 +413,26 @@ def test_mesh_oversample_has_normals(unit_sphere_mesh):
 
 
 def test_mesh_separate_surfaces_two_labels(two_sphere_mesh):
-    labels = DiscreteSurface.separate_surfaces(two_sphere_mesh)
-    unique = np.unique(labels)
-    assert set(unique) == {0, 1}, f"expected labels {{0,1}}, got {unique}"
+    inner_mask, outer_mask = two_sphere_mesh.separate_closed_surface()
+    assert inner_mask.any(), "inner surface mask is empty"
+    assert outer_mask.any(), "outer surface mask is empty"
 
 
 def test_mesh_separate_surfaces_both_present(two_sphere_mesh):
-    labels = DiscreteSurface.separate_surfaces(two_sphere_mesh)
-    n_inner = int(np.sum(labels == 0))
-    n_outer = int(np.sum(labels == 1))
+    inner_mask, outer_mask = two_sphere_mesh.separate_closed_surface()
+    n_inner = int(inner_mask.sum())
+    n_outer = int(outer_mask.sum())
     assert n_inner > 0 and n_outer > 0
 
 
 def test_mesh_filter_by_labels_returns_subset(two_sphere_mesh):
-    labels = DiscreteSurface.separate_surfaces(two_sphere_mesh)
-    inner = two_sphere_mesh.filter_by_labels(labels, "inner")
-    outer = two_sphere_mesh.filter_by_labels(labels, "outer")
+    inner_mask, outer_mask = two_sphere_mesh.separate_closed_surface()
+    inner = two_sphere_mesh.apply_vertex_mask(inner_mask)
+    outer = two_sphere_mesh.apply_vertex_mask(outer_mask)
     # Each filtered mesh must be a strict subset of the original
     assert len(inner.vertices) < len(two_sphere_mesh.vertices)
     assert len(outer.vertices) < len(two_sphere_mesh.vertices)
-    # Together they account for all original vertices (labels partition exactly)
+    # Together they account for all original vertices (masks partition exactly)
     assert len(inner.vertices) + len(outer.vertices) <= len(two_sphere_mesh.vertices)
 
 
@@ -520,3 +520,160 @@ def test_opc_oversample_preserves_normals(unit_sphere_opc):
     result = unit_sphere_opc.oversample(point_spacing=0.3)
     assert result.normals is not None
     assert result.normals.shape == result.vertices.shape
+
+
+# ===========================================================================
+# DiscreteSurface — tests for methods not covered above
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Fixture: two parallel planes (ideal for separate_planar_surface)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def two_plane_mesh():
+    """Upper plane (z=+0.5, normals +z) and lower plane (z=−0.5, normals −z).
+
+    This is the simplest possible bilayer proxy for testing ``separate_planar_surface``:
+    a clear PCA axis separates the two groups.
+    """
+    n = 10
+    xs, ys = np.meshgrid(np.linspace(-1, 1, n), np.linspace(-1, 1, n))
+    xs, ys = xs.ravel(), ys.ravel()
+    npts = len(xs)
+
+    upper_v = np.column_stack([xs, ys,  np.full(npts, 0.5)])
+    lower_v = np.column_stack([xs, ys, -np.full(npts, 0.5)])
+    upper_n = np.tile([0.0, 0.0,  1.0], (npts, 1))
+    lower_n = np.tile([0.0, 0.0, -1.0], (npts, 1))
+
+    mesh = Mesh()
+    mesh.vertices = np.vstack([upper_v, lower_v])
+    mesh.normals  = np.vstack([upper_n, lower_n])
+    mesh.faces    = np.zeros((0, 3), dtype=int)
+    return mesh
+
+
+# ---------------------------------------------------------------------------
+# separate_planar_surface
+# ---------------------------------------------------------------------------
+
+def test_separate_planar_surface_returns_two_groups(two_plane_mesh):
+    s1, s2 = two_plane_mesh.separate_planar_surface()
+    assert s1 is not None and s2 is not None
+    assert s1.sum() > 0 and s2.sum() > 0
+
+
+def test_separate_planar_surface_no_overlap(two_plane_mesh):
+    s1, s2 = two_plane_mesh.separate_planar_surface()
+    assert not np.any(s1 & s2), "A vertex is assigned to both surfaces"
+
+
+def test_separate_planar_surface_covers_all_vertices(two_plane_mesh):
+    s1, s2 = two_plane_mesh.separate_planar_surface()
+    # Together the two masks should partition all vertices (union = all True)
+    assert np.all(s1 | s2), "Some vertices are assigned to neither surface"
+
+
+def test_separate_planar_surface_equal_split(two_plane_mesh):
+    """Upper and lower planes have the same number of points → 50/50 split."""
+    s1, s2 = two_plane_mesh.separate_planar_surface()
+    assert s1.sum() == s2.sum()
+
+
+# ---------------------------------------------------------------------------
+# orient_normals_globally
+# ---------------------------------------------------------------------------
+
+def test_orient_normals_globally_consistent(unit_sphere_opc):
+    """After orientation, most normals should point radially outward (unit sphere)."""
+    opc = unit_sphere_opc
+    opc.orient_normals_globally(inplace=True)
+    # On a unit sphere, outward normals have positive dot product with position
+    dots = (opc.vertices * opc.normals).sum(axis=1)
+    fraction_outward = (dots > 0).mean()
+    assert fraction_outward > 0.8, (
+        f"Only {fraction_outward:.1%} of normals point outward after global orientation"
+    )
+
+
+def test_orient_normals_globally_preserves_shape(unit_sphere_opc):
+    original_shape = unit_sphere_opc.normals.shape
+    unit_sphere_opc.orient_normals_globally(inplace=True)
+    assert unit_sphere_opc.normals.shape == original_shape
+
+
+# ---------------------------------------------------------------------------
+# refine_normals / refine_normals_from_arrays
+# ---------------------------------------------------------------------------
+
+def test_refine_normals_does_not_change_shape(unit_sphere_mesh):
+    before_shape = unit_sphere_mesh.normals.shape
+    unit_sphere_mesh.refine_normals(radius_hit=0.3, n_iter=1, inplace=True)
+    assert unit_sphere_mesh.normals.shape == before_shape
+
+
+def test_refine_normals_keeps_unit_length(unit_sphere_mesh):
+    unit_sphere_mesh.refine_normals(radius_hit=0.3, n_iter=1, inplace=True)
+    lengths = np.linalg.norm(unit_sphere_mesh.normals, axis=1)
+    assert np.allclose(lengths, 1.0, atol=1e-4)
+
+
+def test_refine_normals_from_arrays_returns_unit_normals(unit_sphere_mesh):
+    refined = DiscreteSurface.refine_normals_from_arrays(
+        unit_sphere_mesh.vertices,
+        unit_sphere_mesh.normals,
+        radius_hit=0.3,
+        n_iter=1,
+    )
+    assert refined.shape == unit_sphere_mesh.normals.shape
+    lengths = np.linalg.norm(refined, axis=1)
+    assert np.allclose(lengths, 1.0, atol=1e-4)
+
+
+def test_refine_normals_from_arrays_smooths_toward_neighbors(unit_sphere_opc):
+    """Flipping one normal and then refining should pull it back toward its neighbors."""
+    opc = unit_sphere_opc
+    flipped_normals = opc.normals.copy()
+    flipped_normals[0] = -flipped_normals[0]   # flip one normal
+
+    refined = DiscreteSurface.refine_normals_from_arrays(
+        opc.vertices, flipped_normals, radius_hit=0.15, n_iter=3
+    )
+    # After refinement, the flipped normal should be more aligned with the original
+    dot_before = np.dot(opc.normals[0], flipped_normals[0])
+    dot_after  = np.dot(opc.normals[0], refined[0])
+    assert dot_after > dot_before, "Refinement should pull the flipped normal toward its neighbors"
+
+
+# ---------------------------------------------------------------------------
+# apply_normals_mask
+# ---------------------------------------------------------------------------
+
+def test_apply_normals_mask_reduces_vertex_count(unit_sphere_opc):
+    """A 45° threshold removes roughly half the vertices of a sphere."""
+    original_n = len(unit_sphere_opc.vertices)
+    filtered = unit_sphere_opc.apply_normals_mask(angle_threshold=45.0, inplace=False)
+    assert filtered is not None
+    assert len(filtered.vertices) < original_n
+    assert len(filtered.vertices) > 0
+
+
+def test_apply_normals_mask_tight_threshold_few_survivors(unit_sphere_opc):
+    """Very tight threshold (5°) keeps only normals close to the mean."""
+    filtered = unit_sphere_opc.apply_normals_mask(angle_threshold=5.0, inplace=False)
+    assert len(filtered.vertices) < len(unit_sphere_opc.vertices)
+
+
+def test_apply_normals_mask_wide_threshold_keeps_all(unit_sphere_opc):
+    """180° threshold keeps every vertex."""
+    original_n = len(unit_sphere_opc.vertices)
+    filtered = unit_sphere_opc.apply_normals_mask(angle_threshold=180.0, inplace=False)
+    assert len(filtered.vertices) == original_n
+
+
+def test_apply_normals_mask_normals_consistent_after_filter(unit_sphere_opc):
+    """Filtered normals should remain unit-length."""
+    filtered = unit_sphere_opc.apply_normals_mask(angle_threshold=60.0, inplace=False)
+    lengths = np.linalg.norm(filtered.normals, axis=1)
+    assert np.allclose(lengths, 1.0, atol=1e-5)

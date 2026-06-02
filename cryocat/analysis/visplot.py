@@ -2149,6 +2149,363 @@ def plot_scatter_3d(
     return fig
 
 
+def plot_ply_mesh(
+    ply_paths: PathOrStr | list[PathOrStr],
+    mesh_labels: list[str] | None = None,
+    colors: str | list[Color] | None = None,
+    opacity: float = 0.5,
+    overlay_points: ArrayLike | list[ArrayLike] | None = None,
+    overlay_names: list[str] | None = None,
+    overlay_colors: str | list[Color] | None = None,
+    overlay_marker_size: int = 3,
+    title: str | None = None,
+    output_path: PathOrStr | None = None,
+) -> go.Figure:
+    """Display one or more ``.ply`` mesh files as interactive 3-D surfaces.
+
+    Each file is loaded via ``open3d.io.read_triangle_mesh`` and rendered as a
+    semi-transparent :class:`plotly.graph_objects.Mesh3d` trace. Point clouds
+    passed via ``overlay_points`` are added as :class:`plotly.graph_objects.Scatter3d`
+    traces on top of the mesh(es).
+
+    Parameters
+    ----------
+    ply_paths : PathOrStr or list of PathOrStr
+        Path(s) to ``.ply`` mesh file(s).
+    mesh_labels : list of str, optional
+        Legend labels, one per mesh. Defaults to the filename stems.
+    colors : str or list of str, optional
+        Color palette specification. Resolved via :func:`resolve_colors_any`.
+    opacity : float, default=0.5
+        Mesh opacity (0–1).
+    overlay_points : N×3 array or list of N×3 arrays, optional
+        One or more point clouds to overlay as ``Scatter3d`` markers.
+    overlay_names : list of str, optional
+        Legend labels for each overlay point cloud.
+    overlay_colors : str or list of str, optional
+        Colors for the overlay point clouds. Resolved via :func:`resolve_colors_any`.
+    overlay_marker_size : int, default=3
+        Marker size for overlay point clouds.
+    title : str, optional
+        Figure title.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    try:
+        import open3d as o3d
+    except ImportError:
+        raise ImportError("open3d is required for plot_ply_mesh. Install with: pip install open3d")
+
+    from pathlib import Path as _Path
+
+    if not isinstance(ply_paths, (list, tuple)):
+        ply_paths = [ply_paths]
+
+    n = len(ply_paths)
+    if mesh_labels is None:
+        mesh_labels = [_Path(p).stem for p in ply_paths]
+
+    palette = resolve_colors_any(colors, color_type="palette", n=n)
+
+    fig = go.Figure()
+    for path, name, color in zip(ply_paths, mesh_labels, palette):
+        mesh = o3d.io.read_triangle_mesh(str(path))
+        if not mesh.has_vertices():
+            continue
+        verts = np.asarray(mesh.vertices)
+        faces = np.asarray(mesh.triangles)
+        fig.add_trace(go.Mesh3d(
+            x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
+            i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+            color=color,
+            opacity=opacity,
+            name=name,
+            showlegend=True,
+        ))
+
+    if overlay_points is not None:
+        if isinstance(overlay_points, np.ndarray) and overlay_points.ndim == 2:
+            overlay_points = [overlay_points]
+        n_ov = len(overlay_points)
+        if overlay_names is None:
+            overlay_names = [f"overlay {i + 1}" for i in range(n_ov)]
+        ov_palette = resolve_colors_any(overlay_colors, color_type="palette", n=n_ov)
+        for pts, ov_name, ov_color in zip(overlay_points, overlay_names, ov_palette):
+            pts = np.asarray(pts)
+            fig.add_trace(go.Scatter3d(
+                x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                mode="markers",
+                marker=dict(size=overlay_marker_size, color=ov_color),
+                name=ov_name,
+                showlegend=True,
+            ))
+
+    if title is not None:
+        fig.update_layout(title=title)
+    fig.update_layout(scene=dict(aspectmode="data"))
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
+
+
+def plot_vtp_mesh(
+    vtp_paths: PathOrStr | list[PathOrStr],
+    color_by: str | None = None,
+    mesh_labels: list[str] | None = None,
+    colors: str | list[Color] | None = None,
+    colorscale: str = "RdBu_r",
+    colorscale_range: tuple[float, float] | None = None,
+    opacity: float = 0.9,
+    overlay_points: ArrayLike | list[ArrayLike] | None = None,
+    overlay_names: list[str] | None = None,
+    overlay_colors: str | list[Color] | None = None,
+    overlay_marker_size: int = 3,
+    title: str | None = None,
+    output_path: PathOrStr | None = None,
+) -> go.Figure:
+    """Display one or more ``.vtp`` meshes, optionally colored by a curvature field.
+
+    Each file is loaded via ``pyvista.read`` and rendered as a
+    :class:`plotly.graph_objects.Mesh3d` trace. When ``color_by`` is given, a
+    per-vertex scalar field (e.g. ``"mean_curvature"``, ``"gaussian_curvature"``,
+    ``"k1"``, ``"k2"``, ``"curvature_anisotropy"``) is mapped to the trace's
+    ``intensity`` array using a diverging colorscale. A single colorbar is shown
+    when coloring a single mesh; multi-mesh plots share the same scale.
+
+    Point clouds passed via ``overlay_points`` are added as
+    :class:`plotly.graph_objects.Scatter3d` traces on top of the mesh(es),
+    which is useful for overlaying particle positions.
+
+    Parameters
+    ----------
+    vtp_paths : PathOrStr or list of PathOrStr
+        Path(s) to ``.vtp`` mesh file(s).
+    color_by : str, optional
+        Name of a point-data scalar field stored in the file, e.g.
+        ``"mean_curvature"``. When ``None`` each mesh is drawn with a flat color
+        from ``colors``.
+    mesh_labels : list of str, optional
+        Legend labels, one per mesh. Defaults to the filename stems.
+    colors : str or list of str, optional
+        Flat-color palette used when ``color_by`` is ``None``.
+    colorscale : str, default ``"RdBu_r"``
+        Plotly colorscale name used when ``color_by`` is set.
+    colorscale_range : tuple of (float, float), optional
+        Explicit ``(cmin, cmax)`` for the colorscale. When ``None`` the range is
+        derived from the data across all loaded meshes. Useful for comparing
+        multiple meshes on a shared scale or for clipping outliers.
+    opacity : float, default=0.9
+        Mesh opacity (0–1).
+    overlay_points : N×3 array or list of N×3 arrays, optional
+        One or more point clouds to overlay as ``Scatter3d`` markers.
+    overlay_names : list of str, optional
+        Legend labels for each overlay point cloud.
+    overlay_colors : str or list of str, optional
+        Colors for the overlay point clouds. Resolved via :func:`resolve_colors_any`.
+    overlay_marker_size : int, default=3
+        Marker size for overlay point clouds.
+    title : str, optional
+        Figure title.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    try:
+        import pyvista as pv
+    except ImportError:
+        raise ImportError("pyvista is required for plot_vtp_mesh. Install with: pip install pyvista")
+
+    from pathlib import Path as _Path
+
+    if not isinstance(vtp_paths, (list, tuple)):
+        vtp_paths = [vtp_paths]
+
+    n = len(vtp_paths)
+    if mesh_labels is None:
+        mesh_labels = [_Path(p).stem for p in vtp_paths]
+
+    palette = resolve_colors_any(colors, color_type="palette", n=n)
+
+    # Collect global min/max from data unless the caller supplied an explicit range.
+    meshes = []
+    global_min, global_max = (colorscale_range if colorscale_range is not None else (None, None))
+    for path in vtp_paths:
+        mesh = pv.read(str(path))
+        meshes.append(mesh)
+        if colorscale_range is None and color_by is not None and color_by in mesh.point_data:
+            vals = np.asarray(mesh.point_data[color_by])
+            lo, hi = float(vals.min()), float(vals.max())
+            global_min = lo if global_min is None else min(global_min, lo)
+            global_max = hi if global_max is None else max(global_max, hi)
+
+    fig = go.Figure()
+    for mesh, name, color in zip(meshes, mesh_labels, palette):
+        verts = np.asarray(mesh.points)
+        # pyvista face array: [n_verts, v0, v1, v2, ...]
+        faces = mesh.faces.reshape(-1, 4)[:, 1:]
+
+        trace_kwargs: dict = dict(
+            x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
+            i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+            opacity=opacity,
+            name=name,
+            showlegend=True,
+        )
+
+        if color_by is not None and color_by in mesh.point_data:
+            vals = np.asarray(mesh.point_data[color_by])
+            trace_kwargs.update(dict(
+                intensity=vals,
+                intensitymode="vertex",
+                colorscale=colorscale,
+                cmin=global_min,
+                cmax=global_max,
+                showscale=(n == 1),
+                colorbar=dict(title=color_by) if n == 1 else None,
+            ))
+        else:
+            trace_kwargs["color"] = color
+
+        fig.add_trace(go.Mesh3d(**trace_kwargs))
+
+    # Overlay point clouds
+    if overlay_points is not None:
+        if isinstance(overlay_points, np.ndarray) and overlay_points.ndim == 2:
+            overlay_points = [overlay_points]
+        n_ov = len(overlay_points)
+        if overlay_names is None:
+            overlay_names = [f"overlay {i + 1}" for i in range(n_ov)]
+        ov_palette = resolve_colors_any(overlay_colors, color_type="palette", n=n_ov)
+        for pts, ov_name, ov_color in zip(overlay_points, overlay_names, ov_palette):
+            pts = np.asarray(pts)
+            fig.add_trace(go.Scatter3d(
+                x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                mode="markers",
+                marker=dict(size=overlay_marker_size, color=ov_color),
+                name=ov_name,
+                showlegend=True,
+            ))
+
+    if title is not None:
+        fig.update_layout(title=title)
+    fig.update_layout(scene=dict(aspectmode="data"))
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
+
+
+def plot_points_with_normals(
+    points: ArrayLike | list[ArrayLike],
+    normals: ArrayLike | list[ArrayLike] | None = None,
+    labels: list[str] | None = None,
+    colors: str | list[Color] | None = None,
+    sample_fraction: float = 1.0,
+    show_normals: bool = True,
+    normal_scale: float = 5.0,
+    marker_size: int = 3,
+    title: str | None = None,
+    output_path: PathOrStr | None = None,
+) -> go.Figure:
+    """Display one or more oriented point clouds as interactive 3-D scatter plots.
+
+    Each point cloud is shown as a :class:`plotly.graph_objects.Scatter3d` trace.
+    When *normals* are provided and *show_normals* is ``True``, surface normals are
+    drawn as :class:`plotly.graph_objects.Cone` traces, giving an approximate view
+    of particle or surface orientation.
+
+    Parameters
+    ----------
+    points : array-like of shape (N, 3) or list of such arrays
+        Spatial coordinates, one array per point cloud.
+    normals : array-like of shape (N, 3) or list of such arrays, optional
+        Surface normals aligned with *points*. Required when *show_normals=True*.
+    labels : list of str, optional
+        Legend labels, one per point cloud.
+    colors : str or list of str, optional
+        Color palette specification. Resolved via :func:`resolve_colors_any`.
+    sample_fraction : float, default=1.0
+        Fraction of points to display (random subsample). Values in ``(0, 1]``.
+        Useful for large dense meshes; the already-sparse oversampled clouds
+        (~1 500 points) can be shown at full resolution.
+    show_normals : bool, default=True
+        When ``True`` and *normals* are provided, draw each normal as a cone.
+    normal_scale : float, default=5.0
+        Absolute cone length in the same units as *points*.
+    marker_size : int, default=3
+        Scatter marker size in pixels.
+    title : str, optional
+        Figure title.
+    output_path : PathOrStr, optional
+        Saved with :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    if not isinstance(points, list):
+        points = [points]
+    if normals is not None and not isinstance(normals, list):
+        normals = [normals]
+
+    n = len(points)
+    if labels is None:
+        labels = [f"Surface {i + 1}" for i in range(n)]
+    if normals is None:
+        normals = [None] * n
+
+    palette = resolve_colors_any(colors, color_type="palette", n=n)
+    rng = np.random.default_rng(42)
+
+    fig = go.Figure()
+    for pts, nrm, label, color in zip(points, normals, labels, palette):
+        pts = np.asarray(pts)
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError(f"Each points array must be shape (N, 3); got {pts.shape}.")
+
+        idx = np.arange(len(pts))
+        if 0 < sample_fraction < 1.0:
+            n_keep = max(1, int(len(pts) * sample_fraction))
+            idx = rng.choice(len(pts), size=n_keep, replace=False)
+            idx.sort()
+
+        sub_pts = pts[idx]
+
+        fig.add_trace(go.Scatter3d(
+            x=sub_pts[:, 0], y=sub_pts[:, 1], z=sub_pts[:, 2],
+            mode="markers",
+            marker=dict(size=marker_size, color=color, opacity=0.8),
+            name=label,
+            showlegend=True,
+        ))
+
+        if show_normals and nrm is not None:
+            sub_nrm = np.asarray(nrm)[idx]
+            fig.add_trace(go.Cone(
+                x=sub_pts[:, 0], y=sub_pts[:, 1], z=sub_pts[:, 2],
+                u=sub_nrm[:, 0], v=sub_nrm[:, 1], w=sub_nrm[:, 2],
+                sizemode="absolute",
+                sizeref=normal_scale,
+                colorscale=[[0, color], [1, color]],
+                showscale=False,
+                name=f"{label} normals",
+                showlegend=False,
+            ))
+
+    if title is not None:
+        fig.update_layout(title=title)
+    fig.update_layout(scene=dict(aspectmode="data"))
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
+
+
 def plot_grouped_box(
     data: DataSource,
     group_column_name: str,
@@ -2240,7 +2597,7 @@ def plot_polar_nn_distances(
     coordinates: ArrayLike,
     distances: ArrayLike,
     max_radius: Optional[float] = None,
-    marker_size: int = 7,
+    marker_size: int = 3,
     colormap: str = "viridis_r",
     graph_title: Optional[str] = None,
     output_path: Optional[PathOrStr] = None,
@@ -2389,8 +2746,8 @@ def plot_orientational_distribution(
     coordinates: ArrayLike,
     projection: ProjectionType = "stereo",
     graph_title: Optional[str] = None,
-    theta_bin: int = 12,
-    radius_bin: int = 5,
+    theta_bin: int = 73,
+    radius_bin: int = 33,
     max_radius: Optional[float] = None,
     colormap: str = "viridis_r",
     output_path: Optional[PathOrStr] = None,
@@ -2409,9 +2766,9 @@ def plot_orientational_distribution(
         Projection algorithm passed to :func:`cryocat.utils.geom.create_projection`.
     graph_title : str, optional
         Figure title.
-    theta_bin : int, default=12
+    theta_bin : int, default=73
         Number of angular bin edges. ``theta_bin - 1`` sectors per radial ring.
-    radius_bin : int, default=5
+    radius_bin : int, default=33
         Number of radial bin edges. ``radius_bin - 1`` rings per hemisphere.
     max_radius : float, optional
         Maximum projected radius. Defaults to the data maximum.
