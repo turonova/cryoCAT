@@ -2151,7 +2151,7 @@ def plot_scatter_3d(
 
 def plot_ply_mesh(
     ply_paths: PathOrStr | list[PathOrStr],
-    mesh_names: list[str] | None = None,
+    mesh_labels: list[str] | None = None,
     colors: str | list[Color] | None = None,
     opacity: float = 0.5,
     overlay_points: ArrayLike | list[ArrayLike] | None = None,
@@ -2172,7 +2172,7 @@ def plot_ply_mesh(
     ----------
     ply_paths : PathOrStr or list of PathOrStr
         Path(s) to ``.ply`` mesh file(s).
-    mesh_names : list of str, optional
+    mesh_labels : list of str, optional
         Legend labels, one per mesh. Defaults to the filename stems.
     colors : str or list of str, optional
         Color palette specification. Resolved via :func:`resolve_colors_any`.
@@ -2206,13 +2206,13 @@ def plot_ply_mesh(
         ply_paths = [ply_paths]
 
     n = len(ply_paths)
-    if mesh_names is None:
-        mesh_names = [_Path(p).stem for p in ply_paths]
+    if mesh_labels is None:
+        mesh_labels = [_Path(p).stem for p in ply_paths]
 
     palette = resolve_colors_any(colors, color_type="palette", n=n)
 
     fig = go.Figure()
-    for path, name, color in zip(ply_paths, mesh_names, palette):
+    for path, name, color in zip(ply_paths, mesh_labels, palette):
         mesh = o3d.io.read_triangle_mesh(str(path))
         if not mesh.has_vertices():
             continue
@@ -2255,7 +2255,7 @@ def plot_ply_mesh(
 def plot_vtp_mesh(
     vtp_paths: PathOrStr | list[PathOrStr],
     color_by: str | None = None,
-    mesh_names: list[str] | None = None,
+    mesh_labels: list[str] | None = None,
     colors: str | list[Color] | None = None,
     colorscale: str = "RdBu_r",
     colorscale_range: tuple[float, float] | None = None,
@@ -2288,7 +2288,7 @@ def plot_vtp_mesh(
         Name of a point-data scalar field stored in the file, e.g.
         ``"mean_curvature"``. When ``None`` each mesh is drawn with a flat color
         from ``colors``.
-    mesh_names : list of str, optional
+    mesh_labels : list of str, optional
         Legend labels, one per mesh. Defaults to the filename stems.
     colors : str or list of str, optional
         Flat-color palette used when ``color_by`` is ``None``.
@@ -2328,8 +2328,8 @@ def plot_vtp_mesh(
         vtp_paths = [vtp_paths]
 
     n = len(vtp_paths)
-    if mesh_names is None:
-        mesh_names = [_Path(p).stem for p in vtp_paths]
+    if mesh_labels is None:
+        mesh_labels = [_Path(p).stem for p in vtp_paths]
 
     palette = resolve_colors_any(colors, color_type="palette", n=n)
 
@@ -2346,7 +2346,7 @@ def plot_vtp_mesh(
             global_max = hi if global_max is None else max(global_max, hi)
 
     fig = go.Figure()
-    for mesh, name, color in zip(meshes, mesh_names, palette):
+    for mesh, name, color in zip(meshes, mesh_labels, palette):
         verts = np.asarray(mesh.points)
         # pyvista face array: [n_verts, v0, v1, v2, ...]
         faces = mesh.faces.reshape(-1, 4)[:, 1:]
@@ -2404,7 +2404,7 @@ def plot_vtp_mesh(
 def plot_points_with_normals(
     points: ArrayLike | list[ArrayLike],
     normals: ArrayLike | list[ArrayLike] | None = None,
-    names: list[str] | None = None,
+    labels: list[str] | None = None,
     colors: str | list[Color] | None = None,
     sample_fraction: float = 1.0,
     show_normals: bool = True,
@@ -2426,7 +2426,7 @@ def plot_points_with_normals(
         Spatial coordinates, one array per point cloud.
     normals : array-like of shape (N, 3) or list of such arrays, optional
         Surface normals aligned with *points*. Required when *show_normals=True*.
-    names : list of str, optional
+    labels : list of str, optional
         Legend labels, one per point cloud.
     colors : str or list of str, optional
         Color palette specification. Resolved via :func:`resolve_colors_any`.
@@ -2455,8 +2455,8 @@ def plot_points_with_normals(
         normals = [normals]
 
     n = len(points)
-    if names is None:
-        names = [f"Surface {i + 1}" for i in range(n)]
+    if labels is None:
+        labels = [f"Surface {i + 1}" for i in range(n)]
     if normals is None:
         normals = [None] * n
 
@@ -2464,7 +2464,7 @@ def plot_points_with_normals(
     rng = np.random.default_rng(42)
 
     fig = go.Figure()
-    for pts, nrm, name, color in zip(points, normals, names, palette):
+    for pts, nrm, label, color in zip(points, normals, labels, palette):
         pts = np.asarray(pts)
         if pts.ndim != 2 or pts.shape[1] != 3:
             raise ValueError(f"Each points array must be shape (N, 3); got {pts.shape}.")
@@ -2481,7 +2481,7 @@ def plot_points_with_normals(
             x=sub_pts[:, 0], y=sub_pts[:, 1], z=sub_pts[:, 2],
             mode="markers",
             marker=dict(size=marker_size, color=color, opacity=0.8),
-            name=name,
+            name=label,
             showlegend=True,
         ))
 
@@ -2494,7 +2494,7 @@ def plot_points_with_normals(
                 sizeref=normal_scale,
                 colorscale=[[0, color], [1, color]],
                 showscale=False,
-                name=f"{name} normals",
+                name=f"{label} normals",
                 showlegend=False,
             ))
 
