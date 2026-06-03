@@ -3321,35 +3321,48 @@ def create_test_csv_angles(angles, order):
     return file_path
 
 
-def test_rot_angles_load():
-    # 4 x 3 (N x (phi,theta,psi))
-    angles_phi_theta_psi = np.array([[1, 4, 30, 45], [2, 5, 60, 45], [3, 6, 90, 120]])
+def test_euler_angles_load():
+    # 3 x 3 (N x (phi,theta,psi))
+    angles_phi_theta_psi = np.array([[1, 4, 30], [2, 5, 60], [3, 6, 90]])
+    result_phi_psi_theta_np = np.array([[1, 30, 4], [2, 60, 5], [3, 90, 6]])
 
-    # N lines: 4 arrays
-    result_phi_theta_psi = np.array([[1, 2, 3], [4, 5, 6], [30, 60, 90], [45, 45, 120]])
-    result_phi_psi_theta = np.array([[1, 3, 2], [4, 6, 5], [30, 90, 60], [45, 120, 45]])
+    # Testing passing list or tuple
+    list_phi_theta_psi = [1, 2, 3]
+    tuple_phi_theta_psi = (1, 2, 3)
+    result_phi_theta_psi_tl = np.array([1, 2, 3])
 
-    # Passing nparray: result is equal to input
-    # zxz or zzx doesn't matter when passing a numpy array
-    np.testing.assert_array_equal(angles_phi_theta_psi, rot_angles_load(angles_phi_theta_psi))
+    np.testing.assert_array_equal(result_phi_theta_psi_tl, euler_angles_load(list_phi_theta_psi))
+    np.testing.assert_array_equal(result_phi_theta_psi_tl, euler_angles_load(tuple_phi_theta_psi))
+
+    # N lines: 3 arrays
+    result_phi_theta_psi = np.array([[1, 2, 3], [4, 5, 6], [30, 60, 90]]) #, [45, 45, 120]])
+    result_phi_psi_theta = np.array([[1, 3, 2], [4, 6, 5], [30, 90, 60]]) #, [45, 120, 45]])
+
+    # Passing ndarray
+    np.testing.assert_array_equal(angles_phi_theta_psi, euler_angles_load(angles_phi_theta_psi))
+    np.testing.assert_array_equal(result_phi_psi_theta_np, euler_angles_load(angles_phi_theta_psi, "zzx"))
 
     # testing csv path
-    # he lines in csv:
+    # the lines in csv:
     # phi, theta, psi
     # phi1, theta1, psi1
     filepath = create_test_csv_angles(angles_phi_theta_psi, "zxz")
-    np.testing.assert_array_equal(rot_angles_load(str(filepath), "zxz"), result_phi_theta_psi)
+    np.testing.assert_array_equal(euler_angles_load(str(filepath), "zxz"), result_phi_theta_psi)
     # the lines in csv: must be the same as before: we want this by our will
     filepath = create_test_csv_angles(angles_phi_theta_psi, "zzx")
-    np.testing.assert_array_equal(rot_angles_load(str(filepath), "zzx"), result_phi_theta_psi)
+    np.testing.assert_array_equal(euler_angles_load(str(filepath), "zzx"), result_phi_theta_psi)
     # Testing exception being raised if not valid path is being passed
     with pytest.raises(ValueError):
-        rot_angles_load("random")
+        euler_angles_load("random")
 
     # Testing exception being raised if passed csv doesn't contain 3 columns (phi,theta,psi)
     with pytest.raises(ValueError):
         filepath = create_test_csv_angles(angles_phi_theta_psi, "exception")
-        result = rot_angles_load((str(filepath), "zxz"))
+        result = euler_angles_load((str(filepath), "zxz"))
+    
+    # testing wrong shape of the inputs
+    with pytest.raises(ValueError):
+        euler_angles_load(np.array([1,3,5,7]))
 
     # Test file cleanup
     if os.path.exists(filepath):
@@ -3359,26 +3372,26 @@ def test_rot_angles_load():
 
 
 def test_angles_save_round_trip(tmp_path):
-    """angles_save + rot_angles_load are inverse operations."""
-    from cryocat.utils.ioutils import angles_save, rot_angles_load
+    """angles_save + euler_angles_load are inverse operations."""
+    from cryocat.utils.ioutils import angles_save, euler_angles_load
 
     angles = np.array([[0.0, 45.0, 90.0], [30.0, 60.0, 120.0], [180.0, 0.0, 270.0]])
     out = tmp_path / "angles.csv"
     angles_save(angles, str(out))
 
-    loaded = rot_angles_load(str(out))
+    loaded = euler_angles_load(str(out))
     np.testing.assert_allclose(loaded, angles, atol=1e-9)
 
 
 def test_angles_save_single_row(tmp_path):
     """angles_save handles a single-row array."""
-    from cryocat.utils.ioutils import angles_save, rot_angles_load
+    from cryocat.utils.ioutils import angles_save, euler_angles_load
 
     angles = np.array([[10.0, 20.0, 30.0]])
     out = tmp_path / "single.csv"
     angles_save(angles, str(out))
 
-    loaded = rot_angles_load(str(out))
+    loaded = euler_angles_load(str(out))
     np.testing.assert_allclose(loaded, angles, atol=1e-9)
 
 

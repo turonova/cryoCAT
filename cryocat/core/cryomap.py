@@ -1045,6 +1045,8 @@ def rotate(
             f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
+    if rotation_angles is not None:
+        rotation_angles = ioutils.euler_angles_load(rotation_angles, angles_order=coord_space)
     input_map = read(input_map)
     rot_struct = imageutils.rotate_volume(
         input_map,

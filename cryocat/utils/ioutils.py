@@ -741,39 +741,54 @@ def total_dose_load(input_dose, sort_mdoc=True):
         raise ValueError("Error: the dose has to be either ndarray or str with valid path!")
 
 
-def rot_angles_load(input_angles, angles_order="zxz"):
-    """Load rotation angles from a file or numpy array and arrange them in a specified order.
+def euler_angles_load(input_angles, angles_order="zxz"):
+    """Load rotation angles from a file, numpy array, 3-list or 3-tuple and arrange them in a specified order.
 
     Parameters
     ----------
-    input_angles : str or numpy.ndarray
+    input_angles : str or numpy.ndarray or 3-list of floats or a 3-tuple of floats
         If a string, it should be the path to a CSV file containing the angles (three per line). If a numpy array, it
-        should directly contain the angles.
+        should directly contain the angles. Id 1D ndarray is provided, its shape should be (3,),
+        if a 2D ndarray is provided, its shape should be (N, 3) where N is the number of angle sets. If a list or tuple is
+        provided, it should contain exactly three float or int values corresponding to the angles.
     angles_order : str, default="zxz"
         The order of the angles in the output array. Default is "zxz" (phi, theta, psi). If "zzx", the order will be
         adjusted to phi, psi, theta.
 
+
     Returns
     -------
     angles : numpy.ndarray
-        A numpy array of shape (N, 3) where n is the number of angle sets. Each row contains the angles phi, theta,
-          and psi in the specified order.
+        A numpy array of shape (N, 3) where N is the number of angle sets. Each row contains the angles phi, theta,
+          and psi in the specified order. If the input was a 3-list, tuple or 1D ndarray with shape (3,), the 
+          output will have shape (3,).
 
     Raises
     ------
     ValueError
-        If `input_angles` is neither a string path to a CSV file nor a numpy array.
+        If `input_angles` is neither a string path to a CSV file nor a numpy array nor a 3-list nor a 3-tuple.
+    ValueError
+        If the CSV file does not contain valid data (i.e., it does not have exactly three columns).
+    ValueError
+        If the input 1D array or list or tuple does not contain exactly three elements.
+    ValueError
+        If the input 2D array does not have shape (N,3).
+    ValueError
+        If the input has an unsupported number of dimensions (i.e., not 1D or 2D).
 
     Examples
     --------
-    >>> rot_angles_load("path/to/angles.csv")
+    >>> euler_angles_load("path/to/angles.csv")
     array([[phi1, theta1, psi1],
            [phi2, theta2, psi2],
            ...])
 
-    >>> rot_angles_load(numpy.array([[0, 45, 90], [90, 45, 0]]), "zzx")
+    >>> euler_angles_load(numpy.array([[0, 45, 90], [90, 45, 0]]), "zzx")
     array([[0, 90, 45],
            [90, 0, 45]])
+    
+    >>> euler_angles_load([20,30,45])
+    array([20, 30, 45])
     """
 
     if isinstance(input_angles, str):
@@ -786,17 +801,35 @@ def rot_angles_load(input_angles, angles_order="zxz"):
         if len(angles.columns) != 3:
             raise ValueError(f"File '{input_angles}' does not contain valid data.")
 
-        if angles_order == "zzx":
-            angles.columns = ["phi", "psi", "theta"]
-        else:
-            angles.columns = ["phi", "theta", "psi"]
-
-        angles = angles.loc[:, ["phi", "theta", "psi"]].to_numpy()
+        angles = angles.to_numpy()
 
     elif isinstance(input_angles, np.ndarray):
         angles = input_angles.copy()
+
+        # Ensure correct shape (3,) or (N,3): require second dim == 3 for 2D arrays
+        if angles.ndim == 1:
+            if not angles.shape[0] == 3:
+                raise ValueError(f"1D input array must have exactly 3 elements, but got {angles.shape[0]}.")
+            
+        elif angles.ndim == 2:
+            if angles.shape[1] != 3:
+                raise ValueError(f"2D input array must have shape (N, 3), but got {angles.shape}.")
+            
+        else:
+            raise ValueError(f"Input arrays must be 1D length-3 or 2D shape (N,3), but got {angles.ndim}D array with shape {angles.shape}.")
+
+    elif isinstance(input_angles, (list, tuple)) and len(input_angles) == 3 and all(isinstance(angle, (int, float)) for angle in input_angles):
+        angles = np.asarray(input_angles) # this returns (3,)
+        
     else:
-        raise ValueError("The input_angles have to be either a valid path to a file or numpy array!!!")
+        raise ValueError("The input_angles have to be either a valid path to a file, numpy array or a length-3 list or tuple!!!")
+    
+    # Rearrange angles if needed
+    if angles_order == "zzx":
+        if angles.ndim == 1:
+            angles = angles[[0, 2, 1]]
+        else:  # angles.ndim == 2
+            angles = angles[:, [0, 2, 1]]
 
     return angles
 
@@ -808,7 +841,7 @@ def angles_save(
 ) -> None:
     """Write Euler angles to a headerless three-column CSV file.
 
-    The output format is compatible with :func:`rot_angles_load`: each row
+    The output format is compatible with :func:`euler_angles_load`: each row
     contains three whitespace/comma-separated values (phi, theta, psi) with no
     header line and no row index.
 
@@ -975,7 +1008,7 @@ def dimensions_load(input_dims, tomo_idx=None):
     else:
         raise ValueError(
             f"The dimensions should have shape of 1x3 or Nx4, where N is number of tomograms."
-            f"Instead following shape was extracted from the prvoided files: {dimensions.shape}."
+            f"Instead following shape was extracted from the provided files: {dimensions.shape}."
         )
 
     if tomo_idx is not None:

@@ -531,7 +531,7 @@ def compute_sharp_mask_overlap_single(
     """
     mask_arr = cryomap.read(template_mask) if not isinstance(template_mask, np.ndarray) else template_mask
     angles_arr = (
-        ioutils.rot_angles_load(input_angles, angles_order)
+        ioutils.euler_angles_load(input_angles, angles_order)
         if not isinstance(input_angles, np.ndarray)
         else input_angles
     )
@@ -874,7 +874,7 @@ def compute_sharp_mask_overlap(
         mask_name = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tight mask"])
         mask = cryomap.read(mask_name)
         angle_list = angle_list_path + temp_df.at[i, "Angles"]
-        angles = ioutils.rot_angles_load(angle_list, angles_order)
+        angles = ioutils.euler_angles_load(angle_list, angles_order)
         rotations = srot.from_euler("zxz", angles, degrees=True)
 
         voxel_count = sharp_mask_overlap(mask, rotations)
@@ -1210,7 +1210,7 @@ def analyze_rotations(
     """
 
     angles = geom.apply_starting_and_offset(
-        ioutils.rot_angles_load(input_angles, angles_order),
+        ioutils.euler_angles_load(input_angles, angles_order),
         starting_angle,
         angular_offset,
         angles_order,
@@ -1443,7 +1443,7 @@ def compute_distance_map(
     """
     angles_map_arr = cryomap.read(angles_map) if not isinstance(angles_map, np.ndarray) else angles_map
     angles_arr = (
-        ioutils.rot_angles_load(angles_list, angles_order) if not isinstance(angles_list, np.ndarray) else angles_list
+        ioutils.euler_angles_load(angles_list, angles_order) if not isinstance(angles_list, np.ndarray) else angles_list
     )
 
     # Reference rotation: None or (0, 0, 0) → measure from the identity.
@@ -1795,7 +1795,7 @@ def visualize_results(
     alist_arr: np.ndarray | None = None
     if angles_list is not None:
         alist_arr = (
-            ioutils.rot_angles_load(angles_list, "zxz") if not isinstance(angles_list, np.ndarray) else angles_list
+            ioutils.euler_angles_load(angles_list, "zxz") if not isinstance(angles_list, np.ndarray) else angles_list
         )
 
     ps_dict: dict | None = None
@@ -1999,7 +1999,7 @@ def run_single_case(
     # Pre-compute transformed angles so angles.csv is consistent with the
     # 0-based indices stored in angles.em by analyze_rotations.
     angles_array = geom.apply_starting_and_offset(
-        ioutils.rot_angles_load(input_angles, angles_order),
+        ioutils.euler_angles_load(input_angles, angles_order),
         starting_angle,
         angular_offset,
         angles_order,

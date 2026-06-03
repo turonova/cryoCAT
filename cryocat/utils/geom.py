@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import re
 from scipy.spatial.transform import Rotation as srot
+from cryocat.utils import ioutils
 from cryocat.utils.exceptions import UserInputError
 import matplotlib.pyplot as plt
 import os
@@ -1159,6 +1160,7 @@ def euler_angles_to_normals(angles: EulerAngles) -> np.ndarray:
     ndarray (n,3)
         Unit length z-normal vectors associated to input Euler angles.
     """
+    angles = ioutils.euler_angles_load(angles)
     rotations = srot.from_euler("zxz", angles=angles, degrees=True)
     points = rotations_to_z_normals(rotations)
     n_length = np.linalg.norm(points, axis=1, keepdims=True)  # per-row norm; shape (N, 1)

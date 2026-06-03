@@ -73,6 +73,8 @@ Literals (good for GUI dropdowns)
     MotlColumn              -- the 20 fixed motl columns
     BoundaryType            -- center, whole
     CTFFileType             -- gctf, ctffind4, warp, relion
+    RelionVersion          -- 3.0, 3.1, 4.0, 5.0, 5.1
+    ThresholdType           -- gauss, triangle, hard
 
 Generic
     FeatureName             -- str (looser than MotlColumn)
@@ -100,6 +102,7 @@ Normalizers (boundary helpers that take a polymorphic input -> canonical form)
     TomoList                -> cryocat.utils.ioutils.tlt_load(x)
     DataSource              -> cryocat.utils.ioutils.df_load(x)  (tabular) / np.asarray (arrays)
     DictSource              -> cryocat.utils.ioutils.dict_load(x)
+    EulerAngles             -> cryocat.utils.ioutils.euler_angles_load(x)
 """
 
 from os import PathLike as _PathLike
@@ -194,13 +197,16 @@ Accepted shapes:
 Normalize with :func:`cryocat.utils.geom.as_rotation`.
 """
 
-type EulerAngles = npt.NDArray[np.floating] | tuple[float, float, float] | list[float]
+type EulerAngles = PathOrStr | npt.NDArray[np.floating] | tuple[float, float, float] | list[float]
 """Euler angles in degrees.
 
 Either a single triple (shape ``(3,)`` / 3-tuple / 3-list) or a stack
-(shape ``(N, 3)``). Convention is normally zxz unless the function says
-otherwise. Distinct from a generic 3-vector because the GUI/agent should
-treat these as angles (degree spinners) rather than coordinates.
+(shape ``(N, 3)``), or a path to a file containing angles. Convention 
+is normally zxz unless the function says otherwise. Distinct from a 
+generic 3-vector because the GUI/agent should treat these as angles 
+(degree spinners) rather than coordinates.
+
+Normalize with :func:`cryocat.utils.ioutils.euler_angles_load`.
 """
 
 
@@ -342,6 +348,17 @@ Used by :func:`cryocat.utils.geom.create_projection` and consumed by
 :func:`cryocat.analysis.visplot.plot_orientational_distribution`.
 """
 
+type RelionVersion = Literal["3.0", "3.1", "4.0", "5.0", "5.1"]
+"""Supported Relion versions for motl I/O."""
+
+type ThresholdType = Literal["gauss", "triangle", "hard"]
+"""Thresholding methods supported within :func:`cryocat.analysis.tmana.evaluate_scores_map`.
+
+* ``"gauss"`` -- threshold estimated via :func:`cryocat.analysis.tmana.compute_gaussian_threshold`.
+* ``"triangle"`` -- threshold estimated via :func:`cryocat.analysis.tmana.compute_scores_map_threshold_triangle`.
+* ``"hard"`` -- half of the value of the global maximum value in the map.
+
+"""
 
 
 # ===========================================================================
