@@ -17,9 +17,9 @@ from cryocat.utils import imageutils
 from cryocat.utils import ioutils
 from cryocat.analysis import nnana
 from cryocat.utils import imod
-from cryocat._types import ArrayLike, BoundaryType, MapSource, MotlColumn, MotlType, PathOrStr, RotationLike, Symmetry, TomoDimensions
+from cryocat._types import ArrayLike, BoundaryType, MapSource, MotlColumn, MotlType, PathOrStr, RotationLike, Symmetry, TomoDimensions, RelionVersion
 from cryocat.utils.classutils import gui_exposed
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Literal
 
 from math import ceil
 from pathlib import Path
@@ -537,7 +537,7 @@ class Motl:
         The function creates a new instance of a Motl and does not alter the original one.
         """
 
-        tomos = ioutils.tlt_load(tomo_list)
+        tomos = ioutils.tlt_load(tomo_list, sort_angles=False)
 
         requries_loading = True
         if isinstance(tomo_masks, list):
@@ -2988,7 +2988,7 @@ class RelionMotl(Motl):
             relion_df = pd.DataFrame(
                 data=np.zeros((self.df.shape[0], len(self.columns_v3_0))), columns=self.columns_v3_0
             )
-        elif version == 3.1:
+        elif version == 3.1 or version == 5.1:
             relion_df = pd.DataFrame(
                 data=np.zeros((self.df.shape[0], len(self.columns_v3_1))), columns=self.columns_v3_1
             )
@@ -3071,9 +3071,9 @@ class RelionMotl(Motl):
                 )
         else:
             # TODO add support for 3.0
-            if version == 3.1:
+            if version == 3.1 or version == 5.1:
                 optics_df = self.create_optics_group_v3_1(pixel_size=pixel_size, subtomo_size=subtomo_size)
-            elif version > 3.1:
+            elif version > 3.1 and version != 5.1:
                 optics_df = self.create_optics_group_v4(
                     pixel_size=pixel_size, subtomo_size=subtomo_size, binning=binning
                 )
@@ -3237,7 +3237,7 @@ class RelionMotl(Motl):
 
         relion_df.loc[:, shifts_name] = np.zeros((relion_df.shape[0], 3))
 
-        if version < 4.0:
+        if version < 4.0 or version == 5.1:
             relion_df["rlnPixelSize"] = pixel_size
 
         # assign group number
@@ -3474,7 +3474,7 @@ class RelionMotl(Motl):
         if add_subunit_id:
             relion_df["ccSubunitName"] = self.df["geom2"].to_numpy()
 
-        if binning != 1.0 and version >= 4.0:
+        if binning != 1.0 and version >= 4.0 and version != 5.1:
             for coord in ("X", "Y", "Z"):
                 relion_df["rlnCoordinate" + coord] = relion_df["rlnCoordinate" + coord] * binning
 
@@ -5576,3 +5576,104 @@ def mod2emmotl(input_mod: "MotlSource", output_path: Optional[PathOrStr] = None,
         em_motl.write_out(output_path)
 
     return em_motl
+
+
+def motl_converter_kwargs(
+        input_motl: "MotlSource",
+        output_motl_type: Optional[MotlType] = "emmotl",
+        output_path: Optional[PathOrStr] = None,
+        relion_version: Optional[RelionVersion] = None,
+        **output_kwargs
+) -> "MotlSource":
+    """Convert a motl (EmMotl) to a specified output motl type and optionally write it to file.
+    The function checks for a valid outupt motl type, consistency of relion version (in case of 
+    relion output motls), and kwargs provided for the conversion. It then performs the conversion
+    based on the specified output motl type and returns the converted motl object.
+
+    Parameters:
+    ----------
+    input_motl : str or pandas.DataFrame or EmMotl
+        Path to the input EM MOTL file to convert or an already loaded EmMotl object.
+    output_motl_type : str, default="emmotl"
+        The type of the output motl. Supported types are: "emmotl", "dynamo", "mod", "stopgap", "relion", "relion5", "relion5_1".
+    output_path : str, optional
+        If provided, the converted motl will be written to this path.
+    relion_version : str, optional
+        The version of the relion STAR file format to be returned. Required if output_motl_type is "relion". 
+        Versions currently supported: "3.0", "3.1", "4.0". As for versions 5.0 and 5.1, those are automatically 
+        assigned if the output_motl_type is set to "relion5" or "relion5_1", respectively, and the provided 
+        relion_version argument will be ignored with a warning.
+    **output_kwargs
+        Additional keyword arguments for the conversion function. The accepted kwargs depend on the specified output_motl_type.
+        Check :func:`cryocat.core.cryomotl.emmotl2stopgap`, :func:`cryocat.core.cryomotl.emmotl2relion`, `:func:cryocat.core.cryomotl.emmotl2mod`
+        for the available parameters for each output motl type.
+
+    Returns:
+    --------
+    output_motl : MotlSource
+        The converted motl object of the specified output type.
+
+    Raises:
+    -------
+    ValueError:
+        If an invalid output_motl_type is provided, if the relion_version is inconsistent with the output_motl_type, or if invalid kwargs are provided for the specified output_motl_type.
+    """
+    # map motl types and acceptable kwargs
+    motl_type_to_kwargs = {"emmotl": [],
+                           "mod": ["mod_prefix", "mod_suffix"],
+                           "stopgap": ["update_coordinates", "reset_index"],
+                           "dynamo": [],
+                           "relion": ["flip_handedness", "tomo_dim", "load_kwargs", "write_kwargs"]
+                           }
+    motl_type_to_kwargs["relion5"] = motl_type_to_kwargs["relion"]
+    motl_type_to_kwargs["relion5_1"] = motl_type_to_kwargs["relion"]
+
+    # check for valid MotlType for the output
+    if output_motl_type is not None and output_motl_type not in motl_type_to_kwargs:
+        raise ValueError(f"output_motl_type {output_motl_type} is not supported. Supported types are: {list(motl_type_to_kwargs)}")
+
+    # check the consistency of relion version specification
+    if output_motl_type != "relion":
+        if output_motl_type == "relion5":
+            relion_version = "5.0"
+            warnings.warn(f"Setting output relion version to {relion_version} for relion5 output motl type.", UserWarning)
+        elif output_motl_type == "relion5_1":
+            relion_version = "5.1"
+            warnings.warn(f"Setting output relion version to {relion_version} for relion5_1 output motl type.", UserWarning)
+        else:
+            if relion_version is not None:
+                warnings.warn(f"Provided output relion version {relion_version} is not relevant for motl type {output_motl_type}. Ignoring relion_version argument.")
+                relion_version = None
+    
+    elif output_motl_type == "relion" and relion_version is None:
+        raise ValueError(f"output_relion_version argument is required when output_motl_type is 'relion'.\n"
+                             "Valid output_relion_version values are: 3.0, 3.1, 4.0, 5.0, 5.1.\n")
+
+    relion_version = float(relion_version) if relion_version is not None else None
+
+    # filter the kwargs for the output conversion function based on the output motl type and raise error if invalid kwargs are provided
+    if output_kwargs:
+        valid_kwargs = motl_type_to_kwargs.get(output_motl_type, [])
+        invalid_kwargs = [kwarg for kwarg in output_kwargs if kwarg not in valid_kwargs]
+        if invalid_kwargs:
+            raise ValueError(f"Got invalid output kwargs {invalid_kwargs} for output_motl_type {output_motl_type}. "
+                             f"Valid kwargs for this motl type are: {valid_kwargs}")
+        
+    # perform the conversion based on the output motl type
+    output_motl = Motl.load(input_motl=input_motl, motl_type="emmotl")
+
+    if output_motl_type == "emmotl":
+        if output_path is not None:
+            output_motl.write_out(output_path)
+    elif output_motl_type == "dynamo":
+        output_motl = DynamoMotl(output_motl.df)
+        if output_path is not None:
+            output_motl.write_out(output_path)
+    elif output_motl_type == "mod":
+        output_motl = emmotl2mod(output_motl.df, output_path=output_path, **{kwarg: output_kwargs[kwarg] for kwarg in motl_type_to_kwargs["mod"] if kwarg in output_kwargs})
+    elif output_motl_type == "stopgap":
+        output_motl = emmotl2stopgap(output_motl.df, output_path=output_path, **{kwarg: output_kwargs[kwarg] for kwarg in motl_type_to_kwargs["stopgap"] if kwarg in output_kwargs})
+    elif output_motl_type in ["relion", "relion5", "relion5_1"]:
+        output_motl = emmotl2relion(output_motl.df, relion_version=relion_version, output_path=output_path, **{kwarg: output_kwargs[kwarg] for kwarg in motl_type_to_kwargs["relion"] if kwarg in output_kwargs}) 
+
+    return output_motl

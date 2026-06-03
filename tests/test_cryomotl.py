@@ -5699,3 +5699,58 @@ class TestRelionMotlv5:
         })
         pd.testing.assert_frame_equal(optics_df, expected_df)
 
+
+class TestMotlConverterKwargs:
+
+    @pytest.mark.parametrize("output_motl_type", ["random_type", "relion"])
+    def test_raise_error(self, sample_motl_data1, output_motl_type):
+        with pytest.raises(ValueError):
+            cryomotl.motl_converter_kwargs(sample_motl_data1, output_motl_type=output_motl_type)
+    
+    @pytest.mark.parametrize("output_motl_type", ["relion5_1", "emmotl"])
+    def test_warning_relion_version(self, sample_motl_data1, output_motl_type):
+        with pytest.warns(UserWarning):
+            # test two cases for warning
+            cryomotl.motl_converter_kwargs(sample_motl_data1, output_motl_type=output_motl_type, relion_version="3.0")
+            #assert isinstance(rln_motl5_1, RelionMotl)
+            #assert rln_motl5_1.version == "5.1"
+
+    
+    @pytest.mark.parametrize("output_motl_type, relion_version, output_kwargs", [
+            ("emmotl", None, {"flip_handedness": True}),
+            ("mod", None, {"load_kwargs":{"pixel_size":4.828, "binning": 2}, "tomo_dim": (4000, 4000, 2000)}),
+            ("stopgap", None, {"load_kwargs":{"pixel_size":4.828, "binning": 2}, "tomo_dim": (4000, 4000, 2000)}),
+            ("dynamo", None, {"load_kwargs":{"pixel_size":4.828, "binning": 2}, "tomo_dim": (4000, 4000, 2000)}),
+            ("relion", "3.1", {"mod_prefix": "rand"})                  
+            ])
+    def test_raise_error_invalid_kwargs(self, sample_motl_data1, output_motl_type, relion_version, output_kwargs):
+        with pytest.raises(ValueError, match=f"Got invalid output kwargs"):
+            cryomotl.motl_converter_kwargs(sample_motl_data1, output_motl_type=output_motl_type, relion_version=relion_version, **output_kwargs)
+    
+
+    @pytest.mark.parametrize("output_motl_type, relion_version, expected_output_motl_type", [
+        ("emmotl", None, EmMotl),
+        ("mod", None, ModMotl),
+        ("stopgap", None, StopgapMotl),
+        ("dynamo", None, DynamoMotl),
+        ("relion", "3.1", RelionMotl),
+        ("relion5_1", "3.0", RelionMotl)
+    ])
+    def test_conversion(self, sample_motl_data1, output_motl_type, relion_version, expected_output_motl_type):
+        output_motl = cryomotl.motl_converter_kwargs(sample_motl_data1, output_motl_type=output_motl_type, relion_version=relion_version)
+        assert isinstance(output_motl, expected_output_motl_type)
+    
+
+
+
+    
+            
+    
+
+
+
+
+
+
+
+#motl = Motl(copy.deepcopy(sample_motl_data1))
