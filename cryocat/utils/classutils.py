@@ -314,6 +314,18 @@ def resolve_param_type(annotation) -> tuple[str, dict]:
     if origin is typing.Literal:
         return ("Literal", {"choices": list(typing.get_args(annotation))})
 
+    # tuple[float, ...] / tuple[float, float] / tuple[int, int] — fixed-length
+    # numeric tuple. We surface this as a composite "Tuple" widget so the form
+    # renders one number field per slot and the parser builds a python tuple.
+    # The element type and length come from the annotation's args.
+    if origin in (tuple,):
+        args = list(typing.get_args(annotation))
+        # Reject heterogeneous / Ellipsis tuples — they'd need a different
+        # widget. Fall through to str for now (so behavior is unchanged for
+        # anything we don't explicitly support).
+        if args and Ellipsis not in args and len(set(args)) == 1 and args[0] in (int, float):
+            return ("Tuple", {"length": len(args), "elem": args[0].__name__})
+
     # Subscripted PEP-695 alias, e.g. ListLike[int] — origin is the alias itself.
     if isinstance(origin, typing.TypeAliasType) and origin.__name__ in _ALIAS_TAGS:
         return (origin.__name__, {})
@@ -421,6 +433,31 @@ def _parse_literal(v, choices=None):
     return v
 
 
+def _parse_tuple(v, elem: str = "float"):
+    """Composite fixed-length numeric tuple field.
+
+    The formgen widget renders one number input per slot and stores the slots
+    as a list under a single id (see :func:`cryocat.app.formgen._tuple_field`).
+    This parser coerces that list to a Python tuple with the requested element
+    type. ``None`` / empty / mismatched-length payloads return ``None`` so the
+    function falls back to its default.
+    """
+    if v is None or v == "":
+        return None
+    if not isinstance(v, (list, tuple)) or len(v) == 0:
+        return None
+    coerced = []
+    cast = float if elem == "float" else int
+    for item in v:
+        if item is None or item == "":
+            return None
+        try:
+            coerced.append(cast(item))
+        except (TypeError, ValueError):
+            return None
+    return tuple(coerced)
+
+
 # argparse ``type=`` helpers (CLI string -> python value).
 def _parse_str(v):
     """GUI text field -> str. None stays None (not converted to the string 'None')."""
@@ -462,6 +499,7 @@ TYPE_HANDLERS = {
     "Symmetry":       {"widget": "text",     "parse": _parse_str,      "argparse": {"type": str}},
     "RotationLike":   {"widget": "rotation", "parse": _parse_str,      "argparse": {"type": str}},
     "Literal":        {"widget": "dropdown", "parse": _parse_literal,  "argparse": {"type": str}},
+    "Tuple":          {"widget": "tuple",    "parse": _parse_tuple,    "argparse": {"type": _arg_listlike}},
     "bool":           {"widget": "bool",     "parse": _parse_bool,     "argparse": {"type": _arg_bool}},
     "int":            {"widget": "number",   "parse": _parse_int,      "argparse": {"type": int}},
     "float":          {"widget": "number",   "parse": _parse_float,    "argparse": {"type": float}},

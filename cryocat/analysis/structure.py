@@ -17,7 +17,8 @@ from cryocat.utils import geom
 from cryocat.utils import mathutils
 from cryocat.analysis import nnana
 from cryocat.utils import ioutils
-from cryocat._types import PathOrStr
+from cryocat._types import MotlColumn, PathOrStr, TomoDimensions
+from cryocat.core.cryomotl import MotlSource
 from cryocat.core.surface import (
     Surface,
     DiscreteSurface,
@@ -28,7 +29,7 @@ from cryocat.core.surface import (
     Ellipsoid,
     QuadricsM,
 )
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Literal, Sequence
 
 # =============================================================================
 # Chain — generic linear-chain analysis on traced particles
@@ -1378,7 +1379,12 @@ class PleomorphicSurface:
             return None
         return PleomorphicSurface(out)
 
-    def extract_region(self, indices: np.ndarray, element: str = "triangles", **kwargs) -> "PleomorphicSurface":
+    def extract_region(
+        self,
+        indices: np.ndarray,
+        element: Literal["triangles", "points", "mask"] = "triangles",
+        preserve_curvatures: bool = True,
+    ) -> "PleomorphicSurface":
         """
         Extract an indexed subregion from the wrapped surface.
 
@@ -1391,34 +1397,42 @@ class PleomorphicSurface:
         indices : np.ndarray
             Integer indices of the elements to keep, or a boolean mask when
             ``element='mask'``.
-        element : str, default='triangles'
+        element : {'triangles', 'points', 'mask'}, default='triangles'
             Which surface primitive ``indices`` refers to:
 
             - ``'triangles'`` (Mesh only): select by triangle index.
             - ``'points'`` (OrientedPointCloud only): select by point index.
             - ``'mask'`` (OrientedPointCloud only): boolean selection mask.
-
-        **kwargs
-            Forwarded to :meth:`Mesh.extract_submesh` or
-            :meth:`OrientedPointCloud.extract_points`.
+        preserve_curvatures : bool, default=True
+            Mesh only — when True, per-vertex curvature fields are copied to
+            the extracted submesh. Ignored for point clouds.
 
         Returns
         -------
         PleomorphicSurface
             New wrapper containing only the extracted elements.
+
+        Raises
+        ------
+        ValueError
+            If ``element`` is not valid for the wrapped surface's representation
+            (e.g. ``'triangles'`` on an OrientedPointCloud).
+        TypeError
+            If the wrapped surface is neither :class:`Mesh` nor
+            :class:`OrientedPointCloud`.
         """
         element = str(element).lower()
         if isinstance(self.surface, Mesh):
             if element not in ("triangle", "triangles"):
                 raise ValueError("Mesh subregions currently support element='triangles'")
-            out = self.surface.extract_submesh(indices, **kwargs)
+            out = self.surface.extract_submesh(indices, preserve_curvatures=preserve_curvatures)
             return PleomorphicSurface(out)
 
         if isinstance(self.surface, OrientedPointCloud):
             if element in ("point", "points"):
-                out = self.surface.extract_points(point_ids=indices, **kwargs)
+                out = self.surface.extract_points(point_ids=indices)
             elif element == "mask":
-                out = self.surface.extract_points(mask=indices, **kwargs)
+                out = self.surface.extract_points(mask=indices)
             else:
                 raise ValueError("Point-cloud subregions support element='points' or element='mask'")
             return PleomorphicSurface(out)
@@ -1745,18 +1759,20 @@ class PleomorphicSurface:
             triangle_id, radius, use_kdtree=use_kdtree
         )
 
-    def ray_intersections(self,
-                                rays: np.ndarray,
-                                one_hit_per_target: bool = False,
-                                knn_radius: float = 10.0,
-                                return_orientations: bool = False,
-                                target_orientation: str | Callable = 'normal') -> dict:
+    def ray_intersections(
+        self,
+        rays: np.ndarray,
+        one_hit_per_target: bool = False,
+        knn_radius: float = 10.0,
+        return_orientations: bool = False,
+        target_orientation: Literal["normal", "principal_1", "principal_2"] | Callable = "normal",
+    ) -> dict:
         """
         Compute ray intersections with this surface.
-        
+
         For meshes, uses Open3D's exact raycasting. For oriented point clouds,
         uses KDTree-based nearest neighbor search along ray trajectories.
-        
+
         Parameters
         ----------
         rays : np.ndarray, shape (N, 6)
@@ -1768,13 +1784,13 @@ class PleomorphicSurface:
             For OrientedPointCloud only: maximum search radius for finding
             nearest points along ray trajectory
         return_orientations : bool, default=False
-            If True, compute relative orientations between ray directions and 
+            If True, compute relative orientations between ray directions and
             surface orientations at hit points. Returns additional fields:
             - 'ray_directions': normalized ray direction vectors
             - 'surface_orientations': orientation vectors at hit points
             - 'angles_deg': angles in degrees between ray and surface orientation
             - 'dot_products': dot products (cosine of angle)
-        target_orientation : str or callable, default='normal'
+        target_orientation : {'normal', 'principal_1', 'principal_2'} or callable, default='normal'
             Which orientation to use for comparison. Options:
             
             For OrientedPointCloud:
@@ -2339,15 +2355,15 @@ class PleomorphicSurface:
     def intersection_data(
         self,
         result: dict[str, Any],
-        query_type: str | None = None,
+        query_type: Literal["ray", "distance_to_pointcloud"] | None = None,
         min_distance_source_target: float | None = None,
         max_distance_source_target: float | None = None,
         source_id_name: str = "source_id",
         target_id_name: str = "target_id",
         include_curvatures: bool = True,
         surface_radii: list[float] | None = None,
-        surface_element: str | None = None,
-        surface_seeds: str = "auto",
+        surface_element: Literal["triangles", "vertices", "points"] | None = None,
+        surface_seeds: Literal["auto", "hit_sources", "hit_targets"] = "auto",
         use_kdtree: bool = True,
     ) -> dict[str, Any]:
         """
@@ -2362,9 +2378,10 @@ class PleomorphicSurface:
         ----------
         result : dict
             Output of :meth:`ray_intersections` or :meth:`distance_to_pointcloud`.
-        query_type : str, optional
-            ``'ray'`` or ``'distance_to_pointcloud'``. Inferred from ``result`` when
-            omitted.
+        query_type : {'ray', 'distance_to_pointcloud'}, optional
+            Inferred from ``result`` when omitted. The body also accepts a small
+            set of aliases (``'rays'``, ``'distance'``, ``'pointcloud'``,
+            ``'distance_to_point_cloud'``) for backward compatibility.
         min_distance_source_target, max_distance_source_target : float, optional
             Keep hits whose source-target distance lies in this interval.
         source_id_name, target_id_name : str
@@ -2373,13 +2390,11 @@ class PleomorphicSurface:
             Attach curvature columns for mesh-backed ``self``.
         surface_radii : sequence of float, optional
             Radii for cumulative regions around hit seeds on ``self``.
-        surface_element : str, optional
-            ``'triangles'``, ``'vertices'`` (mesh only), or ``'points'`` (point cloud
-            only). Defaults: ray+mesh → triangles; distance+mesh → vertices;
-            point cloud → points.
-        surface_seeds : str, default='auto'
-            Which hit IDs seed expansion: ``'auto'``, ``'hit_sources'``, or
-            ``'hit_targets'``.
+        surface_element : {'triangles', 'vertices', 'points'}, optional
+            Defaults: ray+mesh → triangles; distance+mesh → vertices; point
+            cloud → points.
+        surface_seeds : {'auto', 'hit_sources', 'hit_targets'}, default='auto'
+            Which hit IDs seed expansion.
         use_kdtree : bool, default=True
             Passed to mesh triangle expansion.
 
@@ -2499,52 +2514,66 @@ class ParametricSurface:
     ----------
     quadrics : QuadricsM
         Already-constructed container of analytic surfaces.
-    feature_id : str
-        Column name used as the surface-object identifier.
+    column_name : MotlColumn, default='object_id'
+        Column name used as the surface-object identifier (one fitted surface
+        per unique ``(tomo_id, column_name)`` group). Per the column-naming
+        convention this is :data:`cryocat._types.MotlColumn`.
     """
 
-    def __init__(self, quadrics: QuadricsM, feature_id: str = "object_id"):
+    def __init__(self, quadrics: QuadricsM, column_name: MotlColumn = "object_id"):
         self.quadrics = quadrics
-        self.feature_id = feature_id
+        self.column_name = column_name
 
     @classmethod
-    def from_motl(cls, input_motl, surface_type: str = "ellipsoid", feature_id: str = "object_id") -> "ParametricSurface":
+    def from_motl(
+        cls,
+        input_motl: MotlSource,
+        surface_type: Literal["ellipsoid"] = "ellipsoid",
+        column_name: MotlColumn = "object_id",
+    ) -> "ParametricSurface":
         """Fit analytic surfaces to particle groups and return a ParametricSurface.
 
         Parameters
         ----------
-        input_motl : str or Motl
-            Input particle list.  One surface is fitted per unique
-            ``(tomo_id, feature_id)`` group.
-        surface_type : str, default='ellipsoid'
-            Quadric type; currently only ``'ellipsoid'`` is supported.
-        feature_id : str, default='object_id'
+        input_motl : MotlSource
+            Input particle list. One surface is fitted per unique
+            ``(tomo_id, column_name)`` group.
+        surface_type : {'ellipsoid'}, default='ellipsoid'
+            Quadric type; currently only ellipsoid is supported.
+        column_name : MotlColumn, default='object_id'
             Column used to group particles.
 
         Returns
         -------
         ParametricSurface
         """
-        quadrics = QuadricsM(input_motl, quadric=surface_type, feature_id=feature_id)
-        return cls(quadrics, feature_id=feature_id)
+        quadrics = QuadricsM(input_motl, quadric=surface_type, feature_id=column_name)
+        return cls(quadrics, column_name=column_name)
 
     @classmethod
-    def from_csv(cls, path: str, surface_type: str = "ellipsoid", feature_id: str = "object_id") -> "ParametricSurface":
+    def from_csv(
+        cls,
+        path: PathOrStr,
+        surface_type: Literal["ellipsoid"] = "ellipsoid",
+        column_name: MotlColumn = "object_id",
+    ) -> "ParametricSurface":
         """Load analytic surface parameters from a CSV file.
 
         Parameters
         ----------
-        path : str
+        path : PathOrStr
             Path to a CSV produced by :meth:`write_out`.
-        surface_type : str, default='ellipsoid'
-        feature_id : str, default='object_id'
+        surface_type : {'ellipsoid'}, default='ellipsoid'
+            Quadric type to materialise.
+        column_name : MotlColumn, default='object_id'
+            Surface-object identifier column the file is keyed on.
 
         Returns
         -------
         ParametricSurface
         """
-        quadrics = QuadricsM(path, quadric=surface_type, feature_id=feature_id)
-        return cls(quadrics, feature_id=feature_id)
+        quadrics = QuadricsM(path, quadric=surface_type, feature_id=column_name)
+        return cls(quadrics, column_name=column_name)
 
     def write_out(self, output_path: PathOrStr) -> None:
         """Write the surface parameter table to *output_path* as CSV.
@@ -2558,35 +2587,35 @@ class ParametricSurface:
 
     def compute_point_surface_distance(
         self,
-        input_motl,
-        output_path=None,
-        store_id: str = "geom4",
+        input_motl: MotlSource,
+        output_path: PathOrStr | None = None,
+        store_column_name: MotlColumn = "geom4",
     ):
         """Compute the shortest distance from each particle to its assigned surface.
 
         Parameters
         ----------
-        input_motl : str or Motl
-            Particles with ``feature_id`` already assigned.
-        output_path : str, optional
+        input_motl : MotlSource
+            Particles with ``self.column_name`` already assigned.
+        output_path : PathOrStr, optional
             Path to save the result.
-        store_id : str, default='geom4'
+        store_column_name : MotlColumn, default='geom4'
             Column that receives the distance values.
 
         Returns
         -------
         Motl
-            Input motl with ``store_id`` populated.
+            Input motl with ``store_column_name`` populated.
         """
         in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(column_name=self.feature_id)
+        features = in_motl.get_unique_values(column_name=self.column_name)
         assigned_motl_df = pd.DataFrame()
 
         for f in features:
-            fm = in_motl.get_motl_subset(column_values=f, column_name=self.feature_id, reset_index=True)
+            fm = in_motl.get_motl_subset(column_values=f, column_name=self.column_name, reset_index=True)
             coord = fm.get_coordinates()
             tomo_id = fm.df["tomo_id"].values[0]
-            fm.df[store_id] = self.quadrics.distance_point_surface(tomo_id, f, coord)
+            fm.df[store_column_name] = self.quadrics.distance_point_surface(tomo_id, f, coord)
             assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
 
         assigned_motl = cryomotl.Motl(assigned_motl_df)
@@ -2597,32 +2626,33 @@ class ParametricSurface:
 
     def assign_affiliation_distance_based(
         self,
-        input_motl,
-        output_path=None,
-        unassigned_value=None,
+        input_motl: MotlSource,
+        output_path: PathOrStr | None = None,
+        unassigned_value: float | None = None,
     ):
         """Assign each particle to the nearest surface centre.
 
         Parameters
         ----------
-        input_motl : str or Motl
+        input_motl : MotlSource
             Particles to assign.
-        output_path : str, optional
+        output_path : PathOrStr, optional
             Path to save the result.
-        unassigned_value : scalar, optional
-            When provided, only particles whose current ``feature_id`` equals
-            this value are re-assigned; the rest are kept unchanged.
+        unassigned_value : float, optional
+            When provided, only particles whose current ``self.column_name``
+            value equals this value are re-assigned; the rest are kept
+            unchanged.
 
         Returns
         -------
         Motl
-            Motl with ``feature_id`` updated.
+            Motl with ``self.column_name`` updated.
         """
         in_motl = cryomotl.Motl.load(input_motl)
 
         if unassigned_value is not None:
             assigned_motl = cryomotl.Motl(in_motl.df)
-            in_motl.df = in_motl.df[in_motl.df[self.feature_id] == unassigned_value]
+            in_motl.df = in_motl.df[in_motl.df[self.column_name] == unassigned_value]
             in_motl.df.reset_index(drop=True, inplace=True)
 
         tomos = in_motl.get_unique_values(column_name="tomo_id")
@@ -2632,11 +2662,11 @@ class ParametricSurface:
             tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id", reset_index=True)
             coord = tm.get_coordinates()
             closest_ids = self.quadrics.find_closest_quadric(t, coord)
-            tm.df[self.feature_id] = closest_ids
+            tm.df[self.column_name] = closest_ids
             assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
 
         if unassigned_value is not None:
-            assigned_motl.df.loc[assigned_motl.df[self.feature_id] == unassigned_value, :] = assigned_motl_df.values
+            assigned_motl.df.loc[assigned_motl.df[self.column_name] == unassigned_value, :] = assigned_motl_df.values
         else:
             assigned_motl = cryomotl.Motl(assigned_motl_df)
 
@@ -2649,30 +2679,31 @@ class ParametricSurface:
 
     def assign_affiliation_intersection_based(
         self,
-        input_motl,
-        output_path=None,
+        input_motl: MotlSource,
+        output_path: PathOrStr | None = None,
         keep_unassigned: bool = True,
     ):
         """Assign each particle to the surface it points toward (ray casting).
 
-        A ray is cast along the negated particle normal.  The particle is
+        A ray is cast along the negated particle normal. The particle is
         labelled with the identifier of the surface whose intersection is
-        closest along that ray.  Particles that lie inside a surface or have
+        closest along that ray. Particles that lie inside a surface or have
         no valid intersection receive ``-1``.
 
         Parameters
         ----------
-        input_motl : str or Motl
-            Particles to assign.  Euler angles are used to derive normals.
-        output_path : str, optional
+        input_motl : MotlSource
+            Particles to assign. Euler angles are used to derive normals.
+        output_path : PathOrStr, optional
             Path to save the result.
         keep_unassigned : bool, default=True
-            When ``False``, particles with ``feature_id == -1`` are removed.
+            When ``False``, particles whose ``self.column_name`` is ``-1``
+            are removed.
 
         Returns
         -------
         Motl
-            Motl with ``feature_id`` updated.
+            Motl with ``self.column_name`` updated.
         """
         in_motl = cryomotl.Motl.load(input_motl)
         tomos = in_motl.get_unique_values(column_name="tomo_id")
@@ -2704,13 +2735,13 @@ class ParametricSurface:
                             closest_distances[i] = d
                             closest_ids[i] = fid
 
-            tm.df[self.feature_id] = closest_ids
+            tm.df[self.column_name] = closest_ids
             assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
 
-        unassigned = assigned_motl_df[assigned_motl_df[self.feature_id] == -1].shape[0]
+        unassigned = assigned_motl_df[assigned_motl_df[self.column_name] == -1].shape[0]
 
         if not keep_unassigned:
-            assigned_motl_df = assigned_motl_df[assigned_motl_df[self.feature_id] != -1]
+            assigned_motl_df = assigned_motl_df[assigned_motl_df[self.column_name] != -1]
 
         assigned_motl_df.reset_index(drop=True, inplace=True)
         assigned_motl = cryomotl.Motl(assigned_motl_df)
@@ -2719,8 +2750,8 @@ class ParametricSurface:
             assigned_motl.write_out(output_path)
         return assigned_motl
 
-    def compute_intersection(self, input_motl):
-        """Compute ray–ellipsoid intersection distances for each particle.
+    def compute_intersection(self, input_motl: MotlSource) -> pd.DataFrame:
+        """Compute ray-ellipsoid intersection distances for each particle.
 
         For every particle a ray is cast along ``-euler_angles_to_normals``
         and the two intersection distances with the assigned ellipsoid are
@@ -2728,20 +2759,20 @@ class ParametricSurface:
 
         Parameters
         ----------
-        input_motl : str or Motl
-            Particles grouped by ``feature_id``.
+        input_motl : MotlSource
+            Particles grouped by ``self.column_name``.
 
         Returns
         -------
         pandas.DataFrame
-            Columns: ``subtomo_id``, ``feature_id``, ``d1``, ``d2``.
+            Columns: ``subtomo_id``, ``<self.column_name>``, ``d1``, ``d2``.
         """
         in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(column_name=self.feature_id)
-        intersection_points = pd.DataFrame(columns=["subtomo_id", self.feature_id, "d1", "d2"])
+        features = in_motl.get_unique_values(column_name=self.column_name)
+        intersection_points = pd.DataFrame(columns=["subtomo_id", self.column_name, "d1", "d2"])
 
         for f in features:
-            fm = in_motl.get_motl_subset(column_values=f, column_name=self.feature_id, reset_index=True)
+            fm = in_motl.get_motl_subset(column_values=f, column_name=self.column_name, reset_index=True)
             coord = fm.get_coordinates()
             normal_vectors = -geom.euler_angles_to_normals(fm.get_angles())
             tomo_id = fm.df["tomo_id"].values[0]
@@ -2753,43 +2784,43 @@ class ParametricSurface:
                 _, _, d1, d2, _ = geom.ray_ellipsoid_intersection_3d(
                     coord[i, :], normal_vectors[i, :], params_array
                 )
-                new_row = pd.Series({"subtomo_id": fm.df.iloc[i]["subtomo_id"], self.feature_id: f, "d1": d1, "d2": d2})
+                new_row = pd.Series({"subtomo_id": fm.df.iloc[i]["subtomo_id"], self.column_name: f, "d1": d1, "d2": d2})
                 intersection_points = pd.concat([intersection_points, new_row.to_frame().T], ignore_index=True)
 
         return intersection_points
 
     def compute_normals_angle(
         self,
-        input_motl,
-        store_id: str = "geom4",
-        output_path=None,
+        input_motl: MotlSource,
+        store_column_name: MotlColumn = "geom4",
+        output_path: PathOrStr | None = None,
     ):
         """Compute the angle between each particle's orientation and the ellipsoid radial normal.
 
-        The radial normal is the vector from the fitted ellipsoid centre to the
-        particle.  The stored value is the angle (degrees) between that vector
-        and the particle's orientation normal.
+        The radial normal is the vector from the fitted ellipsoid centre to
+        the particle. The stored value is the angle (degrees) between that
+        vector and the particle's orientation normal.
 
         Parameters
         ----------
-        input_motl : str or Motl
-            Particles grouped by ``feature_id``.
-        store_id : str, default='geom4'
+        input_motl : MotlSource
+            Particles grouped by ``self.column_name``.
+        store_column_name : MotlColumn, default='geom4'
             Column that receives the angle values.
-        output_path : str, optional
+        output_path : PathOrStr, optional
             Path to save the result.
 
         Returns
         -------
         Motl
-            Input motl with ``store_id`` populated.
+            Input motl with ``store_column_name`` populated.
         """
         in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(column_name=self.feature_id)
+        features = in_motl.get_unique_values(column_name=self.column_name)
         assigned_motl_df = pd.DataFrame()
 
         for f in features:
-            fm = in_motl.get_motl_subset(column_values=f, column_name=self.feature_id, reset_index=True)
+            fm = in_motl.get_motl_subset(column_values=f, column_name=self.column_name, reset_index=True)
             coord = fm.get_coordinates()
             normals = geom.euler_angles_to_normals(fm.get_angles())
             tomo_id = fm.df["tomo_id"].values[0]
@@ -2799,7 +2830,7 @@ class ParametricSurface:
                 continue
             center = self.quadrics.dict[key].center
             normals_t = coord - np.tile(center, (coord.shape[0], 1))
-            fm.df[store_id] = geom.angle_between_n_vectors(normals, normals_t)
+            fm.df[store_column_name] = geom.angle_between_n_vectors(normals, normals_t)
             assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
 
         assigned_motl_df.index = in_motl.df.index
@@ -2810,24 +2841,26 @@ class ParametricSurface:
 
     def clean_by_normals(
         self,
-        input_motl,
+        input_motl: MotlSource,
         compute_normals: bool = True,
-        normals_id: str = "geom4",
-        threshold=None,
-        output_path=None,
+        normals_id: MotlColumn = "geom4",
+        threshold: float | None = None,
+        output_path: PathOrStr | None = None,
     ):
         """Remove particles whose orientation deviates too far from the surface normal.
 
         Parameters
         ----------
-        input_motl : str or Motl
+        input_motl : MotlSource
+            Source particles.
         compute_normals : bool, default=True
-            Recompute normal angles before filtering.
-        normals_id : str, default='geom4'
+            Recompute the angle-to-normal column before filtering.
+        normals_id : MotlColumn, default='geom4'
             Column holding the angle-to-normal values.
         threshold : float, optional
-            Maximum allowed angle (degrees).  Defaults to one standard deviation.
-        output_path : str, optional
+            Maximum allowed angle (degrees). Defaults to one standard deviation.
+        output_path : PathOrStr, optional
+            Path to save the result.
 
         Returns
         -------
@@ -2837,7 +2870,7 @@ class ParametricSurface:
         orig_number = in_motl.df.shape[0]
 
         if compute_normals:
-            in_motl = self.compute_normals_angle(in_motl, store_id=normals_id)
+            in_motl = self.compute_normals_angle(in_motl, store_column_name=normals_id)
 
         diff_angles = in_motl.df[normals_id].values
         to_remove = (
@@ -2861,29 +2894,32 @@ class ParametricSurface:
 
     def clean_by_radius(
         self,
-        input_motl,
-        threshold=None,
-        output_path=None,
+        input_motl: MotlSource,
+        threshold: float | None = None,
+        output_path: PathOrStr | None = None,
     ):
         """Remove particles that lie too far from the mean ellipsoid radius.
 
         Parameters
         ----------
-        input_motl : str or Motl
+        input_motl : MotlSource
+            Source particles.
         threshold : float, optional
-            Half-width of the allowed distance band.  Defaults to one standard deviation.
-        output_path : str, optional
+            Half-width of the allowed distance band. Defaults to one standard
+            deviation.
+        output_path : PathOrStr, optional
+            Path to save the result.
 
         Returns
         -------
         Motl
         """
         in_motl = cryomotl.Motl.load(input_motl)
-        features = in_motl.get_unique_values(column_name=self.feature_id)
+        features = in_motl.get_unique_values(column_name=self.column_name)
         cleaned_motl_df = pd.DataFrame()
 
         for f in features:
-            fm = in_motl.get_motl_subset(column_values=f, column_name=self.feature_id, reset_index=True)
+            fm = in_motl.get_motl_subset(column_values=f, column_name=self.column_name, reset_index=True)
             coord = fm.get_coordinates()
             tomo_id = fm.df["tomo_id"].values[0]
             key = (tomo_id, f)
@@ -2911,31 +2947,36 @@ class ParametricSurface:
 
     @staticmethod
     def assign_affiliation_mask_based(
-        input_motl,
-        object_motl,
-        tomo_dim,
-        shell_size,
-        column_name: str = "object_id",
-        output_path=None,
+        input_motl: MotlSource,
+        object_motl: MotlSource,
+        tomo_dim: TomoDimensions,
+        shell_size: int,
+        column_name: MotlColumn = "object_id",
+        output_path: PathOrStr | None = None,
         radius_offset: float = 0.0,
-        motl_radius_id: str = "geom5",
+        motl_radius_id: MotlColumn = "geom5",
     ):
         """Assign each particle to a surface object using a spherical-shell mask.
 
         Parameters
         ----------
-        input_motl : str or Motl
-        object_motl : str or Motl
+        input_motl : MotlSource
+            Particles to assign.
+        object_motl : MotlSource
             Surface-object positions (one row per object).
-        tomo_dim : str or array-like
-            Tomogram dimensions table; see :func:`ioutils.dimensions_load`.
+        tomo_dim : TomoDimensions
+            Tomogram dimensions; normalized via :func:`ioutils.dimensions_load`.
         shell_size : int
-            Thickness of the spherical shell mask.
-        column_name : str, default='object_id'
-        output_path : str, optional
+            Thickness of the spherical shell mask in voxels.
+        column_name : MotlColumn, default='object_id'
+            Identifier column on ``input_motl`` that receives the assigned
+            object id.
+        output_path : PathOrStr, optional
+            Path to save the result.
         radius_offset : float, default=0.0
-        motl_radius_id : str, default='geom5'
-            Column in *object_motl* holding each object's radius.
+            Constant added to ``object_motl[motl_radius_id]`` to pad the shell.
+        motl_radius_id : MotlColumn, default='geom5'
+            Column in ``object_motl`` holding each object's radius.
 
         Returns
         -------
@@ -2971,24 +3012,27 @@ class ParametricSurface:
 
     @staticmethod
     def create_spherical_oversampling(
-        input_motl,
-        motl_radius_id: str,
+        input_motl: MotlSource,
+        motl_radius_id: MotlColumn,
         sampling_distance: float,
-        sampling_angle: float = 360,
-        output_path=None,
+        sampling_angle: float = 360.0,
+        output_path: PathOrStr | None = None,
     ):
         """Generate oversampled particles on a sphere around each input particle.
 
         Parameters
         ----------
-        input_motl : str or Motl
-        motl_radius_id : str
+        input_motl : MotlSource
+            Source particles (one sphere per row).
+        motl_radius_id : MotlColumn
             Column holding the sphere radius for each particle.
         sampling_distance : float
             Angular sampling step forwarded to :func:`geom.sample_cone`.
-        sampling_angle : float, default=360
-            Half-opening angle of the sampling cone.  ``360`` samples the full sphere.
-        output_path : str, optional
+        sampling_angle : float, default=360.0
+            Half-opening angle of the sampling cone. ``360`` samples the full
+            sphere.
+        output_path : PathOrStr, optional
+            Path to save the result.
 
         Returns
         -------

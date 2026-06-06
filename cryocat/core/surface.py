@@ -1999,17 +1999,20 @@ class Mesh(DiscreteSurface):
             'n_neighbors': len(neighbor_ids)
         }
     
-    def get_surface_area(self):
+    def get_surface_area(self) -> float:
         """
         Compute total surface area of the mesh.
-        
+
+        The result is in the same units as the mesh's vertices (e.g. ``nm``
+        when ``mesh.units == "nm"``).
+
         Returns
         -------
         float
-            Total surface area (sum of all face areas)
+            Total surface area (sum of all face areas).
         """
         self.compute_mesh_properties()  # Ensures _face_areas is computed
-        return np.sum(self._face_areas)
+        return float(np.sum(self._face_areas))
 
     def convex_hull(self):
         """
@@ -4103,7 +4106,7 @@ class OrientedPointCloud(DiscreteSurface):
         T[:3, :3] = rotation_matrix
         self.transform(T)
 
-    def flip_normals(self, inplace: bool = True, **kwargs):
+    def flip_normals(self, inplace: bool = True):
         """
         Reverse point-cloud normal directions.
 
@@ -4117,11 +4120,6 @@ class OrientedPointCloud(DiscreteSurface):
         OrientedPointCloud or None
             New point cloud if ``inplace=False``, otherwise ``None``.
         """
-        if kwargs:
-            raise TypeError(
-                f"OrientedPointCloud.flip_normals got unexpected keywords: {list(kwargs)!r}"
-            )
-
         target = self if inplace else copy.deepcopy(self)
         if target.normals is None:
             raise ValueError("Cannot flip normals: point cloud has no normals")
@@ -4525,18 +4523,18 @@ class OrientedPointCloud(DiscreteSurface):
             return oriented
 
     @classmethod
-    def from_mrc(cls, input_path: PathOrStr, labels_dict: dict[str, int] | None = None, pixel_size: float | np.ndarray | None = None, 
-                compute_normals: bool = True, knn: int = 30, orient_normals: bool = True, 
+    def from_mrc(cls, input_path: MapSource, labels_dict: dict[str, int] | None = None, pixel_size: float | np.ndarray | None = None,
+                compute_normals: bool = True, knn: int = 30, orient_normals: bool = True,
                 tangent_plane_knn: int = 50, transpose: bool = True, smooth_sigma: float | None = None) -> "OrientedPointCloud" | dict[str, "OrientedPointCloud"]:
         """
-        Create oriented point cloud from MRC segmentation file.
-        
+        Create oriented point cloud from a segmentation source (MRC/EM file or in-memory ndarray).
+
         Extracts coordinates from segmented pixel/voxels and estimates normals using
         local geometry. Supports both single binary segmentations and multi-label
         segmentations.
 
        Coordinate System Conventions:
-        
+
         1. Physical Units (for software expecting real-world coordinates)
             - Set `pixel_size` to the physical pixel/voxel size (e.g., `pixel_size=0.7884` for 0.7884 nm/pixel)
             - Set `sampling_distance` in the same physical units (e.g., `sampling_distance=0.55` for 0.55 nm)
@@ -4546,11 +4544,12 @@ class OrientedPointCloud(DiscreteSurface):
             - Set `pixel_size=1` (normalized)
             - Set `sampling_distance` in pixel/voxel units (e.g., scaling factor `sampling_distance=55/7.84`)
             - Output coordinates are in pixel/voxel units
-        
+
         Parameters
         ----------
-        input_path : str
-            Path to MRC segmentation file
+        input_path : MapSource
+            Segmentation source: path to MRC/EM file or an already-loaded ndarray.
+            Loaded via :func:`cryocat.core.cryomap.read`.
         labels_dict : dict, optional
             Dictionary mapping membrane names to label values.
             If None, treats as binary segmentation (any non-zero pixel/voxel).
@@ -4709,7 +4708,16 @@ class OrientedPointCloud(DiscreteSurface):
             pcd_o3d.normals = o3d.utility.Vector3dVector(self.normals)
         return pcd_o3d
 
-    def save(self, output_path: PathOrStr, format: str | None = None, **kwargs):
+    def save(
+        self,
+        output_path: PathOrStr,
+        format: str | None = None,
+        *,
+        write_ascii: bool = False,
+        input_dict: dict[str, Any] | None = None,
+        subtomo_ids: np.ndarray | None = None,
+        tomo_id: int | float | np.ndarray | None = None,
+    ):
         """
         Save oriented point cloud to a supported output format.
 
@@ -4721,69 +4729,82 @@ class OrientedPointCloud(DiscreteSurface):
             Output format. If None, inferred from the file suffix. Supported values:
             - 'ply': point cloud geometry (with normals when present)
             - 'motl' or 'em': motive list using normals as orientations
-        **kwargs
-            Forwarded to the selected format helper:
-
-            *PLY* (``format='ply'``):
-
-            - ``write_ascii`` : bool, default=False — write ASCII rather than binary PLY.
-
-            *MOTL / EM* (``format='motl'`` or ``'em'``):
-
-            - ``input_dict`` : dict, optional — extra motive-list columns to fill.
-            - ``subtomo_ids`` : array-like, shape (N,), optional — per-point subtomogram IDs;
-              sequential IDs (1, 2, …) are assigned when None.
-            - ``tomo_id`` : int, float, or array-like, optional — tomogram ID; scalar applies
-              to all points, array assigns per-point IDs.
+        write_ascii : bool, default=False
+            *PLY only* — write ASCII rather than binary PLY. Ignored for motl/em.
+        input_dict : dict, optional
+            *Motl/EM only* — extra motive-list columns to fill.
+        subtomo_ids : array-like, shape (N,), optional
+            *Motl/EM only* — per-point subtomogram IDs; sequential IDs (1, 2, …)
+            are assigned when None.
+        tomo_id : int, float, or array-like, optional
+            *Motl/EM only* — tomogram ID; scalar applies to all points, array
+            assigns per-point IDs.
 
         Returns
         -------
         None
+
+        Raises
+        ------
+        ValueError
+            If ``format`` (or the inferred suffix) is not one of ``"ply"``,
+            ``"motl"``, ``"em"``.
         """
         output_path = Path(output_path)
         fmt = output_path.suffix.lower().lstrip(".") if format is None else str(format).lower()
 
         if fmt == "ply":
-            return self._save_as_ply(output_path, **kwargs)
+            return self._save_as_ply(output_path, write_ascii=write_ascii)
         if fmt in ("motl", "em"):
-            return self._save_as_motl(output_path, **kwargs)
+            return self._save_as_motl(
+                output_path,
+                input_dict=input_dict,
+                subtomo_ids=subtomo_ids,
+                tomo_id=tomo_id,
+            )
         raise ValueError(
             f"Unsupported point-cloud save format '{fmt}'. Use 'ply', 'motl', or 'em'."
         )
 
-    def _save_as_motl(self, output_path: PathOrStr, input_dict: dict[str, Any] | None = None, subtomo_ids: np.ndarray | None = None, tomo_id: int | float | np.ndarray | None = None):
-        """
-        Save oriented point cloud as motl file.
-        
+    def to_motl(
+        self,
+        input_dict: dict[str, Any] | None = None,
+        subtomo_ids: np.ndarray | None = None,
+        tomo_id: int | float | np.ndarray | None = None,
+    ) -> "cryomotl.Motl":
+        """Build a :class:`cryocat.core.cryomotl.Motl` from this point cloud.
+
+        The vertices become ``coord``; the normals are converted to zxz Euler
+        angles via :func:`cryocat.utils.geom.normals_to_euler_angles`; class is
+        set to ``1.0``; ``subtomo_id`` is either taken from ``subtomo_ids``
+        (mapped to sequential per-object IDs) or assigned sequentially; and
+        ``tomo_id`` is set from the scalar/array argument when given.
+
         Parameters
         ----------
-        output_path : str
-            Output path for motl file
         input_dict : dict, optional
-            Additional motl columns to fill
-        subtomo_ids : array-like, optional
-            Subtomo IDs for each point.
-            If None, sequential IDs are assigned (1, 2, 3, ...).
-            Shape should be (N,) where N is the number of vertices.
+            Extra motive-list columns to fill via :meth:`Motl.fill`. The set of
+            keys covered by the dedicated parameters above is forbidden.
+        subtomo_ids : array-like of shape (N,), optional
+            Per-point subtomogram IDs; sequential IDs (1..N) are assigned when
+            None.
         tomo_id : int, float, or array-like, optional
-            Tomogram ID for all points or per point.
-            - If scalar (int or float): Same tomo_id for all points
-            - If array-like: Different tomo_id for each point (shape should be (N,))
-            - If None: tomo_id defaults to 0.0 (standard motl default)
+            Tomogram ID; scalar applies to all points, array assigns per-point
+            IDs (must be shape (N,)).
+
+        Returns
+        -------
+        cryocat.core.cryomotl.Motl
+            A fresh motl with N rows where N = ``len(self.vertices)``.
         """
         # Convert normals to Euler angles (zxz convention)
         angles = geom.normals_to_euler_angles(self.normals)
-        
-        # Create motl
+
         motl = cryomotl.Motl()
-        
-        # Fill coordinates and angles
         motl.fill({"coord": self.vertices})
         motl.fill({"angles": angles})  # phi, theta, psi
-        
-        # Set default values
         motl.df["class"] = 1.0
-        
+
         # Assign subtomo_id based on object grouping or sequential
         if subtomo_ids is not None:
             subtomo_ids = np.asarray(subtomo_ids)
@@ -4791,46 +4812,53 @@ class OrientedPointCloud(DiscreteSurface):
                 raise ValueError(
                     f"subtomo_ids length ({len(subtomo_ids)}) must match number of vertices ({len(self.vertices)})"
                 )
-            
             # Map unique object IDs to sequential subtomo_ids (1, 2, 3, ...)
-            unique_objects, inverse_indices = np.unique(subtomo_ids, return_inverse=True)
-            # Assign sequential subtomo_id starting from 1 for each unique object
+            _, inverse_indices = np.unique(subtomo_ids, return_inverse=True)
             motl.df["subtomo_id"] = (inverse_indices + 1).astype(float)
         else:
-            # Default: sequential IDs for each point
             motl.df["subtomo_id"] = np.arange(1, len(self.vertices) + 1, dtype=float)
-        
-        # Assign tomo_id
+
         if tomo_id is not None:
             tomo_id_array = np.asarray(tomo_id)
             if tomo_id_array.ndim == 0:
-                # Scalar: same tomo_id for all points
                 motl.df["tomo_id"] = float(tomo_id_array)
             else:
-                # Array: different tomo_id per point
                 if len(tomo_id_array) != len(self.vertices):
                     raise ValueError(
                         f"tomo_id length ({len(tomo_id_array)}) must match number of vertices ({len(self.vertices)})"
                     )
                 motl.df["tomo_id"] = tomo_id_array.astype(float)
-        
-        # Fill additional columns
+
         if input_dict is not None:
-            # Prevent overwriting coordinates, angles, and now tomo_id/subtomo_id if set
             forbidden_keys = {"x", "y", "z", "coord", "phi", "theta", "psi", "angles"}
             if tomo_id is not None:
                 forbidden_keys.add("tomo_id")
             if subtomo_ids is not None:
                 forbidden_keys.add("subtomo_id")
-            
             if forbidden_keys.intersection(input_dict.keys()):
                 raise ValueError(
                     "Coordinates, angles, tomo_id, and subtomo_id are set by dedicated parameters. "
                     "Cannot override these fields via input_dict."
                 )
             motl.fill(input_dict)
-        
-        # Write out
+
+        return motl
+
+    def _save_as_motl(self, output_path: PathOrStr, input_dict: dict[str, Any] | None = None, subtomo_ids: np.ndarray | None = None, tomo_id: int | float | np.ndarray | None = None):
+        """Save oriented point cloud as a motl file (thin wrapper over :meth:`to_motl`).
+
+        Parameters
+        ----------
+        output_path : str
+            Output path for motl file
+        input_dict : dict, optional
+            Additional motl columns to fill
+        subtomo_ids : array-like, optional
+            Subtomo IDs for each point (see :meth:`to_motl`).
+        tomo_id : int, float, or array-like, optional
+            Tomogram ID for all points or per point (see :meth:`to_motl`).
+        """
+        motl = self.to_motl(input_dict=input_dict, subtomo_ids=subtomo_ids, tomo_id=tomo_id)
         motl.write_out(output_path)
         print(f"Saved {len(self.vertices)} points with normals to {output_path}")
     

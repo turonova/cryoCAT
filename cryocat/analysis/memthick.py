@@ -1582,7 +1582,7 @@ class IntensityProfileAnalyzer:
         self,
         smooth_sigma_intensity_profiles: float = 0.5,
         extrema_prominence_threshold: float = 0.1,
-        minima_search_nm: tuple = (3.0, 4.0),
+        minima_search_nm: tuple[float, float] = (3.0, 4.0),
         anchor_search_nm: float = 4.0,
         mirror_anchor_slope_ratio_threshold: float = 0.5,
         mirror_anchor_max_inward_steps: int = 10,
@@ -3898,7 +3898,7 @@ def analyse_intensity_profiles(
 
 def run_full_pipeline(
     segmentation_map: MapSource,
-    output_path: PathOrStr = None,
+    output_path: PathOrStr | None = None,
     membrane_labels: dict[str, int] | None = None,
     # ── Surface extraction ────────────────────────────────────────────
     step_size_marching_cubes: int = 1,
@@ -3922,7 +3922,7 @@ def run_full_pipeline(
     pixel_size_nm: float | None = None,
     # ── Profile / boundary stage ──────────────────────────────────────
     extract_intensity_profiles: bool = True,
-    tomogram_map: MapSource = None,
+    tomogram_map: MapSource | None = None,
     profile_half_width_nm: float = 6.0,
     analyzer: "IntensityProfileAnalyzer | None" = None,
     intensity_save_profiles: bool = True,

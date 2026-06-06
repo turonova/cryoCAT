@@ -18,8 +18,8 @@ TOOLS = [
     {"id": "pana",      "label": "Peak Analysis",     "path": "/pana",      "module": "cryocat.app.suite.pages.ppana"},
     {"id": "volume",    "label": "Mask generation",   "path": "/volume",    "module": "cryocat.app.suite.pages.pvolume"},
     {"id": "utilities", "label": "Utilities",         "path": "/utilities", "module": "cryocat.app.suite.pages.putilities"},
-    # Uncomment as the page module is created (see suite_information_architecture.md §7):
-    # {"id": "structure", "label": "Structure", "path": "/structure", "module": "cryocat.app.suite.pages.pstructure"},
+    {"id": "structure", "label": "Structure",         "path": "/structure", "module": "cryocat.app.suite.pages.pstructure"},
+    {"id": "memthick",  "label": "Membrane thickness", "path": "/memthick",  "module": "cryocat.app.suite.pages.pmemthick"},
 ]
 
 # Route used when the URL is empty / root / unknown.

@@ -218,12 +218,37 @@ def generate_kwargs(ids, values):
     :func:`cryocat.app.formgen.build_form`); the matching ``TYPE_HANDLERS``
     entry's ``parse`` turns the widget value into the python value. Render and
     parse therefore read the *same* table and cannot drift.
+
+    Composite widgets (``tag == "Tuple"``) emit one control per slot, all
+    sharing the same ``param`` and carrying a ``slot`` index in the id. They
+    are collected here into a single list (sorted by slot) and handed to the
+    Tuple parser, which converts it to the requested Python tuple type.
     """
-    out = {}
+    # Pass 1: bucket composite-widget slots by param; collect everything else
+    # into a flat list to parse normally.
+    tuple_buckets: dict = {}
+    flat: list = []
     for id_, value in zip(ids, values):
+        if id_.get("tag") == "Tuple":
+            bucket = tuple_buckets.setdefault(id_["param"], {
+                "elem": id_.get("elem", "float"),
+                "slots": {},
+            })
+            bucket["slots"][int(id_["slot"])] = value
+        else:
+            flat.append((id_, value))
+
+    out = {}
+    for id_, value in flat:
         tag = id_["tag"]
         parse = TYPE_HANDLERS[tag]["parse"]
         out[id_["param"]] = parse(value, id_.get("choices")) if tag == "Literal" else parse(value)
+
+    parse_tuple = TYPE_HANDLERS["Tuple"]["parse"]
+    for param, bucket in tuple_buckets.items():
+        ordered = [bucket["slots"][k] for k in sorted(bucket["slots"])]
+        out[param] = parse_tuple(ordered, elem=bucket["elem"])
+
     return out
 
 

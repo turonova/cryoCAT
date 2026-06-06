@@ -180,6 +180,51 @@ def _rotation_field(cid, default, required, choices=None):
     )
 
 
+def _tuple_field(cid, default, required, choices=None, extra=None):
+    """Composite numeric-tuple widget.
+
+    Renders ``length`` number inputs side-by-side. Each slot is its own
+    pattern-matched control sharing the param's ``cid`` with an added
+    ``slot`` index and ``elem`` ("float" or "int") so
+    :func:`cryocat.app.apputils.generate_kwargs` can re-assemble the slots
+    into a Python tuple via :func:`cryocat.utils.classutils._parse_tuple`.
+
+    The ``extra`` dict comes from :func:`cryocat.utils.classutils.resolve_param_type`
+    (``{"length": int, "elem": "float" | "int"}``) — we pull length and elem
+    from there so the resolver and the form stay in sync.
+    """
+    length = int((extra or {}).get("length", 2))
+    elem = str((extra or {}).get("elem", "float"))
+    if _empty(default):
+        slot_vals: list = [None] * length
+    elif isinstance(default, (list, tuple)):
+        slot_vals = list(default) + [None] * max(0, length - len(default))
+        slot_vals = slot_vals[:length]
+    else:
+        slot_vals = [default] * length
+
+    inputs = []
+    for slot, slot_value in enumerate(slot_vals):
+        slot_cid = dict(cid)
+        slot_cid["slot"] = slot
+        slot_cid["elem"] = elem
+        inputs.append(
+            html.Div(
+                dcc.Input(
+                    type="number", id=slot_cid,
+                    value=None if slot_value is None else slot_value,
+                    placeholder="Optional" if _truly_optional(required, default) else "",
+                    style=_COMPACT_INPUT_STYLE,
+                ),
+                style={"flex": "1 1 0", "minWidth": "0"},
+            )
+        )
+    return html.Div(
+        inputs,
+        style={"display": "flex", "flexDirection": "row", "gap": "0.25rem", "width": "100%"},
+    )
+
+
 _WIDGET_FACTORIES = {
     "path":     _path_field,
     "triplet":  _triplet_field,
@@ -189,6 +234,7 @@ _WIDGET_FACTORIES = {
     "bool":     _bool_dropdown,
     "dropdown": _choice_dropdown,
     "rotation": _rotation_field,
+    "tuple":    _tuple_field,
 }
 
 
@@ -269,7 +315,13 @@ def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
 
         handler = TYPE_HANDLERS[tag]
         cid = _mk_id(id_type, name, tag, id_extra)
-        widget = _WIDGET_FACTORIES[handler["widget"]](cid, default, required, choices=choices)
+        # Composite widgets (Tuple) need length/elem from `extra`; pass it
+        # through so simpler factories can ignore it without breaking.
+        widget_fn = _WIDGET_FACTORIES[handler["widget"]]
+        try:
+            widget = widget_fn(cid, default, required, choices=choices, extra=extra)
+        except TypeError:
+            widget = widget_fn(cid, default, required, choices=choices)
         # Build a label ID that is unique across all mounted pages by incorporating
         # id_type and all id_extra values (sorted for stability).
         extra_str = "_".join(str(v) for _, v in sorted((id_extra or {}).items()))

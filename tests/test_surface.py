@@ -677,3 +677,103 @@ def test_apply_normals_mask_normals_consistent_after_filter(unit_sphere_opc):
     filtered = unit_sphere_opc.apply_normals_mask(angle_threshold=60.0, inplace=False)
     lengths = np.linalg.norm(filtered.normals, axis=1)
     assert np.allclose(lengths, 1.0, atol=1e-5)
+
+
+# =============================================================================
+# Phase-1 signature tightenings (kwargs -> explicit) + to_motl helper
+# =============================================================================
+import inspect
+
+
+def test_opc_flip_normals_signature_drops_var_kwargs():
+    """flip_normals exposes only inplace; no var-kwargs catch-all."""
+    sig = inspect.signature(OrientedPointCloud.flip_normals)
+    assert list(sig.parameters) == ["self", "inplace"]
+    has_var_kw = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+    assert not has_var_kw
+
+
+def test_opc_flip_normals_rejects_unknown_kwarg(unit_sphere_opc):
+    """An unknown kwarg now raises TypeError directly (no custom message needed)."""
+    with pytest.raises(TypeError):
+        unit_sphere_opc.flip_normals(flip_faces=True)
+
+
+def test_opc_flip_normals_inplace_still_works(unit_sphere_opc):
+    """The behaviour we care about (flip in place) is unchanged."""
+    before = unit_sphere_opc.normals.copy()
+    unit_sphere_opc.flip_normals(inplace=True)
+    assert np.allclose(unit_sphere_opc.normals, -before)
+
+
+def test_opc_save_signature_explicit_kwargs():
+    """save now names every format-specific kwarg: write_ascii / input_dict /
+    subtomo_ids / tomo_id (no catch-all)."""
+    sig = inspect.signature(OrientedPointCloud.save)
+    expected = {"self", "output_path", "format",
+                "write_ascii", "input_dict", "subtomo_ids", "tomo_id"}
+    assert set(sig.parameters) == expected
+    assert not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+
+
+def test_opc_save_rejects_unknown_kwarg(unit_sphere_opc, tmp_path):
+    """Unknown kwargs must now fail at the signature, not silently slip into the
+    private helper."""
+    out = tmp_path / "out.ply"
+    with pytest.raises(TypeError):
+        unit_sphere_opc.save(out, format="ply", bogus=True)
+
+
+def test_opc_from_mrc_annotation_is_mapsource():
+    """The PathOrStr -> MapSource tightening matches Mesh.from_mrc so an
+    in-memory ndarray segmentation is also a valid input.
+
+    surface.py uses ``from __future__ import annotations`` so the annotation
+    is a string at runtime; compare textually."""
+    sig = inspect.signature(OrientedPointCloud.from_mrc)
+    assert sig.parameters["input_path"].annotation == "MapSource"
+
+
+def test_opc_to_motl_returns_motl_with_one_row_per_vertex(unit_sphere_opc):
+    """to_motl is the new pure helper: build a Motl in memory without writing."""
+    motl = unit_sphere_opc.to_motl()
+    assert motl is not None
+    assert len(motl.df) == len(unit_sphere_opc.vertices)
+    for col in ("x", "y", "z", "phi", "theta", "psi", "subtomo_id", "class"):
+        assert col in motl.df.columns
+    # Sequential 1..N by default.
+    assert np.allclose(
+        motl.df["subtomo_id"].to_numpy(),
+        np.arange(1, len(unit_sphere_opc.vertices) + 1, dtype=float),
+    )
+    assert np.allclose(motl.df["class"].to_numpy(), 1.0)
+
+
+def test_opc_to_motl_scalar_tomo_id_broadcasts(unit_sphere_opc):
+    motl = unit_sphere_opc.to_motl(tomo_id=42)
+    assert np.allclose(motl.df["tomo_id"].to_numpy(), 42.0)
+
+
+def test_opc_to_motl_subtomo_ids_remap_to_sequential(unit_sphere_opc):
+    """Object-style subtomo_ids get remapped to sequential per-object IDs."""
+    n = len(unit_sphere_opc.vertices)
+    ids = np.where(np.arange(n) % 2 == 0, 100, 200)
+    motl = unit_sphere_opc.to_motl(subtomo_ids=ids)
+    out = motl.df["subtomo_id"].to_numpy()
+    assert set(np.unique(out)) == {1.0, 2.0}
+    assert len(out) == n
+
+
+def test_opc_to_motl_input_dict_forbidden_keys(unit_sphere_opc):
+    """Coords/angles/subtomo_id/tomo_id can't be smuggled in via input_dict."""
+    with pytest.raises(ValueError):
+        unit_sphere_opc.to_motl(input_dict={"x": np.zeros(len(unit_sphere_opc.vertices))})
+
+
+def test_opc_save_em_writes_motl_file(unit_sphere_opc, tmp_path):
+    """save(format='em') still works -- public path now routes through to_motl."""
+    out = tmp_path / "pc.em"
+    unit_sphere_opc.save(out, format="em")
+    assert out.exists() and out.stat().st_size > 0
