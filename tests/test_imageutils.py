@@ -507,10 +507,11 @@ def test_triangle_threshold_3d():
 # find_peak_3d
 # ---------------------------------------------------------------------------
 
-def test_find_peak_3d_known_peak():
+@pytest.mark.parametrize("center", [None, (8,8,8), 8, [8,8,8], np.asarray([8,8,8])])
+def test_find_peak_3d_known_peak(center):
     vol = np.zeros((20, 20, 20))
     vol[10, 10, 10] = 5.0
-    assert find_peak_3d(vol, search_radius=6) == (10, 10, 10)
+    assert find_peak_3d(vol, search_radius=6, center=center) == (10, 10, 10)
 
 
 def test_find_peak_3d_returns_tuple():

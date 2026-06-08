@@ -8,6 +8,8 @@ from skimage import measure as _skimage_measure
 from skimage import morphology as _skimage_morphology
 from skimage.filters import gaussian as _skimage_gaussian
 from skimage.transform import rotate as skimage_rotate
+from cryocat.utils import geom
+from cryocat._types import TripletLike
 
 
 # ---------------------------------------------------------------------------
@@ -198,8 +200,9 @@ def gaussian_smooth(volume: np.ndarray, sigma: float) -> np.ndarray:
     return _skimage_gaussian(volume, sigma=sigma)
 
 
-def _spherical_mask_nd(shape, radius, gaussian=0.0):
-    """Create a centred spherical (or hyperspherical) binary mask with optional Gaussian softening.
+def _spherical_mask_nd(shape: tuple[int, ...], radius: int, gaussian: float = 0.0, center: TripletLike = None):
+    """Create a spherical (or hyperspherical) binary mask with optional Gaussian softening centred either on the center 
+    of the box or on the specified coordinates.
 
     Implements the Dynamo convention (gaussian_outwards=False): the Gaussian
     blur is centred on the sphere surface, so the radius is NOT expanded.
@@ -212,6 +215,8 @@ def _spherical_mask_nd(shape, radius, gaussian=0.0):
         Radius in voxels of the binary sphere before any blurring.
     gaussian : float, default=0.0
         Sigma of the Gaussian softening.  0 means no blur.
+    center : int or ndarray or 3-tuple or 3-list, optional
+        The center coordinates of the sphere in the mask box. 
 
     Returns
     -------
@@ -219,7 +224,11 @@ def _spherical_mask_nd(shape, radius, gaussian=0.0):
         Values in [0, 1].  Shape matches *shape*.
     """
     shape = np.asarray(shape, dtype=int)
-    center = shape // 2
+    if center is None:
+        center = shape // 2
+    else:
+        center = geom.as_triplet(center)
+    
     grids = np.mgrid[tuple(slice(0, s) for s in shape)]
     dist = np.sqrt(sum((g - c) ** 2 for g, c in zip(grids, center)))
     mask = (dist <= radius).astype(np.float64)
@@ -830,7 +839,7 @@ def triangle_threshold(values: np.ndarray) -> float:
     return sp[arg_level]
 
 
-def find_peak_3d(volume: np.ndarray, search_radius: int = 20) -> tuple[int, ...]:
+def find_peak_3d(volume: np.ndarray, search_radius: int = 20, center: TripletLike = None) -> tuple[int, ...]:
     """Find the position of the highest voxel within a central spherical region.
 
     Parameters
@@ -839,6 +848,8 @@ def find_peak_3d(volume: np.ndarray, search_radius: int = 20) -> tuple[int, ...]
         3-D input array.
     search_radius : int, default=20
         Radius in voxels of the spherical search region centred on the volume.
+    center : int or ndarray or 3-tuple or 3-list, optional
+        The center coordinates of the spherical region. 
 
     Returns
     -------
@@ -846,7 +857,13 @@ def find_peak_3d(volume: np.ndarray, search_radius: int = 20) -> tuple[int, ...]
         Array indices (dim0, dim1, dim2) of the highest-valued voxel inside
         the search sphere.
     """
-    mask = _spherical_mask_nd(volume.shape, search_radius)
+    shape = np.asarray(volume.shape, dtype=int)
+    if center is None:
+        center = shape // 2 #returns array
+    else:
+        center = geom.as_triplet(center) #returns array
+    
+    mask = _spherical_mask_nd(volume.shape, search_radius, center=center)
     masked = volume * mask
     return np.unravel_index(np.argmax(masked), masked.shape)
 
