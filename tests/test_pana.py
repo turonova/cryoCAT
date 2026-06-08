@@ -1182,3 +1182,177 @@ def test_docstrings_use_type_aliases():
                         f"{name}: parameter '{p.name}' uses {alias} in its annotation "
                         f"but the docstring Parameters section does not name it."
                     )
+
+
+# =============================================================================
+# Smoke coverage: pipeline functions exercising "skip if not Done" early-return
+# =============================================================================
+
+
+@pytest.fixture
+def csv_all_not_done(tmp_path):
+    """Copy a real template_list_0 fixture into tmp so we can mutate / verify safely."""
+    import shutil
+    src = test_data_dir / "test_template_list_0.csv"
+    dst = tmp_path / "tl.csv"
+    shutil.copy(src, dst)
+    return str(dst)
+
+
+# Eight pipeline functions have a ``if not temp_df.at[i, "Done"]: continue``
+# guard at the top of their per-index loop; invoking with a Done=False row is a
+# no-op.
+@pytest.mark.parametrize("fn_name", [
+    "compute_sharp_mask_overlap",
+    "check_existing_tight_mask_values",
+    "compute_dist_maps_voxels",
+    "compute_center_peak_stats_and_profiles",
+    "compute_peak_shapes",
+    "correct_bbox",
+    "recompute_dist_maps",
+    "create_summary_pdf",
+])
+def test_pipeline_fns_skip_when_not_done(fn_name, csv_all_not_done, tmp_path):
+    """Functions with ``if not Done: continue`` guard must be no-ops on Done=False rows."""
+    fn = getattr(pana, fn_name)
+    parent = str(tmp_path) + "/"
+    extra = {
+        "compute_sharp_mask_overlap": dict(angle_list_path=parent, parent_folder_path=parent),
+        "check_existing_tight_mask_values": dict(parent_folder_path=parent, angle_list_path=parent),
+        "compute_dist_maps_voxels": dict(parent_folder_path=parent),
+        "compute_center_peak_stats_and_profiles": dict(parent_folder_path=parent),
+        "compute_peak_shapes": dict(parent_folder_path=parent),
+        "correct_bbox": {},
+        "recompute_dist_maps": dict(parent_folder_path=parent, angle_list_path=parent),
+        "create_summary_pdf": dict(parent_folder_path=parent),
+    }[fn_name]
+    assert fn(csv_all_not_done, [0], **extra) is None
+
+
+def test_get_mask_stats_invokes_mask_stats_per_index(mocker, csv_all_not_done, tmp_path):
+    """``get_mask_stats`` always processes every index (no skip-guard); mock the
+    heavy mask loader so the function runs through the row without touching disk.
+    """
+    mocker.patch("cryocat.analysis.pana.cryomap.read",
+                 return_value=np.ones((4, 4, 4), dtype=np.float32))
+    mocker.patch("cryocat.analysis.pana.mask_stats", return_value=dict(
+        voxels_soft=64, voxels_sharp=32, bbox=(2, 2, 2), solidity=0.5,
+    ))
+    mocker.patch("pandas.DataFrame.to_csv")
+    parent = str(tmp_path) + "/"
+    pana.get_mask_stats(csv_all_not_done, [0], parent_folder_path=parent)
+
+
+def test_get_shape_stats_invokes_per_index_without_disk_io(mocker, csv_all_not_done, tmp_path):
+    """``get_shape_stats`` always processes every index; mock heavy IO + shape stats."""
+    _prep_csv_string_cols(csv_all_not_done, 0)
+    mocker.patch("cryocat.analysis.pana.cryomap.read",
+                 return_value=np.ones((4, 4, 4), dtype=np.float32))
+    mocker.patch("cryocat.analysis.pana.shape_stats",
+                 return_value=pd.DataFrame({"label": [], "area": []}))
+    mocker.patch("pandas.DataFrame.to_csv")
+    parent = str(tmp_path) + "/"
+    pana.get_shape_stats(csv_all_not_done, [0], shape_type="cube", parent_folder_path=parent)
+
+
+# ── run_analysis / run_angle_analysis / run_single_gradual_case (mocked) ──────
+
+
+def test_run_single_gradual_case_returns_two_dataframes(mocker):
+    """``run_single_gradual_case`` collates per-angle ``analyze_rotations`` outputs
+    into (analysis_df, histograms_df). The slice ``results[a, :, j] = res_df.values``
+    requires a (1, 8) DataFrame per call; mock accordingly.
+    """
+    fake_row = pd.DataFrame(
+        [[0.0, 0.0, 0.0, 1.0, 0.5, 0.5, 0.0, 0.0]],
+        columns=["ang_dist", "cone_dist", "inplane_dist",
+                 "common_voxels", "ccc", "ccc_masked", "z_score", "z_score_masked"],
+    )
+    mocker.patch(
+        "cryocat.analysis.pana.analyze_rotations",
+        return_value=(fake_row, np.zeros((4, 4, 4), dtype=np.float32), None, None),
+    )
+
+    vol = np.zeros((8, 8, 8), dtype=np.float32)
+    analysis_df, hist_df = pana.run_single_gradual_case(
+        target_map=vol, template=vol, template_mask=vol, angular_range=5,
+    )
+    assert isinstance(analysis_df, pd.DataFrame)
+    assert isinstance(hist_df, pd.DataFrame)
+    assert len(analysis_df) == 5
+
+
+def _prep_csv_string_cols(path, idx):
+    """Coerce CSV columns that pana writes string values into to ``object`` dtype.
+
+    The fixture CSVs have these columns as float64 (NaN-filled); pandas refuses
+    to set a str into a float column. Pre-set placeholders here so the assignment
+    in the function under test succeeds.
+    """
+    df = pd.read_csv(path, index_col=0)
+    for c in ("Output folder", "Tomo map", "Tomogram"):
+        if c in df.columns:
+            df[c] = df[c].astype(object)
+            df.at[idx, c] = df.at[idx, c] if isinstance(df.at[idx, c], str) else "x"
+    df.to_csv(path)
+
+
+def test_run_analysis_marks_processed_rows_done(mocker, csv_all_not_done, tmp_path):
+    """``run_analysis`` always processes every index — verify the Done flag flips."""
+    _prep_csv_string_cols(csv_all_not_done, 0)
+    mocker.patch("cryocat.analysis.pana._run_analysis_args_from_row", return_value=dict(
+        target_map=np.zeros((4, 4, 4), dtype=np.float32),
+        template=np.zeros((4, 4, 4), dtype=np.float32),
+        mask=np.zeros((4, 4, 4), dtype=np.float32),
+        wedge_target=None, wedge_tmpl=None,
+        starting_angle=None, cyclic_symmetry=1, structure_name="ribosome",
+    ))
+    mocker.patch("cryocat.analysis.pana.analyze_rotations",
+                 return_value=(pd.DataFrame(), None, None, None))
+    mocker.patch("cryocat.analysis.pana.tmana.create_angular_distance_maps",
+                 return_value=(None, None, None))
+
+    parent = str(tmp_path) + "/"
+    pana.run_analysis(csv_all_not_done, [0], angle_list_path=parent,
+                      wedge_path=parent, parent_folder_path=parent)
+    out_df = pd.read_csv(csv_all_not_done, index_col=0)
+    assert bool(out_df.at[0, "Done"]) is True
+
+
+def test_run_angle_analysis_runs_per_index_without_write_output(mocker, csv_all_not_done, tmp_path):
+    """``run_angle_analysis`` with ``write_output=False`` should not touch the filesystem."""
+    mocker.patch("cryocat.analysis.pana._run_analysis_args_from_row", return_value=dict(
+        target_map=np.zeros((4, 4, 4), dtype=np.float32),
+        template=np.zeros((4, 4, 4), dtype=np.float32),
+        mask=np.zeros((4, 4, 4), dtype=np.float32),
+        wedge_target=None, wedge_tmpl=None,
+        starting_angle=None, cyclic_symmetry=1, structure_name="ribosome",
+    ))
+    mocker.patch("cryocat.analysis.pana.run_single_gradual_case",
+                 return_value=(pd.DataFrame(), pd.DataFrame()))
+    parent = str(tmp_path) + "/"
+    assert pana.run_angle_analysis(csv_all_not_done, [0],
+                                   wedge_path=parent, parent_folder_path=parent,
+                                   angular_range=5, write_output=False) is None
+
+
+# ── rename_folders / rename_scores_angles (mocked filesystem) ────────────────
+
+
+def test_rename_folders_calls_os_rename_and_updates_csv(mocker, csv_all_not_done, tmp_path):
+    """``rename_folders`` calls ``os.rename`` once per index and updates the CSV."""
+    _prep_csv_string_cols(csv_all_not_done, 0)
+    rename_mock = mocker.patch("os.rename")
+    parent = str(tmp_path) + "/"
+    pana.rename_folders(csv_all_not_done, [0], parent_folder_path=parent)
+    assert rename_mock.call_count >= 1
+
+
+def test_rename_scores_angles_calls_os_rename_for_six_suffixes(mocker, csv_all_not_done, tmp_path):
+    """Six suffixes are renamed per index (.csv, _scores.em, _angles.em,
+    _angles_dist_{all,normals,inplane}.em)."""
+    _prep_csv_string_cols(csv_all_not_done, 0)
+    rename_mock = mocker.patch("os.rename")
+    parent = str(tmp_path) + "/"
+    pana.rename_scores_angles(csv_all_not_done, [0], parent_folder_path=parent)
+    assert rename_mock.call_count == 6

@@ -341,3 +341,52 @@ def test_starfile_init_from_file(simple_star):
 def test_starfile_init_nonexistent_path():
     sf_obj = sf.Starfile("/does/not/exist.star")
     assert sf_obj.frames is None
+
+
+# ---------------------------------------------------------------------------
+# Token parsers (direct unit tests against tokenized fragments)
+# ---------------------------------------------------------------------------
+
+
+def _toks(text):
+    """Helper: tokenise *text* directly so each parser can be exercised in isolation."""
+    return Token.tokenize(text)
+
+
+def test_token_parse_newline_or_comments_collects_comments():
+    """Leading comment lines are returned as strings; embedded blank lines are skipped."""
+    tokens = _toks("# first\n# second\n\nspecifier\n")
+    comments = Token.parse_newline_or_comments(tokens)
+    assert comments == ["first", "second"]
+    assert tokens[-1].token_type == TokenType.LITERAL
+    assert tokens[-1].value == "specifier"
+
+
+def test_token_parse_specifier_returns_comments_and_value():
+    tokens = _toks("# header_comment\ndata_particles\n")
+    comments, specifier = Token.parse_specifier(tokens)
+    assert comments == ["header_comment"]
+    assert specifier == "data_particles"
+
+
+def test_token_parse_column_strips_leading_underscore():
+    """``parse_column`` consumes one PROPERTY + optional COMMENT + NEWLINE and drops the ``_``."""
+    tokens = _toks("_rlnX #1\n")
+    assert Token.parse_column(tokens) == "rlnX"
+
+
+def test_token_parse_columns_collects_loop_header():
+    tokens = _toks("loop_\n_rlnX\n_rlnY #2\n")
+    comments, columns = Token.parse_columns(tokens)
+    assert comments == []
+    assert columns == ["rlnX", "rlnY"]
+
+
+def test_token_parse_rows_builds_dataframe():
+    tokens = _toks("1.0\t2.0\n3.0\t4.0\n")
+    comments, df = Token.parse_rows(tokens, columns=["rlnX", "rlnY"])
+    assert comments == []
+    assert list(df.columns) == ["rlnX", "rlnY"]
+    assert df.shape == (2, 2)
+    assert df.iloc[0, 0] == "1.0"
+    assert df.iloc[1, 1] == "4.0"

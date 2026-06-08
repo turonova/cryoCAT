@@ -187,6 +187,70 @@ def test_type_handlers_parse_roundtrip():
 
 
 # ---------------------------------------------------------------------------
+# Coverage for the private parser/argparse helpers (exercised via TYPE_HANDLERS
+# entries that don't already appear in the roundtrip above).
+# ---------------------------------------------------------------------------
+
+
+def test_type_handlers_parse_float_and_str():
+    """_parse_float and _parse_str via their TYPE_HANDLERS entries."""
+    assert TYPE_HANDLERS["float"]["parse"]("3.14") == 3.14
+    assert TYPE_HANDLERS["float"]["parse"]("") is None
+    assert TYPE_HANDLERS["float"]["parse"](None) is None
+    assert TYPE_HANDLERS["str"]["parse"]("hello") == "hello"
+    assert TYPE_HANDLERS["str"]["parse"](None) is None
+    assert TYPE_HANDLERS["Symmetry"]["parse"]("C5") == "C5"
+
+
+def test_type_handlers_parse_listlike_variants():
+    """_parse_listlike via ListLike / ArrayLike / TomoList entries."""
+    assert TYPE_HANDLERS["ListLike"]["parse"]("1,2,3") == [1, 2, 3]
+    assert TYPE_HANDLERS["ArrayLike"]["parse"]("4.5,6") == [4.5, 6]
+    assert TYPE_HANDLERS["TomoList"]["parse"]("10,11,12") == [10, 11, 12]
+
+
+def test_type_handlers_argparse_helpers():
+    """_arg_bool / _arg_triplet / _arg_listlike via the argparse spec."""
+    assert TYPE_HANDLERS["bool"]["argparse"]["type"]("True") is True
+    assert TYPE_HANDLERS["TripletLike"]["argparse"]["type"]("64,64,64") == [64, 64, 64]
+    assert TYPE_HANDLERS["ListLike"]["argparse"]["type"]("1,2,3") == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# Direct coverage of private helpers not surfaced through TYPE_HANDLERS.
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_scalar_int_float_str_priority():
+    """_coerce_scalar: int beats float beats string."""
+    from cryocat.utils.classutils import _coerce_scalar
+    assert _coerce_scalar("42") == 42
+    assert _coerce_scalar("3.14") == 3.14
+    assert _coerce_scalar("hello") == "hello"
+    assert _coerce_scalar("  5  ") == 5  # whitespace stripped
+
+
+def test_parse_number_list_single_vs_multi():
+    """Single token returns a scalar; multiple tokens return a list."""
+    from cryocat.utils.classutils import _parse_number_list
+    assert _parse_number_list("64") == 64
+    assert _parse_number_list("1,2,3") == [1, 2, 3]
+    assert _parse_number_list("") is None
+    assert _parse_number_list(None) is None
+    # Non-string input is returned unchanged.
+    assert _parse_number_list([1, 2, 3]) == [1, 2, 3]
+
+
+def test_clean_desc_strips_role_markers():
+    """_clean_desc removes reST cross-reference role prefixes."""
+    from cryocat.utils.classutils import _clean_desc
+    assert _clean_desc("See :meth:`foo`") == "See `foo`"
+    assert _clean_desc(":func:`bar`") == "`bar`"
+    assert _clean_desc(":class:`Baz`") == "`Baz`"
+    assert _clean_desc("plain") == "plain"
+
+
+# ---------------------------------------------------------------------------
 # get_classes_from_names
 # ---------------------------------------------------------------------------
 

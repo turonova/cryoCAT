@@ -18,8 +18,9 @@ TOOLS = [
     {"id": "pana",      "label": "Peak Analysis",     "path": "/pana",      "module": "cryocat.app.suite.pages.ppana"},
     {"id": "volume",    "label": "Mask generation",   "path": "/volume",    "module": "cryocat.app.suite.pages.pvolume"},
     {"id": "utilities", "label": "Utilities",         "path": "/utilities", "module": "cryocat.app.suite.pages.putilities"},
-    {"id": "structure", "label": "Structure",         "path": "/structure", "module": "cryocat.app.suite.pages.pstructure"},
+    {"id": "surfaces",  "label": "Surfaces",          "path": "/surfaces",  "module": "cryocat.app.suite.pages.pstructure"},
     {"id": "memthick",  "label": "Membrane thickness", "path": "/memthick",  "module": "cryocat.app.suite.pages.pmemthick"},
+    {"id": "complexes", "label": "Complexes",          "path": "/complexes", "module": "cryocat.app.suite.pages.pcomplexes"},
 ]
 
 # Route used when the URL is empty / root / unknown.

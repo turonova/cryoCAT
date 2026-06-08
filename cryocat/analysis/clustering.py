@@ -7,6 +7,8 @@ wrappers that feed ``self.desc`` / ``self.df`` in.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 import pandas as pd
 import networkx as nx
@@ -14,8 +16,13 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 
+from cryocat._types import ArrayLike
 
-def drop_nans(input_df: pd.DataFrame, axis_type: str = "row") -> pd.DataFrame:
+
+def drop_nans(
+    input_df: pd.DataFrame,
+    axis_type: Literal["row", "column"] = "row",
+) -> pd.DataFrame:
     """Drop rows or columns that contain NaN values.
 
     Parameters
@@ -118,7 +125,7 @@ def compute_pca(
     n_components: int | None = None,
     feature_ids: str | list[str] = "all",
     id_columns: tuple[str, ...] = ("qp_id",),
-    nan_drop: str = "row",
+    nan_drop: Literal["row", "column"] = "row",
 ) -> tuple[pd.DataFrame, np.ndarray]:
     """Fit PCA on descriptor features and return the reduced representation.
 
@@ -173,7 +180,7 @@ def kmeans_cluster(
     n_clusters: int,
     feature_ids: str | list[str] = "all",
     id_columns: tuple[str, ...] = ("qp_id",),
-    nan_drop: str = "row",
+    nan_drop: Literal["row", "column"] = "row",
     pca_dict: dict | None = None,
     scale_data: bool = True,
 ) -> pd.DataFrame:
@@ -240,18 +247,18 @@ def kmeans_cluster(
 
 
 def connected_component_clusters(
-    qp_ids,
-    nn_ids,
+    qp_ids: ArrayLike,
+    nn_ids: ArrayLike,
     num_components: int = 1,
     min_size: int | None = None,
-) -> list:
+) -> list[nx.Graph]:
     """Build a graph from qp–nn edges and return connected components.
 
     Parameters
     ----------
-    qp_ids : array-like
+    qp_ids : ArrayLike
         Query particle IDs (one entry per edge).
-    nn_ids : array-like
+    nn_ids : ArrayLike
         Nearest-neighbor IDs corresponding to each entry in *qp_ids*.
     num_components : int, default 1
         When *min_size* is ``None`` (or not an ``int``), return this many

@@ -4,10 +4,13 @@ import numpy as np
 import pandas as pd
 from lmfit import models as _lmfit_models
 from scipy.interpolate import RegularGridInterpolator
+from scipy.spatial.transform import Rotation
 from skimage import measure as _skimage_measure
 from skimage import morphology as _skimage_morphology
 from skimage.filters import gaussian as _skimage_gaussian
 from skimage.transform import rotate as skimage_rotate
+
+from cryocat._types import EulerAngles, Symmetry
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +201,11 @@ def gaussian_smooth(volume: np.ndarray, sigma: float) -> np.ndarray:
     return _skimage_gaussian(volume, sigma=sigma)
 
 
-def _spherical_mask_nd(shape, radius, gaussian=0.0):
+def _spherical_mask_nd(
+    shape: tuple[int, ...],
+    radius: float,
+    gaussian: float = 0.0,
+) -> np.ndarray:
     """Create a centred spherical (or hyperspherical) binary mask with optional Gaussian softening.
 
     Implements the Dynamo convention (gaussian_outwards=False): the Gaussian
@@ -1154,8 +1161,8 @@ def binarize(volume: np.ndarray, threshold: float = 0.5) -> np.ndarray:
 
 def rotate_volume(
     volume: np.ndarray,
-    rotation=None,
-    rotation_angles=None,
+    rotation: Rotation | None = None,
+    rotation_angles: EulerAngles | None = None,
     coord_space: str = "zxz",
     transpose_rotation: bool = False,
     degrees: bool = True,
@@ -1169,9 +1176,10 @@ def rotate_volume(
         Input 3-D array.
     rotation : scipy.spatial.transform.Rotation, optional
         Pre-built Rotation object.  Takes precedence over *rotation_angles*.
-    rotation_angles : array-like, optional
-        Euler angles in *coord_space* order.  Used only when *rotation* is
-        ``None``.
+    rotation_angles : EulerAngles, optional
+        Euler angles in *coord_space* order. A single triple ``(3,)`` or a
+        stack ``(N, 3)``; treated as degrees when ``degrees=True``. Used
+        only when *rotation* is ``None``.
     coord_space : str, default "zxz"
         Euler-angle convention passed to ``Rotation.from_euler``.
     transpose_rotation : bool, default False
@@ -1187,7 +1195,6 @@ def rotate_volume(
         Rotated volume with the same shape as *volume*.
     """
     from scipy.ndimage import affine_transform
-    from scipy.spatial.transform import Rotation as _srot
 
     T = np.eye(4)
     structure_center = np.asarray(volume.shape) // 2
@@ -1200,7 +1207,7 @@ def rotate_volume(
         else:
             rot_matrix[:3, :3] = rotation.as_matrix()
     elif rotation_angles is not None:
-        rot = _srot.from_euler(coord_space, rotation_angles, degrees=degrees)
+        rot = Rotation.from_euler(coord_space, rotation_angles, degrees=degrees)
         rot_matrix[:3, :3] = rot.as_matrix().T
     else:
         raise ValueError("Either rotation or rotation_angles must be provided.")
@@ -1298,15 +1305,21 @@ def pad_volume(
     return padded
 
 
-def symmetrize_volume(volume: np.ndarray, symmetry) -> np.ndarray:
+def symmetrize_volume(volume: np.ndarray, symmetry: Symmetry) -> np.ndarray:
     """Average *volume* over the rotations implied by *symmetry*.
 
     Parameters
     ----------
     volume : np.ndarray
         Input 3-D array.
-    symmetry : str or int or float
-        Cyclic symmetry specifier, e.g. ``"C5"`` or ``5``.
+    symmetry : Symmetry
+        Cyclic symmetry specifier, e.g. ``"C5"`` or ``5`` (accepts ``int``
+        or a numeric ``str`` like ``"5"``).
+
+    Raises
+    ------
+    ValueError
+        If ``symmetry`` is neither a string nor a number.
     """
     import re
 

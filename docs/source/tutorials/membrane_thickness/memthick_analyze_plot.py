@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Iterable, Literal
 
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy.spatial import KDTree as _KDTree
 
 from cryocat._types import PathOrStr
 
@@ -717,6 +719,105 @@ def _wrap_profiles_as_intensity_results(membrane_data: MembraneData) -> Intensit
     )
 
 
+class AsymmetryAnalysisResults(IntensityProfileAnalysisResults):
+    """
+    Container for membrane leaflet asymmetry analysis results.
+
+    Inherits from :class:`IntensityProfileAnalysisResults` to carry the aligned
+    intensity profiles alongside per-bin asymmetry statistics.
+
+    Attributes
+    ----------
+    bin_results : pd.DataFrame
+        Per-bin asymmetry analysis results (one row per thickness bin or seed point).
+    bin_profiles : dict[float, dict]
+        Cached median intensity profiles per bin (thickness mode only).
+    overall_statistics : dict[str, Any]
+        Aggregate asymmetry statistics across all valid bins.
+    rejected_bins : list[dict]
+        Bins that were excluded (too few profiles).
+    binning_mode : str
+        ``"thickness"`` or ``"neighborhood"``.
+    """
+
+    def __init__(
+        self,
+        raw_data: MembraneData,
+        profiles: list[dict],
+        profile_statistics: dict[str, Any],
+        parameters: dict[str, Any],
+        bin_results: pd.DataFrame,
+        bin_profiles: dict[float, dict],
+        overall_statistics: dict[str, Any],
+        rejected_bins: list[dict],
+        binned_profiles: dict[float, dict] | None = None,
+        binning_mode: str = "thickness",
+    ):
+        super().__init__(raw_data, profiles, profile_statistics, parameters, binned_profiles)
+        self.bin_results = bin_results
+        self.bin_profiles = bin_profiles
+        self.overall_statistics = overall_statistics
+        self.rejected_bins = rejected_bins
+        self.binning_mode = binning_mode
+
+    def get_asymmetry_summary(self) -> str:
+        """
+        Human-readable summary of the asymmetry analysis.
+
+        Returns
+        -------
+        str
+            Multi-line string with bin counts and asymmetry statistics.
+        """
+        stats = self.overall_statistics
+        summary = f"""
+Asymmetry Analysis Summary:
+==========================
+Binning mode: {self.binning_mode}
+Total bins created: {stats.get('total_bins', 'N/A')}
+Valid bins: {stats.get('valid_bins', 'N/A')}
+Rejected bins: {stats.get('rejected_bins', 'N/A')}
+Total profiles analyzed: {stats.get('total_profiles_analyzed', 'N/A'):,}
+
+Asymmetry Statistics:
+- Median asymmetry: {stats.get('median_asymmetry', float('nan')):.3f} ({stats.get('median_asymmetry_percent', float('nan')):.1f}%)
+- Mean asymmetry: {stats.get('mean_asymmetry', float('nan')):.3f} ({stats.get('mean_asymmetry_percent', float('nan')):.1f}%)
+- Standard deviation: {stats.get('std_asymmetry', float('nan')):.3f}
+- Range: {stats.get('min_asymmetry', float('nan')):.3f} - {stats.get('max_asymmetry', float('nan')):.3f}
+- Notably asymmetric bins (>20%): {stats.get('notably_asymmetric_bins', 'N/A')}
+"""
+        return summary
+
+    def save_to_csv(self, output_path: PathOrStr) -> None:
+        """
+        Save bin results, overall statistics, parameters, and rejected bins to CSV files.
+
+        Parameters
+        ----------
+        output_path : PathOrStr
+            Base path; the suffix is replaced and additional suffixes appended per file.
+        """
+        output_path = Path(output_path)
+        base_name = output_path.stem
+        output_dir = output_path.parent
+
+        self.bin_results.to_csv(output_dir / f"{base_name}_bin_results.csv", index=False)
+
+        if self.overall_statistics:
+            pd.DataFrame([self.overall_statistics]).to_csv(
+                output_dir / f"{base_name}_overall_stats.csv", index=False
+            )
+
+        pd.DataFrame([self.parameters]).to_csv(
+            output_dir / f"{base_name}_parameters.csv", index=False
+        )
+
+        if self.rejected_bins:
+            pd.DataFrame(self.rejected_bins).to_csv(
+                output_dir / f"{base_name}_rejected_bins.csv", index=False
+            )
+
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
@@ -763,6 +864,19 @@ def _profile_passes_v2_boundary(features: dict[str, Any]) -> bool:
     if features.get("passes_filter", False):
         return True
     return bool(features.get("resolved", False))
+
+
+def _profile_eligible_for_asymmetry(
+    features: dict[str, Any],
+    require_central_max: bool = True,
+) -> bool:
+    """Whether asymmetry metrics should consider this profile."""
+    if not _profile_passes_v2_boundary(features):
+        return False
+    if not require_central_max:
+        return True
+    pos = features.get("central_max_position", np.nan)
+    return pos is not None and np.isfinite(pos)
 
 def _distances_along_profile_vox(prof: dict) -> np.ndarray | None:
     """Signed distance along the profile chord in voxels (same geometry as pipeline extraction)."""
@@ -1042,54 +1156,213 @@ def _calculate_thickness_statistics(thickness_data: pd.Series, by_file: bool = F
     return out
 
 
-def _apply_outlier_filtering(data: pd.Series, 
-                           method: str,
-                           iqr_factor: float = 1.5,
-                           percentile_range: tuple[float, float] = (5, 95),
-                           std_factor: float = 2.0) -> pd.Series:
+def _apply_outlier_filtering(
+    data: pd.Series,
+    method: str,
+    percentile_range: tuple[float, float] = (5, 95),
+) -> pd.Series:
     """
     Apply outlier filtering (shared by analysis and plotting helpers).
-    
+
     Parameters
     ----------
     data : pd.Series
-        Data to filter
     method : str
-        Filtering method ('iqr', 'percentile', 'std')
-    iqr_factor : float, default 1.5
-        IQR multiplier for outlier detection
-    percentile_range : tuple[float, float], default (5, 95)
-        Percentile range for outlier detection
-    std_factor : float, default 2.0
-        Standard deviation multiplier for outlier detection
-        
+        Filtering method. Only ``'percentile'`` is supported.
+    percentile_range : (float, float), default (5, 95)
+        Lower and upper percentile cutoffs.
+
     Returns
     -------
     pd.Series
         Filtered data
     """
-    if method == 'iqr':
-        Q1 = data.quantile(0.25)
-        Q3 = data.quantile(0.75)
-        IQR = Q3 - Q1
-        lower_bound = Q1 - iqr_factor * IQR
-        upper_bound = Q3 + iqr_factor * IQR
-        return data[(data >= lower_bound) & (data <= upper_bound)]
-    
-    elif method == 'percentile':
+    if method == 'percentile':
         lower_bound = data.quantile(percentile_range[0] / 100)
         upper_bound = data.quantile(percentile_range[1] / 100)
         return data[(data >= lower_bound) & (data <= upper_bound)]
-    
-    elif method == 'std':
-        mean = data.mean()
-        std = data.std()
-        lower_bound = mean - std_factor * std
-        upper_bound = mean + std_factor * std
-        return data[(data >= lower_bound) & (data <= upper_bound)]
-    
+    raise ValueError(f"Unknown outlier filtering method: {method!r}. Use 'percentile'.")
+
+def _calculate_unity_asymmetry_score(agg_extrema: dict) -> dict:
+    """
+    Compute intensity-based unity asymmetry score from aggregated extrema.
+
+    Score 1.0 = perfectly symmetric leaflets; >1.0 = asymmetric (capped at 10.0).
+    Returns ``{'valid': False}`` when any intensity value is NaN.
+
+    Parameters
+    ----------
+    agg_extrema : dict
+        Aggregated extrema with keys ``central_max_intensity``, ``minima1_intensity``,
+        ``minima2_intensity`` (and optional position keys for hover metadata).
+
+    Returns
+    -------
+    dict
+        Keys: ``valid``, ``asymmetry_score``, ``asymmetry_percent``,
+        ``more_prominent_side``, ``left_diff``, ``right_diff``,
+        ``left_peak_pos``, ``right_peak_pos``, ``left_peak_intensity``,
+        ``right_peak_intensity``, ``peaks_found``.
+    """
+    central_max_int = agg_extrema.get("central_max_intensity", np.nan)
+    minima1_int = agg_extrema.get("minima1_intensity", np.nan)
+    minima2_int = agg_extrema.get("minima2_intensity", np.nan)
+
+    if np.isnan(central_max_int) or np.isnan(minima1_int) or np.isnan(minima2_int):
+        return {"valid": False}
+
+    left_diff = abs(central_max_int - minima1_int)
+    right_diff = abs(central_max_int - minima2_int)
+
+    if left_diff == 0 and right_diff == 0:
+        asymmetry_score = 1.0
+    elif left_diff == 0 or right_diff == 0:
+        asymmetry_score = 10.0
     else:
-        raise ValueError(f"Unknown outlier filtering method: {method}")
+        asymmetry_score = min(max(left_diff, right_diff) / min(left_diff, right_diff), 10.0)
+
+    central_max_pos = agg_extrema.get("central_max_position", np.nan)
+    minima1_pos = agg_extrema.get("minima1_position", np.nan)
+    minima2_pos = agg_extrema.get("minima2_position", np.nan)
+
+    return {
+        "valid": True,
+        "asymmetry_score": asymmetry_score,
+        "asymmetry_percent": (asymmetry_score - 1.0) * 100.0,
+        "more_prominent_side": "left" if left_diff > right_diff else "right",
+        "left_diff": left_diff,
+        "right_diff": right_diff,
+        "left_peak_pos": float(minima1_pos),
+        "right_peak_pos": float(minima2_pos),
+        "left_peak_intensity": float(minima1_int),
+        "right_peak_intensity": float(minima2_int),
+        "peaks_found": (
+            np.isfinite(central_max_pos)
+            and np.isfinite(minima1_pos)
+            and np.isfinite(minima2_pos)
+        ),
+    }
+
+
+def _filter_asymmetry_outliers(
+    results: "AsymmetryAnalysisResults",
+    method: str = "percentile",
+    percentile_range: tuple[float, float] = (5, 95),
+) -> "AsymmetryAnalysisResults":
+    """
+    Return a copy of *results* with outlier bins marked invalid.
+
+    Parameters
+    ----------
+    results : AsymmetryAnalysisResults
+    method : {'percentile'}
+    percentile_range : tuple[float, float], default (5, 95)
+
+    Returns
+    -------
+    AsymmetryAnalysisResults
+        Deep-copied results with outlier bins set ``valid=False``.
+    """
+    from copy import deepcopy
+
+    filtered = deepcopy(results)
+    bin_results = filtered.bin_results
+    valid_bins = bin_results[bin_results["valid"]].copy()
+
+    if len(valid_bins) == 0:
+        return filtered
+
+    scores = valid_bins["asymmetry_score"]
+
+    if method == "percentile":
+        lo, hi = scores.quantile(percentile_range[0] / 100), scores.quantile(percentile_range[1] / 100)
+        keep = (scores >= lo) & (scores <= hi)
+    else:
+        return filtered
+
+    new_br = bin_results.copy()
+    new_br.loc[new_br["valid"], "valid"] = False
+    new_br.loc[valid_bins[keep].index, "valid"] = True
+    filtered.bin_results = new_br
+
+    n_removed = int((~keep).sum())
+    print(f"Filtered out {n_removed} outlier bins using {method} method")
+    print(f"Remaining valid bins: {int(keep.sum())}")
+    return filtered
+
+
+def _process_membrane_asymmetry_data(
+    analysis_results: "AsymmetryAnalysisResults",
+    thickness_df: pd.DataFrame,
+    valid_bins: pd.DataFrame,
+    coordinate_columns: list[str],
+    use_percentages: bool,
+) -> dict | None:
+    """
+    Build coordinate + asymmetry arrays for 3D scatter plotting.
+
+    Handles both ``"thickness"`` and ``"neighborhood"`` binning modes stored in
+    ``analysis_results.binning_mode``.
+    """
+    binning_mode = getattr(analysis_results, "binning_mode", "thickness")
+
+    if binning_mode == "neighborhood":
+        # In neighborhood mode, each valid bin row already carries its seed coordinates.
+        seed_coord_cols = ["seed_x", "seed_y", "seed_z"]
+        missing = [c for c in seed_coord_cols if c not in valid_bins.columns]
+        if missing:
+            return None
+        valid_coords = valid_bins[seed_coord_cols].to_numpy(dtype=float)
+        valid_thickness = np.full(len(valid_bins), np.nan)
+        value_col = "asymmetry_percent" if use_percentages else "asymmetry_score"
+        valid_asymmetry = valid_bins[value_col].to_numpy(dtype=float)
+        return {
+            "valid_coords": valid_coords,
+            "valid_thickness": valid_thickness,
+            "valid_asymmetry": valid_asymmetry,
+        }
+
+    # thickness mode: assign each row in thickness_df to its bin
+    params = analysis_results.parameters
+    bin_size = params["thickness_bin_size_nm"]
+    thickness_range_param = params.get("thickness_range_nm")
+
+    thickness_values = thickness_df["thickness_nm"].values
+    coord_data = thickness_df[coordinate_columns].values
+
+    if thickness_range_param is not None:
+        min_t, max_t = thickness_range_param
+        mask = (thickness_values >= min_t) & (thickness_values <= max_t)
+        thickness_values = thickness_values[mask]
+        coord_data = coord_data[mask]
+
+    asymmetry_scores = np.full(len(thickness_values), np.nan)
+    asymmetry_percents = np.full(len(thickness_values), np.nan)
+    valid_mask = np.zeros(len(thickness_values), dtype=bool)
+
+    for j, (_, bin_row) in enumerate(valid_bins.iterrows()):
+        bin_start, bin_end = bin_row["bin_start"], bin_row["bin_end"]
+        if j == len(valid_bins) - 1:
+            bin_mask = (thickness_values >= bin_start) & (thickness_values <= bin_end)
+        else:
+            bin_mask = (thickness_values >= bin_start) & (thickness_values < bin_end)
+        asymmetry_scores[bin_mask] = bin_row["asymmetry_score"]
+        asymmetry_percents[bin_mask] = bin_row["asymmetry_percent"]
+        valid_mask[bin_mask] = True
+
+    valid_coords = coord_data[valid_mask]
+    valid_thickness = thickness_values[valid_mask]
+    valid_asymmetry = (asymmetry_percents if use_percentages else asymmetry_scores)[valid_mask]
+
+    if len(valid_coords) == 0:
+        return None
+
+    return {
+        "valid_coords": valid_coords,
+        "valid_thickness": valid_thickness,
+        "valid_asymmetry": valid_asymmetry,
+    }
+
 
 def _bin_profiles_by_thickness(profiles: list[dict],
                               thickness_data: pd.Series,
@@ -1331,9 +1604,7 @@ def analyze_membrane_thickness(
     random_seed: int = 42,
     calculate_statistics_by_file: bool = False,
     outlier_removal_method: str | None = None,
-    outlier_iqr_factor: float = 1.5,
     outlier_percentile_range: tuple[float, float] = (5, 95),
-    outlier_std_factor: float = 2.0,
     auto_discover_related_files: bool = False,
     thickness_column: str | None = None,
 ) -> ThicknessAnalysisResults:
@@ -1353,13 +1624,9 @@ def analyze_membrane_thickness(
     calculate_statistics_by_file : bool, default False
         Whether to calculate statistics separately by file
     outlier_removal_method : str | None, optional
-        Method for outlier removal ('iqr', 'percentile', 'std')
-    outlier_iqr_factor : float, default 1.5
-        IQR factor for outlier detection
+        Method for outlier removal ('percentile')
     outlier_percentile_range : tuple[float, float], default (5, 95)
         Percentile range for outlier detection
-    outlier_std_factor : float, default 2.0
-        Standard deviation factor for outlier detection
     auto_discover_related_files : bool, default False
         When ``data`` is a path, also load an aligned intensity-profiles pickle if one
         exists next to the CSV (see :func:`load_membrane_data`).
@@ -1409,9 +1676,7 @@ def analyze_membrane_thickness(
         thickness_data = _apply_outlier_filtering(
             thickness_series_full,
             method=outlier_removal_method,
-            iqr_factor=outlier_iqr_factor,
             percentile_range=outlier_percentile_range,
-            std_factor=outlier_std_factor,
         )
         print(
             f"Outlier removal ({outlier_removal_method}): {original_count} → {len(thickness_data)} measurements"
@@ -1439,9 +1704,7 @@ def analyze_membrane_thickness(
         'random_seed': random_seed,
         'calculate_statistics_by_file': calculate_statistics_by_file,
         'outlier_removal_method': outlier_removal_method,
-        'outlier_iqr_factor': outlier_iqr_factor,
         'outlier_percentile_range': outlier_percentile_range,
-        'outlier_std_factor': outlier_std_factor,
         'analysis_timestamp': pd.Timestamp.now().isoformat(),
         'thickness_source_column': membrane_data.metadata.get('thickness_source_column'),
     }
@@ -1763,6 +2026,533 @@ def analyze_intensity_profiles(
         binned_profiles=binned_profiles
     )
 
+
+def analyze_intensity_asymemtry(
+    data: "MembraneData | PathOrStr | IntensityProfileAnalysisResults",
+    binning_mode: Literal["thickness", "neighborhood"] = "thickness",
+    thickness_bin_size_nm: float = 0.5,
+    neighborhood_radius_nm: float = 5.0,
+    pixel_size_nm: float | None = None,
+    neighborhood_seed_fraction: float = 0.1,
+    min_profiles_per_bin: int = 50,
+    thickness_range_nm: tuple[float, float] | None = None,
+    outlier_removal_method: str | None = None,
+    outlier_percentile_range: tuple[float, float] = (5, 95),
+    max_cached_profile_examples: int = 200,
+    thickness_column: str | None = None,
+    random_seed: int = 42,
+) -> "AsymmetryAnalysisResults":
+    """
+    Intensity-based membrane leaflet asymmetry analysis.
+
+    Groups intensity profiles into bins, aggregates the pre-detected extrema
+    (leaflet minima + central maximum) stored in ``profile['features']``, and
+    computes a per-bin unity-based asymmetry score (1.0 = symmetric; >1.0
+    = one leaflet more prominent). Two grouping strategies are supported.
+
+    Parameters
+    ----------
+    data : MembraneData | PathOrStr | IntensityProfileAnalysisResults
+        Source data. A file path triggers :func:`load_membrane_data` with
+        ``auto_discover_related_files=True``.
+    binning_mode : {"thickness", "neighborhood"}, default "thickness"
+        How to group profiles:
+
+        - ``"thickness"`` — profiles binned by ``thickness_nm`` value into
+          equal-width bins of width ``thickness_bin_size_nm``.
+        - ``"neighborhood"`` — for each seed surface-1 point, all profiles whose
+          surface-1 voxel falls within ``neighborhood_radius_nm`` are grouped
+          together. Returns one result row per seed point.
+    thickness_bin_size_nm : float, default 0.5
+        Bin width in nm (``"thickness"`` mode only).
+    neighborhood_radius_nm : float, default 5.0
+        Search radius in nm (``"neighborhood"`` mode only).
+    pixel_size_nm : float | None, optional
+        Voxels size in nm, required for ``"neighborhood"`` mode nm→voxel conversion.
+        If ``None``, read from ``profile['pixel_size']`` or ``MembraneData.metadata``.
+    neighborhood_seed_fraction : float, default 0.1
+        Fraction of surface-1 points to use as seeds in ``"neighborhood"`` mode
+        (random subsample). Reduce below 1.0 for large surfaces to cut
+        computation time. E.g. 0.1 uses 10 % of points as seeds.
+    min_profiles_per_bin : int, default 50
+        Minimum number of profiles with valid extrema required to accept a bin.
+    thickness_range_nm : (float, float) | None, optional
+        Discard profiles outside this thickness range before binning.
+    outlier_removal_method : {"percentile"} | None, optional
+        Post-analysis outlier filtering applied to bin-level asymmetry scores.
+    outlier_percentile_range : (float, float), default (5, 95)
+    max_cached_profile_examples : int, default 200
+        Maximum number of representative seeds whose median profiles are cached
+        for use by ``plot_asymmetry_detection_examples`` (``"neighborhood"`` mode only).
+        Seeds are sampled evenly across the score distribution.
+    thickness_column : str | None, optional
+        Override auto-detected thickness column when loading from a path.
+    random_seed : int, default 42
+        Seed for seed-fraction sampling in ``"neighborhood"`` mode.
+
+    Returns
+    -------
+    AsymmetryAnalysisResults
+    """
+    # --- Resolve input ---
+    if isinstance(data, IntensityProfileAnalysisResults):
+        membrane_data = data.raw_data
+        profiles = list(data.profiles)
+        profile_statistics = data.profile_statistics
+        profile_parameters = data.parameters
+    else:
+        if isinstance(data, (str, Path)):
+            membrane_data = load_membrane_data(
+                data,
+                auto_discover_related_files=True,
+                thickness_column=thickness_column,
+            )
+        else:
+            membrane_data = data
+        if not membrane_data.intensity_profiles:
+            raise ValueError("No intensity profiles found. Cannot perform asymmetry analysis.")
+        profiles = list(membrane_data.intensity_profiles)
+        profile_statistics: dict[str, Any] = {}
+        profile_parameters: dict[str, Any] = {}
+
+    print(f"Starting asymmetry analysis on {len(profiles)} profiles (binning_mode={binning_mode!r})...")
+
+    # --- Pixel size ---
+    effective_pixel_size = (
+        pixel_size_nm
+        or membrane_data.metadata.get("pixel_size_nm")
+        or _voxel_size_nm_from_profiles(profiles)
+    )
+    if binning_mode == "neighborhood" and effective_pixel_size is None:
+        raise ValueError(
+            "pixel_size_nm is required for binning_mode='neighborhood'. Pass it explicitly or "
+            "use profile dicts that include 'pixel_size'."
+        )
+
+    # --- Align lengths ---
+    thickness_df_full = membrane_data.thickness_df.reset_index(drop=True)
+    n_align = min(len(thickness_df_full), len(profiles))
+    if len(thickness_df_full) != len(profiles):
+        warnings.warn(
+            f"Thickness DF length ({len(thickness_df_full)}) != profiles length ({len(profiles)}); "
+            f"truncating to {n_align}."
+        )
+        thickness_df_full = thickness_df_full.iloc[:n_align]
+        profiles = profiles[:n_align]
+
+    thickness_values_full = thickness_df_full["thickness_nm"].to_numpy(dtype=float)
+
+    # --- Optional thickness range filter ---
+    if thickness_range_nm is not None:
+        min_t, max_t = thickness_range_nm
+        keep_mask = (thickness_values_full >= min_t) & (thickness_values_full <= max_t)
+        filtered_indices = np.where(keep_mask)[0]
+        profiles = [profiles[i] for i in filtered_indices]
+        thickness_df_filt = thickness_df_full.iloc[filtered_indices].reset_index(drop=True)
+        thickness_values = thickness_values_full[filtered_indices]
+        print(
+            f"Filtered to thickness range {min_t}-{max_t} nm: {len(profiles)} profiles remain"
+        )
+    else:
+        filtered_indices = np.arange(n_align)
+        thickness_df_filt = thickness_df_full
+        thickness_values = thickness_values_full
+
+    # =============================================================
+    # PRE-EXTRACT FEATURES TO NUMPY (one-time O(n_profiles) cost)
+    # Eliminates the per-neighbor Python dict-lookup inner loop in both modes.
+    # =============================================================
+    _n_profs = len(profiles)
+    _feat_valid = np.zeros(_n_profs, dtype=bool)
+    _min1_int = np.full(_n_profs, np.nan)
+    _min2_int = np.full(_n_profs, np.nan)
+    _cmax_int = np.full(_n_profs, np.nan)
+    _min1_pos = np.full(_n_profs, np.nan)
+    _min2_pos = np.full(_n_profs, np.nan)
+    _cmax_pos = np.full(_n_profs, np.nan)
+    _required_pos = ["minima1_position", "minima2_position", "central_max_position"]
+    for _i, _p in enumerate(profiles):
+        _f = _p.get("features")
+        if not isinstance(_f, dict):
+            continue
+        if not _profile_eligible_for_asymmetry(_f):
+            continue
+        if not all(k in _f and np.isfinite(_f[k]) for k in _required_pos):
+            continue
+        _feat_valid[_i] = True
+        _min1_int[_i] = _f.get("minima1_intensity", np.nan)
+        _min2_int[_i] = _f.get("minima2_intensity", np.nan)
+        _cmax_int[_i] = _f.get("central_max_intensity", np.nan)
+        _min1_pos[_i] = _f.get("minima1_position", np.nan)
+        _min2_pos[_i] = _f.get("minima2_position", np.nan)
+        _cmax_pos[_i] = _f.get("central_max_position", np.nan)
+    _agg_fn = np.nanmedian
+
+    # =============================================================
+    # THICKNESS MODE
+    # =============================================================
+    if binning_mode == "thickness":
+        min_thick = float(np.nanmin(thickness_values))
+        max_thick = float(np.nanmax(thickness_values))
+        bin_edges = np.arange(min_thick, max_thick + thickness_bin_size_nm, thickness_bin_size_nm)
+        bin_centers = bin_edges[:-1] + thickness_bin_size_nm / 2.0
+        print(f"Created {len(bin_centers)} thickness bins from {min_thick:.2f} to {max_thick:.2f} nm")
+
+        bin_data: list[dict] = []
+        bin_profiles: dict[float, dict] = {}
+        rejected_bins: list[dict] = []
+
+        for i, bin_center in enumerate(bin_centers):
+            bin_start = float(bin_edges[i])
+            bin_end = float(bin_edges[i + 1])
+
+            if i == len(bin_centers) - 1:
+                bin_mask = (thickness_values >= bin_start) & (thickness_values <= bin_end)
+            else:
+                bin_mask = (thickness_values >= bin_start) & (thickness_values < bin_end)
+
+            bin_indices = np.where(bin_mask)[0]
+            if len(bin_indices) < min_profiles_per_bin:
+                rejected_bins.append(
+                    {
+                        "bin_center": bin_center,
+                        "thickness_range": f"{bin_start:.2f}-{bin_end:.2f} nm",
+                        "n_profiles": len(bin_indices),
+                        "reason": f"Insufficient profiles ({len(bin_indices)} < {min_profiles_per_bin})",
+                    }
+                )
+                continue
+
+            # Vectorized feature extraction using pre-computed arrays
+            valid_idx = bin_indices[_feat_valid[bin_indices]]
+            if len(valid_idx) < min_profiles_per_bin:
+                rejected_bins.append(
+                    {
+                        "bin_center": bin_center,
+                        "thickness_range": f"{bin_start:.2f}-{bin_end:.2f} nm",
+                        "n_profiles": len(valid_idx),
+                        "reason": f"Insufficient valid extrema ({len(valid_idx)} < {min_profiles_per_bin})",
+                    }
+                )
+                continue
+
+            m1 = _min1_int[valid_idx]
+            m2 = _min2_int[valid_idx]
+            cm = _cmax_int[valid_idx]
+            finite_mask = np.isfinite(m1) & np.isfinite(m2) & np.isfinite(cm)
+            n_scoring = int(finite_mask.sum())
+            if n_scoring < min_profiles_per_bin:
+                rejected_bins.append(
+                    {
+                        "bin_center": bin_center,
+                        "thickness_range": f"{bin_start:.2f}-{bin_end:.2f} nm",
+                        "n_profiles": n_scoring,
+                        "reason": f"Insufficient profiles with finite intensities ({n_scoring} < {min_profiles_per_bin})",
+                    }
+                )
+                continue
+
+            agg_dict = {
+                "central_max_intensity": float(_agg_fn(cm)),
+                "minima1_intensity":     float(_agg_fn(m1)),
+                "minima2_intensity":     float(_agg_fn(m2)),
+                "central_max_position":  float(_agg_fn(_cmax_pos[valid_idx])),
+                "minima1_position":      float(_agg_fn(_min1_pos[valid_idx])),
+                "minima2_position":      float(_agg_fn(_min2_pos[valid_idx])),
+            }
+            asym = _calculate_unity_asymmetry_score(agg_dict)
+            if not asym["valid"]:
+                rejected_bins.append(
+                    {
+                        "bin_center": bin_center,
+                        "thickness_range": f"{bin_start:.2f}-{bin_end:.2f} nm",
+                        "n_profiles": n_scoring,
+                        "reason": "Intensity values NaN after aggregation",
+                    }
+                )
+                continue
+
+            bin_data.append(
+                {
+                    "bin_center": bin_center,
+                    "bin_start": bin_start,
+                    "bin_end": bin_end,
+                    "thickness_range": f"{bin_start:.2f}-{bin_end:.2f} nm",
+                    "n_profiles": len(valid_idx),
+                    "n_valid_profiles": n_scoring,
+                    "valid": True,
+                    **asym,
+                }
+            )
+
+            # Profile curves: still needs raw profile dicts for _distances_along_profile_vox
+            profile_curves: list[tuple[np.ndarray, np.ndarray]] = []
+            for pi in valid_idx:
+                d_vox = _distances_along_profile_vox(profiles[pi])
+                inten = profiles[pi].get("profile")
+                if (
+                    d_vox is not None
+                    and inten is not None
+                    and len(d_vox) == len(inten)
+                    and len(d_vox) > 1
+                ):
+                    profile_curves.append(
+                        (np.asarray(d_vox, dtype=float), np.asarray(inten, dtype=float))
+                    )
+
+            # Cache median profile for detection-examples plot
+            if len(profile_curves) >= 2:
+                lo_ax = min(float(np.min(d)) for d, _ in profile_curves)
+                hi_ax = max(float(np.max(d)) for d, _ in profile_curves)
+                if hi_ax > lo_ax:
+                    common = np.linspace(lo_ax, hi_ax, 101)
+                    stacked = [
+                        np.interp(common, d, y)
+                        for d, y in profile_curves
+                        if d.min() <= hi_ax and d.max() >= lo_ax
+                    ]
+                    if len(stacked) >= 2:
+                        arr = np.vstack(stacked)
+                        bin_profiles[float(bin_center)] = {
+                            "distances": common,
+                            "median_profile": np.median(arr, axis=0),
+                            "percentile_25": np.percentile(arr, 25, axis=0),
+                            "percentile_75": np.percentile(arr, 75, axis=0),
+                        }
+
+    # =============================================================
+    # NEIGHBORHOOD MODE
+    # =============================================================
+    elif binning_mode == "neighborhood":
+        coord_cols = [c for c in ["x1_voxel", "y1_voxel", "z1_voxel"] if c in thickness_df_filt.columns]
+        if len(coord_cols) < 3:
+            raise ValueError(
+                "neighborhood mode requires columns x1_voxel, y1_voxel, z1_voxel in thickness_df."
+            )
+        coords_vox = thickness_df_filt[coord_cols].to_numpy(dtype=float)
+        radius_vox = neighborhood_radius_nm / float(effective_pixel_size)
+
+        # Determine seeds
+        n_total = len(coords_vox)
+        rng = np.random.RandomState(random_seed)
+        if 0.0 < neighborhood_seed_fraction < 1.0:
+            n_seeds = max(1, int(n_total * neighborhood_seed_fraction))
+            seed_indices = rng.choice(n_total, size=n_seeds, replace=False)
+        else:
+            seed_indices = np.arange(n_total)
+
+        print(
+            f"Building KDTree on {n_total} surface-1 points, "
+            f"radius={neighborhood_radius_nm:.2f} nm ({radius_vox:.2f} vox), "
+            f"{len(seed_indices)} seeds (seed_fraction={neighborhood_seed_fraction})..."
+        )
+        tree = _KDTree(coords_vox)
+
+        bin_data = []
+        bin_profiles = {}
+        rejected_bins = []
+
+        # Bulk KDTree query: one C call instead of N_seeds separate calls
+        print("Querying neighborhoods (bulk)...")
+        all_neighbourhoods = tree.query_ball_point(coords_vox[seed_indices], r=radius_vox)
+
+        for seed_idx, neighbour_idx in zip(seed_indices, all_neighbourhoods):
+            nbr = np.asarray(neighbour_idx, dtype=int)
+            nbr = nbr[nbr < _n_profs]  # guard against out-of-range indices
+
+            if len(nbr) < min_profiles_per_bin:
+                rejected_bins.append(
+                    {
+                        "seed_index": int(seed_idx),
+                        "n_profiles": len(nbr),
+                        "reason": f"Insufficient neighbours ({len(nbr)} < {min_profiles_per_bin})",
+                    }
+                )
+                continue
+
+            # Vectorized feature extraction
+            valid_idx = nbr[_feat_valid[nbr]]
+            if len(valid_idx) < min_profiles_per_bin:
+                rejected_bins.append(
+                    {
+                        "seed_index": int(seed_idx),
+                        "n_profiles": len(valid_idx),
+                        "reason": f"Insufficient valid extrema ({len(valid_idx)} < {min_profiles_per_bin})",
+                    }
+                )
+                continue
+
+            m1 = _min1_int[valid_idx]
+            m2 = _min2_int[valid_idx]
+            cm = _cmax_int[valid_idx]
+            finite_mask = np.isfinite(m1) & np.isfinite(m2) & np.isfinite(cm)
+            n_scoring = int(finite_mask.sum())
+            if n_scoring < min_profiles_per_bin:
+                rejected_bins.append(
+                    {
+                        "seed_index": int(seed_idx),
+                        "n_profiles": n_scoring,
+                        "reason": f"Insufficient profiles with finite intensities ({n_scoring} < {min_profiles_per_bin})",
+                    }
+                )
+                continue
+
+            agg_dict = {
+                "central_max_intensity": float(_agg_fn(cm)),
+                "minima1_intensity":     float(_agg_fn(m1)),
+                "minima2_intensity":     float(_agg_fn(m2)),
+                "central_max_position":  float(_agg_fn(_cmax_pos[valid_idx])),
+                "minima1_position":      float(_agg_fn(_min1_pos[valid_idx])),
+                "minima2_position":      float(_agg_fn(_min2_pos[valid_idx])),
+            }
+            asym = _calculate_unity_asymmetry_score(agg_dict)
+            if not asym["valid"]:
+                rejected_bins.append(
+                    {
+                        "seed_index": int(seed_idx),
+                        "n_profiles": n_scoring,
+                        "reason": "Intensity values NaN after aggregation",
+                    }
+                )
+                continue
+
+            sx, sy, sz = coords_vox[seed_idx]
+            bin_data.append(
+                {
+                    "seed_index": int(seed_idx),
+                    "seed_x": float(sx),
+                    "seed_y": float(sy),
+                    "seed_z": float(sz),
+                    "n_profiles": len(valid_idx),
+                    "n_valid_profiles": n_scoring,
+                    "valid": True,
+                    **asym,
+                }
+            )
+
+        # Second pass: cache median profiles for representative seeds so
+        # plot_asymmetry_detection_examples can display them.
+        if bin_data:
+            _valid_by_score = sorted(bin_data, key=lambda r: r["asymmetry_score"])
+            _n_cache = min(max_cached_profile_examples, len(_valid_by_score))
+            _cache_pos = np.round(np.linspace(0, len(_valid_by_score) - 1, _n_cache)).astype(int)
+            print(f"Caching median profiles for {_n_cache} representative seeds...")
+            for _pos in _cache_pos:
+                _seed_idx = _valid_by_score[int(_pos)]["seed_index"]
+                _neighbour_idx = tree.query_ball_point(coords_vox[_seed_idx], r=radius_vox)
+                _profile_curves: list[tuple[np.ndarray, np.ndarray]] = []
+                for _pi in _neighbour_idx:
+                    if _pi >= len(profiles):
+                        continue
+                    _d_vox = _distances_along_profile_vox(profiles[_pi])
+                    _inten = profiles[_pi].get("profile")
+                    if (
+                        _d_vox is not None
+                        and _inten is not None
+                        and len(_d_vox) == len(_inten)
+                        and len(_d_vox) > 1
+                    ):
+                        _profile_curves.append(
+                            (np.asarray(_d_vox, dtype=float), np.asarray(_inten, dtype=float))
+                        )
+                if len(_profile_curves) < 2:
+                    continue
+                _lo = min(float(np.min(d)) for d, _ in _profile_curves)
+                _hi = max(float(np.max(d)) for d, _ in _profile_curves)
+                if _hi <= _lo:
+                    continue
+                _common = np.linspace(_lo, _hi, 101)
+                _stacked = [
+                    np.interp(_common, d, y)
+                    for d, y in _profile_curves
+                    if d.min() <= _hi and d.max() >= _lo
+                ]
+                if len(_stacked) < 2:
+                    continue
+                _arr = np.vstack(_stacked)
+                bin_profiles[int(_seed_idx)] = {
+                    "distances": _common,
+                    "median_profile": np.median(_arr, axis=0),
+                    "percentile_25": np.percentile(_arr, 25, axis=0),
+                    "percentile_75": np.percentile(_arr, 75, axis=0),
+                }
+
+    else:
+        raise ValueError(f"Unknown binning_mode {binning_mode!r}. Use 'thickness' or 'neighborhood'.")
+
+    # --- Build results DataFrame ---
+    bin_results_df = pd.DataFrame(bin_data)
+    valid_bins_df = bin_results_df[bin_results_df["valid"]].copy() if len(bin_results_df) > 0 else pd.DataFrame()
+
+    print(f"Successfully computed asymmetry for {len(valid_bins_df)} bins/seeds")
+    print(f"Rejected: {len(rejected_bins)}")
+
+    # --- Post-analysis outlier filtering ---
+    if outlier_removal_method is not None and len(valid_bins_df) > 0:
+        scores = valid_bins_df["asymmetry_score"]
+        if outlier_removal_method == "percentile":
+            lo = scores.quantile(outlier_percentile_range[0] / 100)
+            hi = scores.quantile(outlier_percentile_range[1] / 100)
+            keep = (scores >= lo) & (scores <= hi)
+        else:
+            keep = pd.Series(True, index=scores.index)
+        bin_results_df.loc[valid_bins_df.index[~keep.values], "valid"] = False
+        valid_bins_df = bin_results_df[bin_results_df["valid"]].copy()
+        print(f"After outlier removal ({outlier_removal_method}): {len(valid_bins_df)} valid bins/seeds")
+
+    # --- Overall statistics ---
+    overall_stats: dict[str, Any] = {
+        "total_bins": len(bin_results_df),
+        "valid_bins": len(valid_bins_df),
+        "rejected_bins": len(rejected_bins),
+        "total_profiles_analyzed": int(valid_bins_df["n_profiles"].sum()) if len(valid_bins_df) > 0 else 0,
+    }
+    if len(valid_bins_df) > 0:
+        asym_s = valid_bins_df["asymmetry_score"]
+        asym_p = valid_bins_df["asymmetry_percent"]
+        notably_asymmetric = int((asym_s > 1.2).sum())
+        overall_stats.update(
+            {
+                "median_asymmetry": float(asym_s.median()),
+                "median_asymmetry_percent": float(asym_p.median()),
+                "mean_asymmetry": float(asym_s.mean()),
+                "mean_asymmetry_percent": float(asym_p.mean()),
+                "std_asymmetry": float(asym_s.std()),
+                "min_asymmetry": float(asym_s.min()),
+                "max_asymmetry": float(asym_s.max()),
+                "notably_asymmetric_bins": notably_asymmetric,
+                "fraction_high_asymmetry": notably_asymmetric / len(valid_bins_df),
+            }
+        )
+
+    parameters: dict[str, Any] = {
+        "binning_mode": binning_mode,
+        "thickness_bin_size_nm": thickness_bin_size_nm if binning_mode == "thickness" else None,
+        "neighborhood_radius_nm": neighborhood_radius_nm if binning_mode == "neighborhood" else None,
+        "pixel_size_nm": effective_pixel_size,
+        "min_profiles_per_bin": min_profiles_per_bin,
+        "thickness_range_nm": thickness_range_nm,
+        "outlier_removal_method": outlier_removal_method,
+        "outlier_percentile_range": outlier_percentile_range,
+        "thickness_column": thickness_column,
+        "analysis_timestamp": pd.Timestamp.now().isoformat(),
+    }
+    if profile_parameters:
+        parameters["profile_analysis_params"] = profile_parameters
+
+    return AsymmetryAnalysisResults(
+        raw_data=membrane_data,
+        profiles=profiles,
+        profile_statistics=profile_statistics,
+        parameters=parameters,
+        bin_results=bin_results_df,
+        bin_profiles=bin_profiles,
+        overall_statistics=overall_stats,
+        rejected_bins=rejected_bins,
+        binning_mode=binning_mode,
+    )
+
+
 def create_profile_coordinates_table(
     membrane_data: 'MembraneData',
     spatial_bounds: dict[str, tuple[float, float]] | None = None,
@@ -1991,7 +2781,6 @@ def _plot_measurement_histogram(
     default_title: str,
     value_range: tuple[float, float] | None,
     outlier_removal_method: str | None,
-    outlier_iqr_factor: float,
     outlier_percentile_range: tuple[float, float],
     hover_label: str = "Value",
 ) -> go.Figure:
@@ -2008,9 +2797,7 @@ def _plot_measurement_histogram(
 
         if outlier_removal_method is not None:
             original_count = len(data_s)
-            data_s = _apply_outlier_filtering(
-                data_s, outlier_removal_method, outlier_iqr_factor, outlier_percentile_range
-            )
+            data_s = _apply_outlier_filtering(data_s, outlier_removal_method, outlier_percentile_range)
             print(f"Outlier removal for {membrane_name}: {original_count} -> {len(data_s)}")
 
         if len(data_s) == 0:
@@ -2149,12 +2936,11 @@ def plot_thickness_distribution(
     figure_size: tuple[int, int] = (800, 600),
     plot_title: str | None = None,
     outlier_removal_method: str | None = None,
-    outlier_iqr_factor: float = 1.5,
     outlier_percentile_range: tuple[float, float] = (5, 95)
 ) -> go.Figure:
     """
     Create thickness distribution histogram with comprehensive filtering options.
-    
+
     Parameters
     ----------
     data : ThicknessAnalysisResults or list[ThicknessAnalysisResults]
@@ -2186,9 +2972,7 @@ def plot_thickness_distribution(
     plot_title : str | None, optional
         Custom plot title
     outlier_removal_method : str | None, optional
-        Method for outlier removal ('iqr', 'percentile', 'std')
-    outlier_iqr_factor : float, default 1.5
-        IQR factor for outlier detection
+        Method for outlier removal ('percentile')
     outlier_percentile_range : tuple[float, float], default (5, 95)
         Percentile range for outlier detection
 
@@ -2223,7 +3007,6 @@ def plot_thickness_distribution(
         default_title=f'Membrane Thickness Distribution{range_str}{membrane_str}',
         value_range=thickness_range_nm,
         outlier_removal_method=outlier_removal_method,
-        outlier_iqr_factor=outlier_iqr_factor,
         outlier_percentile_range=outlier_percentile_range,
         hover_label='Thickness (nm)',
     )
@@ -2244,7 +3027,6 @@ def plot_min_to_min_distribution(
     figure_size: tuple[int, int] = (800, 600),
     plot_title: str | None = None,
     outlier_removal_method: str | None = None,
-    outlier_iqr_factor: float = 1.5,
     outlier_percentile_range: tuple[float, float] = (5, 95)
 ) -> go.Figure:
     """
@@ -2280,9 +3062,7 @@ def plot_min_to_min_distribution(
     plot_title : str | None, optional
         Custom plot title
     outlier_removal_method : str | None, optional
-        Method for outlier removal ('iqr', 'percentile', 'std')
-    outlier_iqr_factor : float, default 1.5
-        IQR factor for outlier detection
+        Method for outlier removal ('percentile')
     outlier_percentile_range : tuple[float, float], default (5, 95)
         Percentile range for outlier detection
         
@@ -2317,7 +3097,6 @@ def plot_min_to_min_distribution(
         default_title=f'Minima Separation Distribution ({unit}){range_str}{membrane_str}',
         value_range=minima_separation_range_nm,
         outlier_removal_method=outlier_removal_method,
-        outlier_iqr_factor=outlier_iqr_factor,
         outlier_percentile_range=outlier_percentile_range,
         hover_label=xaxis_label,
     )
@@ -2338,7 +3117,6 @@ def plot_thickness_3d(
     figure_size: tuple[int, int] = (800, 600),
     plot_title: str | None = None,
     outlier_removal_method: str | None = None,
-    outlier_iqr_factor: float = 1.5,
     outlier_percentile_range: tuple[float, float] = (5, 95),
     color_by_mean: bool = False
 ) -> go.Figure:
@@ -2376,9 +3154,7 @@ def plot_thickness_3d(
     plot_title : str | None, optional
         Custom plot title
     outlier_removal_method : str | None, default None
-        Method for outlier removal ('iqr', 'percentile', 'std')
-    outlier_iqr_factor : float, default 1.5
-        IQR factor for outlier detection
+        Method for outlier removal ('percentile')
     outlier_percentile_range : tuple[float, float], default (5, 95)
         Percentile range for outlier detection
     color_by_mean : bool, default False
@@ -2411,7 +3187,7 @@ def plot_thickness_3d(
         if outlier_removal_method is not None:
             original_count = len(df)
             filtered = _apply_outlier_filtering(
-                df["thickness_nm"], outlier_removal_method, outlier_iqr_factor, outlier_percentile_range,
+                df["thickness_nm"], outlier_removal_method, outlier_percentile_range,
             )
             df = df[df['thickness_nm'].isin(filtered)]
             print(f"Outlier removal for {membrane_name}: {original_count} -> {len(df)} measurements")
@@ -3917,4 +4693,481 @@ def save_thickness_motls(
         print(f"Saved subsampled motls with {len(sub_motl1.df)} points")
     else:
         print(f"Saved motls with {len(motl1.df)} points")
+
+
+# =============================================================================
+# ASYMMETRY VISUALIZATION FUNCTIONS
+# =============================================================================
+
+
+def plot_asymmetry_distribution(
+    data: "AsymmetryAnalysisResults | list[AsymmetryAnalysisResults]",
+    membrane_names: list[str] | None = None,
+    use_percentages: bool = True,
+    histogram_bins: int | list[float] = 40,
+    asymmetry_range: tuple[float, float] | None = None,
+    y_axis_type: str = "count",
+    colors: list[str] | None = None,
+    opacity: float = 0.7,
+    figure_size: tuple[int, int] = (550, 450),
+    plot_title: str | None = None,
+    filter_method: str | None = None,
+    outlier_percentile_range: tuple[float, float] = (5, 95),
+) -> go.Figure:
+    """
+    Histogram of per-bin asymmetry scores or percentages.
+
+    Parameters
+    ----------
+    data : AsymmetryAnalysisResults | list[AsymmetryAnalysisResults]
+        Single or multiple asymmetry analysis results.
+    membrane_names : list[str] | None, optional
+    use_percentages : bool, default True
+        Show asymmetry as percentage (True) or raw score (False).
+    histogram_bins : int | list[float], default 40
+        Number of bins, or explicit bin-edge array.
+    asymmetry_range : (float, float) | None, optional
+        Restrict the histogram x-axis to this range.
+    y_axis_type : {"count", "density", "measurements"}, default "count"
+        ``"count"`` = one count per bin-row; ``"density"`` = probability density;
+        ``"measurements"`` = each bin contributes ``n_profiles`` counts.
+    colors : list[str] | None, optional
+    opacity : float, default 0.7
+    figure_size : (int, int), default (700, 450)
+    plot_title : str | None, optional
+    filter_method : {"percentile"} | None, optional
+        Outlier filter applied before plotting.
+    outlier_percentile_range : (float, float), default (5, 95)
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    data_list, membrane_names = _coerce_multi(data, membrane_names)
+    _colors = resolve_palette(colors)
+
+    fig = go.Figure()
+    all_values: list[float] = []
+    reference_line = 0.0 if use_percentages else 1.0
+    x_title = "Asymmetry (%)" if use_percentages else "Asymmetry Score"
+    value_col = "asymmetry_percent" if use_percentages else "asymmetry_score"
+    y_title = {"count": "Number of Bins", "density": "Density", "measurements": "Number of Measurements"}.get(
+        y_axis_type, "Number of Bins"
+    )
+
+    for i, (results, membrane_name) in enumerate(zip(data_list, membrane_names)):
+        if filter_method:
+            results = _filter_asymmetry_outliers(
+                results,
+                method=filter_method,
+                percentile_range=outlier_percentile_range,
+            )
+
+        bin_results = results.bin_results
+        valid_bins = bin_results[bin_results["valid"]].copy() if len(bin_results) > 0 else pd.DataFrame()
+
+        if len(valid_bins) == 0:
+            print(f"Warning: no valid bins for {membrane_name}")
+            continue
+
+        values = valid_bins[value_col].dropna()
+        all_values.extend(values.tolist())
+
+        if y_axis_type == "measurements":
+            expanded: list[float] = []
+            for _, row in valid_bins.iterrows():
+                expanded.extend([float(row[value_col])] * int(row["n_profiles"]))
+            data_for_hist = expanded
+        else:
+            data_for_hist = values.tolist()
+
+        x_range = asymmetry_range or (
+            (min(all_values), max(all_values)) if all_values else (0.0, 1.0)
+        )
+        bin_size = (x_range[1] - x_range[0]) / histogram_bins if isinstance(histogram_bins, int) else None
+
+        fig.add_trace(
+            go.Histogram(
+                x=data_for_hist,
+                xbins=dict(start=x_range[0], end=x_range[1], size=bin_size),
+                marker_color=_colors[i % len(_colors)],
+                marker_line_color="black",
+                marker_line_width=1,
+                opacity=opacity,
+                name=f"{membrane_name} (n={len(valid_bins)} bins)",
+                histnorm="probability density" if y_axis_type == "density" else None,
+            )
+        )
+
+    if all_values:
+        fig.add_vline(
+            x=reference_line,
+            line=dict(color="red", width=2, dash="dash"),
+            annotation_text="Perfect Symmetry",
+            annotation_position="top right",
+        )
+
+    if asymmetry_range is not None:
+        fig.update_xaxes(range=list(asymmetry_range))
+
+    fig.update_layout(
+        title=plot_title or "Asymmetry Distribution",
+        xaxis_title=x_title,
+        yaxis_title=y_title,
+        width=figure_size[0],
+        height=figure_size[1],
+        barmode="overlay" if len(data_list) > 1 else "group",
+    )
+    return apply_defaults(fig)
+
+
+def plot_asymmetry_3d(
+    data: "AsymmetryAnalysisResults | list[AsymmetryAnalysisResults]",
+    membrane_names: list[str] | None = None,
+    coordinate_columns: list[str] | None = None,
+    use_percentages: bool = True,
+    asymmetry_range: tuple[float, float] | None = None,
+    color_scale: str = "OrRd",
+    marker_size: int = 2,
+    sample_fraction: float = 1.0,
+    random_seed: int = 42,
+    figure_size: tuple[int, int] = (800, 600),
+    plot_title: str | None = None,
+    filter_method: str | None = None,
+    outlier_percentile_range: tuple[float, float] = (5, 95),
+) -> go.Figure:
+    """
+    3D spatial scatter of asymmetry scores, colored by intensity.
+
+    Works for both ``"thickness"`` and ``"neighborhood"`` binning modes. In thickness
+    mode the spatial coordinates come from the underlying thickness CSV (via
+    ``raw_data.thickness_df``). In neighborhood mode the seed-point coordinates
+    stored in ``bin_results`` are used directly.
+
+    Parameters
+    ----------
+    data : AsymmetryAnalysisResults | list[AsymmetryAnalysisResults]
+    membrane_names : list[str] | None, optional
+    coordinate_columns : list[str] | None, optional
+        Override the default ``['x1_voxel', 'y1_voxel', 'z1_voxel']``.
+    use_percentages : bool, default True
+    asymmetry_range : (float, float) | None, optional
+        Shared color-scale range across all membranes.
+    color_scale : str, default "OrRd"
+    marker_size : int, default 2
+    sample_fraction : float, default 1.0
+    random_seed : int, default 42
+    figure_size : (int, int), default (800, 600)
+    plot_title : str | None, optional
+    filter_method : {"percentile"} | None, optional
+    outlier_percentile_range : (float, float), default (5, 95)
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    data_list, membrane_names = _coerce_multi(data, membrane_names)
+    coord_cols = coordinate_columns or ["x1_voxel", "y1_voxel", "z1_voxel"]
+    color_title = "Asymmetry (%)" if use_percentages else "Asymmetry Score"
+    symbols = ["circle", "square", "diamond", "cross", "triangle-up", "star"]
+    rng = np.random.RandomState(random_seed)
+
+    fig = go.Figure()
+    all_asym: list[float] = []
+    processed: list[dict | None] = []
+
+    for results in data_list:
+        if filter_method:
+            results = _filter_asymmetry_outliers(
+                results,
+                method=filter_method,
+                percentile_range=outlier_percentile_range,
+            )
+        bin_results = results.bin_results
+        valid_bins = bin_results[bin_results["valid"]].copy() if len(bin_results) > 0 else pd.DataFrame()
+
+        if len(valid_bins) == 0:
+            processed.append(None)
+            continue
+
+        thickness_df = results.raw_data.thickness_df
+        mem_data = _process_membrane_asymmetry_data(
+            results, thickness_df, valid_bins, coord_cols, use_percentages
+        )
+        if mem_data is not None:
+            all_asym.extend(mem_data["valid_asymmetry"].tolist())
+        processed.append(mem_data)
+
+    if asymmetry_range is None and all_asym:
+        asymmetry_range = (0.0, 50.0) if use_percentages else (1.0, 2.0)
+
+    for i, (mem_data, membrane_name) in enumerate(zip(processed, membrane_names)):
+        if mem_data is None:
+            continue
+
+        valid_coords = mem_data["valid_coords"]
+        valid_thickness = mem_data["valid_thickness"]
+        valid_asymmetry = mem_data["valid_asymmetry"]
+
+        if 0 < sample_fraction < 1.0:
+            n_sample = max(1, int(len(valid_coords) * sample_fraction))
+            idx = rng.choice(len(valid_coords), size=n_sample, replace=False)
+            valid_coords = valid_coords[idx]
+            valid_thickness = valid_thickness[idx]
+            valid_asymmetry = valid_asymmetry[idx]
+
+        if len(valid_coords) == 0:
+            continue
+
+        df_trace = pd.DataFrame(
+            {
+                coord_cols[0]: valid_coords[:, 0],
+                coord_cols[1]: valid_coords[:, 1],
+                coord_cols[2]: valid_coords[:, 2],
+            }
+        )
+        opacity_val = 0.7 if len(data_list) > 1 else 0.8
+        thickness_hover = (
+            "Thickness: %{customdata[0]:.2f} nm<br>"
+            if np.any(np.isfinite(valid_thickness))
+            else ""
+        )
+        _add_scatter3d_trace(
+            fig=fig,
+            df=df_trace,
+            coordinate_columns=coord_cols,
+            color_values=valid_asymmetry,
+            color_scale=color_scale,
+            color_range=asymmetry_range,
+            colorbar_title=color_title,
+            show_colorbar=(i == 0),
+            marker_size=marker_size,
+            opacity=opacity_val,
+            marker_symbol=symbols[i % len(symbols)] if len(data_list) > 1 else "circle",
+            trace_name=f"{membrane_name} (n={len(valid_coords):,})",
+            hover_extra=(
+                f"{color_title}: %{{marker.color:.1f}}"
+                + ("%" if use_percentages else "")
+                + "<br>"
+                + thickness_hover
+            ),
+        )
+        if np.any(np.isfinite(valid_thickness)):
+            fig.data[-1].customdata = valid_thickness.reshape(-1, 1)
+
+    sample_str = f" (sampled {sample_fraction:.0%})" if sample_fraction < 1.0 else ""
+    fig.update_layout(
+        scene=dict(
+            aspectmode="data",
+            xaxis_title=coord_cols[0],
+            yaxis_title=coord_cols[1],
+            zaxis_title=coord_cols[2],
+        ),
+        width=figure_size[0],
+        height=figure_size[1],
+        title=plot_title or f"3D Spatial Asymmetry{sample_str}",
+    )
+    return apply_defaults(fig)
+
+
+def plot_asymmetry_detection_examples(
+    data: "AsymmetryAnalysisResults",
+    number_of_examples: int = 6,
+    membrane_name: str = "Membrane",
+    figure_size: tuple[int, int] | None = None,
+    plot_title: str | None = None,
+) -> go.Figure:
+    """
+    Multi-panel plot of example median profiles with detected asymmetry peaks.
+
+    Samples ``number_of_examples`` bins evenly across the score distribution so
+    the full range from most symmetric to most asymmetric is represented.
+    Works for both ``"thickness"`` and ``"neighborhood"`` binning modes, provided
+    that ``bin_profiles`` was populated during analysis (set
+    ``max_cached_profile_examples`` high enough in ``analyze_intensity_asymemtry``).
+
+    Parameters
+    ----------
+    data : AsymmetryAnalysisResults
+    number_of_examples : int, default 6
+    membrane_name : str, default "Membrane"
+    figure_size : (int, int) | None, optional
+        ``(width, height)`` in pixels.  When ``None`` (default), size is
+        computed automatically: 320 px per column wide, 360 px per row tall,
+        plus margins for the figure title and subplot titles.
+    plot_title : str | None, optional
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    bin_results = data.bin_results
+    bin_profiles = data.bin_profiles
+    binning_mode = getattr(data, "binning_mode", "thickness")
+
+    if not bin_profiles:
+        msg = (
+            "No cached profiles available. "
+            "Re-run analyze_intensity_asymemtry with a higher max_cached_profile_examples."
+        )
+        return apply_defaults(
+            go.Figure().add_annotation(
+                text=msg, xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+            )
+        )
+
+    valid_bins = bin_results[bin_results["valid"]].copy()
+    if len(valid_bins) == 0:
+        return apply_defaults(
+            go.Figure().add_annotation(
+                text="No valid bins to plot",
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=0.5,
+                showarrow=False,
+            )
+        )
+
+    # Restrict to bins that actually have a cached profile
+    def _cache_key(row: pd.Series):
+        return int(row["seed_index"]) if binning_mode == "neighborhood" else float(row["bin_center"])
+
+    has_cache = valid_bins.apply(lambda r: _cache_key(r) in bin_profiles, axis=1)
+    valid_bins = valid_bins[has_cache]
+    if len(valid_bins) == 0:
+        return apply_defaults(
+            go.Figure().add_annotation(
+                text="No cached profiles available for valid bins. "
+                     "Re-run analyze_intensity_asymemtry with a higher max_cached_profile_examples.",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+            )
+        )
+
+    # Sample evenly across the score distribution
+    sorted_bins = valid_bins.sort_values("asymmetry_score").reset_index(drop=True)
+    n_show = min(number_of_examples, len(sorted_bins))
+    sample_pos = np.round(np.linspace(0, len(sorted_bins) - 1, n_show)).astype(int)
+    example_bins = sorted_bins.iloc[sample_pos]
+
+    rows = max(1, int(np.ceil(n_show / 3)))
+    cols = min(3, n_show)
+
+    def _subplot_title(bin_row: pd.Series) -> str:
+        score_str = f"{bin_row['asymmetry_score']:.3f} ({bin_row['asymmetry_percent']:.1f}%)"
+        if binning_mode == "neighborhood":
+            return f"Seed {int(bin_row['seed_index'])} (n={int(bin_row['n_profiles'])}): {score_str}"
+        return f"{bin_row['thickness_range']}: {score_str}"
+
+    subplot_titles = [_subplot_title(row) for _, row in example_bins.iterrows()]
+    # vertical_spacing is a fraction of total figure height per gap;
+    # scale it down with more rows so subplots keep their height.
+    v_spacing = min(0.10, 0.25 / max(rows, 1))
+    fig = make_subplots(
+        rows=rows,
+        cols=cols,
+        subplot_titles=subplot_titles,
+        vertical_spacing=v_spacing,
+        horizontal_spacing=0.08,
+    )
+
+    palette = resolve_palette(None)
+
+    for k, (_, bin_row) in enumerate(example_bins.iterrows()):
+        row_idx = (k // cols) + 1
+        col_idx = (k % cols) + 1
+        color = palette[k % len(palette)]
+
+        profile_key = _cache_key(bin_row)
+        bd = bin_profiles[profile_key]
+        distances = bd["distances"]
+        median_profile = bd["median_profile"]
+
+        fig.add_trace(
+            go.Scatter(
+                x=distances,
+                y=median_profile,
+                mode="lines",
+                line=dict(color=color, width=2),
+                showlegend=False,
+            ),
+            row=row_idx,
+            col=col_idx,
+        )
+
+        if "percentile_25" in bd and "percentile_75" in bd:
+            fig.add_trace(
+                go.Scatter(
+                    x=distances,
+                    y=bd["percentile_75"],
+                    mode="lines",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    showlegend=False,
+                    hoverinfo="skip",
+                ),
+                row=row_idx,
+                col=col_idx,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=distances,
+                    y=bd["percentile_25"],
+                    mode="lines",
+                    fill="tonexty",
+                    fillcolor=f"rgba({','.join(str(c) for c in _hex_to_rgb(color))},0.25)"
+                    if color.startswith("#")
+                    else "rgba(100,100,100,0.2)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    showlegend=False,
+                    hoverinfo="skip",
+                ),
+                row=row_idx,
+                col=col_idx,
+            )
+
+        for peak_key, inten_key, marker_color, label in (
+            ("left_peak_pos", "left_peak_intensity", "red", "Left Min"),
+            ("right_peak_pos", "right_peak_intensity", "green", "Right Min"),
+        ):
+            pos = bin_row.get(peak_key, np.nan)
+            inten = bin_row.get(inten_key, np.nan)
+            if np.isfinite(pos) and np.isfinite(inten):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[float(pos)],
+                        y=[float(inten)],
+                        mode="markers",
+                        marker=dict(color=marker_color, size=8, symbol="x"),
+                        showlegend=False,
+                        hovertemplate=f"{label}<extra></extra>",
+                    ),
+                    row=row_idx,
+                    col=col_idx,
+                )
+
+        fig.add_vline(x=0.0, line=dict(color="gray", width=1, dash="dash"), row=row_idx, col=col_idx)
+
+    for ri in range(1, rows + 1):
+        for ci in range(1, cols + 1):
+            fig.update_xaxes(title_text="Distance (vox)", row=ri, col=ci)
+            fig.update_yaxes(title_text="Intensity", row=ri, col=ci)
+
+    if figure_size is not None:
+        fig_width, fig_height = figure_size
+    else:
+        fig_width = cols * 320
+        fig_height = rows * 2400 + 80  # 650 px per row + 80 px for figure title
+
+    fig.update_layout(
+        title=plot_title or f"{membrane_name} — Example Profiles with Peak Detection",
+        width=fig_width,
+        height=fig_height,
+    )
+    return apply_defaults(fig)
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Convert ``#RRGGBB`` to an (R, G, B) integer tuple."""
+    h = hex_color.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 

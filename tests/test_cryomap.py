@@ -1367,3 +1367,62 @@ def test_rotate_no_output_no_kwargs():
     volume = np.zeros((16, 16, 16), dtype=np.float32)
     result = rotate(volume, rotation_angles=[0, 0, 0])
     assert result.shape == volume.shape
+
+
+# ---------------------------------------------------------------------------
+# sample_line_profiles + symmetrize_volume direct coverage
+# ---------------------------------------------------------------------------
+
+
+def test_sample_line_profiles_shape_and_geometry():
+    """One pair → one dict with the documented geometry keys and a 1-D profile."""
+    rng = np.random.default_rng(0)
+    volume = rng.random((20, 20, 20)).astype(np.float32)
+    p1 = np.array([[5.0, 5.0, 5.0]])
+    p2 = np.array([[15.0, 5.0, 5.0]])
+    out = sample_line_profiles(p1, p2, volume, extension_half_width_a=2.0)
+    assert isinstance(out, list)
+    assert len(out) == 1
+    entry = out[0]
+    assert {"profile", "p1", "p2", "midpoint", "start", "end"} <= entry.keys()
+    assert entry["profile"].ndim == 1
+    np.testing.assert_allclose(entry["midpoint"], [10.0, 5.0, 5.0])
+
+
+def test_sample_line_profiles_skips_nan_and_zero_pairs():
+    """Pairs with NaN or zero-length direction are dropped silently."""
+    volume = np.ones((10, 10, 10), dtype=np.float32)
+    p1 = np.array([[5.0, 5.0, 5.0], [np.nan, 0.0, 0.0], [1.0, 1.0, 1.0]])
+    p2 = np.array([[5.0, 5.0, 5.0], [1.0, 1.0, 1.0],     [7.0, 1.0, 1.0]])
+    # First pair: zero direction; second pair: NaN; only third survives.
+    out = sample_line_profiles(p1, p2, volume, extension_half_width_a=1.0)
+    assert len(out) == 1
+
+
+def test_sample_line_profiles_rejects_non_3d_map():
+    """Non-3D input must raise ValueError."""
+    with pytest.raises(ValueError):
+        sample_line_profiles(
+            np.array([[0.0, 0.0, 0.0]]),
+            np.array([[1.0, 0.0, 0.0]]),
+            np.zeros((10, 10)),  # 2-D
+        )
+
+
+def test_symmetrize_volume_constant_is_invariant_in_interior():
+    """A constant volume is invariant under Cn averaging in the interior.
+
+    ``scipy.ndimage.affine_transform`` defaults to ``mode='constant'`` so voxels
+    near the boundary get zeroed when a 90° rotation maps their inverse-source
+    outside the original grid. Exclude a 2-voxel margin in the rotated plane
+    (xy) and the interior must be invariant.
+    """
+    vol = np.full((12, 12, 12), 3.0, dtype=np.float32)
+    out = symmetrize_volume(vol, "C4")
+    np.testing.assert_allclose(out[2:-2, 2:-2, :], vol[2:-2, 2:-2, :], atol=1e-4)
+
+
+def test_symmetrize_volume_shape_preserved():
+    """Output shape matches input."""
+    vol = np.random.rand(10, 10, 10).astype(np.float32)
+    assert symmetrize_volume(vol, 2).shape == vol.shape

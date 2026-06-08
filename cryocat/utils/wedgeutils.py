@@ -9,13 +9,28 @@ from cryocat.utils import geom
 from cryocat.utils import imageutils
 from cryocat.core import cryomask
 from cryocat.core import cryomap
-from cryocat._types import CTFFileType, DataSource, PathOrStr, TomoDimensions, TomoList, TripletLike, WedgeMaskMethod
+from cryocat._types import (
+    CTFFileType,
+    DataSource,
+    EulerAngles,
+    MapSource,
+    PathOrStr,
+    TomoDimensions,
+    TomoList,
+    TripletLike,
+    WedgeMaskMethod,
+)
 from cryocat.utils.classutils import gui_exposed
 import emfile
 import math
 
 
-def check_data_consistency(data1, data2, data_type1, data_type2):
+def check_data_consistency(
+    data1: np.ndarray,
+    data2: np.ndarray,
+    data_type1: str,
+    data_type2: str,
+) -> None:
     """Check the consistency of two sets of data.
 
     Parameters
@@ -65,7 +80,7 @@ def create_wedge_list_sg(
     cs: float = 2.7000,
     output_path: PathOrStr | None = None,
     drop_nan_columns: bool = True,
-):
+) -> pd.DataFrame:
     """Create a wedge list dataframe for a single tomogram/tilt series in STOPGAP format.
 
     Parameters
@@ -183,7 +198,7 @@ def create_wedge_list_sg_batch(
     amp_contrast: float = 0.07,
     cs: float = 2.7000,
     output_path: PathOrStr | None = None,
-):
+) -> pd.DataFrame:
     """Create a wedge list dataframe in STOPGAP format for all tomograms/tilt series specified in tomo_list.
 
     Parameters
@@ -330,22 +345,22 @@ def create_wedge_list_sg_batch(
 
 
 def create_wedge_list_em_batch(
-    tomo_list,
-    tlt_file_format,
-    output_path=None,
-):
+    tomo_list: TomoList,
+    tlt_file_format: str,
+    output_path: PathOrStr | None = None,
+) -> pd.DataFrame:
     """Create a wedge list dataframe in EM format for all tomograms/tilt series specified in tomo_list.
 
     Parameters
     ----------
-    tomo_list : str or array-like
+    tomo_list : TomoList
         The path to the file containing list of tomograms (txt) or tomogram/tilt series numbers specified as array-like
         variable. See :meth:`cryocat.utils.ioutils.tlt_load` for more information on formatting.
     tlt_file_format : str
         The format describing name of the input files (including the path) with tilt angles. See `Notes` below for more
         information. See :meth:`cryocat.utils.ioutils.tlt_load` for more information on allowed input files (tlt, mdoc,
         xml).
-    output_path : str, optional
+    output_path : PathOrStr, optional
         The path to the output file, by default None. If None, the output is not written out.
 
     Returns
@@ -397,12 +412,12 @@ def create_wedge_list_em_batch(
     return wedge_list_df
 
 
-def load_wedge_list_sg(input_data):
+def load_wedge_list_sg(input_data: DataSource) -> pd.DataFrame:
     """Load a STOPGAP wedge list from a file or a pandas DataFrame.
 
     Parameters
     ----------
-    input_data : str or pd.DataFrame
+    input_data : DataSource
         The input data can either be a file path (string) to a star file or a pandas DataFrame containing the wedge list.
 
     Returns
@@ -429,14 +444,14 @@ def load_wedge_list_sg(input_data):
     return wedge_list_df
 
 
-def load_wedge_list_em(input_data):
+def load_wedge_list_em(input_data: DataSource) -> pd.DataFrame:
     """Load an EM wedge list from various input formats.
 
     Parameters
     ----------
-    input_data : str, np.ndarray, or pd.DataFrame
+    input_data : DataSource
         The input data can be one of the following:
-        - A string representing the file path to a data source.
+        - A path (``PathOrStr``) to a data source.
         - A 2D numpy array with a shape of (n, 3), where n is the number of wedges.
         - A pandas DataFrame containing wedge data.
 
@@ -480,15 +495,19 @@ def load_wedge_list_em(input_data):
     return wedge_list_df
 
 
-def wedge_list_sg_to_em(input_path, output_path, write_out=True):
+def wedge_list_sg_to_em(
+    input_path: PathOrStr,
+    output_path: PathOrStr,
+    write_out: bool = True,
+) -> pd.DataFrame:
     """Convert a STOPGAP star format wedge list into a em wedge list;
     only 3 columns [tomo_id, min_tilt_angle, max_tilt_angle] are collected
 
     Parameters
     ----------
-    input_path : str
+    input_path : PathOrStr
         Path to a STOPGAP star wedge list.
-    output_path : str
+    output_path : PathOrStr
         Path to save the new em format wedge list.
     write_out : bool, default=True
         Whether to save the output. Default is True.
@@ -518,7 +537,13 @@ def wedge_list_sg_to_em(input_path, output_path, write_out=True):
     return wedge_list_em
 
 
-def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape="wedge", output_path=None):
+def create_wg_mask(
+    wg_list_star_df: pd.DataFrame,
+    tomo_list: TomoList,
+    box_size: TripletLike,
+    shape: str = "wedge",
+    output_path: PathOrStr | None = None,
+) -> np.ndarray:
     """Create a missing-wedge mask for each tomogram listed in ``tomo_list``.
 
     Parameters
@@ -526,14 +551,14 @@ def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape="wedge", output_p
     wg_list_star_df : pandas.DataFrame
         Wedge-list star file loaded as a DataFrame; must contain columns
         ``tomo_num`` and ``tilt_angle``.
-    tomo_list : str or array-like
+    tomo_list : TomoList
         Path to a ``.tlt`` file or an integer array of tomogram IDs.
-    box_size : int or sequence of int
+    box_size : TripletLike
         Side length(s) of the cubic (or non-cubic) output mask volume.
     shape : str, default='wedge'
         Mask geometry.  Currently ``'wedge'`` and ``'sph_wedge'`` are
         supported.
-    output_path : str, optional
+    output_path : PathOrStr, optional
         If given, the mask is written to this file path.
 
     Returns
@@ -576,7 +601,12 @@ def create_wg_mask(wg_list_star_df, tomo_list, box_size, shape="wedge", output_p
     return mask
 
 
-def apply_wedge_mask(wedge_mask, in_map, rotation_zxz=None, output_path=None):
+def apply_wedge_mask(
+    wedge_mask: MapSource,
+    in_map: MapSource,
+    rotation_zxz: EulerAngles | None = None,
+    output_path: PathOrStr | None = None,
+) -> np.ndarray:
     """Apply a wedge mask to a volume in Fourier space.
 
     Reads ``in_map``, optionally rotates it by ``rotation_zxz``, applies the
@@ -584,14 +614,14 @@ def apply_wedge_mask(wedge_mask, in_map, rotation_zxz=None, output_path=None):
 
     Parameters
     ----------
-    wedge_mask : str
-        Path to the wedge mask volume.
-    in_map : str
-        Path to the input volume to be filtered.
-    rotation_zxz : array-like of float, optional
+    wedge_mask : MapSource
+        Path or ndarray for the wedge mask volume.
+    in_map : MapSource
+        Path or ndarray for the input volume to be filtered.
+    rotation_zxz : EulerAngles, optional
         zxz Euler angles (degrees) used to rotate the map before masking.
         When ``None`` no rotation is applied.
-    output_path : str, optional
+    output_path : PathOrStr, optional
         If given, the filtered volume is written to this path.
 
     Returns

@@ -7,7 +7,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation as srot
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from cryocat.utils import ioutils
 from cryocat.utils import geom
 from cryocat.utils import imageutils
@@ -22,7 +22,7 @@ def scale(
     input_map: MapSource,
     scaling_factor: float,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """
     Scales an input map by a given scaling factor.
@@ -201,7 +201,7 @@ def bandpass(
     lp_gaussian: int = 3,
     hp_gaussian: int = 2,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """Apply a bandpass filter to an input map using specified low-pass and high-pass filter parameters.
 
@@ -279,7 +279,7 @@ def lowpass(
     pixel_size: float | None = None,
     gaussian: int = 3,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """Apply a lowpass filter to a given input map using Fourier transform methods.
 
@@ -344,7 +344,7 @@ def highpass(
     pixel_size: float | None = None,
     gaussian: int = 2,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """Apply a highpass filter to a given input map using Fourier transform methods.
 
@@ -596,7 +596,7 @@ def write(
         raise ValueError("The output file name", file_name_str, "has to end with .mrc, .rec or .em!")
 
 
-def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
+def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, **output_kwargs: Any) -> np.ndarray:
     """Invert the contrast of an input volume map.
 
     Parameters
@@ -646,7 +646,7 @@ def em2mrc(
     input_path: PathOrStr,
     invert: bool = False,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> None:
     """Convert a file in EM format to MRC format.
 
@@ -699,7 +699,7 @@ def mrc2em(
     input_path: PathOrStr,
     invert: bool = False,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> None:
     """Convert a file in MRC format to EM format.
 
@@ -991,7 +991,7 @@ def rotate(
     degrees: bool = True,
     spline_order: int = 3,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """Rotate a 3D input map using a specified rotation matrix or rotation angles.
 
@@ -1045,6 +1045,8 @@ def rotate(
             f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
+    if rotation_angles is not None:
+        rotation_angles = ioutils.euler_angles_load(rotation_angles, angles_order=coord_space)
     input_map = read(input_map)
     rot_struct = imageutils.rotate_volume(
         input_map,
@@ -1067,7 +1069,7 @@ def crop(
     new_size: TripletLike,
     output_path: PathOrStr | None = None,
     crop_coord: TripletLike | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """
     This function crops a given input map to a new size. If no crop coordinates are provided, the function will crop from the center of the input map. If an output file is specified, the cropped volume will be written to this file.
@@ -1128,7 +1130,7 @@ def shift(
     input_map: MapSource,
     delta: ArrayLike,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """
     Shifts an input map by a specified delta.
@@ -1287,7 +1289,7 @@ def extract_subvolume(
     subvolume_shape: TripletLike,
     enforce_shape: bool = False,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """
     Extracts a subvolume from a given volume.
@@ -1533,7 +1535,7 @@ def deconvolve(
     phase_flipped: bool = False,
     phaseshift: float = 0,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """Deconvolution adapted from MATLAB script tom_deconv_tomo by D. Tegunov (https://github.com/dtegunov/tom_deconv).
     Example for usage: deconvolve(my_map, 3.42, 6, 1.1, 1, 0.02, false, 0)
@@ -1600,7 +1602,7 @@ def trim(
     trim_start: TripletLike,
     trim_end: TripletLike,
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """
     Trims a 3D map to a specified range.
@@ -1658,7 +1660,7 @@ def flip(
     input_map: MapSource,
     axis: str = "z",
     output_path: PathOrStr | None = None,
-    **output_kwargs,
+    **output_kwargs: Any,
 ) -> np.ndarray:
     """
     Function to flip a given input map along specified axis.

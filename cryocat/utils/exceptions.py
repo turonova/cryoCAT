@@ -7,13 +7,13 @@ class MotlException(Exception):
         Optional message string as the first positional argument.
     """
 
-    def __init__(self, *args):
+    def __init__(self, *args: object) -> None:
         if args:
             self.message = args[0]
         else:
             self.message = None
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.message:
             return self.message
         else:
@@ -26,7 +26,7 @@ class UserInputError(MotlException):
     Inherits from :class:`MotlException`.
     """
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.message:
             return self.message
         else:
@@ -39,7 +39,7 @@ class ProcessError(MotlException):
     Inherits from :class:`MotlException`.
     """
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.message:
             return self.message
         else:

@@ -441,3 +441,35 @@ def test_tiltstack_write_out_output_kwargs_forwarded(tmp_path):
     _, ps, _ = cryomap.get_metadata(out)
     assert abs(ps - 3.14) < 0.01
 
+
+# ---------------------------------------------------------------------------
+# TiltStack.correct_order: direct tests
+# ---------------------------------------------------------------------------
+
+
+def test_correct_order_zyx_to_xyz_transposes():
+    """With output_order='xyz' the internal zyx data is transposed to (x, y, z)."""
+    data = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)  # (z, y, x)
+    ts = TiltStack(data, input_order="zyx", output_order="xyz")
+    out = ts.correct_order()
+    assert out.shape == (4, 3, 2)
+    np.testing.assert_array_equal(out, data.transpose(2, 1, 0))
+
+
+def test_correct_order_zyx_keeps_layout():
+    """When output_order matches internal zyx layout the array is returned untransposed."""
+    data = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    ts = TiltStack(data, input_order="zyx", output_order="zyx")
+    out = ts.correct_order()
+    assert out.shape == data.shape
+    np.testing.assert_array_equal(out, data)
+
+
+def test_correct_order_casts_dtype_of_new_data():
+    """Passing ``new_data`` of a different dtype recasts it to the stored ``data_type``."""
+    data = np.ones((2, 3, 4), dtype=np.float32)
+    ts = TiltStack(data, input_order="zyx", output_order="zyx")
+    other = np.ones((2, 3, 4), dtype=np.float64)
+    out = ts.correct_order(other)
+    assert out.dtype == np.float32
+

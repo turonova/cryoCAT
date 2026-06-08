@@ -16,13 +16,19 @@ import inspect
 import sys
 import typing
 import types as _stdtypes
+from collections.abc import Callable
+from typing import Any, Literal
 
 from numpydoc.docscrape import NumpyDocString
 
 from cryocat._types import ListLike
 
 
-def filter_strings(input_list, filter_contains=None, filter_exclude=None):
+def filter_strings(
+    input_list: list[str],
+    filter_contains: str | list[str] | None = None,
+    filter_exclude: str | list[str] | None = None,
+) -> list[str]:
     """Filter a list of strings based on inclusion and exclusion criteria.
 
     Parameters
@@ -63,7 +69,12 @@ def filter_strings(input_list, filter_contains=None, filter_exclude=None):
     return filtered
 
 
-def get_class_names_by_parent(parent_class_name: str, module_name: str, filter_contains=None, filter_exclude=None):
+def get_class_names_by_parent(
+    parent_class_name: str,
+    module_name: str,
+    filter_contains: str | list[str] | None = None,
+    filter_exclude: str | list[str] | None = None,
+) -> list[str]:
     """Get class names that are subclasses of a specified parent class in a given module.
 
     Parameters
@@ -110,7 +121,10 @@ def get_class_names_by_parent(parent_class_name: str, module_name: str, filter_c
     return class_names
 
 
-def get_classes_from_names(class_names, module_name):
+def get_classes_from_names(
+    class_names: str | type | list[str | type],
+    module_name: str,
+) -> type | list[type]:
     """Convert class names to actual class objects from a specified module.
 
     Parameters
@@ -141,7 +155,7 @@ def get_classes_from_names(class_names, module_name):
         return [getattr(module, name) for name in class_names]
 
 
-def get_class_names_by_prefix(prefix):
+def get_class_names_by_prefix(prefix: str) -> list[str]:
     """Get class names in the current module that start with a specified prefix.
 
     Parameters
@@ -178,13 +192,13 @@ _GUI_BUILDER_REGISTRY: list[dict] = []
 
 
 def gui_exposed(
-    _fn=None,
+    _fn: Callable | None = None,
     *,
-    label=None,
-    category=None,
-    hide=(),
-    output=None,
-    motls=None,
+    label: str | None = None,
+    category: str | None = None,
+    hide: tuple[str, ...] = (),
+    output: Literal["motl", "figure", "dataframe"] | None = None,
+    motls: dict | None = None,
     standalone: bool = False,
     preview: str | None = None,
 ):
@@ -198,7 +212,7 @@ def gui_exposed(
         Grouping for the dropdown (e.g. "Cleaning", "Geometry"). None = ungrouped.
         Use ``"builder"`` to flag a value-producing function (e.g. an angle-list
         generator) that should not appear in the main tool dropdown.
-    hide : iterable of str, optional
+    hide : tuple of str, optional
         Parameter names the GUI/CLI should NOT surface (beyond ``self`` / ``cls``,
         which are always hidden).
     output : {"motl", "figure", "dataframe", None}, optional
@@ -281,25 +295,40 @@ _LITERAL_ALIASES = {
 }
 
 
-def resolve_param_type(annotation) -> tuple[str, dict]:
+def resolve_param_type(annotation: Any) -> tuple[str, dict]:
     """Map a parameter annotation to a handler tag + extras.
 
-    Returns ``(tag, extra)``; ``extra`` carries e.g. ``{"choices": [...]}`` for
-    Literals. Rules:
+    Parameters
+    ----------
+    annotation : Any
+        Python type annotation (a class, a PEP-695 ``type X = ...`` alias, a
+        ``Literal[...]``, an ``X | None`` / ``X | None`` union, or
+        :data:`inspect.Parameter.empty` for an unannotated parameter).
 
-    * None / empty annotation        -> ``("str", {})``
-    * ``Optional[X]`` / ``X | None`` -> unwrap to X, then resolve
-    * ``Literal[...]``               -> ``("Literal", {"choices": [...]})``
-    * a PEP-695 alias in the known set -> ``(alias name, {})``
+    Returns
+    -------
+    tuple of (str, dict)
+        ``(tag, extra)``; ``extra`` carries e.g. ``{"choices": [...]}`` for
+        Literals or ``{"length": int, "elem": str}`` for fixed-length numeric
+        tuples.
+
+    Notes
+    -----
+    Resolution rules:
+
+    * ``None`` / empty annotation        -> ``("str", {})``
+    * ``X | None`` / ``X | None``     -> unwrap to ``X``, then resolve
+    * ``Literal[...]``                   -> ``("Literal", {"choices": [...]})``
+    * a PEP-695 alias in the known set   -> ``(alias name, {})``
     * bare ``bool``/``int``/``float``/``str`` -> ``(name, {})``
-    * anything else                  -> ``("str", {})``
+    * anything else                      -> ``("str", {})``
     """
     if annotation is inspect.Parameter.empty or annotation is None:
         return ("str", {})
 
     origin = typing.get_origin(annotation)
 
-    # Optional[X] / X | None — unwrap NoneType and resolve the remainder.
+    # X | None / X | None — unwrap NoneType and resolve the remainder.
     if origin is typing.Union or origin is _stdtypes.UnionType:
         args = [a for a in typing.get_args(annotation) if a is not type(None)]
         if len(args) == 1:
@@ -352,7 +381,7 @@ def resolve_param_type(annotation) -> tuple[str, dict]:
 # Value parsers (GUI value -> python) and argparse helpers (CLI str -> python)
 # ===========================================================================
 
-def _coerce_scalar(x):
+def _coerce_scalar(x: str) -> int | float | str:
     """Best-effort int -> float -> str coercion of a single token."""
     x = x.strip()
     try:
@@ -365,7 +394,7 @@ def _coerce_scalar(x):
         return x
 
 
-def _parse_number_list(v):
+def _parse_number_list(v: Any) -> Any:
     """``"1,2,3"`` -> ``[1, 2, 3]`` (per-element int/float autodetect);
     a single token -> a scalar. Non-string input is returned unchanged."""
     if v is None or v == "":
@@ -379,15 +408,15 @@ def _parse_number_list(v):
     return vals[0] if len(vals) == 1 else vals
 
 
-def _parse_path(v):
+def _parse_path(v: Any) -> str | None:
     return v or None
 
 
-def _parse_bool(v):
+def _parse_bool(v: Any) -> bool:
     return v in (True, "True", "true", "1", 1)
 
 
-def _parse_int(v):
+def _parse_int(v: Any) -> int | None:
     """GUI number field -> int. Empty/None -> None; floats and numeric strings
     are coerced via float() to tolerate things like ``"33.0"``."""
     if v is None:
@@ -399,7 +428,7 @@ def _parse_int(v):
     return int(float(v))
 
 
-def _parse_float(v):
+def _parse_float(v: Any) -> float | None:
     """GUI number field -> float, with empty/None tolerated."""
     if v is None:
         return None
@@ -410,19 +439,19 @@ def _parse_float(v):
     return float(v)
 
 
-def _parse_triplet(v):
+def _parse_triplet(v: Any) -> Any:
     """A GUI triplet field (``"64,64,64"`` or ``"64"``). The receiving function
     normalizes with :func:`cryocat.utils.geom.as_triplet`."""
     return _parse_number_list(v)
 
 
-def _parse_listlike(v):
+def _parse_listlike(v: Any) -> Any:
     """A GUI csv/text field (``"1,2,3"``). The receiving function normalizes
     with :func:`cryocat.utils.classutils.as_list`."""
     return _parse_number_list(v)
 
 
-def _parse_literal(v, choices=None):
+def _parse_literal(v: Any, choices: list | None = None) -> Any:
     """A GUI dropdown value. If the matching choice is non-string typed,
     coerce ``v`` to that choice's type."""
     if v is None or not choices:
@@ -433,7 +462,7 @@ def _parse_literal(v, choices=None):
     return v
 
 
-def _parse_tuple(v, elem: str = "float"):
+def _parse_tuple(v: Any, elem: str = "float") -> tuple | None:
     """Composite fixed-length numeric tuple field.
 
     The formgen widget renders one number input per slot and stores the slots
@@ -459,22 +488,22 @@ def _parse_tuple(v, elem: str = "float"):
 
 
 # argparse ``type=`` helpers (CLI string -> python value).
-def _parse_str(v):
+def _parse_str(v: Any) -> str | None:
     """GUI text field -> str. None stays None (not converted to the string 'None')."""
     if v is None:
         return None
     return str(v)
 
 
-def _arg_bool(s):
+def _arg_bool(s: str) -> bool:
     return _parse_bool(s)
 
 
-def _arg_triplet(s):
+def _arg_triplet(s: str) -> Any:
     return _parse_number_list(s)
 
 
-def _arg_listlike(s):
+def _arg_listlike(s: str) -> Any:
     return _parse_number_list(s)
 
 
@@ -511,14 +540,17 @@ TYPE_HANDLERS = {
 # Docstring -> parameter descriptions (help text / tooltips only)
 # ===========================================================================
 
-def _clean_desc(text):
+def _clean_desc(text: str) -> str:
     """Strip reST cross-reference role markers from help text."""
     for role in (":meth:", ":func:", ":class:", ":data:", ":attr:", ":mod:"):
         text = text.replace(role, "")
     return text.strip()
 
 
-def process_method_docstring(path_to_method, method_name=None):
+def process_method_docstring(
+    path_to_method: Any,
+    method_name: str | None = None,
+) -> dict[str, str]:
     """Extract parameter *descriptions* from a method's numpy-style docstring.
 
     Types, required/default, and choices are NOT taken from the docstring any
@@ -536,7 +568,7 @@ def process_method_docstring(path_to_method, method_name=None):
 
     Returns
     -------
-    dict
+    dict of str -> str
         ``{param_name: description}``. Empty when the docstring has no
         Parameters section.
     """

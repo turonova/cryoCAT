@@ -10,7 +10,8 @@ import plotly.express as px
 from dataclasses import dataclass, field, asdict
 from contextlib import contextmanager
 from copy import deepcopy
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any
+from collections.abc import Iterator
 import plotly.io as pio
 from scipy.stats import gaussian_kde
 from cryocat.utils import geom
@@ -18,10 +19,10 @@ from cryocat.utils import ioutils
 from cryocat._types import ArrayLike, ColumnNames, DataSource, PathOrStr, ProjectionType, RotationLike
 
 Color = str  # hex like "#1f77b4" or "rgb(…)"
-Colorscale = List[Tuple[float, Color]]  # [(0.0, "#..."), (1.0, "#...")]
+Colorscale = list[tuple[float, Color]]  # [(0.0, "#..."), (1.0, "#...")]
 
 
-def _save_plotly(fig: go.Figure, output_path: Optional[PathOrStr]) -> None:
+def _save_plotly(fig: go.Figure, output_path: PathOrStr | None) -> None:
     """Save a Plotly figure to disk.
 
     ``.html`` paths are written with :meth:`~plotly.graph_objects.Figure.write_html`;
@@ -70,14 +71,14 @@ def _save_plotly(fig: go.Figure, output_path: Optional[PathOrStr]) -> None:
 
 
 # ---------- Built-ins (from Plotly) ----------
-def _collect_builtin_palettes() -> Dict[str, List[Color]]:
+def _collect_builtin_palettes() -> dict[str, list[Color]]:
     q = px.colors.qualitative
     names = [n for n in dir(q) if n[:1].isupper()]
     return {n.lower(): getattr(q, n) for n in names}
 
 
-def _collect_builtin_colorscales() -> Dict[str, Colorscale]:
-    result: Dict[str, Colorscale] = {}
+def _collect_builtin_colorscales() -> dict[str, Colorscale]:
+    result: dict[str, Colorscale] = {}
     for mod in (px.colors.sequential, px.colors.diverging, px.colors.cyclical):
         names = [n for n in dir(mod) if n[:1].isupper()]
         for n in names:
@@ -96,18 +97,18 @@ _BUILTIN_PALETTES = _collect_builtin_palettes()  # e.g. "plotly", "d3", "set3"
 _BUILTIN_SCALES = _collect_builtin_colorscales()  # e.g. "viridis", "plasma", "rdBu"
 
 # ---------- Registries (user-defined) ----------
-CUSTOM_PALETTES: Dict[str, List[Color]] = {}
-CUSTOM_SCALES: Dict[str, Colorscale] = {}
+CUSTOM_PALETTES: dict[str, list[Color]] = {}
+CUSTOM_SCALES: dict[str, Colorscale] = {}
 
 
-def register_palette(name: str, colors: Sequence[Color]) -> None:
+def register_palette(name: str, colors: list[Color]) -> None:
     """Register a discrete palette (used for categorical colorway)."""
     if not colors:
         raise ValueError("Palette must contain at least one color.")
     CUSTOM_PALETTES[name.lower()] = list(colors)
 
 
-def register_colorscale(name: str, hex_colors: Sequence[Color]) -> None:
+def register_colorscale(name: str, hex_colors: list[Color]) -> None:
     """Register a continuous colorscale from a list of colors (stops spread evenly)."""
     if not hex_colors:
         raise ValueError("Colorscale must contain at least one color.")
@@ -115,7 +116,7 @@ def register_colorscale(name: str, hex_colors: Sequence[Color]) -> None:
     CUSTOM_SCALES[name.lower()] = [(i / k, c) for i, c in enumerate(hex_colors)]
 
 
-def resolve_palette(spec: Optional[Union[str, Sequence[Color]]]) -> List[Color]:
+def resolve_palette(spec: str | list[Color] | None) -> list[Color]:
     """Return a list of colors given a name or explicit sequence."""
     if spec is None:
         return _BUILTIN_PALETTES["plotly"]
@@ -129,7 +130,7 @@ def resolve_palette(spec: Optional[Union[str, Sequence[Color]]]) -> List[Color]:
     return list(spec)
 
 
-def resolve_colorscale(spec: Optional[Union[str, Colorscale, Sequence[Color]]]) -> Colorscale:
+def resolve_colorscale(spec: str | Colorscale | list[Color] | None) -> Colorscale:
     """Return a Plotly colorscale [(pos,color),…] from name or explicit input."""
     if spec is None:
         return _BUILTIN_SCALES["viridis"]
@@ -149,11 +150,11 @@ def resolve_colorscale(spec: Optional[Union[str, Colorscale, Sequence[Color]]]) 
     return [(float(p), c) for p, c in spec]  # type: ignore
 
 
-def _is_pair_list(obj) -> bool:
+def _is_pair_list(obj: Any) -> bool:
     return isinstance(obj, (list, tuple)) and len(obj) > 0 and isinstance(obj[0], (list, tuple)) and len(obj[0]) == 2
 
 
-def _normalize_scale_for_sampling(spec: Union[str, Sequence[Color], Colorscale]) -> Union[str, Colorscale]:
+def _normalize_scale_for_sampling(spec: str | list[Color] | Colorscale) -> str | Colorscale:
     """
     Return either a string name (pass-through) or a colorscale with float positions.
     This guarantees px.colors.sample_colorscale won't see string positions.
@@ -177,7 +178,7 @@ def _normalize_scale_for_sampling(spec: Union[str, Sequence[Color], Colorscale])
     raise TypeError("Invalid colorscale input.")
 
 
-def _pad_truncate(pal: Sequence[Color], n: Optional[int]) -> List[Color]:
+def _pad_truncate(pal: list[Color], n: int | None) -> list[Color]:
     if n is None:
         return list(pal)
     if n <= 0:
@@ -187,11 +188,11 @@ def _pad_truncate(pal: Sequence[Color], n: Optional[int]) -> List[Color]:
 
 
 def resolve_colors_any(
-    spec: Optional[Union[str, Sequence[Color], Colorscale]] = None,
+    spec: str | list[Color] | Colorscale | None = None,
     *,
     color_type: str = "palette",  # "palette" or "colorscale"
-    n: Optional[int] = None,  # length when requesting a palette
-) -> Union[List[Color], Colorscale]:
+    n: int | None = None,  # length when requesting a palette
+) -> list[Color] | Colorscale:
     color_type = color_type.lower()
     if color_type not in {"palette", "colorscale"}:
         raise ValueError("color_type must be 'palette' or 'colorscale'")
@@ -248,13 +249,13 @@ def resolve_colors_any(
 class Defaults:
     template: str = "plotly_white"
     height: int = 500
-    width: Optional[int] = None
+    width: int | None = None
     showlegend: bool = True
     margin: dict = field(default_factory=lambda: dict(l=60, r=20, t=40, b=50))
     font_family: str = "Arial, sans-serif"
     font_size: int = 14
-    colorway: Union[str, Sequence[Color]] = "Plotly"  # discrete palette name or list
-    colorscale: Union[str, Colorscale, Sequence[Color]] = "Viridis"  # continuous scale
+    colorway: str | list[Color] = "Plotly"  # discrete palette name or list
+    colorscale: str | Colorscale | list[Color] = "Viridis"  # continuous scale
     extra_layout: dict = field(default_factory=dict)  # any other default layout
 
     def to_layout_kwargs(self) -> dict:
@@ -285,7 +286,7 @@ register_palette("MonetWhite", ["#FFFFFF", "#AEC684", "#4EACB6", "#C0A3BA", "#7D
 register_colorscale("MonetWhite", ["#FFFFFF", "#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B96"])
 
 
-def set_defaults(**kwargs) -> None:
+def set_defaults(**kwargs: Any) -> None:
     """Update global DEFAULTS. Nested 'extra_layout' is merged (shallow)."""
     global DEFAULTS
     d = deepcopy(asdict(DEFAULTS))
@@ -299,7 +300,7 @@ def set_defaults(**kwargs) -> None:
 
 
 @contextmanager
-def use_defaults(**overrides) -> Iterator[None]:
+def use_defaults(**overrides: Any) -> Iterator[None]:
     """Temporarily override DEFAULTS inside a 'with' block.
 
     Yields
@@ -316,7 +317,7 @@ def use_defaults(**overrides) -> Iterator[None]:
 
 
 # ---------- Helpers to apply defaults ----------
-def apply_defaults(fig: go.Figure, **layout_overrides) -> go.Figure:
+def apply_defaults(fig: go.Figure, **layout_overrides: Any) -> go.Figure:
     """Apply global defaults to an existing figure, with optional overrides."""
     layout = DEFAULTS.to_layout_kwargs()
     layout.update(layout_overrides or {})
@@ -324,7 +325,7 @@ def apply_defaults(fig: go.Figure, **layout_overrides) -> go.Figure:
     return fig
 
 
-def px_defaults(**overrides) -> dict:
+def px_defaults(**overrides: Any) -> dict:
     """Kwargs to pass into Plotly Express functions."""
     base = dict(
         template=DEFAULTS.template,
@@ -341,10 +342,10 @@ def px_defaults(**overrides) -> dict:
 
 
 def _format_column_names(
-    input_data: Union[pd.DataFrame, np.ndarray],
+    input_data: pd.DataFrame | np.ndarray,
     column_names_x: ColumnNames,
     default_name: str = "Value",
-) -> Sequence[str]:
+) -> list[str]:
     """Resolve column/series names for *input_data*.
 
     Parameters
@@ -378,10 +379,10 @@ def _format_column_names(
 
 
 def _format_input_data(
-    input_data: Union[pd.DataFrame, np.ndarray],
-    column_names_x: Sequence[str],
+    input_data: pd.DataFrame | np.ndarray,
+    column_names_x: list[str],
     n_columns: int,
-) -> Tuple[np.ndarray, Sequence[str]]:
+) -> tuple[np.ndarray, list[str]]:
     """Extract and validate data columns from a DataFrame or ndarray.
 
     Parameters
@@ -457,15 +458,15 @@ class BaseBuilder:
 
     def __init__(
         self,
-        input_data,
-        column_names_x=None,
-        colors=None,
-        separate_graphs=False,
-        same_range_for_separate=True,
-        opacity=None,
-        grid_spec="column",
-        color_type="palette",
-    ):
+        input_data: pd.DataFrame | np.ndarray,
+        column_names_x: ColumnNames = None,
+        colors: str | list[Color] | None = None,
+        separate_graphs: bool = False,
+        same_range_for_separate: bool = True,
+        opacity: float | None = None,
+        grid_spec: str = "column",
+        color_type: str = "palette",
+    ) -> None:
 
         column_names_x = _format_column_names(input_data, column_names_x)
 
@@ -508,7 +509,11 @@ class BaseBuilder:
         # init fig
         self.fig = None
 
-    def _expand_array(self, arr, arr_name):
+    def _expand_array(
+        self,
+        arr: ArrayLike,
+        arr_name: list[str],
+    ) -> tuple[np.ndarray, list[str], bool]:
         a = np.asarray(arr)
         if a.ndim == 1:
             a = a.reshape(-1, 1)
@@ -519,7 +524,7 @@ class BaseBuilder:
         else:
             return a, arr_name, False
 
-    def _expand_data_frame(self, df):
+    def _expand_data_frame(self, df: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
         if df.shape[1] == 1 and self.n_columns != 1:
             col = df.columns[0]
             vals = np.tile(df.to_numpy(copy=True), (1, self.n_columns))  # (N, x)
@@ -527,7 +532,7 @@ class BaseBuilder:
         else:
             return df, False
 
-    def _parse_grid(self, spec):
+    def _parse_grid(self, spec: str) -> tuple[int, int]:
         s = str(spec).strip().lower()
         if s in ("row", "rows"):  # 1 x N
             return 1, self.n_columns
@@ -548,7 +553,10 @@ class BaseBuilder:
     # ---- internals ----
 
     @staticmethod
-    def _bins_from_range(range_list, nbins):
+    def _bins_from_range(
+        range_list: list[tuple[float, float]],
+        nbins: int,
+    ) -> list[dict]:
 
         bins_list = []
         for i, rng in enumerate(range_list):
@@ -560,7 +568,11 @@ class BaseBuilder:
 
         return bins_list
 
-    def _set_axis_range(self, custom_range, arr):
+    def _set_axis_range(
+        self,
+        custom_range: tuple[float, float] | None,
+        arr: np.ndarray,
+    ) -> list[tuple[float, float]]:
 
         # prefer custom ranges if given; otherwise use data-driven globals
         if custom_range is not None:
@@ -574,7 +586,7 @@ class BaseBuilder:
                 return list(zip(mins, maxs))
 
     @staticmethod
-    def _validate_range(r):
+    def _validate_range(r: tuple[float, float] | None) -> tuple[float, float] | None:
         if r is None:
             return None
         if not (isinstance(r, (list, tuple)) and len(r) == 2):
@@ -587,7 +599,12 @@ class BaseBuilder:
         lo, hi = (a, b) if a <= b else (b, a)
         return (lo, hi)
 
-    def change_to_separate_graphs(self, message="", opacity=None, grid_spec="column"):
+    def change_to_separate_graphs(
+        self,
+        message: str = "",
+        opacity: float | None = None,
+        grid_spec: str = "column",
+    ) -> None:
         """Switch the builder to separate-subplot mode in place.
 
         Parameters
@@ -607,7 +624,12 @@ class BaseBuilder:
         self.opacity = 1.0 if opacity is None else opacity
         self.update_layout_settings(**dict(showlegend=False, height=max(360, 250 * self.n_columns)))
 
-    def process_second_axis_data(self, second_axis_data, column_names_y, x_id="x"):
+    def process_second_axis_data(
+        self,
+        second_axis_data: pd.DataFrame | np.ndarray | None,
+        column_names_y: ColumnNames,
+        x_id: str = "x",
+    ) -> bool:
         """Load and align a second (Y) axis onto ``self.y_axis`` / ``self.y_id``.
 
         When *second_axis_data* is ``None``, the original ``x_axis`` is
@@ -645,7 +667,7 @@ class BaseBuilder:
 
         return expanded
 
-    def update_layout_settings(self, **layout_setup):
+    def update_layout_settings(self, **layout_setup: Any) -> None:
         """Update self.default_layout with overrides, keeping old values."""
         for key, value in layout_setup.items():
             if key in self.default_layout and isinstance(self.default_layout[key], dict) and isinstance(value, dict):
@@ -654,7 +676,7 @@ class BaseBuilder:
             else:
                 self.default_layout[key] = value
 
-    def update_graph_layout(self, **layout_setup):
+    def update_graph_layout(self, **layout_setup: Any) -> None:
         """Apply layout overrides to the current figure.
 
         Parameters
@@ -673,7 +695,7 @@ class BaseBuilder:
         else:
             raise Warning("Figure object does not exist, call plot_graph first.")
 
-    def plot_graph(self, *args, **kwargs):
+    def plot_graph(self, *args: Any, **kwargs: Any) -> go.Figure:
         """Build and return the figure, dispatching to subplots or single mode.
 
         Calls :meth:`plot_subplots` when ``self.separate_graphs`` is ``True``,
@@ -692,7 +714,7 @@ class BaseBuilder:
         self.fig.update_layout(self.default_layout)
         return self.fig
 
-    def plot_subplots(self, *args, **kwargs):
+    def plot_subplots(self, *args: Any, **kwargs: Any) -> go.Figure:
         """Build a figure with one subplot per data column.
 
         Returns
@@ -701,7 +723,7 @@ class BaseBuilder:
         """
         raise NotImplementedError("Implement in subclass")
 
-    def plot_single(self, *args, **kwargs):
+    def plot_single(self, *args: Any, **kwargs: Any) -> go.Figure:
         """Build a figure with all data columns overlaid on one axes.
 
         Returns
@@ -710,7 +732,7 @@ class BaseBuilder:
         """
         raise NotImplementedError("Implement in subclass")
 
-    def build_trace(self, *args, **kwargs):
+    def build_trace(self, *args: Any, **kwargs: Any) -> Any:
         """Construct a single Plotly trace for one data column.
 
         Returns
@@ -754,19 +776,19 @@ class HistBuilder(BaseBuilder):
 
     def __init__(
         self,
-        input_data,
-        column_names_x=None,
-        bins=20,
-        hist_type="count",  # "count" | "sum" | "avg" | "min" | "max"
-        hist_norm="",  # "percent" | "probability" | "density" | "probability density"
-        opacity=None,
-        colors=None,
-        x_range=None,
-        separate_graphs=False,
-        same_range_for_separate=True,
-        same_scale=False,
-        grid_spec="column",
-    ):
+        input_data: pd.DataFrame | np.ndarray,
+        column_names_x: ColumnNames = None,
+        bins: int = 20,
+        hist_type: str = "count",  # "count" | "sum" | "avg" | "min" | "max"
+        hist_norm: str = "",  # "percent" | "probability" | "density" | "probability density"
+        opacity: float | None = None,
+        colors: str | list[Color] | None = None,
+        x_range: tuple[float, float] | None = None,
+        separate_graphs: bool = False,
+        same_range_for_separate: bool = True,
+        same_scale: bool = False,
+        grid_spec: str = "column",
+    ) -> None:
 
         super().__init__(
             input_data,
@@ -797,7 +819,7 @@ class HistBuilder(BaseBuilder):
         self.xbins = self._bins_from_range(self.x_range, self.nbinsx)
         self.y_scale = self._set_scale()
 
-    def _set_scale(self):
+    def _set_scale(self) -> tuple[float, float] | None:
 
         if self.same_scale and self.separate_graphs:
             ymax = 0
@@ -811,7 +833,7 @@ class HistBuilder(BaseBuilder):
         else:
             return None
 
-    def plot_subplots(self):
+    def plot_subplots(self) -> go.Figure:
         """Build a subplot figure with one histogram per data column.
 
         Returns
@@ -839,7 +861,7 @@ class HistBuilder(BaseBuilder):
 
         return self.fig
 
-    def plot_single(self):
+    def plot_single(self) -> go.Figure:
         """Build a figure with all histograms overlaid.
 
         Returns
@@ -852,7 +874,14 @@ class HistBuilder(BaseBuilder):
 
         return self.fig
 
-    def build_trace(self, y, name, color, x_range, xbins):
+    def build_trace(
+        self,
+        y: ArrayLike,
+        name: str,
+        color: str,
+        x_range: tuple[float, float],
+        xbins: dict,
+    ) -> go.Histogram:
         """Construct a :class:`plotly.graph_objects.Histogram` trace.
 
         Parameters
@@ -926,23 +955,23 @@ class Hist2DBuilder(BaseBuilder):
 
     def __init__(
         self,
-        input_data,
-        column_names_x=None,
-        second_axis_data=None,
-        column_names_y=None,
-        nbinsx=40,
-        nbinsy=40,
-        x_range=None,  # (xmin, xmax) or None
-        y_range=None,  # (ymin, ymax) or None
-        hist_type="count",
-        hist_norm=None,  # None | "percent" | "probability" | "density" | "probability density"
-        same_scale=False,
-        colors=None,
-        separate_graphs=False,
-        same_range_for_separate=True,
-        opacity=None,
-        grid_spec="column",
-    ):
+        input_data: pd.DataFrame | np.ndarray,
+        column_names_x: ColumnNames = None,
+        second_axis_data: pd.DataFrame | np.ndarray | None = None,
+        column_names_y: ColumnNames = None,
+        nbinsx: int = 40,
+        nbinsy: int = 40,
+        x_range: tuple[float, float] | None = None,
+        y_range: tuple[float, float] | None = None,
+        hist_type: str = "count",
+        hist_norm: str | None = None,
+        same_scale: bool = False,
+        colors: str | Colorscale | list[Color] | None = None,
+        separate_graphs: bool = False,
+        same_range_for_separate: bool = True,
+        opacity: float | None = None,
+        grid_spec: str = "column",
+    ) -> None:
 
         super().__init__(
             input_data,
@@ -1008,7 +1037,7 @@ class Hist2DBuilder(BaseBuilder):
 
     # ---- internals ----
 
-    def _update_colorbar(self, subplot_idx):
+    def _update_colorbar(self, subplot_idx: int) -> None:
 
         subplot_idx = subplot_idx + 1
         xax = "xaxis" if subplot_idx == 1 else f"xaxis{subplot_idx}"
@@ -1018,7 +1047,7 @@ class Hist2DBuilder(BaseBuilder):
         self.colorbar.update({"x": xd1 + 0.02, "y": (yd0 + yd1) / 2, "len": yd1 - yd0})
 
     # ---- plotters ----
-    def plot_subplots(self, *args, **kwargs):
+    def plot_subplots(self, *args: Any, **kwargs: Any) -> go.Figure:
         """Build a subplot figure with one 2-D histogram per column pair.
 
         Returns
@@ -1051,7 +1080,7 @@ class Hist2DBuilder(BaseBuilder):
 
         return self.fig
 
-    def plot_single(self, *args, **kwargs):
+    def plot_single(self, *args: Any, **kwargs: Any) -> go.Figure | None:
         """Build a figure with a single 2-D histogram.
 
         Returns ``None`` when more than one column pair is present (use
@@ -1074,7 +1103,12 @@ class Hist2DBuilder(BaseBuilder):
 
         return self.fig
 
-    def prepare_trace_kwargs(self, showscale=None, coloraxis=None, colorbar=None):
+    def prepare_trace_kwargs(
+        self,
+        showscale: bool | None = None,
+        coloraxis: str | None = None,
+        colorbar: dict | None = None,
+    ) -> None:
         """Update ``self.trace_kwargs`` for the next batch of traces.
 
         Parameters
@@ -1099,7 +1133,14 @@ class Hist2DBuilder(BaseBuilder):
         if showscale is not None:
             self.trace_kwargs["showscale"] = showscale
 
-    def build_trace(self, x, y, name, xbins, ybins):
+    def build_trace(
+        self,
+        x: ArrayLike,
+        y: ArrayLike,
+        name: str,
+        xbins: dict,
+        ybins: dict,
+    ) -> go.Histogram2d:
         """Construct a :class:`plotly.graph_objects.Histogram2d` trace.
 
         Parameters
@@ -1163,19 +1204,19 @@ class ScatterBuilder(BaseBuilder):
 
     def __init__(
         self,
-        input_data,
-        column_names_x=None,
-        second_axis_data=None,
-        column_names_y=None,
-        line_mode="markers",
-        x_range=None,  # (xmin, xmax) or None
-        y_range=None,  # (ymin, ymax) or None
-        colors=None,
-        separate_graphs=False,
-        same_range_for_separate=True,
-        opacity=None,
-        grid_spec="column",
-    ):
+        input_data: pd.DataFrame | np.ndarray,
+        column_names_x: ColumnNames = None,
+        second_axis_data: pd.DataFrame | np.ndarray | None = None,
+        column_names_y: ColumnNames = None,
+        line_mode: str = "markers",
+        x_range: tuple[float, float] | None = None,
+        y_range: tuple[float, float] | None = None,
+        colors: str | list[Color] | None = None,
+        separate_graphs: bool = False,
+        same_range_for_separate: bool = True,
+        opacity: float | None = None,
+        grid_spec: str = "column",
+    ) -> None:
 
         super().__init__(
             input_data,
@@ -1195,7 +1236,7 @@ class ScatterBuilder(BaseBuilder):
         self.x_range = self._set_axis_range(x_range, self.x_axis)
         self.y_range = self._set_axis_range(y_range, self.y_axis)
 
-    def plot_subplots(self, *args, **kwargs):
+    def plot_subplots(self, *args: Any, **kwargs: Any) -> go.Figure:
         """Build a subplot figure with one scatter/line panel per column.
 
         Returns
@@ -1220,7 +1261,7 @@ class ScatterBuilder(BaseBuilder):
 
         return self.fig
 
-    def plot_single(self, *args, **kwargs):
+    def plot_single(self, *args: Any, **kwargs: Any) -> go.Figure:
         """Build a figure with all series overlaid on one axes.
 
         Returns
@@ -1240,7 +1281,13 @@ class ScatterBuilder(BaseBuilder):
 
         return fig
 
-    def build_trace(self, x, y, name, color):
+    def build_trace(
+        self,
+        x: ArrayLike,
+        y: ArrayLike,
+        name: str,
+        color: str,
+    ) -> go.Scatter:
         """Construct a :class:`plotly.graph_objects.Scatter` trace.
 
         Parameters
@@ -1304,23 +1351,23 @@ class KDEBuilder(Hist2DBuilder):
 
     def __init__(
         self,
-        input_data,
-        column_names_x=None,
-        second_axis_data=None,
-        column_names_y=None,
-        nbinsx=200,
-        nbinsy=200,
-        x_range=None,  # (xmin, xmax) or None
-        y_range=None,  # (ymin, ymax) or None
-        hist_type="count",
-        hist_norm=None,  # None | "percent" | "probability" | "density" | "probability density"
-        same_scale=False,
-        colors=None,
+        input_data: pd.DataFrame | np.ndarray,
+        column_names_x: ColumnNames = None,
+        second_axis_data: pd.DataFrame | np.ndarray | None = None,
+        column_names_y: ColumnNames = None,
+        nbinsx: int = 200,
+        nbinsy: int = 200,
+        x_range: tuple[float, float] | None = None,
+        y_range: tuple[float, float] | None = None,
+        hist_type: str = "count",
+        hist_norm: str | None = None,
+        same_scale: bool = False,
+        colors: str | Colorscale | list[Color] | None = None,
         # separate_graphs=False,
-        same_range_for_separate=True,
-        opacity=None,
-        grid_spec="column",
-    ):
+        same_range_for_separate: bool = True,
+        opacity: float | None = None,
+        grid_spec: str = "column",
+    ) -> None:
 
         super().__init__(
             input_data,
@@ -1341,7 +1388,14 @@ class KDEBuilder(Hist2DBuilder):
             grid_spec=grid_spec,
         )
 
-    def padded_limits(self, v, frac=0.05, min_pad=0.0, bw=None, k_bw=3.0):
+    def padded_limits(
+        self,
+        v: ArrayLike,
+        frac: float = 0.05,
+        min_pad: float = 0.0,
+        bw: float | None = None,
+        k_bw: float = 3.0,
+    ) -> tuple[float, float]:
         """Return padded ``(min, max)`` limits for a data vector.
 
         Parameters
@@ -1374,14 +1428,18 @@ class KDEBuilder(Hist2DBuilder):
             pad = max(pad, 1.0 if min_pad == 0 else min_pad)
         return vmin - pad, vmax + pad
 
-    def list_max(arr_list, same_scale=False):
+    def list_max(arr_list: ArrayLike, same_scale: bool = False) -> ArrayLike:
         if same_scale:
             max_val = max(values)
             return [max_val] * len(values)
         else:
             return values
 
-    def compute_kde(self, x_axis, y_axis):
+    def compute_kde(
+        self,
+        x_axis: ArrayLike,
+        y_axis: ArrayLike,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, tuple[float, float], tuple[float, float]]:
         """Evaluate a 2-D Gaussian KDE on a regular grid.
 
         Parameters
@@ -1430,7 +1488,10 @@ class KDEBuilder(Hist2DBuilder):
 
         return xg, yg, zg, zmax, (x_lo, x_hi), (y_lo, y_hi)
 
-    def normalize_ranges(self, ranges):
+    def normalize_ranges(
+        self,
+        ranges: list[tuple[float, float]],
+    ) -> list[tuple[float, float]]:
         """Optionally collapse per-panel axis ranges to a single global range.
 
         Parameters
@@ -1453,7 +1514,7 @@ class KDEBuilder(Hist2DBuilder):
         else:
             return ranges
 
-    def plot_subplots(self, *args, **kwargs):
+    def plot_subplots(self, *args: Any, **kwargs: Any) -> go.Figure:
         """Build a subplot figure with one KDE contour per column pair.
 
         Returns
@@ -1501,7 +1562,7 @@ class KDEBuilder(Hist2DBuilder):
 
         return self.fig
 
-    def plot_single(self, *args, **kwargs):
+    def plot_single(self, *args: Any, **kwargs: Any) -> go.Figure | None:
         """Build a figure with a single KDE contour.
 
         Returns ``None`` when more than one column pair is present.
@@ -1523,7 +1584,13 @@ class KDEBuilder(Hist2DBuilder):
 
         return fig
 
-    def build_trace(self, x_grid, y_grid, z_grid, zmax):
+    def build_trace(
+        self,
+        x_grid: np.ndarray,
+        y_grid: np.ndarray,
+        z_grid: np.ndarray,
+        zmax: float,
+    ) -> go.Contour:
         """Construct a filled :class:`plotly.graph_objects.Contour` trace.
 
         Parameters
@@ -1563,8 +1630,8 @@ def plot_histogram(
     hist_norm: str = "",
     same_range_for_separate: bool = True,
     same_scale: bool = False,
-    colors: Optional[Union[str, Sequence[Color]]] = None,
-    opacity: Optional[float] = None,
+    colors: str | list[Color] | None = None,
+    opacity: float | None = None,
     grid_spec: str = "column",
 ) -> go.Figure:
     """Plot 1-D histogram(s) using Plotly.
@@ -1620,19 +1687,19 @@ def plot_histogram(
 def plot_histogram_2d(
     input_data: DataSource,
     column_names_x: ColumnNames = None,
-    second_axis_data: Optional[DataSource] = None,
+    second_axis_data: DataSource | None = None,
     column_names_y: ColumnNames = None,
     nbinsx: int = 40,
     nbinsy: int = 40,
-    x_range: Optional[Tuple[float, float]] = None,
-    y_range: Optional[Tuple[float, float]] = None,
+    x_range: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = None,
     hist_type: str = "count",
-    hist_norm: Optional[str] = None,
+    hist_norm: str | None = None,
     same_scale: bool = False,
-    colors: Optional[Union[str, Sequence[Color]]] = None,
+    colors: str | list[Color] | None = None,
     separate_graphs: bool = False,
     same_range_for_separate: bool = True,
-    opacity: Optional[float] = None,
+    opacity: float | None = None,
     grid_spec: str = "column",
 ) -> go.Figure:
     """Plot 2-D histogram(s) using Plotly.
@@ -1707,12 +1774,12 @@ def plot_spherical_density_2d(
     column_names_x: ColumnNames = None,
     nbinsx: int = 10,
     nbinsy: int = 10,
-    x_range: Optional[Tuple[float, float]] = None,
-    y_range: Optional[Tuple[float, float]] = None,
+    x_range: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = None,
     hist_type: str = "count",
     hist_norm: str = "percent",
     normalize_coord: bool = True,
-    colors: Union[str, Colorscale, Sequence[Color]] = "Viridis",
+    colors: str | Colorscale | list[Color] = "Viridis",
     same_scale: bool = False,
     same_range_for_separate: bool = False,
     grid_spec: str = "column",
@@ -1846,14 +1913,14 @@ def plot_spherical_density_2d(
 def plot_scatter_2d(
     input_data: DataSource,
     column_names_x: ColumnNames = None,
-    second_axis_data: Optional[DataSource] = None,
+    second_axis_data: DataSource | None = None,
     column_names_y: ColumnNames = None,
     separate_graphs: bool = False,
     same_range_for_separate: bool = False,
-    x_range: Optional[Tuple[float, float]] = None,
-    y_range: Optional[Tuple[float, float]] = None,
-    colors: Optional[Union[str, Sequence[Color]]] = None,
-    opacity: Optional[float] = None,
+    x_range: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = None,
+    colors: str | list[Color] | None = None,
+    opacity: float | None = None,
     grid_spec: str = "column",
 ) -> go.Figure:
     """Plot 2-D scatter plot(s) using Plotly.
@@ -1914,8 +1981,8 @@ def plot_line(
     column_names_x: ColumnNames = None,
     separate_graphs: bool = False,
     same_range_for_separate: bool = False,
-    colors: Optional[Union[str, Sequence[Color]]] = None,
-    opacity: Optional[float] = None,
+    colors: str | list[Color] | None = None,
+    opacity: float | None = None,
     grid_spec: str = "column",
 ) -> go.Figure:
     """Plot line chart(s) using Plotly.
@@ -1961,13 +2028,13 @@ def plot_line(
 def plot_scatter_xyz_panels(
     data: DataSource,
     coord_columns: ColumnNames = None,
-    group_by: Optional[str] = None,
-    hover_column_name: Optional[str] = None,
-    circle_radius: Optional[float] = None,
-    displ_threshold: Optional[float] = None,
-    title: Optional[str] = None,
+    group_by: str | None = None,
+    hover_column_name: str | None = None,
+    circle_radius: float | None = None,
+    displ_threshold: float | None = None,
+    title: str | None = None,
     marker_size: int = 5,
-    output_path: Optional[PathOrStr] = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Plot three 2-D scatter views (XY, XZ, YZ) of 3-D coordinates.
 
@@ -2084,12 +2151,12 @@ def plot_scatter_xyz_panels(
 def plot_scatter_3d(
     data: DataSource,
     coord_columns: ColumnNames = None,
-    color_column_name: Optional[str] = None,
+    color_column_name: str | None = None,
     color_label: str = "Group",
     marker_size: int = 3,
     opacity: float = 1.0,
-    title: Optional[str] = None,
-    output_path: Optional[PathOrStr] = None,
+    title: str | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """3-D scatter plot with an optional color-coded value column.
 
@@ -2510,12 +2577,12 @@ def plot_grouped_box(
     data: DataSource,
     group_column_name: str,
     value_column_name: str,
-    title: Optional[str] = None,
-    xaxis_title: Optional[str] = None,
-    yaxis_title: Optional[str] = None,
-    colorscale: Union[str, Colorscale, Sequence[Color]] = "Monet",
-    boxpoints: Union[str, bool] = "outliers",
-    output_path: Optional[PathOrStr] = None,
+    title: str | None = None,
+    xaxis_title: str | None = None,
+    yaxis_title: str | None = None,
+    colorscale: str | Colorscale | list[Color] = "Monet",
+    boxpoints: str | bool = "outliers",
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Side-by-side box plots of *value_column_name* grouped by *group_column_name*.
 
@@ -2574,7 +2641,15 @@ def plot_grouped_box(
 
 
 
-def _hemisphere_distance_traces(theta_r, distances, colorscale, marker_size, cmin, cmax, show_cbar):
+def _hemisphere_distance_traces(
+    theta_r: np.ndarray,
+    distances: ArrayLike,
+    colorscale: str | Colorscale,
+    marker_size: int,
+    cmin: float,
+    cmax: float,
+    show_cbar: bool,
+) -> go.Scatterpolar:
     """Build a Scatterpolar trace for one hemisphere of NN-distance points."""
     return go.Scatterpolar(
         r=theta_r[:, 1],
@@ -2596,11 +2671,11 @@ def _hemisphere_distance_traces(theta_r, distances, colorscale, marker_size, cmi
 def plot_polar_nn_distances(
     coordinates: ArrayLike,
     distances: ArrayLike,
-    max_radius: Optional[float] = None,
+    max_radius: float | None = None,
     marker_size: int = 3,
     colormap: str = "viridis_r",
-    graph_title: Optional[str] = None,
-    output_path: Optional[PathOrStr] = None,
+    graph_title: str | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Plot nearest-neighbour distances in polar (stereographic) projection.
 
@@ -2675,12 +2750,12 @@ def plot_polar_nn_distances(
 
 def plot_rotation_normals(
     input_rotation: RotationLike,
-    color_map: Optional[str] = None,
+    color_map: str | None = None,
     marker_size: int = 4,
     alpha: float = 1.0,
     radius: float = 1.0,
-    graph_title: Optional[str] = None,
-    output_path: Optional[PathOrStr] = None,
+    graph_title: str | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Plot z-normals of ``input_rotation`` as a 3-D scatter on a sphere.
 
@@ -2745,12 +2820,12 @@ def plot_rotation_normals(
 def plot_orientational_distribution(
     coordinates: ArrayLike,
     projection: ProjectionType = "stereo",
-    graph_title: Optional[str] = None,
+    graph_title: str | None = None,
     theta_bin: int = 73,
     radius_bin: int = 33,
-    max_radius: Optional[float] = None,
+    max_radius: float | None = None,
     colormap: str = "viridis_r",
-    output_path: Optional[PathOrStr] = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Polar histogram of unit vectors, both hemispheres side by side.
 
@@ -2862,11 +2937,11 @@ def plot_orientational_distribution(
 
 
 def plot_otsu_thresholds(
-    motl,
+    motl: "cryomotl.Motl",
     column_name: str,
     hbin: int,
-    graph_title: Optional[str] = None,
-    output_path: Optional[PathOrStr] = None,
+    graph_title: str | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Per-group score histograms with their Otsu thresholds overlaid.
 
@@ -2942,7 +3017,7 @@ def plot_otsu_thresholds(
     return fig
 
 
-def _class_lines(values_by_class: dict, palette: Sequence[Color]) -> List[go.Scatter]:
+def _class_lines(values_by_class: dict, palette: list[Color]) -> list[go.Scatter]:
     """Build one ``lines+markers`` trace per class id; axis titles are set by the caller."""
     traces = []
     for i, c in enumerate(sorted(values_by_class)):
@@ -2962,10 +3037,10 @@ def _class_lines(values_by_class: dict, palette: Sequence[Color]) -> List[go.Sca
 
 def plot_class_occupancy(
     occupancy_dic: dict,
-    color_scheme: Optional[Union[str, Sequence[Color]]] = None,
+    color_scheme: str | list[Color] | None = None,
     show_legend: bool = True,
-    graph_title: Optional[str] = None,
-    output_path: Optional[PathOrStr] = None,
+    graph_title: str | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Per-class particle counts over alignment iterations.
 
@@ -3005,10 +3080,10 @@ def plot_class_occupancy(
 
 def plot_class_stability(
     subtomo_changes: dict,
-    color_scheme: Optional[Union[str, Sequence[Color]]] = None,
+    color_scheme: str | list[Color] | None = None,
     show_legend: bool = True,
-    graph_title: Optional[str] = None,
-    output_path: Optional[PathOrStr] = None,
+    graph_title: str | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Number of particles that changed class at each iteration.
 
@@ -3048,9 +3123,9 @@ def plot_class_stability(
 def plot_classification_convergence(
     occupancy_dic: dict,
     subtomo_changes_dic: dict,
-    color_scheme: Optional[Union[str, Sequence[Color]]] = None,
-    graph_title: Optional[str] = None,
-    output_path: Optional[PathOrStr] = None,
+    color_scheme: str | list[Color] | None = None,
+    graph_title: str | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Class occupancy and class stability side by side.
 
@@ -3099,10 +3174,10 @@ def plot_classification_convergence(
 
 
 def plot_alignment_stability(
-    input_dfs: Sequence[DataSource],
-    labels: Optional[Sequence[str]] = None,
+    input_dfs: list[DataSource],
+    labels: list[str] | None = None,
     graph_title: str = "Alignment stability",
-    output_path: Optional[PathOrStr] = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Per-parameter alignment statistics over iterations.
 
@@ -3174,15 +3249,15 @@ def plot_alignment_stability(
 def plot_scatter_with_histogram(
     data_x: ArrayLike,
     data_y: ArrayLike,
-    bins_x: Optional[int] = None,
-    bins_y: Optional[int] = None,
-    colors_x: Optional[Union[str, Sequence[Color]]] = None,
-    colors_y: Optional[Union[str, Sequence[Color]]] = None,
-    edges_x: Optional[Sequence[float]] = None,
-    edges_y: Optional[Sequence[float]] = None,
-    axis_title_x: Optional[str] = None,
-    axis_title_y: Optional[str] = None,
-    output_path: Optional[PathOrStr] = None,
+    bins_x: int | None = None,
+    bins_y: int | None = None,
+    colors_x: str | list[Color] | None = None,
+    colors_y: str | list[Color] | None = None,
+    edges_x: ArrayLike | None = None,
+    edges_y: ArrayLike | None = None,
+    axis_title_x: str | None = None,
+    axis_title_y: str | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Scatter plot with marginal histograms on the top and right.
 
@@ -3297,9 +3372,9 @@ def plot_scatter_with_histogram(
 def plot_pca_summary(
     cumulative_variance: ArrayLike,
     feature_importances: pd.Series,
-    scatter_kwargs: Optional[dict] = None,
-    bar_kwargs: Optional[dict] = None,
-    output_path: Optional[PathOrStr] = None,
+    scatter_kwargs: dict | None = None,
+    bar_kwargs: dict | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Create a combined subplot for PCA analysis.
 
@@ -3378,18 +3453,18 @@ def plot_pca_summary(
 def plot_kde(
     input_data: DataSource,
     column_names_x: ColumnNames = None,
-    second_axis_data: Optional[DataSource] = None,
+    second_axis_data: DataSource | None = None,
     column_names_y: ColumnNames = None,
     nbinsx: int = 200,
     nbinsy: int = 200,
     hist_type: str = "count",
-    hist_norm: Optional[str] = None,
-    colors: Optional[Union[str, Colorscale, Sequence[Color]]] = None,
-    opacity: Optional[float] = None,
+    hist_norm: str | None = None,
+    colors: str | Colorscale | list[Color] | None = None,
+    opacity: float | None = None,
     grid_spec: str = "column",
     same_range_for_separate: bool = False,
     same_scale: bool = False,
-    output_path: Optional[PathOrStr] = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Plot 2-D kernel density estimate contour(s) using Plotly.
 
@@ -3458,10 +3533,10 @@ def plot_kde(
 
 def add_xyz_heatmap_row(
     fig: go.Figure,
-    slices: Sequence[ArrayLike],
+    slices: ArrayLike,
     row: int,
     coloraxis: str = "coloraxis",
-    annot_format: Optional[str] = None,
+    annot_format: str | None = None,
     hide_ticks: bool = True,
 ) -> None:
     """Add a row of three XY / XZ / YZ cross-section heatmaps to an existing figure.
@@ -3516,9 +3591,9 @@ def add_xyz_heatmap_row(
 
 
 def plot_scores_and_peaks(
-    peak_files: Sequence[Union[ArrayLike, PathOrStr]],
-    plot_title: Optional[str] = None,
-    output_path: Optional[PathOrStr] = None,
+    peak_files: list[ArrayLike | PathOrStr],
+    plot_title: str | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Plot interactive heatmaps of peak cross-sections for multiple peak-related arrays.
 
@@ -3583,10 +3658,10 @@ def plot_scores_and_peaks(
 
 
 def plot_fsc(
-    input_data: Union[PathOrStr, pd.DataFrame],
-    pixel_size: Optional[float] = None,
-    box_size: Optional[int] = None,
-    output_path: Optional[PathOrStr] = None,
+    input_data: PathOrStr | pd.DataFrame,
+    pixel_size: float | None = None,
+    box_size: int | None = None,
+    output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """Plot a Fourier Shell Correlation (FSC) curve using Plotly.
 

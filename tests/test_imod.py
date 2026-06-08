@@ -237,6 +237,30 @@ def test_binary_header_sequence_detection(tmp_path):
     assert position == 0
 
 
+def test_read_from_file_locates_and_parses_model_header(tmp_path):
+    """``ImodHeader.read_from_file`` finds the magic chunk and unpacks the fixed header."""
+    bin_file = str(tmp_path / "header.bin")
+    # Write 8 bytes of padding then a full ModelHeader.
+    payload = b"PAD12345" + imod.ModelHeader(xmax=2048, ymax=1024, zmax=512).to_bytes()
+    with open(bin_file, "wb") as f:
+        f.write(payload)
+    with open(bin_file, "rb") as f:
+        parsed = imod.ModelHeader.read_from_file(f, encoding="utf-8")
+    assert isinstance(parsed, imod.ModelHeader)
+    assert parsed.xmax == 2048
+    assert parsed.ymax == 1024
+    assert parsed.zmax == 512
+
+
+def test_read_from_file_returns_none_when_magic_missing(tmp_path):
+    """When the magic string is absent the classmethod returns ``None``."""
+    bin_file = str(tmp_path / "nomagic.bin")
+    with open(bin_file, "wb") as f:
+        f.write(b"NOTHINGHERE_NOTHINGHERE_NOTHING_")
+    with open(bin_file, "rb") as f:
+        assert imod.ModelHeader.read_from_file(f, encoding="utf-8") is None
+
+
 def test_coordinate_precision(tmp_path):
     data = pd.DataFrame({
         "object_id": [1], "contour_id": [1],

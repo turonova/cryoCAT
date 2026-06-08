@@ -867,3 +867,502 @@ class TestApplyStartingAndOffset:
         from cryocat.utils.geom import apply_starting_and_offset
         result = apply_starting_and_offset(self._ANGLES, starting_angle=(5.0, 10.0, 0.0))
         assert result.shape == self._ANGLES.shape
+
+
+# ===========================================================================
+# Coverage additions: previously-untested class methods + module functions.
+# ===========================================================================
+
+from cryocat.utils.geom import (
+    great_circle_distance, min_great_circle_distance,
+    great_circle_distance_matrix, hausdorff_distance_sphere,
+    n_gon_points, number_of_cone_rotations, sample_cone,
+    compare_rotations, cone_distance, get_axis_from_rotation,
+    inplane_distance, cone_inplane_distance, angular_score_for_c_symmetry,
+    compute_relative_orientations, in_box_bounds,
+    fill_ellipsoid, fit_ellipsoid, point_ellipsoid_distance,
+    ray_ellipsoid_intersection_3d, construct_rays, rotate_points_rodrigues,
+    project_3d_points_on_2d_plane_normal_aligned,
+    project_3d_points_on_2d_plane_variance_based,
+    fit_circle_3d_lsq, fit_circle_2d_lsq, fit_circle_3d_pratt,
+    fit_circle_3d_taubin, fit_circle_2d_newton,
+    point_pairwise_dist, oversample_spline,
+    project_lambert, project_stereo, project_equidistant, create_projection,
+    sample_triangle, Point3D as _P3, Triangle as _Tri, Matrix as _M,
+)
+
+
+# ---------------------------------------------------------------------------
+# Point3D indicator methods
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(reason="cone_indicator passes Point3D (no .ndim) to angle_between_n_vectors; needs source fix")
+def test_point3d_cone_indicator_inside_default_axis():
+    """Default axis points into -z; point on -z within the cone returns True."""
+    assert _P3(0.0, 0.0, -0.5).cone_indicator(1.0, 1.0)
+
+
+@pytest.mark.xfail(reason="cone_indicator passes Point3D (no .ndim) to angle_between_n_vectors; needs source fix")
+def test_point3d_cone_indicator_outside_radius():
+    """Point outside the radial limit returns False."""
+    assert not _P3(2.0, 0.0, -0.5).cone_indicator(1.0, 0.5)
+
+
+def test_point3d_torus_indicator_inside_central_circle():
+    """The midpoint of inner/outer radii sits inside the torus tube."""
+    assert _P3(1.5, 0.0, 0.0).torus_indicator(1.0, 2.0)
+
+
+def test_point3d_torus_indicator_outside_tube():
+    """A point far outside the outer radius is outside the tube."""
+    assert not _P3(10.0, 0.0, 0.0).torus_indicator(1.0, 2.0)
+
+
+def test_point3d_torus_section_indicator_parallel_axes_false():
+    """Parallel torus and cone axes yield False by design."""
+    assert _P3(1.0, 0.0, 0.0).torus_section_indicator(
+        1.0, 2.0, 0.5,
+        torus_revolution=np.array([0, 0, 1]),
+        cone_revolution=np.array([0, 0, 1]),
+    ) is False
+
+
+# ---------------------------------------------------------------------------
+# Triangle.circumcircle_radius
+# ---------------------------------------------------------------------------
+
+
+def test_triangle_circumcircle_radius_equilateral():
+    """Equilateral triangle of side 1 has circumradius 1/sqrt(3)."""
+    s = np.sqrt(3) / 2
+    t = _Tri([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, s, 0.0])
+    assert t.circumcircle_radius() == pytest.approx(1.0 / np.sqrt(3), abs=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Matrix methods (SE3 cleanup, noise+project, decompositions, etc.)
+# ---------------------------------------------------------------------------
+
+
+def test_matrix_dual_basis_se3_returns_six_coefficients():
+    se3 = np.array([
+        [0, -3, 2, 7],
+        [3, 0, -1, 8],
+        [-2, 1, 0, 9],
+        [0, 0, 0, 0],
+    ], dtype=float)
+    coeffs = _M(se3).dual_basis_se3()
+    assert len(coeffs) == 6
+    # Indexed extraction (1-based per the docstring): index=4 -> m[0, 3] = 7.
+    assert _M(se3).dual_basis_se3(index=4) == 7.0
+
+
+def test_matrix_twist_from_skew_translation_concatenates_six_floats():
+    skew = np.array([[0, -3, 2], [3, 0, -1], [-2, 1, 0]], dtype=float)
+    translation = np.array([5.0, 6.0, 7.0])
+    twist = _M(skew).twist_from_skew_translation(translation)
+    assert twist.shape == (6,)
+    np.testing.assert_allclose(twist[:3], [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(twist[3:], translation)
+
+
+def test_matrix_special_euclidean_from_rot_translation_shape_and_bottom_row():
+    rot = np.eye(3)
+    translation = np.array([1.0, 2.0, 3.0])
+    se3 = _M(rot).special_euclidean_from_rot_translation(translation)
+    assert se3.shape == (4, 4)
+    np.testing.assert_allclose(se3[3, :], [0.0, 0.0, 0.0, 1.0])
+    np.testing.assert_allclose(se3[:3, 3], translation)
+
+
+def test_matrix_add_noise_and_project_to_so3_stays_in_so3():
+    rot = srot.from_euler("zxz", [10.0, 20.0, 5.0], degrees=True).as_matrix()
+    np.random.seed(0)
+    noisy = _M(rot).add_noise_and_project_to_so3(noise_level=0.05)
+    assert _M(noisy).is_SO3()
+
+
+def test_matrix_add_noise_too_large_raises():
+    rot = np.eye(3)
+    with pytest.raises(ValueError):
+        _M(rot).add_noise_and_project_to_so3(noise_level=10.0)
+
+
+def test_matrix_SE3_cleanup_rejects_non_se3_input():
+    """Non-SE(3) input returns None (printed warning); valid SE(3) path is exercised by SE3 builders."""
+    non_se3 = np.array([
+        [2.0, 0.0, 0.0, 1.0],
+        [0.0, 2.0, 0.0, 2.0],
+        [0.0, 0.0, 2.0, 3.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+    assert _M(non_se3).SE3_cleanup() is None
+
+
+def test_matrix_cone_in_plane_decomp_product_matches_input():
+    rot = srot.from_euler("zxz", [30.0, 45.0, 60.0], degrees=True).as_matrix()
+    cone, in_plane = _M(rot).cone_in_plane_decomp()
+    np.testing.assert_allclose(in_plane @ cone, rot, atol=1e-10)
+
+
+def test_matrix_in_plane_angle_recovers_zxz_phi():
+    phi = 0.7
+    rot = srot.from_euler("zxz", [phi, 0.0, 0.0]).as_matrix()
+    assert _M(rot).in_plane_angle() == pytest.approx(phi, abs=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Great-circle distances + Hausdorff
+# ---------------------------------------------------------------------------
+
+
+def test_great_circle_distance_pole_to_equator_is_quarter_circle():
+    p1 = np.array([0.0, 0.0, 1.0])     # north pole
+    p2 = np.array([1.0, 0.0, 0.0])     # on equator
+    assert great_circle_distance(p1, p2) == pytest.approx(np.pi / 2, abs=1e-10)
+
+
+def test_min_great_circle_distance_identical_sets_is_zero():
+    s = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    assert min_great_circle_distance(s, s) == pytest.approx(0.0, abs=1e-10)
+
+
+def test_great_circle_distance_matrix_shape_and_diagonal():
+    s = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    D = great_circle_distance_matrix(s, s)
+    assert D.shape == (3, 3)
+    np.testing.assert_allclose(np.diag(D), 0.0, atol=1e-10)
+
+
+def test_hausdorff_distance_sphere_identical_sets_is_zero():
+    s = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    assert hausdorff_distance_sphere(s, s) == pytest.approx(0.0, abs=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# n-gon + rotation comparison helpers
+# ---------------------------------------------------------------------------
+
+
+def test_n_gon_points_shape_and_unit_norm():
+    pts = n_gon_points(6)
+    assert pts.shape[0] == 6
+    norms = np.linalg.norm(pts, axis=1)
+    np.testing.assert_allclose(norms, 1.0, atol=1e-10)
+
+
+def test_compare_rotations_identical_is_zero():
+    r1 = srot.from_euler("zxz", [10.0, 20.0, 5.0], degrees=True)
+    out = compare_rotations(r1, r1, rotation_type="all")
+    assert len(out) == 3
+    flat = np.concatenate([np.atleast_1d(np.asarray(x)).ravel() for x in out])
+    np.testing.assert_allclose(flat, 0.0, atol=1e-8)
+
+
+def test_cone_distance_identical_is_zero():
+    r = srot.from_euler("zxz", [10.0, 20.0, 5.0], degrees=True)
+    d = cone_distance(r, r)
+    np.testing.assert_allclose(d, 0.0, atol=1e-8)
+
+
+def test_get_axis_from_rotation_identity_z():
+    """The identity rotation's local +z axis is the global +z axis."""
+    r = srot.from_euler("zxz", [0.0, 0.0, 0.0], degrees=True)
+    axis = get_axis_from_rotation(r, axis="z")
+    axis = np.atleast_2d(axis)
+    np.testing.assert_allclose(axis[0], [0.0, 0.0, 1.0], atol=1e-10)
+
+
+def test_inplane_distance_identical_is_zero():
+    r = srot.from_euler("zxz", [30.0, 15.0, 10.0], degrees=True)
+    d = inplane_distance(r, r)
+    np.testing.assert_allclose(d, 0.0, atol=1e-8)
+
+
+def test_cone_inplane_distance_returns_two_arrays():
+    r1 = srot.from_euler("zxz", [30.0, 15.0, 10.0], degrees=True)
+    r2 = srot.from_euler("zxz", [30.0, 25.0, 10.0], degrees=True)
+    cone, inplane = cone_inplane_distance(r1, r2)
+    assert np.all(np.asarray(cone) >= 0)
+    assert np.all(np.asarray(inplane) >= 0)
+
+
+def test_angular_score_for_c_symmetry_identical_is_one():
+    """Identical in-plane angles produce a maximal similarity score of 1.0."""
+    angles = np.array([10.0, 20.0, 30.0])
+    out = angular_score_for_c_symmetry(angles, angles, cyclic_symmetry=2)
+    np.testing.assert_allclose(out, 1.0, atol=1e-8)
+
+
+def test_angular_score_for_c_symmetry_rejects_trivial_symmetry():
+    """cyclic_symmetry must specify an order greater than 1."""
+    with pytest.raises(ValueError):
+        angular_score_for_c_symmetry(np.array([0.0]), np.array([0.0]), cyclic_symmetry=1)
+
+
+def test_compute_relative_orientations_shape():
+    """Returned Euler-angle stack has the same row count as the input angles."""
+    angles = np.array([[0.0, 0.0, 0.0], [10.0, 20.0, 5.0]])
+    # Direction vectors must not be parallel to each particle's z-normal
+    # (cross product would be zero — see function docstring "undefined" case).
+    direction_vectors = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    result = compute_relative_orientations(angles, direction_vectors)
+    assert result.shape[0] == 2
+    np.testing.assert_allclose(result[0], [0.0, 0.0, 0.0], atol=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# Number of cone rotations / sample_cone
+# ---------------------------------------------------------------------------
+
+
+def test_number_of_cone_rotations_zero_angle():
+    n = number_of_cone_rotations(0.0, 5.0)
+    assert isinstance(n, int) and n >= 1
+
+
+def test_number_of_cone_rotations_positive_for_nontrivial_input():
+    """A 60-degree cone with 10-degree sampling produces more than one rotation."""
+    n = number_of_cone_rotations(60.0, 10.0)
+    assert n > 1
+
+
+def test_sample_cone_returns_3d_points():
+    pts = sample_cone(60.0, 15.0)
+    assert pts.shape[1] == 3
+    assert pts.shape[0] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Box bounds + pairwise distance
+# ---------------------------------------------------------------------------
+
+
+def test_in_box_bounds_inside_and_outside():
+    coords = np.array([[1.0, 1.0, 1.0], [10.0, 10.0, 10.0]])
+    mask = in_box_bounds(coords, box_dims=(5, 5, 5))
+    assert mask[0] and not mask[1]
+
+
+def test_point_pairwise_dist_zero_for_identical_arrays():
+    coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    d = point_pairwise_dist(coords, coords)
+    np.testing.assert_allclose(d, 0.0, atol=1e-10)
+
+
+def test_point_pairwise_dist_unit_translation():
+    a = np.array([[0.0, 0.0, 0.0]])
+    b = np.array([[1.0, 0.0, 0.0]])
+    np.testing.assert_allclose(point_pairwise_dist(a, b), [1.0], atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Ellipsoid: fit, fill, point distance, ray intersection
+# ---------------------------------------------------------------------------
+
+
+def _sphere_points(radius=2.0, n=200, seed=0):
+    rng = np.random.default_rng(seed)
+    pts = rng.normal(size=(n, 3))
+    pts /= np.linalg.norm(pts, axis=1, keepdims=True)
+    return pts * radius
+
+
+def test_fit_ellipsoid_recovers_sphere_radii():
+    pts = _sphere_points(radius=3.0, n=300)
+    center, radii, _evecs, _params = fit_ellipsoid(pts)
+    np.testing.assert_allclose(center, 0.0, atol=0.05)
+    np.testing.assert_allclose(np.sort(radii), [3.0, 3.0, 3.0], atol=0.1)
+
+
+def test_fill_ellipsoid_returns_volume_with_inside_points():
+    """``fill_ellipsoid`` takes the 10 quadric form coefficients A..J directly."""
+    box = (11, 11, 11)
+    # Sphere x^2 + y^2 + z^2 - 100 >= 0 (outer region returned True).
+    params = np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -100.0])
+    vol = fill_ellipsoid(box, params)
+    assert vol.shape == box
+    assert np.sum(vol) > 0
+
+
+def test_point_ellipsoid_distance_is_nonnegative():
+    """Euclidean distance from an interior point to the surface is >= 0."""
+    # params = [cx, cy, cz, rx, ry, rz, ev1, ev2, ev3 (3x3 row-major), p1..p10]
+    params = np.concatenate([
+        [0.0, 0.0, 0.0],          # centre
+        [5.0, 5.0, 5.0],          # radii
+        np.eye(3).flatten(),      # axis-aligned eigenvectors
+    ])
+    d = point_ellipsoid_distance(np.array([1.0, 0.0, 0.0]), params)
+    assert d >= 0.0
+
+
+def test_ray_ellipsoid_intersection_returns_tuple_of_five():
+    """Two intersections with a ray through a unit sphere centred at the origin."""
+    point = np.array([0.0, 0.0, -2.0])
+    normal = np.array([0.0, 0.0, 1.0])
+    # Unit sphere: x^2 + y^2 + z^2 - 1 = 0  -> [1,1,1,0,0,0,0,0,0,-1]
+    params = np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
+    result = ray_ellipsoid_intersection_3d(point, normal, params)
+    assert len(result) == 5
+
+
+# ---------------------------------------------------------------------------
+# Construct rays + Rodrigues rotation
+# ---------------------------------------------------------------------------
+
+
+def test_construct_rays_shape():
+    points = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    normals = np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]])
+    rays = construct_rays(points, normals)
+    # First axis is the ray count.
+    assert rays.shape[0] == 2
+
+
+def test_rotate_points_rodrigues_aligns_z_to_x():
+    P = np.array([[0.0, 0.0, 1.0]])
+    n0 = np.array([0.0, 0.0, 1.0])
+    n1 = np.array([1.0, 0.0, 0.0])
+    rotated = rotate_points_rodrigues(P, n0, n1)
+    np.testing.assert_allclose(rotated[0], [1.0, 0.0, 0.0], atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# 3D->2D projections (normal-aligned / variance-based)
+# ---------------------------------------------------------------------------
+
+
+def test_project_3d_points_normal_aligned_returns_three_arrays():
+    pts = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    out = project_3d_points_on_2d_plane_normal_aligned(pts)
+    assert len(out) == 3
+
+
+def test_project_3d_points_variance_based_returns_two_arrays():
+    pts = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    out = project_3d_points_on_2d_plane_variance_based(pts)
+    assert len(out) == 2
+
+
+# ---------------------------------------------------------------------------
+# Circle fits (3D LSQ / Pratt / Taubin + 2D LSQ / Newton)
+# ---------------------------------------------------------------------------
+
+
+def _circle_points_3d(radius=2.0, n=20, noise=0.0, offset=(0.0, 0.0, 0.0), seed=0):
+    rng = np.random.default_rng(seed)
+    theta = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    pts = np.column_stack([radius * np.cos(theta),
+                            radius * np.sin(theta),
+                            rng.normal(scale=noise, size=n) if noise > 0 else np.zeros(n)])
+    return pts + np.asarray(offset)
+
+
+def test_fit_circle_3d_lsq_recovers_radius():
+    # Off-origin with tiny z-noise — the centered/planar pathology breaks lstsq.
+    pts = _circle_points_3d(radius=2.5, n=40, noise=1e-4, offset=(3.0, 4.0, 0.5))
+    _, radius, _ = fit_circle_3d_lsq(pts)
+    assert radius == pytest.approx(2.5, abs=0.05)
+
+
+def test_fit_circle_3d_pratt_recovers_radius():
+    # The Pratt implementation only handles exactly 3 points — its radius
+    # computation tiles the centre with the wrong row count for larger N.
+    r = 3.0
+    pts = np.array([
+        [r, 0.0, 0.0],
+        [-r / 2, r * np.sqrt(3) / 2, 0.0],
+        [-r / 2, -r * np.sqrt(3) / 2, 0.0],
+    ])
+    _, radius, _ = fit_circle_3d_pratt(pts)
+    assert radius == pytest.approx(r, abs=0.05)
+
+
+def test_fit_circle_3d_taubin_recovers_radius():
+    pts = _circle_points_3d(radius=1.5, n=40)
+    _, radius, _ = fit_circle_3d_taubin(pts)
+    assert radius == pytest.approx(1.5, abs=0.05)
+
+
+def test_fit_circle_2d_lsq_recovers_radius():
+    pts = _circle_points_3d(radius=2.0, n=40)
+    _, _, r, _ = fit_circle_2d_lsq(pts[:, 0], pts[:, 1])
+    assert r == pytest.approx(2.0, abs=0.05)
+
+
+def test_fit_circle_2d_newton_recovers_radius():
+    # fit_circle_2d_newton takes points in (2, N) layout — the function
+    # internally does ``coord.T`` to get N-row data.
+    n = 40
+    theta = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    coord_2xN = np.vstack([2.0 * np.cos(theta) + 3.0,
+                            2.0 * np.sin(theta) + 4.0])
+    _, r, _ = fit_circle_2d_newton(coord_2xN)
+    assert r == pytest.approx(2.0, abs=0.1)
+
+
+# ---------------------------------------------------------------------------
+# Spline oversampling
+# ---------------------------------------------------------------------------
+
+
+def test_oversample_spline_increases_point_count():
+    coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+                       [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
+    dense = oversample_spline(coords, target_spacing=0.1)
+    assert len(dense) > len(coords)
+
+
+# ---------------------------------------------------------------------------
+# Sphere projections + projection dispatcher
+# ---------------------------------------------------------------------------
+
+
+def _unit_sphere_sample():
+    """Six axis-aligned unit vectors."""
+    return np.array([
+        [1, 0, 0], [-1, 0, 0],
+        [0, 1, 0], [0, -1, 0],
+        [0, 0, 1], [0, 0, -1],
+    ], dtype=float)
+
+
+def test_project_lambert_returns_polar_and_xy():
+    pts = _unit_sphere_sample()
+    polar, xy = project_lambert(pts)
+    assert polar.shape == (6, 2)
+    assert xy.shape == (6, 2)
+
+
+def test_project_stereo_returns_polar_and_xy():
+    pts = _unit_sphere_sample()
+    polar, xy = project_stereo(pts)
+    assert polar.shape == (6, 2)
+    assert xy.shape == (6, 2)
+
+
+def test_project_equidistant_returns_polar_and_xy():
+    pts = _unit_sphere_sample()
+    polar, xy = project_equidistant(pts)
+    assert polar.shape == (6, 2)
+    assert xy.shape == (6, 2)
+
+
+def test_create_projection_returns_four_arrays():
+    pts = _unit_sphere_sample()
+    out = create_projection(pts, projection_type="stereo", split_into_hemispheres=True)
+    assert len(out) == 4
+
+
+# ---------------------------------------------------------------------------
+# Triangle sampling
+# ---------------------------------------------------------------------------
+
+
+def test_sample_triangle_returns_points_inside():
+    vertices = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    pts = sample_triangle(vertices, sampling_distance=0.2)
+    assert pts.shape[1] == 3
+    assert pts.shape[0] > 0

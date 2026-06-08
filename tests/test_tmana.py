@@ -280,7 +280,7 @@ class TestScoresExtractParticles:
 
     def _patch(self, mocker, scores, amap, anglist):
         mocker.patch("cryocat.core.cryomap.read", side_effect=[scores, amap])
-        mocker.patch("cryocat.utils.ioutils.rot_angles_load", return_value=anglist)
+        mocker.patch("cryocat.utils.ioutils.euler_angles_load", return_value=anglist)
 
     def test_returns_motl_above_threshold(self, mocker):
         scores, amap, anglist = self._make_inputs()

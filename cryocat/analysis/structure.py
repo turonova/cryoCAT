@@ -17,7 +17,7 @@ from cryocat.utils import geom
 from cryocat.utils import mathutils
 from cryocat.analysis import nnana
 from cryocat.utils import ioutils
-from cryocat._types import MotlColumn, PathOrStr, TomoDimensions
+from cryocat._types import MapSource, MotlColumn, PathOrStr, TomoDimensions, TripletLike
 from cryocat.core.cryomotl import MotlSource
 from cryocat.core.surface import (
     Surface,
@@ -29,7 +29,8 @@ from cryocat.core.surface import (
     Ellipsoid,
     QuadricsM,
 )
-from typing import Any, Callable, Literal, Sequence
+from collections.abc import Callable
+from typing import Any, Literal
 
 # =============================================================================
 # Chain — generic linear-chain analysis on traced particles
@@ -62,13 +63,13 @@ class Chain:
 
     def __init__(
         self,
-        traced_motl,
-        pixel_size=1.0,
-        column_name="tomo_id",
-        chain_id_col="object_id",
-        order_id_col="geom2",
-        step_dist_col="geom4",
-    ):
+        traced_motl: MotlSource,
+        pixel_size: float = 1.0,
+        column_name: MotlColumn = "tomo_id",
+        chain_id_col: MotlColumn = "object_id",
+        order_id_col: MotlColumn = "geom2",
+        step_dist_col: MotlColumn = "geom4",
+    ) -> None:
         self.traced_motl = cryomotl.Motl.load(traced_motl)
         self.pixel_size = pixel_size
         self.column_name = column_name
@@ -79,17 +80,17 @@ class Chain:
     @classmethod
     def from_motls(
         cls,
-        motl_entry,
-        motl_exit,
-        max_distance,
-        min_distance=0,
-        column_name="tomo_id",
-        pixel_size=1.0,
-        output_motl=None,
-        chain_id_col="object_id",
-        order_id_col="geom2",
-        step_dist_col="geom4",
-    ):
+        motl_entry: MotlSource,
+        motl_exit: MotlSource,
+        max_distance: float,
+        min_distance: float = 0,
+        column_name: MotlColumn = "tomo_id",
+        pixel_size: float = 1.0,
+        output_motl: PathOrStr | None = None,
+        chain_id_col: MotlColumn = "object_id",
+        order_id_col: MotlColumn = "geom2",
+        step_dist_col: MotlColumn = "geom4",
+    ) -> "Chain":
         """Build a :class:`Chain` by tracing an entry/exit motl pair.
 
         Calls :func:`nnana.trace_chains` on *motl_entry* and *motl_exit* and
@@ -97,26 +98,26 @@ class Chain:
 
         Parameters
         ----------
-        motl_entry : str or Motl
+        motl_entry : MotlSource
             Entry-site particle list.
-        motl_exit : str or Motl
+        motl_exit : MotlSource
             Exit-site particle list.
         max_distance : float
             Maximum allowed step distance (in voxels) between successive
             entry/exit pairs.
         min_distance : float, default=0
             Minimum allowed step distance.
-        column_name : str, default='tomo_id'
+        column_name : MotlColumn, default='tomo_id'
             Column used to group particles before tracing.
         pixel_size : float, default=1.0
             Pixel size in Å; stored on the instance for later distance scaling.
-        output_motl : str, optional
+        output_motl : PathOrStr, optional
             Path to save the traced motl.
-        chain_id_col : str, default='object_id'
+        chain_id_col : MotlColumn, default='object_id'
             Column that receives the chain identifier.
-        order_id_col : str, default='geom2'
+        order_id_col : MotlColumn, default='geom2'
             Column that receives the within-chain position index.
-        step_dist_col : str, default='geom4'
+        step_dist_col : MotlColumn, default='geom4'
             Column that receives the step distance.
 
         Returns
@@ -146,16 +147,16 @@ class Chain:
     @classmethod
     def from_motl(
         cls,
-        motl,
-        max_distance,
-        min_distance=0,
-        column_name="tomo_id",
-        pixel_size=1.0,
-        output_motl=None,
-        chain_id_col="object_id",
-        order_id_col="geom2",
-        step_dist_col="geom4",
-    ):
+        motl: MotlSource,
+        max_distance: float,
+        min_distance: float = 0,
+        column_name: MotlColumn = "tomo_id",
+        pixel_size: float = 1.0,
+        output_motl: PathOrStr | None = None,
+        chain_id_col: MotlColumn = "object_id",
+        order_id_col: MotlColumn = "geom2",
+        step_dist_col: MotlColumn = "geom4",
+    ) -> "Chain":
         """Build a :class:`Chain` by tracing a single motl (single-site mode).
 
         Useful for structures where each particle has only one binding site,
@@ -164,23 +165,23 @@ class Chain:
 
         Parameters
         ----------
-        motl : str or Motl
+        motl : MotlSource
             Particle list to trace.
         max_distance : float
             Maximum allowed step distance (in voxels).
         min_distance : float, default=0
             Minimum allowed step distance.
-        column_name : str, default='tomo_id'
+        column_name : MotlColumn, default='tomo_id'
             Column used to group particles before tracing.
         pixel_size : float, default=1.0
             Pixel size in Å.
-        output_motl : str, optional
+        output_motl : PathOrStr, optional
             Path to save the traced motl.
-        chain_id_col : str, default='object_id'
+        chain_id_col : MotlColumn, default='object_id'
             Column that receives the chain identifier.
-        order_id_col : str, default='geom2'
+        order_id_col : MotlColumn, default='geom2'
             Column that receives the within-chain position index.
-        step_dist_col : str, default='geom4'
+        step_dist_col : MotlColumn, default='geom4'
             Column that receives the step distance.
 
         Returns
@@ -207,7 +208,7 @@ class Chain:
             step_dist_col=step_dist_col,
         )
 
-    def _step_distances_and_rotated_coords(self, df):
+    def _step_distances_and_rotated_coords(self, df: pd.DataFrame) -> np.ndarray:
         entry_coord = (df[["x", "y", "z"]].values + df[["shift_x", "shift_y", "shift_z"]].values) * self.pixel_size
         if {"exit_x", "exit_y", "exit_z"}.issubset(df.columns):
             exit_coord = df[["exit_x", "exit_y", "exit_z"]].values * self.pixel_size
@@ -234,7 +235,7 @@ class Chain:
             ]
         )
 
-    def _step_rotations(self, df):
+    def _step_rotations(self, df: pd.DataFrame) -> np.ndarray:
         qp_angles = df[["phi", "theta", "psi"]].values[0:-1, :]
         nn_angles = df[["phi", "theta", "psi"]].values[1:, :]
         rel = nnana.relative_rotations(qp_angles, nn_angles)
@@ -243,7 +244,7 @@ class Chain:
         ang_dist = geom.angular_distance(rel, zero_rot)[0].reshape(-1, 1)
         return np.hstack([ang_dist, points, eul])
 
-    def get_chain_stats(self, min_chain_size=2):
+    def get_chain_stats(self, min_chain_size: int = 2) -> pd.DataFrame:
         """Per-step statistics across all chains.
 
         Parameters
@@ -299,7 +300,11 @@ class Chain:
         out["type"] = "chain"
         return out
 
-    def get_occupancy(self, occupancy_id="geom1", output_motl=None):
+    def get_occupancy(
+        self,
+        occupancy_id: MotlColumn = "geom1",
+        output_motl: PathOrStr | None = None,
+    ) -> "cryomotl.Motl":
         """Write the chain length (occupancy) per particle into ``occupancy_id``.
 
         Each particle receives the length of its chain, i.e. the maximum
@@ -308,9 +313,9 @@ class Chain:
 
         Parameters
         ----------
-        occupancy_id : str, default='geom1'
+        occupancy_id : MotlColumn, default='geom1'
             Column name that receives the chain-length value.
-        output_motl : str, optional
+        output_motl : PathOrStr, optional
             Path to save the updated motl.
 
         Returns
@@ -325,7 +330,13 @@ class Chain:
             self.traced_motl.write_out(output_motl)
         return self.traced_motl
 
-    def add_traced_info(self, input_motl, output_motl_path=None, sort_by_subtomo=True, occupancy_id="geom1"):
+    def add_traced_info(
+        self,
+        input_motl: MotlSource,
+        output_motl_path: PathOrStr | None = None,
+        sort_by_subtomo: bool = True,
+        occupancy_id: MotlColumn = "geom1",
+    ) -> "cryomotl.Motl":
         """Copy chain columns from the traced motl onto *input_motl*.
 
         The columns ``occupancy_id``, ``order_id_col``, ``step_dist_col``, and
@@ -334,14 +345,14 @@ class Chain:
 
         Parameters
         ----------
-        input_motl : str or Motl
+        input_motl : MotlSource
             Target motl that will receive the chain annotations.
-        output_motl_path : str, optional
+        output_motl_path : PathOrStr, optional
             Path to save the annotated motl.
         sort_by_subtomo : bool, default=True
             Sort both motls by ``subtomo_id`` before copying to ensure correct
             row alignment.
-        occupancy_id : str, default='geom1'
+        occupancy_id : MotlColumn, default='geom1'
             Column that holds (or will hold) the chain-length value.
 
         Returns
@@ -376,7 +387,12 @@ class Chain:
             input_motl.write_out(output_motl_path)
         return input_motl
 
-    def get_class_chain_occupancies(self, mode="mp", occupancy_id="geom1", class_col="class"):
+    def get_class_chain_occupancies(
+        self,
+        mode: Literal["mp", "mdp"] = "mp",
+        occupancy_id: MotlColumn = "geom1",
+        class_col: MotlColumn = "class",
+    ) -> pd.DataFrame:
         """Return per-class chain-occupancy counts broken down by chain type.
 
         Parameters
@@ -390,10 +406,10 @@ class Chain:
             ``'mdp'``
                 Three categories — monomers, disomes (length 2), and
                 polysomes (length > 2).
-        occupancy_id : str, default='geom1'
+        occupancy_id : MotlColumn, default='geom1'
             Column that holds chain-length values.  Computed automatically
             if not yet present.
-        class_col : str, default='class'
+        class_col : MotlColumn, default='class'
             Column used to group particles by class.
 
         Returns
@@ -457,64 +473,85 @@ class NPC:
     """
 
     @staticmethod
-    def compute_diameter(input_motl, pixel_size=1.0, su_id="geom2"):
+    def compute_diameter(
+        input_motl: MotlSource,
+        pixel_size: float = 1.0,
+        su_id: MotlColumn = "geom2",
+        store_column: MotlColumn = "geom4",
+    ) -> tuple[pd.DataFrame, "cryomotl.Motl"]:
         """Compute the average diameter of opposite-subunit pairs within NPCs.
 
         Pairs are defined by the symmetric layout of an 8-fold NPC:
         ``(1,5)``, ``(2,6)``, ``(3,7)``, ``(4,8)``.  For each NPC
         (``tomo_id`` × ``object_id`` group) the mean pairwise distance of
-        available opposite pairs is returned.
+        available opposite pairs is computed.
 
         Parameters
         ----------
-        input_motl : str or Motl
+        input_motl : MotlSource
             Subunit particle list.  The ``su_id`` column must contain
             subunit indices 1–8.
         pixel_size : float, default=1.0
             Pixel size in Å; distances are multiplied by this value.
-        su_id : str, default='geom2'
+        su_id : MotlColumn, default='geom2'
             Column that identifies the subunit index within each NPC.
+            Naming kept as ``su_id`` for backwards compatibility, even
+            though the value is a motl column name.
+        store_column : MotlColumn, default='geom4'
+            Motl column to receive the per-NPC mean diameter.  Every row in
+            a given NPC group (``tomo_id`` × ``object_id``) is filled with
+            the same value (its NPC's mean diameter); rows in NPCs without
+            any matched opposite pair receive ``NaN``.
 
         Returns
         -------
-        numpy.ndarray
-            Mean diameter per NPC, in physical units (pixel_size × voxels).
+        summary_df : pandas.DataFrame
+            One row per NPC with columns ``tomo_id``, ``object_id``,
+            ``mean_diameter`` (in physical units = ``pixel_size`` × voxels),
+            and ``n_pairs`` (number of matched opposite pairs contributing
+            to the mean).
+        motl_out : Motl
+            A new motl, identical to ``input_motl`` apart from
+            ``store_column`` holding the per-NPC mean diameter.
         """
-        motl_ri = cryomotl.Motl.load(input_motl)
-        motl_ri.df.reset_index(inplace=True, drop=True)
+        motl_out = cryomotl.Motl.load(input_motl)
+        motl_out.df = motl_out.df.copy()
+        motl_out.df.reset_index(inplace=True, drop=True)
 
         pairs = [(1, 5), (2, 6), (3, 7), (4, 8)]
+        coord = motl_out.get_coordinates()
+        diameters_col = np.full(len(motl_out.df), np.nan)
+        rows: list[dict] = []
+        for (tomo_id, object_id), group in motl_out.df.groupby(["tomo_id", "object_id"]):
+            pair_rows: list[list[int]] = []
+            for a, b in pairs:
+                if a in group[su_id].values and b in group[su_id].values:
+                    pair_rows.append([
+                        group.loc[group[su_id] == a].index.tolist()[0],
+                        group.loc[group[su_id] == b].index.tolist()[0],
+                    ])
+            if not pair_rows:
+                continue
+            idx = np.asarray(pair_rows)
+            distances = geom.point_pairwise_dist(coord[idx[:, 0], :], coord[idx[:, 1], :]) * pixel_size
+            mean_d = float(np.mean(distances))
+            diameters_col[group.index.to_numpy()] = mean_d
+            rows.append({
+                "tomo_id": float(tomo_id),
+                "object_id": float(object_id),
+                "mean_diameter": mean_d,
+                "n_pairs": int(len(distances)),
+            })
 
-        def get_pairs_indices(group):
-            indices = []
-            for pair in pairs:
-                if pair[0] in group[su_id].values and pair[1] in group[su_id].values:
-                    indices.append(
-                        [
-                            group.loc[group[su_id] == pair[0]].index.tolist()[0],
-                            group.loc[group[su_id] == pair[1]].index.tolist()[0],
-                        ]
-                    )
-            return indices
-
-        result = (
-            motl_ri.df.groupby(["tomo_id", "object_id"]).apply(get_pairs_indices).reset_index(name="su_pairs_indices")
-        )
-        pairs_only = result.loc[result["su_pairs_indices"].apply(bool), "su_pairs_indices"].to_list()
-        motl_idx = np.array([item for sublist in pairs_only for item in sublist])
-
-        coord = motl_ri.get_coordinates()
-        distances = geom.point_pairwise_dist(coord[motl_idx[:, 0], :], coord[motl_idx[:, 1], :])
-
-        df_values = np.full(len(motl_ri.df), np.nan)
-        df_values[motl_idx[:, 0]] = distances * pixel_size
-        motl_ri.df["su_distance"] = df_values
-
-        npc_diameters_df = motl_ri.df.groupby(["tomo_id", "object_id"])["su_distance"].mean().dropna()
-        return npc_diameters_df.values
+        motl_out.df[store_column] = diameters_col
+        summary_df = pd.DataFrame(rows, columns=["tomo_id", "object_id", "mean_diameter", "n_pairs"])
+        return summary_df, motl_out
 
     @staticmethod
-    def unify_nn_orientations(input_motl, dist_threshold=10000):
+    def unify_nn_orientations(
+        input_motl: MotlSource,
+        dist_threshold: float = 10000,
+    ) -> "cryomotl.Motl":
         """Flip subunit orientations so that all neighbours point consistently.
 
         Traces particles into a chain and then walks each chain, applying a
@@ -523,7 +560,7 @@ class NPC:
 
         Parameters
         ----------
-        input_motl : str or Motl
+        input_motl : MotlSource
             Subunit particle list.
         dist_threshold : float, default=10000
             Maximum nearest-neighbour distance used during tracing (voxels).
@@ -563,20 +600,22 @@ class NPC:
 
     @staticmethod
     def cluster_subunits_to_rings(
-        input_motl_path,
-        mask_size,
-        entry_mask_coord,
-        exit_mask_coord,
-        npc_radius,
-        max_trace_distance,
-        min_trace_distance=0,
-    ):
+        input_motl: MotlSource,
+        npc_radius: float,
+        max_trace_distance: float,
+        min_trace_distance: float = 0,
+        *,
+        mask_size: TripletLike | None = None,
+        entry_mask_coord: TripletLike | None = None,
+        exit_mask_coord: TripletLike | None = None,
+        entry_mask: MapSource | None = None,
+        exit_mask: MapSource | None = None,
+    ) -> "cryomotl.Motl":
         """Cluster NPC subunit particles into rings.
 
         Workflow:
 
-        1. Create temporary spherical entry/exit masks at *entry_mask_coord*
-           and *exit_mask_coord*.
+        1. Build (or accept) spherical entry/exit masks.
         2. Re-centre the input motl to the entry and exit sub-particle
            positions.
         3. Trace entry/exit pairs into chains with
@@ -584,17 +623,22 @@ class NPC:
         4. Copy chain annotations onto the original motl and merge nearby
            subunits with :meth:`merge_subunits`.
 
+        Mask handling is fully in-memory: when a coord + ``mask_size`` is
+        given, :func:`cryocat.core.cryomask.spherical_mask` is called
+        without ``output_path`` and the returned ndarray is forwarded to
+        :meth:`cryocat.core.cryomotl.Motl.recenter_to_subparticle` (whose
+        ``input_map`` parameter accepts ndarrays via
+        :func:`cryocat.core.cryomap.read`).  No temporary files are written.
+
+        For each of the entry and exit sides, either the mask itself or the
+        ``(coord + mask_size)`` pair must be supplied.
+
         Parameters
         ----------
-        input_motl_path : str
-            Path to the subunit motl.  Temporary mask files are written to
-            the same directory.
-        mask_size : int or array-like
-            Box size for the temporary spherical masks.
-        entry_mask_coord : array-like
-            Centre of the entry spherical mask (voxels).
-        exit_mask_coord : array-like
-            Centre of the exit spherical mask (voxels).
+        input_motl : MotlSource
+            Subunit particle list.  A :class:`Motl`, a DataFrame, or a path
+            to a motl file -- :meth:`cryocat.core.cryomotl.Motl.load`
+            normalises all three.
         npc_radius : float
             Approximate NPC ring radius (voxels) used by
             :meth:`merge_subunits`.
@@ -602,20 +646,53 @@ class NPC:
             Maximum allowed step distance during chain tracing (voxels).
         min_trace_distance : float, default=0
             Minimum allowed step distance during chain tracing.
+        mask_size : TripletLike, optional
+            Box size for the in-memory entry / exit masks.  Required when
+            ``entry_mask`` / ``exit_mask`` are not supplied; ignored
+            otherwise.
+        entry_mask_coord : TripletLike, optional
+            Centre of the entry spherical mask (voxels).  Required when
+            ``entry_mask`` is not supplied.
+        exit_mask_coord : TripletLike, optional
+            Centre of the exit spherical mask (voxels).  Required when
+            ``exit_mask`` is not supplied.
+        entry_mask : MapSource, optional
+            User-provided entry mask.  Path or ndarray.  When supplied,
+            ``entry_mask_coord`` / ``mask_size`` are ignored on the entry
+            side.
+        exit_mask : MapSource, optional
+            User-provided exit mask.  Path or ndarray.  When supplied,
+            ``exit_mask_coord`` / ``mask_size`` are ignored on the exit
+            side.
 
         Returns
         -------
         Motl
             Motl with ``object_id`` identifying each ring, ``geom1`` holding
             ring occupancy, and ``geom2`` the within-ring subunit index.
-        """
-        working_dir, _ = os.path.split(input_motl_path)
-        entry_mask = working_dir + "entry_mask.em"
-        exit_mask = working_dir + "exit_mask.em"
-        _ = cryomask.spherical_mask(mask_size, 3, center=entry_mask_coord, output_path=entry_mask)
-        _ = cryomask.spherical_mask(mask_size, 3, center=exit_mask_coord, output_path=exit_mask)
 
-        motl = cryomotl.Motl.load(input_motl_path)
+        Raises
+        ------
+        ValueError
+            If, for either side, neither the mask nor the
+            ``(coord + mask_size)`` pair was supplied.
+        """
+        if entry_mask is None:
+            if entry_mask_coord is None or mask_size is None:
+                raise ValueError(
+                    "cluster_subunits_to_rings: supply either `entry_mask` or "
+                    "both `entry_mask_coord` and `mask_size`."
+                )
+            entry_mask = cryomask.spherical_mask(mask_size, 3, center=entry_mask_coord)
+        if exit_mask is None:
+            if exit_mask_coord is None or mask_size is None:
+                raise ValueError(
+                    "cluster_subunits_to_rings: supply either `exit_mask` or "
+                    "both `exit_mask_coord` and `mask_size`."
+                )
+            exit_mask = cryomask.spherical_mask(mask_size, 3, center=exit_mask_coord)
+
+        motl = cryomotl.Motl.load(input_motl)
         motl.renumber_particles()
 
         motl_entry = cryomotl.Motl.recenter_to_subparticle(motl, entry_mask)
@@ -631,15 +708,10 @@ class NPC:
         chain.get_occupancy()
         motl = chain.add_traced_info(motl)
 
-        new_traced_motl = NPC.merge_subunits(motl, npc_radius=npc_radius)
-
-        os.remove(entry_mask)
-        os.remove(exit_mask)
-
-        return new_traced_motl
+        return NPC.merge_subunits(motl, npc_radius=npc_radius)
 
     @staticmethod
-    def get_center_with_radius(object_motl, radius):
+    def get_center_with_radius(object_motl: MotlSource, radius: float) -> np.ndarray:
         """Estimate the NPC centre by shifting each subunit inward by *radius*.
 
         Shifts every particle by ``(-radius, 0, 0)`` along the local X axis
@@ -648,7 +720,7 @@ class NPC:
 
         Parameters
         ----------
-        object_motl : Motl
+        object_motl : MotlSource
             Subunit particles belonging to a single NPC ring.
         radius : float
             Approximate ring radius in voxels.
@@ -665,7 +737,10 @@ class NPC:
         return np.mean(center_coordinates, axis=0)
 
     @staticmethod
-    def get_center_and_radius(object_motl, include_singles=False):
+    def get_center_and_radius(
+        object_motl: MotlSource,
+        include_singles: bool = False,
+    ) -> tuple[np.ndarray, float]:
         """Fit a circle to the subunit positions and return its centre and radius.
 
         For fewer than 4 particles the centre is estimated from ray-ray
@@ -673,7 +748,7 @@ class NPC:
 
         Parameters
         ----------
-        object_motl : Motl
+        object_motl : MotlSource
             Subunit particles belonging to a single NPC ring.
         include_singles : bool, default=False
             When ``True``, a single-particle motl returns its own coordinates
@@ -707,7 +782,11 @@ class NPC:
         return circle_center, circle_radius
 
     @staticmethod
-    def get_centers_as_motl(tomo_motl, tomo_id, radius):
+    def get_centers_as_motl(
+        tomo_motl: MotlSource,
+        tomo_id: int,
+        radius: float,
+    ) -> "cryomotl.Motl":
         """Build a motl of estimated NPC centres for all rings in one tomogram.
 
         For each unique ``object_id`` in *tomo_motl* the ring centre is
@@ -716,9 +795,9 @@ class NPC:
 
         Parameters
         ----------
-        tomo_motl : Motl
+        tomo_motl : MotlSource
             Subunit motl for a single tomogram.
-        tomo_id : int or float
+        tomo_id : int
             Tomogram identifier written into the output motl.
         radius : float
             Approximate ring radius in voxels, forwarded to
@@ -756,7 +835,11 @@ class NPC:
         return new_object_motl
 
     @staticmethod
-    def get_new_subunit_idx(object_motl, npc_radius, symmetry=8):
+    def get_new_subunit_idx(
+        object_motl: MotlSource,
+        npc_radius: float,
+        symmetry: int = 8,
+    ) -> list[int]:
         """Assign angular subunit indices after ring merging.
 
         Computes the angle of each subunit relative to the first one, divides
@@ -765,7 +848,7 @@ class NPC:
 
         Parameters
         ----------
-        object_motl : Motl
+        object_motl : MotlSource
             Subunit particles belonging to a single merged NPC ring.
         npc_radius : float
             Approximate ring radius in voxels, used to locate the ring centre.
@@ -791,7 +874,10 @@ class NPC:
         return s_idx
 
     @staticmethod
-    def merge_subunits(input_motl, npc_radius=55):
+    def merge_subunits(
+        input_motl: MotlSource,
+        npc_radius: float = 55,
+    ) -> "cryomotl.Motl":
         """Merge NPC rings whose centres are closer than *npc_radius*.
 
         For each tomogram:
@@ -805,7 +891,7 @@ class NPC:
 
         Parameters
         ----------
-        input_motl : str or pandas.DataFrame or Motl
+        input_motl : MotlSource
             Subunit motl, already annotated with ``object_id`` ring labels.
         npc_radius : float, default=55
             Distance threshold in voxels.  Ring centres closer than this are
@@ -856,7 +942,11 @@ class NPC:
         return input_motl
 
     @staticmethod
-    def merge_rings(input_motls, npc_radius, distance_threshold=40):
+    def merge_rings(
+        input_motls: list[MotlSource],
+        npc_radius: float,
+        distance_threshold: float = 40,
+    ) -> list["cryomotl.Motl"]:
         """Merge corresponding rings across multiple ring-motls.
 
         Assigns sequential ``object_id`` values across all motls, then for
@@ -866,7 +956,7 @@ class NPC:
 
         Parameters
         ----------
-        input_motls : list of str or Motl
+        input_motls : list of MotlSource
             At least two ring-motls to merge.
         npc_radius : float
             Ring radius in voxels, forwarded to :meth:`get_centers_as_motl`.
@@ -942,7 +1032,7 @@ class NPC:
 class PleomorphicSurface:
     """Wrapper around :class:`Mesh` or :class:`OrientedPointCloud`."""
 
-    def __init__(self, surface: Mesh | OrientedPointCloud | "PleomorphicSurface"):
+    def __init__(self, surface: Mesh | OrientedPointCloud | "PleomorphicSurface") -> None:
         if isinstance(surface, PleomorphicSurface):
             surface = surface.surface
         if not isinstance(surface, (Mesh, OrientedPointCloud)):
@@ -953,7 +1043,7 @@ class PleomorphicSurface:
         self.surface = surface
 
     @staticmethod
-    def _unwrap_surface(surface):
+    def _unwrap_surface(surface: Mesh | OrientedPointCloud | "PleomorphicSurface") -> Mesh | OrientedPointCloud:
         """Return the concrete Mesh / OrientedPointCloud behind an optional wrapper."""
         if isinstance(surface, PleomorphicSurface):
             return surface.surface
@@ -965,7 +1055,7 @@ class PleomorphicSurface:
         )
 
     @classmethod
-    def read(cls, input_path: PathOrStr, method: str = "mesh", **kwargs) -> "PleomorphicSurface":
+    def read(cls, input_path: PathOrStr, method: str = "mesh", **kwargs: Any) -> "PleomorphicSurface":
         """
         Create a wrapped surface from common on-disk inputs.
 
@@ -1146,7 +1236,7 @@ class PleomorphicSurface:
             )
         return self.surface.get_surface_area()
 
-    def save(self, output_path: PathOrStr, format: str | None = None, **kwargs) -> None:
+    def save(self, output_path: PathOrStr, format: str | None = None, **kwargs: Any) -> None:
         """
         Save the wrapped surface.
 
@@ -1187,7 +1277,7 @@ class PleomorphicSurface:
         """
         return self.surface.save(output_path, format=format, **kwargs)
 
-    def compute_normals(self, **kwargs) -> "PleomorphicSurface":
+    def compute_normals(self, **kwargs: Any) -> "PleomorphicSurface":
         """
         Delegates to :meth:`Mesh.compute_normals` or :meth:`OrientedPointCloud.compute_normals`.
 
@@ -1215,7 +1305,7 @@ class PleomorphicSurface:
             return self
         return PleomorphicSurface(out)
 
-    def flip_normals(self, inplace: bool = True, **kwargs) -> "PleomorphicSurface" | None:
+    def flip_normals(self, inplace: bool = True, **kwargs: Any) -> "PleomorphicSurface" | None:
         """
         Delegate normal-direction flipping to the wrapped surface.
 
@@ -1251,7 +1341,7 @@ class PleomorphicSurface:
         mask: np.ndarray | None = None,
         logger: logging.Logger | None = None,
         inplace: bool = True,
-        **kwargs,
+        **kwargs: Any,
     ) -> "PleomorphicSurface":
         """
         Refine normals on the wrapped surface by neighborhood averaging.
@@ -1299,7 +1389,7 @@ class PleomorphicSurface:
             return self
         return PleomorphicSurface(out)
 
-    def remove_nonfinite_vertices(self, inplace: bool = True, **kwargs) -> "PleomorphicSurface":
+    def remove_nonfinite_vertices(self, inplace: bool = True, **kwargs: Any) -> "PleomorphicSurface":
         """
         Remove NaN/Inf vertices or point samples from the wrapped surface.
 
@@ -1326,7 +1416,7 @@ class PleomorphicSurface:
             return self
         return PleomorphicSurface(out)
 
-    def oversample(self, **kwargs) -> "PleomorphicSurface":
+    def oversample(self, **kwargs: Any) -> "PleomorphicSurface":
         """
         Delegate to ``oversample`` on :attr:`surface`; mesh and point-cloud semantics differ.
 
@@ -1679,7 +1769,7 @@ class PleomorphicSurface:
         
         return result
 
-    def get_neighboring_triangles(self, triangle_id: int, method: str = 'edge-connected', **kwargs) -> set | dict:
+    def get_neighboring_triangles(self, triangle_id: int, method: str = 'edge-connected', **kwargs: Any) -> set | dict:
         """
         Get neighboring triangles (Mesh only).
         
@@ -2115,7 +2205,7 @@ class PleomorphicSurface:
     def get_triangle_neighborhoods(
         self,
         seed_triangle_ids: np.ndarray,
-        radii: Sequence[float],
+        radii: ArrayLike,
         use_kdtree: bool = True,
     ) -> dict[str, np.ndarray]:
         """
@@ -2129,7 +2219,7 @@ class PleomorphicSurface:
         ----------
         seed_triangle_ids : np.ndarray
             Integer indices of the seed triangles to expand from.
-        radii : Sequence[float]
+        radii : ArrayLike
             Expansion radii in the same units as the mesh coordinates. Each entry
             produces a cumulative shell and (for consecutive pairs) an annulus band.
         use_kdtree : bool, default=True
@@ -2216,7 +2306,7 @@ class PleomorphicSurface:
     def get_point_neighborhoods(
         self,
         seed_point_ids: np.ndarray,
-        radii: Sequence[float],
+        radii: ArrayLike,
     ) -> dict[str, np.ndarray]:
         """
         Expand seed points on an oriented point cloud using surface radii.
@@ -2229,7 +2319,7 @@ class PleomorphicSurface:
         ----------
         seed_point_ids : np.ndarray
             Integer indices of the seed points to expand from.
-        radii : Sequence[float]
+        radii : ArrayLike
             Expansion radii in the same units as the point-cloud coordinates.
 
         Returns
@@ -2311,7 +2401,7 @@ class PleomorphicSurface:
         self,
         seed_ids: np.ndarray,
         surface_element: str,
-        surface_radii: Sequence[float],
+        surface_radii: ArrayLike,
         use_kdtree: bool = True,
     ) -> dict[str, np.ndarray]:
         """
@@ -2520,7 +2610,7 @@ class ParametricSurface:
         convention this is :data:`cryocat._types.MotlColumn`.
     """
 
-    def __init__(self, quadrics: QuadricsM, column_name: MotlColumn = "object_id"):
+    def __init__(self, quadrics: QuadricsM, column_name: MotlColumn = "object_id") -> None:
         self.quadrics = quadrics
         self.column_name = column_name
 
@@ -2590,7 +2680,7 @@ class ParametricSurface:
         input_motl: MotlSource,
         output_path: PathOrStr | None = None,
         store_column_name: MotlColumn = "geom4",
-    ):
+    ) -> "cryomotl.Motl":
         """Compute the shortest distance from each particle to its assigned surface.
 
         Parameters
@@ -2629,7 +2719,7 @@ class ParametricSurface:
         input_motl: MotlSource,
         output_path: PathOrStr | None = None,
         unassigned_value: float | None = None,
-    ):
+    ) -> "cryomotl.Motl":
         """Assign each particle to the nearest surface centre.
 
         Parameters
@@ -2682,7 +2772,7 @@ class ParametricSurface:
         input_motl: MotlSource,
         output_path: PathOrStr | None = None,
         keep_unassigned: bool = True,
-    ):
+    ) -> "cryomotl.Motl":
         """Assign each particle to the surface it points toward (ray casting).
 
         A ray is cast along the negated particle normal. The particle is
@@ -2794,7 +2884,7 @@ class ParametricSurface:
         input_motl: MotlSource,
         store_column_name: MotlColumn = "geom4",
         output_path: PathOrStr | None = None,
-    ):
+    ) -> "cryomotl.Motl":
         """Compute the angle between each particle's orientation and the ellipsoid radial normal.
 
         The radial normal is the vector from the fitted ellipsoid centre to
@@ -2846,7 +2936,7 @@ class ParametricSurface:
         normals_id: MotlColumn = "geom4",
         threshold: float | None = None,
         output_path: PathOrStr | None = None,
-    ):
+    ) -> "cryomotl.Motl":
         """Remove particles whose orientation deviates too far from the surface normal.
 
         Parameters
@@ -2897,7 +2987,7 @@ class ParametricSurface:
         input_motl: MotlSource,
         threshold: float | None = None,
         output_path: PathOrStr | None = None,
-    ):
+    ) -> "cryomotl.Motl":
         """Remove particles that lie too far from the mean ellipsoid radius.
 
         Parameters
@@ -2955,7 +3045,7 @@ class ParametricSurface:
         output_path: PathOrStr | None = None,
         radius_offset: float = 0.0,
         motl_radius_id: MotlColumn = "geom5",
-    ):
+    ) -> "cryomotl.Motl":
         """Assign each particle to a surface object using a spherical-shell mask.
 
         Parameters
@@ -3017,7 +3107,7 @@ class ParametricSurface:
         sampling_distance: float,
         sampling_angle: float = 360.0,
         output_path: PathOrStr | None = None,
-    ):
+    ) -> "cryomotl.Motl":
         """Generate oversampled particles on a sphere around each input particle.
 
         Parameters

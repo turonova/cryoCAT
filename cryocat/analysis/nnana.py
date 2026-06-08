@@ -25,18 +25,30 @@ the ``NearestNeighbors`` class; downstream chain analysis (occupancies,
 chain stats, etc.) lives in ``cryocat.analysis.structure.Chain``.
 """
 
-from typing import Optional
+from __future__ import annotations
+
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import sklearn.neighbors as sn
 from scipy.spatial.transform import Rotation as srot
 
-from cryocat._types import MotlColumn, NNType, RotationDistanceType
-from cryocat.core import cryomotl
-from cryocat.core import cryomap
+from cryocat._types import (
+    ArrayLike,
+    MapSource,
+    MotlColumn,
+    NNType,
+    PathOrStr,
+    RotationDistanceType,
+)
+from cryocat.core import cryomap, cryomotl
 from cryocat.utils import geom
-from cryocat._types import ArrayLike
+
+if TYPE_CHECKING:
+    # Import the alias lazily to avoid the cryomotl ↔ nnana circular import
+    # (cryomotl loads nnana before its own module body finishes executing).
+    from cryocat.core.cryomotl import MotlSource
 
 
 # =============================================================================
@@ -44,7 +56,12 @@ from cryocat._types import ArrayLike
 # =============================================================================
 
 
-def find_nn_indices(coords_qp, coords_nn, k=1, remove_qp=False):
+def find_nn_indices(
+    coords_qp: ArrayLike,
+    coords_nn: ArrayLike,
+    k: int = 1,
+    remove_qp: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """k-nearest-neighbor search on raw coordinate arrays.
 
     Parameters
@@ -91,7 +108,12 @@ def find_nn_indices(coords_qp, coords_nn, k=1, remove_qp=False):
     return qp_idx, nn_idx, nn_dist, nn_dist.shape[1]
 
 
-def find_nn_within_radius(coords_qp, coords_nn, radius, remove_qp=False):
+def find_nn_within_radius(
+    coords_qp: ArrayLike,
+    coords_nn: ArrayLike,
+    radius: float,
+    remove_qp: bool = False,
+) -> tuple[list[int], list[np.ndarray]]:
     """Radius search on raw coordinate arrays.
 
     Parameters
@@ -127,7 +149,11 @@ def find_nn_within_radius(coords_qp, coords_nn, radius, remove_qp=False):
     return qp_idx, nn_idx
 
 
-def find_nn_within_self(coords, radius, unique_only=True):
+def find_nn_within_self(
+    coords: ArrayLike,
+    radius: float,
+    unique_only: bool = True,
+) -> tuple[np.ndarray, list[np.ndarray]]:
     """Radius self-NN: each particle's neighbors within `radius`.
 
     Parameters
@@ -230,7 +256,13 @@ def nms_by_distance(
     return keep
 
 
-def centered_nn_coords(coords_qp, qp_idx, coords_nn, nn_idx, pixel_size=1.0):
+def centered_nn_coords(
+    coords_qp: ArrayLike,
+    qp_idx: ArrayLike,
+    coords_nn: ArrayLike,
+    nn_idx: ArrayLike,
+    pixel_size: float = 1.0,
+) -> np.ndarray:
     """Per-pair centered coordinates: ``coords_nn[nn_idx] - coords_qp[qp_idx]``.
 
     Parameters
@@ -255,7 +287,10 @@ def centered_nn_coords(coords_qp, qp_idx, coords_nn, nn_idx, pixel_size=1.0):
     return (coords_nn[nn_flat] - coords_qp[qp_expanded]) * pixel_size
 
 
-def rotated_nn_coords(centered_coords, qp_angles_per_pair):
+def rotated_nn_coords(
+    centered_coords: ArrayLike,
+    qp_angles_per_pair: ArrayLike,
+) -> np.ndarray:
     """Express centered NN coordinates in the local frame of each query point.
 
     Parameters
@@ -275,7 +310,11 @@ def rotated_nn_coords(centered_coords, qp_angles_per_pair):
     return rot.apply(centered_coords)
 
 
-def angular_distances(qp_angles_per_pair, nn_angles_per_pair, rotation_type="angular_distance"):
+def angular_distances(
+    qp_angles_per_pair: ArrayLike,
+    nn_angles_per_pair: ArrayLike,
+    rotation_type: RotationDistanceType = "angular_distance",
+) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per-pair angular distances between qp and nn rotations.
 
     Parameters
@@ -294,7 +333,10 @@ def angular_distances(qp_angles_per_pair, nn_angles_per_pair, rotation_type="ang
     )
 
 
-def relative_rotations(qp_angles_per_pair, nn_angles_per_pair):
+def relative_rotations(
+    qp_angles_per_pair: ArrayLike,
+    nn_angles_per_pair: ArrayLike,
+) -> srot:
     """Return the qp→nn relative rotation as a scipy ``Rotation`` object.
 
     Computes ``R_qp⁻¹ · R_nn`` for each pair, i.e. the rotation that
@@ -318,7 +360,7 @@ def relative_rotations(qp_angles_per_pair, nn_angles_per_pair):
     return rot_qp_to_zero * rot_nn
 
 
-def rotations_to_unit_vectors(rotations):
+def rotations_to_unit_vectors(rotations: srot) -> tuple[np.ndarray, np.ndarray]:
     """Convert rotations to their representative unit vectors and Euler angles.
 
     Parameters
@@ -384,14 +426,14 @@ class NearestNeighbors:
 
     def __init__(
         self,
-        input_data=None,
+        input_data: MotlSource | list[MotlSource] | None = None,
         column_name: MotlColumn = "tomo_id",
         nn_type: NNType = "closest_dist",
-        type_param: Optional[float] = None,
-        remove_qp: Optional[bool] = None,
+        type_param: float | None = None,
+        remove_qp: bool | None = None,
         remove_duplicates: bool = False,
         paired: bool = False,
-    ):
+    ) -> None:
         if input_data is None:
             self.features = None
             self.df = None
@@ -480,9 +522,19 @@ class NearestNeighbors:
         self.features = features
 
     @staticmethod
-    def _stack_nn_results(motl_idx, column_value, qp_idx, nn_idx,
-                          qp_subtomos, nn_subtomos, qp_angles, nn_angles,
-                          qp_coord, nn_coord, nn_dist):
+    def _stack_nn_results(
+        motl_idx: int,
+        column_value: Any,
+        qp_idx: np.ndarray,
+        nn_idx: np.ndarray,
+        qp_subtomos: np.ndarray,
+        nn_subtomos: np.ndarray,
+        qp_angles: np.ndarray,
+        nn_angles: np.ndarray,
+        qp_coord: np.ndarray,
+        nn_coord: np.ndarray,
+        nn_dist: np.ndarray,
+    ) -> np.ndarray | None:
         """Stack k-NN pair data into a single 2-D array for one feature/motl.
 
         Parameters
@@ -536,9 +588,18 @@ class NearestNeighbors:
         ])
 
     @staticmethod
-    def _stack_nn_results_radius(motl_idx, column_value, qp_idx, nn_idx_list,
-                                 qp_subtomos, nn_subtomos, qp_angles, nn_angles,
-                                 qp_coord, nn_coord):
+    def _stack_nn_results_radius(
+        motl_idx: int,
+        column_value: Any,
+        qp_idx: list[int] | np.ndarray,
+        nn_idx_list: list[np.ndarray],
+        qp_subtomos: np.ndarray,
+        nn_subtomos: np.ndarray,
+        qp_angles: np.ndarray,
+        nn_angles: np.ndarray,
+        qp_coord: np.ndarray,
+        nn_coord: np.ndarray,
+    ) -> np.ndarray | None:
         """Stack radius-NN pair data into a single 2-D array for one feature/motl.
 
         Parameters
@@ -589,7 +650,7 @@ class NearestNeighbors:
             nn_angles[nn_flat], nn_coord[nn_flat],
         ])
 
-    def drop_symmetric_duplicates(self):
+    def drop_symmetric_duplicates(self) -> pd.DataFrame:
         """Return a copy of ``self.df`` with symmetric (a, b)/(b, a) pairs deduped."""
         pairs = self.df[["qp_subtomo_id", "nn_subtomo_id"]].apply(
             lambda row: tuple(sorted(row)), axis=1
@@ -598,7 +659,7 @@ class NearestNeighbors:
         df["_pair_key"] = pairs
         return df.drop_duplicates(subset="_pair_key").drop(columns="_pair_key")
 
-    def get_unique_values(self):
+    def get_unique_values(self) -> np.ndarray:
         """Return the feature values present in ``self.df``.
 
         Returns
@@ -608,7 +669,11 @@ class NearestNeighbors:
         """
         return self.features
 
-    def get_nn_subset(self, motl_id_values, column_values):
+    def get_nn_subset(
+        self,
+        motl_id_values: int | list[int],
+        column_values: Any,
+    ) -> "NearestNeighbors":
         """Return a new :class:`NearestNeighbors` restricted to the given subset.
 
         Parameters
@@ -637,7 +702,7 @@ class NearestNeighbors:
         sub.features = column_values
         return sub
 
-    def get_normalized_coord(self, add_to_df=True):
+    def get_normalized_coord(self, add_to_df: bool = True) -> np.ndarray:
         """Return centered NN coordinates ``nn_coord - qp_coord``.
 
         Parameters
@@ -662,7 +727,7 @@ class NearestNeighbors:
             self.df[self._NORM_COORD_COLS] = norm
         return norm
 
-    def get_rotated_coord(self, add_to_df=True):
+    def get_rotated_coord(self, add_to_df: bool = True) -> np.ndarray:
         """Return centered NN coordinates rotated into the qp local frame.
 
         Parameters
@@ -684,7 +749,7 @@ class NearestNeighbors:
             self.df[self._ROT_COORD_COLS] = rot
         return rot
 
-    def get_qp_rotations(self):
+    def get_qp_rotations(self) -> srot:
         """Return the query-particle rotations as a scipy ``Rotation`` object.
 
         Returns
@@ -695,7 +760,7 @@ class NearestNeighbors:
         """
         return srot.from_euler("zxz", degrees=True, angles=self.df[self._QP_ANGLE_COLS].to_numpy())
 
-    def get_nn_rotations(self):
+    def get_nn_rotations(self) -> srot:
         """Return the nearest-neighbor rotations as a scipy ``Rotation`` object.
 
         Returns
@@ -706,7 +771,7 @@ class NearestNeighbors:
         """
         return srot.from_euler("zxz", degrees=True, angles=self.df[self._NN_ANGLE_COLS].to_numpy())
 
-    def get_relative_rotations(self):
+    def get_relative_rotations(self) -> srot:
         """Return per-pair qp→nn relative rotations.
 
         Returns
@@ -720,7 +785,10 @@ class NearestNeighbors:
             self.df[self._NN_ANGLE_COLS].to_numpy(),
         )
 
-    def get_angular_distances(self, rotation_type: RotationDistanceType = "angular_distance"):
+    def get_angular_distances(
+        self,
+        rotation_type: RotationDistanceType = "angular_distance",
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return per-pair angular distances between qp and nn orientations.
 
         Parameters
@@ -742,7 +810,11 @@ class NearestNeighbors:
             rotation_type=rotation_type,
         )
 
-    def to_stats_dataframe(self, pixel_size=1.0, rotation_type="angular_distance"):
+    def to_stats_dataframe(
+        self,
+        pixel_size: float = 1.0,
+        rotation_type: RotationDistanceType = "angular_distance",
+    ) -> pd.DataFrame:
         """Build the canonical per-pair statistics DataFrame.
 
         Parameters
@@ -826,7 +898,13 @@ class NearestNeighbors:
 # =============================================================================
 
 
-def get_feature_nn_indices(motl_a, motl_nn, nn_number=1, remove_qp=False, column_name="tomo_id"):
+def get_feature_nn_indices(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    nn_number: int = 1,
+    remove_qp: bool = False,
+    column_name: MotlColumn = "tomo_id",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """k-nearest-neighbor indices and distances for two motls.
 
     Thin wrapper around :func:`find_nn_indices` that accepts motl paths or
@@ -858,7 +936,12 @@ def get_feature_nn_indices(motl_a, motl_nn, nn_number=1, remove_qp=False, column
                            k=nn_number, remove_qp=remove_qp)
 
 
-def get_feature_nn_within_radius(motl_a, motl_nn, radius, remove_qp=False):
+def get_feature_nn_within_radius(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    radius: float,
+    remove_qp: bool = False,
+) -> tuple[list[int], list[np.ndarray]]:
     """Radius search for two motls.
 
     Thin wrapper around :func:`find_nn_within_radius` that accepts motl paths
@@ -886,7 +969,11 @@ def get_feature_nn_within_radius(motl_a, motl_nn, radius, remove_qp=False):
                                  radius=radius, remove_qp=remove_qp)
 
 
-def get_nn_within_distance(feature_motl, radius, unique_only=True):
+def get_nn_within_distance(
+    feature_motl: MotlSource,
+    radius: float,
+    unique_only: bool = True,
+) -> tuple[np.ndarray, list[np.ndarray]]:
     """Self-NN within a radius for a single motl.
 
     Thin wrapper around :func:`find_nn_within_self`.
@@ -909,7 +996,13 @@ def get_nn_within_distance(feature_motl, radius, unique_only=True):
     return find_nn_within_self(feature_motl.get_coordinates(), radius, unique_only=unique_only)
 
 
-def get_nn_within_radius(motl_a, motl_nn, nn_radius, pixel_size=1.0, column_name="tomo_id"):
+def get_nn_within_radius(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    nn_radius: float,
+    pixel_size: float = 1.0,
+    column_name: MotlColumn = "tomo_id",
+) -> np.ndarray:
     """Per-particle count of neighbors within *nn_radius*, grouped by column_name.
 
     Parameters
@@ -950,9 +1043,16 @@ def get_nn_within_radius(motl_a, motl_nn, nn_radius, pixel_size=1.0, column_name
     return np.concatenate(counts, axis=0) if counts else np.array([])
 
 
-def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, column_name="tomo_id",
-                 nn_number=1, rotation_type="angular_distance",
-                 paired=False, remove_duplicates=False):
+def get_nn_stats(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    pixel_size: float = 1.0,
+    column_name: MotlColumn = "tomo_id",
+    nn_number: int = 1,
+    rotation_type: RotationDistanceType = "angular_distance",
+    paired: bool = False,
+    remove_duplicates: bool = False,
+) -> pd.DataFrame:
     """Return a per-pair statistics DataFrame for two motls.
 
     Parameters
@@ -992,9 +1092,16 @@ def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, column_name="tomo_id",
     return nn.to_stats_dataframe(pixel_size=pixel_size, rotation_type=rotation_type)
 
 
-def get_nn_distances(motl_a, motl_nn, pixel_size=1.0, nn_number=1,
-                     column_name="tomo_id", rotation_type="angular_distance",
-                     paired=False, remove_duplicates=False):
+def get_nn_distances(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    pixel_size: float = 1.0,
+    nn_number: int = 1,
+    column_name: MotlColumn = "tomo_id",
+    rotation_type: RotationDistanceType = "angular_distance",
+    paired: bool = False,
+    remove_duplicates: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return per-pair geometry as a flat tuple (backward-compatible).
 
     Parameters
@@ -1049,8 +1156,14 @@ def get_nn_distances(motl_a, motl_nn, pixel_size=1.0, nn_number=1,
             nn.df["qp_subtomo_id"].to_numpy(), nn.df["nn_subtomo_id"].to_numpy())
 
 
-def get_nn_rotations(motl_a, motl_nn, nn_number=1, column_name="tomo_id",
-                     paired=False, remove_duplicates=False):
+def get_nn_rotations(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    nn_number: int = 1,
+    column_name: MotlColumn = "tomo_id",
+    paired: bool = False,
+    remove_duplicates: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
     """Return the qp→nn relative rotations as unit vectors and Euler angles.
 
     Parameters
@@ -1085,8 +1198,12 @@ def get_nn_rotations(motl_a, motl_nn, nn_number=1, column_name="tomo_id",
     return rotations_to_unit_vectors(nn.get_relative_rotations())
 
 
-def get_nn_stats_within_radius(input_motl, nn_radius, column_name="tomo_id",
-                               index_by_feature=True):
+def get_nn_stats_within_radius(
+    input_motl: MotlSource,
+    nn_radius: float,
+    column_name: MotlColumn = "tomo_id",
+    index_by_feature: bool = True,
+) -> pd.DataFrame:
     """Build a per-pair stats DataFrame for all self-NN pairs within a radius.
 
     Unlike :func:`get_nn_stats`, this function uses the same motl for both
@@ -1178,7 +1295,10 @@ def get_nn_stats_within_radius(input_motl, nn_radius, column_name="tomo_id",
     return pd.DataFrame(rows)
 
 
-def filter_nn_radial_stats(input_stats, binary_mask):
+def filter_nn_radial_stats(
+    input_stats: pd.DataFrame,
+    binary_mask: MapSource,
+) -> pd.DataFrame:
     """Keep only rows whose rotated coordinate falls inside a binary mask.
 
     Pairs whose ``(coord_rx, coord_ry, coord_rz)`` maps to a voxel outside
@@ -1226,9 +1346,15 @@ def filter_nn_radial_stats(input_stats, binary_mask):
 # =============================================================================
 
 
-def assign_class_by_nn(motl_unassigned, motl_list, starting_class=1,
-                       dist_threshold=20, output_motl=None,
-                       unassigned_class=0, update_coord=False):
+def assign_class_by_nn(
+    motl_unassigned: MotlSource,
+    motl_list: list[MotlSource],
+    starting_class: int = 1,
+    dist_threshold: float = 20,
+    output_motl: PathOrStr | None = None,
+    unassigned_class: int = 0,
+    update_coord: bool = False,
+) -> "cryomotl.Motl":
     """Assign each particle in ``motl_unassigned`` the class of its nearest neighbor.
 
     For every motl in ``motl_list`` the nearest particle in ``motl_unassigned``
@@ -1334,7 +1460,14 @@ def assign_class_by_nn(motl_unassigned, motl_list, starting_class=1,
 # =============================================================================
 
 
-def _get_nn_dist(kdt, query_point, dist_max, dist_min, active_points, test_value):
+def _get_nn_dist(
+    kdt: sn.KDTree,
+    query_point: np.ndarray,
+    dist_max: float,
+    dist_min: float,
+    active_points: np.ndarray,
+    test_value: bool,
+) -> tuple[int, float | list]:
     """Return the nearest active point within ``[dist_min, dist_max]``.
 
     Queries *kdt* within *dist_max*, then filters by *active_points* and
@@ -1384,8 +1517,16 @@ def _get_nn_dist(kdt, query_point, dist_max, dist_min, active_points, test_value
     return rp_idx[0], rp_dist[0]
 
 
-def _add_chain_suffix(chain_df, motl, traced_df, subtomo_id, current_dist,
-                      store_idx1="object_id", store_idx2="geom2", store_dist="geom4"):
+def _add_chain_suffix(
+    chain_df: pd.DataFrame,
+    motl: "cryomotl.Motl",
+    traced_df: pd.DataFrame,
+    subtomo_id: int,
+    current_dist: float,
+    store_idx1: str = "object_id",
+    store_idx2: str = "geom2",
+    store_dist: str = "geom4",
+) -> bool:
     """Append the current chain after an existing one.
 
     Looks up the particle at *subtomo_id* in *traced_df*, finds the chain it
@@ -1443,9 +1584,17 @@ def _add_chain_suffix(chain_df, motl, traced_df, subtomo_id, current_dist,
     return True
 
 
-def _add_chain_prefix(chain_df, motl, traced_df, subtomo_id, current_dist,
-                      store_idx1="object_id", store_idx2="geom2", store_dist="geom4",
-                      class_max=None):
+def _add_chain_prefix(
+    chain_df: pd.DataFrame,
+    motl: "cryomotl.Motl",
+    traced_df: pd.DataFrame,
+    subtomo_id: int,
+    current_dist: float,
+    store_idx1: str = "object_id",
+    store_idx2: str = "geom2",
+    store_dist: str = "geom4",
+    class_max: tuple[int, int] | None = None,
+) -> int | None:
     """Prepend the current chain before an existing one.
 
     Looks up the particle at *subtomo_id* in *traced_df* and inserts the
@@ -1519,9 +1668,17 @@ def _add_chain_prefix(chain_df, motl, traced_df, subtomo_id, current_dist,
     chain_df.loc[chain_df.index[-1], store_dist] = current_dist
 
 
-def trace_chains(motl_entry, motl_exit=None, max_distance=None, min_distance=0,
-                 column_name="tomo_id", output_motl=None,
-                 store_idx1="object_id", store_idx2="geom2", store_dist="geom4"):
+def trace_chains(
+    motl_entry: MotlSource,
+    motl_exit: MotlSource | None = None,
+    max_distance: float | None = None,
+    min_distance: float = 0,
+    column_name: MotlColumn = "tomo_id",
+    output_motl: PathOrStr | None = None,
+    store_idx1: str = "object_id",
+    store_idx2: str = "geom2",
+    store_dist: str = "geom4",
+) -> "cryomotl.Motl":
     """Build chains by linking the exit of particle A to the entry of particle B.
 
     Iterates over particles sorted by their exit positions and greedily links

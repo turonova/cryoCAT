@@ -1,24 +1,29 @@
+from __future__ import annotations
+
+import json
 import re
+from typing import TextIO
+
+from cryocat._types import DictSource, PathOrStr
 from cryocat.utils import ioutils
 from cryocat.utils.classutils import as_list
-import json
 
 
-def parse_command(command_string, output_dict=None):
+def parse_command(command_string: str, output_dict: PathOrStr | None = None) -> dict:
     """Splits command string into tokens and identifies command, flags, and parameters.
     Supports both -key value and -key=value formats.
 
     Parameters
     ----------
     command_string : str
-        The command line string to parse
-    output_dict : str, optional
-        If provided, writes the parsed dictionary to this file
+        The command line string to parse.
+    output_dict : PathOrStr, optional
+        If provided, writes the parsed dictionary to this file.
 
     Returns
     -------
     dict
-        Dictionary with 'command' key and parameter key-value pairs
+        Dictionary with 'command' key and parameter key-value pairs.
 
     Examples
     --------
@@ -62,16 +67,19 @@ def parse_command(command_string, output_dict=None):
     return command_dict
 
 
-def parse_command_for_gui(command_string, output_dict=None):
+def parse_command_for_gui(
+    command_string: str,
+    output_dict: PathOrStr | None = None,
+) -> dict:
     """Similar to parse_command but formats parameter names for GUI display
     by removing dashes and capitalizing.
 
     Parameters
     ----------
     command_string : str
-        The command line string to parse
-    output_dict : str, optional
-        If provided, writes the parsed dictionary as JSON to this file
+        The command line string to parse.
+    output_dict : PathOrStr, optional
+        If provided, writes the parsed dictionary as JSON to this file.
 
     Returns
     -------
@@ -123,15 +131,18 @@ def parse_command_for_gui(command_string, output_dict=None):
     return command_dict
 
 
-def process_cluster_params(script_file, cluster_params):
+def process_cluster_params(
+    script_file: TextIO,
+    cluster_params: DictSource | None,
+) -> None:
     """Write SBATCH directives to a script file from a cluster-parameters mapping.
 
     Parameters
     ----------
-    script_file : file-like object
+    script_file : TextIO
         Open writable file object for the script being generated.
-    cluster_params : dict, str, or None
-        SBATCH parameters as a dictionary or a JSON string understood by
+    cluster_params : DictSource, optional
+        SBATCH parameters as a dictionary or a JSON string/path understood by
         :func:`cryocat.utils.ioutils.dict_load`. If ``None``, the function
         is a no-op. Keys that start with ``--`` produce ``#SBATCH key=value``
         lines; keys that start with ``-`` produce ``#SBATCH key value`` lines.
@@ -157,14 +168,14 @@ def process_cluster_params(script_file, cluster_params):
                 script_file.write(f"#SBATCH {key} {value}\n")
 
 
-def parse_script_file(script_name):
+def parse_script_file(script_name: PathOrStr) -> dict:
     """Extracts interpreter, SBATCH parameters, module loads, variable assignments,
     and commands from a shell script file.
 
     Parameters
     ----------
-    script_name : str
-        Path to the shell script file to parse
+    script_name : PathOrStr
+        Path to the shell script file to parse.
 
     Returns
     -------
@@ -235,16 +246,19 @@ def parse_script_file(script_name):
     }
 
 
-def generate_python_command(function_dict, import_dict=None):
+def generate_python_command(
+    function_dict: dict,
+    import_dict: dict | None = None,
+) -> str:
     """Creates a python -c command string that calls a function with specified
     parameters and optional imports.
 
     Parameters
     ----------
     function_dict : dict
-        Dictionary with 'function' key and parameter key-value pairs
+        Dictionary with 'function' key and parameter key-value pairs.
     import_dict : dict, optional
-        Dictionary mapping modules to imports
+        Dictionary mapping modules to imports.
 
     Returns
     -------
@@ -276,7 +290,7 @@ def generate_python_command(function_dict, import_dict=None):
     return f'{command}{imports}{function_name}{function_variables})"\n'
 
 
-def generate_interactive_command(input_dict):
+def generate_interactive_command(input_dict: dict) -> str:
     """Creates a command string that uses heredoc syntax for interactive input.
 
     Parameters
@@ -294,7 +308,7 @@ def generate_interactive_command(input_dict):
     return f"{command}\n{params}\nfoo\n"
 
 
-def generate_command_line(input_dict):
+def generate_command_line(input_dict: dict) -> str:
     """Converts a dictionary of command parameters into a executable command string.
 
     Parameters
@@ -315,16 +329,16 @@ def generate_command_line(input_dict):
     return f"{command} {params}\n"
 
 
-def replace_command_in_script(script_file, input_dict):
+def replace_command_in_script(script_file: PathOrStr, input_dict: dict) -> bool:
     """Searches for a command in a script file and replaces it with a new command
     generated from the input dictionary.
 
     Parameters
     ----------
-    script_file : str
-        Path to the script file to modify
+    script_file : PathOrStr
+        Path to the script file to modify.
     input_dict : dict
-        Dictionary with 'command' key and new parameters
+        Dictionary with 'command' key and new parameters.
 
     Returns
     -------
@@ -361,39 +375,40 @@ def replace_command_in_script(script_file, input_dict):
 
 
 def generate_script(
-    script_name,
-    coms_and_params,
-    script_header="#!/bin/bash",
-    cluster_params=None,
-    module_loads=None,
-    template_script=None,
-    parallelize=False,
-    p_type="cluster",
-    p_variable="tomo_list",
-):
+    script_name: PathOrStr,
+    coms_and_params: list[dict] | dict | PathOrStr,
+    script_header: str = "#!/bin/bash",
+    cluster_params: DictSource | None = None,
+    module_loads: list[str] | dict[str, str] | None = None,
+    template_script: PathOrStr | None = None,
+    parallelize: bool = False,
+    p_type: str = "cluster",
+    p_variable: str = "tomo_list",
+) -> None:
     """Creates a complete shell script with header, cluster parameters, module loads,
     and commands. Supports both list and dictionary inputs for modules.
 
     Parameters
     ----------
-    script_name : str
-        Output path for the generated script
-    coms_and_params : list or str
-        List of command dictionaries or path to command dictionary file
-    script_header : str, optional
-        Script header/shebang line
-    cluster_params : str or dict, optional
-        Cluster parameters for SBATCH directives
-    module_loads : list or dict, optional
-        Modules to load in the script
-    template_script : str, optional
-        Not currently implemented
-    parallelize : bool, optional
-        Not currently implemented
-    p_type : str, optional
-        Not currently implemented
-    p_variable : str, optional
-        Not currently implemented
+    script_name : PathOrStr
+        Output path for the generated script.
+    coms_and_params : list of dict, dict, or PathOrStr
+        List of command dictionaries or path to command dictionary file (or a
+        single command dictionary).
+    script_header : str, default="#!/bin/bash"
+        Script header/shebang line.
+    cluster_params : DictSource, optional
+        Cluster parameters for SBATCH directives.
+    module_loads : list of str or dict of str, optional
+        Modules to load in the script.
+    template_script : PathOrStr, optional
+        Not currently implemented.
+    parallelize : bool, default=False
+        Not currently implemented.
+    p_type : str, default="cluster"
+        Not currently implemented.
+    p_variable : str, default="tomo_list"
+        Not currently implemented.
 
     Raises
     ------

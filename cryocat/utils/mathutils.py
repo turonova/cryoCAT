@@ -1,8 +1,11 @@
-import numpy as np
+from __future__ import annotations
+
 import math
 
+import numpy as np
 
-def compute_rmse(array1, array2):
+
+def compute_rmse(array1: np.ndarray, array2: np.ndarray) -> np.ndarray:
     """Compute the Root Mean Square Error (RMSE) between two arrays along each column.
 
     Parameters
@@ -59,17 +62,17 @@ def compute_rmse(array1, array2):
     return rmse
 
 
-def get_all_pairs(input_numbers):
+def get_all_pairs(input_numbers: list[int | float]) -> list[tuple[int | float, int | float]]:
     """Generate all possible unique pairs from a list of numbers.
 
     Parameters
     ----------
-    input_numbers : list
+    input_numbers : list of int or float
         List of integers or floats from which pairs are to be generated.
 
     Returns
     -------
-    list
+    list of tuple
         A list of tuples, each containing a pair of numbers from the input list.
 
     Raises
@@ -92,7 +95,7 @@ def get_all_pairs(input_numbers):
     return pairs
 
 
-def get_number_of_digits(input_number):
+def get_number_of_digits(input_number: int | float) -> int:
     """Return the number of digits in the given input number.
 
     Parameters
@@ -122,7 +125,7 @@ def get_number_of_digits(input_number):
     return digit_length
 
 
-def get_similar_size_factors(number, order="ascending"):
+def get_similar_size_factors(number: int, order: str = "ascending") -> tuple[int, int]:
     """Return two factors of a number that are closest in size - either in ascending or descending order.
 
     Parameters

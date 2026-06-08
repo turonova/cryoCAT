@@ -1,8 +1,14 @@
-import struct
+from __future__ import annotations
+
 import os
 import re
-import pandas as pd
+import struct
 from dataclasses import dataclass
+from typing import BinaryIO
+
+import pandas as pd
+
+from cryocat._types import PathOrStr
 from cryocat.utils import ioutils
 
 
@@ -36,7 +42,11 @@ class ImodHeader:
     encoding: str = "utf-8"  # Default encoding
 
     @staticmethod
-    def check_sequence(file_handler, control_sequence, encoding):
+    def check_sequence(
+        file_handler: BinaryIO,
+        control_sequence: str,
+        encoding: str,
+    ) -> int:
         """Scan forward in *file_handler* until *control_sequence* is found.
 
         Reads the file in 4-byte chunks.  When a chunk matches the encoded
@@ -75,7 +85,11 @@ class ImodHeader:
         return -1
 
     @classmethod
-    def read_from_file(cls, file_handler, encoding):
+    def read_from_file(
+        cls,
+        file_handler: BinaryIO,
+        encoding: str,
+    ) -> ImodHeader | None:
         """Locate and parse this header type from *file_handler*.
 
         Uses :meth:`check_sequence` to find the magic string, then reads and
@@ -132,7 +146,7 @@ class ContourHeader(ImodHeader):
 
     header_format = ">4s iiii"
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         """Serialise this header to a packed byte string.
 
         Returns
@@ -150,7 +164,7 @@ class ContourHeader(ImodHeader):
         return struct.pack(self.header_format, *values)
 
     @classmethod
-    def from_bytes(cls, data, encoding):
+    def from_bytes(cls, data: bytes, encoding: str) -> ContourHeader:
         """Deserialise a :class:`ContourHeader` from a packed byte string.
 
         Parameters
@@ -243,7 +257,7 @@ class ObjectHeader(ImodHeader):
     # for conversion to and from bytes
     header_format = ">64s 68s i I ii fff i BBBBBBBB ii"
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         """Serialise this header to a packed byte string.
 
         Returns
@@ -276,7 +290,7 @@ class ObjectHeader(ImodHeader):
         return struct.pack(self.header_format, *values)
 
     @classmethod
-    def from_bytes(cls, data, encoding):
+    def from_bytes(cls, data: bytes, encoding: str) -> ObjectHeader:
         """Deserialise an :class:`ObjectHeader` from a packed byte string.
 
         Parameters
@@ -389,7 +403,7 @@ class ModelHeader(ImodHeader):
     # for conversion to bytes
     header_format = ">128s iiii I iiii fff fff iiiii f ii fff"
 
-    def to_bytes(self):
+    def to_bytes(self) -> bytes:
         """Serialise this header to a packed byte string.
 
         Returns
@@ -429,7 +443,7 @@ class ModelHeader(ImodHeader):
         return struct.pack(self.header_format, *values)
 
     @classmethod
-    def from_bytes(cls, data, encoding):
+    def from_bytes(cls, data: bytes, encoding: str) -> ModelHeader:
         """Deserialise a :class:`ModelHeader` from a packed byte string.
 
         Parameters
@@ -475,24 +489,31 @@ class ModelHeader(ImodHeader):
         )
 
 
-def read_mod_files(input_path, file_prefix="", file_suffix=".mod"):
-    """
-    If input_path is a file, reads that single file. If input_path is a directory,
-    reads all files matching the prefix and suffix pattern and combines them.
+def read_mod_files(
+    input_path: PathOrStr,
+    file_prefix: str = "",
+    file_suffix: str = ".mod",
+) -> pd.DataFrame:
+    """Read one or more IMOD ``.mod`` files into a single combined DataFrame.
+
+    If *input_path* is a file, reads that single file. If *input_path* is a
+    directory, reads all files matching the prefix and suffix pattern and
+    combines them, appending a ``mod_id`` column from the filename and
+    offsetting ``object_id`` per file so labels stay unique.
 
     Parameters
     ----------
-    input_path : str
-        Path to a single .mod file or directory containing .mod files
+    input_path : PathOrStr
+        Path to a single ``.mod`` file or directory containing ``.mod`` files.
     file_prefix : str, optional
-        Prefix pattern for filtering files in directory
+        Prefix pattern for filtering files in directory.
     file_suffix : str, optional
-        Suffix pattern for filtering files in directory (default: ".mod")
+        Suffix pattern for filtering files in directory (default ``".mod"``).
 
     Returns
     -------
     pandas.DataFrame
-        DataFrame containing coordinates and metadata from model files
+        DataFrame containing coordinates and metadata from the model files.
 
     Examples
     --------
@@ -523,20 +544,21 @@ def read_mod_files(input_path, file_prefix="", file_suffix=".mod"):
         return mod_df
 
 
-def read_mod_file(input_path):
+def read_mod_file(input_path: PathOrStr) -> pd.DataFrame:
     """Read a single IMOD binary model file and extract coordinate data.
 
     Parses IMOD model file format to extract object contours and their 3D coordinates.
 
     Parameters
     ----------
-    input_path : str
-        Path to the .mod file to read
+    input_path : PathOrStr
+        Path to the ``.mod`` file to read.
 
     Returns
     -------
     pandas.DataFrame
-        DataFrame with columns: object_id, contour_id, x, y, z, object_radius
+        DataFrame with columns: ``object_id``, ``contour_id``, ``x``, ``y``,
+        ``z``, ``object_radius``.
     """
     encoding = ioutils.get_file_encoding(input_path)
 
@@ -592,7 +614,7 @@ def read_mod_file(input_path):
     return df
 
 
-def write_model_binary(df, output_path):
+def write_model_binary(df: pd.DataFrame, output_path: PathOrStr) -> None:
     """Write a DataFrame of 3-D coordinates as an IMOD binary ``.mod`` file.
 
     Parameters
@@ -600,7 +622,7 @@ def write_model_binary(df, output_path):
     df : pandas.DataFrame
         Coordinate table with columns ``object_id``, ``contour_id``,
         ``x``, ``y``, ``z``, and optionally ``object_radius``.
-    output_path : str
+    output_path : PathOrStr
         Output path for the ``.mod`` file.
 
     Returns

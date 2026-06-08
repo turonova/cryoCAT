@@ -1,16 +1,27 @@
 import math
 import re
+from pathlib import Path, PurePosixPath
+from typing import Any
+
 import numpy as np
 import pandas as pd
 from cryocat.core import cryomotl
+from cryocat.core.cryomotl import MotlSource
 from cryocat.utils import geom
 from cryocat.utils import mathutils
 from cryocat.analysis import visplot
 from cryocat.utils import ioutils
 from cryocat.utils.starfileio import Starfile
+from cryocat._types import ListLike, MotlColumn, MotlType, PathOrStr
 
 
-def get_stable_particles(motl_base_name, start_it, end_it, motl_type="emmotl", load_kwargs=None):
+def get_stable_particles(
+    motl_base_name: str,
+    start_it: int,
+    end_it: int,
+    motl_type: MotlType = "emmotl",
+    load_kwargs: dict | None = None,
+) -> list:
     """Load and analyze particle data across multiple iterations to identify stable particles, i.e. particles that do
     not change their class.
 
@@ -23,12 +34,13 @@ def get_stable_particles(motl_base_name, start_it, end_it, motl_type="emmotl", l
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
-        Type of the input motl. Defaults to "stopgap".
-    load_kwargs : dict, optional
+    motl_type : MotlType, default='emmotl'
+        Type of the input motl.  One of the standard motl-format identifiers
+        (``'emmotl'``, ``'stopgap'``, ``'relion'``, ``'relion5'``, ``'relion5_1'``).
+    load_kwargs : dict or None, default=None
         Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
         Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
-        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`).
 
     Returns
     -------
@@ -67,55 +79,53 @@ def get_stable_particles(motl_base_name, start_it, end_it, motl_type="emmotl", l
 
 
 def evaluate_alignment(
-    motl_base_names,
-    start_it,
-    end_it,
-    motl_type="stopgap",
-    write_out_stats=False,
-    plot_values=True,
-    filter_rows=None,
-    filter_column_name="subtomo_id",
-    labels=None,
-    graph_title="Alignment stability",
-    graph_output_file=None,
-    load_kwargs=None
-):
+    motl_base_names: ListLike[str],
+    start_it: int,
+    end_it: int,
+    motl_type: MotlType = "stopgap",
+    write_out_stats: bool = False,
+    plot_values: bool = True,
+    filter_rows: ListLike | None = None,
+    filter_column_name: ListLike[MotlColumn] = "subtomo_id",
+    labels: ListLike[str] | None = None,
+    graph_title: str = "Alignment stability",
+    graph_output_file: PathOrStr | None = None,
+    load_kwargs: dict | None = None,
+) -> list:
     """Evaluate alignment stability for specified motls and iterations.
 
     Parameters
     ----------
-    motl_base_names : str or list
+    motl_base_names : ListLike of str
         List of MOTL base names or a single motl base name to perform the evaluation on. Base name means without the
         iteration number and extension. For example for name motl_shift_3.em the base name is motl_shift\_.
     start_it : int
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion), default="stopgap"
-        Type of the input motl. Defaults to "stopgap".
+    motl_type : MotlType, default='stopgap'
+        Type of the input motl.
     write_out_stats : bool, default=False
         Whether to write out stats. If True, the stats will be written to the motl_base_name + _as_motlID.csv where the
         motlID is given by its position in the motl_base_names list. For example, for motl_shift_3.em the final will
-        be motl_shift_as_1.em if the motl_shift\_ is the first motl in the motl_base_names. Defaults to False.
+        be motl_shift_as_1.em if the motl_shift\_ is the first motl in the motl_base_names.
     plot_values : bool, default=True
-        Whether to plot values. Defaults to True.
-    filter_rows : array-like or list of array-like, optional
-        Rows to filter. Only rows that are within the filter_rows will be kept. Defaults to None which means no filtering.
-    filter_column_name : str or list, default="subtomo_id"
-        Column names based on which the filtering is perfomed. If filter_rows is None, no filtering will be done and
-        this parameter will not be used. Defaults to "subtomo_id".
-    labels : str or list, optional
-        Labels for the plot. Should have the same length as the motl_base_names. In case of None, the labels will
-        be automatically set as motl_base_names (in case those names contain paths, the paths will be removed).
-        Used only if plot_values is True. Defaults to None.
-    graph_title : str, default="Alignment stability"
-        Title of the graph. Used only if plot_values is True. Defaults to "Alignment stability".
-    graph_output_file : str, optional
-        Output file for the graph. Used only if plot_values is True. If None no file will be written out. Defaults to None.
-    load_kwargs : dict, optional
+        Whether to plot values.
+    filter_rows : ListLike or None, default=None
+        Rows to filter. Only rows that are within the filter_rows will be kept. ``None`` means no filtering.
+    filter_column_name : ListLike of MotlColumn, default='subtomo_id'
+        Column name(s) based on which the filtering is performed. Ignored when ``filter_rows`` is ``None``.
+    labels : ListLike of str or None, default=None
+        Labels for the plot. Should have the same length as the motl_base_names. In case of ``None``, the labels will
+        be automatically set as motl_base_names (paths are stripped).  Used only if ``plot_values`` is True.
+    graph_title : str, default='Alignment stability'
+        Title of the graph. Used only if ``plot_values`` is True.
+    graph_output_file : PathOrStr or None, default=None
+        Output file for the graph. Used only if ``plot_values`` is True. If ``None`` no file will be written out.
+    load_kwargs : dict or None, default=None
         Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
         Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
-        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`).
 
     Returns
     -------
@@ -219,13 +229,14 @@ def evaluate_alignment(
     return stats_dfs
 
 
-def get_motl_extension(motl_type):
+def get_motl_extension(motl_type: MotlType) -> str:
     """Return the file extension for a given motl type.
 
     Parameters
     ----------
-    motl_type : str (emmotl|relion|relion5|relion5_1|stopgap)
-        The type of motl file.
+    motl_type : MotlType
+        The type of motl file (``'emmotl'``, ``'relion'``, ``'relion5'``,
+        ``'relion5_1'``, or ``'stopgap'``).
 
     Returns
     -------
@@ -248,15 +259,15 @@ def get_motl_extension(motl_type):
 
 
 def compute_alignment_statistics(
-    motl_base_name,
-    start_it,
-    end_it,
-    motl_type="stopgap",
-    filter_rows=None,
-    filter_column_name="subtomo_id",
-    output_path=None,
-    load_kwargs=None
-):
+    motl_base_name: str,
+    start_it: int,
+    end_it: int,
+    motl_type: MotlType = "stopgap",
+    filter_rows: ListLike | None = None,
+    filter_column_name: MotlColumn = "subtomo_id",
+    output_path: PathOrStr | None = None,
+    load_kwargs: dict | None = None,
+) -> pd.DataFrame:
     """Compute alignment statistics for specified motls and iterations. Pairs of (current motl, subsequent motl) are
     evaluated for differences in cone angles, in-plane angles, change in positions of particles and root mean square
     errors (RMSE) in x, y, and z directions. The output contains mean, median, std, and variance for cone and in-plane
@@ -271,19 +282,18 @@ def compute_alignment_statistics(
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
-        Type of the input motl. Defaults to "stopgap".
-    filter_rows : array-like, optional
-        Rows to filter. Only rows that are within the filter_rows will be kept. Defaults to None which means no filtering.
-    filter_column_name : str, default="subtomo_id"
-        Column names based on which the filtering is perfomed. If filter_rows is None, no filtering will be done and
-        this parameter will not be used. Defaults to "subtomo_id".
-    output_path : str, optional
-        Output file for the statistics. If None no file will be written out. Defaults to None.
-    load_kwargs : dict, optional
+    motl_type : MotlType, default='stopgap'
+        Type of the input motl.
+    filter_rows : ListLike or None, default=None
+        Rows to filter. Only rows that are within the filter_rows will be kept. ``None`` means no filtering.
+    filter_column_name : MotlColumn, default='subtomo_id'
+        Column based on which the filtering is performed. Ignored when ``filter_rows`` is ``None``.
+    output_path : PathOrStr or None, default=None
+        Output file for the statistics. If ``None`` no file will be written out.
+    load_kwargs : dict or None, default=None
         Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
         Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
-        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`).
 
     Returns
     -------
@@ -365,17 +375,26 @@ def compute_alignment_statistics(
     return stats_df
 
 
-def write_out_motl(input_motl, output_file_base, output_motl_type):
+def write_out_motl(
+    input_motl: MotlSource,
+    output_file_base: PathOrStr,
+    output_motl_type: str,
+) -> None:
     """Writes out a given motl file to a specified output format.
 
     Parameters
     ----------
-    input_motl : motl
-        Input motl file to be written out.
-    output_file_base : str
-        Base name for the output file.
-    output_motl_type : str (emfile|relion|relion5|relion5_1|stopgap)
-        Type of the output motl file.
+    input_motl : MotlSource
+        Input motl to be written out (a :class:`Motl`, a DataFrame, or a path).
+        Only the ``.df`` attribute is read.
+    output_file_base : PathOrStr
+        Base path for the output file (extension is appended automatically).
+    output_motl_type : str
+        Type of the output motl file -- one of ``'stopgap'``, ``'relion'``,
+        ``'relion5'``, ``'relion5_1'``, ``'emfile'``.  ``'emfile'`` is
+        accepted here for historical reasons and maps to an :class:`EmMotl`
+        write; for new code prefer the standard :data:`MotlType` enum value
+        ``'emmotl'`` via the :class:`cryocat.core.cryomotl.Motl` API.
 
     Raises
     ------
@@ -407,36 +426,36 @@ def write_out_motl(input_motl, output_file_base, output_motl_type):
 
 
 def create_multiref_run(
-    input_motl,
-    number_of_classes,
-    output_motl_base,
-    input_motl_type="emmotl",
-    iteration_number=1,
-    number_of_runs=1,
-    output_motl_type="stopgap",
-):
+    input_motl: MotlSource,
+    number_of_classes: int,
+    output_motl_base: PathOrStr,
+    input_motl_type: MotlType = "emmotl",
+    iteration_number: int = 1,
+    number_of_runs: int = 1,
+    output_motl_type: str = "stopgap",
+) -> None:
     """Creates motls for multiple runs of a multi-reference alignment. In essence, it will randomly assign specified number
     of classes to each motl that will be created. New motls will be written out into files
     output_motl_base_mr#runID_iterationNumber either in stopgap, emmotl or relion format.
 
     Parameters
     ----------
-    input_motl : str, pandas dataframe or Motl
-        Input motl (specified either as a path, dataframe or Motl object).
+    input_motl : MotlSource
+        Input motl (specified either as a path, DataFrame or Motl object).
     number_of_classes : int
         Number of classes to assign randomly.
-    output_motl_base : str
+    output_motl_base : PathOrStr
         Base path for the output motl files. The final name will be created as output_motl_base_mr#runID_iterationNumber
-        where runID is from 1 to number_of_runs and iterationNumber is iteration_number. The extension will be determined
-        based on the output_motl_type.
-    input_motl_type : str (emmotl|stopgap|relion|relion5|relion5_1), default="emmotl"
-        Type of the input motl file. Defaults to "emmotl".
+        where runID is from 1 to number_of_runs and iterationNumber is iteration_number. The extension is determined
+        by ``output_motl_type``.
+    input_motl_type : MotlType, default='emmotl'
+        Type of the input motl file.
     iteration_number : int, default=1
-        Iteration number to be used in the output name creation. Defaults to 1.
+        Iteration number to be used in the output name creation.
     number_of_runs : int, default=1
-        Number of motls to create. Defaults to 1.
-    output_motl_type : str (stopgap|emmotl|relion), default="stopgap"
-        Type of the output motl file. Defaults to "stopgap".
+        Number of motls to create.
+    output_motl_type : str, default='stopgap'
+        Type of the output motl file (see :func:`write_out_motl` for accepted values).
 
     Returns
     -------
@@ -464,15 +483,15 @@ def create_multiref_run(
 
 
 def create_denovo_multiref_run(
-    input_motl,
-    number_of_classes,
-    output_motl_base,
-    input_motl_type="emmotl",
-    class_occupancy=None,
-    iteration_number=1,
-    number_of_runs=1,
-    output_motl_type="stopgap",
-):
+    input_motl: MotlSource,
+    number_of_classes: int,
+    output_motl_base: PathOrStr,
+    input_motl_type: MotlType = "emmotl",
+    class_occupancy: int | None = None,
+    iteration_number: int = 1,
+    number_of_runs: int = 1,
+    output_motl_type: str = "stopgap",
+) -> None:
     """Creates number_of_runs motls for reference averaging and one motl for alignment. The motls for reference averaging
     are created by random selection of N particles for each class from the input_motl, where N equals to class_occupancy.
     The particles within the classes of each motl can overlap, i.e. each class will have a unique set of particles, but
@@ -483,25 +502,25 @@ def create_denovo_multiref_run(
 
     Parameters
     ----------
-    input_motl : str, pandas dataframe or Motl
-        Input motl (specified either as a path, dataframe or Motl object).
+    input_motl : MotlSource
+        Input motl (specified either as a path, DataFrame or Motl object).
     number_of_classes : int
         Number of classes to create references for and to assign randomly to the alignment motl.
-    output_motl_base : str
+    output_motl_base : PathOrStr
         Base path for the output motl files. The final name will be created as output_motl_base_ref_mr#runID_iterationNumber
         where runID is from 1 to number_of_runs and iterationNumber is iteration_number. The alignment motl will be named
-        output_motl_base_iterationNumber. In both cases, the extension will be determined based on the output_motl_type.
-    input_motl_type : str (emmotl|stopgap|relion|relion5|relion5_1), default="emmotl"
-        Type of the input motl file. Defaults to "emmotl".
-    class_occupancy : int, optional
-        Number of particles per class for the reference averaging motls. If None, the number is determined as 1/10
-        of total number of particles in the input motl. Defaults to None.
+        output_motl_base_iterationNumber. Extension is determined by ``output_motl_type``.
+    input_motl_type : MotlType, default='emmotl'
+        Type of the input motl file.
+    class_occupancy : int or None, default=None
+        Number of particles per class for the reference averaging motls. If ``None``, the number is determined as 1/10
+        of total number of particles in the input motl.
     iteration_number : int, default=1
-        Iteration number to be used in the output name creation. Defaults to 1.
+        Iteration number to be used in the output name creation.
     number_of_runs : int, default=1
-        Number of motls to create. Defaults to 1.
-    output_motl_type : str (stopgap|emmotl|relion), default="stopgap"
-        Type of the output motl file. Defaults to "stopgap".
+        Number of motls to create.
+    output_motl_type : str, default='stopgap'
+        Type of the output motl file (see :func:`write_out_motl` for accepted values).
 
     Returns
     -------
@@ -549,17 +568,20 @@ def create_denovo_multiref_run(
 
     #instead of calling conversion functions kind of the same is happening
 
-def evaluate_multirun_stability(input_motls, input_motl_type="stopgap"):
+def evaluate_multirun_stability(
+    input_motls: list[MotlSource],
+    input_motl_type: MotlType = "stopgap",
+) -> dict:
     """Evaluate how many particles ended up within the same class among all the classification runs. It is meant to be
     used for multiruns with existing references (i.e. not de novo ones) where all runs uses the same references in the
     same order.
 
     Parameters
     ----------
-    input_motls : list
-        List of input motl files. At least two are required.
-    input_motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
-        Type of the input motl. Defaults to "stopgap".
+    input_motls : list of MotlSource
+        List of input motls (paths, DataFrames, or Motl objects).  At least two are required.
+    input_motl_type : MotlType, default='stopgap'
+        Type of the input motl.
 
     Returns
     -------
@@ -596,7 +618,13 @@ def evaluate_multirun_stability(input_motls, input_motl_type="stopgap"):
     return common_occupancies
 
 
-def get_subtomos_class_stability(motl_base_name, start_it, end_it, motl_type="stopgap", load_kwargs=None):
+def get_subtomos_class_stability(
+    motl_base_name: str,
+    start_it: int,
+    end_it: int,
+    motl_type: MotlType = "stopgap",
+    load_kwargs: dict | None = None,
+) -> dict:
     """Calculate the class stability of subtomograms over iterations.
 
     Parameters
@@ -608,12 +636,12 @@ def get_subtomos_class_stability(motl_base_name, start_it, end_it, motl_type="st
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
-        Type of the input motl. Defaults to "stopgap".
-    load_kwargs : dict, optional
+    motl_type : MotlType, default='stopgap'
+        Type of the input motl.
+    load_kwargs : dict or None, default=None
         Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
         Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
-        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`).
 
     Returns
     -------
@@ -649,15 +677,15 @@ def get_subtomos_class_stability(motl_base_name, start_it, end_it, motl_type="st
 
 
 def evaluate_classification(
-    motl_base_name,
-    start_it,
-    end_it,
-    motl_type="stopgap",
-    output_file_stats=None,
-    plot_results=False,
-    output_file_graphs=None,
-    load_kwargs=None
-):
+    motl_base_name: str,
+    start_it: int,
+    end_it: int,
+    motl_type: MotlType = "stopgap",
+    output_file_stats: PathOrStr | None = None,
+    plot_results: bool = False,
+    output_file_graphs: PathOrStr | None = None,
+    load_kwargs: dict | None = None,
+) -> tuple[dict, dict]:
     """Get the occupancy of each class over the iterations and the class stability of subtomograms over iterations.
 
     Parameters
@@ -669,20 +697,19 @@ def evaluate_classification(
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
-        Type of the input motl. Defaults to "stopgap".
-    output_file_stats : str, optional
-        Name of the file into which the results will be written out. If None, no results will be written out. Defaults
-        to None.
+    motl_type : MotlType, default='stopgap'
+        Type of the input motl.
+    output_file_stats : PathOrStr or None, default=None
+        Name of the file into which the results will be written out. If ``None``, no results will be written out.
     plot_results : bool, default=False
-        Whether to plot the results. Defaults to False.
-    output_file_graphs : str, optional
-        Name of the file into which the plotted graphs will be written out. If None, the graphs will not be written out.
-        If plot_results is False, this parameter is unused. Defaults to None.
-    load_kwargs : dict, optional
+        Whether to plot the results.
+    output_file_graphs : PathOrStr or None, default=None
+        Name of the file into which the plotted graphs will be written out. If ``None``, the graphs will not be written out.
+        Ignored when ``plot_results`` is False.
+    load_kwargs : dict or None, default=None
         Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
         Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
-        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`).
 
     Returns
     -------
@@ -744,7 +771,13 @@ def evaluate_classification(
     return occupancy, changing_subtomos
 
 
-def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap", load_kwargs=None):
+def get_class_occupancy(
+    motl_base_name: str,
+    start_it: int,
+    end_it: int,
+    motl_type: MotlType = "stopgap",
+    load_kwargs: dict | None = None,
+) -> dict:
     """Get the occupancy of each class over the iterations.
 
     Parameters
@@ -756,12 +789,12 @@ def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap", l
         Starting iteration number.
     end_it : int
         Ending iteration number.
-    motl_type : str (stopgap|emmotl|relion|relion5|relion5_1), default="stopgap"
-        Type of the input motl. Defaults to "stopgap".
-    load_kwargs : dict, optional
+    motl_type : MotlType, default='stopgap'
+        Type of the input motl.
+    load_kwargs : dict or None, default=None
         Dictionary of keyword arguments passed to the `Motl.load` method (and subsequently to the underlying
         Motl class constructors like 'RelionMotl' and `RelionMotlv5`). This is useful for providing necessary metadata like
-        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`). Defaults to None.
+        `pixel_size`, `binning`, `optics_data`, or custom formats (`tomo_format`, `subtomo_format`).
 
     Returns
     -------
@@ -791,7 +824,11 @@ def get_class_occupancy(motl_base_name, start_it, end_it, motl_type="stopgap", l
 
     return occupancy
 
-def get_motl_filename(motl_base_name, iteration, motl_type):
+def get_motl_filename(
+    motl_base_name: str,
+    iteration: int,
+    motl_type: MotlType,
+) -> str:
     """Construct the full filename for a motl file given a base name, iteration, and type.
 
     For Relion-type motls the iteration number is zero-padded to three digits
@@ -805,7 +842,7 @@ def get_motl_filename(motl_base_name, iteration, motl_type):
         For example, for ``motl_shift_3.em`` the base name is ``motl_shift_``.
     iteration : int
         Iteration number to embed in the filename.
-    motl_type : str
+    motl_type : MotlType
         Type of the motl file (e.g. ``'emmotl'``, ``'stopgap'``, ``'relion'``,
         ``'relion5'``, ``'relion5_1'``).  Any value containing ``'relion'``
         triggers zero-padded three-digit formatting.
@@ -861,7 +898,12 @@ _NOVA_TO_SG_NAME = {v: k for k, v in _SG_TO_NOVA_NAME.items()}
 
 # ── Angle conversion helpers ──────────────────────────────────────────────────
 
-def stopgap_to_nova_angles(angiter, angincr, phi_angiter, phi_angincr):
+def stopgap_to_nova_angles(
+    angiter: int,
+    angincr: float,
+    phi_angiter: int,
+    phi_angincr: float,
+) -> tuple[float, float, float, float]:
     """Convert STOPGAP angle iteration counts to novaSTA angle extents.
 
     Parameters
@@ -894,7 +936,12 @@ def stopgap_to_nova_angles(angiter, angincr, phi_angiter, phi_angincr):
     return cone_angle, cone_sampling, inplane_angle, inplane_sampling
 
 
-def nova_to_stopgap_angles(cone_angle, cone_sampling, inplane_angle, inplane_sampling):
+def nova_to_stopgap_angles(
+    cone_angle: float,
+    cone_sampling: float,
+    inplane_angle: float,
+    inplane_sampling: float,
+) -> tuple[int, float, int, float]:
     """Convert novaSTA angle extents to STOPGAP angle iteration counts.
 
     Parameters
@@ -917,7 +964,7 @@ def nova_to_stopgap_angles(cone_angle, cone_sampling, inplane_angle, inplane_sam
 
 # ── novaSTA log parser ────────────────────────────────────────────────────────
 
-def sta_log_read(log_path):
+def sta_log_read(log_path: PathOrStr) -> pd.DataFrame:
     """Parse a novaSTA log file into a per-iteration RMSE statistics DataFrame.
 
     Each iteration block is delimited by a line matching
@@ -925,7 +972,7 @@ def sta_log_read(log_path):
 
     Parameters
     ----------
-    log_path : str
+    log_path : PathOrStr
         Path to the novaSTA log file.
 
     Returns
@@ -974,7 +1021,7 @@ def sta_log_read(log_path):
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-def _parse_scalar(v):
+def _parse_scalar(v: Any) -> int | float | str:
     """Convert a single string token to int, float, or leave as str."""
     if isinstance(v, (int, float, bool)) and not isinstance(v, bool):
         return v
@@ -989,7 +1036,7 @@ def _parse_scalar(v):
         return s
 
 
-def _parse_value_list(raw):
+def _parse_value_list(raw: Any) -> list:
     """Parse a value into a flat list of scalars.
 
     Accepts a scalar, a list/tuple, or a whitespace-separated string
@@ -1005,7 +1052,7 @@ def _parse_value_list(raw):
     return [_parse_scalar(raw)]
 
 
-def _is_none_val(v):
+def _is_none_val(v: Any) -> bool:
     """Return True for None, NaN, or the string 'none'."""
     if v is None:
         return True
@@ -1016,18 +1063,18 @@ def _is_none_val(v):
     return False
 
 
-def _normalize_stopgap_mode(mode_str):
+def _normalize_stopgap_mode(mode_str: str) -> str:
     """Normalise STOPGAP _subtomo_mode aliases to canonical form."""
     m = str(mode_str).strip()
     return {"ali_multiref": "multiref_ali", "avg_multiref": "multiref_avg"}.get(m, m)
 
 
-def _stopgap_col_to_name(col):
+def _stopgap_col_to_name(col: str) -> str:
     """``_motl_name`` → ``'motl name'``; strips leading underscore, replaces the rest with spaces."""
     return col.lstrip("_").replace("_", " ")
 
 
-def _nova_key_to_name(key):
+def _nova_key_to_name(key: str) -> str:
     """Convert a novaSTA camelCase key to a space-separated display name.
 
     ``coneAngle`` → ``'cone angle'``,  ``useGPU`` → ``'use GPU'``.
@@ -1038,7 +1085,7 @@ def _nova_key_to_name(key):
     return ' '.join(w if (w.isupper() and len(w) > 1) else w.lower() for w in s.split())
 
 
-def _display_to_nova_key(name):
+def _display_to_nova_key(name: str) -> str:
     """Inverse of ``_nova_key_to_name``: ``'cone angle'`` → ``'coneAngle'``, ``'use GPU'`` → ``'useGPU'``."""
     words = name.split()
     result = words[0].lower()
@@ -1047,11 +1094,44 @@ def _display_to_nova_key(name):
     return result
 
 
-def _fmt_val(v):
+def _fmt_val(v: Any) -> str:
     """Format a scalar for novaSTA output (drop trailing .0 from whole floats)."""
     if isinstance(v, float) and v == math.floor(v):
         return str(int(v))
     return str(v)
+
+
+def _apply_working_dir(path_str: str, working_dir: PathOrStr | None) -> str:
+    """Apply the novaSTA-style ``working_dir`` override to a stored path.
+
+    Rules:
+
+    * ``working_dir is None`` -- the path is returned unchanged (the
+      current working directory is assumed by downstream loaders when the
+      path is relative).
+    * relative ``path_str`` -- ``working_dir`` is prepended.  E.g.
+      ``"./ddd"`` + ``working_dir="/scratch/run42"`` →
+      ``"/scratch/run42/ddd"``.
+    * absolute ``path_str`` -- everything up to the basename is replaced
+      with ``working_dir``.  E.g. ``"/gg/cc/motl_base"`` +
+      ``working_dir="/scratch/run42"`` → ``"/scratch/run42/motl_base"``.
+
+    Used by :meth:`StaParameters.get_motl_base_name` (the novaSTA default)
+    and the novaSTA auxiliary resolvers.  STOPGAP uses its own
+    rootdir-based convention -- see
+    :meth:`StopgapParams.get_motl_base_name`.
+    """
+    if working_dir is None:
+        return path_str
+    # STA params files are written on the cluster (POSIX) so a leading '/'
+    # indicates absolute even when the host is Windows -- check both via
+    # PurePosixPath AND the native Path so drive-prefixed Windows paths
+    # ("C:\\...") are recognised too.
+    is_abs = PurePosixPath(path_str).is_absolute() or Path(path_str).is_absolute()
+    name = PurePosixPath(path_str).name
+    if is_abs:
+        return str(Path(working_dir) / name)
+    return str(Path(working_dir) / path_str)
 
 
 # ── Base class ────────────────────────────────────────────────────────────────
@@ -1077,7 +1157,13 @@ class StaParameters:
         Whether multi-reference mode is active.
     """
 
-    def __init__(self, df, df_extra=None, create_ref=False, multiref=False):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        df_extra: pd.DataFrame | None = None,
+        create_ref: bool = False,
+        multiref: bool = False,
+    ) -> None:
         self.df = df.reset_index(drop=True)
         self.df_extra = (
             df_extra.reset_index(drop=True)
@@ -1115,13 +1201,33 @@ class StaParameters:
         """Motl type string for this format (implemented by subclasses)."""
         raise NotImplementedError
 
-    def get_motl_base_name(self, separator="_"):
+    def get_motl_base_name(
+        self,
+        separator: str = "_",
+        working_dir: PathOrStr | None = None,
+    ) -> str | None:
         """Return the motl base name (column value + *separator*), or None.
+
+        The default implementation matches the novaSTA layout: the motl
+        column already carries the (relative or absolute) full path and is
+        used verbatim.  ``working_dir``, when supplied, overrides the
+        directory portion of that path -- relative paths are joined onto
+        ``working_dir``, absolute paths have their directory replaced with
+        ``working_dir`` while the basename is preserved.  Subclasses (e.g.
+        :class:`StopgapParams`) override this to honour their own
+        directory conventions.
 
         Parameters
         ----------
-        separator : str, default="_"
-            Appended to the motl path stored in ``df``.
+        separator : str, default='_'
+            Appended to the motl path stored in ``df``.  Downstream loaders
+            then append ``<iter><extension>`` to build per-iteration paths.
+        working_dir : PathOrStr or None, default=None
+            Directory override.  When ``None``, the value stored in the
+            params file is used as-is (current working directory is assumed
+            for relative paths).  When provided, it replaces the directory
+            portion of the stored motl path -- see :func:`_apply_working_dir`
+            for the exact rules.
 
         Returns
         -------
@@ -1132,19 +1238,25 @@ class StaParameters:
         val = self.df["motl"].iloc[0]
         if _is_none_val(val):
             return None
-        return str(val) + separator
+        return _apply_working_dir(str(val), working_dir) + separator
 
     # ── Factory / dispatch ─────────────────────────────────────────────────
 
     @classmethod
-    def load(cls, path, sta_type=None, **kwargs):
+    def load(
+        cls,
+        path: PathOrStr,
+        sta_type: str | None = None,
+        **kwargs: Any,
+    ) -> "StaParameters":
         """Load a parameter file, dispatching on *sta_type* or file extension.
 
         Parameters
         ----------
-        path : str
-        sta_type : str or None
-            ``"stopgap"`` or ``"novasta"``.  If None, ``.star`` → stopgap,
+        path : PathOrStr
+            Path to the parameter file.
+        sta_type : str or None, default=None
+            ``"stopgap"`` or ``"novasta"``.  If ``None``, ``.star`` → stopgap,
             otherwise → novasta.
         **kwargs
             Forwarded to the subclass ``from_file``.
@@ -1163,7 +1275,11 @@ class StaParameters:
         raise ValueError(f"Unknown sta_type {sta_type!r}. Use 'stopgap' or 'novasta'.")
 
     @classmethod
-    def from_dict(cls, params, sta_type="novasta"):
+    def from_dict(
+        cls,
+        params: dict,
+        sta_type: str = "novasta",
+    ) -> "StaParameters":
         """Construct an StaParameters from a parameter dictionary (GUI path).
 
         Parameters
@@ -1246,12 +1362,13 @@ class StaParameters:
 
     # ── Auxiliary data ─────────────────────────────────────────────────────
 
-    def attach_log(self, log_path):
+    def attach_log(self, log_path: PathOrStr) -> pd.DataFrame:
         """Parse a novaSTA log and attach per-iteration RMSE stats.
 
         Parameters
         ----------
-        log_path : str
+        log_path : PathOrStr
+            Path to the novaSTA log file.
 
         Returns
         -------
@@ -1260,15 +1377,23 @@ class StaParameters:
         self.df_stats = sta_log_read(log_path)
         return self.df_stats
 
-    def attach_fsc(self, path, pixel_size=None, box_size=None):
+    def attach_fsc(
+        self,
+        path: PathOrStr,
+        pixel_size: float | None = None,
+        box_size: int | None = None,
+    ) -> pd.DataFrame:
         """Read and attach an FSC curve.
 
         Parameters
         ----------
-        path : str
-        pixel_size : float, optional
-        box_size : int, optional
-            If None, falls back to ``subtomo_size`` in ``df_extra``.
+        path : PathOrStr
+            Path to the FSC curve file.
+        pixel_size : float or None, default=None
+            Pixel size in Å.
+        box_size : int or None, default=None
+            Subtomogram box size.  If ``None``, falls back to ``subtomo_size``
+            in ``df``.
 
         Returns
         -------
@@ -1283,12 +1408,12 @@ class StaParameters:
 
     # ── Format conversion ──────────────────────────────────────────────────
 
-    def to_novasta(self):
+    def to_novasta(self) -> "NovaStaParams":
         """Return a NovaStaParams with columns renamed to novaSTA display names."""
         df = self.df.rename(columns=_SG_TO_NOVA_NAME)
         return NovaStaParams(df, pd.DataFrame(), create_ref=self.create_ref, multiref=self.multiref)
 
-    def to_stopgap(self):
+    def to_stopgap(self) -> "StopgapParams":
         """Return a StopgapParams with columns renamed to STOPGAP display names."""
         df = self.df.rename(columns=_NOVA_TO_SG_NAME)
         return StopgapParams(df, pd.DataFrame(), create_ref=self.create_ref, multiref=self.multiref)
@@ -1307,22 +1432,164 @@ class StopgapParams(StaParameters):
     ``'inplane sampling'``).
     """
 
-    def __init__(self, df, df_extra=None, create_ref=False, multiref=False):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        df_extra: pd.DataFrame | None = None,
+        create_ref: bool = False,
+        multiref: bool = False,
+    ) -> None:
         super().__init__(df, df_extra, create_ref=create_ref, multiref=multiref)
         self._orig_columns = None  # set by from_file for round-trip column order
 
     @property
-    def motl_type(self):
+    def motl_type(self) -> str:
         return "stopgap"
 
-    def get_motl_base_name(self, separator="_"):
+    def get_motl_base_name(
+        self,
+        separator: str = "_",
+        working_dir: PathOrStr | None = None,
+    ) -> str | None:
+        """STOPGAP motl base name -- ``rootdir/lists/<motl name><separator>``.
+
+        STOPGAP runs follow a fixed directory layout under a single
+        ``rootdir`` (stored as the ``rootdir`` column of every row): motls
+        live in ``lists/``, masks in ``masks/``, and references in
+        ``refs/``.  When ``working_dir`` is supplied it overrides the
+        ``rootdir`` column; the ``lists/`` subdirectory + the ``motl name``
+        column + ``separator`` are still appended verbatim.  Downstream
+        loaders append ``<iter>.star`` to form the per-iteration path.
+
+        Parameters
+        ----------
+        separator : str, default='_'
+            Appended to the motl name.
+        working_dir : PathOrStr or None, default=None
+            Directory override.  When ``None``, the ``rootdir`` column is
+            used; when both are absent, only the motl name + separator is
+            returned (no leading directory).
+
+        Returns
+        -------
+        str or None
+        """
         col = "motl name"
         if col not in self.df.columns or self.df.empty:
             return None
         val = self.df[col].iloc[0]
         if _is_none_val(val):
             return None
-        return str(val) + separator
+        root = self._effective_rootdir(working_dir)
+        if root is None:
+            return str(val) + separator
+        return str(Path(root) / "lists" / str(val)) + separator
+
+    def _effective_rootdir(self, working_dir: PathOrStr | None) -> str | None:
+        """Return the directory that anchors STOPGAP's subdir layout.
+
+        ``working_dir`` wins when supplied; otherwise the ``rootdir``
+        column from the first row is used.  Returns ``None`` if neither
+        is available -- callers then fall back to bare column values.
+        """
+        if working_dir is not None:
+            return str(working_dir)
+        if "rootdir" in self.df.columns and not self.df.empty:
+            v = self.df["rootdir"].iloc[0]
+            if not _is_none_val(v):
+                return str(v)
+        return None
+
+    def _resolve_in_subdir(
+        self,
+        col: str,
+        subdir: str,
+        working_dir: PathOrStr | None,
+    ) -> str | None:
+        """Join ``<rootdir>/<subdir>/<self.df[col]>`` if both pieces are present."""
+        if col not in self.df.columns or self.df.empty:
+            return None
+        val = self.df[col].iloc[0]
+        if _is_none_val(val):
+            return None
+        root = self._effective_rootdir(working_dir)
+        if root is None:
+            return str(val)
+        return str(Path(root) / subdir / str(val))
+
+    def resolve_wedge_list(self, working_dir: PathOrStr | None = None) -> str | None:
+        """STOPGAP wedge list path -- ``rootdir/lists/<wedgelist name>``.
+
+        Parameters
+        ----------
+        working_dir : PathOrStr or None, default=None
+            Overrides the ``rootdir`` column when supplied.
+
+        Returns
+        -------
+        str or None
+        """
+        return self._resolve_in_subdir("wedgelist name", "lists", working_dir)
+
+    def resolve_mask(self, working_dir: PathOrStr | None = None) -> str | None:
+        """STOPGAP particle mask path -- ``rootdir/masks/<mask name>``.
+
+        Parameters
+        ----------
+        working_dir : PathOrStr or None, default=None
+            Overrides the ``rootdir`` column when supplied.
+
+        Returns
+        -------
+        str or None
+        """
+        return self._resolve_in_subdir("mask name", "masks", working_dir)
+
+    def resolve_ccmask(self, working_dir: PathOrStr | None = None) -> str | None:
+        """STOPGAP CC mask path -- ``rootdir/masks/<ccmask name>``.
+
+        Parameters
+        ----------
+        working_dir : PathOrStr or None, default=None
+            Overrides the ``rootdir`` column when supplied.
+
+        Returns
+        -------
+        str or None
+        """
+        return self._resolve_in_subdir("ccmask name", "masks", working_dir)
+
+    def resolve_ref_base(
+        self,
+        working_dir: PathOrStr | None = None,
+        separator: str = "_",
+    ) -> str | None:
+        """STOPGAP reference base name -- ``rootdir/refs/<ref name><separator>``.
+
+        Downstream code appends ``<iter>.em`` to form the per-iteration
+        reference path, mirroring the motl-base-name convention.
+
+        Parameters
+        ----------
+        working_dir : PathOrStr or None, default=None
+            Overrides the ``rootdir`` column when supplied.
+        separator : str, default='_'
+            Appended to the reference name.
+
+        Returns
+        -------
+        str or None
+        """
+        col = "ref name"
+        if col not in self.df.columns or self.df.empty:
+            return None
+        val = self.df[col].iloc[0]
+        if _is_none_val(val):
+            return None
+        root = self._effective_rootdir(working_dir)
+        if root is None:
+            return str(val) + separator
+        return str(Path(root) / "refs" / str(val)) + separator
 
     # ── Default STOPGAP column order (used when _orig_columns is not set) ──
     _DEFAULT_STOPGAP_COLS = [
@@ -1339,12 +1606,17 @@ class StopgapParams(StaParameters):
     ]
 
     @classmethod
-    def from_file(cls, path, load_completed_only=False):
+    def from_file(
+        cls,
+        path: PathOrStr,
+        load_completed_only: bool = False,
+    ) -> "StopgapParams":
         """Load a STOPGAP subtomogram parameter STAR file.
 
         Parameters
         ----------
-        path : str
+        path : PathOrStr
+            Path to the STOPGAP ``.star`` parameter file.
         load_completed_only : bool, default=False
             If True, keep only rows where ``_completed_ali == 1``.
 
@@ -1408,16 +1680,24 @@ class StopgapParams(StaParameters):
         obj._orig_columns = orig_columns
         return obj
 
-    def write_out(self, path, create_ref=None, multiref=None, total_iterations=None):
+    def write_out(
+        self,
+        path: PathOrStr,
+        create_ref: bool | None = None,
+        multiref: bool | None = None,
+        total_iterations: int | None = None,
+    ) -> None:
         """Write a STOPGAP subtomogram parameter STAR file.
 
         Parameters
         ----------
-        path : str
-        create_ref : bool or None
-            If None, uses the value stored on the object.
-        multiref : bool or None
-        total_iterations : int or None
+        path : PathOrStr
+            Destination path for the ``.star`` file.
+        create_ref : bool or None, default=None
+            If ``None``, uses the value stored on the object.
+        multiref : bool or None, default=None
+            If ``None``, uses the value stored on the object.
+        total_iterations : int or None, default=None
             If larger than the current alignment-iteration count, pad with
             extra rows (params copied from the last row, flags 0).
         """
@@ -1461,7 +1741,14 @@ class StopgapParams(StaParameters):
 
         Starfile.write([out_df], path, specifiers=["data_stopgap_subtomo_parameters"])
 
-    def _build_row(self, df_row, family, is_avg, out_cols, iteration=None):
+    def _build_row(
+        self,
+        df_row: pd.Series,
+        family: str,
+        is_avg: bool,
+        out_cols: list[str],
+        iteration: int | None = None,
+    ) -> dict:
         """Assemble one STOPGAP output row dict from a display-name df row."""
         _angle_display = {"cone angle", "cone sampling", "inplane angle", "inplane sampling"}
         _skip_display  = {"iteration", "subtomo mode"} | _angle_display
@@ -1515,21 +1802,115 @@ class NovaStaParams(StaParameters):
     ``createRef``) become object attributes, not columns.
     """
 
-    def __init__(self, df, df_extra=None, create_ref=False, multiref=False):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        df_extra: pd.DataFrame | None = None,
+        create_ref: bool = False,
+        multiref: bool = False,
+    ) -> None:
         super().__init__(df, df_extra, create_ref=create_ref, multiref=multiref)
         self._orig_key_order = None  # preserved for write-order hints
 
     @property
-    def motl_type(self):
+    def motl_type(self) -> str:
         return "emmotl"
 
+    def _resolve_path_col(
+        self,
+        col: str,
+        working_dir: PathOrStr | None,
+    ) -> str | None:
+        """Apply :func:`_apply_working_dir` to ``self.df[col].iloc[0]``."""
+        if col not in self.df.columns or self.df.empty:
+            return None
+        val = self.df[col].iloc[0]
+        if _is_none_val(val):
+            return None
+        return _apply_working_dir(str(val), working_dir)
+
+    def resolve_wedge_list(self, working_dir: PathOrStr | None = None) -> str | None:
+        """novaSTA wedge list path -- ``self.df['wedge list']`` with optional override.
+
+        Parameters
+        ----------
+        working_dir : PathOrStr or None, default=None
+            Directory override.  Applied via :func:`_apply_working_dir`
+            (relative paths get prepended; absolute paths have their
+            directory replaced).
+
+        Returns
+        -------
+        str or None
+        """
+        return self._resolve_path_col("wedge list", working_dir)
+
+    def resolve_mask(self, working_dir: PathOrStr | None = None) -> str | None:
+        """novaSTA particle mask path -- ``self.df['mask']`` with optional override.
+
+        Parameters
+        ----------
+        working_dir : PathOrStr or None, default=None
+            Directory override (see :func:`_apply_working_dir`).
+
+        Returns
+        -------
+        str or None
+        """
+        return self._resolve_path_col("mask", working_dir)
+
+    def resolve_ccmask(self, working_dir: PathOrStr | None = None) -> str | None:
+        """novaSTA CC mask path -- ``self.df['cc mask']`` with optional override.
+
+        Parameters
+        ----------
+        working_dir : PathOrStr or None, default=None
+            Directory override (see :func:`_apply_working_dir`).
+
+        Returns
+        -------
+        str or None
+        """
+        return self._resolve_path_col("cc mask", working_dir)
+
+    def resolve_ref_base(
+        self,
+        working_dir: PathOrStr | None = None,
+        separator: str = "_",
+    ) -> str | None:
+        """novaSTA reference base -- ``self.df['ref'] + separator`` with optional override.
+
+        novaSTA stores the reference column as a base name (downstream
+        appends ``<iter>.em``); this helper mirrors
+        :meth:`get_motl_base_name` for symmetry.
+
+        Parameters
+        ----------
+        working_dir : PathOrStr or None, default=None
+            Directory override (see :func:`_apply_working_dir`).
+        separator : str, default='_'
+            Appended after the resolved path.
+
+        Returns
+        -------
+        str or None
+        """
+        if "ref" not in self.df.columns or self.df.empty:
+            return None
+        val = self.df["ref"].iloc[0]
+        if _is_none_val(val):
+            return None
+        return _apply_working_dir(str(val), working_dir) + separator
+
     @classmethod
-    def from_file(cls, path):
+    def from_file(cls, path: PathOrStr) -> "NovaStaParams":
         """Load a novaSTA flat key-value parameter file.
 
         Parameters
         ----------
-        path : str
+        path : PathOrStr
+            Path to the novaSTA flat parameter file (typically ``.txt`` /
+            ``.params``).
 
         Returns
         -------
@@ -1586,14 +1967,19 @@ class NovaStaParams(StaParameters):
         obj._orig_key_order = key_order
         return obj
 
-    def write_out(self, path, create_ref=None):
+    def write_out(
+        self,
+        path: PathOrStr,
+        create_ref: bool | None = None,
+    ) -> None:
         """Write a novaSTA flat key-value parameter file.
 
         Parameters
         ----------
-        path : str
-        create_ref : bool or None
-            If None, uses the flag stored on the object.
+        path : PathOrStr
+            Destination path for the flat key-value file.
+        create_ref : bool or None, default=None
+            If ``None``, uses the flag stored on the object.
         """
         cr = self.create_ref if create_ref is None else bool(create_ref)
         n_align = len(self.df)
@@ -1694,7 +2080,11 @@ class NovaStaParams(StaParameters):
 
 # ── File-driven progress evaluation wrappers ──────────────────────────────────
 
-def _resolve_sta_params(input_params, sta_type=None, **kwargs):
+def _resolve_sta_params(
+    input_params: "PathOrStr | dict | StaParameters",
+    sta_type: str | None = None,
+    **kwargs: Any,
+) -> "StaParameters":
     """Resolve a path, dict, or StaParameters into an StaParameters object."""
     if isinstance(input_params, StaParameters):
         return input_params
@@ -1703,19 +2093,37 @@ def _resolve_sta_params(input_params, sta_type=None, **kwargs):
     return StaParameters.load(str(input_params), sta_type=sta_type, **kwargs)
 
 
-def evaluate_alignment_from_params(input_params, sta_type=None, motl_separator="_", **kwargs):
+def evaluate_alignment_from_params(
+    input_params: "PathOrStr | dict | StaParameters",
+    sta_type: str | None = None,
+    motl_separator: str = "_",
+    working_dir: PathOrStr | None = None,
+    **kwargs: Any,
+) -> list:
     """Run :func:`evaluate_alignment` driven by a parameter file, dict, or object.
+
+    Pulls ``motl_base_name``, ``start_iteration``, ``end_iteration``, and
+    ``motl_type`` directly off the resolved :class:`StaParameters` instance
+    and forwards everything else through to :func:`evaluate_alignment`.
 
     Parameters
     ----------
-    input_params : str, dict, or StaParameters
+    input_params : PathOrStr, dict, or StaParameters
         Path to a parameter file, a canonical parameter dict, or an already-
         loaded StaParameters object.
-    sta_type : str or None
-        ``"stopgap"`` or ``"novasta"``.  Auto-detected from extension if None.
-    motl_separator : str, default="_"
+    sta_type : str or None, default=None
+        ``"stopgap"`` or ``"novasta"``.  Auto-detected from extension if ``None``.
+    motl_separator : str, default='_'
         Appended to the stored motl path to form the base name
         (e.g. ``"./allmotl_lt"`` → ``"./allmotl_lt_"``).
+    working_dir : PathOrStr or None, default=None
+        Optional directory override.  For STOPGAP it replaces the
+        ``rootdir`` column (the ``lists/`` subdirectory is still appended,
+        so the motl prefix becomes ``working_dir/lists/<motl name>_``).
+        For novaSTA it overrides the directory portion of the stored motl
+        path -- relative paths get prepended, absolute paths have their
+        directory replaced.  Pass ``None`` to use the path embedded in the
+        parameter file as-is.
     **kwargs
         Forwarded to :func:`evaluate_alignment`.  ``motl_type`` defaults to
         the format-native type (``"stopgap"`` or ``"emmotl"``) if not supplied.
@@ -1725,21 +2133,34 @@ def evaluate_alignment_from_params(input_params, sta_type=None, motl_separator="
     list of pandas.DataFrame
     """
     params = _resolve_sta_params(input_params, sta_type=sta_type)
-    base = params.get_motl_base_name(motl_separator)
+    base = params.get_motl_base_name(motl_separator, working_dir=working_dir)
     if base is None:
         raise ValueError("No motl path found in the parameter file.")
     kwargs.setdefault("motl_type", params.motl_type)
     return evaluate_alignment(base, params.start_iteration, params.end_iteration, **kwargs)
 
 
-def compute_alignment_statistics_from_params(input_params, sta_type=None, motl_separator="_", **kwargs):
+def compute_alignment_statistics_from_params(
+    input_params: "PathOrStr | dict | StaParameters",
+    sta_type: str | None = None,
+    motl_separator: str = "_",
+    working_dir: PathOrStr | None = None,
+    **kwargs: Any,
+) -> pd.DataFrame:
     """Run :func:`compute_alignment_statistics` driven by a parameter file, dict, or object.
 
     Parameters
     ----------
-    input_params : str, dict, or StaParameters
-    sta_type : str or None
-    motl_separator : str, default="_"
+    input_params : PathOrStr, dict, or StaParameters
+        Path to a parameter file, a canonical parameter dict, or an already-
+        loaded StaParameters object.
+    sta_type : str or None, default=None
+        ``"stopgap"`` or ``"novasta"``.  Auto-detected from extension if ``None``.
+    motl_separator : str, default='_'
+        Appended to the stored motl path to form the base name.
+    working_dir : PathOrStr or None, default=None
+        Optional directory override.  See
+        :func:`evaluate_alignment_from_params` for the per-format rules.
     **kwargs
         Forwarded to :func:`compute_alignment_statistics`.
 
@@ -1748,7 +2169,7 @@ def compute_alignment_statistics_from_params(input_params, sta_type=None, motl_s
     pandas.DataFrame
     """
     params = _resolve_sta_params(input_params, sta_type=sta_type)
-    base = params.get_motl_base_name(motl_separator)
+    base = params.get_motl_base_name(motl_separator, working_dir=working_dir)
     if base is None:
         raise ValueError("No motl path found in the parameter file.")
     kwargs.setdefault("motl_type", params.motl_type)

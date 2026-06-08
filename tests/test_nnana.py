@@ -451,3 +451,143 @@ class TestFilterNnRadialStats:
         mask = np.ones((10, 10, 10))
         result = nnana.filter_nn_radial_stats(self._STATS, mask)
         assert list(result.index) == list(range(len(result)))
+
+
+# =============================================================================
+# Direct coverage for module-level wrappers + NearestNeighbors lazy accessors
+# =============================================================================
+
+
+def _two_particle_motl():
+    """Tiny 2-particle Motl, same tomo, useful for k=1 NN smoke tests."""
+    df = cryomotl.Motl.create_empty_motl_df()
+    rows = [
+        {"subtomo_id": 1, "tomo_id": 1, "object_id": 1, "class": 1,
+         "x": 10.0, "y": 0.0, "z": 0.0, "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+         "phi": 0.0, "theta": 0.0, "psi": 0.0, "score": 1.0},
+        {"subtomo_id": 2, "tomo_id": 1, "object_id": 1, "class": 1,
+         "x": 13.0, "y": 0.0, "z": 0.0, "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+         "phi": 30.0, "theta": 0.0, "psi": 0.0, "score": 1.0},
+    ]
+    return cryomotl.Motl(motl_df=pd.concat([df, pd.DataFrame(rows)], ignore_index=True))
+
+
+# ── module-level layer-2 wrappers ────────────────────────────────────────────
+
+
+def test_get_feature_nn_indices_returns_4_tuple():
+    """``get_feature_nn_indices`` is a thin wrapper that returns (qp_idx, nn_idx, nn_dist, k_eff)."""
+    m = _two_particle_motl()
+    qp_idx, nn_idx, nn_dist, k_eff = nnana.get_feature_nn_indices(m, m, nn_number=1, remove_qp=True)
+    assert qp_idx.shape == (2,)
+    assert nn_idx.shape == (2, 1)
+    assert nn_dist.shape == (2, 1)
+    assert k_eff == 1
+
+
+def test_get_feature_nn_within_radius_returns_2_tuple():
+    """``get_feature_nn_within_radius`` returns (qp_idx_list, nn_idx_list)."""
+    m = _two_particle_motl()
+    qp_idx, nn_idx = nnana.get_feature_nn_within_radius(m, m, radius=5.0, remove_qp=True)
+    assert isinstance(qp_idx, list) and isinstance(nn_idx, list)
+    assert len(qp_idx) == len(nn_idx)
+
+
+def test_get_nn_within_distance_returns_self_nn_pairs():
+    """Self-NN within a radius returns (center_idx, nn_idx_list)."""
+    m = _two_particle_motl()
+    center_idx, nn_idx = nnana.get_nn_within_distance(m, radius=5.0)
+    assert hasattr(center_idx, "__len__")
+    assert len(center_idx) == len(nn_idx)
+
+
+def test_get_nn_distances_returns_six_arrays():
+    """``get_nn_distances`` returns the 6-tuple (centered, rotated, nn_dist, ang, qp_id, nn_id)."""
+    m = _two_particle_motl()
+    centered, rotated, nn_dist, ang, qp_id, nn_id = nnana.get_nn_distances(
+        m, m, pixel_size=2.0, nn_number=1, paired=False, remove_duplicates=False,
+    )
+    assert centered.shape[1] == 3
+    assert rotated.shape == centered.shape
+    assert nn_dist.shape[0] == centered.shape[0]
+    assert ang.shape[0] == centered.shape[0]
+    assert qp_id.shape == nn_id.shape
+
+
+def test_get_nn_rotations_returns_unit_vectors_and_angles():
+    """``get_nn_rotations`` returns (points_on_sphere, euler_angles)."""
+    m = _two_particle_motl()
+    points, eulers = nnana.get_nn_rotations(m, m, nn_number=1)
+    assert points.shape[1] == 3
+    assert eulers.shape[1] == 3
+    np.testing.assert_allclose(np.linalg.norm(points, axis=1), 1.0, atol=1e-6)
+
+
+def test_assign_class_by_nn_labels_matched_particles():
+    """A motl matched to itself gets ``starting_class`` for every particle."""
+    m = _two_particle_motl()
+    out = nnana.assign_class_by_nn(m, [m], starting_class=7, dist_threshold=1.0)
+    assert isinstance(out, cryomotl.Motl)
+    # Every particle in `m` was matched by itself → class label is `starting_class`.
+    assert set(out.df["class"].unique()) == {7}
+
+
+def test_trace_chains_links_two_particles():
+    """A 2-particle motl ⇒ one chain of length 2 within the threshold."""
+    m = _two_particle_motl()
+    out = nnana.trace_chains(m, max_distance=5.0, min_distance=0.0)
+    assert isinstance(out, cryomotl.Motl)
+    # ``object_id`` is the chain identifier; both rows must share it.
+    assert out.df["object_id"].nunique() == 1
+    assert len(out.df) == 2
+
+
+def test_trace_chains_no_max_distance_raises():
+    """``max_distance=None`` is the only required arg; omitting it raises."""
+    m = _two_particle_motl()
+    with pytest.raises(ValueError):
+        nnana.trace_chains(m)
+
+
+# ── NearestNeighbors lazy accessors ──────────────────────────────────────────
+
+
+def _nn_from_two_particle_motl():
+    return nnana.NearestNeighbors(_two_particle_motl(), nn_type="closest_dist", type_param=1)
+
+
+def test_nn_get_qp_rotations_returns_rotation_object():
+    """``get_qp_rotations`` returns a scipy Rotation matching the qp-angle stack."""
+    from scipy.spatial.transform import Rotation as srot
+    nn = _nn_from_two_particle_motl()
+    rot = nn.get_qp_rotations()
+    assert isinstance(rot, srot)
+
+
+def test_nn_get_nn_rotations_returns_rotation_object():
+    from scipy.spatial.transform import Rotation as srot
+    nn = _nn_from_two_particle_motl()
+    assert isinstance(nn.get_nn_rotations(), srot)
+
+
+def test_nn_get_relative_rotations_returns_rotation_object():
+    from scipy.spatial.transform import Rotation as srot
+    nn = _nn_from_two_particle_motl()
+    assert isinstance(nn.get_relative_rotations(), srot)
+
+
+def test_nn_get_angular_distances_returns_array():
+    nn = _nn_from_two_particle_motl()
+    d = nn.get_angular_distances(rotation_type="angular_distance")
+    assert hasattr(d, "__len__")
+
+
+def test_nn_get_nn_subset_filters_by_motl_id_and_feature():
+    """Subsetting by an existing (motl_id, tomo_id) pair returns a non-empty NearestNeighbors."""
+    nn = _nn_from_two_particle_motl()
+    # The class stores the partition column on .feature_id when subsetting; we
+    # exercise the happy path matching the only present motl_id (1) and tomo_id (1).
+    nn.feature_id = "tomo_id"
+    sub = nn.get_nn_subset(motl_id_values=1, column_values=1)
+    assert isinstance(sub, nnana.NearestNeighbors)
+    assert sub.df is not None and len(sub.df) > 0

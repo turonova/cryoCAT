@@ -749,3 +749,138 @@ def test_get_class_occupancy():
         occupancy = get_class_occupancy(base_path, 1, 2, motl_type="stopgap")
         expected = {1: [5, 5]}
         assert occupancy == expected
+
+
+# ---------------------------------------------------------------------------
+# Direct coverage: angle converters, log reader, StaParameters factories
+# ---------------------------------------------------------------------------
+
+
+def test_stopgap_to_nova_angles_roundtrip():
+    """Even ``angiter`` round-trips identically through nova-extent conversion."""
+    cone, cs, inp, is_ = stopgap_to_nova_angles(angiter=4, angincr=2.0, phi_angiter=3, phi_angincr=5.0)
+    assert cone == 8.0 and cs == 2.0
+    assert inp == 30.0 and is_ == 5.0
+    # nova->sg->nova
+    ai, ac, pai, pac = nova_to_stopgap_angles(cone, cs, inp, is_)
+    assert (ai, ac, pai, pac) == (4, 2.0, 3, 5.0)
+
+
+def test_nova_to_stopgap_angles_zero_sampling_gives_zero_iter():
+    """``cone_sampling=0`` produces ``angiter=0`` (averaging-only step)."""
+    ai, ac, pai, pac = nova_to_stopgap_angles(cone_angle=0.0, cone_sampling=0.0,
+                                              inplane_angle=0.0, inplane_sampling=0.0)
+    assert ai == 0 and pai == 0
+
+
+def test_sta_log_read_parses_iterations(tmp_path):
+    """``sta_log_read`` picks up RMSE labels per iteration block."""
+    log = tmp_path / "novasta.log"
+    log.write_text(
+        "Starting iteration #1\n"
+        "  RMSE x shift: 0.10\n"
+        "  RMSE y shift: 0.20\n"
+        "Starting iteration #2\n"
+        "  RMSE x shift: 0.05\n"
+        "  RMSE rotation: 1.5\n"
+    )
+    df = sta_log_read(str(log))
+    assert list(df["iteration"]) == [1, 2]
+    np.testing.assert_allclose(df.loc[df["iteration"] == 1, "rmse_x"], [0.10])
+    np.testing.assert_allclose(df.loc[df["iteration"] == 2, "rmse_rotation"], [1.5])
+
+
+def _minimal_params_dict():
+    """Build the smallest valid params dict for ``StaParameters.from_dict``."""
+    return {
+        "cone_angle": "30 20 10",
+        "cone_sampling": "5 5 5",
+        "inplane_angle": "30 20 10",
+        "inplane_sampling": "5 5 5",
+        "high_pass": "0.05 0.05 0.05",
+        "start_index": 1,
+    }
+
+
+def test_staparameters_from_dict_builds_three_iterations():
+    """``from_dict`` infers the number of alignment iterations from the longest list."""
+    p = StaParameters.from_dict(_minimal_params_dict(), sta_type="novasta")
+    assert isinstance(p, NovaStaParams)
+    assert p.num_iterations == 3
+    assert p.start_iteration == 1
+    assert p.end_iteration == 3
+
+
+def test_staparameters_from_dict_missing_mandatory_raises():
+    bad = dict(_minimal_params_dict())
+    bad.pop("high_pass")
+    with pytest.raises(ValueError):
+        StaParameters.from_dict(bad)
+
+
+def test_staparameters_to_novasta_and_to_stopgap_roundtrip():
+    """Conversion both ways preserves the per-iteration row count."""
+    nova = StaParameters.from_dict(_minimal_params_dict(), sta_type="novasta")
+    sg = nova.to_stopgap()
+    nova2 = sg.to_novasta()
+    assert isinstance(sg, StopgapParams)
+    assert isinstance(nova2, NovaStaParams)
+    assert sg.num_iterations == nova.num_iterations
+    assert nova2.num_iterations == nova.num_iterations
+
+
+def test_novastaparams_from_file_loads_basic_keys(tmp_path):
+    """A minimal novaSTA flat file is parsed into a per-iteration DataFrame."""
+    cfg = tmp_path / "params.txt"
+    cfg.write_text(
+        "iter 2\n"
+        "startIndex 1\n"
+        "createRef 0\n"
+        "coneAngle 30 20\n"
+        "coneSampling 5 5\n"
+        "inplaneAngle 30 20\n"
+        "inplaneSampling 5 5\n"
+        "highPass 0.05\n"
+    )
+    obj = NovaStaParams.from_file(str(cfg))
+    assert obj.num_iterations == 2
+    assert obj.start_iteration == 1
+
+
+def test_staparameters_load_dispatches_by_extension(tmp_path):
+    """``load`` picks ``NovaStaParams`` for non-.star extensions."""
+    cfg = tmp_path / "params.txt"
+    cfg.write_text("iter 1\nstartIndex 1\nconeAngle 30\n")
+    loaded = StaParameters.load(str(cfg))
+    assert isinstance(loaded, NovaStaParams)
+
+
+def test_staparameters_attach_log_populates_df_stats(tmp_path):
+    """``attach_log`` stores the parsed log in ``df_stats``."""
+    log = tmp_path / "out.log"
+    log.write_text("Starting iteration #1\n  RMSE x shift: 0.5\n")
+    p = StaParameters.from_dict(_minimal_params_dict(), sta_type="novasta")
+    out = p.attach_log(str(log))
+    assert p.df_stats is not None
+    assert list(out["iteration"]) == [1]
+
+
+def test_staparameters_attach_fsc_populates_fsc(tmp_path):
+    """``attach_fsc`` parses a CSV-formatted FSC curve into ``self.fsc``."""
+    fsc_path = tmp_path / "fsc.csv"
+    fsc_path.write_text("x,uncorrected_fsc\n0.0,1.0\n0.1,0.9\n0.2,0.4\n")
+    p = StaParameters.from_dict(_minimal_params_dict(), sta_type="novasta")
+    out = p.attach_fsc(str(fsc_path), pixel_size=3.0, box_size=128)
+    assert p.fsc is not None
+    assert "uncorrected_fsc" in out.columns
+
+
+def test_stopgapparams_from_file_loads_subtomo_parameters(tmp_path):
+    """Round-trip a StopgapParams through write_out → from_file."""
+    nova = StaParameters.from_dict(_minimal_params_dict(), sta_type="novasta")
+    sg = nova.to_stopgap()
+    star_path = tmp_path / "params.star"
+    sg.write_out(str(star_path))
+    loaded = StopgapParams.from_file(str(star_path))
+    assert isinstance(loaded, StopgapParams)
+    assert loaded.num_iterations == sg.num_iterations

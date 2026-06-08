@@ -312,5 +312,69 @@ class TestMdocWithFiles:
         result_from_obj = mdoc.split_mdoc_file(original)
         assert len(result_from_obj) == len(original.imgs)
 
+    # ----------------------------------------------------------------------
+    # Direct coverage for ZValue/feature lookup helpers + keep_images
+    # ----------------------------------------------------------------------
+
+    def test_get_image_feature(self, mdoc_file):
+        """Single-column accessor returns a pandas Series for an existing column."""
+        m = mdoc.Mdoc(mdoc_file)
+        s = m.get_image_feature("TiltAngle")
+        assert isinstance(s, pd.Series)
+        assert len(s) == len(m.imgs)
+        np.testing.assert_allclose(s.values, m.imgs["TiltAngle"].values)
+
+    def _make_zvalue_mdoc(self):
+        """Build a small ZValue-style Mdoc in memory so we can exercise the ZValue helpers."""
+        imgs = pd.DataFrame({
+            "ZValue": pd.array([0, 1, 2, 3], dtype="Int64"),
+            "TiltAngle": [-2.0, -1.0, 0.0, 1.0],
+            "Removed": [False, False, False, False],
+        })
+        return mdoc.Mdoc(
+            titles=["Test"],
+            project_info={"PixelSpacing": 1.0},
+            imgs=imgs,
+            section_id="ZValue",
+        )
+
+    def test_get_image_by_zvalue(self):
+        """ZValue lookup returns the single row whose ZValue matches."""
+        m = self._make_zvalue_mdoc()
+        row = m.get_image_by_zvalue(2)
+        assert isinstance(row, pd.DataFrame)
+        assert len(row) == 1
+        assert int(row["ZValue"].iloc[0]) == 2
+
+    def test_get_images_by_zvalues(self):
+        """Multi-ZValue lookup returns all rows matching the requested list."""
+        m = self._make_zvalue_mdoc()
+        rows = m.get_images_by_zvalues([0, 2])
+        assert isinstance(rows, pd.DataFrame)
+        assert set(rows["ZValue"].astype(int)) == {0, 2}
+
+    def test_get_image_by_zvalue_range(self):
+        """ZValue-range lookup is inclusive on both ends."""
+        m = self._make_zvalue_mdoc()
+        rows = m.get_image_by_zvalue_range(1, 3)
+        assert isinstance(rows, pd.DataFrame)
+        assert sorted(rows["ZValue"].astype(int).tolist()) == [1, 2, 3]
+
+    def test_get_images_by_zvalue_ranges_concatenates(self):
+        """A list of ranges concatenates the per-range matches into one DataFrame."""
+        m = self._make_zvalue_mdoc()
+        rows = m.get_images_by_zvalue_ranges([(0, 0), (2, 3)])
+        assert isinstance(rows, pd.DataFrame)
+        assert sorted(rows["ZValue"].astype(int).tolist()) == [0, 2, 3]
+
+    def test_keep_images_unmarks_removed(self, mdoc_file):
+        """``keep_images`` clears the Removed flag for the requested indices."""
+        m = mdoc.Mdoc(mdoc_file)
+        m.remove_image(0)
+        m.remove_image(1)
+        m.keep_images([0, 1])
+        assert not m.imgs.loc[0, "Removed"]
+        assert not m.imgs.loc[1, "Removed"]
+
         with pytest.raises(ValueError):
             mdoc.split_mdoc_file(42)

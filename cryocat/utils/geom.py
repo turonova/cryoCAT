@@ -1,7 +1,11 @@
 import numpy as np
 import pandas as pd
 import re
+from collections.abc import Callable
+from typing import Any
+
 from scipy.spatial.transform import Rotation as srot
+from cryocat.utils import ioutils
 from cryocat.utils.exceptions import UserInputError
 import matplotlib.pyplot as plt
 import os
@@ -33,13 +37,13 @@ class Line:
         Direction vector of the line (not necessarily unit length).
     """
 
-    def __init__(self, starting_point, line_dir):
+    def __init__(self, starting_point: ArrayLike, line_dir: ArrayLike) -> None:
         """
         Parameters
         ----------
-        starting_point : array-like, shape (3,)
+        starting_point : ArrayLike, shape (3,)
             A point on the line.
-        line_dir : array-like, shape (3,)
+        line_dir : ArrayLike, shape (3,)
             Direction vector of the line.
         """
         self.p = starting_point
@@ -61,13 +65,13 @@ class LineSegment(Line):
         Euclidean length of the segment.
     """
 
-    def __init__(self, point1, point2):
+    def __init__(self, point1: ArrayLike, point2: ArrayLike) -> None:
         """
         Parameters
         ----------
-        point1 : array-like, shape (3,)
+        point1 : ArrayLike, shape (3,)
             Start point of the segment.
-        point2 : array-like, shape (3,)
+        point2 : ArrayLike, shape (3,)
             End point of the segment.
         """
         self.p = point1
@@ -90,7 +94,7 @@ class Point3D:
         Coordinate accessors backed by a single ``(3,)`` float64 array.
     """
 
-    def __init__(self, x, y, z):
+    def __init__(self, x: float, y: float, z: float) -> None:
         """
         Parameters
         ----------
@@ -145,7 +149,7 @@ class Point3D:
     def __repr__(self):
         return repr(self._coords)  # will print like a NumPy array
 
-    def _binary_op(self, other, op):
+    def _binary_op(self, other: Any, op: Callable) -> "Point3D":
         if isinstance(other, Point3D):
             other = other._coords
         return Point3D(*op(self._coords, other))
@@ -182,7 +186,12 @@ class Point3D:
             return np.allclose(self._coords, other._coords)
         return False
 
-    def cone_indicator(self, cone_height, cone_radius, axis=None):
+    def cone_indicator(
+        self,
+        cone_height: float,
+        cone_radius: float,
+        axis: ArrayLike | None = None,
+    ) -> bool:
         """Check whether the point lies within a cone whose tip is at the origin.
 
         Parameters
@@ -191,7 +200,7 @@ class Point3D:
             Height of the cone along its axis.
         cone_radius : float
             Radius of the cone's base circle.
-        axis : array-like, shape (3,), optional
+        axis : ArrayLike, shape (3,), optional
             Axis of revolution. Defaults to ``-np.array([0, 0, 1])``.
 
         Returns
@@ -224,7 +233,12 @@ class Point3D:
 
         return height_bool and radial_bool and angular_bool
 
-    def torus_indicator(self, inner_rad, outer_rad, axis=None):
+    def torus_indicator(
+        self,
+        inner_rad: float,
+        outer_rad: float,
+        axis: ArrayLike | None = None,
+    ) -> bool:
         """Check whether the point lies within a solid torus centred at the origin.
 
         Parameters
@@ -233,7 +247,7 @@ class Point3D:
             Inner radius of the solid torus (distance from axis to inner edge).
         outer_rad : float
             Outer radius of the solid torus (distance from axis to outer edge).
-        axis : array-like, shape (3,), optional
+        axis : ArrayLike, shape (3,), optional
             Axis of revolution. The torus lies in the plane perpendicular to this
             axis. Defaults to ``np.array([0, 0, 1])``.
 
@@ -276,12 +290,12 @@ class Point3D:
 
     def torus_section_indicator(
         self,
-        inner_rad,
-        outer_rad,
-        cone_radius,
-        torus_revolution=None,
-        cone_revolution=None,
-    ):
+        inner_rad: float,
+        outer_rad: float,
+        cone_radius: float,
+        torus_revolution: ArrayLike | None = None,
+        cone_revolution: ArrayLike | None = None,
+    ) -> bool:
         """Check whether the point lies in the intersection of a solid torus and a cone.
 
         Parameters
@@ -292,9 +306,9 @@ class Point3D:
             Outer radius of the torus (also used as the cone height).
         cone_radius : float
             Radius of the cone's base circle.
-        torus_revolution : array-like, shape (3,), optional
+        torus_revolution : ArrayLike, shape (3,), optional
             Axis of revolution for the torus. Defaults to ``np.array([0, 0, 1])``.
-        cone_revolution : array-like, shape (3,), optional
+        cone_revolution : ArrayLike, shape (3,), optional
             Axis of revolution for the cone. Defaults to ``np.array([1, 0, 0])``.
 
         Returns
@@ -329,22 +343,22 @@ class Triangle:
         The three vertices of the triangle.
     """
 
-    def __init__(self, a, b, c):
+    def __init__(self, a: ArrayLike, b: ArrayLike, c: ArrayLike) -> None:
         """
         Parameters
         ----------
-        a : array-like, shape (3,)
+        a : ArrayLike, shape (3,)
             First vertex coordinates.
-        b : array-like, shape (3,)
+        b : ArrayLike, shape (3,)
             Second vertex coordinates.
-        c : array-like, shape (3,)
+        c : ArrayLike, shape (3,)
             Third vertex coordinates.
         """
         self.a = Point3D(a[0], a[1], a[2])
         self.b = Point3D(b[0], b[1], b[2])
         self.c = Point3D(c[0], c[1], c[2])
 
-    def _side_lengths(self):
+    def _side_lengths(self) -> tuple[float, float, float]:
         """Return the three side lengths (ab, bc, ca).
 
         Returns
@@ -357,7 +371,7 @@ class Triangle:
         ca = np.linalg.norm(self.a - self.c)
         return ab, bc, ca
 
-    def area(self):
+    def area(self) -> float:
         """Compute the area of the triangle via the cross-product formula.
 
         Returns
@@ -370,7 +384,7 @@ class Triangle:
         cross = np.cross(ab, ac)
         return 0.5 * np.linalg.norm(cross)
 
-    def inner_angles(self):
+    def inner_angles(self) -> tuple[float, float, float]:
         """Compute the three interior angles of the triangle in degrees.
 
         Returns
@@ -388,7 +402,7 @@ class Triangle:
 
         return angle_A, angle_B, angle_C
 
-    def inscribed_circle(self):
+    def inscribed_circle(self) -> tuple["Point3D", float]:
         """Compute the inscribed circle (incircle) of the triangle.
 
         Returns
@@ -405,7 +419,7 @@ class Triangle:
         radius = self.area() * 2 / p
         return center, radius
 
-    def circumcircle_radius(self):
+    def circumcircle_radius(self) -> float:
         """Compute the circumradius of the triangle.
 
         Returns
@@ -418,7 +432,7 @@ class Triangle:
 
         return radius
 
-    def circumcircle(self):
+    def circumcircle(self) -> tuple[Any, float]:
         """Compute the circumscribed circle (circumcircle) of the triangle.
 
         Returns
@@ -472,7 +486,11 @@ class Matrix:
         Number of columns.
     """
 
-    def __init__(self, input_data=None, size=3):
+    def __init__(
+        self,
+        input_data: np.ndarray | None = None,
+        size: int = 3,
+    ) -> None:
         """
         Parameters
         ----------
@@ -502,7 +520,7 @@ class Matrix:
         self.nrow = self.m.shape[0]
         self.ncol = self.m.shape[1]
 
-    def is_SE3(self):
+    def is_SE3(self) -> bool:
         """Check whether the matrix is a valid SE(3) roto-translation.
 
         Returns
@@ -517,7 +535,7 @@ class Matrix:
         else:
             return False
 
-    def is_SO3(self):
+    def is_SO3(self) -> bool:
         """
         Boolean function to check whether an input matrix is a rotation matrix.
         """
@@ -526,7 +544,7 @@ class Matrix:
 
         return np.allclose(det, 1, atol=0.01) and np.allclose(potential_id, np.identity(3), atol=0.01)
 
-    def dual_basis_so3(self):
+    def dual_basis_so3(self) -> np.ndarray:
         """Return the coordinates of a skew-symmetric matrix in the canonical so(3) basis.
 
         Extracts the three independent components ``[m[2,1], m[0,2], m[1,0]]``
@@ -542,7 +560,7 @@ class Matrix:
         coefficients = np.asarray([self.m[2, 1], self.m[0, 2], self.m[1, 0]])
         return coefficients
 
-    def dual_basis_se3(self, index=None):
+    def dual_basis_se3(self, index: int | None = None) -> list | float:
         """Return se(3) coordinates of the matrix, optionally a single component.
 
         The six canonical se(3) basis coefficients are
@@ -568,7 +586,7 @@ class Matrix:
         else:
             return coefficients[index - 1]
 
-    def twist_from_skew_translation(self, translation):
+    def twist_from_skew_translation(self, translation: np.ndarray) -> np.ndarray:
         """Build a twist (se(3) vector) from the skew-symmetric part and a translation.
 
         Parameters
@@ -587,9 +605,32 @@ class Matrix:
 
         return twist
 
-    def add_noise_and_project_to_so3(self, noise_level=0.05, degrees=False):
+    def add_noise_and_project_to_so3(
+        self,
+        noise_level: float = 0.05,
+        degrees: bool = False,
+    ) -> np.ndarray:
         """Add noise to a matrix and project it back to SO(3) using SVD.
-        (Singular value decomp.)
+
+        Parameters
+        ----------
+        noise_level : float, default=0.05
+            Noise magnitude. When ``degrees`` is ``True``, interpreted as a
+            degree value and converted to radians internally. Must be below
+            ``pi`` (the SO(3) injectivity radius) in radians.
+        degrees : bool, default=False
+            If ``True``, ``noise_level`` is treated as a value in degrees.
+
+        Returns
+        -------
+        numpy.ndarray
+            The noisy matrix projected back onto SO(3) via SVD with the
+            determinant adjusted to be ``+1``.
+
+        Raises
+        ------
+        ValueError
+            If the (radian) noise level is not below ``pi``.
         """
         # Make sure that noise level is small enough
         noise_threshold = np.pi  # injectvity radius of SO(3)
@@ -614,7 +655,7 @@ class Matrix:
         else:
             raise ValueError(f"Noise level should be below {noise_threshold} for orientational noise.")
 
-    def matrix_power(self, k):
+    def matrix_power(self, k: int) -> np.ndarray:
         """Compute the k-th power of the wrapped square matrix.
 
         Parameters
@@ -650,7 +691,7 @@ class Matrix:
         else:
             raise TypeError("mat has to be np.ndarray.")
 
-    def SE3_cleanup(self):
+    def SE3_cleanup(self) -> np.ndarray | None:
         """Clean up floating-point rounding errors in an SE(3) matrix.
 
         Zeros out entries whose absolute value is below 1e-15.
@@ -675,7 +716,10 @@ class Matrix:
         else:
             print("Input matrix is not rototranslation")
 
-    def special_euclidean_from_rot_translation(self, translation):
+    def special_euclidean_from_rot_translation(
+        self,
+        translation: np.ndarray,
+    ) -> np.ndarray:
         """Combine the wrapped SO(3) matrix with a translation to form an SE(3) matrix.
 
         Parameters
@@ -695,13 +739,19 @@ class Matrix:
 
         return np.vstack((top_portion, bottom_portion))
 
-    def cone_in_plane_decomp(self):
-        """
-        Decomposes input rotation matrix into matrices
-        cone, in_plane, where cone describes cone-rotation
-        and in_plane describes in-plane-rotation.
+    def cone_in_plane_decomp(self) -> tuple[np.ndarray, np.ndarray]:
+        """Decompose the wrapped rotation matrix into a cone + in-plane factor.
 
-        It holds: rot_matrix == in_plane @ cone
+        ``rot_matrix == in_plane @ cone`` holds, where ``cone`` describes the
+        cone-rotation (deviation of the local Z axis from the reference axis)
+        and ``in_plane`` describes the in-plane rotation about the (rotated)
+        local Z axis.
+
+        Returns
+        -------
+        cone, in_plane : tuple of numpy.ndarray
+            Two ``(3, 3)`` SO(3) matrices whose product equals the input
+            rotation.
         """
 
         eulers = srot.from_matrix(self.m).as_euler("zxz")
@@ -715,7 +765,7 @@ class Matrix:
 
         return cone, in_plane
 
-    def in_plane_angle(self):
+    def in_plane_angle(self) -> float:
         """Extract the in-plane rotation angle (first ZXZ Euler angle) in radians.
 
         Returns
@@ -1159,6 +1209,7 @@ def euler_angles_to_normals(angles: EulerAngles) -> np.ndarray:
     ndarray (n,3)
         Unit length z-normal vectors associated to input Euler angles.
     """
+    angles = ioutils.euler_angles_load(angles)
     rotations = srot.from_euler("zxz", angles=angles, degrees=True)
     points = rotations_to_z_normals(rotations)
     n_length = np.linalg.norm(points, axis=1, keepdims=True)  # per-row norm; shape (N, 1)
@@ -2413,7 +2464,10 @@ def construct_rays(
     return np.hstack([points, ray_directions])
 
 
-def ray_ray_intersection_3d(starting_points, ending_points):
+def ray_ray_intersection_3d(
+    starting_points: np.ndarray,
+    ending_points: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
     """Calculate the intersection point and distances from the intersection to each line for a set of 3D rays.
 
     Parameters
