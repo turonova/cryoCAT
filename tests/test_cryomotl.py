@@ -5739,18 +5739,4 @@ class TestMotlConverterKwargs:
     def test_conversion(self, sample_motl_data1, output_motl_type, relion_version, expected_output_motl_type):
         output_motl = cryomotl.motl_converter_kwargs(sample_motl_data1, output_motl_type=output_motl_type, relion_version=relion_version)
         assert isinstance(output_motl, expected_output_motl_type)
-    
-
-
-
-    
-            
-    
-
-
-
-
-
-
-
-#motl = Motl(copy.deepcopy(sample_motl_data1))
+   

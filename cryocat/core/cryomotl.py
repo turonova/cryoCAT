@@ -5617,6 +5617,8 @@ def motl_converter_kwargs(
     -------
     ValueError:
         If an invalid output_motl_type is provided, if the relion_version is inconsistent with the output_motl_type, or if invalid kwargs are provided for the specified output_motl_type.
+    UserWarning:
+        If the provided relion_version is ignored due to the specified output_motl_type being "relion5" or "relion5_1", or if a relion_version is provided but not relevant for the specified output_motl_type.
     """
     # map motl types and acceptable kwargs
     motl_type_to_kwargs = {"emmotl": [],

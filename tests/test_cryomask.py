@@ -129,9 +129,10 @@ def test_shrink_full_mask(ref_masks, mask, factor):
     assert np.allclose(actual, expected, atol=1e-8)
 
 
-def test_rotate(ref_masks):
+@pytest.mark.parametrize("angles", [[0.3, 0.2, 0.1], (0.3, 0.2, 0.1), np.asarray([0.3, 0.2, 0.1])])
+def test_rotate(ref_masks, angles):
     mask = spherical_mask([4, 6, 8], 2, [1, 3, 3], 0.5, False)
-    actual = rotate(mask, [0.3, 0.2, 0.1])
+    actual = rotate(mask, angles)
     expected = ref_masks["sm50r302010.em"]
     assert np.allclose(actual, expected, atol=1e-8)
 
@@ -268,6 +269,7 @@ def test_parse_shape_string():
     assert parse_shape_string("s_shell_r15_s3") == ("s_shell", [15, 3])
     assert parse_shape_string("ellipsoid_rx4_ry5_rz6") == ("ellipsoid", [4, 5, 6])
     assert parse_shape_string("e_shell_rx8_ry9_rz10_s2") == ("e_shell", [8, 9, 10, 2])
+    assert parse_shape_string("icosahedral_r8") == ("icosahedral", [8])
 
     # Invalid cases
     with pytest.raises(ValueError):
@@ -289,9 +291,10 @@ def test_parse_shape_string():
         (f"sphere_r5", 20, (5,)),  # Sphere with radius 5
         (f"cylinder_r5_h10", 20, (5, 10)),  # Cylinder with radius 5, height 10
         (f"ellipsoid_rx5_ry8_rz10", 20, (5, 8, 10)),  # Ellipsoid with radii 5, 8, 10
+        (f"icosahedral_r7", 20, (7,)),  # Icosahedral with radius 5
     ],
 )
-def test_generate_mask(shape_string, mask_size, expected_radii):
+def test_generate_mask_shape_and_values(shape_string, mask_size, expected_radii):
 
     mask = generate_mask(shape_string, mask_size=mask_size)
 
@@ -301,6 +304,17 @@ def test_generate_mask(shape_string, mask_size, expected_radii):
     # Ensure the mask contains only 0s and 1s
     assert np.unique(mask).tolist() == [0, 1], "Mask should contain only 0s and 1s"
 
+
+@pytest.mark.parametrize(
+    "shape_string, mask_size, expected_radii",
+    [
+        (f"sphere_r5", 20, (5,)),  # Sphere with radius 5
+        (f"cylinder_r5_h10", 20, (5, 10)),  # Cylinder with radius 5, height 10
+        (f"ellipsoid_rx5_ry8_rz10", 20, (5, 8, 10)),  # Ellipsoid with radii 5, 8, 10
+    ],
+)
+def test_generate_mask_check_values(shape_string, mask_size, expected_radii):
+    mask = generate_mask(shape_string, mask_size=mask_size)
     # Get center of the mask
     center = mask_size // 2
     cx, cy, cz = center, center, center  # Center coordinates

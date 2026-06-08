@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 from cryocat.analysis import tmana
+from cryocat.core import cryomotl
 
 # IMPORTANT: pytest-mock needs to be installed within environment to run these tests
 
@@ -488,3 +489,104 @@ class TestGetCentralPlaneLabels:
     def test_mask_nonzero_near_peak(self, cubic_blob):
         mask, _ = tmana.get_central_plane_labels(cubic_blob, (10, 10, 10))
         assert mask.sum() > 0
+
+
+# -- extract_peak_orientations ------------------------------------------------------------
+
+class TestExtractPeakOrientations:
+
+    @pytest.fixture
+    def peak_coords(self):
+        """Numpy ndarray of shape (2, 3) with two sets of 3D coordinates."""
+        peak_coords = np.asarray([[5, 5, 5],[10, 10, 10]])
+        return peak_coords
+
+    def _make_inputs(self, peak_coords, shape=(20, 20, 20)):
+        #scores = np.zeros(shape)
+        #scores[10, 10, 10] = 0.9
+        #scores[5, 5, 5] = 0.8
+        angles_map = np.zeros(shape)
+        angles_map[peak_coords[0]] = 1
+        angles_map[peak_coords[1]] = 1
+        anglist = np.zeros((3, 3))  # rows 0-2
+        anglist[1] = [10, 20, 30]
+        return angles_map, anglist
+    
+    def _patch(self, mocker, amap, anglist):
+        mocker.patch("cryocat.core.cryomap.read", return_value=amap)
+        mocker.patch("cryocat.utils.ioutils.euler_angles_load", return_value=anglist)
+    
+    def test_returns_orientations_for_peaks(self, mocker, peak_coords):
+        angles_map, anglist = self._make_inputs(peak_coords)
+        self._patch(mocker, angles_map, anglist)
+        orientations = tmana.extract_peak_orientations(peak_coords, "a.em", "al.npy")
+        assert orientations[0].shape == (2,)
+        assert np.allclose(orientations[0], 10)
+        assert orientations[1].shape == (2,)
+        assert np.allclose(orientations[1], 20)
+        assert orientations[2].shape == (2,)
+        assert np.allclose(orientations[2], 30)
+
+    def test_warning_for_non_c_symmetry(self, mocker, peak_coords):
+        angles_map, anglist = self._make_inputs(peak_coords)
+        self._patch(mocker, angles_map, anglist)
+        with pytest.warns(UserWarning):
+            tmana.extract_peak_orientations(peak_coords, "a.em", "al.npy", symmetry="d2")
+
+
+# -- scores_extract_particles_around_positions ------------------------------------------------------------
+
+class TestScoresExtractParticlesAroundPositions:
+
+    @pytest.fixture
+    def input_motl_data(self):
+        """Motl.df with coordinates of particles to extract around."""
+        input_motl = cryomotl.Motl()
+        input_motl.fill(
+            {
+            "x": [6.5, 12],
+            "y": [6.5, 12],
+            "z": [6.5, 12],
+            "class": 1,
+            "subtomo_id":[1,2]
+            }
+        )
+        return input_motl
+    
+    def _make_inputs(self, shape=(20, 20, 20)):
+        scores = np.zeros(shape)
+        scores[10, 10, 10] = 0.9
+        scores[5, 5, 5] = 0.8
+        angles_map = np.zeros(shape)
+        angles_map[5, 5, 5] = 1
+        angles_map[10, 10, 10] = 1
+        anglist = np.zeros((3, 3))  # rows 0-2
+        anglist[1] = [10, 20, 30]
+        return scores, angles_map, anglist
+
+    def _patch(self, mocker, scores, amap, anglist):
+        mocker.patch("cryocat.core.cryomap.read", side_effect=[scores, amap])
+        mocker.patch("cryocat.utils.ioutils.euler_angles_load", return_value=anglist) 
+
+    def test_extracts_particles_around_positions(self, mocker, input_motl_data):
+        scores, amap, anglist = self._make_inputs()
+        self._patch(mocker, scores, amap, anglist)
+        motl = tmana.scores_extract_particles_around_positions(
+            "s.em", "a.em", "al.npy", input_motl_data, radius=3, tomo_id=1
+        )
+        assert motl.df.shape[0] == 2
+        assert (np.all(motl.df["tomo_id"] == 1))
+        assert np.array_equal(motl.df["score"], [0.8, 0.9])
+        assert np.array_equal(motl.df["x"], [6, 11])
+        assert np.array_equal(motl.df["y"], [6, 11])
+        assert np.array_equal(motl.df["z"], [6, 11])
+        assert (np.all(motl.df["phi"] == 10))
+        assert (np.all(motl.df["psi"] == 30))
+        assert (np.all(motl.df["theta"] == 20))
+
+        
+
+
+
+
+    
