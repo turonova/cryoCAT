@@ -4506,24 +4506,42 @@ def _motl_kind_tag(mode: str) -> str:
     }.get(mode, "thickness")
 
 
-def _motl_surface_xyz_columns(df: pd.DataFrame, side: int) -> tuple[str, str, str]:
+def _motl_kind_tag_from_column(score_column: str) -> str:
+    return {
+        "membrane_thickness_nm": "inflection_points",
+        "minima_separation_nm": "minima",
+        "match_distance_nm": "segmentation_boundaries",
+    }.get(score_column, "thickness")
+
+
+def _motl_surface_xyz_columns(
+    df: pd.DataFrame, side: int, use_corrected_coords: bool = True
+) -> tuple[str, str, str]:
     """
     Pick ``x,y,z`` columns for one surface: profile-corrected integers when present,
     else integer mesh columns, else float subvoxel mesh columns.
+
+    Parameters
+    ----------
+    use_corrected_coords : bool, default True
+        When True, prefer ``x{s}_corr_voxel_int`` (inflection-point positions).
+        When False, skip the corrected columns and use the original matched-point
+        voxel coordinates (``x{s}_voxel`` etc.) instead.
     """
     s = str(side)
-    corr = (f"x{s}_corr_voxel_int", f"y{s}_corr_voxel_int", f"z{s}_corr_voxel_int")
-    if all(c in df.columns for c in corr):
-        return corr
+    if use_corrected_coords:
+        corr = (f"x{s}_corr_voxel_int", f"y{s}_corr_voxel_int", f"z{s}_corr_voxel_int")
+        if all(c in df.columns for c in corr):
+            return (f"x{s}_corr_voxel_int", f"y{s}_corr_voxel_int", f"z{s}_corr_voxel_int")
     ints = (f"x{s}_voxel_int", f"y{s}_voxel_int", f"z{s}_voxel_int")
     if all(c in df.columns for c in ints):
-        return ints
+        return (f"x{s}_voxel_int", f"y{s}_voxel_int", f"z{s}_voxel_int")
     floats = (f"x{s}_voxel", f"y{s}_voxel", f"z{s}_voxel")
     if all(c in df.columns for c in floats):
-        return floats
+        return (f"x{s}_voxel", f"y{s}_voxel", f"z{s}_voxel")
     raise ValueError(
         f"Missing coordinate columns for surface {side}: expected one of "
-        f"{corr}, {ints}, or {floats}"
+        f"corr_voxel_int, voxel_int, or voxel columns"
     )
 
 
@@ -4532,7 +4550,7 @@ def _build_surface_motl(
     valid_mask: np.ndarray,
     xyz_cols: tuple[str, str, str],
     normal_cols: tuple[str, str, str],
-    score_col: str = "thickness_nm",
+    score_col: str = "membrane_thickness_nm",
 ) -> "cryomotl.Motl":
     """Build a Motl from one surface's coordinate, normal, and score columns."""
     motl = cryomotl.Motl()
@@ -4541,7 +4559,7 @@ def _build_surface_motl(
     mdf["x"] = df.loc[valid_mask, xc].astype(float).to_numpy()
     mdf["y"] = df.loc[valid_mask, yc].astype(float).to_numpy()
     mdf["z"] = df.loc[valid_mask, zc].astype(float).to_numpy()
-    mdf["score"] = df.loc[valid_mask, score_col]
+    mdf["score"] = pd.to_numeric(df.loc[valid_mask, score_col], errors="coerce").to_numpy()
     normals = np.column_stack([df.loc[valid_mask, c].to_numpy() for c in normal_cols])
     ea = geom.normals_to_euler_angles(normals, output_order="zxz")
     mdf["phi"], mdf["theta"], mdf["psi"] = ea[:, 0], ea[:, 1], ea[:, 2]
@@ -4553,7 +4571,8 @@ def create_thickness_motls(
     thickness_csv,
     sample_fraction=None,
     random_seed=42,
-    score_column="thickness_nm",
+    score_column="membrane_thickness_nm",
+    use_corrected_coords=True,
 ):
     """
     Convert thickness measurements to motive lists for both membrane surfaces.
@@ -4562,9 +4581,11 @@ def create_thickness_motls(
     (profile-resolved boundaries), else ``x{1,2}_voxel_int``, else float
     ``x{1,2}_voxel`` mesh coordinates.
 
-    **Score.** The motl ``score`` column is filled from ``score_column`` (default
-    ``"thickness_nm"``).  Pass ``score_column="minima_separation_nm"`` when working
-    with cohorts where ``thickness_nm`` is NaN (``minima_only`` rows).
+    **Score / row filtering.** Only rows with a finite value in ``score_column`` are
+    written — NaN rows are dropped silently before the motl is built. With the
+    default ``score_column="membrane_thickness_nm"``, this means ``minima_only``
+    rows (which have NaN there) are automatically excluded. To include minima
+    distances instead, pass ``score_column="minima_separation_nm"``.
 
     Parameters
     ----------
@@ -4574,8 +4595,12 @@ def create_thickness_motls(
         Fraction of points to sample (between 0 and 1)
     random_seed : int
         Random seed for reproducible subsampling
-    score_column : str
-        DataFrame column to use for the motl ``score`` field.
+    score_column : str, default "membrane_thickness_nm"
+        DataFrame column to use for the motl ``score`` field. Rows where this
+        column is NaN are excluded from the output.
+    use_corrected_coords : bool, default True
+        When True, use inflection-point positions (``x{s}_corr_voxel_int``).
+        Pass False to use the original matched-point voxel coordinates instead.
 
     Returns
     -------
@@ -4583,6 +4608,11 @@ def create_thickness_motls(
         Motive lists for surface 1 and surface 2
     """
     df, _ = _ensure_thickness_nm_column(pd.read_csv(thickness_csv))
+
+    # Drop rows where the chosen score column is NaN (e.g. minima_only rows
+    # when score_column="membrane_thickness_nm").
+    finite_mask = pd.to_numeric(df[score_column], errors="coerce").notna()
+    df = df.loc[finite_mask].reset_index(drop=True)
 
     valid_mask = np.ones(len(df), dtype=bool)
 
@@ -4597,8 +4627,8 @@ def create_thickness_motls(
         subsample_mask[sampled_indices] = True
         valid_mask = subsample_mask
 
-    x1c, y1c, z1c = _motl_surface_xyz_columns(df, 1)
-    x2c, y2c, z2c = _motl_surface_xyz_columns(df, 2)
+    x1c, y1c, z1c = _motl_surface_xyz_columns(df, 1, use_corrected_coords=use_corrected_coords)
+    x2c, y2c, z2c = _motl_surface_xyz_columns(df, 2, use_corrected_coords=use_corrected_coords)
 
     motl1 = _build_surface_motl(
         df, valid_mask, (x1c, y1c, z1c), ("normal1_x", "normal1_y", "normal1_z"), score_column
@@ -4613,32 +4643,34 @@ def save_thickness_motls(
     output_path=None,
     sample_fraction=None,
     *,
-    thickness_mode: Literal[
-        "auto", "inflection_points", "minima", "segmentation_boundaries"
-    ] = "auto",
+    score_column: str = "membrane_thickness_nm",
+    use_corrected_coords: bool = True,
 ):
     """
     Save thickness measurements as motive lists for visualization.
 
-    Output names include a short kind tag (``inflection_points``, ``minima``,
-    ``segmentation_boundaries``) inferred from the input CSV path when
-    ``thickness_mode="auto"``.  Auto-inference covers ``*_thickness.csv``
-    (→ ``inflection_points``) and ``*_matched_points*.csv``
-    (→ ``segmentation_boundaries``).  For ``minima`` cohorts pass
-    ``thickness_mode="minima"`` explicitly.
+    The output filename tag is derived automatically from ``score_column``:
+    ``membrane_thickness_nm`` → ``inflection_points``,
+    ``minima_separation_nm`` → ``minima``,
+    ``match_distance_nm`` → ``segmentation_boundaries``,
+    anything else → ``thickness``.
 
     Parameters
     ----------
     thickness_csv : str
-        Path to CSV file with thickness measurements
+        Path to CSV file with thickness measurements.
     output_path : str or Path, optional
-        Directory to save output files. If None, saves in current directory.
+        Directory to save output files. Defaults to the CSV's directory.
     sample_fraction : float, optional
-        Fraction of points to sample (for creating reduced dataset)
-    thickness_mode
-        Selects the filename tag when not ``auto``; ``auto`` infers it from the CSV basename.
-        Motl coordinates and scores always follow the columns in the CSV
-        (see :func:`create_thickness_motls`).
+        Fraction of points to sample for creating a reduced motl alongside the
+        full one.
+    score_column : str, default "membrane_thickness_nm"
+        Column written to the motl ``score`` field. Rows where this column is NaN
+        are excluded. Pass ``"minima_separation_nm"`` to export minima distances
+        instead (includes ``minima_only`` rows).
+    use_corrected_coords : bool, default True
+        When True, use inflection-point positions (``x{s}_corr_voxel_int``).
+        Pass False to use the original matched-point voxel coordinates instead.
     """
     csv_p = Path(thickness_csv)
     # Generate output prefix: strip common memthick CSV suffixes from the *basename*
@@ -4661,12 +4693,7 @@ def save_thickness_motls(
         # Prepend output directory to filenames
         output_prefix = str(output_dir / Path(output_prefix).name)
 
-    mode_key = (
-        thickness_mode
-        if thickness_mode != "auto"
-        else _infer_thickness_motl_mode(csv_p)
-    )
-    kt = _motl_kind_tag(mode_key)
+    kt = _motl_kind_tag_from_column(score_column)
 
     def _surface_em_path(surface: int, subsampled: bool = False) -> str:
         base = f"{output_prefix}_{kt}_surface{surface}"
@@ -4676,6 +4703,8 @@ def save_thickness_motls(
     motl1, motl2 = create_thickness_motls(
         thickness_csv,
         sample_fraction=None,
+        score_column=score_column,
+        use_corrected_coords=use_corrected_coords,
     )
     motl1.write_out(_surface_em_path(1))
     motl2.write_out(_surface_em_path(2))
@@ -4685,6 +4714,8 @@ def save_thickness_motls(
         sub_motl1, sub_motl2 = create_thickness_motls(
             thickness_csv,
             sample_fraction=sample_fraction,
+            score_column=score_column,
+            use_corrected_coords=use_corrected_coords,
         )
         sub_motl1.write_out(_surface_em_path(1, subsampled=True))
         sub_motl2.write_out(_surface_em_path(2, subsampled=True))
