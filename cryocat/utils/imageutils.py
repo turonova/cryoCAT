@@ -14,10 +14,10 @@ from cryocat._types import TripletLike
 
 from cryocat._types import EulerAngles, Symmetry
 
-
 # ---------------------------------------------------------------------------
 # §3.1  Frequency / phase
 # ---------------------------------------------------------------------------
+
 
 def compute_frequency_array(shape: tuple[int, ...], pixel_size: float) -> np.ndarray:
     """Compute the frequency array for a given shape and pixel size.
@@ -85,6 +85,7 @@ def randomize_phases(volume: np.ndarray, fourier_cutoff: int) -> np.ndarray:
 # §3.2  Thresholding
 # ---------------------------------------------------------------------------
 
+
 def otsu_threshold(input_values: np.ndarray) -> float:
     """Calculate the Otsu threshold for binarization based on the histogram of input values.
 
@@ -135,6 +136,7 @@ def otsu_threshold(input_values: np.ndarray) -> float:
 # §3.3  Filter primitives
 # ---------------------------------------------------------------------------
 
+
 def get_filter_radius(
     edge_size: int,
     fourier_pixels: int | None,
@@ -181,6 +183,7 @@ def get_filter_radius(
 # §3.4  Frequency-space filters
 # ---------------------------------------------------------------------------
 
+
 def gaussian_smooth(volume: np.ndarray, sigma: float) -> np.ndarray:
     """Apply Gaussian smoothing to an array.
 
@@ -207,6 +210,7 @@ def _spherical_mask_nd(
     shape: tuple[int, ...],
     radius: float,
     gaussian: float = 0.0,
+    center: TripletLike | None = None,
 ) -> np.ndarray:
     """Create a centred spherical (or hyperspherical) binary mask with optional Gaussian softening.
 
@@ -221,8 +225,8 @@ def _spherical_mask_nd(
         Radius in voxels of the binary sphere before any blurring.
     gaussian : float, default=0.0
         Sigma of the Gaussian softening.  0 means no blur.
-    center : int or ndarray or 3-tuple or 3-list, optional
-        The center coordinates of the sphere in the mask box. 
+    center : TripletLike
+        The center coordinates of the sphere in the mask box.
 
     Returns
     -------
@@ -234,7 +238,7 @@ def _spherical_mask_nd(
         center = shape // 2
     else:
         center = geom.as_triplet(center)
-    
+
     grids = np.mgrid[tuple(slice(0, s) for s in shape)]
     dist = np.sqrt(sum((g - c) ** 2 for g, c in zip(grids, center)))
     mask = (dist <= radius).astype(np.float64)
@@ -279,13 +283,13 @@ def apply_highpass(volume: np.ndarray, radius: int, gaussian: float = 2) -> np.n
     ndarray
         Highpass-filtered volume (real-valued, same shape as *volume*).
     """
-    hp_mask = np.fft.ifftshift(
-        np.ones(volume.shape) - _spherical_mask_nd(volume.shape, radius, gaussian=gaussian)
-    )
+    hp_mask = np.fft.ifftshift(np.ones(volume.shape) - _spherical_mask_nd(volume.shape, radius, gaussian=gaussian))
     return np.real(np.fft.ifftn(np.fft.fftn(volume) * hp_mask))
 
 
-def apply_bandpass(volume: np.ndarray, lp_radius: int, hp_radius: int, lp_gaussian: float = 3, hp_gaussian: float = 2) -> np.ndarray:
+def apply_bandpass(
+    volume: np.ndarray, lp_radius: int, hp_radius: int, lp_gaussian: float = 3, hp_gaussian: float = 2
+) -> np.ndarray:
     """Apply a bandpass filter to a volume in Fourier space.
 
     Parameters
@@ -315,6 +319,7 @@ def apply_bandpass(volume: np.ndarray, lp_radius: int, hp_radius: int, lp_gaussi
 # ---------------------------------------------------------------------------
 # §3.5  2-D image operations
 # ---------------------------------------------------------------------------
+
 
 def rotate_2d(image: np.ndarray, angle: float, fill_mode: str = "constant", fill_value: float = 0.0) -> np.ndarray:
     """Rotate an ndarray image by a specified angle.
@@ -348,6 +353,7 @@ def rotate_2d(image: np.ndarray, angle: float, fill_mode: str = "constant", fill
 # ---------------------------------------------------------------------------
 # §3.6  CTF
 # ---------------------------------------------------------------------------
+
 
 def compute_ctf_1d(
     length: int,
@@ -405,7 +411,9 @@ def compute_ctf_1d(
     return ctf
 
 
-def compute_ctf_2d(defocus: np.ndarray, pshift: np.ndarray, famp: float, cs: float, evk: float, f: np.ndarray) -> np.ndarray:
+def compute_ctf_2d(
+    defocus: np.ndarray, pshift: np.ndarray, famp: float, cs: float, evk: float, f: np.ndarray
+) -> np.ndarray:
     """Compute Contrast Transfer Function (CTF) for an acquisition scheme.
 
     This function evaluates the 1D CTF over a 1D spatial frequency array
@@ -499,16 +507,7 @@ def dose_attenuator(dose: float, freq_array: np.ndarray) -> np.ndarray:
         Attenuator with the same shape as ``freq_array``. Each value lies in
         ``(0, 1]``; ``dose=0`` degenerates to all ones.
     """
-    return np.exp(
-        -dose
-        / (
-            2.0
-            * (
-                _DOSE_ATTENUATOR_A * (freq_array ** _DOSE_ATTENUATOR_B)
-                + _DOSE_ATTENUATOR_C
-            )
-        )
-    )
+    return np.exp(-dose / (2.0 * (_DOSE_ATTENUATOR_A * (freq_array**_DOSE_ATTENUATOR_B) + _DOSE_ATTENUATOR_C)))
 
 
 def generate_ctf_slice(wl: pd.DataFrame, slice_idx: list, slice_weight: np.ndarray, binning: int | float) -> np.ndarray:
@@ -565,7 +564,7 @@ def generate_ctf_slice(wl: pd.DataFrame, slice_idx: list, slice_weight: np.ndarr
     # calculate frequency arrays of tomogram and template sizes
     freqs_full = compute_frequency_array((full_size,), pixelsize)
     freqs_crop = compute_frequency_array((tmpl_size,), pixelsize)
-    freqs_crop = freqs_crop[tmpl_size // 2:]  # only need half of the freq array
+    freqs_crop = freqs_crop[tmpl_size // 2 :]  # only need half of the freq array
 
     # selects the central part (len = tmpl length) of the frequency array from
     # the full frequency array and wraps it to match FFT layout
@@ -589,7 +588,7 @@ def generate_ctf_slice(wl: pd.DataFrame, slice_idx: list, slice_weight: np.ndarr
     ft_ctf = np.fft.fft(full_ctf, axis=1)
     ft_ctf = ft_ctf[:, f_idx] * tmpl_size / full_size
     crop_ctf = np.real(np.fft.ifft(ft_ctf, axis=1))
-    crop_ctf = crop_ctf[:, tmpl_size // 2:]
+    crop_ctf = crop_ctf[:, tmpl_size // 2 :]
 
     # init an empty vol to save ctf values
     ctf_filt = np.zeros_like(slice_weight)
@@ -617,6 +616,7 @@ def generate_ctf_slice(wl: pd.DataFrame, slice_idx: list, slice_weight: np.ndarr
 # ---------------------------------------------------------------------------
 # §3.7  Wiener deconvolution
 # ---------------------------------------------------------------------------
+
 
 def compute_wiener_1d(
     interp_dim: int,
@@ -703,7 +703,7 @@ def apply_wiener_radial(volume: np.ndarray, wiener_1d: np.ndarray, interp_dim: i
     s = volume.shape
     grids = np.meshgrid(*[np.arange(-d / 2, d / 2) for d in s], indexing="ij")
     normalized = [g / max(1, abs(d / 2)) for g, d in zip(grids, s)]
-    r = np.minimum(1, np.sqrt(sum(g ** 2 for g in normalized)))
+    r = np.minimum(1, np.sqrt(sum(g**2 for g in normalized)))
     r = np.fft.ifftshift(r)
     freq = np.arange(0, 1, 1 / interp_dim)
     ramp = np.interp(r.flatten(), freq, wiener_1d).reshape(r.shape)
@@ -713,6 +713,7 @@ def apply_wiener_radial(volume: np.ndarray, wiener_1d: np.ndarray, interp_dim: i
 # ---------------------------------------------------------------------------
 # §3.8  Cross-correlation
 # ---------------------------------------------------------------------------
+
 
 def calculate_conjugates(
     volume: np.ndarray,
@@ -840,6 +841,7 @@ def calculate_flcf(
 # §3.9  Image analysis — thresholding, peak finding, profile extraction
 # ---------------------------------------------------------------------------
 
+
 def triangle_threshold(values: np.ndarray) -> float:
     """Compute a threshold from an array using the triangle / chord method.
 
@@ -899,7 +901,7 @@ def find_peak_3d(volume: np.ndarray, search_radius: int = 20, center: TripletLik
     search_radius : int, default=20
         Radius in voxels of the spherical search region centred on the volume.
     center : int or ndarray or 3-tuple or 3-list, optional
-        The center coordinates of the spherical region. 
+        The center coordinates of the spherical region.
 
     Returns
     -------
@@ -909,10 +911,10 @@ def find_peak_3d(volume: np.ndarray, search_radius: int = 20, center: TripletLik
     """
     shape = np.asarray(volume.shape, dtype=int)
     if center is None:
-        center = shape // 2 #returns array
+        center = shape // 2  # returns array
     else:
-        center = geom.as_triplet(center) #returns array
-    
+        center = geom.as_triplet(center)  # returns array
+
     mask = _spherical_mask_nd(volume.shape, search_radius, center=center)
     masked = volume * mask
     return np.unravel_index(np.argmax(masked), masked.shape)
@@ -935,11 +937,13 @@ def extract_orthogonal_lines_1d(volume: np.ndarray, center: tuple[int, ...]) -> 
         column 1 along dim1, column 2 along dim2.  N is the length of the
         corresponding axis (requires a cubic volume for all columns to share N).
     """
-    profiles = np.vstack([
-        volume[:, center[1], center[2]],
-        volume[center[0], :, center[2]],
-        volume[center[0], center[1], :],
-    ])
+    profiles = np.vstack(
+        [
+            volume[:, center[1], center[2]],
+            volume[center[0], :, center[2]],
+            volume[center[0], center[1], :],
+        ]
+    )
     return profiles.T
 
 
@@ -960,11 +964,14 @@ def extract_orthogonal_slices_2d(volume: np.ndarray, center: tuple[int, ...]) ->
         ``[..., 1]`` = YZ plane (fixed dim0=center[0]),
         ``[..., 2]`` = XZ plane (fixed dim1=center[1]).
     """
-    return np.stack([
-        volume[:, :, center[2]],
-        volume[center[0], :, :],
-        volume[:, center[1], :],
-    ], axis=2)
+    return np.stack(
+        [
+            volume[:, :, center[2]],
+            volume[center[0], :, :],
+            volume[:, center[1], :],
+        ],
+        axis=2,
+    )
 
 
 def gaussian_threshold(volume: np.ndarray) -> float:
@@ -1007,6 +1014,7 @@ def gaussian_threshold(volume: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 # §3.10  Labeling and morphology
 # ---------------------------------------------------------------------------
+
 
 def label_connected_components(volume: np.ndarray, connectivity: int = 1) -> np.ndarray:
     """Label connected regions in a binary or integer array.
@@ -1065,7 +1073,9 @@ def get_label_bounding_box(labeled: np.ndarray) -> pd.DataFrame:
     return pd.DataFrame(_skimage_measure.regionprops_table(labeled, properties=("label", "bbox")))
 
 
-def morphology_open_close(volume: np.ndarray, footprint: np.ndarray | None = None, operation: str = "open") -> np.ndarray:
+def morphology_open_close(
+    volume: np.ndarray, footprint: np.ndarray | None = None, operation: str = "open"
+) -> np.ndarray:
     """Apply binary morphological opening or closing to a volume.
 
     Parameters
@@ -1099,6 +1109,7 @@ def morphology_open_close(volume: np.ndarray, footprint: np.ndarray | None = Non
 # ---------------------------------------------------------------------------
 # §3.11  Mask statistics
 # ---------------------------------------------------------------------------
+
 
 def mask_voxel_count_and_bbox(mask: np.ndarray, threshold: float | None = None) -> tuple[int, np.ndarray]:
     """Count non-zero voxels and compute the bounding box of a mask.
@@ -1141,6 +1152,7 @@ def mask_voxel_count_and_bbox(mask: np.ndarray, threshold: float | None = None) 
 # ---------------------------------------------------------------------------
 # §  Array-operation primitives (pure compute, no I/O)
 # ---------------------------------------------------------------------------
+
 
 def normalize_array(volume: np.ndarray) -> np.ndarray:
     """Z-score normalize *volume* using only finite values.

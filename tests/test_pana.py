@@ -28,9 +28,18 @@ def test_create_subtomograms(mocker, csv_file):
 
     df = pana.create_subtomograms_for_tm(str(csv_file), str(parent_path))
 
-    assert df["Tomo created"].to_list() == [True] * len(df)
-    assert all([isinstance(i, str) for i in df["Tomo map"].tolist()]) == True
+    assert df["Target created"].to_list() == [True] * len(df)
+    assert all([isinstance(i, str) for i in df["Target map"].tolist()]) == True
     assert (df[["Phi", "Theta", "Psi"]].to_numpy() == np.full((len(df), len(angles)), angles)).all()
+
+
+def test_create_subtomograms_target_map_has_em_extension(mocker):
+    """Newly-created Target map entries store the full .em filename (csv_file0 has all rows fresh)."""
+    csv_file = test_data_dir / "test_template_list_0.csv"
+    mocker.patch("cryocat.analysis.pana.cut_the_best_subtomo", return_value=(np.ones((64, 64, 64)), [1, 2, 3]))
+    mocker.patch("pandas.DataFrame.to_csv")
+    df = pana.create_subtomograms_for_tm(str(csv_file), str(test_data_dir))
+    assert all(v.endswith(".em") for v in df["Target map"].tolist())
 
 
 # ── Path / name building ───────────────────────────────────────────────────────
@@ -51,10 +60,10 @@ class TestCreateStructurePath:
 
 class TestCreateEmPath:
     def test_basic(self):
-        assert pana.create_em_path("/data/", "ribosome", "template") == "/data/ribosome/template.em"
+        assert pana.create_em_path("/data/", "ribosome", "template") == "/data/ribosome/template"
 
-    def test_em_extension_appended(self):
-        assert pana.create_em_path("/base/", "struct", "myfile").endswith(".em")
+    def test_filename_in_path(self):
+        assert pana.create_em_path("/base/", "struct", "myfile").endswith("myfile")
 
     def test_structure_folder_in_path(self):
         assert "mystructure" in pana.create_em_path("/base/", "mystructure", "myfile")
@@ -64,7 +73,7 @@ class TestCreateSubtomoName:
     def test_full_format(self):
         assert (
             pana.create_subtomo_name("ribosome", "motl1", "001", 80)
-            == "subtomo_ribosome_mmotl1_t001_s80.em"
+            == "subtomo_ribosome_m_motl1_t_001_s80.em"
         )
 
     def test_ends_with_em(self):
@@ -75,15 +84,27 @@ class TestCreateSubtomoName:
         assert f"_s{boxsize}.em" in pana.create_subtomo_name("s", "m", "1", boxsize)
 
     def test_tomo_id_in_name(self):
-        assert "_t007_" in pana.create_subtomo_name("s", "m", "007", 64)
+        assert "_t_007_" in pana.create_subtomo_name("s", "m", "007", 64)
+
+    @pytest.mark.parametrize("ext", [".mrc", ".em", ".rec"])
+    def test_tomo_id_extension_stripped(self, ext):
+        name = pana.create_subtomo_name("s", "m", f"007{ext}", 64)
+        assert f"_t_007{ext}_" not in name
+        assert "_t_007_" in name
+
+    @pytest.mark.parametrize("ext", [".em", ".mrc"])
+    def test_motl_extension_stripped(self, ext):
+        name = pana.create_subtomo_name("s", f"motl{ext}", "1", 64)
+        assert f"_m_motl{ext}_" not in name
+        assert "_m_motl_" in name
 
 
 class TestCreateTomoName:
     def test_basic(self):
-        assert pana.create_tomo_name("/data/", "tomo_001") == "/data/tomo_001.mrc"
+        assert pana.create_tomo_name("/data/", "tomo_001") == "/data/tomo_001"
 
-    def test_mrc_extension(self):
-        assert pana.create_tomo_name("/p/", "name").endswith(".mrc")
+    def test_filename_in_path(self):
+        assert pana.create_tomo_name("/p/", "name").endswith("name")
 
 
 class TestCreateWedgeNames:
@@ -133,6 +154,20 @@ class TestCreateOutputNames:
     def test_folder_path_ends_with_slash(self):
         assert pana.create_output_folder_path("/b/", "s", 0).endswith("/")
         assert pana.create_output_folder_path("/b/", "s", "x").endswith("/")
+
+    def test_folder_path_numpy_float_int(self):
+        # pandas reads integer columns as numpy.float64 when NaNs are present
+        result = pana.create_output_folder_path("/base/", "ribosome", np.float64(2))
+        assert result == "/base/ribosome/id_2_results/"
+
+    def test_folder_path_numpy_integer(self):
+        result = pana.create_output_folder_path("/base/", "ribosome", np.int64(3))
+        assert result == "/base/ribosome/id_3_results/"
+
+    def test_folder_path_nan_does_not_raise(self):
+        # NaN in the "Output folder" column must not raise ValueError
+        result = pana.create_output_folder_path("/base/", "ribosome", np.float64("nan"))
+        assert isinstance(result, str) and result.endswith("/")
 
 
 # ── CTF (private helper) ───────────────────────────────────────────────────────
@@ -267,7 +302,7 @@ class TestGetIndices:
     def test_multiple_conditions(self):
         idx = pana.get_indices(
             str(test_data_dir / "test_template_list_1.csv"),
-            {"Structure": "ribosome", "Tomo created": False},
+            {"Structure": "ribosome", "Target created": False},
         )
         assert list(idx) == [0, 1]
 
@@ -289,8 +324,8 @@ class TestGetIndices:
         assert all(i >= 5 for i in idx)
 
     def test_tomo_created_true_filter(self):
-        # list_3: last entry has Tomo created = True
-        idx = pana.get_indices(str(test_data_dir / "test_template_list_3.csv"), {"Tomo created": True})
+        # list_3: last entry has Target created = True
+        idx = pana.get_indices(str(test_data_dir / "test_template_list_3.csv"), {"Target created": True})
         assert len(idx) == 1
 
     def test_single_structure_csv(self):
@@ -641,7 +676,7 @@ class TestRunAnalysisArgsFromRow:
             "Template": "mytemplate",
             "Mask": "mymask",
             "Compare": "subtomo",
-            "Tomo map": "tomofile",
+            "Target map": "tomofile",
             "Tomogram": "ts_001",
             "Apply wedge": False,
             "Boxsize": 80,
@@ -1210,7 +1245,7 @@ def csv_all_not_done(tmp_path):
     "compute_peak_shapes",
     "correct_bbox",
     "recompute_dist_maps",
-    "create_summary_pdf",
+    "create_summary_html",
 ])
 def test_pipeline_fns_skip_when_not_done(fn_name, csv_all_not_done, tmp_path):
     """Functions with ``if not Done: continue`` guard must be no-ops on Done=False rows."""
@@ -1224,7 +1259,7 @@ def test_pipeline_fns_skip_when_not_done(fn_name, csv_all_not_done, tmp_path):
         "compute_peak_shapes": dict(parent_folder_path=parent),
         "correct_bbox": {},
         "recompute_dist_maps": dict(parent_folder_path=parent, angle_list_path=parent),
-        "create_summary_pdf": dict(parent_folder_path=parent),
+        "create_summary_html": dict(parent_folder_path=parent),
     }[fn_name]
     assert fn(csv_all_not_done, [0], **extra) is None
 
@@ -1290,7 +1325,7 @@ def _prep_csv_string_cols(path, idx):
     in the function under test succeeds.
     """
     df = pd.read_csv(path, index_col=0)
-    for c in ("Output folder", "Tomo map", "Tomogram"):
+    for c in ("Output folder", "Target map", "Tomogram"):
         if c in df.columns:
             df[c] = df[c].astype(object)
             df.at[idx, c] = df.at[idx, c] if isinstance(df.at[idx, c], str) else "x"

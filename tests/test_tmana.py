@@ -280,7 +280,15 @@ class TestScoresExtractParticles:
         return scores, angles_map, anglist
 
     def _patch(self, mocker, scores, amap, anglist):
-        mocker.patch("cryocat.core.cryomap.read", side_effect=[scores, amap])
+        _file_returns = iter([scores, amap])
+
+        def _fake_read(x, *_args, **_kwargs):
+            # Mirrors cryomap.read pass-through: ndarrays are returned as-is.
+            if isinstance(x, np.ndarray):
+                return x
+            return next(_file_returns)
+
+        mocker.patch("cryocat.core.cryomap.read", side_effect=_fake_read)
         mocker.patch("cryocat.utils.ioutils.euler_angles_load", return_value=anglist)
 
     def test_returns_motl_above_threshold(self, mocker):
