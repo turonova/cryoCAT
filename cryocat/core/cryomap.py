@@ -902,7 +902,8 @@ def sample_line_profiles(
         Paired 3D coordinates in voxel units, XYZ order. Any array-coercible
         input is accepted; normalized internally with ``np.asarray``.
     input_map : MapSource
-        3D volume in ZYX order, or a path to an MRC/EM file.
+        3D volume in XYZ order, or a path to an MRC/EM file (read with
+        ``transpose=True`` → XYZ).
     pixel_size_a : float, optional
         Voxel size in Angstroms. Used to convert ``extension_half_width_a`` to
         voxels and stored in the output dicts for downstream rescaling. When
@@ -963,8 +964,8 @@ def sample_line_profiles(
         num_points = int(np.ceil(2 * half_width_vox + lengths[i])) + 1
         line_points = np.linspace(starts[i], ends[i], num=num_points)
 
-        coords_zyx = line_points[:, [2, 1, 0]].T
-        intensities = map_coordinates(volume, coords_zyx, order=1, mode="nearest")
+        coords_xyz = line_points.T
+        intensities = map_coordinates(volume, coords_xyz, order=1, mode="nearest")
 
         entry = {
             "profile": intensities,
