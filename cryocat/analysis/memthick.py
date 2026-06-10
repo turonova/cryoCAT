@@ -304,9 +304,9 @@ def verify_and_save_outputs(
     Parameters
     ----------
     aligned_vertices : np.ndarray
-        2D array (N, 3) of vertex coordinates in voxel units (ZYX order)
+        2D array (N, 3) of vertex coordinates in voxel units (XYZ order)
     aligned_normals : np.ndarray
-        2D array (N, 3) of normal vectors (ZYX order)
+        2D array (N, 3) of normal vectors (XYZ order)
     vertex_volume : np.ndarray
         3D binary volume marking vertex positions
     surface1_mask : np.ndarray
@@ -353,22 +353,22 @@ def verify_and_save_outputs(
                           transpose=False, pixel_size=pixel_size * 10.0)  # nm → Å
             log_msg(f"Saved MRC to {mrc_output}")
 
-        # Save CSV with coordinates, normals, and surface masks (ZYX → XYZ conversion)
+        # Save CSV with coordinates and normals (vertices are in XYZ order from transposed volume)
         csv_output = os.path.join(output_path, f"{base_name}_{membrane_name}_vertices_normals.csv")
         df = pd.DataFrame(
             {
-                "x_voxel": aligned_vertices[:, 2],
+                "x_voxel": aligned_vertices[:, 0],
                 "y_voxel": aligned_vertices[:, 1],
-                "z_voxel": aligned_vertices[:, 0],
-                "x_voxel_int": rounded_vertices[:, 2],
+                "z_voxel": aligned_vertices[:, 2],
+                "x_voxel_int": rounded_vertices[:, 0],
                 "y_voxel_int": rounded_vertices[:, 1],
-                "z_voxel_int": rounded_vertices[:, 0],
-                "x_physical": scaled_vertices[:, 2],
+                "z_voxel_int": rounded_vertices[:, 2],
+                "x_physical": scaled_vertices[:, 0],
                 "y_physical": scaled_vertices[:, 1],
-                "z_physical": scaled_vertices[:, 0],
-                "normal_x": aligned_normals[:, 2],
+                "z_physical": scaled_vertices[:, 2],
+                "normal_x": aligned_normals[:, 0],
                 "normal_y": aligned_normals[:, 1],
-                "normal_z": aligned_normals[:, 0],
+                "normal_z": aligned_normals[:, 2],
                 "surface1": surface1_mask,
                 "surface2": surface2_mask,
             }
@@ -1582,7 +1582,7 @@ class IntensityProfileAnalyzer:
         self,
         smooth_sigma_intensity_profiles: float = 0.5,
         extrema_prominence_threshold: float = 0.1,
-        minima_search_nm: tuple[float, float] = (3.0, 4.0),
+        minima_search_nm: tuple = (3.0, 4.0),
         anchor_search_nm: float = 4.0,
         mirror_anchor_slope_ratio_threshold: float = 0.5,
         mirror_anchor_max_inward_steps: int = 10,
@@ -3898,7 +3898,7 @@ def analyse_intensity_profiles(
 
 def run_full_pipeline(
     segmentation_map: MapSource,
-    output_path: PathOrStr | None = None,
+    output_path: PathOrStr = None,
     membrane_labels: dict[str, int] | None = None,
     # ── Surface extraction ────────────────────────────────────────────
     step_size_marching_cubes: int = 1,
@@ -3922,7 +3922,7 @@ def run_full_pipeline(
     pixel_size_nm: float | None = None,
     # ── Profile / boundary stage ──────────────────────────────────────
     extract_intensity_profiles: bool = True,
-    tomogram_map: MapSource | None = None,
+    tomogram_map: MapSource = None,
     profile_half_width_nm: float = 6.0,
     analyzer: "IntensityProfileAnalyzer | None" = None,
     intensity_save_profiles: bool = True,
@@ -4030,7 +4030,7 @@ def run_full_pipeline(
     compatibility_tolerance_nm : float, default 0.01
         Tolerance (nm) passed to ``validate_seg_tomo_compatibility`` before profiling.
     save_thickness_mrc : bool, default False
-        Calls ``save_thickness_mrc`` to produce per-voxel median thickness
+        Calls ``save_thickness_volume_mrc`` to produce per-voxel median thickness
         MRC volumes. When ``extract_intensity_profiles=True``, uses inflection-point
         thickness; otherwise uses ``match_distance_nm`` from the matched-points CSV.
 
@@ -4206,7 +4206,7 @@ def run_full_pipeline(
                     if save_thickness_mrc:
                         logger.info(f"\nStep 3b: Discretizing boundary distances for {membrane_name}")
                         try:
-                            surface_paths = save_thickness_mrc(
+                            surface_paths = save_thickness_volume_mrc(
                                 thickness_csv=thickness_csv,
                                 segmentation_map=segmentation_map,
                                 output_path=output_path,
@@ -4280,7 +4280,7 @@ def run_full_pipeline(
                             try:
                                 thickness_csv_path = intensity_results.get("saved_files", {}).get("thickness_csv")
                                 if thickness_csv_path is not None and Path(thickness_csv_path).exists():
-                                    surface_paths = save_thickness_mrc(
+                                    surface_paths = save_thickness_volume_mrc(
                                         thickness_csv=thickness_csv_path,
                                         segmentation_map=segmentation_map,
                                         output_path=output_path,
@@ -4500,7 +4500,7 @@ def save_per_surface_mrc_helper(
 
     return saved
 
-def save_thickness_mrc(
+def save_thickness_volume_mrc(
     thickness_csv: PathOrStr,
     segmentation_map: MapSource,
     output_path: PathOrStr,
