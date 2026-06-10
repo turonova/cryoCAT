@@ -20,10 +20,12 @@ from cryocat._types import (
     PathOrStr,
     TomoDimensions,
     TomoList,
+    TripletLike,
 )
 from cryocat.core import mdoc
 from cryocat.utils import starfileio as sf, starfileio
 from cryocat.utils.exceptions import UserInputError
+from cryocat.utils import geom
 
 
 def get_file_encoding(input_path: PathOrStr) -> str:
@@ -1646,3 +1648,196 @@ def fsc_write(
         ET.ElementTree(root).write(output_path, encoding="utf-8", xml_declaration=True)
     else:
         raise ValueError(f"Unsupported FSC output format: {output_path!r}. Use .csv or .xml.")
+
+
+def cmm_read(input_path: PathOrStr) -> pd.DataFrame:
+    """Reads a file in ChimeraX .cmm format ad returns a DataFrame containing the data.
+
+    Parameters
+    ----------
+    input_path : PathOrStr
+        The path of the .cmm file to be read. 
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame representation of the input data.
+    
+    Raises
+    ------
+    FileNotFoundError
+        If the file at the specified path does not exist.
+    ValueError
+        If ``input_path`` has the wrong file extension.
+    """
+    if not os.path.isfile(input_path):
+        raise FileNotFoundError(f"The file {input_path} does not exist.")
+    if not input_path.endswith(".cmm"):
+        raise ValueError(f"The file {input_path} is not a valid marker file.")
+
+    tree = ET.parse(input_path)
+    root = tree.getroot()
+
+    markers = root.findall(".//marker")
+    markers=pd.DataFrame([marker.attrib for marker in markers])
+    markers[["x", "y","z"]]=markers[["x", "y","z"]].astype(float)
+
+    return markers
+
+
+    # if marker_idx >= len(markers):
+    #     raise ValueError(f"Marker number {marker_idx} exceeds the number of markers in the file ({len(markers)}).")
+
+    # marker = markers[marker_idx]
+    # x = marker.attrib["x"]
+    # y = marker.attrib["y"]
+    # z = marker.attrib["z"]
+
+    # return np.asarray([x, y, z]).astype(float)
+
+
+def marker_coords_load(input_data: DataSource | TripletLike) -> pd.DataFrame:   #str | np.ndarray | pd.DataFrame | list[float]) -> pd.DataFrame:
+    """Extract 3D coordinates of points from various sources.
+
+    Paramerters
+    ------------
+    input_data : DataSource or TripletLike
+        The input data to load. If a pandas DataFrame is provided, it is assumed to already contain the coordinates data
+        with the header containing "x", "y" and "z" columns. If a numpy ndarray is provided, the shape should be Nx3, where
+        N is the number of points. If a list or tuple is provided, it is assumed to be a single set of x,y,z coordinates. 
+        If a string is provided, it is assumed to be the path to a file containing 3D coordinates with ene set of (x,y,z)
+        coordinates in each line (e.g. csv, txt file). The file can also be a marker file (.cmm extension) from ChimeraX.
+        Integers or floats are also accepted and will be converted to a single set of x,y,z coordinates with the same value 
+        for each coordinate.
+
+    Returns
+    --------
+    pd.DataFrame
+        A DataFrame containing the 3D coordinates of each point. Columns will be named as ["x", "y", "z"].
+    
+    Raises
+    -------
+    ValueError
+        If the number of columns does not match
+    FileNotFoundError
+        If the file at the specified path does not exist.
+    
+    See also
+    --------
+    - :func:`cmm_read` for reading coordinates from a ChimeraX marker file.
+    - :func:`df_load` for loading data into a DataFrame from a DataFrame or numpy ndarray.
+    - :func:`cryocat.utils.geom.as_triplet` for converting a list, tuple, int or floats to a triplet of coordinates.
+    """
+    required_cols=["x", "y", "z"] # columns of the output dataframe
+
+    if isinstance(input_data, pd.DataFrame):
+        input_data.columns = map(str.lower, input_data.columns)
+        missing_required = set(required_cols) - set(input_data.columns)
+        if missing_required:
+            raise ValueError(f"Invalid input. The following columns are missing: {missing_required}")
+        else:
+            coords=df_load(input_data)[required_cols]
+    
+    elif isinstance(input_data, np.ndarray):  
+        if input_data.ndim == 2 and input_data.shape[1] == 3:
+            coords=df_load(input_data, header=required_cols) #pd.DataFrame(data=input_data, columns=required_cols)
+        else:
+            raise ValueError("Invalid input. The input array needs to have shape (N,3), where N is the number of points.")
+
+    elif isinstance(input_data, (list, tuple, int, float)): # 1 point only
+        input_data = geom.as_triplet(input_data)
+        coords = pd.DataFrame(data= np.reshape(input_data, (1, len(input_data))), columns=required_cols) 
+        
+    elif isinstance(input_data, str):
+        if os.path.isfile(input_data):
+
+            if input_data.endswith(".csv"):
+                coords=pd.read_csv(input_data, dtype=float, header=None)
+                if len(coords.columns) != 3:
+                    raise ValueError(f"Invalid input. File '{input_data}' does not contain valid data.")
+                else:
+                    coords.columns=required_cols
+                
+            elif input_data.endswith(".cmm"): # chimera marker file
+                coords=cmm_read(input_data)
+                coords=coords[required_cols]
+
+            else:
+                coords=pd.read_csv(input_data, sep=r"\s+", header=None, dtype=float, engine="python") #txt file
+                coords.columns = required_cols
+
+        else:
+            raise FileNotFoundError(f"The file at the path {input_data} does not exist.")
+    else:
+        raise ValueError("Invalid input. The input_data has to be either a valid path to a csv, txt or cmm file, or a list, or ndarray or pandas.DataFrame!")
+    
+    return coords
+
+
+def write_coords_to_cmm_file(coords: np.ndarray | pd.DataFrame | TripletLike, output_path: PathOrStr) -> None:
+    """Write the given coordinates to a .cmm file as markers.
+
+    Parameters
+    ----------
+    coords : np.ndarray or pandas.DataFrame or TripletLike
+        Data of 3D coordinates to write out as markers that can be loaded in ChimeraX for visualization.
+        
+        - TripletLike: A 3-element list, tuple, 1D numpy ndarray, int or float that can be converted to a triplet of coordinates (x,y,z).
+        - 2D numpy array: An array of shape (N, 3) containing the x, y, z coordinates of the markers.
+        - pandas DataFrame: Three-columns dataframe with "x", "y" and "z" columns
+
+    output_path : PathOrStr
+       Destination file path. Extension must be .cmm (ChimeraX marker file).
+
+    Returns
+    --------
+    None
+    
+    Raises
+    ------
+    ValueError
+        If the extension is not ``.cmm``.
+    ValueError
+        If the input is not a supported type or is invalid.
+    """
+    
+    def make_marker(e_root, coords_set, idx=0):
+        marker = ET.SubElement(e_root, "marker", id=str(idx), x=str(coords_set[0]), y=str(coords_set[1]), z=str(coords_set[2]), r="1", g="1", b="0", radius="2")
+        return marker
+
+    # check output file extension
+    if not output_path.endswith(".cmm"):
+        raise ValueError("Invalid output file name. Please specify the path to a .cmm file.")
+    
+    root = ET.Element("marker_set", name="markers")
+
+    # TripletLike input
+    if isinstance(coords, (list, tuple, int, float)):
+        coords = geom.as_triplet(coords)
+        coords = np.reshape(coords, (1, len(coords)))
+    elif isinstance(coords, np.ndarray) and coords.ndim == 1 and coords.shape[0] == 3:
+        coords = np.reshape(coords, (1, 3))
+    # check input types and cast to ndarray of shape (N,3)
+    elif isinstance(coords, np.ndarray) and coords.ndim == 2:
+        if not coords.shape[1]==3:
+            raise ValueError("Invalid input. The array needs to have shape (N,3), where N is the number of points to convert to markers!")
+        else:
+            coords=coords
+    elif isinstance(coords, pd.DataFrame):
+        required_cols=["x", "y", "z"]
+        coords.columns = map(str.lower, coords.columns)
+        missing_required = set(required_cols) - set(coords.columns)
+        if missing_required:
+            raise ValueError(f"Invalid input. The following columns are missing: {missing_required}")
+        else:
+            coords=coords[required_cols].to_numpy(dtype=float)
+    else:
+        raise ValueError("Invalid input.")
+
+    # parse coordinates to xml and write output file
+    idx=1
+    for coord in coords:
+        make_marker(root, coord, idx=idx) #ET.SubElement(root, "marker", x=str(coord[0]), y=str(coord[1]), z=str(coord[2]), r="1", g="1", b="0", radius="2")
+        idx+=1
+    tree = ET.ElementTree(root)
+    tree.write(output_path, encoding="utf-8", xml_declaration=False)
