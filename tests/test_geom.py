@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from scipy.spatial.transform import Rotation as srot
+from collections import Counter
 
 import sys
 
@@ -1366,3 +1367,103 @@ def test_sample_triangle_returns_points_inside():
     pts = sample_triangle(vertices, sampling_distance=0.2)
     assert pts.shape[1] == 3
     assert pts.shape[0] > 0
+
+
+# --------------------------------------------------------------------------
+# Orthonormal basis
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def non_collinear_vectors():
+    v1 = np.asarray([-0.41, 32.85, 43.63])
+    v2 = np.asarray([45.81, 26.81, 10.42])
+    if not np.allclose(np.cross(v1, v2), 0):
+        return v1,v2
+
+@pytest.fixture
+def collinear_vectors():
+    v1 = np.random.rand(3)
+    scalar = np.random.choice([-1, 1]) * (np.random.rand() + 0.1)
+    v2 = scalar * v1
+    return v1, v2
+    
+def test_orthonormal_frame_vectors_are_normalized(non_collinear_vectors):
+    M = orthonormal_frame(non_collinear_vectors[0], non_collinear_vectors[1])
+    norms = np.linalg.norm(M, axis=1)       # norm of each row vector
+    assert np.allclose(norms, 1.0, atol=1e-6)
+
+def test_orthonormal_frame_vectors_are_orthogonal(non_collinear_vectors):
+    M = orthonormal_frame(non_collinear_vectors[0], non_collinear_vectors[1])
+    dot_products = M @ M.T
+    # off-diagonal elements should all be zero
+    off_diagonal = dot_products - np.diag(np.diag(dot_products))
+    assert np.allclose(off_diagonal, 0.0, atol=1e-6)
+
+def test_orthonormal_frame_raises_value_error(collinear_vectors):
+    v1, v2 = collinear_vectors
+    with pytest.raises(ValueError, match="collinear vectors"):
+        orthonormal_frame(v1, v2)
+
+
+# --------------------------------------------------------------------------
+# Canonical icosahedron edges and faces
+# --------------------------------------------------------------------------
+class TestCanonicalIcosahedronEdgesAndFaces:
+
+    @pytest.fixture
+    def sample_vertices(self):
+        return icosahedron()
+
+    @pytest.fixture
+    def sample_edges(self, sample_vertices):
+        return icosahedron_edges(sample_vertices)
+
+    @pytest.fixture
+    def incorrect_vertices_coords(self):
+        return np.random.rand(10,3)
+
+    @pytest.fixture
+    def incorrect_edges_idx(self):
+        return np.random.rand(2,10)
+
+    def test_edges_incorrect_vertices_shape(self, incorrect_vertices_coords):
+        with pytest.raises(ValueError, match="12 vertices need to be provided"):
+            icosahedron_edges(incorrect_vertices_coords)
+
+    def test_edges_output_shape(self, sample_edges):
+        assert isinstance(sample_edges, np.ndarray)
+        assert sample_edges.shape == (30,2)
+    
+    def test_equal_edge_lengths(self, sample_vertices, sample_edges):
+        # look up the coordinates of each vertex using the indices
+        start_vertices = sample_vertices[sample_edges[:, 0]]   # shape (30, 3)
+        end_vertices   = sample_vertices[sample_edges[:, 1]]   # shape (30, 3)
+        # then compute lengths
+        lengths = np.linalg.norm(end_vertices - start_vertices, axis=1)
+        assert np.allclose(lengths, lengths[0], atol=1e-6)
+
+    def test_vertex_connectivity(self, sample_edges):
+        counts = Counter(idx for edge in sample_edges for idx in edge)
+        assert all(c == 5 for c in counts.values())
+
+    def test_faces_incorrect_edges_shape(self, sample_vertices, incorrect_edges_idx):
+        with pytest.raises(ValueError, match="12 vertices and 30 edges need to be provided"):
+            icosahedron_faces(sample_vertices, incorrect_edges_idx)
+    
+    def test_faces_incorrect_verts_shape(self, incorrect_vertices_coords, sample_edges):
+        with pytest.raises(ValueError, match="12 vertices and 30 edges need to be provided"):
+            icosahedron_faces(incorrect_vertices_coords, sample_edges)
+    
+    def test_faces_output_shape(self, sample_vertices, sample_edges):
+        result = icosahedron_faces(sample_vertices, sample_edges)
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (20, 3)
+    
+    def test_equal_faces_area(self, sample_vertices, sample_edges):
+        faces = icosahedron_faces(sample_vertices, sample_edges)
+        v0 = sample_vertices[faces[:, 0]]                # shape (20, 3)
+        v1 = sample_vertices[faces[:, 1]]                # shape (20, 3)
+        v2 = sample_vertices[faces[:, 2]]                # shape (20, 3)
+        cross = np.cross(v1 - v0, v2 - v0)       # shape (20, 3)
+        areas = 0.5 * np.linalg.norm(cross, axis=1)   # shape (20,)
+        assert np.allclose(areas, areas[0], atol=1e-6)
