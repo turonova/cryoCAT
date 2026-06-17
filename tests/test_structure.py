@@ -1,11 +1,22 @@
 import pytest
 import numpy as np
 import pandas as pd
+import mrcfile
 from pathlib import Path
+from scipy.spatial.transform import Rotation
 from cryocat.core import cryomotl
 from cryocat.analysis import structure
+from cryocat.utils import geom
+from cryocat.utils.geom import PHI
 
 DATA_DIR = Path(__file__).parent / "test_data" / "structure_data"
+
+
+def _write_mock_mrc(path, dimensions, voxel_size_x):
+    """Write a temporary mrc file with desired dimensions and voxel size."""
+    with mrcfile.new(path, overwrite=True) as mrc:
+        mrc.set_data(np.zeros(dimensions, dtype=np.float32))
+        mrc.voxel_size = voxel_size_x
 
 
 def test_unify_nn_orientations():
@@ -565,3 +576,264 @@ def test_PleomorphicSurface_clean_by_normals_returns_psurf():
         # The behaviour may require additional setup; the call surface still
         # needs to be referenced for the audit.
         pass
+
+
+# -- Icosahedron ---------------------------------------------------------------
+
+class TestIcosahedron:
+
+    @pytest.fixture
+    def canonical_icosahedron(self):
+        return structure.Icosahedron()
+
+    @pytest.fixture
+    def sample_icosahedron(self):
+        return structure.Icosahedron(2.2, np.asarray([[ 0.30775949, -0.80936378,  0.50021432],[ 0.81239293,  0.49719682,  0.30465235],[-0.49527955,  0.31261093,  0.81053845]]))
+
+    def test_attributes_canonical_icosahedron(self, canonical_icosahedron):
+        expected_vertices = geom.icosahedron()
+        assert canonical_icosahedron.radius == 1
+        assert np.allclose(canonical_icosahedron.rotation.as_matrix(), np.eye(3), atol=1e-6)
+        assert np.allclose(canonical_icosahedron.vertices, expected_vertices, atol=1e-6)
+    
+
+    @pytest.mark.parametrize("radius, rotation", [
+        (2, None),
+        (1, np.asarray([[ 0.30775949, -0.80936378,  0.50021432],[ 0.81239293,  0.49719682,  0.30465235],[-0.49527955,  0.31261093,  0.81053845]])),
+        (2.2, np.asarray([[ 0.30775949, -0.80936378,  0.50021432],[ 0.81239293,  0.49719682,  0.30465235],[-0.49527955,  0.31261093,  0.81053845]]))
+    ])
+    def test_radius_and_rotation_type_and_len_attributes(self, radius, rotation):
+        sample_icosahedron = structure.Icosahedron(radius, rotation)
+        assert isinstance(sample_icosahedron.radius, float)
+        assert isinstance(sample_icosahedron.rotation, Rotation)
+        assert sample_icosahedron.vertices.shape == (12,3)
+        assert sample_icosahedron.edges.shape == (30,3)
+        assert sample_icosahedron.faces.shape == (20,3)
+    
+
+    def test_rotation_determinant_is_one(self, sample_icosahedron):
+        # determinant of a valid rotation matrix must be +1
+        R = sample_icosahedron.rotation.as_matrix()
+        assert np.isclose(np.linalg.det(R), 1.0, atol=1e-6)
+    
+
+    def test_edges_equal_distance_from_center(self, sample_icosahedron):
+        # all midpoints should be equidistant from the center
+        distances = np.linalg.norm(sample_icosahedron.edges, axis=1)
+        assert np.allclose(distances, distances[0], atol=1e-6)
+
+    def test_edges_distance_from_center(self, sample_icosahedron):
+        # for a regular icosahedron the midradius (distance from center
+        # to edge midpoint) is: r_mid = radius * sqrt(5) * phi / 4
+        # where phi = (1 + sqrt(5)) / 2 is the golden ratio
+        expected_distance = sample_icosahedron.radius * np.sqrt(5) * PHI / 4
+        distances = np.linalg.norm(sample_icosahedron.edges, axis=1)
+        assert np.allclose(distances, expected_distance, atol=0.2)
+
+    def test_faces_equal_distance_from_center(self, sample_icosahedron):
+        # all face centers should be equidistant from the center
+        distances = np.linalg.norm(sample_icosahedron.faces, axis=1)
+        assert np.allclose(distances, distances[0], atol=1e-6)
+    
+    def test_faces_distance_from_centers(self, sample_icosahedron):
+        # for a regular icosahedron the inradius (distance from center
+        # to face center) is: r_in = radius * sqrt(3) * phi^2 / (2 * sqrt(5 + 2*sqrt(5)))
+        expected_distance = sample_icosahedron.radius * PHI**2 / (2 * np.sqrt(3))
+        distances = np.linalg.norm(sample_icosahedron.faces, axis=1)
+        assert np.allclose(distances, expected_distance, atol=0.1)
+
+
+    @pytest.mark.parametrize("shift_v1, shift_v2", [
+        (None, None),
+        (None, np.asarray([0, 44.2, 72.5])),
+        (np.asarray([0, 44.2, 72.5]), None)
+    ])
+    def test_compute_icosahedron_no_shifts(self, shift_v1, shift_v2):
+        # if one or both shift vectors are None, should return canonical icosahedron
+        icosahedron = structure.Icosahedron.compute_icosahedron(shift_v1, shift_v2)
+        assert isinstance(icosahedron, structure.Icosahedron)
+        assert icosahedron.radius == 1
+        assert np.allclose(icosahedron.rotation.as_matrix(), np.eye(3), atol=1e-6)
+        assert np.allclose(icosahedron.vertices, geom.icosahedron(), atol=1e-6)
+    
+
+    @pytest.mark.parametrize("shift_v1, shift_v2",[
+        (np.asarray([0, 44.2, 72.5]), np.array([72.2, -0.1, 44.7]))
+    ])
+    def test_compute_icosahedron_instance(self, shift_v1, shift_v2):
+        icosahedron = structure.Icosahedron.compute_icosahedron(shift_v1, shift_v2)
+        assert isinstance(icosahedron, structure.Icosahedron)   
+    
+
+    @pytest.fixture
+    def mrc_file(self, tmp_path):
+        path = tmp_path / "test_sample.mrc"
+        _write_mock_mrc(path, dimensions=(224,224,224), voxel_size_x=1)
+        yield path
+    
+    @pytest.fixture
+    def path_test_marker_file(self):
+        current_dir = Path(__file__).parent
+        test_cmm_file = current_dir / "test_data" / "test_marker_file.cmm"
+        return str(test_cmm_file) 
+
+    def test_recover_icosahedral_features_value_error(self, path_test_marker_file, mrc_file):
+        with pytest.raises(ValueError, match="Invalid mode"):
+            structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file), mode="random")
+
+    def test_recover_icosahedral_features_returns_two_vectors(self, path_test_marker_file, mrc_file):
+        v1, v2 = structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file))
+        assert isinstance(v1, np.ndarray)
+        assert isinstance(v2, np.ndarray) 
+    
+    def test_recover_icosahedral_features_output_cmm_is_created(self, path_test_marker_file, tmp_path, mrc_file):
+        output_path = tmp_path / "test_out.cmm"
+        _, _ =structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file), output_cmm_file=str(output_path))
+        assert output_path.exists()
+
+
+    @pytest.mark.parametrize("mode, expected_ratio", [
+        ("vertices", 1), 
+        ("edges", np.sqrt(5) * PHI / 4),
+        ("faces", PHI**2 / (2 * np.sqrt(3)))
+        ])
+    def test_recover_icosahedral_features_correct_dist_no_project_to_sphere(self, path_test_marker_file, mrc_file, mode, expected_ratio):
+
+        # compute the expected radius of the icosahedron instance
+        shift_v1 = np.asarray([112, 156.2, 184.5]) - np.asarray([112,112,112])
+        shift_v2 = np.asarray([184.2, 111.9, 156.7]) - np.asarray([112,112,112])
+        expected_icosahedron = structure.Icosahedron.compute_icosahedron(shift_v1, shift_v2)
+
+        vecs, _ = structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file), mode=mode)
+        distances = np.linalg.norm(vecs, axis=1)
+        assert np.allclose(distances / expected_icosahedron.radius, expected_ratio, atol=1e-1)
+    
+
+    @pytest.mark.parametrize("mode", ["vertices", "edges", "faces"])
+    def test_recover_icosahedral_features_correct_dist_project_to_sphere(self, path_test_marker_file, mrc_file, mode):
+
+        # compute the expected radius of the icosahedron instance
+        shift_v1 = np.asarray([112, 156.2, 184.5]) - np.asarray([112,112,112])
+        shift_v2 = np.asarray([184.2, 111.9, 156.7]) - np.asarray([112,112,112])
+        expected_icosahedron = structure.Icosahedron.compute_icosahedron(shift_v1, shift_v2)
+
+        vecs, _ = structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file), mode=mode, project_to_sphere=True)
+        distances = np.linalg.norm(vecs, axis=1)
+        assert np.allclose(distances, expected_icosahedron.radius, atol=1e-1)
+
+
+    @pytest.fixture
+    def sample_motl_data1(self):
+        data = {
+            "tomo_id": [1, 1, 1, 2, 2, 2],
+            "x": [10, 11, 20, 30, 31, 40],
+            "y": [10, 11, 20, 30, 31, 40],
+            "z": [10, 11, 20, 30, 31, 40],
+            "score": [0.9, 0.8, 0.7, 0.6, 0.5, 0.4],
+            "subtomo_id": [1, 2, 3, 4, 5, 6],
+            "geom1": [1, 1, 1, 1, 1, 1],
+            "geom2": [2, 2, 2, 2, 2, 2],
+            "object_id": [100, 200, 300, 400, 500, 600],
+            "subtomo_mean": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            "shift_x": [0, 0, 0, 0, 0, 0],
+            "shift_y": [0, 0, 0, 0, 0, 0],
+            "shift_z": [0, 0, 0, 0, 0, 0],
+            "geom3": [3, 3, 3, 3, 3, 3],
+            "geom4": [4, 4, 4, 4, 4, 4],
+            "geom5": [5, 5, 5, 5, 5, 5],
+            "phi": [0, 10, 20, 30, 40, 50],
+            "psi": [5, 15, 25, 35, 45, 55],
+            "theta": [10, 20, 30, 40, 50, 60],
+            "class": [1, 2, 1, 2, 1, 2],
+        }
+        return pd.DataFrame(data)
+
+    
+    @pytest.mark.parametrize("shift_vecs", [
+        6,
+        np.random.rand(3),
+        np.random.rand(2,4)
+    ])
+    def test_icosahedral_sym_expansion_value_error_shifts(self, shift_vecs, sample_motl_data1):
+        with pytest.raises(ValueError, match="shift_vecs should be a numpy array"):
+            structure.Icosahedron.icosahedral_sym_expansion(sample_motl_data1, shift_vecs)
+
+    @pytest.mark.parametrize("col1, col2", [
+        ("object_id", "random"),
+        ("random", "geom2"),
+        ("random1", "random2")
+    ])
+    def test_icosahedral_sym_expansion_value_error_wrong_col(self, sample_motl_data1, col1, col2):
+        with pytest.raises(ValueError, match="not found in the columns of the input motive list"):
+            structure.Icosahedron.icosahedral_sym_expansion(
+                sample_motl_data1, 
+                np.random.rand(3,3), 
+                original_id_col=col1, 
+                order_id_col=col2
+                )
+
+    @pytest.fixture
+    def shift_vecs_test(self, path_test_marker_file, mrc_file):
+        vecs, _ = structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file), project_to_sphere=True)
+        return vecs
+
+    def test_icosahedral_sym_expansion_output_is_motl(self, sample_motl_data1, shift_vecs_test):
+        sample_motl = structure.Icosahedron.icosahedral_sym_expansion(sample_motl_data1, shift_vecs=shift_vecs_test)
+        assert isinstance(sample_motl, cryomotl.Motl)
+    
+    def test_icosahedral_sym_expansion_motl_len(self, sample_motl_data1, shift_vecs_test):
+        sample_motl = structure.Icosahedron.icosahedral_sym_expansion(sample_motl_data1, shift_vecs=shift_vecs_test)
+        assert len(sample_motl.df) == shift_vecs_test.shape[0]*len(sample_motl_data1)
+
+    def test_icosahedral_sym_expansion_reset_cols(self, sample_motl_data1, shift_vecs_test):
+        sample_motl = structure.Icosahedron.icosahedral_sym_expansion(sample_motl_data1, shift_vecs=shift_vecs_test)
+        assert np.all(sample_motl.df["score"] == 0)
+        assert np.all(sample_motl.df["subtomo_mean"] == 0)
+        assert np.array_equal(sample_motl.df["subtomo_id"], np.arange(1, len(sample_motl.df)+1, 1, dtype=np.int8))
+    
+    def test_icosahedral_sym_expansion_outfile(self, sample_motl_data1, shift_vecs_test, tmp_path):
+        output_path = tmp_path / "test_out.em"
+        _ = structure.Icosahedron.icosahedral_sym_expansion(
+            sample_motl_data1, 
+            shift_vecs=shift_vecs_test, 
+            output_path=str(output_path)
+            )
+        assert output_path.exists()
+    
+    @pytest.mark.parametrize("motl_type, output_file, relion_version, expected_type",[
+        ("stopgap", "output.star", None, cryomotl.StopgapMotl),
+        ("relion", "output.star", 3.1, cryomotl.RelionMotl),
+        ("relion5_1", "output.star", 5.1, cryomotl.RelionMotl),
+        ("dynamo", "output.tbl", None, cryomotl.DynamoMotl)
+    ])
+    def test_icosahedral_sym_expansion_different_motl_type(self, sample_motl_data1, shift_vecs_test, tmp_path, motl_type, output_file, relion_version, expected_type):
+        output_path = tmp_path / output_file
+        sample_motl = structure.Icosahedron.icosahedral_sym_expansion(
+            sample_motl_data1,
+            shift_vecs=shift_vecs_test,
+            output_motl_type=motl_type,
+            relion_version = relion_version,
+            output_path=str(output_path)
+        )
+        assert output_path.exists() 
+        assert isinstance(sample_motl, expected_type)
+
+    @pytest.mark.parametrize("original_id_col, order_id_col",[
+        ("object_id", "geom1"),
+        ("geom1","geom3")
+    ])
+    def test_icosahedral_sym_expansion_particel_ordering(self, sample_motl_data1, shift_vecs_test, original_id_col, order_id_col):
+        sample_motl = structure.Icosahedron.icosahedral_sym_expansion(
+            sample_motl_data1,
+            shift_vecs=shift_vecs_test,
+            original_id_col=original_id_col,
+            order_id_col=order_id_col
+        )
+        unique_objects = np.unique(sample_motl.df[original_id_col])
+        assert len(unique_objects) == len(sample_motl_data1)
+        assert np.array_equal(unique_objects, sample_motl_data1["subtomo_id"])
+        assert sample_motl.df[original_id_col].is_monotonic_increasing # ascending order
+        for object in unique_objects:
+            motl_object = sample_motl.get_motl_subset(object, column_name=original_id_col, return_df=True)
+            assert motl_object[order_id_col].is_monotonic_increasing
+            assert np.array_equal(motl_object[order_id_col], np.arange(0,len(motl_object),1))
