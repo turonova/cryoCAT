@@ -888,6 +888,94 @@ def dodecahedron() -> np.ndarray:
     return vertices
 
 
+def icosahedron_edges(vertices: np.ndarray) -> np.ndarray:
+    """Calculate the edges of an icosahedron given its vertices.
+
+    Parameters
+    -----------
+    vertices : np.ndarray 
+        An array of shape (12, 3) containing the coordinates of the 12 vertices of the icosahedron.
+
+    Returns
+    -------
+    np.ndarray
+        An array of shape (30,2) containing the indices of the vertices that form an edge of the icosahedron.
+    
+    Raises
+    ------
+    ValueError
+        If the input array does not have the required shape to represent vertices of an icosahedron.
+    """
+
+    if vertices.shape != (12,3):
+        raise(ValueError(f"12 vertices need to be provided"))
+
+    edges = []
+    dists = []
+
+    n = vertices.shape[0]
+
+    for i in range(n):
+        for j in range(i+1, n):
+            d = np.linalg.norm(vertices[i] - vertices[j])
+            dists.append(d)
+
+    edge_length = min(dists)
+    tol = 1e-6
+
+    for i in range(n):
+        for j in range(i+1, n):
+            d = np.linalg.norm(vertices[i] - vertices[j])
+            if abs(d - edge_length) < tol:
+                edges.append((i, j))
+
+    return np.asarray(edges)
+
+
+def icosahedron_faces(vertices: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    """Calculate the faces of an icosahedron given its vertices and edges.
+
+    Parameters
+    ----------
+    vertices : np.ndarray
+        An array of shape (12, 3) containing the coordinates of the 12 vertices of the icosahedron.
+    edges : np.ndarray
+        An array of shape (30, 2) containing the indices of the vertices that form an edge of the icosahedron.
+
+    Returns
+    --------
+    np.ndarray
+        An array of shape (20, 3) containing the indices of the vertices that form a face of the icosahedron. 
+        Each face is represented as a 1d np.ndarray of three vertex indices.
+    
+    Raises
+    ------
+    ValueError
+        If the input array of the vertices or edges do not have the required shape.
+    """
+
+    if vertices.shape != (12,3) or edges.shape != (30,2):
+        raise ValueError("12 vertices and 30 edges need to be provided")
+    
+    # Faces are triples where all three pairs are edges
+    edge_set = set(tuple(row) for row in np.sort(edges, axis=1)) #set(tuple(sorted(e)) for e in edges)
+    faces = []
+
+    n = vertices.shape[0]
+
+    for i in range(n):
+        for j in range(i+1, n):
+            for k in range(j+1, n):
+                if (
+                    tuple(sorted((i, j))) in edge_set and
+                    tuple(sorted((i, k))) in edge_set and
+                    tuple(sorted((j, k))) in edge_set
+                ):
+                    faces.append((i, j, k))
+
+    return np.asarray(faces)
+    
+
 def n_gon_points(n: int) -> np.ndarray:
     """Return the unit-circle vertices of a regular n-gon in the xy-plane.
 
@@ -3348,6 +3436,36 @@ def cartesian_to_spherical(
 
     return phi, theta
 
+def orthonormal_frame(v1: ArrayLike, v2: ArrayLike) -> np.ndarray:
+    """Construct an orthonormal basis from two non-collinear vectors
+
+    Parameters
+    -----------
+    v1 : numpy.ndarray 
+        First inputs vector
+    v2 : numpy.ndarray
+        Second input vector
+
+    Returns
+    --------
+    numpy.ndarray
+        Matrix of three vectors representing the orthonormal basis
+    
+    Raises
+    ------
+    ValueError
+        If input vectors are collinear.
+    """
+
+    # check for collinearity
+    if np.allclose(np.cross(v1, v2), 0):
+        raise ValueError(f"{v1}, {v2} are two collinear vectors. An orthonormal basis cannot be computed from two collinear vectors.")
+    e1 = normalize_vector(v1)
+    temp = v2 - np.dot(v2, e1) * e1
+    e2 = normalize_vector(temp)
+    e3 = np.cross(e1, e2)
+    return np.column_stack((e1, e2, e3))
+
 
 # =============================================================================
 # Sphere projections (Lambert / stereographic / equidistant)
@@ -3953,3 +4071,4 @@ def as_triplet(
         raise ValueError("Either input_size or referene_size have to be specified")
 
     return size_correct_format
+

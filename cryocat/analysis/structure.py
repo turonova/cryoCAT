@@ -17,7 +17,7 @@ from cryocat.utils import geom
 from cryocat.utils import mathutils
 from cryocat.analysis import nnana
 from cryocat.utils import ioutils
-from cryocat._types import MapSource, MotlColumn, PathOrStr, TomoDimensions, TripletLike
+from cryocat._types import MapSource, MotlColumn, PathOrStr, TomoDimensions, TripletLike, RotationLike, MotlType, ArrayLike
 from cryocat.core.cryomotl import MotlSource
 from cryocat.core.surface import (
     Surface,
@@ -3154,3 +3154,330 @@ class ParametricSurface:
         if output_path is not None:
             motl.write_out(output_path)
         return motl
+
+
+class Icosahedron:
+    """Icosahedron class defined by the center coordinates of its vertices, edges and faces.
+
+    Parameters
+    ----------
+    radius : int or float
+    rotation : RotationLike
+    vertices : np.ndarray
+    edges : np.ndarray
+    faces : np.ndarray
+    """
+
+    def __init__(self, radius: float | int = 1, R: RotationLike | None = None):
+        """If radius and rotation are both None, then returns canonical icosahedron
+
+        Parameters
+        -----------
+        radius : int or float, optional
+            The radius of the icosahedron. Defaults to 1.0.
+        R : RotationLike, optional
+            Rotation to orient the canonical icosahedron to the desired orientation. Normalized via :func:`cryocat.utils.geom.as_rotation`.
+            If None, R will correspond to the identity matrix and no rotation is applied. Defaults to None.
+        """
+
+        if R is None:
+            R = np.eye(3) #identity matrix
+        R = geom.as_rotation(R)
+
+        self.radius = float(radius)
+        self.rotation = R
+
+        # build canonical icosahedron
+        self.vertices = geom.icosahedron()
+        self.edges = geom.icosahedron_edges(self.vertices)
+        self.faces = geom.icosahedron_faces(self.vertices, self.edges)
+
+        # Vertices
+        self.vertices = R.apply(self.vertices)
+        self.vertices = self.vertices * radius
+        
+        # Edges - center coordinates
+        self.edges = (self.vertices[self.edges[:,0]]+self.vertices[self.edges[:,1]]) / 2
+
+        # Faces - center coordinates
+        edges=geom.icosahedron_edges(self.vertices)
+        faces=geom.icosahedron_faces(self.vertices, edges)
+        self.faces = (self.vertices[faces[:,0]]+self.vertices[faces[:,1]]+ self.vertices[faces[:,2]])/ 3 
+
+
+    @classmethod
+    def compute_icosahedron(
+        cls, 
+        shift_vector1: ArrayLike | None = None, 
+        shift_vector2: ArrayLike | None = None
+        ) -> "Icosahedron":
+
+        """Compute an icosahedron from two input vectors defining two non-collinear vertices from the 
+        center of the icosahedron. If any of the two vectors is None, the canonical icosahedron is returned.
+
+        Parameters
+        -----------
+        shift_vector1 : ArrayLike, optional 
+            Vector defining the first vertex. Normalized via ``np.asarray()``.
+        shift_vector2 : ArrayLike, optional 
+            Vector defining the second vertex, which has to be non-collinear to the first vertex.
+            Normalized via :func:`np.asarray()`.
+        
+        Returns
+        --------
+        Icosahedron
+            An instance of the Icosahedron class with vertices, edges and faces computed based on the provided shift vectors.
+        """
+
+        if shift_vector1 is None or shift_vector2 is None:
+            radius = 1
+            R = None
+    
+        else:
+            shift_vector1 = np.asarray(shift_vector1)
+            shift_vector2 = np.asarray(shift_vector2)
+
+            # compute radius of the icosahedron
+            r1 = np.linalg.norm(shift_vector1)
+            r2 = np.linalg.norm(shift_vector2)
+            radius = 0.5 * (r1 + r2)
+
+            # build orientation frame in the box
+            F_box = geom.orthonormal_frame(shift_vector1, shift_vector2)
+
+            # Build canonical frame from two canonical adjacent vertices
+            verts_can = geom.icosahedron()
+            edges_can = geom.icosahedron_edges(verts_can)
+            v1_can = verts_can[0]
+            # pick neighbor (first edge involving vertex 0)
+            for e in edges_can:
+                if 0 in e:
+                    v2_can = verts_can[e[0] if e[1] == 0 else e[1]]
+                    break
+            F_can = geom.orthonormal_frame(v1_can, v2_can)
+
+            # Compute rotation from canonical frame to box frame
+            R = F_box @ F_can.T
+
+        # compute icosahedron
+        icosahedron = cls(radius=radius, R=R)
+
+        return icosahedron
+
+
+    @staticmethod
+    def recover_icosahedral_features(
+        input_cmm_file: PathOrStr, 
+        input_map: PathOrStr, 
+        center: TripletLike | None = None, 
+        mode: Literal["vertices", "edges", "faces"] = "vertices",
+        project_to_sphere: bool = False,
+        output_cmm_file: PathOrStr | None = None):
+
+        """Calculates the center coordinates of the desired feature (vertices, edges or faces) of the icosahedron 
+        based on the coordinates of the markers for two non-collinear vertices and the center of the input map (in voxels) within
+        its box. If desired, the coordinates of the features can be written out as a .cmm file that can be loaded in ChimeraX. 
+        The pixel size is retrieved directly from the input map via :func:`cryocat.core.cryomap.get_metadata` and is applied 
+        to the marker coordinates. Please note that if you provide a loaded numpy array as ``input_map``, the pixel size is 1.0.
+
+        Parameters
+        -----------
+        input_cmm_file : PathOrStr
+            Path to the .cmm file containing the coordinates of the markers for two non-collinear vertices
+        input_map : PathOrStr 
+            Path to the input map used to prepare the markers file or the input map as a numpy array. 
+        center : TripletLike, optional
+            Specify the center of the icosahedron within the box of the input map to calulate the vectors 
+            defining the selected non-collinear vertices. Normalized via :func:`cryocat.utils.geom.as_triplet`. 
+            If not specified, the center will be taken as the center of the box of the input map (e.g. for box 
+            size of 64 the center will be at (32, 32, 32) when numbered from 0). Defaults to None.
+        mode : {"vertices", "edges", "faces"}, default="vertices"
+            Feature to be recovered.
+        project_to_sphere : bool, default=False
+            Whether to project the recovered features to the sphere defined by the radius of the icosahedron.
+            This is useful when the input structure is made of subunits that exhibit icosahedral symmetry but 
+            form a spherical assembly rather than displaying icosahedral morphology.
+        output_cmm_file : PathOrStr, optional
+            Path to write out the markers of the extracted features. If not specified, 
+            no marker file is written out. Defaults to None.
+        
+        Returns
+        --------
+        feature_vec : np.ndarray
+            An array of shape (N, 3) containing the vectors defining the desired features (vertices, edges or faces) from the center of the reference icosahedron
+            
+        features_coords : np.ndarray
+            An array of shape (N, 3) containing the coordinates of the recovered features (vertices, edges or faces) in the box of the input map
+        
+        Raises
+        -------
+        ValueError
+            If the mode is not one of "vertices", "edges", or "faces".
+        """
+
+        # get the center of the icosahedron in the map box
+        input_map_metadata = cryomap.get_metadata(input_map)
+        map_size = geom.as_triplet(input_map_metadata[0])
+        center=geom.as_triplet(center, reference_size=map_size)
+        
+        # read the coordinates of the markers for two non-collinear vertices
+        input_vert_marks = ioutils.marker_coords_load(input_cmm_file) # pd.DataFrame
+        v1 = input_vert_marks.iloc[0].to_numpy() / input_map_metadata[1] 
+        v2 = input_vert_marks.iloc[1].to_numpy() / input_map_metadata[1]
+
+        # compute the vectors defining center -> vertex1 and center -> vertex2
+        shift_vector1 = v1 - center
+        shift_vector2 = v2 - center
+
+        # compute the icosahedron based on the two vectors
+        icosahedron = Icosahedron.compute_icosahedron(shift_vector1, shift_vector2)
+
+        # select the desired features - get vectors defing center -> feature 
+        if mode == "vertices":
+            feature_vec = icosahedron.vertices
+        elif mode == "edges":
+            feature_vec = icosahedron.edges
+        elif mode == "faces":
+            feature_vec = icosahedron.faces
+        else:
+            raise ValueError(f"Invalid mode: {mode}. Mode should be one of 'vertices', 'edges', or 'faces'.")
+
+        # spherical projection (optional)
+        if project_to_sphere:
+            norms = np.linalg.norm(feature_vec, axis=1)
+            feature_vec = (
+                feature_vec /
+                norms[:, None]
+            ) * icosahedron.radius
+
+        # add the center coordinates to get the feature coordinates in the map box and convert to Å
+        features_coords = np.add(feature_vec, center) * input_map_metadata[1]
+
+        # write out the features as .cmm file if desired
+        if output_cmm_file is not None:
+            ioutils.write_coords_to_cmm_file(features_coords, output_cmm_file)
+
+        return feature_vec, features_coords
+
+
+    @staticmethod
+    def icosahedral_sym_expansion(
+        input_motl: MotlSource,
+        shift_vecs: np.ndarray,
+        original_id_col: MotlColumn = "object_id",
+        order_id_col: MotlColumn = "geom1",
+        output_motl_type: MotlType = "emmotl",
+        output_path: PathOrStr | None = None,
+        **output_kwargs
+    ) -> "MotlSource":
+
+        """Create motive list where particle coordinates define the center of the extracted feature of the original icosahedral particles 
+        (e.g. vertices, edges or faces) based on the shift vectors provided. The extracted subparticles will have randomized in-plane angle.
+        The affiliation of the original particle is retained in the column specified by original_id_col and the new motive list is written 
+        out if output_path is specified.
+
+        Parameters
+        -----------
+        input_motl : MotlSource
+            Path to the input motive list or the input motive list as a cryomotl.Motl object. 
+            The motive list should contain particles corresponding to the original icosahedral particles 
+        shift_vecs : np.ndarray
+            An array of shape (N,3) defining the shift vectors form the center of the reference icosahedron 
+            to the desired features (vertices, edges or faces) that should be extracted.
+        original_id_col : MoltColumn, default="object_id"
+            Column in which to store the subtomo_id of the original particle (retain the afiliation to the original particle)
+        order_id_col : MotlColumn, deafult="geom1"
+            Column in which to store the order of subunit extraction for each original particle (0-numbering).
+            The order of the subunit extrcation is hierarchical and follows the following order:
+            1. ascending based on x coordinate;
+            2. ascending based on y coordinate;
+            3. ascending based on z coordinate.
+        output_motl_type : MotlType, default="emmotl"
+            Format of the output particle list.
+        output_path : PathOrStr, optional
+            Path to write the output motl.  No file is written when None.
+            Defaults to None.
+        **output_kwargs
+            Additional keyword arguments passed to the motl converter when preparing the
+            output motive list and writing the output file.  
+            See :func:`cryocat.core.cryomotl.motl_converter_kwargs` for details.
+
+        Returns
+        --------
+        cryomotl.Motl
+            A new motive list as a cryomotl.Motl object with icosahedral symmetry expansion applied 
+            according to the shift vectors passed as input
+        
+        Raises
+        -------
+        ValueError
+            If shift_vecs is not a numpy array of shape (N, 3), if original_id_col or order_id_col is not a valid column.
+        """
+
+        original_motl = cryomotl.Motl.load(input_motl)
+
+        if not isinstance(shift_vecs, np.ndarray) or shift_vecs.ndim !=2 or shift_vecs.shape[1] != 3:
+            raise ValueError("shift_vecs should be a numpy array of shape (N, 3)")
+        
+        for col in [original_id_col, order_id_col]:
+            if col not in original_motl.df.columns:
+                raise ValueError(f"original_id_col {col} not found in the columns of the input motive list")
+
+        # create as many new Motl instances as number of subparticles to be extracted
+        motl_subparticles = []
+
+        # sort the single 1d arrays forming feature_vec based on the following criterium:
+        # ascending order of x -> ascending order of y -> ascending order of z
+        idx = np.lexsort((shift_vecs[:,2], shift_vecs[:,1], shift_vecs[:,0]))
+        shift_vecs = shift_vecs[idx]
+
+        for shift in range(len(shift_vecs)):
+            df_copy = original_motl.df.copy()
+
+            #reset columns
+            df_copy["score"]=0
+            df_copy["subtomo_mean"]=0
+
+            df_copy[original_id_col] = original_motl.df["subtomo_id"] # retain affiliation of the original particle in the column specified by original_id_col
+            df_copy[order_id_col] = shift # subunits order, 0-numbering
+
+            motl_subparticle = cryomotl.Motl(df_copy)
+
+            # Apply the shifts to update the coordinates
+            motl_subparticle.shift_positions(shift_vecs[shift])
+            motl_subparticle.update_coordinates()
+
+            #Normalize the shift vector to use as target normal direction
+            target_normal = geom.normalize_vector(shift_vecs[shift])
+
+            #Define the reference normal (default z-axis in particle frame)  
+            reference_normal = np.array([0, 0, 1])
+
+            # Create a scipy Rotation object to align the original reference normal with the new target normal
+            # Use Rodrigues' rotation formula -> refer to geom.rotate_point_rodrigues()
+            rotation_axis = np.cross(reference_normal, target_normal)
+            rotation_axis = geom.normalize_vector(rotation_axis)
+            rotation_angle = np.arccos(np.clip(np.dot(reference_normal, target_normal), -1.0, 1.0))
+            rotation = srot.from_rotvec(rotation_angle * rotation_axis)
+
+            # Apply the rotations to align to the local frame of each subparticle
+            motl_subparticle.apply_rotation(rotation)
+
+            # Randomize in-plane angle
+            random_phi = np.random.rand(len(motl_subparticle.df)) * 360
+            motl_subparticle.fill({"phi": random_phi})
+
+            motl_subparticles.append(motl_subparticle)
+        
+        # merge all copies
+        output_motl = motl_subparticles[0]
+        for motl_subparticle in motl_subparticles[1:]:
+            output_motl = output_motl + motl_subparticle
+        
+        output_motl.df = output_motl.df.sort_values(by=[original_id_col, order_id_col],
+                                          ascending=[True, True]).reset_index(drop=True) # get particles sorted according to the original particle IDs and by their subunit extraction
+        output_motl.renumber_particles() # renumber the particles -> update subtomo_id
+
+        output_motl = cryomotl.motl_converter_kwargs(output_motl, output_motl_type, output_path=output_path, **output_kwargs)
+
+        return output_motl

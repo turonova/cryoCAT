@@ -1135,7 +1135,7 @@ def select_peaks(
     """
 
     # load the angles
-    angles = ioutils.euler_angles_load(angles_file, angles_order=angles_order)
+    angles = ioutils.euler_angles_load(angles_list, angles_order=angles_order)
     angles_map = (cryomap.read(angles_map) - 1).astype(int)
 
     # get threshold and threshold map

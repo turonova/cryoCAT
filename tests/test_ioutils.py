@@ -4424,3 +4424,155 @@ def test_fsc_read_unsupported_extension(tmp_path):
 def test_fsc_write_unsupported_extension(tmp_path):
     with pytest.raises(ValueError, match="Unsupported FSC output format"):
         ioutils.fsc_write(str(tmp_path / "fsc.txt"), [0.1], [0.9])
+
+
+def test_cmm_read_error_invalid_marker_file(tmp_path):
+    # Create a non-XML file
+    non_xml_path = tmp_path / "not_an_xml.txt"
+    non_xml_path.write_text("This is not an XML file.")
+    with pytest.raises(ValueError, match="not a valid marker file"):
+        ioutils.cmm_read(str(non_xml_path))
+
+def test_cmm_read_error_file_not_found(tmp_path):
+    invalid_file = tmp_path / "nonexistent_file.cmm"
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        ioutils.cmm_read(str(invalid_file))
+
+def test_cmm_read():
+    current_dir = Path(__file__).parent
+    df = pd.DataFrame({
+        "id": ["2", "4"],
+        "x": [112.0, 184.2],
+        "y": [156.2, 111.9],
+        "z": [184.5, 156.7],
+        "r":["1", "1"],
+        "g":["1", "1"],
+        "b":["0", "0"],
+        "radius":["3","3"]
+    })
+    cmm_file_path = str(current_dir / "test_data" / "test_marker_file.cmm")
+    result = ioutils.cmm_read(cmm_file_path)
+    pd.testing.assert_frame_equal(result, df)
+
+
+@pytest.mark.parametrize(
+        "input_data", [
+            {"x":[1]},
+            pd.DataFrame({"x":[1],"Y":[2],"random_col":[3]}),
+            np.asarray([[[23,34,45],[3,4,5],[4,5,6]]]),
+            np.asarray([[1,2],[34,45]]),
+            np.asarray([23,45,56])    
+        ]
+        )
+def test_marker_coords_invalid_input(input_data):
+    with pytest.raises(ValueError, match="Invalid input"):
+        ioutils.marker_coords_load(input_data)
+
+def test_marker_coords_file_not_found(tmp_path):
+    invalid_file = tmp_path / "nonexistent_file.txt"
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        ioutils.marker_coords_load(str(invalid_file))
+
+
+def test_marker_coords_invalid_input_from_file(tmp_path):
+    invalid_marker_content = pd.DataFrame({"x":[1],"Y":[2]})
+    invalid_file = tmp_path / "invalid_marker_file.csv"
+    invalid_marker_content.to_csv(invalid_file, header=False)
+    with pytest.raises(ValueError, match="Invalid input"):
+        ioutils.marker_coords_load(invalid_file)
+
+
+@pytest.mark.parametrize("input_data",[
+    pd.DataFrame({"x":[1,2],"y":[3,4],"Z":[5,6],"extra_col":["some","extra"]}),
+    pd.DataFrame({"x":[1,2],"y":[3,4],"Z":[5,6]}),
+    np.asarray([[1,2,3],[4,5,6]]),
+    1,
+    1.0,
+    [1,2,3],
+    (1,2,3),
+])
+def test_marker_coords_load_not_from_file(input_data):
+    result = ioutils.marker_coords_load(input_data)
+    assert isinstance(result, pd.DataFrame)
+    assert result.columns.tolist() == ["x","y","z"]
+
+def test_marker_coords_load_from_csv_file(tmp_path):
+    test_csv_file = tmp_path / "test_marker.csv"
+    content_test = pd.DataFrame({"x":[1,2],"y":[3,4],"z":[5,6]})
+    content_test = content_test.astype(float)
+    content_test.to_csv(test_csv_file, header=False, index=False)
+    result = ioutils.marker_coords_load(str(test_csv_file))
+    assert isinstance(result, pd.DataFrame)
+    assert result.columns.tolist() == ["x","y","z"]
+    pd.testing.assert_frame_equal(result, content_test) 
+
+def test_marker_coords_load_from_txt_file(tmp_path):
+    test_txt_file = tmp_path / "test_marker.txt"
+    content_test = np.asarray([[1,2,3],[4,5,6]])
+    np.savetxt(test_txt_file, content_test, fmt="%.1f")
+    expected = pd.DataFrame({"x":[1.0,4.0],"y":[2.0,5.0],"z":[3.0,6.0]})
+    result = ioutils.marker_coords_load(str(test_txt_file))
+    assert isinstance(result, pd.DataFrame)
+    assert result.columns.tolist() == ["x","y","z"]
+    pd.testing.assert_frame_equal(result, expected)
+
+def test_marker_coords_load_from_cmm():
+    current_dir = Path(__file__).parent
+    cmm_file_path = str(current_dir / "test_data" / "test_marker_file.cmm")
+    expected = df = pd.DataFrame({
+        "x": [112.0, 184.2],
+        "y": [156.2, 111.9],
+        "z": [184.5, 156.7], 
+    })
+    pd.testing.assert_frame_equal(expected, ioutils.marker_coords_load(cmm_file_path))
+
+
+def test_write_coords_to_cmm_file_error_wrong_extension():
+    with pytest.raises(ValueError, match="Invalid output file name"):
+        ioutils.write_coords_to_cmm_file([1,1,1], "dummy_file.txt")
+
+@pytest.mark.parametrize("coords", [
+    {"x":1, "y":2, "z":3},
+    np.asarray([1,2,3,4]),
+    np.random.rand(2,3,3),
+    np.random.rand(2,4),
+    pd.DataFrame({"x":[1,2], "y":[23,34]})
+])
+def test_write_coords_to_cmm_file_error_invalid_input(coords):
+    with pytest.raises(ValueError, match="Invalid input"):
+        ioutils.write_coords_to_cmm_file(coords, "dummy_file.cmm")
+
+@pytest.mark.parametrize("coords", [
+    12,
+    12.0,
+    [12,12,12],
+    (12,12,12),
+    np.asarray([12,12,12]),
+
+])
+def test_write_coords_to_cmm_file_triplet(tmp_path, coords):
+    out_cmm_file = tmp_path / "test_write_coords.cmm"
+    ioutils.write_coords_to_cmm_file(coords, str(out_cmm_file))
+    result = ioutils.marker_coords_load(str(out_cmm_file))
+    expected = pd.DataFrame({"x":[12.0], "y":[12.0], "z":[12.0]})
+    assert isinstance(result, pd.DataFrame)
+    assert result.columns.tolist() == ["x","y","z"]
+    pd.testing.assert_frame_equal(result, expected)
+
+
+@pytest.mark.parametrize("coords",[
+    pd.DataFrame({"x":[1,2,3], "y":[4,5,6], "z":[7,8,9]}),
+    pd.DataFrame({"X":[1,2,3], "Y":[4,5,6], "Z":[7,8,9]}),
+    pd.DataFrame({"x":[1,2,3], "y":[4,5,6], "z":[7,8,9], "extra_col":["extra", "test", "stuff"]}),
+    np.asarray([[1,4,7],[2,5,8],[3,6,9]])
+])
+def test_write_coords_to_cmm_file_2d(tmp_path, coords):
+    out_cmm_file = tmp_path / "test_write_coords.cmm"
+    ioutils.write_coords_to_cmm_file(coords, str(out_cmm_file))
+    result = ioutils.marker_coords_load(str(out_cmm_file))
+    expected = pd.DataFrame({"x":[1,2,3], "y":[4,5,6], "z":[7,8,9]})
+    expected = expected.astype(float)
+    assert isinstance(result, pd.DataFrame)
+    assert result.columns.tolist() == ["x","y","z"]
+    pd.testing.assert_frame_equal(result, expected)
+
