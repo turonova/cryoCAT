@@ -264,6 +264,55 @@ def create_output_folder_path(folder_path: PathOrStr, structure_name: str, folde
     return output_path
 
 
+def _path_or_inmemory(value: np.ndarray | str | os.PathLike | None) -> str:
+    """Return *value* as a string path, or a sentinel for non-path inputs.
+
+    Parameters
+    ----------
+    value : numpy.ndarray or str or os.PathLike or None
+        The map/data source to stringify.  ``None`` produces an empty string.
+        An ndarray (or any non-path object) produces ``"<in-memory>"``.
+
+    Returns
+    -------
+    str
+        ``""`` when *value* is ``None``; the string form of *value* when it is
+        a path; ``"<in-memory>"`` otherwise.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (str, os.PathLike)):
+        return str(value)
+    return "<in-memory>"
+
+
+def _resolve_input_path(value: str, parent_folder_path: PathOrStr, structure_name: str) -> str:
+    """Resolve a Template/Mask/Target-map value to an absolute path.
+
+    When *value* already carries directory information (absolute path or
+    contains a directory separator) it is returned unchanged.  A bare
+    filename is resolved via the rigid ``parent / structure / filename``
+    convention used by the batch pipeline.
+
+    Parameters
+    ----------
+    value : str
+        Filename or path as read from the template-list CSV.
+    parent_folder_path : PathOrStr
+        Root folder containing structure subfolders.
+    structure_name : str
+        Name of the structure subfolder under *parent_folder_path*.
+
+    Returns
+    -------
+    str
+        Absolute or explicitly-qualified path.
+    """
+    if os.path.isabs(value) or os.path.dirname(value):
+        return value
+    return create_em_path(parent_folder_path, structure_name, value)
+
+
 def filter_template_df(df: pd.DataFrame, conditions: dict, sort_by: str | None = None) -> pd.Index:
     """Filter an already-loaded template DataFrame and return matching indices.
 
@@ -1335,6 +1384,220 @@ def analyze_rotations(
     return res_table, final_ccc_map, final_angles_map, final_ccc_map_masked
 
 
+# ── params.csv columns ──────────────────────────────────────────────────────
+
+_TEMPLATE_INPUT_COLS: tuple[str, ...] = (
+    "Structure",
+    "Compare",
+    "Target map",
+    "Template",
+    "Mask",
+    "Tomogram",
+    "Angles",
+    "Degrees",
+    "Phi",
+    "Theta",
+    "Psi",
+    "Apply angular offset",
+    "Apply wedge",
+    "Boxsize",
+    "Binning",
+    "Pixelsize",
+    "Symmetry",
+    "Motl",
+    "Output folder",
+    "Done",
+)
+
+_RESULT_COLS: tuple[str, ...] = (
+    "Voxels",
+    "Voxels TM",
+    "Dim x",
+    "Dim y",
+    "Dim z",
+    "Solidity",
+    "VC dist_all",
+    "VC dist_normals",
+    "VC dist_inplane",
+    "Solidity dist_all",
+    "Solidity dist_normals",
+    "Solidity dist_inplane",
+    "VCO dist_all",
+    "VCO dist_normals",
+    "VCO dist_inplane",
+    "O dist_all x",
+    "O dist_all y",
+    "O dist_all z",
+    "O dist_normals x",
+    "O dist_normals y",
+    "O dist_normals z",
+    "O dist_inplane x",
+    "O dist_inplane y",
+    "O dist_inplane z",
+    "Peak value",
+    "Peak x",
+    "Peak y",
+    "Peak z",
+    "Drop x",
+    "Drop y",
+    "Drop z",
+    "Mean 1",
+    "Mean 2",
+    "Mean 3",
+    "Mean 4",
+    "Mean 5",
+    "Median 1",
+    "Median 2",
+    "Median 3",
+    "Median 4",
+    "Median 5",
+    "Var 1",
+    "Var 2",
+    "Var 3",
+    "Var 4",
+    "Var 5",
+    "TP x",
+    "TP y",
+    "TP z",
+    "GP x",
+    "GP y",
+    "GP z",
+    "HP x",
+    "HP y",
+    "HP z",
+)
+
+
+def gather_case_results(
+    scores_map: MapSource | None = None,
+    dist_all_map: MapSource | None = None,
+    dist_normals_map: MapSource | None = None,
+    dist_inplane_map: MapSource | None = None,
+    tight_mask: MapSource | None = None,
+    template_mask: MapSource | None = None,
+    degrees: float | None = None,
+    cc_radius: int = 10,
+    morph_footprint: TripletLike = (2, 2, 2),
+) -> dict:
+    """Compute all result metrics from single-case outputs and return a flat dict.
+
+    Delegates to the Layer-1 helpers :func:`mask_stats`,
+    :func:`dist_map_stats`, :func:`peak_stats_and_profiles`, and
+    :func:`peak_shapes`.  Only metrics whose required inputs are available are
+    included.  All ``MapSource`` parameters may be ndarrays or file paths.
+
+    Parameters
+    ----------
+    scores_map : MapSource, optional
+        Cross-correlation scores volume.
+    dist_all_map : MapSource, optional
+        Combined angular distance map.
+    dist_normals_map : MapSource, optional
+        Normals angular distance map.
+    dist_inplane_map : MapSource, optional
+        In-plane angular distance map.
+    tight_mask : MapSource, optional
+        Tight (binary) mask — required for mask-stats columns.
+    template_mask : MapSource, optional
+        Soft template mask — required together with *tight_mask* for mask-stats.
+    degrees : float, optional
+        Search-angle increment used to threshold distance maps.  Required for
+        dist-map-stats columns.
+    cc_radius : int, default=10
+        Radius (voxels) of the central sphere used to locate the peak.
+    morph_footprint : TripletLike, default=(2, 2, 2)
+        Structuring element for binary opening in :func:`dist_map_stats`.
+
+    Returns
+    -------
+    dict
+        Flat dict with keys drawn from :data:`_RESULT_COLS`.
+    """
+    result: dict = {}
+
+    # ── mask stats ──────────────────────────────────────────────────────────
+    if template_mask is not None and tight_mask is not None:
+        _tm = cryomap.read(template_mask)
+        _tight = cryomap.read(tight_mask)
+        _ms = mask_stats(_tm, _tight)
+        result["Voxels"] = _ms["voxels_soft"]
+        result["Voxels TM"] = _ms["voxels_sharp"]
+        result["Dim x"] = _ms["bbox"][0]
+        result["Dim y"] = _ms["bbox"][1]
+        result["Dim z"] = _ms["bbox"][2]
+        result["Solidity"] = _ms["solidity"]
+
+    # ── locate peak ─────────────────────────────────────────────────────────
+    _sm = None
+    peak_center = None
+    peak_value = None
+    if scores_map is not None:
+        _sm = cryomap.read(scores_map)
+        _cc_mask = cryomask.spherical_mask(np.asarray(_sm.shape), radius=cc_radius)
+        peak_center, peak_value, _ = tmana.create_starting_parameters_2D(_sm * _cc_mask)
+
+    # ── dist-map stats ───────────────────────────────────────────────────────
+    if peak_center is not None and degrees is not None:
+        _dist_names = ["dist_all", "dist_normals", "dist_inplane"]
+        _dist_sources = [dist_all_map, dist_normals_map, dist_inplane_map]
+        for j, (name, src) in enumerate(zip(_dist_names, _dist_sources)):
+            if src is None:
+                continue
+            _dm = cryomap.read(src)
+            _ds = dist_map_stats(_dm, peak_center, degrees, is_all=(j == 0),
+                                 morph_footprint=morph_footprint)
+            result[f"VC {name}"] = _ds["vc"]
+            result[f"Solidity {name}"] = _ds["solidity"]
+            result[f"VCO {name}"] = _ds["vco"]
+            for d, dim in enumerate(["x", "y", "z"]):
+                result[f"O {name} {dim}"] = _ds["dim"][d]
+
+    # ── peak stats and profiles ──────────────────────────────────────────────
+    if _sm is not None:
+        _ps = peak_stats_and_profiles(_sm, peak_center, peak_value)
+        result["Peak value"] = _ps["peak_value"]
+        for dim in ["x", "y", "z"]:
+            result["Drop " + dim] = _ps["drop_" + dim]
+            result["Peak " + dim] = _ps["peak_" + dim]
+        for r in range(1, 6):
+            result[f"Mean {r}"] = _ps[f"mean_{r}"]
+            result[f"Median {r}"] = _ps[f"median_{r}"]
+            result[f"Var {r}"] = _ps[f"var_{r}"]
+
+        _shp = peak_shapes(_sm)
+        for t, p in enumerate(["x", "y", "z"]):
+            result["TP " + p] = np.round(_shp["tp_shape"][t], 3)
+            result["GP " + p] = np.round(_shp["gp_shape"][t], 3)
+            result["HP " + p] = np.round(_shp["hp_shape"][t], 3)
+
+    return result
+
+
+def build_params_record(params: dict[str, object], results: dict[str, object]) -> pd.DataFrame:
+    """Build a one-row template-schema-compatible DataFrame from case params and results.
+
+    The returned DataFrame has all columns from :data:`_TEMPLATE_INPUT_COLS`
+    and :data:`_RESULT_COLS` plus an ``"Output base"`` helper column.  Missing
+    keys produce ``NaN`` rather than raising a ``KeyError``.
+
+    Parameters
+    ----------
+    params : dict
+        Input-parameter values (keys matching :data:`_TEMPLATE_INPUT_COLS`).
+    results : dict
+        Computed result values (keys matching :data:`_RESULT_COLS`).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Single-row DataFrame.
+    """
+    combined = {**params, **results}
+    all_cols = list(_TEMPLATE_INPUT_COLS) + list(_RESULT_COLS) + ["Output base"]
+    row = {col: combined.get(col, np.nan) for col in all_cols}
+    return pd.DataFrame([row])
+
+
 # ---------------------------------------------------------------------------
 # Layer 2 — single-case orchestrators
 # ---------------------------------------------------------------------------
@@ -1957,6 +2220,7 @@ def run_single_case(
     compute_distance_map: bool = True,
     compute_peak_stats: bool = True,
     angles_order: str = "zxz",
+    tight_mask: MapSource | None = None,
     if_exists: Literal["overwrite", "error", "timestamp"] = "overwrite",
 ) -> dict:
     """Run a complete single-case peak analysis and return all results.
@@ -2013,6 +2277,9 @@ def run_single_case(
         Whether to run :func:`compute_peak_stats` after distance-map computation.
     angles_order : str, default='zxz'
         Euler-angle convention.
+    tight_mask : MapSource, optional
+        Tight (binary) mask used by :func:`gather_case_results` for mask-stats
+        columns in the written ``params.csv``.
     if_exists : {'overwrite', 'error', 'timestamp'}, default='overwrite'
         Policy when output artifacts already exist.  ``'overwrite'`` writes
         directly; ``'error'`` raises :exc:`FileExistsError`; ``'timestamp'``
@@ -2022,7 +2289,8 @@ def run_single_case(
     -------
     dict
         Always contains ``"res_table"``, ``"scores_map"``, ``"angles_map"``,
-        ``"write_dir"``.  When *compute_distance_map* is True, also contains
+        ``"write_dir"``, ``"params"`` (the one-row params DataFrame written to
+        ``params.csv``).  When *compute_distance_map* is True, also contains
         ``"dist_all_map"``, ``"dist_normals_map"``, ``"dist_inplane_map"``.
         When *compute_peak_stats* is True and *degrees* is provided, also
         contains ``"peak_stats"``.
@@ -2096,6 +2364,51 @@ def run_single_case(
             )
             result["peak_stats"] = stats
 
+    # ── params.csv ───────────────────────────────────────────────────────────
+    case_results = gather_case_results(
+        scores_map=result.get("scores_map"),
+        dist_all_map=result.get("dist_all_map"),
+        dist_normals_map=result.get("dist_normals_map"),
+        dist_inplane_map=result.get("dist_inplane_map"),
+        tight_mask=tight_mask,
+        template_mask=template_mask,
+        degrees=degrees,
+        cc_radius=cc_radius,
+        morph_footprint=morph_footprint,
+    )
+    _tmpl_path = _path_or_inmemory(template)
+    _tgt_path = _path_or_inmemory(target_map)
+    _compare = (
+        "tmpl"
+        if _tmpl_path and _tgt_path
+        and _tmpl_path != "<in-memory>" and _tgt_path != "<in-memory>"
+        and os.path.abspath(_tmpl_path) == os.path.abspath(_tgt_path)
+        else "subtomo"
+    )
+    if starting_angle is not None:
+        _sa = np.asarray(starting_angle).flatten()
+        _phi, _theta, _psi = float(_sa[0]), float(_sa[1]), float(_sa[2])
+    else:
+        _phi, _theta, _psi = 0.0, 0.0, 0.0
+    params_input = {
+        "Target map": _tgt_path,
+        "Template": _tmpl_path,
+        "Mask": _path_or_inmemory(template_mask),
+        "Angles": _path_or_inmemory(input_angles),
+        "Degrees": degrees,
+        "Symmetry": cyclic_symmetry,
+        "Compare": _compare,
+        "Apply wedge": wedge_mask_target is not None or wedge_mask_tmpl is not None,
+        "Apply angular offset": angular_offset is not None,
+        "Phi": _phi,
+        "Theta": _theta,
+        "Psi": _psi,
+        "Output base": "",
+    }
+    params_df = build_params_record(params_input, case_results)
+    params_df.to_csv(str(write_dir / "params.csv"), index=False)
+    result["params"] = params_df
+
     return result
 
 
@@ -2133,8 +2446,8 @@ def _run_analysis_args_from_row(row: pd.Series, parent_folder_path: PathOrStr, w
         ``cyclic_symmetry``.
     """
     structure_name = row["Structure"]
-    template = create_em_path(parent_folder_path, structure_name, row["Template"])
-    mask = create_em_path(parent_folder_path, structure_name, row["Mask"])
+    template = _resolve_input_path(row["Template"], parent_folder_path, structure_name)
+    mask = _resolve_input_path(row["Mask"], parent_folder_path, structure_name)
 
     wedge_target = None
     wedge_tmpl = None
@@ -2142,7 +2455,7 @@ def _run_analysis_args_from_row(row: pd.Series, parent_folder_path: PathOrStr, w
     if row["Compare"] == "tmpl":
         target_map = template
     elif row["Compare"] == "subtomo":
-        target_map = create_em_path(parent_folder_path, structure_name, row["Target map"])
+        target_map = _resolve_input_path(row["Target map"], parent_folder_path, structure_name)
         tomo_number = re.findall(r"\d+", row["Tomogram"])[0]
         if row["Apply wedge"]:
             wedge_target, wedge_tmpl = create_wedge_names(wedge_path, tomo_number, row["Boxsize"], row["Binning"])
@@ -2274,6 +2587,11 @@ def run_analysis(
 
         temp_df.at[i, "Done"] = True
         temp_df.to_csv(template_list)  # save what was finished in case of a crush
+
+        params_input = {col: temp_df.at[i, col] for col in _TEMPLATE_INPUT_COLS if col in temp_df.columns}
+        params_input["Output base"] = output_base
+        params_df = build_params_record(params_input, {})
+        params_df.to_csv(output_folder + "params.csv", index=False)
 
 
 def run_single_gradual_case(
@@ -2820,6 +3138,181 @@ def _angle_development_figure(hist_df: pd.DataFrame, analysis_df: pd.DataFrame) 
     return fig
 
 
+_RESIZE_SCRIPT = (
+    "<script>\n"
+    "window.addEventListener('load', function() {\n"
+    "  if (window.Plotly) {\n"
+    "    document.querySelectorAll('.js-plotly-plot').forEach(\n"
+    "      function(d) { Plotly.Plots.resize(d); }\n"
+    "    );\n"
+    "  }\n"
+    "});\n"
+    "</script>"
+)
+
+# Flat-file names written by run_single_case mapped from the batch-style
+# suffix used by the batch pipeline (used in _write_case_summary_html).
+_SINGLE_CASE_FILE_MAP: dict[str, str] = {
+    "_scores.em":                     "scores.em",
+    "_angles_dist_all.em":            "distance_map_all.em",
+    "_angles_dist_normals.em":        "distance_map_normals.em",
+    "_angles_dist_inplane.em":        "distance_map_inplane.em",
+    "_stats.json":                    "stats.json",
+    "_gradual_angles_histograms.csv": "gradual_angles_histograms.csv",
+    "_gradual_angles_analysis.csv":   "gradual_angles_analysis.csv",
+}
+
+
+def _write_case_summary_html(
+    row: pd.Series,
+    output_folder: str,
+    output_base: str,
+    *,
+    tight_mask_path: str | None = None,
+    title: str | None = None,
+) -> str:
+    """Render and write a single-page HTML summary for one analysis case.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        Template-schema row (may be a ``params.csv`` row or a template-list row).
+    output_folder : str
+        Directory containing the output files (trailing slash).
+    output_base : str
+        Filename prefix for the batch pipeline (e.g. ``"id_3"``).  Pass ``""``
+        for single-case outputs, which use flat filenames (``scores.em``, …).
+    tight_mask_path : str, optional
+        Absolute path to the tight-mask file.  When provided, the tight-mask
+        cross-section panel is included.
+    title : str, optional
+        ``<h1>`` title string.  Defaults to ``"Summary — <output_base>"`` for
+        batch mode or ``"Summary"`` for single-case mode.
+
+    Returns
+    -------
+    str
+        Path to the written HTML file.
+    """
+    if output_base:
+        def _p(suffix: str) -> str | None:
+            path = output_folder + output_base + suffix
+            return path if os.path.isfile(path) else None
+        rot_csv = _p(".csv")
+        html_out = output_folder + output_base + "_summary.html"
+        title_str = title or f"Summary — {output_base}"
+    else:
+        def _p(suffix: str) -> str | None:
+            fname = _SINGLE_CASE_FILE_MAP.get(suffix, "")
+            if not fname:
+                return None
+            path = output_folder + fname
+            return path if os.path.isfile(path) else None
+        rot_csv = None
+        html_out = output_folder + "summary.html"
+        title_str = title or "Summary"
+
+    figs = visualize_results(
+        scores=_p("_scores.em"),
+        dist_all_map=_p("_angles_dist_all.em"),
+        dist_normals_map=_p("_angles_dist_normals.em"),
+        dist_inplane_map=_p("_angles_dist_inplane.em"),
+        peak_stats=_p("_stats.json"),
+    )
+
+    html_parts: list[str] = []
+
+    # ── Section 1: input parameters | results (combined 4-column table) ────
+    tbl_html = _summary_table_figure(row).to_html(include_plotlyjs="cdn", full_html=False)
+    html_parts.append("<h2>Run parameters &amp; results</h2>\n" + tbl_html)
+
+    # ── Section 2: line profiles | peak shape ──────────────────────────────
+    _resp = {"responsive": True}
+    lp_html = (figs["line_profiles"].to_html(include_plotlyjs=False, full_html=False,
+               default_width="100%", config=_resp)
+               if "line_profiles" in figs else None)
+    ps_html = (figs["peak_shape"].to_html(include_plotlyjs=False, full_html=False,
+               default_width="100%", config=_resp)
+               if "peak_shape" in figs else None)
+    if lp_html and ps_html:
+        html_parts.append("<h2>Line profiles &amp; peak shape</h2>\n" + _flex_pair(lp_html, ps_html))
+    elif lp_html:
+        html_parts.append("<h2>Line profiles</h2>\n" + lp_html)
+    elif ps_html:
+        html_parts.append("<h2>Peak shape</h2>\n" + ps_html)
+
+    # ── Section 3: CCC scatter ──────────────────────────────────────────────
+    if rot_csv:
+        try:
+            rot_df = pd.read_csv(rot_csv)
+            if "ang_dist" in rot_df.columns and "ccc_masked" in rot_df.columns:
+                html_parts.append(
+                    "<h2>CCC scatter</h2>\n"
+                    + _ccc_scatter_figure(rot_df).to_html(include_plotlyjs=False, full_html=False)
+                )
+        except Exception:
+            pass
+
+    # ── Section 4: angle development ───────────────────────────────────────
+    hist_csv = _p("_gradual_angles_histograms.csv")
+    analysis_csv = _p("_gradual_angles_analysis.csv")
+    if hist_csv and analysis_csv:
+        try:
+            h_df = pd.read_csv(hist_csv, index_col=0)
+            a_df = pd.read_csv(analysis_csv, index_col=0)
+            html_parts.append(
+                "<h2>Angle development</h2>\n"
+                + _angle_development_figure(h_df, a_df).to_html(include_plotlyjs=False, full_html=False)
+            )
+        except Exception:
+            pass
+
+    # ── Section 5: tight mask cross-sections ───────────────────────────────
+    if tight_mask_path and os.path.isfile(tight_mask_path):
+        try:
+            mask_arr = cryomap.read(tight_mask_path)
+            html_parts.append(
+                "<h2>Tight mask cross-sections</h2>\n"
+                + _make_slice_figure(mask_arr, colorscale="gray",
+                                     title="",
+                                     show_zoom=False).to_html(
+                    include_plotlyjs=False, full_html=False)
+            )
+        except Exception:
+            pass
+
+    # ── Section 6: orthogonal cross-sections ───────────────────────────────
+    for key, section_title in [
+        ("score_slices",            "Score map cross-sections"),
+        ("distance_slices_all",     "Distance map (all) cross-sections"),
+        ("distance_slices_normals", "Distance map (normals) cross-sections"),
+        ("distance_slices_inplane", "Distance map (in-plane) cross-sections"),
+    ]:
+        if key in figs:
+            figs[key].update_layout(title_text="", margin_t=0)
+            html_parts.append(
+                f"<h2>{section_title}</h2>\n"
+                + figs[key].to_html(include_plotlyjs=False, full_html=False)
+            )
+
+    full_html = (
+        "<!DOCTYPE html>\n<html>\n<head>\n"
+        '<meta charset="utf-8">\n'
+        f"<title>{title_str}</title>\n"
+        "<style>body{font-family:sans-serif;margin:1rem}</style>\n"
+        "</head>\n<body>\n"
+        f"<h1>{title_str}</h1>\n"
+        + "\n".join(html_parts)
+        + "\n" + _RESIZE_SCRIPT
+        + "\n</body>\n</html>"
+    )
+
+    with open(html_out, "w", encoding="utf-8") as fh:
+        fh.write(full_html)
+
+    return html_out
+
+
 def create_summary_html(template_list: PathOrStr, indices: list[int], parent_folder_path: PathOrStr) -> None:
     """Generate a single-page HTML summary for a set of peak analysis results.
 
@@ -2857,127 +3350,106 @@ def create_summary_html(template_list: PathOrStr, indices: list[int], parent_fol
         output_base = create_output_base_name(i)
         output_folder = create_output_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
 
-        def _p(suffix: str) -> str | None:
-            path = output_folder + output_base + suffix
-            return path if os.path.isfile(path) else None
-
-        figs = visualize_results(
-            scores=_p("_scores.em"),
-            dist_all_map=_p("_angles_dist_all.em"),
-            dist_normals_map=_p("_angles_dist_normals.em"),
-            dist_inplane_map=_p("_angles_dist_inplane.em"),
-            peak_stats=_p("_stats.json"),
-        )
-
-        row = temp_df.loc[i]
-        html_parts: list[str] = []
-
-        # ── Section 1: input parameters | results (combined 4-column table) ─
-        tbl_html = _summary_table_figure(row).to_html(include_plotlyjs="cdn", full_html=False)
-        html_parts.append("<h2>Run parameters &amp; results</h2>\n" + tbl_html)
-
-        # ── Section 2: line profiles | peak shape ─────────────────────────
-        _resp = {"responsive": True}
-        lp_html = (figs["line_profiles"].to_html(include_plotlyjs=False, full_html=False,
-                   default_width="100%", config=_resp)
-                   if "line_profiles" in figs else None)
-        ps_html = (figs["peak_shape"].to_html(include_plotlyjs=False, full_html=False,
-                   default_width="100%", config=_resp)
-                   if "peak_shape" in figs else None)
-        if lp_html and ps_html:
-            html_parts.append("<h2>Line profiles &amp; peak shape</h2>\n" + _flex_pair(lp_html, ps_html))
-        elif lp_html:
-            html_parts.append("<h2>Line profiles</h2>\n" + lp_html)
-        elif ps_html:
-            html_parts.append("<h2>Peak shape</h2>\n" + ps_html)
-
-        # ── Section 3: CCC scatter (angular distance | voxel overlap) ─────
-        rot_csv = _p(".csv")
-        if rot_csv:
-            try:
-                rot_df = pd.read_csv(rot_csv)
-                if "ang_dist" in rot_df.columns and "ccc_masked" in rot_df.columns:
-                    html_parts.append(
-                        "<h2>CCC scatter</h2>\n"
-                        + _ccc_scatter_figure(rot_df).to_html(include_plotlyjs=False, full_html=False)
-                    )
-            except Exception:
-                pass
-
-        # ── Section 4: angle development (histogram | progression) ────────
-        hist_csv = _p("_gradual_angles_histograms.csv")
-        analysis_csv = _p("_gradual_angles_analysis.csv")
-        if hist_csv and analysis_csv:
-            try:
-                h_df = pd.read_csv(hist_csv, index_col=0)
-                a_df = pd.read_csv(analysis_csv, index_col=0)
-                html_parts.append(
-                    "<h2>Angle development</h2>\n"
-                    + _angle_development_figure(h_df, a_df).to_html(include_plotlyjs=False, full_html=False)
-                )
-            except Exception:
-                pass
-
-        # ── Section 5: cross-sections (mask → scores → distances) ─────────
         tight_mask_name = temp_df.at[i, "Tight mask"] if "Tight mask" in temp_df.columns else None
+        tight_mask_path: str | None = None
         if tight_mask_name and not (isinstance(tight_mask_name, float) and pd.isna(tight_mask_name)):
-            try:
-                mask_path = create_em_path(parent_folder_path, structure_name, tight_mask_name)
-                if os.path.isfile(mask_path):
-                    mask_arr = cryomap.read(mask_path)
-                    html_parts.append(
-                        "<h2>Tight mask cross-sections</h2>\n"
-                        + _make_slice_figure(mask_arr, colorscale="gray",
-                                             title="",
-                                             show_zoom=False).to_html(
-                            include_plotlyjs=False, full_html=False)
-                    )
-            except Exception:
-                pass
+            candidate = _resolve_input_path(tight_mask_name, parent_folder_path, structure_name)
+            if os.path.isfile(candidate):
+                tight_mask_path = candidate
 
-        for key, section_title in [
-            ("score_slices",            "Score map cross-sections"),
-            ("distance_slices_all",     "Distance map (all) cross-sections"),
-            ("distance_slices_normals", "Distance map (normals) cross-sections"),
-            ("distance_slices_inplane", "Distance map (in-plane) cross-sections"),
-        ]:
-            if key in figs:
-                figs[key].update_layout(title_text="", margin_t=0)
-                html_parts.append(
-                    f"<h2>{section_title}</h2>\n"
-                    + figs[key].to_html(include_plotlyjs=False, full_html=False)
-                )
-
-        # Force Plotly to re-measure all figure divs once the browser has
-        # finished computing flex layout (responsive:True only fires on resize,
-        # not on initial render, so the first load would be cut off otherwise).
-        _resize_script = (
-            "<script>\n"
-            "window.addEventListener('load', function() {\n"
-            "  if (window.Plotly) {\n"
-            "    document.querySelectorAll('.js-plotly-plot').forEach(\n"
-            "      function(d) { Plotly.Plots.resize(d); }\n"
-            "    );\n"
-            "  }\n"
-            "});\n"
-            "</script>"
+        _write_case_summary_html(
+            row=temp_df.loc[i],
+            output_folder=output_folder,
+            output_base=output_base,
+            tight_mask_path=tight_mask_path,
+            title=f"Summary — index {i}",
         )
 
-        full_html = (
-            "<!DOCTYPE html>\n<html>\n<head>\n"
-            '<meta charset="utf-8">\n'
-            f"<title>Summary — index {i}</title>\n"
-            "<style>body{font-family:sans-serif;margin:1rem}</style>\n"
-            "</head>\n<body>\n"
-            f"<h1>Summary — index {i}</h1>\n"
-            + "\n".join(html_parts)
-            + "\n" + _resize_script
-            + "\n</body>\n</html>"
-        )
 
-        out_path = output_folder + output_base + "_summary.html"
-        with open(out_path, "w", encoding="utf-8") as fh:
-            fh.write(full_html)
+def create_summary_html_from_folder(output_folder: PathOrStr) -> str:
+    """Generate an HTML summary for a single-case output folder.
+
+    Reads ``params.csv`` from *output_folder*, reconstructs the parameter row,
+    and delegates to :func:`_write_case_summary_html` using the flat single-case
+    file naming convention.
+
+    Parameters
+    ----------
+    output_folder : PathOrStr
+        Directory written by :func:`run_single_case`.  Must contain
+        ``params.csv``.
+
+    Returns
+    -------
+    str
+        Path to the written ``summary.html`` file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``params.csv`` is not found in *output_folder*.
+    """
+    folder = str(output_folder).rstrip("/\\") + "/"
+    params_path = folder + "params.csv"
+    if not os.path.isfile(params_path):
+        raise FileNotFoundError(f"params.csv not found in {folder!r}")
+
+    params_df = pd.read_csv(params_path)
+    row = params_df.iloc[0]
+
+    tight_mask_path: str | None = None
+    tight_mask_val = row.get("Tight mask") if hasattr(row, "get") else row.get("Tight mask", None)
+    if tight_mask_val and not (isinstance(tight_mask_val, float) and pd.isna(tight_mask_val)):
+        candidate = str(tight_mask_val)
+        if os.path.isfile(candidate):
+            tight_mask_path = candidate
+
+    return _write_case_summary_html(
+        row=row,
+        output_folder=folder,
+        output_base="",
+        tight_mask_path=tight_mask_path,
+    )
+
+
+def params_to_template_row(
+    params_csv: PathOrStr,
+    *,
+    template_columns: list[str] | None = None,
+    output_folder_name: str | None = None,
+) -> pd.Series:
+    """Convert a single-case ``params.csv`` to a template-list-compatible row.
+
+    GUI helper: lets the ppana GUI add a single-case result to an existing
+    template-list DataFrame or build a new one from scratch.
+
+    Parameters
+    ----------
+    params_csv : PathOrStr
+        Path to the ``params.csv`` written by :func:`run_single_case`.
+    template_columns : list of str, optional
+        Column order to enforce.  Defaults to ``list(_TEMPLATE_INPUT_COLS) +
+        list(_RESULT_COLS)``.
+    output_folder_name : str, optional
+        Value to store in the ``"Output folder"`` column.  If ``None``, the
+        parent directory name of *params_csv* is used.
+
+    Returns
+    -------
+    pandas.Series
+        One row compatible with the template-list schema.
+    """
+    params_df = pd.read_csv(str(params_csv))
+    row = params_df.iloc[0].copy()
+
+    if output_folder_name is None:
+        output_folder_name = Path(params_csv).parent.name
+    row["Output folder"] = output_folder_name
+
+    if template_columns is None:
+        template_columns = list(_TEMPLATE_INPUT_COLS) + list(_RESULT_COLS)
+
+    return row.reindex(template_columns)
 
 
 ##########################################################################################################################

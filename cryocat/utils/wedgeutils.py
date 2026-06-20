@@ -799,9 +799,7 @@ def _analytical_wedgemask_slices(
     # Auto-thickness: keep adjacent slabs overlapping at Nyquist.
     if thickness is None:
         tilts_sorted = np.sort(wedgelist["tilt_angle"].to_numpy(dtype=float))
-        max_gap_deg = (
-            float(np.max(np.diff(tilts_sorted))) if len(tilts_sorted) > 1 else 1.0
-        )
+        max_gap_deg = float(np.max(np.diff(tilts_sorted))) if len(tilts_sorted) > 1 else 1.0
         nyq = max(shape) / 2.0
         thickness = max(1.0, nyq * np.sin(np.deg2rad(max_gap_deg)) / 2.0)
 
@@ -815,8 +813,8 @@ def _analytical_wedgemask_slices(
     for alpha in wedgelist["tilt_angle"]:
         a = np.deg2rad(float(alpha))
         # Slab plane sin(α)·kx − cos(α)·kz = 0; sign matches rotate_2d.
-        d = np.abs(np.cos(a) * KX - np.sin(a) * KZ) 
-        slab_2d = d < thickness                          # (nx, nz)
+        d = np.abs(np.cos(a) * KX - np.sin(a) * KZ)
+        slab_2d = d < thickness  # (nx, nz)
         slab_3d = np.broadcast_to(slab_2d[:, None, :], shape) & bpf_idx
         weight += slab_3d
         active_slices_idx.append(np.nonzero(slab_3d))
@@ -926,9 +924,9 @@ def generate_wedge_mask(
     wl = wl.loc[wl["tomo_num"] == tomo_number]
 
     if low_pass_filter is not None:
-        filt = cryomap.lowpass(filt, fourier_pixels=low_pass_filter)
+        filt *= np.fft.ifftshift(imageutils._spherical_mask_nd(size_triplet, low_pass_filter))
     if high_pass_filter is not None:
-        filt = cryomap.highpass(filt, fourier_pixels=high_pass_filter)
+        filt *= np.fft.ifftshift(imageutils._spherical_mask_nd(size_triplet, high_pass_filter))
 
     if method == "geometric":
         if thickness is not None:
@@ -936,17 +934,13 @@ def generate_wedge_mask(
                 "thickness is only used when method='analytic'; ignoring.",
                 stacklevel=2,
             )
-        active_slices_idx, wedge_slices_weights, wedge_slices = (
-            _geometric_wedgemask_slices(wl, filt)
-        )
+        active_slices_idx, wedge_slices_weights, wedge_slices = _geometric_wedgemask_slices(wl, filt)
     elif method == "analytic":
-        active_slices_idx, wedge_slices_weights, wedge_slices = (
-            _analytical_wedgemask_slices(wl, filt, thickness=thickness)
+        active_slices_idx, wedge_slices_weights, wedge_slices = _analytical_wedgemask_slices(
+            wl, filt, thickness=thickness
         )
     else:
-        raise ValueError(
-            f"Unknown method {method!r}; expected 'geometric' or 'analytic'."
-        )
+        raise ValueError(f"Unknown method {method!r}; expected 'geometric' or 'analytic'.")
 
     mask = wedge_slices * filt
 

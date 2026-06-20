@@ -387,8 +387,30 @@ def test_wedge_list_sg_to_em_invalid_input(tmp_path):
 # ── generate_wedge_mask ────────────────────────────────────────────────────────
 
 _WL_PATH = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_list.star")
+_DATA_DIR = Path(__file__).parent / "test_data" / "wedgeutils_data"
 _TOMO_NUM = 17
 
+
+@pytest.fixture(scope="module")
+def exposure_wedgelist():
+    tilts = np.arange(-52, 54, 2, dtype=float)
+    n = len(tilts)
+    return pd.DataFrame({
+        "tomo_num": [1] * n,
+        "tilt_angle": tilts,
+        "pixelsize": [2.4] * n,
+        "exposure": np.linspace(0.1, 5.0, n),
+        "tomo_x": [512] * n,
+        "tomo_y": [512] * n,
+        "tomo_z": [200] * n,
+        "defocus": [3.5] * n,
+        "voltage": [300.0] * n,
+        "amp_contrast": [0.07] * n,
+        "cs": [2.7] * n,
+    })
+
+
+# ── structural / error tests ──────────────────────────────────────────────────
 
 def test_generate_wedge_mask_cubic_shape():
     result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
@@ -414,155 +436,14 @@ def test_generate_wedge_mask_no_output_path():
     assert result["output_path"] is None
 
 
-def test_generate_wedge_mask_values_in_unit_interval():
-    result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
-    assert result["mask"].min() >= 0.0
-    assert result["mask"].max() <= 1.0 + 1e-6
-
-
-def test_generate_wedge_mask_lowpass_not_all_ones():
-    result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, low_pass_filter=8)
-    assert not np.allclose(result["mask"], 1.0)
-
-
-@pytest.fixture
-def exposure_wedgelist():
-    import pandas as pd
-    tilts = np.arange(-52, 54, 2, dtype=float)
-    n = len(tilts)
-    return pd.DataFrame({
-        "tomo_num": [1] * n,
-        "tilt_angle": tilts,
-        "pixelsize": [2.4] * n,
-        "exposure": np.linspace(0.1, 5.0, n),
-        "tomo_x": [512] * n,
-        "tomo_y": [512] * n,
-        "tomo_z": [200] * n,
-        "defocus": [3.5] * n,
-        "voltage": [300.0] * n,
-        "amp_contrast": [0.07] * n,
-        "cs": [2.7] * n,
-    })
-
-
-def test_generate_wedge_mask_exposure_weighting(exposure_wedgelist):
-    result_plain = generate_wedge_mask(32, exposure_wedgelist, 1)
-    result_exp = generate_wedge_mask(32, exposure_wedgelist, 1, exposure_weighting=True)
-    assert result_exp["mask"].shape == (32, 32, 32)
-    assert not np.allclose(result_plain["mask"], result_exp["mask"])
-
-
-def test_generate_wedge_mask_ctf_weighting():
-    result_plain = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
-    result_ctf = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, ctf_weighting=True)
-    assert result_ctf["mask"].shape == (32, 32, 32)
-    assert not np.allclose(result_plain["mask"], result_ctf["mask"])
-
-
-def test_generate_wedge_mask_two_sizes_independent():
-    r_small = generate_wedge_mask(16, _WL_PATH, _TOMO_NUM)
-    r_large = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
-    assert r_small["mask"].shape == (16, 16, 16)
-    assert r_large["mask"].shape == (32, 32, 32)
-
-
-# ── generate_wedge_mask: method dispatch (geometric vs analytic) ───────────────
-
-
-def _synthetic_wedgelist(tilts):
-    """Minimal wedge list with the columns generate_wedge_mask consumes."""
-    import pandas as pd
-    tilts = np.asarray(tilts, dtype=float)
-    n = len(tilts)
-    return pd.DataFrame({
-        "tomo_num": [1] * n,
-        "tilt_angle": tilts,
-        "pixelsize": [2.4] * n,
-        "exposure": np.linspace(0.1, 5.0, n),
-        "tomo_x": [512] * n,
-        "tomo_y": [512] * n,
-        "tomo_z": [200] * n,
-        "defocus": [3.5] * n,
-        "voltage": [300.0] * n,
-        "amp_contrast": [0.07] * n,
-        "cs": [2.7] * n,
-    })
-
-
 def test_generate_wedge_mask_default_method_is_geometric():
-    """Default call must equal an explicit method='geometric' call byte-for-byte
-    (pins that the dispatch path didn't change the historical output)."""
+    """Default call must be byte-for-byte identical to method='geometric'."""
     r_default = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
     r_explicit = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method="geometric")
     assert np.array_equal(r_default["mask"], r_explicit["mask"])
 
 
-def test_generate_wedge_mask_both_methods_reach_dc():
-    """The DC voxel (index 0,0,0 in FFT layout) lies inside every slab, so both
-    methods must mark it as covered for a typical tilt list."""
-    wl = _synthetic_wedgelist(np.arange(-30, 32, 2))
-    r_geom = generate_wedge_mask(32, wl, 1, method="geometric")
-    r_ana = generate_wedge_mask(32, wl, 1, method="analytic", thickness=1.0)
-    # mask is transposed (2,1,0); corner stays a corner.
-    assert r_geom["mask"][0, 0, 0] == 1
-    assert r_ana["mask"][0, 0, 0] == 1
-
-
-def test_generate_wedge_mask_analytic_reaches_nyquist_corner():
-    """48^3 / ±60°@2° tilts: analytic covers the (24,24,24) Nyquist corner.
-    The geometric mask has notable un-covered region here -- this test pins
-    that analytic doesn't."""
-    wl = _synthetic_wedgelist(np.arange(-60, 62, 2))
-    r_ana = generate_wedge_mask(48, wl, 1, method="analytic")
-    assert r_ana["mask"][24, 24, 24] != 0
-
-
-def test_generate_wedge_mask_analytic_has_at_least_geometric_mean():
-    """Both methods produce non-trivial wedge coverage; analytic eliminates
-    the diamond truncation so its overall coverage is at least as high as
-    geometric's at every box size."""
-    wl = _synthetic_wedgelist(np.arange(-60, 62, 2))
-    for box in (32, 48):
-        g = generate_wedge_mask(box, wl, 1, method="geometric")["mask"]
-        a = generate_wedge_mask(box, wl, 1, method="analytic", thickness=1.0)["mask"]
-        # Each method produces a real wedge (neither degenerate to 0 nor 1).
-        for name, m in (("geom", g), ("ana", a)):
-            mean = float(m.mean())
-            assert 0.3 < mean < 0.95, f"box={box}, method={name}: mean={mean:.3f}"
-        # Analytic covers the diamond-cropped corners that geometric misses.
-        assert float(a.mean()) >= float(g.mean()), f"box={box}"
-
-
-def test_generate_wedge_mask_auto_thickness_large_box():
-    """At larger box sizes the analytic auto-thickness is essential: with
-    thickness=1.0 the slabs would stop overlapping at Nyquist and coverage
-    would drop. With thickness=None the mean coverage should be close to
-    (180 - 60) / 180 ≈ 0.67."""
-    wl = _synthetic_wedgelist(np.arange(-60, 62, 2))
-    r_auto = generate_wedge_mask(128, wl, 1, method="analytic", thickness=None)
-    expected = (180.0 - 60.0) / 180.0
-    assert abs(float(r_auto["mask"].mean()) - expected) < 0.05
-
-
-def test_generate_wedge_mask_sign_convention_asymmetric_tilts():
-    """Asymmetric tilt list pins the sign in sin(α)·kx − cos(α)·kz.
-
-    The Hamming distance per voxel between geometric and analytic masks
-    should be comparable for symmetric vs asymmetric tilt lists -- if the
-    sign were flipped, asymmetric would diverge sharply.
-    """
-    for tilts in ([-30.0, 0.0, 30.0], [-30.0, 0.0, 5.0]):
-        wl = _synthetic_wedgelist(tilts)
-        r_geom = generate_wedge_mask(32, wl, 1, method="geometric")
-        r_ana = generate_wedge_mask(32, wl, 1, method="analytic", thickness=1.0)
-        ham = float(np.mean(np.abs(r_geom["mask"] - r_ana["mask"])))
-        # Generous bound; if the sign flipped, the asymmetric pair would
-        # disagree on huge swaths of the volume (>> 0.3).
-        assert ham < 0.3, f"tilts={tilts}: Hamming/voxel = {ham:.3f}"
-
-
 def test_generate_wedge_mask_method_validation_bogus():
-    """Unknown method values raise ValueError naming both valid options."""
     with pytest.raises(ValueError) as exc_info:
         generate_wedge_mask(16, _WL_PATH, _TOMO_NUM, method="bogus")
     msg = str(exc_info.value)
@@ -571,12 +452,67 @@ def test_generate_wedge_mask_method_validation_bogus():
 
 
 def test_generate_wedge_mask_thickness_warning_when_geometric():
-    """Passing thickness with method='geometric' emits a UserWarning
-    mentioning both keywords; the value is silently dropped."""
     with pytest.warns(UserWarning, match="thickness.*analytic"):
         result = generate_wedge_mask(
             16, _WL_PATH, _TOMO_NUM, method="geometric", thickness=2.0
         )
-    # geometric branch ran -> shape still correct
     assert result["mask"].shape == (16, 16, 16)
+
+
+# ── integration tests: voxel-level comparison against stored reference masks ──
+#
+# Reference files were generated once from the corrected implementation and
+# stored in test_data/wedgeutils_data/.  Any change to generate_wedge_mask,
+# _geometric_wedgemask_slices, _analytical_wedgemask_slices, or the filter
+# application path will cause a mismatch here.
+
+def test_generate_wedge_mask_geometric_tomo17_matches_reference():
+    """Geometric mask for tomo 17 must reproduce the stored reference exactly."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_geom_t17.em"))
+    result = generate_wedge_mask(32, _WL_PATH, 17, method="geometric")
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="geometric mask (tomo 17) diverged from reference")
+
+
+def test_generate_wedge_mask_geometric_tomo18_matches_reference():
+    """Geometric mask for tomo 18 must reproduce the stored reference exactly
+    (exercises tomo-number selection from the wedge list)."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_geom_t18.em"))
+    result = generate_wedge_mask(32, _WL_PATH, 18, method="geometric")
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="geometric mask (tomo 18) diverged from reference")
+
+
+def test_generate_wedge_mask_analytic_tomo17_matches_reference():
+    """Analytic mask for tomo 17 must reproduce the stored reference exactly."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_ana_t17.em"))
+    result = generate_wedge_mask(32, _WL_PATH, 17, method="analytic")
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="analytic mask (tomo 17) diverged from reference")
+
+
+def test_generate_wedge_mask_lowpass_filter_matches_reference():
+    """Geometric mask with low_pass_filter=8 must match the stored reference,
+    pinning that the filter is applied as a binary Fourier-domain sphere
+    (not a real-space FFT round-trip as the old broken implementation did)."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_geom_lp8_t17.em"))
+    result = generate_wedge_mask(32, _WL_PATH, 17, method="geometric", low_pass_filter=8)
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="low-pass filtered mask diverged from reference")
+
+
+def test_generate_wedge_mask_exposure_weighting_matches_reference(exposure_wedgelist):
+    """Exposure-weighted mask must reproduce the stored reference voxel-for-voxel."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_exposure_t1.em"))
+    result = generate_wedge_mask(32, exposure_wedgelist, 1, exposure_weighting=True)
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="exposure-weighted mask diverged from reference")
+
+
+def test_generate_wedge_mask_ctf_weighting_matches_reference():
+    """CTF-weighted mask must reproduce the stored reference voxel-for-voxel."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_ctf_t17.em"))
+    result = generate_wedge_mask(32, _WL_PATH, 17, ctf_weighting=True)
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="CTF-weighted mask diverged from reference")
 

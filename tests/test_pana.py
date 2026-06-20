@@ -1391,3 +1391,299 @@ def test_rename_scores_angles_calls_os_rename_for_six_suffixes(mocker, csv_all_n
     parent = str(tmp_path) + "/"
     pana.rename_scores_angles(csv_all_not_done, [0], parent_folder_path=parent)
     assert rename_mock.call_count == 6
+
+
+# =============================================================================
+# New helpers: _path_or_inmemory, _resolve_input_path
+# gather_case_results, build_params_record
+# _write_case_summary_html, create_summary_html_from_folder, params_to_template_row
+# =============================================================================
+
+
+class TestPathOrInmemory:
+    def test_none_returns_empty_string(self):
+        assert pana._path_or_inmemory(None) == ""
+
+    def test_string_path_returned_as_is(self):
+        assert pana._path_or_inmemory("/data/template.em") == "/data/template.em"
+
+    def test_pathlib_path_converted_to_string(self):
+        assert pana._path_or_inmemory(Path("/data/template.em")) == str(Path("/data/template.em"))
+
+    def test_ndarray_gives_in_memory_sentinel(self):
+        assert pana._path_or_inmemory(np.zeros((4, 4, 4))) == "<in-memory>"
+
+    def test_return_type_is_always_str(self):
+        for v in [None, "path", Path("p"), np.zeros(2)]:
+            assert isinstance(pana._path_or_inmemory(v), str)
+
+
+class TestResolveInputPath:
+    def test_bare_filename_builds_structure_path(self):
+        result = pana._resolve_input_path("template.em", "/base/", "ribo")
+        assert result == "/base/ribo/template.em"
+
+    def test_absolute_path_returned_unchanged(self):
+        p = os.path.abspath("/abs/template.em")
+        assert pana._resolve_input_path(p, "/base/", "ribo") == p
+
+    def test_relative_path_with_directory_returned_unchanged(self):
+        # has a dirname component → returned as-is
+        rel = "subdir/template.em"
+        assert pana._resolve_input_path(rel, "/base/", "ribo") == rel
+
+    def test_structure_name_in_result_for_bare_filename(self):
+        result = pana._resolve_input_path("mask.em", "/base/", "ribosome")
+        assert "ribosome" in result
+
+    def test_bare_filename_returned_as_string(self):
+        assert isinstance(pana._resolve_input_path("f.em", "/b/", "s"), str)
+
+
+class TestGatherCaseResults:
+    SIZE = 32
+
+    @pytest.fixture
+    def scores(self):
+        return _gaussian_map(size=self.SIZE, peak_sigma=3.0)
+
+    @pytest.fixture
+    def soft_mask(self):
+        vol = np.zeros((self.SIZE,) * 3)
+        c = self.SIZE // 2
+        vol[c - 6 : c + 7, c - 6 : c + 7, c - 6 : c + 7] = 0.9
+        return vol
+
+    @pytest.fixture
+    def tight_mask(self):
+        vol = np.zeros((self.SIZE,) * 3)
+        c = self.SIZE // 2
+        vol[c - 4 : c + 5, c - 4 : c + 5, c - 4 : c + 5] = 1.0
+        return vol
+
+    def test_no_inputs_returns_empty_dict(self):
+        result = pana.gather_case_results()
+        assert result == {}
+
+    def test_scores_map_gives_peak_keys(self, scores):
+        result = pana.gather_case_results(scores_map=scores)
+        assert "Peak value" in result
+        for dim in ["x", "y", "z"]:
+            assert f"Peak {dim}" in result
+            assert f"Drop {dim}" in result
+
+    def test_scores_map_gives_mean_median_var_keys(self, scores):
+        result = pana.gather_case_results(scores_map=scores)
+        for r in range(1, 6):
+            assert f"Mean {r}" in result
+            assert f"Median {r}" in result
+            assert f"Var {r}" in result
+
+    def test_scores_map_gives_shape_keys(self, scores):
+        result = pana.gather_case_results(scores_map=scores)
+        for p in ["x", "y", "z"]:
+            assert f"TP {p}" in result
+            assert f"GP {p}" in result
+            assert f"HP {p}" in result
+
+    def test_mask_stats_with_both_masks(self, soft_mask, tight_mask):
+        result = pana.gather_case_results(template_mask=soft_mask, tight_mask=tight_mask)
+        assert "Voxels" in result
+        assert "Voxels TM" in result
+        for dim in ["x", "y", "z"]:
+            assert f"Dim {dim}" in result
+        assert "Solidity" in result
+
+    def test_no_mask_stats_with_only_one_mask(self, soft_mask):
+        result = pana.gather_case_results(template_mask=soft_mask)
+        assert "Voxels" not in result
+
+    def test_dist_stats_keys_present_with_scores_and_degrees(self, scores):
+        dist = scores * 10.0
+        result = pana.gather_case_results(
+            scores_map=scores, dist_all_map=dist, degrees=5.0
+        )
+        assert "VC dist_all" in result
+
+    def test_no_dist_stats_without_degrees(self, scores):
+        dist = scores * 10.0
+        result = pana.gather_case_results(scores_map=scores, dist_all_map=dist)
+        assert "VC dist_all" not in result
+
+
+class TestBuildParamsRecord:
+    def test_returns_dataframe(self):
+        assert isinstance(pana.build_params_record({}, {}), pd.DataFrame)
+
+    def test_single_row(self):
+        df = pana.build_params_record({}, {})
+        assert len(df) == 1
+
+    def test_known_input_col_present(self):
+        df = pana.build_params_record({"Target map": "tm.em"}, {})
+        assert "Target map" in df.columns
+        assert df.at[0, "Target map"] == "tm.em"
+
+    def test_known_result_col_present(self):
+        df = pana.build_params_record({}, {"Peak value": 0.75})
+        assert "Peak value" in df.columns
+        assert df.at[0, "Peak value"] == pytest.approx(0.75)
+
+    def test_missing_key_gives_nan(self):
+        df = pana.build_params_record({}, {})
+        assert pd.isna(df.at[0, "Target map"])
+
+    def test_output_base_col_always_present(self):
+        df = pana.build_params_record({}, {})
+        assert "Output base" in df.columns
+
+    def test_all_template_input_cols_present(self):
+        df = pana.build_params_record({}, {})
+        for col in pana._TEMPLATE_INPUT_COLS:
+            assert col in df.columns, f"Column {col!r} missing"
+
+    def test_all_result_cols_present(self):
+        df = pana.build_params_record({}, {})
+        for col in pana._RESULT_COLS:
+            assert col in df.columns, f"Column {col!r} missing"
+
+    def test_params_take_precedence_over_results_for_same_key(self):
+        # "Peak value" appears in _RESULT_COLS; if also in params it should
+        # use the params value because build_params_record merges results into
+        # combined and params keys come from the combined dict first.
+        df = pana.build_params_record({"Peak value": 0.5}, {"Peak value": 0.9})
+        # results overwrite params in the merge (results comes second)
+        assert df.at[0, "Peak value"] == pytest.approx(0.9)
+
+
+class TestWriteCaseSummaryHtml:
+    @pytest.fixture
+    def empty_row(self):
+        return pd.Series(dtype=object)
+
+    def test_batch_mode_writes_named_html(self, tmp_path, mocker, empty_row):
+        mocker.patch("cryocat.analysis.pana.visualize_results", return_value={})
+        folder = str(tmp_path) + "/"
+        path = pana._write_case_summary_html(empty_row, folder, "id_3")
+        assert Path(path).name == "id_3_summary.html"
+        assert Path(path).exists()
+
+    def test_single_case_mode_writes_summary_html(self, tmp_path, mocker, empty_row):
+        mocker.patch("cryocat.analysis.pana.visualize_results", return_value={})
+        folder = str(tmp_path) + "/"
+        path = pana._write_case_summary_html(empty_row, folder, "")
+        assert Path(path).name == "summary.html"
+        assert Path(path).exists()
+
+    def test_returns_path_string(self, tmp_path, mocker, empty_row):
+        mocker.patch("cryocat.analysis.pana.visualize_results", return_value={})
+        result = pana._write_case_summary_html(empty_row, str(tmp_path) + "/", "id_0")
+        assert isinstance(result, str)
+
+    def test_html_contains_custom_title(self, tmp_path, mocker, empty_row):
+        mocker.patch("cryocat.analysis.pana.visualize_results", return_value={})
+        path = pana._write_case_summary_html(
+            empty_row, str(tmp_path) + "/", "id_0", title="My Test Title"
+        )
+        content = Path(path).read_text(encoding="utf-8")
+        assert "My Test Title" in content
+
+    def test_html_contains_plotly_cdn_reference(self, tmp_path, mocker, empty_row):
+        mocker.patch("cryocat.analysis.pana.visualize_results", return_value={})
+        path = pana._write_case_summary_html(empty_row, str(tmp_path) + "/", "")
+        content = Path(path).read_text(encoding="utf-8")
+        assert "cdn" in content.lower()
+
+    def test_single_case_lookup_maps_scores_em(self, tmp_path, mocker, empty_row):
+        # With output_base="" the helper should look for flat "scores.em", not "id_*_scores.em"
+        scores_file = tmp_path / "scores.em"
+        scores_file.write_bytes(b"")
+        captured = {}
+
+        def _fake_visualize(**kwargs):
+            captured.update(kwargs)
+            return {}
+
+        mocker.patch("cryocat.analysis.pana.visualize_results", side_effect=_fake_visualize)
+        pana._write_case_summary_html(empty_row, str(tmp_path) + "/", "")
+        # scores kwarg should point to the flat "scores.em", not None
+        assert captured.get("scores") is not None
+        assert Path(captured["scores"]).name == "scores.em"
+
+
+class TestCreateSummaryHtmlFromFolder:
+    def _write_minimal_params_csv(self, folder: Path) -> None:
+        import pandas as pd
+        df = pana.build_params_record({"Target map": "t.em", "Template": "tmpl.em"}, {})
+        df.to_csv(str(folder / "params.csv"), index=False)
+
+    def test_raises_without_params_csv(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            pana.create_summary_html_from_folder(tmp_path)
+
+    def test_writes_summary_html(self, tmp_path, mocker):
+        self._write_minimal_params_csv(tmp_path)
+        mocker.patch("cryocat.analysis.pana.visualize_results", return_value={})
+        pana.create_summary_html_from_folder(tmp_path)
+        assert (tmp_path / "summary.html").exists()
+
+    def test_returns_path_to_summary_html(self, tmp_path, mocker):
+        self._write_minimal_params_csv(tmp_path)
+        mocker.patch("cryocat.analysis.pana.visualize_results", return_value={})
+        result = pana.create_summary_html_from_folder(tmp_path)
+        assert result.endswith("summary.html")
+
+    def test_accepts_path_with_trailing_slash(self, tmp_path, mocker):
+        self._write_minimal_params_csv(tmp_path)
+        mocker.patch("cryocat.analysis.pana.visualize_results", return_value={})
+        result = pana.create_summary_html_from_folder(str(tmp_path) + "/")
+        assert Path(result).exists()
+
+    def test_accepts_pathlib_path(self, tmp_path, mocker):
+        self._write_minimal_params_csv(tmp_path)
+        mocker.patch("cryocat.analysis.pana.visualize_results", return_value={})
+        result = pana.create_summary_html_from_folder(tmp_path)  # pathlib.Path
+        assert Path(result).exists()
+
+
+class TestParamsToTemplateRow:
+    @pytest.fixture
+    def params_csv(self, tmp_path):
+        df = pana.build_params_record(
+            {"Target map": "t.em", "Template": "tmpl.em", "Degrees": 5.0},
+            {"Peak value": 0.8},
+        )
+        p = tmp_path / "mycase" / "params.csv"
+        p.parent.mkdir()
+        df.to_csv(str(p), index=False)
+        return p
+
+    def test_returns_series(self, params_csv):
+        assert isinstance(pana.params_to_template_row(params_csv), pd.Series)
+
+    def test_output_folder_defaults_to_parent_dir_name(self, params_csv):
+        row = pana.params_to_template_row(params_csv)
+        assert row["Output folder"] == "mycase"
+
+    def test_custom_output_folder_name(self, params_csv):
+        row = pana.params_to_template_row(params_csv, output_folder_name="custom_folder")
+        assert row["Output folder"] == "custom_folder"
+
+    def test_all_template_input_cols_present_by_default(self, params_csv):
+        row = pana.params_to_template_row(params_csv)
+        for col in pana._TEMPLATE_INPUT_COLS:
+            assert col in row.index, f"Missing column {col!r}"
+
+    def test_known_input_value_preserved(self, params_csv):
+        row = pana.params_to_template_row(params_csv)
+        assert row["Target map"] == "t.em"
+
+    def test_custom_template_columns(self, params_csv):
+        cols = ["Target map", "Template", "Peak value"]
+        row = pana.params_to_template_row(params_csv, template_columns=cols)
+        assert list(row.index) == cols
+
+    def test_missing_col_gives_nan_with_custom_columns(self, params_csv):
+        cols = ["Target map", "Structure"]
+        row = pana.params_to_template_row(params_csv, template_columns=cols)
+        assert pd.isna(row["Structure"])
