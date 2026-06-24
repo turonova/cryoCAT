@@ -54,6 +54,19 @@ def _create_motl_sidebar_content():
                 value=[],
                 labelStyle={"display": "block", "marginBottom": "0.2rem", "fontSize": "0.85rem"},
             ),
+            html.Hr(style={"margin": "0.4rem 0"}),
+            html.Label("Rows to include:", style=lbl),
+            dbc.RadioItems(
+                id="nn-sel-rows-mode",
+                options=[
+                    {"label": "All", "value": "all"},
+                    {"label": "Selected rows only", "value": "selected"},
+                ],
+                value="all",
+                inline=False,
+                className="sidebar-checklist",
+                labelStyle={"fontSize": "0.85rem"},
+            ),
             html.Div(
                 [
                     html.Hr(style={"margin": "0.4rem 0"}),
@@ -85,6 +98,25 @@ def _create_motl_sidebar_content():
                     ),
                 ],
                 id="nn-sel-motl-id-col-wrap",
+                style={"display": "none"},
+            ),
+            html.Div(
+                [
+                    html.Hr(style={"margin": "0.4rem 0"}),
+                    html.Label("Transfer extra columns:", style=lbl),
+                    dcc.Checklist(
+                        id="nn-cluster-col-checklist",
+                        options=[],
+                        value=[],
+                        labelStyle={
+                            "display": "block",
+                            "marginBottom": "0.2rem",
+                            "fontSize": "0.85rem",
+                        },
+                    ),
+                    html.Div(id="nn-cluster-target-rows"),
+                ],
+                id="nn-cluster-transfer-wrap",
                 style={"display": "none"},
             ),
             html.Hr(style={"margin": "0.4rem 0"}),
@@ -138,13 +170,62 @@ def _sidebar():
                         ),
                         dbc.AccordionItem(
                             [
+                                # nn_type: manual dropdown so labels are user-friendly
+                                html.Div(
+                                    [
+                                        html.Div(
+                                            html.Label(
+                                                "Nn type",
+                                                style={"fontSize": "0.85rem", "margin": 0},
+                                            ),
+                                            style={
+                                                "width": "45%", "display": "flex",
+                                                "alignItems": "center", "boxSizing": "border-box",
+                                                "paddingRight": "4px",
+                                            },
+                                        ),
+                                        html.Div(
+                                            dcc.Dropdown(
+                                                id={
+                                                    "type": "nn-forms-params",
+                                                    "param": "nn_type",
+                                                    "tag": "Literal",
+                                                    "cls_name": "nn-params",
+                                                },
+                                                options=[
+                                                    {"label": "Closest distance", "value": "closest_dist"},
+                                                    {"label": "Radius", "value": "radius"},
+                                                ],
+                                                value="closest_dist",
+                                                clearable=False,
+                                                searchable=False,
+                                                style={"width": "100%"},
+                                            ),
+                                            style={"width": "55%"},
+                                        ),
+                                    ],
+                                    style={
+                                        "display": "flex", "flexDirection": "row",
+                                        "marginBottom": "0.25rem", "width": "100%",
+                                        "alignItems": "center",
+                                    },
+                                ),
                                 html.Div(
                                     build_form(
                                         NearestNeighbors,
                                         id_type="nn-forms-params",
                                         id_extra={"cls_name": "nn-params"},
-                                        exclude=["input_data"],
+                                        exclude=["input_data", "nn_type"],
                                     ),
+                                ),
+                                html.Div(
+                                    dbc.Checkbox(
+                                        id="nn-dist-toggle",
+                                        label="Compute euclidean distances",
+                                        value=False,
+                                    ),
+                                    id="nn-dist-toggle-wrap",
+                                    style={"display": "none", "marginTop": "0.3rem"},
                                 ),
                                 dbc.Checkbox(
                                     id="nn-angular-toggle",
@@ -226,6 +307,7 @@ layout = html.Div(
         dcc.Store(id="nn-result"),
         # Ordered list of pool motl-ids used in the last NN run, plus is_multi flag.
         dcc.Store(id="nn-used-motls-store"),
+        dcc.Store(id="nn-cluster-cols-store", data=[]),
         dbc.Row([_sidebar(), _main()], className="g-0", style={"margin": "0", "padding": "0"}),
     ],
     style={"margin": "0", "padding": "0"},
@@ -257,7 +339,80 @@ def register_callbacks(app):
     register_table_cluster_callbacks(
         app, "nn-out-tabv-table-cluster", "nn-out-tabv-global-data-store",
         table_grid_id="nn-out-tabv-grid",
+        cluster_cols_store_id="nn-cluster-cols-store",
     )
+    @app.callback(
+        Output("nn-dist-toggle-wrap", "style"),
+        Input({"type": "nn-forms-params", "param": "nn_type", "tag": "Literal", "cls_name": "nn-params"}, "value"),
+    )
+    def _toggle_dist_form(nn_type):
+        return {"display": "block"} if nn_type == "radius" else {"display": "none"}
+
+    _NN_EXTRA_COLS = ["nn_dist", "angular_distance", "cone_distance", "in_plane_distance"]
+
+    @app.callback(
+        Output("nn-cluster-col-checklist", "options"),
+        Output("nn-cluster-col-checklist", "value"),
+        Output("nn-cluster-transfer-wrap", "style"),
+        Input("nn-cluster-cols-store", "data"),
+        Input("nn-out-tabv-global-data-store", "data"),
+    )
+    def _update_cluster_transfer_ui(cluster_cols, table_data):
+        available = []
+        if table_data:
+            df_cols = set(pd.DataFrame(table_data).columns)
+            for col in _NN_EXTRA_COLS:
+                if col in df_cols:
+                    available.append(col)
+        if cluster_cols:
+            for col in cluster_cols:
+                if col not in available:
+                    available.append(col)
+        if not available:
+            return [], [], {"display": "none"}
+        opts = [{"label": c, "value": c} for c in available]
+        return opts, list(available), {"display": "block"}
+
+    @app.callback(
+        Output("nn-cluster-target-rows", "children"),
+        Input("nn-cluster-col-checklist", "value"),
+    )
+    def _build_cluster_target_rows(selected_cols):
+        if not selected_cols:
+            return []
+        rows = []
+        for col in selected_cols:
+            rows.append(
+                html.Div(
+                    [
+                        html.Span(
+                            f"{col} →",
+                            style={
+                                "fontSize": "0.8rem",
+                                "whiteSpace": "nowrap",
+                                "marginRight": "6px",
+                                "color": "var(--color9)",
+                            },
+                        ),
+                        dcc.Dropdown(
+                            id={"type": "nn-cluster-target", "col": col},
+                            options=_MOTL_COL_OPTIONS,
+                            placeholder="Motl column…",
+                            searchable=True,
+                            clearable=True,
+                            style={"flex": 1, "fontSize": "0.8rem"},
+                        ),
+                    ],
+                    style={
+                        "display": "flex",
+                        "alignItems": "center",
+                        "marginBottom": "0.3rem",
+                        "width": "100%",
+                    },
+                )
+            )
+        return rows
+
     @app.callback(
         Output("nn-angular-form-wrap", "style"),
         Input("nn-angular-toggle", "value"),
@@ -278,9 +433,10 @@ def register_callbacks(app):
         State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State("nn-angular-toggle", "value"),
+        State("nn-dist-toggle", "value"),
         prevent_initial_call=True,
     )
-    def compute_nn(n_clicks, selected, pool_motls, param_values, param_ids, angular_on):
+    def compute_nn(n_clicks, selected, pool_motls, param_values, param_ids, angular_on, compute_dist):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
 
@@ -316,6 +472,18 @@ def register_callbacks(app):
             )
         else:
             status_bits.append(f"NN analysis complete - {len(nn_stats.df)} neighbor rows.")
+
+        if compute_dist and nn_kwargs.get("nn_type") == "radius":
+            try:
+                qp_coords = nn_stats.df[["qp_coord_x", "qp_coord_y", "qp_coord_z"]].to_numpy()
+                nn_coords = nn_stats.df[["nn_coord_x", "nn_coord_y", "nn_coord_z"]].to_numpy()
+                nn_stats.df["nn_dist"] = np.linalg.norm(nn_coords - qp_coords, axis=1)
+                status_bits.append(
+                    f"Mean distance: {nn_stats.df['nn_dist'].mean():.3f}; "
+                    f"Median distance: {nn_stats.df['nn_dist'].median():.3f}"
+                )
+            except Exception as exc:
+                status_bits.append(f"Euclidean distances skipped: {exc}")
 
         if angular_on:
             try:
@@ -402,6 +570,8 @@ def register_callbacks(app):
         Input("nn-sel-motl-save-btn", "n_clicks"),
         Input("nn-sel-motl-send-btn", "n_clicks"),
         State("nn-out-tabv-grid", "selectedRows"),
+        State("nn-out-tabv-grid", "rowData"),
+        State("nn-sel-rows-mode", "value"),
         State("nn-sel-motl-checklist", "value"),
         State("nn-used-motls-store", "data"),
         State("nn-sel-motl-id-type", "value"),
@@ -411,16 +581,27 @@ def register_callbacks(app):
         State("pool-motls", "data"),
         State("pool-registry", "data"),
         State("pool-next-id", "data"),
+        State("nn-cluster-col-checklist", "value"),
+        State({"type": "nn-cluster-target", "col": ALL}, "value"),
+        State({"type": "nn-cluster-target", "col": ALL}, "id"),
         prevent_initial_call=True,
     )
     def _build_and_act(
         _save_click, _send_click,
-        selected_rows, checked_motls, used_motls, id_type, id_col,
+        selected_rows, all_rows, rows_mode,
+        checked_motls, used_motls, id_type, id_col,
         save_path, editor_label, pool_motls, registry, next_id,
+        cluster_cols, cluster_target_vals, cluster_target_ids,
     ):
         trigger = ctx.triggered_id
-        if not selected_rows:
-            return "No rows selected in the table.", no_update, no_update, no_update
+        rows_mode = rows_mode or "all"
+        if rows_mode == "all":
+            active_rows = all_rows or []
+        else:
+            active_rows = selected_rows or []
+        if not active_rows:
+            msg = "No rows in the table." if rows_mode == "all" else "No rows selected in the table."
+            return msg, no_update, no_update, no_update
         if not checked_motls:
             return "No motls checked.", no_update, no_update, no_update
         if not used_motls:
@@ -429,8 +610,23 @@ def register_callbacks(app):
         all_names = used_motls.get("names", [])
         is_multi = used_motls.get("is_multi", False)
         pool_motls = pool_motls or {}
-        sel_df = pd.DataFrame(selected_rows)
 
+        # Build cluster column mapping: {source_cluster_col: target_motl_col}
+        col_mapping = {}
+        if cluster_cols and cluster_target_vals:
+            for tid, tval in zip(cluster_target_ids, cluster_target_vals):
+                src = tid.get("col")
+                if src and src in cluster_cols and tval:
+                    col_mapping[src] = tval
+            # Validate no duplicate targets
+            used_targets = list(col_mapping.values())
+            if len(used_targets) != len(set(used_targets)):
+                return (
+                    "Two cluster columns cannot map to the same motl column.",
+                    no_update, no_update, no_update,
+                )
+
+        sel_df = pd.DataFrame(active_rows)
         parts = []
         for i, motl_name in enumerate(all_names):
             if motl_name not in checked_motls:
@@ -452,6 +648,26 @@ def register_callbacks(app):
                 ids = set(sel_df[col].dropna().astype(float).values)
 
             subset = motl_df[motl_df["subtomo_id"].isin(ids)].copy()
+            if col_mapping and len(subset) > 0:
+                if is_multi:
+                    if i == 0:
+                        id_col_nn = "qp_subtomo_id"
+                        slice_df = sel_df
+                    else:
+                        id_col_nn = "nn_subtomo_id"
+                        slice_df = sel_df[sel_df["motl_id"].astype(float) == float(i)]
+                else:
+                    id_col_nn = "qp_subtomo_id" if (id_type or "qp") == "qp" else "nn_subtomo_id"
+                    slice_df = sel_df
+                for src_col, dst_col in col_mapping.items():
+                    if src_col in slice_df.columns:
+                        id_to_cluster = (
+                            slice_df.drop_duplicates(subset=[id_col_nn])
+                            .set_index(id_col_nn)[src_col]
+                            .dropna()
+                            .to_dict()
+                        )
+                        subset[dst_col] = subset["subtomo_id"].map(id_to_cluster)
             if len(subset) == 0:
                 continue
             if id_col and len(checked_motls) > 1:

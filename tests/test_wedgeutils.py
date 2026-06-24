@@ -516,3 +516,94 @@ def test_generate_wedge_mask_ctf_weighting_matches_reference():
     np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
                                err_msg="CTF-weighted mask diverged from reference")
 
+
+# ── property-based tests ──────────────────────────────────────────────────────
+
+
+def test_generate_wedge_mask_values_in_unit_interval():
+    """Both methods produce output values in [0, 1]."""
+    for method in ("geometric", "analytic"):
+        mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method=method)["mask"]
+        assert mask.min() >= 0.0, f"{method}: value below 0"
+        assert mask.max() <= 1.0 + 1e-9, f"{method}: value above 1"
+
+
+def test_generate_wedge_mask_lowpass_not_all_ones():
+    """A low-pass filter with a small radius zeroes the high-frequency corners."""
+    mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, low_pass_filter=6)["mask"]
+    assert mask.min() == 0.0
+
+
+def test_generate_wedge_mask_exposure_weighting(exposure_wedgelist):
+    """exposure_weighting=True changes the mask relative to the unweighted result."""
+    raw = generate_wedge_mask(32, exposure_wedgelist, 1)["mask"]
+    weighted = generate_wedge_mask(32, exposure_wedgelist, 1, exposure_weighting=True)["mask"]
+    assert not np.array_equal(raw, weighted)
+
+
+def test_generate_wedge_mask_ctf_weighting():
+    """ctf_weighting=True changes the mask relative to the unweighted result."""
+    raw = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)["mask"]
+    weighted = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, ctf_weighting=True)["mask"]
+    assert not np.array_equal(raw, weighted)
+
+
+def test_generate_wedge_mask_two_sizes_independent():
+    """Two calls with different box sizes do not interfere with each other."""
+    r32a = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)["mask"]
+    r64 = generate_wedge_mask(64, _WL_PATH, _TOMO_NUM)["mask"]
+    r32b = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)["mask"]
+    assert r64.shape == (64, 64, 64)
+    assert np.array_equal(r32a, r32b)
+
+
+def test_generate_wedge_mask_both_methods_reach_dc():
+    """DC voxel (index 0,0,0 in FFT order) is covered (>0) by both methods."""
+    for method in ("geometric", "analytic"):
+        mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method=method)["mask"]
+        assert mask[0, 0, 0] > 0.0, f"{method}: DC voxel is zero"
+
+
+def test_generate_wedge_mask_analytic_reaches_nyquist_corner():
+    """Analytic slabs span the full Fourier volume, covering at least as many
+    voxels as the geometric method (which is bounded by the 2D image extent)."""
+    geom_mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method="geometric")["mask"]
+    ana_mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method="analytic")["mask"]
+    assert (ana_mask > 0).sum() >= (geom_mask > 0).sum()
+
+
+def test_generate_wedge_mask_analytic_has_at_least_geometric_mean():
+    """Mean analytic mask value >= mean geometric mask value (more coverage)."""
+    geom_mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method="geometric")["mask"]
+    ana_mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method="analytic")["mask"]
+    assert np.mean(ana_mask) >= np.mean(geom_mask) - 1e-9
+
+
+def test_generate_wedge_mask_auto_thickness_large_box():
+    """Auto-thickness (thickness=None) with a 128-cube analytic mask completes
+    without error and produces output with values in [0, 1]."""
+    result = generate_wedge_mask(128, _WL_PATH, _TOMO_NUM, method="analytic")
+    mask = result["mask"]
+    assert mask.shape == (128, 128, 128)
+    assert mask.min() >= 0.0
+    assert mask.max() <= 1.0 + 1e-9
+
+
+def test_generate_wedge_mask_sign_convention_asymmetric_tilts():
+    """Negative-only tilt list leaves positive-angle slabs unmeasured: the mask
+    has zeros in the missing-wedge region and non-zeros in the sampled region."""
+    n = 20
+    neg_wl = pd.DataFrame({
+        "tomo_num": [99] * n,
+        "tilt_angle": np.arange(-60, -60 + n * 3, 3, dtype=float),  # -60 … -3
+        "pixelsize": [2.4] * n,
+        "exposure": np.ones(n),
+        "tomo_x": [128] * n, "tomo_y": [128] * n, "tomo_z": [64] * n,
+        "defocus": [3.5] * n, "voltage": [300.0] * n,
+        "amp_contrast": [0.07] * n, "cs": [2.7] * n,
+    })
+    mask = generate_wedge_mask(32, neg_wl, 99)["mask"]
+    assert mask.shape == (32, 32, 32)
+    assert mask.min() == 0.0   # positive-tilt region is missing
+    assert mask.max() > 0.0    # negative-tilt region is covered
+

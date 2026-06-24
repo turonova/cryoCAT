@@ -104,7 +104,8 @@ class Motl:
     def __init__(self, motl_df: Optional[pd.DataFrame] = None) -> None:
         if motl_df is not None:
             if self.check_df_correct_format(motl_df):
-                self.df = motl_df
+                self.df = motl_df[Motl.motl_columns].copy()
+                self.df.reset_index(drop=True, inplace=True)
             else:
                 raise ValueError("Provided pandas.DataFrame does not have correct format.")
         else:
@@ -776,7 +777,7 @@ class Motl:
         """
 
         if Motl.check_df_correct_format(input_motl):
-            self.df = input_motl.copy()
+            self.df = input_motl[Motl.motl_columns].copy()
             self.df.reset_index(inplace=True, drop=True)
             self.df = self.df.apply(pd.to_numeric, errors="coerce")
             self.df = self.df.fillna(0.0)
@@ -1922,85 +1923,55 @@ class Motl:
         return None if inplace else target
 
     def split_in_asymmetric_subunits(self, symmetry: Symmetry, xyz_shift: ArrayLike) -> "Motl":
-        """Split the motive list into assymetric subunits.
+        """Split the motive list into asymmetric subunits.
 
         Parameters
         ----------
         symmetry : Symmetry
-            Symmetry to be used. Currently cyclic and dihedral symmetry are supported. ``Cx`` or
-            ``cx`` specify the cyclic symmetry of order x, ``Dx`` or ``dx`` dihedral symmetry of order x. If
-            symmetry is specified as an int, cyclic symmetry is assumed. Normalized via
+            Symmetry to be used. Supported groups: cyclic (``"Cn"`` or
+            bare int), dihedral (``"Dn"``), tetrahedral (``"T"``),
+            octahedral (``"O"``), and icosahedral (``"I"``). Parsed via
             :func:`cryocat.utils.geom.as_symmetry`.
         xyz_shift : ArrayLike
-            Shift by which the center of current particles should be shifted to be centered at the first
-            subunit.
+            Shift from the particle centre to the reference subunit,
+            expressed in the particle's local frame.
 
         Returns
         -------
         :class:`Motl`
-            Splitted particle list.
+            Expanded particle list with one entry per subunit.
 
         Warnings
         --------
-        This method does not preserve a child class - it always returns :class:`Motl`.
-
+        This method does not preserve a child class – it always returns
+        :class:`Motl`.
         """
-        group, nfold = geom.as_symmetry(symmetry)
-        is_dihedral = group == "D"
+        from cryocat.utils.symmetry import get_symmetry_rotations
 
-        inplane_step = 360 / nfold
+        rot_matrices = get_symmetry_rotations(symmetry)  # (M, 3, 3)
+        n_subunits = len(rot_matrices)
 
-        if not is_dihedral:
-            n_subunits = nfold
-            phi_angles = np.arange(0, 360, int(inplane_step))
-            new_angles = np.zeros((n_subunits, 3))
-            new_angles[:, 0] = phi_angles
-        else:
-            n_subunits = nfold * 2
-            in_plane_offset = int(inplane_step / 2)
-            new_angles = np.zeros((n_subunits, 3))
-            new_angles[0::2, 0] = np.arange(0, 360, int(inplane_step))
-            new_angles[1::2, 0] = np.arange(0 + in_plane_offset, 360 + in_plane_offset, int(inplane_step))
-            new_angles[1::2, 1] = 180
-
-            phi_angles = new_angles[:, 0].copy()
-
-        phi_angles = phi_angles.reshape(
-            n_subunits,
-        )
-
-        # make up vectors
-        starting_vector = np.array(xyz_shift)
-        rho = np.sqrt(starting_vector[0] ** 2 + starting_vector[1] ** 2)
-        the = np.arctan2(starting_vector[1], starting_vector[0])
-
-        rot_rho = np.full((n_subunits,), rho)
-        rep_the = np.full((n_subunits,), the) + np.deg2rad(phi_angles)
-        rep_z = np.full((n_subunits,), starting_vector[2])
-
-        if is_dihedral:
-            rep_z[1::2] *= -1
-
-        center_shift = np.zeros([rot_rho.shape[0], 3])
-        center_shift[:, 0] = rot_rho * np.cos(rep_the)
-        center_shift[:, 1] = rot_rho * np.sin(rep_the)
-        center_shift[:, 2] = rep_z
+        xyz = np.asarray(xyz_shift, dtype=float)
+        # center_shift[k] = rot_matrices[k] @ xyz_shift  →  shape (M, 3)
+        center_shift = np.einsum("kij,j->ki", rot_matrices, xyz)
 
         new_motl_df = pd.concat([self.df] * n_subunits)
-
         new_motl_df["geom5"] = new_motl_df["subtomo_id"]
         new_motl_df = new_motl_df.sort_values(by="subtomo_id")
         new_motl_df["geom2"] = np.tile(np.arange(1, n_subunits + 1).reshape(n_subunits, 1), (len(self.df), 1))
 
         euler_angles = new_motl_df[["phi", "theta", "psi"]]
         rotations = rot.from_euler(seq="zxz", angles=euler_angles, degrees=True)
-        center_shift = np.tile(center_shift, (len(self.df), 1))
-        new_angles = np.tile(new_angles, (len(self.df), 1))
+
+        center_shift_tiled = np.tile(center_shift, (len(self.df), 1))
+        # Tile rotation matrices directly (no Euler round-trip, avoids gimbal-lock warnings)
+        sym_rot_tiled = rot.from_matrix(np.tile(rot_matrices, (len(self.df), 1, 1)))
+
         new_motl_df.loc[:, ["shift_x", "shift_y", "shift_z"]] = new_motl_df.loc[
             :, ["shift_x", "shift_y", "shift_z"]
-        ] + rotations.apply(center_shift)
+        ] + rotations.apply(center_shift_tiled)
 
-        new_rotations = rotations * rot.from_euler(seq="zxz", angles=new_angles, degrees=True)
+        new_rotations = rotations * sym_rot_tiled
         new_motl_df.loc[:, ["phi", "theta", "psi"]] = new_rotations.as_euler(seq="zxz", degrees=True)
 
         new_motl_df["subtomo_id"] = np.arange(1, len(new_motl_df) + 1)

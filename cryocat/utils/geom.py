@@ -778,203 +778,313 @@ class Matrix:
         return eulers[0]
 
 
-def tetrahedron() -> np.ndarray:
-    """Return the four unit-sphere vertices of a regular tetrahedron.
-
-    Returns
-    -------
-    numpy.ndarray
-        ``(4, 3)`` array of vertices on the unit sphere.
-    """
-
-    vertices = 1 / ROOT3 * np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]])
-
-    return vertices
+# =============================================================================
+# Platonic-solid class hierarchy
+# =============================================================================
 
 
-def octahedron() -> np.ndarray:
-    """Return the six unit-sphere vertices of a regular octahedron.
+class Polyhedron:
+    """Base class for all five regular (Platonic) solids.
 
-    Returns
-    -------
-    numpy.ndarray
-        ``(6, 3)`` array of vertices on the unit sphere.
-    """
-
-    vertices = np.vstack((np.identity(3), -np.identity(3)))
-
-    return vertices
-
-
-def cube() -> np.ndarray:
-    """Return the eight unit-sphere vertices of a cube.
-
-    Returns
-    -------
-    numpy.ndarray
-        ``(8, 3)`` array of vertices on the unit sphere.
-    """
-
-    vertices = (
-        1
-        / ROOT3
-        * np.array([[1, 1, 1], [-1, -1, -1], [-1, 1, 1], [1, -1, 1], [1, 1, -1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]])
-    )
-
-    return vertices
-
-
-def icosahedron() -> np.ndarray:
-    """Return the twelve unit-sphere vertices of a regular icosahedron.
-
-    Returns
-    -------
-    numpy.ndarray
-        ``(12, 3)`` array of vertices on the unit sphere.
-    """
-    vertices = np.array(
-        [
-            [0, 1, PHI],
-            [0, 1, -PHI],
-            [0, -1, PHI],
-            [0, -1, -PHI],
-            [1, PHI, 0],
-            [1, -PHI, 0],
-            [-1, PHI, 0],
-            [-1, -PHI, 0],
-            [PHI, 0, 1],
-            [-PHI, 0, 1],
-            [PHI, 0, -1],
-            [-PHI, 0, -1],
-        ]
-    )
-
-    return vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
-
-
-def dodecahedron() -> np.ndarray:
-    """Return the twenty unit-sphere vertices of a regular dodecahedron.
-
-    The twelve face-centre vertices are combined with the eight cube vertices
-    (see :func:`cube`) to produce all twenty dodecahedron vertices on the unit
-    sphere.
-
-    Returns
-    -------
-    numpy.ndarray
-        ``(20, 3)`` array of vertices on the unit sphere.
-    """
-    vertices = np.array(
-        [
-            [0, 1 / PHI, PHI],
-            [0, -1 / PHI, PHI],
-            [0, 1 / PHI, -PHI],
-            [0, -1 / PHI, -PHI],
-            [1 / PHI, PHI, 0],
-            [-1 / PHI, PHI, 0],
-            [1 / PHI, -PHI, 0],
-            [-1 / PHI, -PHI, 0],
-            [PHI, 0, 1 / PHI],
-            [-PHI, 0, 1 / PHI],
-            [PHI, 0, -1 / PHI],
-            [-PHI, 0, -1 / PHI],
-        ]
-    )
-
-    vertices = vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
-
-    vertices = np.vstack((vertices, cube()))
-
-    return vertices
-
-
-def icosahedron_edges(vertices: np.ndarray) -> np.ndarray:
-    """Calculate the edges of an icosahedron given its vertices.
-
-    Parameters
-    -----------
-    vertices : np.ndarray 
-        An array of shape (12, 3) containing the coordinates of the 12 vertices of the icosahedron.
-
-    Returns
-    -------
-    np.ndarray
-        An array of shape (30,2) containing the indices of the vertices that form an edge of the icosahedron.
-    
-    Raises
-    ------
-    ValueError
-        If the input array does not have the required shape to represent vertices of an icosahedron.
-    """
-
-    if vertices.shape != (12,3):
-        raise(ValueError(f"12 vertices need to be provided"))
-
-    edges = []
-    dists = []
-
-    n = vertices.shape[0]
-
-    for i in range(n):
-        for j in range(i+1, n):
-            d = np.linalg.norm(vertices[i] - vertices[j])
-            dists.append(d)
-
-    edge_length = min(dists)
-    tol = 1e-6
-
-    for i in range(n):
-        for j in range(i+1, n):
-            d = np.linalg.norm(vertices[i] - vertices[j])
-            if abs(d - edge_length) < tol:
-                edges.append((i, j))
-
-    return np.asarray(edges)
-
-
-def icosahedron_faces(vertices: np.ndarray, edges: np.ndarray) -> np.ndarray:
-    """Calculate the faces of an icosahedron given its vertices and edges.
+    Subclasses implement :meth:`_canonical_vertices` to return unit-sphere
+    vertex coordinates and may override :meth:`_topology` to control how
+    edges and faces are derived from those vertices.
 
     Parameters
     ----------
-    vertices : np.ndarray
-        An array of shape (12, 3) containing the coordinates of the 12 vertices of the icosahedron.
-    edges : np.ndarray
-        An array of shape (30, 2) containing the indices of the vertices that form an edge of the icosahedron.
+    radius : float or int, default=1.0
+        All vertices are scaled so that they lie on a sphere of this radius.
+    R : RotationLike, optional
+        Rotation applied to the canonical vertices before radius scaling.
+        Defaults to the identity rotation.
 
-    Returns
-    --------
-    np.ndarray
-        An array of shape (20, 3) containing the indices of the vertices that form a face of the icosahedron. 
-        Each face is represented as a 1d np.ndarray of three vertex indices.
-    
-    Raises
-    ------
-    ValueError
-        If the input array of the vertices or edges do not have the required shape.
+    Attributes
+    ----------
+    radius : float
+    rotation : scipy.spatial.transform.Rotation
+    vertices : numpy.ndarray, shape (V, 3)
+        Vertex coordinates on the sphere of the given radius.
+    edges : numpy.ndarray, shape (E, 3)
+        Midpoint coordinates of each edge.
+    faces : numpy.ndarray, shape (F, 3)
+        Centroid coordinates of each face.
     """
 
-    if vertices.shape != (12,3) or edges.shape != (30,2):
-        raise ValueError("12 vertices and 30 edges need to be provided")
-    
-    # Faces are triples where all three pairs are edges
-    edge_set = set(tuple(row) for row in np.sort(edges, axis=1)) #set(tuple(sorted(e)) for e in edges)
-    faces = []
+    n_vertices: int
+    n_edges: int
+    n_faces: int
 
-    n = vertices.shape[0]
+    def __init__(
+        self,
+        radius: float | int = 1.0,
+        R: "RotationLike | None" = None,
+    ) -> None:
+        R = as_rotation(np.eye(3) if R is None else R)
+        self.radius = float(radius)
+        self.rotation = R
+        v_can = self._canonical_vertices()
+        self._edge_idx, self._face_groups = self._topology(v_can)
+        v = R.apply(v_can) * self.radius
+        self.vertices = v
+        self.edges = v[self._edge_idx].mean(axis=1)
+        self.faces = np.array([v[g].mean(axis=0) for g in self._face_groups])
+        if len(self.vertices) != self.n_vertices:
+            raise ValueError(
+                f"{type(self).__name__}: expected {self.n_vertices} vertices, "
+                f"got {len(self.vertices)}"
+            )
+        if len(self.edges) != self.n_edges:
+            raise ValueError(
+                f"{type(self).__name__}: expected {self.n_edges} edges, "
+                f"got {len(self.edges)}"
+            )
+        if len(self.faces) != self.n_faces:
+            raise ValueError(
+                f"{type(self).__name__}: expected {self.n_faces} faces, "
+                f"got {len(self.faces)}"
+            )
 
-    for i in range(n):
-        for j in range(i+1, n):
-            for k in range(j+1, n):
-                if (
-                    tuple(sorted((i, j))) in edge_set and
-                    tuple(sorted((i, k))) in edge_set and
-                    tuple(sorted((j, k))) in edge_set
-                ):
-                    faces.append((i, j, k))
+    @classmethod
+    def from_vectors(cls, v1: "ArrayLike", v2: "ArrayLike") -> "Polyhedron":
+        """Build an oriented solid from two non-collinear vertex vectors.
 
-    return np.asarray(faces)
-    
+        The first vertex of the canonical solid and its nearest neighbour
+        define a reference frame; *v1* and *v2* define the target frame.
+        The rotation mapping canonical → target is computed via
+        :func:`orthonormal_frame` and applied as the ``R`` parameter.
+
+        Parameters
+        ----------
+        v1 : array-like, shape (3,)
+            Target position of the first canonical vertex.
+        v2 : array-like, shape (3,)
+            Target position of a vertex adjacent to the first vertex.
+
+        Returns
+        -------
+        Polyhedron
+            New instance of ``cls`` with appropriate *radius* and *R*.
+        """
+        v1 = np.asarray(v1, dtype=float)
+        v2 = np.asarray(v2, dtype=float)
+        radius = 0.5 * (np.linalg.norm(v1) + np.linalg.norm(v2))
+        F_box = orthonormal_frame(v1, v2)
+        tmp = cls()
+        v1_can = tmp.vertices[0]
+        for e in tmp._edge_idx:
+            if e[0] == 0 or e[1] == 0:
+                v2_can = tmp.vertices[e[0] if e[1] == 0 else e[1]]
+                break
+        F_can = orthonormal_frame(v1_can, v2_can)
+        R = F_box @ F_can.T
+        return cls(radius=radius, R=R)
+
+    def _canonical_vertices(self) -> np.ndarray:
+        """Return the (V, 3) unit-sphere vertices of the canonical solid."""
+        raise NotImplementedError
+
+    def _topology(self, v: np.ndarray):
+        """Derive edge indices and face vertex groups from vertices *v*.
+
+        Default implementation uses minimum-distance edges and coplanar
+        grouping via :class:`scipy.spatial.ConvexHull` outward normals.
+
+        Parameters
+        ----------
+        v : numpy.ndarray, shape (V, 3)
+
+        Returns
+        -------
+        edge_idx : numpy.ndarray, shape (E, 2)
+        face_groups : list of list of int
+        """
+        from scipy.spatial import ConvexHull
+        from collections import defaultdict
+
+        n = v.shape[0]
+        pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+        dists = np.array([np.linalg.norm(v[i] - v[j]) for i, j in pairs])
+        edge_len = dists.min()
+        tol = edge_len * 1e-6
+        edge_idx = np.array(
+            [(i, j) for (i, j), d in zip(pairs, dists) if abs(d - edge_len) < tol]
+        )
+        hull = ConvexHull(v)
+        normal_map = defaultdict(set)
+        for simplex, eq in zip(hull.simplices, hull.equations):
+            key = tuple(np.round(eq[:3], 8))
+            normal_map[key].update(simplex.tolist())
+        face_groups = [sorted(s) for s in normal_map.values()]
+        return edge_idx, face_groups
+
+
+class Tetrahedron(Polyhedron):
+    """Regular tetrahedron — 4 vertices, 6 edges, 4 triangular faces.
+
+    Parameters
+    ----------
+    radius : float or int, default=1.0
+    R : RotationLike, optional
+    """
+
+    n_vertices = 4
+    n_edges = 6
+    n_faces = 4
+
+    def _canonical_vertices(self) -> np.ndarray:
+        return (1.0 / ROOT3) * np.array(
+            [[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]], dtype=float
+        )
+
+
+class Octahedron(Polyhedron):
+    """Regular octahedron — 6 vertices, 12 edges, 8 triangular faces.
+
+    Parameters
+    ----------
+    radius : float or int, default=1.0
+    R : RotationLike, optional
+    """
+
+    n_vertices = 6
+    n_edges = 12
+    n_faces = 8
+
+    def _canonical_vertices(self) -> np.ndarray:
+        return np.vstack((np.identity(3), -np.identity(3)))
+
+
+class Cube(Polyhedron):
+    """Regular cube (hexahedron) — 8 vertices, 12 edges, 6 square faces.
+
+    Parameters
+    ----------
+    radius : float or int, default=1.0
+    R : RotationLike, optional
+    """
+
+    n_vertices = 8
+    n_edges = 12
+    n_faces = 6
+
+    def _canonical_vertices(self) -> np.ndarray:
+        return (1.0 / ROOT3) * np.array(
+            [
+                [1, 1, 1], [-1, -1, -1], [-1, 1, 1], [1, -1, 1],
+                [1, 1, -1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1],
+            ],
+            dtype=float,
+        )
+
+
+class Icosahedron(Polyhedron):
+    """Regular icosahedron — 12 vertices, 30 edges, 20 triangular faces.
+
+    The edge and face topology preserves the ordering produced by the
+    historical ``icosahedron_edges`` / ``icosahedron_faces`` free functions
+    for backward compatibility with :class:`cryocat.analysis.structure.Icosahedron`.
+
+    Parameters
+    ----------
+    radius : float or int, default=1.0
+    R : RotationLike, optional
+    """
+
+    n_vertices = 12
+    n_edges = 30
+    n_faces = 20
+
+    def _canonical_vertices(self) -> np.ndarray:
+        v = np.array(
+            [
+                [0, 1, PHI],
+                [0, 1, -PHI],
+                [0, -1, PHI],
+                [0, -1, -PHI],
+                [1, PHI, 0],
+                [1, -PHI, 0],
+                [-1, PHI, 0],
+                [-1, -PHI, 0],
+                [PHI, 0, 1],
+                [-PHI, 0, 1],
+                [PHI, 0, -1],
+                [-PHI, 0, -1],
+            ],
+            dtype=float,
+        )
+        return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+    def _topology(self, v: np.ndarray):
+        """Icosahedron-specific topology preserving historical edge/face ordering."""
+        n = v.shape[0]
+        dists = [np.linalg.norm(v[i] - v[j]) for i in range(n) for j in range(i + 1, n)]
+        edge_len = min(dists)
+        tol = 1e-6
+        edge_idx = np.array(
+            [
+                (i, j)
+                for i in range(n)
+                for j in range(i + 1, n)
+                if abs(np.linalg.norm(v[i] - v[j]) - edge_len) < tol
+            ]
+        )
+        edge_set = set(tuple(row) for row in np.sort(edge_idx, axis=1))
+        face_groups = [
+            [i, j, k]
+            for i in range(n)
+            for j in range(i + 1, n)
+            for k in range(j + 1, n)
+            if (
+                tuple(sorted((i, j))) in edge_set
+                and tuple(sorted((i, k))) in edge_set
+                and tuple(sorted((j, k))) in edge_set
+            )
+        ]
+        return edge_idx, face_groups
+
+
+class Dodecahedron(Polyhedron):
+    """Regular dodecahedron — 20 vertices, 30 edges, 12 pentagonal faces.
+
+    Parameters
+    ----------
+    radius : float or int, default=1.0
+    R : RotationLike, optional
+    """
+
+    n_vertices = 20
+    n_edges = 30
+    n_faces = 12
+
+    def _canonical_vertices(self) -> np.ndarray:
+        v12 = np.array(
+            [
+                [0, 1 / PHI, PHI],
+                [0, -1 / PHI, PHI],
+                [0, 1 / PHI, -PHI],
+                [0, -1 / PHI, -PHI],
+                [1 / PHI, PHI, 0],
+                [-1 / PHI, PHI, 0],
+                [1 / PHI, -PHI, 0],
+                [-1 / PHI, -PHI, 0],
+                [PHI, 0, 1 / PHI],
+                [-PHI, 0, 1 / PHI],
+                [PHI, 0, -1 / PHI],
+                [-PHI, 0, -1 / PHI],
+            ],
+            dtype=float,
+        )
+        v12 = v12 / np.linalg.norm(v12, axis=1, keepdims=True)
+        cube_v = (1.0 / ROOT3) * np.array(
+            [
+                [1, 1, 1], [-1, -1, -1], [-1, 1, 1], [1, -1, 1],
+                [1, 1, -1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1],
+            ],
+            dtype=float,
+        )
+        return np.vstack((v12, cube_v))
+
+
 
 def n_gon_points(n: int) -> np.ndarray:
     """Return the unit-circle vertices of a regular n-gon in the xy-plane.
@@ -3958,20 +4068,23 @@ def as_symmetry(source: Symmetry) -> tuple[str, int]:
     ----------
     source : Symmetry
         Either a string like ``"C5"`` or ``"D2"`` (case-insensitive),
-        or a bare integer/float ``n`` (interpreted as cyclic Cn).
+        or a bare integer/float ``n`` (interpreted as cyclic Cn), or
+        one of ``"T"``, ``"O"``, ``"I"`` for the Platonic solid groups.
 
     Returns
     -------
     group : str
-        ``"C"`` for cyclic, ``"D"`` for dihedral.
+        ``"C"`` for cyclic, ``"D"`` for dihedral, ``"T"`` for
+        tetrahedral, ``"O"`` for octahedral, ``"I"`` for icosahedral.
     order : int
-        The order of the symmetry group (n in Cn / Dn).
+        The order of the symmetry group (n for Cn/Dn; 12/24/60 for T/O/I).
 
     Raises
     ------
     ValueError
-        If the string does not start with C or D, if no digits are
-        present, or if the input type is unsupported.
+        If the string does not start with a recognised letter, if no
+        digits are present for C/D groups, or if the input type is
+        unsupported.
 
     Examples
     --------
@@ -3981,19 +4094,35 @@ def as_symmetry(source: Symmetry) -> tuple[str, int]:
     ('D', 2)
     >>> as_symmetry(7)
     ('C', 7)
+    >>> as_symmetry("T")
+    ('T', 12)
+    >>> as_symmetry("o")
+    ('O', 24)
+    >>> as_symmetry("I")
+    ('I', 60)
     """
     if isinstance(source, str):
+        stripped_upper = source.strip().upper()
+
+        # Fixed-order Platonic solid groups (no digits)
+        if stripped_upper == "T":
+            return ("T", 12)
+        if stripped_upper == "O":
+            return ("O", 24)
+        if stripped_upper == "I":
+            return ("I", 60)
+
         digits = re.findall(r"\d+", source)
         if not digits:
             raise ValueError(f"No order found in symmetry string {source!r}.")
         order = int(digits[-1])
-        letter = source.strip()[0].upper()
+        letter = stripped_upper[0]
         if letter == "C":
             return ("C", order)
         if letter == "D":
             return ("D", order)
         raise ValueError(
-            f"Unknown symmetry {source!r}: only C (cyclic) and D (dihedral) are supported."
+            f"Unknown symmetry {source!r}: only C (cyclic), D (dihedral), T, O, and I are supported."
         )
 
     # int / float
@@ -4005,6 +4134,51 @@ def as_symmetry(source: Symmetry) -> tuple[str, int]:
     raise ValueError(
         f"Symmetry must be a string ('Cn'/'Dn') or an integer, got {type(source).__name__}."
     )
+
+
+def barycenter(coords: ArrayLike, weights: ArrayLike | None = None) -> np.ndarray:
+    """Return the centroid or weighted centre of mass of a point set.
+
+    Parameters
+    ----------
+    coords : ArrayLike
+        Point coordinates, shape ``(N, 3)``.
+    weights : ArrayLike, optional
+        Per-point weights, shape ``(N,)``.  When ``None`` (default) the plain
+        unweighted centroid is returned.
+
+    Returns
+    -------
+    numpy.ndarray
+        Centre coordinates, shape ``(3,)``.
+
+    Raises
+    ------
+    ValueError
+        If *coords* is empty or does not have exactly 3 columns after array
+        coercion.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> barycenter(np.array([[0., 0., 0.], [2., 2., 2.]]))
+    array([1., 1., 1.])
+    >>> barycenter(np.array([[0., 0., 0.], [2., 2., 2.]]), weights=np.array([1., 3.]))
+    array([1.5, 1.5, 1.5])
+    """
+    c = np.asarray(coords, dtype=float)
+    if c.ndim != 2 or c.shape[1] != 3:
+        raise ValueError(f"barycenter: coords must have shape (N, 3), got {c.shape}.")
+    if c.shape[0] == 0:
+        raise ValueError("barycenter: coords is empty.")
+    if weights is None:
+        return c.mean(axis=0)
+    w = np.asarray(weights, dtype=float)
+    if w.shape != (c.shape[0],):
+        raise ValueError(
+            f"barycenter: weights shape {w.shape} does not match coords shape {c.shape}."
+        )
+    return (c * w[:, None]).sum(0) / w.sum()
 
 
 def as_triplet(

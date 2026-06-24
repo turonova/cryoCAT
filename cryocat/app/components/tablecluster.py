@@ -25,7 +25,7 @@ from cryocat.analysis import clustering as clustering_mod
 from cryocat.analysis import visplot
 
 
-def get_table_cluster_component(prefix: str):
+def get_table_cluster_component(prefix: str, is_motl=False, motl_cols=None):
     lbl = {"fontWeight": "bold", "marginBottom": "0.3rem", "fontSize": "0.85rem"}
     return html.Div(
         children=[
@@ -169,11 +169,49 @@ def get_table_cluster_component(prefix: str):
                     "wordBreak": "break-word",
                 },
             ),
+        html.Div(
+            id=f"{prefix}-cluster-save-wrap",
+            style={"display": "none"},
+            children=[
+                html.Hr(style={"margin": "0.5rem 0"}),
+                html.Label("Save cluster assignments to table:", style=lbl),
+                html.Div(
+                    dbc.Input(
+                        id=f"{prefix}-cluster-save-colname",
+                        placeholder="Column name (e.g. cluster1)",
+                        size="sm",
+                        style={"marginBottom": "0.3rem"},
+                    ),
+                    style={"display": "none" if is_motl else "block"},
+                ),
+                html.Div(
+                    dcc.Dropdown(
+                        id=f"{prefix}-cluster-save-motlcol",
+                        options=[{"label": c, "value": c} for c in (motl_cols or [])],
+                        value=(
+                            "class" if (motl_cols and "class" in motl_cols)
+                            else (motl_cols[0] if motl_cols else None)
+                        ),
+                        clearable=False,
+                        searchable=len(motl_cols or []) > 10,
+                        style={"marginBottom": "0.3rem"},
+                    ),
+                    style={"display": "block" if is_motl else "none"},
+                ),
+                dbc.Button(
+                    "Save to table",
+                    id=f"{prefix}-cluster-save-btn",
+                    color="secondary",
+                    size="sm",
+                    style={"width": "100%"},
+                ),
+            ],
+        ),
         ]
     )
 
 
-def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, table_grid_id=None):
+def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, table_grid_id=None, is_motl=False, motl_cols=None, cluster_cols_store_id=None):
 
     # ── Type selection: show/hide panels, populate features + PCA ────────────
 
@@ -252,6 +290,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         Output(f"{prefix}-cluster-yaxis", "options"),
         Output(f"{prefix}-cluster-data-store", "data"),
         Output(f"{prefix}-cluster-status", "children"),
+        Output(f"{prefix}-cluster-save-wrap", "style"),
         Input(f"{prefix}-cluster-run-btn", "n_clicks"),
         State(f"{prefix}-cluster-features-check", "value"),
         State(f"{prefix}-cluster-n-slider", "value"),
@@ -262,7 +301,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         if not n_clicks or not data:
             raise dash.exceptions.PreventUpdate
         if not features:
-            return no_update, no_update, no_update, no_update, "Select at least one feature."
+            return no_update, no_update, no_update, no_update, "Select at least one feature.", no_update
 
         df = pd.DataFrame(data)
 
@@ -275,6 +314,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
             return (
                 no_update, no_update, no_update, no_update,
                 f"Too few valid rows ({len(df_valid)}) for {n_clusters} clusters.",
+                no_update,
             )
 
         X = df_valid[features].values
@@ -293,6 +333,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
             axis_opts,
             result_df.to_dict("records"),
             f"K-means complete — {int(n_clusters)} clusters, {len(df_valid)} points.",
+            {"display": "block"},
         )
 
     # ── K-means scatter (re-renders when axes change) ─────────────────────────
@@ -301,7 +342,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         Output(f"{prefix}-cluster-scatter", "figure"),
         Input(f"{prefix}-cluster-xaxis", "value"),
         Input(f"{prefix}-cluster-yaxis", "value"),
-        State(f"{prefix}-cluster-data-store", "data"),
+        Input(f"{prefix}-cluster-data-store", "data"),
         prevent_initial_call=True,
     )
     def _update_scatter(x_col, y_col, data):
@@ -354,6 +395,64 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         preview = sizes[:10]
         suffix = "…" if len(sizes) > 10 else ""
         return f"{len(comps)} component(s). Sizes: {preview}{suffix}"
+
+    # ── Save K-means cluster assignments to the data table ────────────────────
+
+    _save_out = [
+        Output(connected_store_id, "data", allow_duplicate=True),
+        Output(f"{prefix}-cluster-status", "children", allow_duplicate=True),
+    ]
+    if cluster_cols_store_id:
+        _save_out.append(Output(cluster_cols_store_id, "data", allow_duplicate=True))
+
+    _save_states = [
+        State(f"{prefix}-cluster-data-store", "data"),
+        State(connected_store_id, "data"),
+        State(f"{prefix}-cluster-save-colname", "value"),
+        State(f"{prefix}-cluster-save-motlcol", "value"),
+    ]
+    if cluster_cols_store_id:
+        _save_states.append(State(cluster_cols_store_id, "data"))
+
+    @app.callback(
+        *_save_out,
+        Input(f"{prefix}-cluster-save-btn", "n_clicks"),
+        *_save_states,
+        prevent_initial_call=True,
+    )
+    def _save_cluster(n_clicks, cluster_data, main_data, col_name, motl_col, *extra):
+        existing_cols = extra[0] if extra else None
+        n_out = len(_save_out)
+
+        def _ret(*vals):
+            return vals[0] if n_out == 1 else vals
+
+        if not n_clicks or not cluster_data or not main_data:
+            raise dash.exceptions.PreventUpdate
+
+        col_target = motl_col if is_motl else col_name
+        if not col_target:
+            return _ret(no_update, "Enter a column name first.", *([no_update] if cluster_cols_store_id else []))
+
+        df = pd.DataFrame(main_data)
+        cluster_df = pd.DataFrame(cluster_data)
+
+        df[col_target] = np.nan
+        for _, row in cluster_df.iterrows():
+            idx = int(row["__row_idx__"])
+            if 0 <= idx < len(df):
+                df.loc[idx, col_target] = int(row["cluster"])
+
+        new_data = df.to_dict("records")
+        status = f"Saved cluster assignments to column '{col_target}'."
+
+        if cluster_cols_store_id:
+            cols = list(existing_cols or [])
+            if col_target not in cols:
+                cols.append(col_target)
+            return new_data, status, cols
+
+        return new_data, status
 
     # ── Graph → table selection sync ─────────────────────────────────────────
 

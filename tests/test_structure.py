@@ -21,7 +21,9 @@ def _write_mock_mrc(path, dimensions, voxel_size_x):
 
 def test_unify_nn_orientations():
     ir_motl = cryomotl.Motl.load(str(DATA_DIR / "ir_input.em"))
-    result = structure.NPC.unify_nn_orientations(ir_motl, dist_threshold=10000)
+    cs = structure.NPC(ir_motl, symmetry=8)
+    cs.unify_nn_orientations(dist_threshold=10000)
+    result = cs.motl
     gt = cryomotl.Motl.load(str(DATA_DIR / "gt_ir_flipped.em"))
 
     result_df = result.df.sort_values("subtomo_id").reset_index(drop=True)
@@ -40,6 +42,7 @@ def test_cluster_subunits_to_rings():
         entry_mask_coord=(34, 61, 36),
         exit_mask_coord=(34, 17, 36),
     )
+
     gt = cryomotl.Motl.load(str(DATA_DIR / "gt_ir_merged.em"))
 
     result_df = result.df.sort_values("subtomo_id").reset_index(drop=True)
@@ -186,7 +189,8 @@ def _make_npc_motl(n_subunits: int = 8, n_rings: int = 1):
 
 def test_NPC_compute_diameter_returns_summary_and_motl():
     m = _make_npc_motl(n_subunits=8, n_rings=1)
-    summary, motl_out = structure.NPC.compute_diameter(m, pixel_size=1.0)
+    cs = structure.CnComplex(m, symmetry=8)
+    summary, motl_out = cs.diameter(pixel_size=1.0)
     assert isinstance(summary, pd.DataFrame)
     assert isinstance(motl_out, cryomotl.Motl)
     assert "mean_diameter" in summary.columns
@@ -195,37 +199,39 @@ def test_NPC_compute_diameter_returns_summary_and_motl():
 
 def test_NPC_get_center_with_radius_returns_3vec():
     m = _make_npc_motl(n_subunits=8)
-    centre = structure.NPC.get_center_with_radius(m, radius=50.0)
+    centre = structure.NPC._center_by_radius_shift(m, npc_radius=50.0)
     assert centre.shape == (3,)
 
 
 def test_NPC_get_center_and_radius_returns_centre_and_radius():
-    """Use ≤ 3 particles so the ray-ray intersection path is taken (avoids the
-    Pratt circle-fit which only handles certain shapes).
-    """
+    """Use 3 particles to exercise the circle-fit / barycentric centre path."""
     m = _make_npc_motl(n_subunits=3)
-    centre, radius = structure.NPC.get_center_and_radius(m)
+    cs = structure.CnComplex(m, symmetry=3)
+    centre, radius = cs._compute_object_center(m)
     assert np.asarray(centre).shape[-1] == 3
     assert isinstance(radius, (int, float))
 
 
 def test_NPC_get_centers_as_motl_returns_one_centre_per_ring():
     m = _make_npc_motl(n_subunits=8, n_rings=2)
-    centres = structure.NPC.get_centers_as_motl(m, tomo_id=1, radius=50.0)
+    cs = structure.CnComplex(m, symmetry=8)
+    centres = cs.get_centers_as_motl()
     assert isinstance(centres, cryomotl.Motl)
     assert len(centres.df) == 2
 
 
 def test_NPC_get_new_subunit_idx_starts_at_1():
     m = _make_npc_motl(n_subunits=8)
-    s_idx = structure.NPC.get_new_subunit_idx(m, npc_radius=50.0, symmetry=8)
+    s_idx = structure.NPC._assign_subunit_index(m, 50.0, symmetry=8)
     assert s_idx[0] == 1
     assert len(s_idx) == 8
 
 
 def test_NPC_merge_subunits_returns_motl():
     m = _make_npc_motl(n_subunits=8, n_rings=1)
-    merged = structure.NPC.merge_subunits(m, npc_radius=55.0)
+    cs = structure.CnComplex(m, symmetry=8)
+    cs.merge_subunits(radius=55.0)
+    merged = cs.motl
     assert isinstance(merged, cryomotl.Motl)
     assert "geom1" in merged.df.columns
 
@@ -578,262 +584,1186 @@ def test_PleomorphicSurface_clean_by_normals_returns_psurf():
         pass
 
 
-# -- Icosahedron ---------------------------------------------------------------
-
-class TestIcosahedron:
-
-    @pytest.fixture
-    def canonical_icosahedron(self):
-        return structure.Icosahedron()
-
-    @pytest.fixture
-    def sample_icosahedron(self):
-        return structure.Icosahedron(2.2, np.asarray([[ 0.30775949, -0.80936378,  0.50021432],[ 0.81239293,  0.49719682,  0.30465235],[-0.49527955,  0.31261093,  0.81053845]]))
-
-    def test_attributes_canonical_icosahedron(self, canonical_icosahedron):
-        expected_vertices = geom.icosahedron()
-        assert canonical_icosahedron.radius == 1
-        assert np.allclose(canonical_icosahedron.rotation.as_matrix(), np.eye(3), atol=1e-6)
-        assert np.allclose(canonical_icosahedron.vertices, expected_vertices, atol=1e-6)
-    
-
-    @pytest.mark.parametrize("radius, rotation", [
-        (2, None),
-        (1, np.asarray([[ 0.30775949, -0.80936378,  0.50021432],[ 0.81239293,  0.49719682,  0.30465235],[-0.49527955,  0.31261093,  0.81053845]])),
-        (2.2, np.asarray([[ 0.30775949, -0.80936378,  0.50021432],[ 0.81239293,  0.49719682,  0.30465235],[-0.49527955,  0.31261093,  0.81053845]]))
-    ])
-    def test_radius_and_rotation_type_and_len_attributes(self, radius, rotation):
-        sample_icosahedron = structure.Icosahedron(radius, rotation)
-        assert isinstance(sample_icosahedron.radius, float)
-        assert isinstance(sample_icosahedron.rotation, Rotation)
-        assert sample_icosahedron.vertices.shape == (12,3)
-        assert sample_icosahedron.edges.shape == (30,3)
-        assert sample_icosahedron.faces.shape == (20,3)
-    
-
-    def test_rotation_determinant_is_one(self, sample_icosahedron):
-        # determinant of a valid rotation matrix must be +1
-        R = sample_icosahedron.rotation.as_matrix()
-        assert np.isclose(np.linalg.det(R), 1.0, atol=1e-6)
-    
-
-    def test_edges_equal_distance_from_center(self, sample_icosahedron):
-        # all midpoints should be equidistant from the center
-        distances = np.linalg.norm(sample_icosahedron.edges, axis=1)
-        assert np.allclose(distances, distances[0], atol=1e-6)
-
-    def test_edges_distance_from_center(self, sample_icosahedron):
-        # for a regular icosahedron the midradius (distance from center
-        # to edge midpoint) is: r_mid = radius * sqrt(5) * phi / 4
-        # where phi = (1 + sqrt(5)) / 2 is the golden ratio
-        expected_distance = sample_icosahedron.radius * np.sqrt(5) * PHI / 4
-        distances = np.linalg.norm(sample_icosahedron.edges, axis=1)
-        assert np.allclose(distances, expected_distance, atol=0.2)
-
-    def test_faces_equal_distance_from_center(self, sample_icosahedron):
-        # all face centers should be equidistant from the center
-        distances = np.linalg.norm(sample_icosahedron.faces, axis=1)
-        assert np.allclose(distances, distances[0], atol=1e-6)
-    
-    def test_faces_distance_from_centers(self, sample_icosahedron):
-        # for a regular icosahedron the inradius (distance from center
-        # to face center) is: r_in = radius * sqrt(3) * phi^2 / (2 * sqrt(5 + 2*sqrt(5)))
-        expected_distance = sample_icosahedron.radius * PHI**2 / (2 * np.sqrt(3))
-        distances = np.linalg.norm(sample_icosahedron.faces, axis=1)
-        assert np.allclose(distances, expected_distance, atol=0.1)
+# -- PolyhedralComplex --------------------------------------------------------
 
 
-    @pytest.mark.parametrize("shift_v1, shift_v2", [
-        (None, None),
-        (None, np.asarray([0, 44.2, 72.5])),
-        (np.asarray([0, 44.2, 72.5]), None)
-    ])
-    def test_compute_icosahedron_no_shifts(self, shift_v1, shift_v2):
-        # if one or both shift vectors are None, should return canonical icosahedron
-        icosahedron = structure.Icosahedron.compute_icosahedron(shift_v1, shift_v2)
-        assert isinstance(icosahedron, structure.Icosahedron)
-        assert icosahedron.radius == 1
-        assert np.allclose(icosahedron.rotation.as_matrix(), np.eye(3), atol=1e-6)
-        assert np.allclose(icosahedron.vertices, geom.icosahedron(), atol=1e-6)
-    
+def _make_poly_motl(n_particles: int = 6) -> cryomotl.Motl:
+    """Minimal Motl with *n_particles* rows, each in its own object."""
+    rows = []
+    for i in range(n_particles):
+        rows.append({
+            "score": 0.9 - i * 0.1, "geom1": 1.0, "geom2": 2.0,
+            "subtomo_id": float(i + 1), "tomo_id": (1.0 if i < 3 else 2.0),
+            "object_id": float(100 * (i + 1)),
+            "subtomo_mean": float(i + 1) * 0.1,
+            "x": float(10 + i), "y": float(10 + i), "z": float(10 + i),
+            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+            "geom3": 3.0, "geom4": 4.0, "geom5": 5.0,
+            "phi": float(i * 10), "psi": float(i * 10 + 5),
+            "theta": float(i * 10 + 10), "class": float(1 + i % 2),
+        })
+    m = cryomotl.Motl()
+    m.df = pd.DataFrame(rows)
+    return m
 
-    @pytest.mark.parametrize("shift_v1, shift_v2",[
-        (np.asarray([0, 44.2, 72.5]), np.array([72.2, -0.1, 44.7]))
-    ])
-    def test_compute_icosahedron_instance(self, shift_v1, shift_v2):
-        icosahedron = structure.Icosahedron.compute_icosahedron(shift_v1, shift_v2)
-        assert isinstance(icosahedron, structure.Icosahedron)   
-    
+
+class TestPolyhedralComplex:
+
+    # ------------------------------------------------------------------ fixtures
 
     @pytest.fixture
     def mrc_file(self, tmp_path):
         path = tmp_path / "test_sample.mrc"
-        _write_mock_mrc(path, dimensions=(224,224,224), voxel_size_x=1)
+        _write_mock_mrc(path, dimensions=(224, 224, 224), voxel_size_x=1)
         yield path
-    
+
     @pytest.fixture
     def path_test_marker_file(self):
         current_dir = Path(__file__).parent
-        test_cmm_file = current_dir / "test_data" / "test_marker_file.cmm"
-        return str(test_cmm_file) 
-
-    def test_recover_icosahedral_features_value_error(self, path_test_marker_file, mrc_file):
-        with pytest.raises(ValueError, match="Invalid mode"):
-            structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file), mode="random")
-
-    def test_recover_icosahedral_features_returns_two_vectors(self, path_test_marker_file, mrc_file):
-        v1, v2 = structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file))
-        assert isinstance(v1, np.ndarray)
-        assert isinstance(v2, np.ndarray) 
-    
-    def test_recover_icosahedral_features_output_cmm_is_created(self, path_test_marker_file, tmp_path, mrc_file):
-        output_path = tmp_path / "test_out.cmm"
-        _, _ =structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file), output_cmm_file=str(output_path))
-        assert output_path.exists()
-
-
-    @pytest.mark.parametrize("mode, expected_ratio", [
-        ("vertices", 1), 
-        ("edges", np.sqrt(5) * PHI / 4),
-        ("faces", PHI**2 / (2 * np.sqrt(3)))
-        ])
-    def test_recover_icosahedral_features_correct_dist_no_project_to_sphere(self, path_test_marker_file, mrc_file, mode, expected_ratio):
-
-        # compute the expected radius of the icosahedron instance
-        shift_v1 = np.asarray([112, 156.2, 184.5]) - np.asarray([112,112,112])
-        shift_v2 = np.asarray([184.2, 111.9, 156.7]) - np.asarray([112,112,112])
-        expected_icosahedron = structure.Icosahedron.compute_icosahedron(shift_v1, shift_v2)
-
-        vecs, _ = structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file), mode=mode)
-        distances = np.linalg.norm(vecs, axis=1)
-        assert np.allclose(distances / expected_icosahedron.radius, expected_ratio, atol=1e-1)
-    
-
-    @pytest.mark.parametrize("mode", ["vertices", "edges", "faces"])
-    def test_recover_icosahedral_features_correct_dist_project_to_sphere(self, path_test_marker_file, mrc_file, mode):
-
-        # compute the expected radius of the icosahedron instance
-        shift_v1 = np.asarray([112, 156.2, 184.5]) - np.asarray([112,112,112])
-        shift_v2 = np.asarray([184.2, 111.9, 156.7]) - np.asarray([112,112,112])
-        expected_icosahedron = structure.Icosahedron.compute_icosahedron(shift_v1, shift_v2)
-
-        vecs, _ = structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file), mode=mode, project_to_sphere=True)
-        distances = np.linalg.norm(vecs, axis=1)
-        assert np.allclose(distances, expected_icosahedron.radius, atol=1e-1)
-
+        return str(current_dir / "test_data" / "test_marker_file.cmm")
 
     @pytest.fixture
-    def sample_motl_data1(self):
-        data = {
-            "tomo_id": [1, 1, 1, 2, 2, 2],
-            "x": [10, 11, 20, 30, 31, 40],
-            "y": [10, 11, 20, 30, 31, 40],
-            "z": [10, 11, 20, 30, 31, 40],
-            "score": [0.9, 0.8, 0.7, 0.6, 0.5, 0.4],
-            "subtomo_id": [1, 2, 3, 4, 5, 6],
-            "geom1": [1, 1, 1, 1, 1, 1],
-            "geom2": [2, 2, 2, 2, 2, 2],
-            "object_id": [100, 200, 300, 400, 500, 600],
-            "subtomo_mean": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
-            "shift_x": [0, 0, 0, 0, 0, 0],
-            "shift_y": [0, 0, 0, 0, 0, 0],
-            "shift_z": [0, 0, 0, 0, 0, 0],
-            "geom3": [3, 3, 3, 3, 3, 3],
-            "geom4": [4, 4, 4, 4, 4, 4],
-            "geom5": [5, 5, 5, 5, 5, 5],
-            "phi": [0, 10, 20, 30, 40, 50],
-            "psi": [5, 15, 25, 35, 45, 55],
-            "theta": [10, 20, 30, 40, 50, 60],
-            "class": [1, 2, 1, 2, 1, 2],
-        }
-        return pd.DataFrame(data)
+    def sample_motl(self):
+        return _make_poly_motl()
 
-    
+    @pytest.fixture
+    def ico_complex(self, sample_motl):
+        return structure.PolyhedralComplex(sample_motl, "I")
+
+    @pytest.fixture
+    def shift_vecs_test(self, path_test_marker_file, mrc_file):
+        vecs, _ = structure.PolyhedralComplex.recover_features(
+            path_test_marker_file, str(mrc_file), symmetry="I", project_to_sphere=True
+        )
+        return vecs
+
+    # ------------------------------------------------------------------ constructor
+
+    @pytest.mark.parametrize("sym", ["T", "O", "I"])
+    def test_valid_symmetry(self, sample_motl, sym):
+        pc = structure.PolyhedralComplex(sample_motl, sym)
+        assert pc.group == sym
+
+    def test_invalid_symmetry_raises(self, sample_motl):
+        with pytest.raises(ValueError, match="T/O/I"):
+            structure.PolyhedralComplex(sample_motl, "C4")
+
+    def test_stores_column_names(self, sample_motl):
+        pc = structure.PolyhedralComplex(
+            sample_motl, "I",
+            affiliation_column="geom3", order_column="geom4",
+        )
+        assert pc.affiliation_column == "geom3"
+        assert pc.order_column == "geom4"
+
+    # ------------------------------------------------------------------ feature_vectors
+
+    @pytest.mark.parametrize("sym, mode, expected_n", [
+        ("T", "vertices", 4), ("T", "edges", 6), ("T", "faces", 4),
+        ("O", "vertices", 6), ("O", "edges", 12), ("O", "faces", 8),
+        ("I", "vertices", 12), ("I", "edges", 30), ("I", "faces", 20),
+    ])
+    def test_feature_vectors_count(self, sample_motl, sym, mode, expected_n):
+        pc = structure.PolyhedralComplex(sample_motl, sym)
+        vecs = pc.feature_vectors(mode=mode)
+        assert vecs.shape == (expected_n, 3)
+
+    # ------------------------------------------------------------------ assign_subunit_order
+
+    def test_assign_subunit_order_xyz_ordering(self):
+        """Subunit indices follow x→y→z ascending lexicographic order."""
+        rows = []
+        for x_val, y_val, z_val in [(3, 1, 1), (1, 3, 1), (1, 1, 3), (2, 2, 2)]:
+            rows.append({
+                "score": 0.0, "geom1": 0.0, "geom2": 0.0,
+                "subtomo_id": float(len(rows) + 1), "tomo_id": 1.0,
+                "object_id": 1.0, "subtomo_mean": 0.0,
+                "x": float(x_val), "y": float(y_val), "z": float(z_val),
+                "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+                "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+                "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
+            })
+        m = cryomotl.Motl()
+        m.df = pd.DataFrame(rows)
+        pc = structure.PolyhedralComplex(m, "I")
+        pc.assign_subunit_order()
+        # particle lexicographically first (x→y→z) gets rank 1
+        df = pc.motl.df
+        lex_min_idx = df.sort_values(["x", "y", "z"]).index[0]
+        assert df.loc[lex_min_idx, "geom1"] == 1
+
+    # ------------------------------------------------------------------ recover_features
+
+    def test_recover_features_invalid_mode(self, path_test_marker_file, mrc_file):
+        with pytest.raises(ValueError, match="Invalid mode"):
+            structure.PolyhedralComplex.recover_features(
+                path_test_marker_file, str(mrc_file), symmetry="I", mode="random"
+            )
+
+    def test_recover_features_invalid_symmetry(self, path_test_marker_file, mrc_file):
+        with pytest.raises(ValueError, match="T/O/I"):
+            structure.PolyhedralComplex.recover_features(
+                path_test_marker_file, str(mrc_file), symmetry="C4"
+            )
+
+    def test_recover_features_returns_two_arrays(self, path_test_marker_file, mrc_file):
+        v1, v2 = structure.PolyhedralComplex.recover_features(
+            path_test_marker_file, str(mrc_file), symmetry="I"
+        )
+        assert isinstance(v1, np.ndarray)
+        assert isinstance(v2, np.ndarray)
+
+    def test_recover_features_output_cmm_is_created(self, path_test_marker_file, tmp_path, mrc_file):
+        output_path = tmp_path / "test_out.cmm"
+        structure.PolyhedralComplex.recover_features(
+            path_test_marker_file, str(mrc_file), symmetry="I",
+            output_cmm_file=str(output_path),
+        )
+        assert output_path.exists()
+
+    @pytest.mark.parametrize("mode, expected_ratio", [
+        ("vertices", 1),
+        ("edges", np.sqrt(5) * PHI / 4),
+        ("faces", PHI**2 / (2 * np.sqrt(3))),
+    ])
+    def test_recover_features_correct_dist_no_project(
+        self, path_test_marker_file, mrc_file, mode, expected_ratio
+    ):
+        shift_v1 = np.asarray([112, 156.2, 184.5]) - 112.0
+        shift_v2 = np.asarray([184.2, 111.9, 156.7]) - 112.0
+        expected_radius = geom.Icosahedron.from_vectors(shift_v1, shift_v2).radius
+
+        vecs, _ = structure.PolyhedralComplex.recover_features(
+            path_test_marker_file, str(mrc_file), symmetry="I", mode=mode
+        )
+        distances = np.linalg.norm(vecs, axis=1)
+        assert np.allclose(distances / expected_radius, expected_ratio, atol=1e-1)
+
+    @pytest.mark.parametrize("mode", ["vertices", "edges", "faces"])
+    def test_recover_features_correct_dist_project(
+        self, path_test_marker_file, mrc_file, mode
+    ):
+        shift_v1 = np.asarray([112, 156.2, 184.5]) - 112.0
+        shift_v2 = np.asarray([184.2, 111.9, 156.7]) - 112.0
+        expected_radius = geom.Icosahedron.from_vectors(shift_v1, shift_v2).radius
+
+        vecs, _ = structure.PolyhedralComplex.recover_features(
+            path_test_marker_file, str(mrc_file), symmetry="I", mode=mode,
+            project_to_sphere=True,
+        )
+        distances = np.linalg.norm(vecs, axis=1)
+        assert np.allclose(distances, expected_radius, atol=1e-1)
+
+    # ------------------------------------------------------------------ expand
+
     @pytest.mark.parametrize("shift_vecs", [
         6,
         np.random.rand(3),
-        np.random.rand(2,4)
+        np.random.rand(2, 4),
     ])
-    def test_icosahedral_sym_expansion_value_error_shifts(self, shift_vecs, sample_motl_data1):
+    def test_expand_value_error_shifts(self, ico_complex, shift_vecs):
         with pytest.raises(ValueError, match="shift_vecs should be a numpy array"):
-            structure.Icosahedron.icosahedral_sym_expansion(sample_motl_data1, shift_vecs)
+            ico_complex.expand(shift_vecs=shift_vecs)
 
     @pytest.mark.parametrize("col1, col2", [
         ("object_id", "random"),
         ("random", "geom2"),
-        ("random1", "random2")
+        ("random1", "random2"),
     ])
-    def test_icosahedral_sym_expansion_value_error_wrong_col(self, sample_motl_data1, col1, col2):
+    def test_expand_value_error_wrong_col(self, ico_complex, col1, col2):
         with pytest.raises(ValueError, match="not found in the columns of the input motive list"):
-            structure.Icosahedron.icosahedral_sym_expansion(
-                sample_motl_data1, 
-                np.random.rand(3,3), 
-                original_id_col=col1, 
-                order_id_col=col2
-                )
-
-    @pytest.fixture
-    def shift_vecs_test(self, path_test_marker_file, mrc_file):
-        vecs, _ = structure.Icosahedron.recover_icosahedral_features(path_test_marker_file, str(mrc_file), project_to_sphere=True)
-        return vecs
-
-    def test_icosahedral_sym_expansion_output_is_motl(self, sample_motl_data1, shift_vecs_test):
-        sample_motl = structure.Icosahedron.icosahedral_sym_expansion(sample_motl_data1, shift_vecs=shift_vecs_test)
-        assert isinstance(sample_motl, cryomotl.Motl)
-    
-    def test_icosahedral_sym_expansion_motl_len(self, sample_motl_data1, shift_vecs_test):
-        sample_motl = structure.Icosahedron.icosahedral_sym_expansion(sample_motl_data1, shift_vecs=shift_vecs_test)
-        assert len(sample_motl.df) == shift_vecs_test.shape[0]*len(sample_motl_data1)
-
-    def test_icosahedral_sym_expansion_reset_cols(self, sample_motl_data1, shift_vecs_test):
-        sample_motl = structure.Icosahedron.icosahedral_sym_expansion(sample_motl_data1, shift_vecs=shift_vecs_test)
-        assert np.all(sample_motl.df["score"] == 0)
-        assert np.all(sample_motl.df["subtomo_mean"] == 0)
-        assert np.array_equal(sample_motl.df["subtomo_id"], np.arange(1, len(sample_motl.df)+1, 1, dtype=np.int8))
-    
-    def test_icosahedral_sym_expansion_outfile(self, sample_motl_data1, shift_vecs_test, tmp_path):
-        output_path = tmp_path / "test_out.em"
-        _ = structure.Icosahedron.icosahedral_sym_expansion(
-            sample_motl_data1, 
-            shift_vecs=shift_vecs_test, 
-            output_path=str(output_path)
+            ico_complex.expand(
+                shift_vecs=np.random.rand(3, 3),
+                original_id_col=col1,
+                order_id_col=col2,
             )
+
+    def test_expand_output_is_motl(self, ico_complex, shift_vecs_test):
+        result = ico_complex.expand(shift_vecs=shift_vecs_test)
+        assert isinstance(result, cryomotl.Motl)
+
+    def test_expand_motl_len(self, ico_complex, shift_vecs_test):
+        result = ico_complex.expand(shift_vecs=shift_vecs_test)
+        assert len(result.df) == shift_vecs_test.shape[0] * len(ico_complex.motl.df)
+
+    def test_expand_reset_cols(self, ico_complex, shift_vecs_test):
+        result = ico_complex.expand(shift_vecs=shift_vecs_test)
+        assert np.all(result.df["score"] == 0)
+        assert np.all(result.df["subtomo_mean"] == 0)
+        assert np.array_equal(
+            result.df["subtomo_id"],
+            np.arange(1, len(result.df) + 1, 1, dtype=np.int8),
+        )
+
+    def test_expand_outfile(self, ico_complex, shift_vecs_test, tmp_path):
+        output_path = tmp_path / "test_out.em"
+        ico_complex.expand(shift_vecs=shift_vecs_test, output_path=str(output_path))
         assert output_path.exists()
-    
-    @pytest.mark.parametrize("motl_type, output_file, relion_version, expected_type",[
+
+    @pytest.mark.parametrize("motl_type, output_file, relion_version, expected_type", [
         ("stopgap", "output.star", None, cryomotl.StopgapMotl),
         ("relion", "output.star", 3.1, cryomotl.RelionMotl),
         ("relion5_1", "output.star", 5.1, cryomotl.RelionMotl),
-        ("dynamo", "output.tbl", None, cryomotl.DynamoMotl)
+        ("dynamo", "output.tbl", None, cryomotl.DynamoMotl),
     ])
-    def test_icosahedral_sym_expansion_different_motl_type(self, sample_motl_data1, shift_vecs_test, tmp_path, motl_type, output_file, relion_version, expected_type):
+    def test_expand_different_motl_type(
+        self, ico_complex, shift_vecs_test, tmp_path,
+        motl_type, output_file, relion_version, expected_type,
+    ):
         output_path = tmp_path / output_file
-        sample_motl = structure.Icosahedron.icosahedral_sym_expansion(
-            sample_motl_data1,
+        result = ico_complex.expand(
             shift_vecs=shift_vecs_test,
             output_motl_type=motl_type,
-            relion_version = relion_version,
-            output_path=str(output_path)
+            relion_version=relion_version,
+            output_path=str(output_path),
         )
-        assert output_path.exists() 
-        assert isinstance(sample_motl, expected_type)
+        assert output_path.exists()
+        assert isinstance(result, expected_type)
 
-    @pytest.mark.parametrize("original_id_col, order_id_col",[
+    @pytest.mark.parametrize("original_id_col, order_id_col", [
         ("object_id", "geom1"),
-        ("geom1","geom3")
+        ("geom1", "geom3"),
     ])
-    def test_icosahedral_sym_expansion_particel_ordering(self, sample_motl_data1, shift_vecs_test, original_id_col, order_id_col):
-        sample_motl = structure.Icosahedron.icosahedral_sym_expansion(
-            sample_motl_data1,
+    def test_expand_particle_ordering(self, ico_complex, shift_vecs_test, original_id_col, order_id_col):
+        result = ico_complex.expand(
             shift_vecs=shift_vecs_test,
             original_id_col=original_id_col,
-            order_id_col=order_id_col
+            order_id_col=order_id_col,
         )
-        unique_objects = np.unique(sample_motl.df[original_id_col])
-        assert len(unique_objects) == len(sample_motl_data1)
-        assert np.array_equal(unique_objects, sample_motl_data1["subtomo_id"])
-        assert sample_motl.df[original_id_col].is_monotonic_increasing # ascending order
-        for object in unique_objects:
-            motl_object = sample_motl.get_motl_subset(object, column_name=original_id_col, return_df=True)
-            assert motl_object[order_id_col].is_monotonic_increasing
-            assert np.array_equal(motl_object[order_id_col], np.arange(0,len(motl_object),1))
+        unique_objects = np.unique(result.df[original_id_col])
+        assert len(unique_objects) == len(ico_complex.motl.df)
+        assert np.array_equal(unique_objects, ico_complex.motl.df["subtomo_id"].values)
+        assert result.df[original_id_col].is_monotonic_increasing
+        for obj in unique_objects:
+            subset = result.get_motl_subset(obj, column_name=original_id_col, return_df=True)
+            assert subset[order_id_col].is_monotonic_increasing
+            assert np.array_equal(subset[order_id_col], np.arange(0, len(subset), 1))
+
+
+# ---------------------------------------------------------------------------
+# Helpers for CnComplex tests
+# ---------------------------------------------------------------------------
+
+def _make_synthetic_ring(
+    n: int = 8,
+    radius: float = 50.0,
+    center: tuple[float, float, float] = (100.0, 100.0, 100.0),
+    tomo_id: float = 1.0,
+    object_id: float = 1.0,
+) -> cryomotl.Motl:
+    """Synthetic ring with *n* subunits placed on a circle of given radius."""
+    angles = np.linspace(0, 360, n, endpoint=False)
+    x = center[0] + radius * np.cos(np.radians(angles))
+    y = center[1] + radius * np.sin(np.radians(angles))
+    z = np.full(n, center[2])
+    rows = []
+    for i in range(n):
+        rows.append({
+            "score": 0.0, "geom1": 0.0, "geom2": float(i + 1),
+            "subtomo_id": float(i + 1), "tomo_id": tomo_id,
+            "object_id": object_id, "subtomo_mean": 0.0,
+            "x": x[i], "y": y[i], "z": z[i],
+            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+            "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+            "phi": float(angles[i]), "psi": 0.0, "theta": 0.0, "class": 1.0,
+        })
+    m = cryomotl.Motl()
+    m.df = pd.DataFrame(rows)
+    return m
+
+
+def _make_two_ring_motl() -> cryomotl.Motl:
+    """Two identical rings in the same tomogram, with overlapping centres."""
+    ring1 = _make_synthetic_ring(object_id=1.0)
+    ring2 = _make_synthetic_ring(object_id=2.0, center=(100.0, 100.0, 100.0))
+    ring2.df["subtomo_id"] += 8
+    combined = cryomotl.Motl()
+    combined.df = pd.concat([ring1.df, ring2.df], ignore_index=True)
+    return combined
+
+
+# ---------------------------------------------------------------------------
+# Tests for geom.barycenter (here so they run alongside structure tests)
+# ---------------------------------------------------------------------------
+
+class TestCnComplexInit:
+    def test_accepts_string_C8(self):
+        m = _make_synthetic_ring()
+        cs = structure.CnComplex(m, "C8")
+        assert cs.n == 8
+
+    def test_accepts_int_symmetry(self):
+        m = _make_synthetic_ring()
+        cs = structure.CnComplex(m, 6)
+        assert cs.n == 6
+
+    def test_raises_on_dihedral(self):
+        m = _make_synthetic_ring()
+        with pytest.raises(ValueError, match="cyclic"):
+            structure.CnComplex(m, "D2")
+
+    def test_raises_on_other_non_cyclic(self):
+        m = _make_synthetic_ring()
+        with pytest.raises(ValueError, match="cyclic"):
+            structure.CnComplex(m, "D8")
+
+    def test_stores_column_names(self):
+        m = _make_synthetic_ring()
+        cs = structure.CnComplex(m, 8, affiliation_column="geom3", order_column="geom4")
+        assert cs.affiliation_column == "geom3"
+        assert cs.order_column == "geom4"
+
+
+class TestCnComplexProperties:
+    def test_central_angle_C8(self):
+        m = _make_synthetic_ring()
+        cs = structure.CnComplex(m, 8)
+        assert cs.central_angle == pytest.approx(45.0)
+
+    def test_interior_angle_C8(self):
+        m = _make_synthetic_ring()
+        cs = structure.CnComplex(m, 8)
+        assert cs.interior_angle == pytest.approx(135.0)
+
+    def test_central_angle_C6(self):
+        m = _make_synthetic_ring(n=6)
+        cs = structure.CnComplex(m, 6)
+        assert cs.central_angle == pytest.approx(60.0)
+
+
+class TestCnComplexCenters:
+    def test_barycentric_center_correct(self):
+        m = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0))
+        cs = structure.CnComplex(m, 8, center_method="barycentric")
+        centers = cs.get_centers_as_motl()
+        assert centers.df.shape[0] == 1
+        np.testing.assert_allclose(
+            centers.df[["x", "y", "z"]].values[0],
+            [100.0, 100.0, 100.0],
+            atol=1e-6,
+        )
+
+    def test_circle_fit_center_close_to_true(self):
+        m = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0))
+        cs = structure.CnComplex(m, 8, center_method="circle_fit")
+        centers = cs.get_centers_as_motl()
+        assert centers.df.shape[0] == 1
+        np.testing.assert_allclose(
+            centers.df[["x", "y", "z"]].values[0],
+            [100.0, 100.0, 100.0],
+            atol=5.0,
+        )
+
+    def test_circle_fit_fallback_warns_on_collinear(self):
+        """Collinear 4-point input should trigger fallback warning."""
+        rows = []
+        for i in range(4):
+            rows.append({
+                "score": 0.0, "geom1": 0.0, "geom2": float(i + 1),
+                "subtomo_id": float(i + 1), "tomo_id": 1.0,
+                "object_id": 1.0, "subtomo_mean": 0.0,
+                "x": float(i * 10), "y": 0.0, "z": 0.0,
+                "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+                "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+                "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
+            })
+        m = cryomotl.Motl()
+        m.df = pd.DataFrame(rows)
+        cs = structure.CnComplex(m, 8, center_method="circle_fit")
+        with pytest.warns(UserWarning):
+            centers = cs.get_centers_as_motl()
+        assert centers.df.shape[0] == 1
+
+    def test_get_centers_one_row_per_object(self):
+        ring1 = _make_synthetic_ring(n=8, object_id=1.0)
+        ring2 = _make_synthetic_ring(n=8, object_id=2.0, center=(200.0, 200.0, 200.0))
+        ring2.df["subtomo_id"] += 8
+        combined = cryomotl.Motl()
+        combined.df = pd.concat([ring1.df, ring2.df], ignore_index=True)
+        cs = structure.CnComplex(combined, 8, center_method="barycentric")
+        centers = cs.get_centers_as_motl()
+        assert centers.df.shape[0] == 2
+
+
+class TestCnComplexAssignSubunitOrder:
+    def test_writes_order_column(self):
+        m = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0))
+        cs = structure.CnComplex(m, 8, center_method="barycentric")
+        cs.assign_subunit_order()
+        assert cs.motl.df["geom1"].notna().all()
+        assert set(cs.motl.df["geom1"].astype(int)).issubset(set(range(1, 10)))
+
+    def test_first_particle_gets_index_one(self):
+        m = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0))
+        cs = structure.CnComplex(m, 8, center_method="barycentric")
+        cs.assign_subunit_order()
+        assert cs.motl.df["geom1"].iloc[0] == 1
+
+
+class TestCnComplexMergeSubunits:
+    def test_distinct_objects_unchanged(self):
+        ring1 = _make_synthetic_ring(n=8, object_id=1.0, center=(0.0, 0.0, 0.0))
+        ring2 = _make_synthetic_ring(n=8, object_id=2.0, center=(500.0, 500.0, 500.0))
+        ring2.df["subtomo_id"] += 8
+        combined = cryomotl.Motl()
+        combined.df = pd.concat([ring1.df, ring2.df], ignore_index=True)
+        cs = structure.CnComplex(combined, 8, center_method="barycentric")
+        cs.merge_subunits(radius=50)
+        assert cs.motl.df["object_id"].nunique() == 2
+
+    def test_close_objects_merged(self):
+        """Two rings with the same centre should merge into one object."""
+        ring1 = _make_synthetic_ring(n=8, object_id=1.0, center=(100.0, 100.0, 100.0))
+        ring2 = _make_synthetic_ring(n=8, object_id=2.0, center=(100.0, 100.0, 100.0))
+        ring2.df["subtomo_id"] += 8
+        combined = cryomotl.Motl()
+        combined.df = pd.concat([ring1.df, ring2.df], ignore_index=True)
+        cs = structure.CnComplex(combined, 8, center_method="barycentric")
+        cs.merge_subunits(radius=50)
+        assert cs.motl.df["object_id"].nunique() == 1
+
+
+# ---------------------------------------------------------------------------
+# Step 2 helpers
+# ---------------------------------------------------------------------------
+
+def _make_ordered_ring(
+    n: int = 8,
+    radius: float = 50.0,
+    center: tuple[float, float, float] = (100.0, 100.0, 100.0),
+    tomo_id: float = 1.0,
+    object_id: float = 1.0,
+) -> cryomotl.Motl:
+    """Ring with subunit order in geom2 (1-based, matches assign_subunit_order)."""
+    return _make_synthetic_ring(n=n, radius=radius, center=center,
+                                tomo_id=tomo_id, object_id=object_id)
+
+
+def _drop_subunits(motl: cryomotl.Motl, indices: list[int]) -> cryomotl.Motl:
+    """Return a copy of *motl* with rows whose geom2 value is in *indices* removed."""
+    out = cryomotl.Motl()
+    out.df = motl.df[~motl.df["geom2"].astype(int).isin(indices)].reset_index(drop=True)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Step 2a — diameter
+# ---------------------------------------------------------------------------
+
+class TestCnComplexDiameter:
+    def test_even_n_opposite_pairs_approx_2r(self):
+        """Diameter of a regular C8 ring at radius 50 ≈ 100 (2 × radius)."""
+        m = _make_ordered_ring(n=8, radius=50.0)
+        cs = structure.CnComplex(m, 8, order_column="geom2", center_method="barycentric")
+        summary, motl_out = cs.diameter(pixel_size=1.0)
+        assert len(summary) == 1
+        assert summary["n_pairs"].iloc[0] == 4
+        np.testing.assert_allclose(summary["mean_diameter"].iloc[0], 100.0, atol=1.0)
+
+    def test_store_column_filled_for_all_rows(self):
+        m = _make_ordered_ring(n=8, radius=50.0)
+        cs = structure.CnComplex(m, 8, order_column="geom2", center_method="barycentric")
+        _, motl_out = cs.diameter(pixel_size=1.0, store_column="geom4")
+        assert motl_out.df["geom4"].notna().all()
+
+    def test_two_objects_both_appear_in_summary(self):
+        ring1 = _make_ordered_ring(n=8, radius=50.0, object_id=1.0)
+        ring2 = _make_ordered_ring(n=8, radius=50.0, object_id=2.0, center=(200.0, 200.0, 200.0))
+        ring2.df["subtomo_id"] += 8
+        combined = cryomotl.Motl()
+        combined.df = pd.concat([ring1.df, ring2.df], ignore_index=True)
+        cs = structure.CnComplex(combined, 8, order_column="geom2", center_method="barycentric")
+        summary, _ = cs.diameter()
+        assert len(summary) == 2
+
+    def test_odd_n_warns_and_returns_circumradius_based(self):
+        """For n=5 (odd) the circumradius fallback fires with a warning."""
+        m = _make_ordered_ring(n=5, radius=50.0)
+        cs = structure.CnComplex(m, 5, order_column="geom2", center_method="barycentric")
+        with pytest.warns(UserWarning, match="odd"):
+            summary, _ = cs.diameter()
+        assert len(summary) == 1
+        assert summary["n_pairs"].iloc[0] == 0
+        np.testing.assert_allclose(summary["mean_diameter"].iloc[0], 100.0, atol=2.0)
+
+    def test_no_order_column_warns_and_uses_circumradius(self):
+        """When order_column is absent, circumradius fallback with warning."""
+        m = _make_ordered_ring(n=8, radius=50.0)
+        # Use order_column that doesn't exist in the motl
+        cs = structure.CnComplex(m, 8, order_column="geom5", center_method="barycentric")
+        with pytest.warns(UserWarning):
+            summary, _ = cs.diameter()
+        assert summary["n_pairs"].iloc[0] == 0
+
+    def test_pixel_size_scales_diameter(self):
+        m = _make_ordered_ring(n=8, radius=50.0)
+        cs = structure.CnComplex(m, 8, order_column="geom2", center_method="barycentric")
+        s1, _ = cs.diameter(pixel_size=1.0)
+        s2, _ = cs.diameter(pixel_size=2.0)
+        np.testing.assert_allclose(s2["mean_diameter"].iloc[0],
+                                   s1["mean_diameter"].iloc[0] * 2.0, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Step 2b — occupancy
+# ---------------------------------------------------------------------------
+
+class TestCnComplexOccupancy:
+    def test_full_ring_occupancy_one(self):
+        m = _make_ordered_ring(n=8, radius=50.0)
+        cs = structure.CnComplex(m, 8, order_column="geom2")
+        occ = cs.occupancy()
+        assert len(occ) == 1
+        assert occ["occupancy"].iloc[0] == pytest.approx(1.0)
+
+    def test_full_ring_missing_empty(self):
+        m = _make_ordered_ring(n=8, radius=50.0)
+        cs = structure.CnComplex(m, 8, order_column="geom2")
+        occ = cs.occupancy()
+        assert occ["missing"].iloc[0] == []
+
+    def test_partial_ring_occupancy_fraction(self):
+        """Drop subunit 7 → occupancy = 7/8."""
+        m = _drop_subunits(_make_ordered_ring(n=8, radius=50.0), [7])
+        cs = structure.CnComplex(m, 8, order_column="geom2")
+        occ = cs.occupancy()
+        assert occ["n_present"].iloc[0] == 7
+        np.testing.assert_allclose(occ["occupancy"].iloc[0], 7 / 8)
+
+    def test_partial_ring_missing_index(self):
+        """Dropped subunit 7 must appear in missing."""
+        m = _drop_subunits(_make_ordered_ring(n=8, radius=50.0), [7])
+        cs = structure.CnComplex(m, 8, order_column="geom2")
+        occ = cs.occupancy()
+        assert 7 in occ["missing"].iloc[0]
+
+    def test_over_occupied_object_visible(self):
+        """An object with n_present > n appears with occupancy > 1."""
+        ring1 = _make_ordered_ring(n=8, radius=50.0)
+        extra = _make_ordered_ring(n=8, radius=50.0)
+        extra.df["subtomo_id"] += 8
+        combined = cryomotl.Motl()
+        combined.df = pd.concat([ring1.df, extra.df], ignore_index=True)
+        cs = structure.CnComplex(combined, 8, order_column="geom2")
+        occ = cs.occupancy()
+        assert any(occ["occupancy"] > 1.0)
+
+    def test_no_order_column_missing_is_none(self):
+        """When order_column is not a column in the motl, missing should be None."""
+        m = _make_ordered_ring(n=8, radius=50.0)
+        # "subunit_order" is not in the standard 20-column Motl schema
+        cs = structure.CnComplex(m, 8, order_column="subunit_order")
+        occ = cs.occupancy()
+        assert occ["missing"].iloc[0] is None
+
+
+# ---------------------------------------------------------------------------
+# Step 2c — circumference
+# ---------------------------------------------------------------------------
+
+class TestCnComplexCircumference:
+    def test_circumference_approx_2pi_r(self):
+        """Circumference of a C8 ring at radius 50 ≈ 2π×50."""
+        m = _make_ordered_ring(n=8, radius=50.0)
+        cs = structure.CnComplex(m, 8, center_method="barycentric")
+        circ = cs.circumference(pixel_size=1.0)
+        assert len(circ) == 1
+        np.testing.assert_allclose(circ["circumference"].iloc[0], 2 * np.pi * 50.0, atol=2.0)
+
+    def test_pixel_size_scales_circumference(self):
+        m = _make_ordered_ring(n=8, radius=50.0)
+        cs = structure.CnComplex(m, 8, center_method="barycentric")
+        c1 = cs.circumference(pixel_size=1.0)["circumference"].iloc[0]
+        c2 = cs.circumference(pixel_size=3.0)["circumference"].iloc[0]
+        np.testing.assert_allclose(c2, c1 * 3.0, atol=1e-6)
+
+    def test_two_objects_two_rows(self):
+        ring1 = _make_ordered_ring(n=8, radius=50.0, object_id=1.0)
+        ring2 = _make_ordered_ring(n=8, radius=80.0, object_id=2.0, center=(200.0, 200.0, 200.0))
+        ring2.df["subtomo_id"] += 8
+        combined = cryomotl.Motl()
+        combined.df = pd.concat([ring1.df, ring2.df], ignore_index=True)
+        cs = structure.CnComplex(combined, 8, center_method="barycentric")
+        circ = cs.circumference()
+        assert len(circ) == 2
+        # Larger ring has larger circumference
+        c_by_obj = circ.set_index("object_id")["circumference"]
+        assert c_by_obj[2.0] > c_by_obj[1.0]
+
+
+# ---------------------------------------------------------------------------
+# Step 2d — get_object_stats
+# ---------------------------------------------------------------------------
+
+class TestCnComplexGetObjectStats:
+    def test_one_row_per_object(self):
+        ring1 = _make_ordered_ring(n=8, radius=50.0, object_id=1.0)
+        ring2 = _make_ordered_ring(n=8, radius=50.0, object_id=2.0, center=(200.0, 200.0, 200.0))
+        ring2.df["subtomo_id"] += 8
+        combined = cryomotl.Motl()
+        combined.df = pd.concat([ring1.df, ring2.df], ignore_index=True)
+        cs = structure.CnComplex(combined, 8, order_column="geom2", center_method="barycentric")
+        stats = cs.get_object_stats()
+        assert len(stats) == 2
+
+    def test_expected_columns_present(self):
+        m = _make_ordered_ring(n=8, radius=50.0)
+        cs = structure.CnComplex(m, 8, order_column="geom2", center_method="barycentric")
+        stats = cs.get_object_stats()
+        for col in ["tomo_id", "object_id", "n_present", "occupancy",
+                    "x", "y", "z", "radius", "circumference",
+                    "mean_diameter", "n_pairs"]:
+            assert col in stats.columns, f"missing column: {col}"
+
+    def test_values_consistent_with_individual_methods(self):
+        """Values in get_object_stats agree with occupancy() and circumference()."""
+        m = _make_ordered_ring(n=8, radius=50.0)
+        cs = structure.CnComplex(m, 8, order_column="geom2", center_method="barycentric")
+        stats = cs.get_object_stats()
+        occ = cs.occupancy()
+        circ = cs.circumference()
+        np.testing.assert_allclose(
+            stats["occupancy"].iloc[0], occ["occupancy"].iloc[0]
+        )
+        np.testing.assert_allclose(
+            stats["circumference"].iloc[0], circ["circumference"].iloc[0], atol=1e-6
+        )
+
+    def test_centre_approx_correct(self):
+        m = _make_ordered_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0))
+        cs = structure.CnComplex(m, 8, center_method="barycentric")
+        stats = cs.get_object_stats()
+        np.testing.assert_allclose(
+            stats[["x", "y", "z"]].values[0], [100.0, 100.0, 100.0], atol=1e-6
+        )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for Step 1B tests
+# ---------------------------------------------------------------------------
+
+def _make_multi_tomo_motl() -> cryomotl.Motl:
+    """8-subunit ring in tomo 1 + 8-subunit ring in tomo 2 + 1 isolated in tomo 1.
+
+    Subunits in each ring are placed on a circle of radius 50 voxels so that
+    adjacent-subunit distance ≈ 38 voxels.  The isolated particle is placed at
+    (300, 300, 300), well beyond any reasonable NN radius.
+    """
+    ring1 = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0),
+                                 tomo_id=1.0, object_id=0.0)
+    ring2 = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0),
+                                 tomo_id=2.0, object_id=0.0)
+    ring2.df["subtomo_id"] += 8
+    iso_row = {
+        "score": 0.0, "geom1": 0.0, "geom2": 0.0,
+        "subtomo_id": 17.0, "tomo_id": 1.0,
+        "object_id": 0.0, "subtomo_mean": 0.0,
+        "x": 300.0, "y": 300.0, "z": 300.0,
+        "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+        "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+        "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
+    }
+    combined = cryomotl.Motl()
+    combined.df = pd.concat(
+        [ring1.df, ring2.df, pd.DataFrame([iso_row])],
+        ignore_index=True,
+    )
+    return combined
+
+
+def _make_ring_with_tilted_outlier(n: int = 8, radius: float = 50.0, tilt: float = 45.0) -> cryomotl.Motl:
+    """Ring with *n* subunits; first particle's theta (ZXZ Euler) set to *tilt* degrees.
+
+    All other particles have theta=0 so their z-axis is [0, 0, 1].  The tilted
+    particle's z-axis points at approximately *tilt* degrees from [0, 0, 1].
+    """
+    m = _make_synthetic_ring(n=n, radius=radius, object_id=1.0)
+    m.df.loc[0, "theta"] = float(tilt)
+    return m
+
+
+def _make_overcrowded_motl(n_particles: int = 10, score_range: tuple[float, float] = (0.0, 9.0)) -> cryomotl.Motl:
+    """Single tight cluster of *n_particles* with scores spanning *score_range*.
+
+    Particles are placed within a 5-voxel range so any radius > 5 groups them.
+    """
+    rows = []
+    scores = np.linspace(score_range[0], score_range[1], n_particles)
+    for i in range(n_particles):
+        rows.append({
+            "score": float(scores[i]), "geom1": 0.0, "geom2": 0.0,
+            "subtomo_id": float(i + 1), "tomo_id": 1.0,
+            "object_id": 1.0, "subtomo_mean": 0.0,
+            "x": 100.0 + i * 0.5, "y": 100.0, "z": 100.0,
+            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+            "geom3": float(i * 5), "geom4": 0.0, "geom5": 0.0,
+            "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
+        })
+    m = cryomotl.Motl()
+    m.df = pd.DataFrame(rows)
+    return m
+
+
+# ---------------------------------------------------------------------------
+# Step 1B — create_affiliation (radius method)
+# ---------------------------------------------------------------------------
+
+class TestCnComplexCreateAffiliationRadius:
+    # Adjacent-subunit distance on C8 radius-50 ring ≈ 38.3 voxels;
+    # radius=44 connects all 8 within each tomogram.
+    _R = 44.0
+
+    def test_ring_subunits_share_one_affiliation(self):
+        """All 8 subunits of a ring in one tomogram get the same object_id."""
+        m = _make_multi_tomo_motl()
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.create_affiliation(method="radius", radius=self._R)
+        tomo1 = result.df[result.df["tomo_id"] == 1.0]
+        # The ring is the largest object; its affiliation id appears 8 times
+        counts = tomo1.groupby("object_id").size()
+        assert counts.max() == 8
+
+    def test_no_object_spans_two_tomograms(self):
+        """NN search is per-tomogram; tomo 2 must still have exactly 8 particles in 1 object."""
+        m = _make_multi_tomo_motl()
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.create_affiliation(method="radius", radius=self._R)
+        tomo2 = result.df[result.df["tomo_id"] == 2.0]
+        # Tomo 2 ring must be a single complete object, not merged with tomo 1
+        assert tomo2["object_id"].nunique() == 1
+        assert len(tomo2) == 8
+
+    def test_isolated_particle_kept_with_unique_id(self):
+        """Isolated particle (no NN within radius) gets its own object_id."""
+        m = _make_multi_tomo_motl()
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.create_affiliation(
+            method="radius", radius=self._R, drop_below_min_occupancy=False
+        )
+        # Tomo 1 has ring (object) + isolated (object) → 2 distinct object_ids
+        tomo1_ids = result.df[result.df["tomo_id"] == 1.0]["object_id"].unique()
+        assert len(tomo1_ids) == 2
+
+    def test_isolated_removed_when_drop_below_min_occupancy(self):
+        """With drop_below_min_occupancy=True and min_occupancy=2, singletons removed."""
+        m = _make_multi_tomo_motl()
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.create_affiliation(
+            method="radius", radius=self._R,
+            min_occupancy=2, drop_below_min_occupancy=True,
+        )
+        tomo1 = result.df[result.df["tomo_id"] == 1.0]
+        assert len(tomo1) == 8
+        assert tomo1["object_id"].nunique() == 1
+
+    def test_occupancy_column_equals_object_size(self):
+        """occupancy_column must equal the row count for that (tomo, object) group."""
+        m = _make_multi_tomo_motl()
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.create_affiliation(
+            method="radius", radius=self._R, occupancy_column="geom2"
+        )
+        for (_t, _o), grp in result.df.groupby(["tomo_id", "object_id"]):
+            occ_vals = grp["geom2"].unique()
+            assert len(occ_vals) == 1
+            assert int(occ_vals[0]) == len(grp)
+
+
+# ---------------------------------------------------------------------------
+# Step 1B — normals threshold
+# ---------------------------------------------------------------------------
+
+class TestCnComplexNormals:
+    def test_cone_distance_stored_for_all_particles(self):
+        """cone_distance_column is populated for every particle even with no threshold."""
+        m = _make_ring_with_tilted_outlier(n=8, tilt=45.0)
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.create_affiliation(
+            method="radius", radius=44.0, normals_threshold=None
+        )
+        assert len(result.df) == 8
+        assert result.df["geom3"].notna().all()
+
+    def test_tilted_outlier_has_higher_cone_distance(self):
+        """The particle with theta=45 should have a cone distance > 10°."""
+        m = _make_ring_with_tilted_outlier(n=8, tilt=45.0)
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.create_affiliation(
+            method="radius", radius=44.0, normals_threshold=None
+        )
+        assert result.df["geom3"].max() > 10.0
+
+    def test_outlier_removed_when_threshold_set(self):
+        """With normals_threshold=30°, the ~40° outlier is dropped."""
+        m = _make_ring_with_tilted_outlier(n=8, tilt=45.0)
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.create_affiliation(
+            method="radius", radius=44.0, normals_threshold=30.0
+        )
+        assert len(result.df) == 7
+
+    def test_all_retained_when_threshold_is_none(self):
+        """With normals_threshold=None no particles are dropped."""
+        m = _make_ring_with_tilted_outlier(n=8, tilt=45.0)
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.create_affiliation(
+            method="radius", radius=44.0, normals_threshold=None
+        )
+        assert len(result.df) == 8
+
+
+# ---------------------------------------------------------------------------
+# Step 1B — over-occupancy warning + clean_per_object
+# ---------------------------------------------------------------------------
+
+class TestCnComplexOverOccupancyAndClean:
+    def test_over_occupancy_warning_fires(self):
+        """A tight cluster of 10 particles (n=8) should trigger UserWarning."""
+        m = _make_overcrowded_motl(n_particles=10)
+        # object_id=1 already set; clear it so create_affiliation re-clusters
+        m.df["object_id"] = 0.0
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        with pytest.warns(UserWarning, match="exceed"):
+            cs.create_affiliation(method="radius", radius=100.0)
+
+    def test_clean_per_object_keeps_high_scores(self):
+        """keep='high' retains the n highest-score rows per object."""
+        m = _make_overcrowded_motl(n_particles=10)
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.clean_per_object("score", keep="high")
+        assert len(result.df) == 8
+        # linspace(0, 9, 10) → scores 0..9; top 8 are scores 2..9 (min=2, max=9)
+        assert result.df["score"].max() == pytest.approx(9.0, rel=0.05)
+        assert float(result.df["score"].min()) > 0.0
+
+    def test_clean_per_object_keeps_low_values(self):
+        """keep='low' retains the n lowest-value rows per object (e.g. cone distance)."""
+        m = _make_overcrowded_motl(n_particles=10)
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.clean_per_object("geom3", keep="low")
+        assert len(result.df) == 8
+        assert result.df["geom3"].max() == pytest.approx(35.0, rel=0.05)
+        assert result.df["geom3"].min() == pytest.approx(0.0, abs=0.01)
+
+    def test_clean_per_object_unchanged_when_at_n(self):
+        """Objects already at n rows are returned intact."""
+        m = _make_synthetic_ring(n=8, radius=50.0, object_id=1.0)
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.clean_per_object("score", keep="high")
+        assert len(result.df) == 8
+
+    def test_clean_per_object_custom_n_overrides_self_n(self):
+        """Passing n=5 keeps 5 rows regardless of self.n=8."""
+        m = _make_overcrowded_motl(n_particles=10)
+        cs = structure.CnComplex(m, 8, affiliation_column="object_id")
+        result = cs.clean_per_object("score", keep="high", n=5)
+        assert len(result.df) == 5
+
+
+# ---------------------------------------------------------------------------
+# New class hierarchy tests
+# ---------------------------------------------------------------------------
+
+class TestSymmetricComplex:
+    def test_d6_n_subunits(self):
+        """SymmetricComplex('D6').n_subunits == 12."""
+        m = _make_synthetic_ring(n=8)
+        sc = structure.SymmetricComplex(m, "D6")
+        assert sc.n_subunits == 12
+
+    def test_t_n_subunits(self):
+        """SymmetricComplex('T').n_subunits == 12."""
+        m = _make_synthetic_ring(n=8)
+        sc = structure.SymmetricComplex(m, "T")
+        assert sc.n_subunits == 12
+
+    def test_o_n_subunits(self):
+        """SymmetricComplex('O').n_subunits == 24."""
+        m = _make_synthetic_ring(n=8)
+        sc = structure.SymmetricComplex(m, "O")
+        assert sc.n_subunits == 24
+
+    def test_i_n_subunits(self):
+        """SymmetricComplex('I').n_subunits == 60."""
+        m = _make_synthetic_ring(n=8)
+        sc = structure.SymmetricComplex(m, "I")
+        assert sc.n_subunits == 60
+
+    def test_c8_n_subunits(self):
+        """SymmetricComplex('C8').n_subunits == 8."""
+        m = _make_synthetic_ring(n=8)
+        sc = structure.SymmetricComplex(m, "C8")
+        assert sc.n_subunits == 8
+
+    def test_stores_group_and_fold(self):
+        m = _make_synthetic_ring(n=8)
+        sc = structure.SymmetricComplex(m, "D6")
+        assert sc.group == "D"
+        assert sc.fold == 6
+
+
+class TestCnComplexVsSymmetricComplex:
+    def test_cncomplex_c8_same_as_old_api(self):
+        """CnComplex('C8') has same n and center_method as before."""
+        m = _make_synthetic_ring(n=8)
+        cs = structure.CnComplex(m, "C8")
+        assert cs.n == 8
+        assert cs.n_subunits == 8
+        assert cs.group == "C"
+        assert cs.fold == 8
+
+    def test_cncomplex_rejects_dihedral(self):
+        """CnComplex('D6') raises ValueError."""
+        m = _make_synthetic_ring(n=8)
+        with pytest.raises(ValueError, match="cyclic"):
+            structure.CnComplex(m, "D6")
+
+    def test_cncomplex_rejects_tetrahedral(self):
+        """CnComplex('T') raises ValueError."""
+        m = _make_synthetic_ring(n=8)
+        with pytest.raises(ValueError, match="cyclic"):
+            structure.CnComplex(m, "T")
+
+
+class TestComplexCenters:
+    def test_returns_one_row_per_object(self):
+        m = _make_synthetic_ring(n=8, object_id=1.0)
+        result = structure.complex_centers(m)
+        assert len(result.df) == 1
+
+    def test_two_objects_two_rows(self):
+        ring1 = _make_synthetic_ring(object_id=1.0, tomo_id=1.0)
+        ring2 = _make_synthetic_ring(object_id=2.0, tomo_id=1.0)
+        ring2.df["subtomo_id"] += 8
+        combined = cryomotl.Motl()
+        combined.df = pd.concat([ring1.df, ring2.df], ignore_index=True)
+        result = structure.complex_centers(combined)
+        assert len(result.df) == 2
+
+    def test_center_is_barycenter(self):
+        m = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0))
+        result = structure.complex_centers(m)
+        np.testing.assert_allclose(result.df["x"].values[0], 100.0, atol=1.0)
+        np.testing.assert_allclose(result.df["y"].values[0], 100.0, atol=1.0)
+        np.testing.assert_allclose(result.df["z"].values[0], 100.0, atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# SymmetricComplex base class — promoted methods and dispatch hook
+# ---------------------------------------------------------------------------
+
+class TestSymmetricComplexPromotedMethods:
+    def test_assign_subunit_order_raises_not_implemented(self):
+        """SymmetricComplex.assign_subunit_order raises NotImplementedError."""
+        m = _make_synthetic_ring(n=8)
+        sc = structure.SymmetricComplex(m, "C8")
+        with pytest.raises(NotImplementedError):
+            sc.assign_subunit_order()
+
+    def test_occupancy_denominator_is_n_subunits(self):
+        """occupancy fraction uses n_subunits, which equals n for CnComplex."""
+        m = _make_ordered_ring(n=8, radius=50.0)
+        m.df = m.df.iloc[:-1].reset_index(drop=True)  # drop one subunit → 7 present
+        cs = structure.CnComplex(m, "C8", order_column="geom2")
+        occ = cs.occupancy()
+        np.testing.assert_allclose(occ["occupancy"].iloc[0], 7 / cs.n_subunits)
+        assert cs.n_subunits == cs.n
+
+    def test_clean_per_object_default_n_uses_n_subunits(self):
+        """clean_per_object default n=None falls back to n_subunits (== n for CnComplex)."""
+        extra = _make_ordered_ring(n=8, radius=50.0)
+        extra.df["subtomo_id"] += 8  # avoid id collision
+        m = cryomotl.Motl()
+        m.df = pd.concat(
+            [_make_ordered_ring(n=8, radius=50.0).df, extra.df], ignore_index=True
+        )
+        cs = structure.CnComplex(m, "C8", order_column="geom2")
+        result = cs.clean_per_object("score", keep="high", n=None)
+        assert len(result.df) == cs.n_subunits
+
+    def test_merge_subunits_smoke_two_distant_rings(self):
+        """merge_subunits on CnComplex (base barycentric) keeps distant objects separate."""
+        ring1 = _make_synthetic_ring(n=8, object_id=1.0, center=(0.0, 0.0, 0.0))
+        ring2 = _make_synthetic_ring(n=8, object_id=2.0, center=(500.0, 500.0, 500.0))
+        ring2.df["subtomo_id"] += 8
+        combined = cryomotl.Motl()
+        combined.df = pd.concat([ring1.df, ring2.df], ignore_index=True)
+        cs = structure.CnComplex(combined, "C8")
+        cs.merge_subunits(radius=55)
+        assert cs.motl.df["object_id"].nunique() == 2
+
+    def test_ring_group_columns_default(self):
+        """CnComplex._ring_group_columns defaults to [tomo_id_column, affiliation_column]."""
+        m = _make_synthetic_ring(n=8)
+        cs = structure.CnComplex(m, "C8")
+        assert cs._ring_group_columns == [cs.tomo_id_column, cs.affiliation_column]
+
+
+# ---------------------------------------------------------------------------
+# DnComplex — dihedral symmetry
+# ---------------------------------------------------------------------------
+
+
+def _make_dn_motl(
+    n: int = 6,
+    radius: float = 50.0,
+    center: tuple[float, float, float] = (100.0, 100.0, 100.0),
+    axial_offset: float = 20.0,
+    stagger_degrees: float = 0.0,
+    tomo_id: float = 1.0,
+    object_id: float = 1.0,
+) -> cryomotl.Motl:
+    """Two stacked Cn rings separated axially.
+
+    Ring 0 (top) is at ``center + (0, 0, +axial_offset/2)``.
+    Ring 1 (bottom) is at ``center + (0, 0, -axial_offset/2)``.
+    *stagger_degrees* rotates ring 1 relative to ring 0 (0 = eclipsed,
+    180/n = staggered).
+    """
+    angles_top = np.linspace(0, 360, n, endpoint=False)
+    angles_bot = angles_top + stagger_degrees
+    rows = []
+    pid = 1
+    for ring_idx, (angles, z_off) in enumerate(
+        [(angles_top, axial_offset / 2.0), (angles_bot, -axial_offset / 2.0)]
+    ):
+        for ang in angles:
+            rows.append({
+                "score": 0.0, "geom1": 0.0, "geom2": 0.0,
+                "subtomo_id": float(pid), "tomo_id": tomo_id,
+                "object_id": object_id, "subtomo_mean": 0.0,
+                "x": center[0] + radius * np.cos(np.radians(ang)),
+                "y": center[1] + radius * np.sin(np.radians(ang)),
+                "z": center[2] + z_off,
+                "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+                "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+                "phi": ang, "psi": 0.0, "theta": 0.0, "class": 1.0,
+            })
+            pid += 1
+    m = cryomotl.Motl()
+    m.df = pd.DataFrame(rows)
+    return m
+
+
+class TestDnComplex:
+    def test_n_subunits_is_2n(self):
+        """DnComplex('D6').n_subunits == 12, .n == 6."""
+        m = _make_dn_motl(n=6)
+        dn = structure.DnComplex(m, "D6")
+        assert dn.n_subunits == 12
+        assert dn.n == 6
+
+    def test_wrong_group_raises(self):
+        """DnComplex rejects non-dihedral symmetry."""
+        m = _make_dn_motl(n=6)
+        with pytest.raises(ValueError, match="dihedral"):
+            structure.DnComplex(m, "C6")
+
+    def test_split_rings_labels_two_groups(self):
+        """split_rings partitions 2n subunits into ring 0 and ring 1."""
+        m = _make_dn_motl(n=6, axial_offset=20.0)
+        dn = structure.DnComplex(m, "D6")
+        dn.split_rings()
+        labels = dn.motl.df["geom5"].values
+        assert set(labels).issubset({0.0, 1.0})
+        assert (labels == 0.0).sum() == 6
+        assert (labels == 1.0).sum() == 6
+
+    def test_split_rings_updates_ring_group_columns(self):
+        """After split_rings, _ring_group_columns has 3 elements."""
+        m = _make_dn_motl(n=6)
+        dn = structure.DnComplex(m, "D6")
+        dn.split_rings(ring_column="geom5")
+        assert len(dn._ring_group_columns) == 3
+        assert dn._ring_group_columns[2] == "geom5"
+
+    def test_assign_subunit_order_ring_partitioning(self):
+        """Ring 0 subunits get indices <= n, ring 1 subunits get indices > n."""
+        m = _make_dn_motl(n=6, axial_offset=20.0)
+        dn = structure.DnComplex(m, "D6")
+        dn.assign_subunit_order()
+        ring_col = dn._ring_column
+        ring0_orders = dn.motl.df.loc[dn.motl.df[ring_col] == 0.0, "geom1"].values
+        ring1_orders = dn.motl.df.loc[dn.motl.df[ring_col] == 1.0, "geom1"].values
+        assert all(v <= dn.n for v in ring0_orders)
+        assert all(v > dn.n for v in ring1_orders)
+
+    def test_assign_subunit_order_ring1_offset(self):
+        """Ring 1 subunits have order_column > n (offset by n applied)."""
+        m = _make_dn_motl(n=6, axial_offset=20.0)
+        dn = structure.DnComplex(m, "D6")
+        dn.assign_subunit_order()
+        ring_col = dn._ring_column
+        ring1_orders = dn.motl.df.loc[dn.motl.df[ring_col] == 1.0, "geom1"].values
+        assert all(v > 6 for v in ring1_orders)
+
+    def test_ring_spacing_matches_axial_separation(self):
+        """ring_spacing recovers the known axial offset."""
+        axial_offset = 30.0
+        m = _make_dn_motl(n=6, axial_offset=axial_offset)
+        dn = structure.DnComplex(m, "D6")
+        df = dn.ring_spacing(pixel_size=1.0)
+        np.testing.assert_allclose(df["ring_spacing"].iloc[0], axial_offset, atol=1e-6)
+
+    def test_inter_ring_twist_staggered(self):
+        """Staggered rings (180/n rotation) give twist ≈ 180/n degrees."""
+        n = 6
+        stagger = 180.0 / n
+        m = _make_dn_motl(n=n, axial_offset=20.0, stagger_degrees=stagger)
+        dn = structure.DnComplex(m, "D6")
+        df = dn.inter_ring_twist(degrees=True)
+        np.testing.assert_allclose(df["inter_ring_twist"].iloc[0], stagger, atol=1e-4)
+
+    def test_inter_ring_twist_eclipsed(self):
+        """Eclipsed rings (0 rotation) give twist ≈ 0 degrees."""
+        m = _make_dn_motl(n=6, axial_offset=20.0, stagger_degrees=0.0)
+        dn = structure.DnComplex(m, "D6")
+        df = dn.inter_ring_twist(degrees=True)
+        np.testing.assert_allclose(df["inter_ring_twist"].iloc[0], 0.0, atol=1e-4)
+
+    def test_occupancy_denominator_is_2n(self):
+        """occupancy uses n_subunits == 2n as denominator."""
+        n = 6
+        m = _make_dn_motl(n=n, axial_offset=20.0)
+        m.df = m.df.iloc[:-1].reset_index(drop=True)
+        dn = structure.DnComplex(m, "D6")
+        occ = dn.occupancy()
+        expected = (2 * n - 1) / (2 * n)
+        np.testing.assert_allclose(occ["occupancy"].iloc[0], expected)
+
+    def test_non_z_axis_split(self):
+        """split_rings works for a non-Z splitting axis."""
+        n = 4
+        m = _make_dn_motl(n=n, axial_offset=0.0)
+        m.df["y"] += np.where(np.arange(len(m.df)) < n, 15.0, -15.0)
+        dn = structure.DnComplex(m, "D4")
+        dn.split_rings(axis=(0.0, 1.0, 0.0))
+        labels = dn.motl.df["geom5"].values
+        assert set(labels).issubset({0.0, 1.0})
+        assert (labels == 0.0).sum() == n
+        assert (labels == 1.0).sum() == n
+
+    def test_unify_nn_orientations_not_on_cn_or_dn(self):
+        """unify_nn_orientations is only on NPC, not CnComplex or DnComplex."""
+        assert not hasattr(structure.CnComplex, "unify_nn_orientations")
+        assert not hasattr(structure.DnComplex, "unify_nn_orientations")
+        assert hasattr(structure.NPC, "unify_nn_orientations")
+
+    def test_diameter_per_ring(self):
+        """diameter() works for DnComplex and returns per-ring rows."""
+        n = 6
+        radius = 50.0
+        m = _make_dn_motl(n=n, radius=radius, axial_offset=20.0)
+        dn = structure.DnComplex(m, "D6")
+        dn.split_rings()
+        summary_df, _ = dn.diameter(pixel_size=1.0)
+        assert len(summary_df) == 2
+
+    def test_get_object_stats_one_row_per_object(self):
+        """get_object_stats returns one row per (tomo_id, object_id)."""
+        m = _make_dn_motl(n=6, axial_offset=20.0)
+        dn = structure.DnComplex(m, "D6")
+        stats = dn.get_object_stats(pixel_size=1.0)
+        assert len(stats) == 1
+        assert "ring_spacing" in stats.columns
+        assert "inter_ring_twist" in stats.columns

@@ -1492,7 +1492,7 @@ def icosahedral_mask(
     radius = preprocess_params(radius, gaussian, gaussian_outwards)
       
     # Get icosahedron vertices  
-    vertices = geom.icosahedron() * radius
+    vertices = geom.Icosahedron(radius).vertices
 
     # Create convex hull  
     hull = ConvexHull(vertices)  

@@ -16,8 +16,9 @@ from cryocat.core import cryomask
 from cryocat.utils import geom
 from cryocat.utils import mathutils
 from cryocat.analysis import nnana
+from cryocat.analysis import clustering as _clustering
 from cryocat.utils import ioutils
-from cryocat._types import MapSource, MotlColumn, PathOrStr, TomoDimensions, TripletLike, RotationLike, MotlType, ArrayLike
+from cryocat._types import MapSource, MotlColumn, PathOrStr, TomoDimensions, TripletLike, RotationLike, MotlType, ArrayLike, Symmetry
 from cryocat.core.cryomotl import MotlSource
 from cryocat.core.surface import (
     Surface,
@@ -455,148 +456,1620 @@ class Chain:
 
 
 # =============================================================================
-# NPC
+# Utilities for symmetric complexes
+# =============================================================================
+
+_GROUP_ORDER: dict[str, Callable[[int], int]] = {
+    "C": lambda n: n,
+    "D": lambda n: 2 * n,
+    "T": lambda n: n,
+    "O": lambda n: n,
+    "I": lambda n: n,
+}
+
+
+def complex_centers(
+    motl: MotlSource,
+    *,
+    affiliation_column: MotlColumn = "object_id",
+    tomo_id_column: MotlColumn = "tomo_id",
+    weights: ArrayLike | None = None,
+) -> "cryomotl.Motl":
+    """Return one barycentric centre particle per (tomogram, object) group.
+
+    Parameters
+    ----------
+    motl : MotlSource
+        Particle list.
+    affiliation_column : MotlColumn, default='object_id'
+        Column that identifies which object each particle belongs to.
+    tomo_id_column : MotlColumn, default='tomo_id'
+        Column that identifies the tomogram.
+    weights : ArrayLike, optional
+        Per-particle weights forwarded to :func:`geom.barycenter`.
+
+    Returns
+    -------
+    cryomotl.Motl
+        One row per ``(tomo_id, affiliation)`` pair.  ``tomo_id`` and
+        ``object_id`` carry the group identifiers; all other columns are
+        zero-filled.
+    """
+    m = cryomotl.Motl.load(motl)
+    central_points: list[np.ndarray] = []
+    tomo_ids: list[float] = []
+    object_ids: list[float] = []
+
+    for t in m.get_unique_values(tomo_id_column):
+        tm = m.get_motl_subset(
+            column_values=[t], column_name=tomo_id_column, reset_index=True
+        )
+        for o in tm.get_unique_values(affiliation_column):
+            om = tm.get_motl_subset(
+                column_values=[o], column_name=affiliation_column, reset_index=True
+            )
+            coords = om.get_coordinates()
+            center = geom.barycenter(coords, weights) if coords.shape[0] > 0 else np.zeros(3)
+            central_points.append(center)
+            tomo_ids.append(float(t))
+            object_ids.append(float(o))
+
+    out = cryomotl.Motl()
+    if central_points:
+        pts = np.vstack(central_points)
+        out.fill({
+            "x": pts[:, 0],
+            "y": pts[:, 1],
+            "z": pts[:, 2],
+            "tomo_id": np.array(tomo_ids),
+            "object_id": np.array(object_ids),
+        })
+        out.renumber_particles()
+    out.df.fillna(0.0, inplace=True)
+    return out
+
+
+# =============================================================================
+# SymmetricComplex — generic point-group symmetric multi-subunit complex
 # =============================================================================
 
 
-class NPC:
-    """Static helpers for Nuclear Pore Complex (NPC) particle-list analysis.
+class SymmetricComplex:
+    """Base class for point-group symmetric multi-subunit complexes.
 
-    All methods are ``@staticmethod``; the class is used purely as a
-    namespace.  Typical workflow:
+    Encapsulates a motl of subunit particles that form a symmetric complex
+    (cyclic, dihedral, or Platonic) and provides per-object centre
+    computation, orientation unification, and geometric statistics that are
+    independent of the specific symmetry type.
 
-    1. :meth:`cluster_subunits_to_rings` — trace subunits into rings and
-       merge nearby rings.
-    2. :meth:`unify_nn_orientations` — flip ambiguous orientations so that
-       all subunits in a ring point consistently.
-    3. :meth:`merge_rings` — merge rings from multiple ring-motls.
+    Parameters
+    ----------
+    motl : MotlSource
+        Subunit particle list.
+    symmetry : Symmetry
+        Symmetry specifier, e.g. ``"C8"``, ``"D6"``, ``"T"``, ``"O"``,
+        ``"I"``, or a bare integer (interpreted as cyclic).
+    affiliation_column : MotlColumn, default='object_id'
+        Column that identifies which object each particle belongs to.
+    order_column : MotlColumn, default='geom1'
+        Column that subunit-ordering methods write indices into.
+    tomo_id_column : MotlColumn, default='tomo_id'
+        Column that identifies the tomogram.
     """
 
-    @staticmethod
-    def compute_diameter(
-        input_motl: MotlSource,
-        pixel_size: float = 1.0,
-        su_id: MotlColumn = "geom2",
-        store_column: MotlColumn = "geom4",
-    ) -> tuple[pd.DataFrame, "cryomotl.Motl"]:
-        """Compute the average diameter of opposite-subunit pairs within NPCs.
+    def __init__(
+        self,
+        motl: MotlSource,
+        symmetry: Symmetry,
+        *,
+        affiliation_column: MotlColumn = "object_id",
+        order_column: MotlColumn = "geom1",
+        tomo_id_column: MotlColumn = "tomo_id",
+    ) -> None:
+        self._setup(
+            motl,
+            symmetry,
+            affiliation_column=affiliation_column,
+            order_column=order_column,
+            tomo_id_column=tomo_id_column,
+        )
 
-        Pairs are defined by the symmetric layout of an 8-fold NPC:
-        ``(1,5)``, ``(2,6)``, ``(3,7)``, ``(4,8)``.  For each NPC
-        (``tomo_id`` × ``object_id`` group) the mean pairwise distance of
-        available opposite pairs is computed.
+    def _setup(
+        self,
+        motl: MotlSource,
+        symmetry: Symmetry,
+        *,
+        affiliation_column: MotlColumn = "object_id",
+        order_column: MotlColumn = "geom1",
+        tomo_id_column: MotlColumn = "tomo_id",
+    ) -> None:
+        """Shared constructor body; called by :meth:`__init__` and subclass constructors."""
+        self.motl = cryomotl.Motl.load(motl)
+        self.group, self.fold = geom.as_symmetry(symmetry)
+        self.n_subunits: int = _GROUP_ORDER[self.group](self.fold)
+        self.affiliation_column: MotlColumn = affiliation_column
+        self.order_column: MotlColumn = order_column
+        self.tomo_id_column: MotlColumn = tomo_id_column
 
-        Parameters
-        ----------
-        input_motl : MotlSource
-            Subunit particle list.  The ``su_id`` column must contain
-            subunit indices 1–8.
-        pixel_size : float, default=1.0
-            Pixel size in Å; distances are multiplied by this value.
-        su_id : MotlColumn, default='geom2'
-            Column that identifies the subunit index within each NPC.
-            Naming kept as ``su_id`` for backwards compatibility, even
-            though the value is a motl column name.
-        store_column : MotlColumn, default='geom4'
-            Motl column to receive the per-NPC mean diameter.  Every row in
-            a given NPC group (``tomo_id`` × ``object_id``) is filled with
-            the same value (its NPC's mean diameter); rows in NPCs without
-            any matched opposite pair receive ``NaN``.
+    # ------------------------------------------------------------------
+    # Centre computation
+    # ------------------------------------------------------------------
 
-        Returns
-        -------
-        summary_df : pandas.DataFrame
-            One row per NPC with columns ``tomo_id``, ``object_id``,
-            ``mean_diameter`` (in physical units = ``pixel_size`` × voxels),
-            and ``n_pairs`` (number of matched opposite pairs contributing
-            to the mean).
-        motl_out : Motl
-            A new motl, identical to ``input_motl`` apart from
-            ``store_column`` holding the per-NPC mean diameter.
-        """
-        motl_out = cryomotl.Motl.load(input_motl)
-        motl_out.df = motl_out.df.copy()
-        motl_out.df.reset_index(inplace=True, drop=True)
+    def get_centers_as_motl(self) -> "cryomotl.Motl":
+        """Return a Motl with one barycentric centre particle per object per tomogram.
 
-        pairs = [(1, 5), (2, 6), (3, 7), (4, 8)]
-        coord = motl_out.get_coordinates()
-        diameters_col = np.full(len(motl_out.df), np.nan)
-        rows: list[dict] = []
-        for (tomo_id, object_id), group in motl_out.df.groupby(["tomo_id", "object_id"]):
-            pair_rows: list[list[int]] = []
-            for a, b in pairs:
-                if a in group[su_id].values and b in group[su_id].values:
-                    pair_rows.append([
-                        group.loc[group[su_id] == a].index.tolist()[0],
-                        group.loc[group[su_id] == b].index.tolist()[0],
-                    ])
-            if not pair_rows:
-                continue
-            idx = np.asarray(pair_rows)
-            distances = geom.point_pairwise_dist(coord[idx[:, 0], :], coord[idx[:, 1], :]) * pixel_size
-            mean_d = float(np.mean(distances))
-            diameters_col[group.index.to_numpy()] = mean_d
-            rows.append({
-                "tomo_id": float(tomo_id),
-                "object_id": float(object_id),
-                "mean_diameter": mean_d,
-                "n_pairs": int(len(distances)),
-            })
-
-        motl_out.df[store_column] = diameters_col
-        summary_df = pd.DataFrame(rows, columns=["tomo_id", "object_id", "mean_diameter", "n_pairs"])
-        return summary_df, motl_out
-
-    @staticmethod
-    def unify_nn_orientations(
-        input_motl: MotlSource,
-        dist_threshold: float = 10000,
-    ) -> "cryomotl.Motl":
-        """Flip subunit orientations so that all neighbours point consistently.
-
-        Traces particles into a chain and then walks each chain, applying a
-        180° rotation around the X axis whenever the cone angle between
-        successive subunits exceeds 90°.
-
-        Parameters
-        ----------
-        input_motl : MotlSource
-            Subunit particle list.
-        dist_threshold : float, default=10000
-            Maximum nearest-neighbour distance used during tracing (voxels).
+        Iterates over all tomograms in ``self.motl``, groups by
+        ``affiliation_column`` within each tomogram, and returns the
+        barycentric centre of each group.
 
         Returns
         -------
         Motl
-            A new motl with updated Euler angles, sorted by ``subtomo_id``.
+            One row per (tomogram, object) pair.  ``tomo_id`` holds the
+            tomogram identifier and ``object_id`` holds the affiliation value.
+            All other columns are zero-filled.
         """
-        traced_motl = nnana.trace_chains(
-            input_motl,
+        central_points: list[np.ndarray] = []
+        tomo_ids: list[float] = []
+        object_ids: list[float] = []
+
+        for t in self.motl.get_unique_values(self.tomo_id_column):
+            tm = self.motl.get_motl_subset(
+                column_values=[t], column_name=self.tomo_id_column, reset_index=True
+            )
+            for o in tm.get_unique_values(self.affiliation_column):
+                om = tm.get_motl_subset(
+                    column_values=[o], column_name=self.affiliation_column, reset_index=True
+                )
+                coords = om.get_coordinates()
+                center = geom.barycenter(coords) if coords.shape[0] > 0 else np.zeros(3)
+                central_points.append(center)
+                tomo_ids.append(float(t))
+                object_ids.append(float(o))
+
+        out = cryomotl.Motl()
+        if central_points:
+            pts = np.vstack(central_points)
+            out.fill({
+                "x": pts[:, 0],
+                "y": pts[:, 1],
+                "z": pts[:, 2],
+                "tomo_id": np.array(tomo_ids),
+                "object_id": np.array(object_ids),
+            })
+            out.renumber_particles()
+        out.df.fillna(0.0, inplace=True)
+        return out
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _require_affiliation(self) -> None:
+        """Raise if ``affiliation_column`` is absent from ``self.motl.df``."""
+        if self.affiliation_column not in self.motl.df.columns:
+            raise ValueError(
+                f"{type(self).__name__}: affiliation column {self.affiliation_column!r} is not present "
+                "in self.motl.df.  Run affiliation first, or set affiliation_column correctly."
+            )
+
+    # ------------------------------------------------------------------
+    # Subunit ordering (dispatch hook — subclasses override)
+    # ------------------------------------------------------------------
+
+    def assign_subunit_order(self) -> None:
+        """Assign subunit indices into ``self.order_column``.
+
+        Subclasses must override this method with a symmetry-specific
+        implementation.
+
+        Raises
+        ------
+        NotImplementedError
+            Always; subclasses define subunit ordering.
+        """
+        raise NotImplementedError("subclasses define subunit ordering")
+
+    # ------------------------------------------------------------------
+    # Per-object evaluations
+    # ------------------------------------------------------------------
+
+    def occupancy(self) -> pd.DataFrame:
+        """Per-object subunit occupancy.
+
+        For every ``(tomo_id, object_id)`` group, counts present subunits
+        and computes the fraction of the expected ``n_subunits``.  When
+        ``order_column`` is populated, the *missing* indices
+        (1 … n_subunits) are also reported.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns:
+
+            ``tomo_id``, ``object_id``
+                Group identifiers.
+            ``n_present``
+                Number of particles in the group.
+            ``occupancy``
+                ``n_present / self.n_subunits``.
+            ``missing``
+                Sorted list of 1-based subunit indices absent from
+                ``order_column`` (empty list when fully occupied);
+                ``None`` when ``order_column`` is not in the motl.
+
+        Raises
+        ------
+        ValueError
+            If ``affiliation_column`` is absent from ``self.motl.df``.
+        """
+        self._require_affiliation()
+
+        has_order = self.order_column in self.motl.df.columns
+        rows: list[dict] = []
+        all_expected = set(range(1, self.n_subunits + 1))
+
+        for (tomo_id, object_id), group in self.motl.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        ):
+            n_present = len(group)
+            if has_order:
+                present = set(int(v) for v in group[self.order_column].dropna())
+                missing: list[int] | None = sorted(all_expected - present)
+            else:
+                missing = None
+            rows.append({
+                "tomo_id": float(tomo_id),
+                "object_id": float(object_id),
+                "n_present": n_present,
+                "occupancy": n_present / self.n_subunits,
+                "missing": missing,
+            })
+
+        return pd.DataFrame(rows)
+
+    def clean_per_object(
+        self,
+        column: MotlColumn,
+        keep: Literal["high", "low"] = "high",
+        *,
+        n: int | None = None,
+    ) -> "cryomotl.Motl":
+        """Keep the *n* best rows per object and drop the rest.
+
+        For each ``(tomo_id_column, affiliation_column)`` group: sort by
+        *column*, keep the top-*n* rows according to *keep*, and discard the
+        remainder.  Objects that already have at most *n* rows are returned
+        unchanged.
+
+        Parameters
+        ----------
+        column : MotlColumn
+            Column to sort and filter by.
+        keep : {'high', 'low'}, default='high'
+            ``'high'`` retains the *n* rows with the largest values (e.g.
+            scores); ``'low'`` retains the *n* rows with the smallest values
+            (e.g. cone distances).
+        n : int, optional
+            Number of rows to keep per object.  Defaults to ``self.n_subunits``.
+
+        Returns
+        -------
+        cryomotl.Motl
+            A copy of ``self.motl`` with over-occupied objects trimmed.
+
+        Raises
+        ------
+        ValueError
+            If ``affiliation_column`` is absent from ``self.motl.df``.
+        """
+        self._require_affiliation()
+
+        n_keep = self.n_subunits if n is None else n
+        ascending = keep == "low"
+
+        rows: list[pd.DataFrame] = []
+        for (_t, _o), grp in self.motl.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        ):
+            if len(grp) <= n_keep:
+                rows.append(grp)
+            else:
+                rows.append(grp.sort_values(column, ascending=ascending).head(n_keep))
+
+        df_out = pd.concat(rows).reset_index(drop=True)
+        return cryomotl.Motl(df_out)
+
+    # ------------------------------------------------------------------
+    # Object deduplication
+    # ------------------------------------------------------------------
+
+    def merge_subunits(self, radius: float = 55) -> None:
+        """Merge near-duplicate objects whose centres are within *radius*.
+
+        For each tomogram:
+
+        1. Compute per-object barycentric centres.
+        2. Find object-centre pairs within *radius* using
+           :func:`nnana.get_nn_within_distance`.
+        3. Re-assign ``affiliation_column`` of near objects to the first
+           encountered partner.
+        4. Recount occupancy into ``geom1`` and recompute subunit order for
+           all objects via :meth:`assign_subunit_order`.
+
+        Parameters
+        ----------
+        radius : float, default=55
+            Distance threshold in voxels.
+
+        Notes
+        -----
+        Modifies ``self.motl.df`` in place.
+        """
+        motl = self.motl
+        aff_col = self.affiliation_column
+        tomo_col = self.tomo_id_column
+
+        for t in motl.get_unique_values(tomo_col):
+            tm = motl.get_motl_subset(
+                column_values=[t], column_name=tomo_col, reset_index=True
+            )
+
+            pts: list[np.ndarray] = []
+            obj_ids: list[float] = []
+            for o in tm.get_unique_values(aff_col):
+                om = tm.get_motl_subset(
+                    column_values=[o], column_name=aff_col, reset_index=True
+                )
+                coords = om.get_coordinates()
+                center = geom.barycenter(coords) if coords.shape[0] > 0 else np.zeros(3)
+                pts.append(center)
+                obj_ids.append(float(o))
+
+            centers_motl = cryomotl.Motl()
+            if pts:
+                pts_arr = np.vstack(pts)
+                centers_motl.fill({
+                    "x": pts_arr[:, 0],
+                    "y": pts_arr[:, 1],
+                    "z": pts_arr[:, 2],
+                    "tomo_id": t,
+                    "object_id": obj_ids,
+                })
+                centers_motl.renumber_particles()
+            centers_motl.df.fillna(0.0, inplace=True)
+
+            if centers_motl.df.shape[0] > 1:
+                center_stats = nnana.get_nn_stats(centers_motl, centers_motl)
+                if any(center_stats["distance"] <= radius):
+                    center_idx, nn_idx = nnana.get_nn_within_distance(centers_motl, radius)
+                    for i, o in enumerate(center_idx):
+                        o_id1 = centers_motl.df.loc[centers_motl.df.index[o], "object_id"]
+                        for j in nn_idx[i]:
+                            o_id2 = centers_motl.df.loc[centers_motl.df.index[j], "object_id"]
+                            tm.df.loc[tm.df[aff_col] == o_id2, aff_col] = o_id1
+
+            tm.df["geom1"] = tm.df.groupby([aff_col])[aff_col].transform("count")
+            tm.df[aff_col] = tm.df[aff_col].rank(method="dense").astype(int)
+
+            update_cols = list({aff_col, "geom1"})
+            motl.df.loc[motl.df[tomo_col] == t, update_cols] = tm.df[update_cols].values
+
+        motl.df.reset_index(inplace=True, drop=True)
+        motl.df["geom1"] = motl.df.groupby([tomo_col, aff_col])[aff_col].transform("count")
+        motl.df[aff_col] = motl.df[aff_col].rank(method="dense").astype(int)
+        self.assign_subunit_order()
+
+    # ------------------------------------------------------------------
+    # Affiliation creation
+    # ------------------------------------------------------------------
+
+    def create_affiliation(
+        self,
+        method: Literal["tracing", "radius"] = "radius",
+        *,
+        shift: float | None = None,
+        radius: float | None = None,
+        normals_threshold: float | None = None,
+        occupancy_column: MotlColumn = "geom2",
+        cone_distance_column: MotlColumn = "geom3",
+        min_occupancy: int = 1,
+        drop_below_min_occupancy: bool = False,
+    ) -> "cryomotl.Motl":
+        """Cluster subunit particles into objects and write affiliation labels.
+
+        Operates on a copy of ``self.motl`` and returns it with
+        ``affiliation_column`` populated.  After assigning affiliation the
+        method also:
+
+        * writes subunit indices into ``order_column`` via
+          :meth:`assign_subunit_order`,
+        * writes the per-object particle count into ``occupancy_column``,
+        * computes each particle's cone-distance to its object's consensus
+          z-axis and stores it in ``cone_distance_column``,
+        * emits a :class:`UserWarning` for any object that exceeds
+          ``self.n_subunits`` subunits, suggesting :meth:`clean_per_object`
+          as a remedy,
+        * optionally drops outlier-normal particles (``normals_threshold``)
+          and/or objects below a minimum size (``drop_below_min_occupancy``).
+
+        Parameters
+        ----------
+        method : {'radius', 'tracing'}, default='radius'
+            Clustering strategy.
+
+            ``'radius'``
+                Optionally shift particles along their local −x axis by
+                *shift*, then run a self nearest-neighbour search within
+                *radius*.  Connected components of the NN graph become
+                objects.  Isolated particles (no NN within *radius*) are
+                kept as singleton objects with unique ``affiliation_column``
+                values.
+
+            ``'tracing'``
+                Optionally shift particles along their local −x axis by
+                *shift*, then trace chains via :func:`nnana.trace_chains`
+                with *radius* as the maximum link distance.  Each chain
+                becomes one object.
+
+        shift : float, optional
+            Magnitude of the local-frame shift along −x applied before
+            clustering (voxels).  When ``None`` no recentring is performed.
+            Typical value: approximate ring radius.
+        radius : float
+            For ``method='radius'``: NN search radius (voxels).
+            For ``method='tracing'``: maximum chain-link distance (voxels).
+            **Required.**
+        normals_threshold : float, optional
+            Per-object cone-distance cutoff (degrees).  Particles whose
+            cone-distance to the object's consensus z-axis exceeds this
+            value are dropped.  When ``None`` the cone distances are stored
+            for inspection but no particles are removed.
+        occupancy_column : MotlColumn, default='geom2'
+            Column that receives the per-object particle count.
+        cone_distance_column : MotlColumn, default='geom3'
+            Column that receives each particle's cone distance (degrees) to
+            its object's consensus z-axis.
+        min_occupancy : int, default=1
+            Minimum object size used by ``drop_below_min_occupancy``.
+        drop_below_min_occupancy : bool, default=False
+            When ``True``, remove objects whose size after all filtering is
+            below *min_occupancy*.  When ``False`` all objects (including
+            singletons) are kept.
+
+        Returns
+        -------
+        cryomotl.Motl
+            A new motl with ``affiliation_column``, ``order_column``,
+            ``occupancy_column``, and ``cone_distance_column`` populated.
+
+        Raises
+        ------
+        ValueError
+            If *radius* is ``None`` or *method* is unrecognised.
+        """
+        if radius is None:
+            raise ValueError(
+                f"{type(self).__name__}.create_affiliation: 'radius' is required "
+                "(NN search radius for 'radius'; max link distance for 'tracing')."
+            )
+
+        motl_out = cryomotl.Motl(self.motl.df.copy())
+        motl_out.df.reset_index(drop=True, inplace=True)
+        motl_out.renumber_particles()
+
+        if method == "radius":
+            self._affiliating_by_radius(motl_out, shift=shift, radius=radius)
+        elif method == "tracing":
+            self._affiliating_by_tracing(motl_out, shift=shift, radius=radius)
+        else:
+            raise ValueError(
+                f"{type(self).__name__}.create_affiliation: unknown method {method!r}. "
+                "Choose 'radius' or 'tracing'."
+            )
+
+        # Assign subunit order via motl-swap
+        orig_motl = self.motl
+        self.motl = motl_out
+        self.assign_subunit_order()
+        motl_out = self.motl
+        self.motl = orig_motl
+
+        # Per-object occupancy count
+        motl_out.df[occupancy_column] = motl_out.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        )[self.affiliation_column].transform("size")
+
+        # Cone distance to per-object consensus z-axis (mirrors geom.cone_distance)
+        motl_out.df[cone_distance_column] = 0.0
+        for (_t, _o), grp in motl_out.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        ):
+            euler = grp[["phi", "theta", "psi"]].to_numpy()
+            z_axes = srot.from_euler("zxz", euler, degrees=True).apply([0.0, 0.0, 1.0])
+            mean_z = z_axes.mean(axis=0)
+            norm = np.linalg.norm(mean_z)
+            mean_z = mean_z / norm if norm > 0 else np.array([0.0, 0.0, 1.0])
+            dots = np.clip(z_axes @ mean_z, -1.0, 1.0)
+            motl_out.df.loc[grp.index, cone_distance_column] = np.degrees(np.arccos(dots))
+
+        # Normals threshold: drop per-object outliers
+        if normals_threshold is not None:
+            keep = motl_out.df[cone_distance_column] <= normals_threshold
+            motl_out = cryomotl.Motl(motl_out.df[keep].reset_index(drop=True))
+
+        # Over-occupancy warning
+        sizes = motl_out.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        ).size()
+        over = sizes[sizes > self.n_subunits]
+        if not over.empty:
+            obj_list = ", ".join(f"tomo={t} obj={o}" for t, o in over.index)
+            warnings.warn(
+                f"{type(self).__name__}.create_affiliation: {len(over)} object(s) exceed "
+                f"n={self.n_subunits} subunits ({obj_list}). Use clean_per_object() to reduce.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Optionally prune small objects
+        if drop_below_min_occupancy:
+            keep = motl_out.df[occupancy_column] >= min_occupancy
+            motl_out = cryomotl.Motl(motl_out.df[keep].reset_index(drop=True))
+
+        return motl_out
+
+    def _affiliating_by_radius(
+        self,
+        motl_out: "cryomotl.Motl",
+        *,
+        shift: float | None,
+        radius: float,
+    ) -> None:
+        """Label ``affiliation_column`` via radius-NN connected components.
+
+        Modifies *motl_out*.df in place.  Isolated particles (no NN within
+        *radius*) receive unique sequential labels per tomogram.
+
+        Parameters
+        ----------
+        motl_out : cryomotl.Motl
+            Working copy (must have a 0-based integer index and unique
+            ``subtomo_id`` values — guaranteed by the caller).
+        shift : float or None
+            If given, particles are shifted along local −x by *shift* before
+            the NN search.  The NN search uses shifted coordinates; the
+            positions stored in *motl_out* are unchanged.
+        radius : float
+            NN search radius in voxels.
+        """
+        if shift is not None:
+            motl_search = motl_out.shift_positions([-shift, 0.0, 0.0], inplace=False)
+        else:
+            motl_search = motl_out
+
+        all_coords = motl_search.get_coordinates()  # (N, 3)
+        motl_out.df[self.affiliation_column] = np.nan
+
+        for tomo_val, group_df in motl_out.df.groupby(self.tomo_id_column):
+            row_pos = group_df.index.to_numpy()
+            coords = all_coords[row_pos]
+            subtomo_ids = group_df["subtomo_id"].to_numpy()
+
+            qp_idx, nn_idx_list = nnana.find_nn_within_radius(
+                coords, coords, radius, remove_qp=True
+            )
+
+            qp_ids: list = []
+            nn_ids: list = []
+            for qi, nns in zip(qp_idx, nn_idx_list):
+                for ni in nns:
+                    qp_ids.append(int(subtomo_ids[qi]))
+                    nn_ids.append(int(subtomo_ids[ni]))
+
+            next_id = 1
+            in_component: set = set()
+
+            if qp_ids:
+                components = _clustering.connected_component_clusters(
+                    qp_ids, nn_ids, min_size=1
+                )
+                for comp in components:
+                    comp_ids = set(comp.nodes())
+                    mask = group_df["subtomo_id"].isin(comp_ids)
+                    motl_out.df.loc[group_df[mask].index, self.affiliation_column] = float(
+                        next_id
+                    )
+                    in_component.update(comp_ids)
+                    next_id += 1
+
+            # Isolated particles — not in any NN edge
+            isolated = group_df[~group_df["subtomo_id"].isin(in_component)]
+            for idx in isolated.index:
+                motl_out.df.loc[idx, self.affiliation_column] = float(next_id)
+                next_id += 1
+
+    def _affiliating_by_tracing(
+        self,
+        motl_out: "cryomotl.Motl",
+        *,
+        shift: float | None,
+        radius: float,
+    ) -> None:
+        """Label ``affiliation_column`` by chain-tracing.
+
+        Calls :func:`nnana.trace_chains` and copies the resulting chain IDs
+        into *motl_out*.df in place.
+
+        Parameters
+        ----------
+        motl_out : cryomotl.Motl
+            Working copy (must have unique ``subtomo_id`` values).
+        shift : float or None
+            If given, shift motl along local −x before tracing so that the
+            trace links shifted (recentred) positions.
+        radius : float
+            Maximum chain-link distance (voxels), passed as ``max_distance``
+            to :func:`nnana.trace_chains`.
+        """
+        if shift is not None:
+            motl_entry = motl_out.shift_positions([-shift, 0.0, 0.0], inplace=False)
+        else:
+            motl_entry = cryomotl.Motl(motl_out.df.copy())
+
+        traced = nnana.trace_chains(
+            motl_entry,
             motl_exit=None,
-            max_distance=dist_threshold,
-            min_distance=0,
-            column_name="tomo_id",
-            output_motl=None,
-            store_idx1="object_id",
-            store_idx2="geom2",
-            store_dist="geom4",
+            max_distance=radius,
+            column_name=self.tomo_id_column,
+            store_idx1=self.affiliation_column,
+            store_idx2="_cns_trace_order_tmp_",
         )
 
-        rot_180 = srot.from_euler("zxz", angles=[0, 180, 0], degrees=True)
+        # Copy affiliation to motl_out by subtomo_id alignment
+        traced.df.sort_values("subtomo_id", inplace=True)
+        traced.df.reset_index(drop=True, inplace=True)
+        motl_out.df.sort_values("subtomo_id", inplace=True)
+        motl_out.df.reset_index(drop=True, inplace=True)
+        motl_out.df[self.affiliation_column] = traced.df[self.affiliation_column].values
 
-        for t in traced_motl.get_unique_values("tomo_id"):
-            tm = traced_motl.get_motl_subset(column_values=[t], column_name="tomo_id", reset_index=True)
-            rotations = tm.get_rotations()
-            for i in np.arange(1, tm.df["geom2"].max(), dtype=int):
-                cone_angle = geom.cone_distance(rotations[i - 1], rotations[i])
-                if cone_angle > 90.0:
-                    rotations[i] = rotations[i] * rot_180
 
-            angles = rotations.as_euler("zxz", degrees=True)
-            tm.fill({"angles": angles})
-            traced_motl.df.loc[traced_motl.df["tomo_id"] == t, :] = tm.df.values
+# =============================================================================
+# CnComplex — cyclic Cn ring structure
+# =============================================================================
 
-        return cryomotl.Motl(traced_motl.df.sort_values(by="subtomo_id"))
+
+class CnComplex(SymmetricComplex):
+    """Cyclic Cn-symmetric ring structure.
+
+    Extends :class:`SymmetricComplex` with methods specific to cyclic
+    symmetry: subunit ordering, affiliation clustering, occupancy analysis,
+    and diameter computation.
+
+    Parameters
+    ----------
+    motl : MotlSource
+        Subunit particle list.
+    symmetry : Symmetry
+        Cyclic fold, e.g. ``"C8"`` or ``8``.  Dihedral or Platonic
+        symmetries raise :class:`ValueError`.
+    affiliation_column : MotlColumn, default='object_id'
+        Column that identifies which object each particle belongs to.
+    order_column : MotlColumn, default='geom1'
+        Column that :meth:`assign_subunit_order` writes cyclic indices into.
+    tomo_id_column : MotlColumn, default='tomo_id'
+        Column that identifies the tomogram.
+    center_method : {'circle_fit', 'barycentric'}, default='circle_fit'
+        Algorithm used by :meth:`get_centers_as_motl` and related helpers.
+        ``'circle_fit'`` falls back to barycentric when the fit fails.
+
+    Raises
+    ------
+    ValueError
+        When *symmetry* is not a cyclic Cn group.
+    """
+
+    def __init__(
+        self,
+        motl: MotlSource,
+        symmetry: Symmetry,
+        *,
+        affiliation_column: MotlColumn = "object_id",
+        order_column: MotlColumn = "geom1",
+        tomo_id_column: MotlColumn = "tomo_id",
+        center_method: Literal["circle_fit", "barycentric"] = "circle_fit",
+    ) -> None:
+        super().__init__(
+            motl,
+            symmetry,
+            affiliation_column=affiliation_column,
+            order_column=order_column,
+            tomo_id_column=tomo_id_column,
+        )
+        if self.group != "C":
+            raise ValueError(
+                f"CnComplex requires cyclic Cn symmetry, got {symmetry!r}."
+            )
+        self.center_method: Literal["circle_fit", "barycentric"] = center_method
+        self._cyclic_setup()
+
+    def _cyclic_setup(self) -> None:
+        """Initialise cyclic-ring attributes shared with :class:`DnComplex`.
+
+        Sets ``self.n`` to the half-ring fold and ``self._ring_group_columns``
+        to ``[tomo_id_column, affiliation_column]``.  Called from
+        :meth:`CnComplex.__init__` and :meth:`DnComplex.__init__`.
+        """
+        self.n: int = self.fold
+        self._ring_group_columns: list[MotlColumn] = [
+            self.tomo_id_column,
+            self.affiliation_column,
+        ]
+
+    # ------------------------------------------------------------------
+    # Centre computation (circle-fit with barycentric fallback)
+    # ------------------------------------------------------------------
+
+    def _compute_object_center(
+        self,
+        object_motl: "cryomotl.Motl",
+    ) -> tuple[np.ndarray, float]:
+        """Compute the centre of one cyclic-ring object, respecting ``center_method``.
+
+        Parameters
+        ----------
+        object_motl : Motl
+            Particles belonging to one affiliation group.
+
+        Returns
+        -------
+        center : numpy.ndarray, shape (3,)
+        radius : float
+            Fitted circle radius; zero for barycentric or degenerate inputs.
+
+        Notes
+        -----
+        Falls back to :func:`geom.barycenter` when the circle fit fails,
+        emitting a :class:`UserWarning` with the object identifier and reason.
+        """
+        coords = object_motl.get_coordinates()
+
+        if coords.shape[0] == 0:
+            return np.zeros(3), 0.0
+
+        if self.center_method == "barycentric":
+            return geom.barycenter(coords), 0.0
+
+        if coords.shape[0] == 1:
+            return geom.barycenter(coords), 0.0
+
+        if coords.shape[0] <= 3:
+            vector_x = np.asarray([-1.0, 0.0, 0.0])
+            try:
+                rot = object_motl.get_rotations()
+                rot_vec = rot.apply(vector_x)
+                end_coord = coords + rot_vec
+                center, _ = geom.ray_ray_intersection_3d(
+                    starting_points=coords, ending_points=end_coord
+                )
+                return center, 0.0
+            except Exception as exc:
+                obj_id = (
+                    object_motl.df[self.affiliation_column].iloc[0]
+                    if self.affiliation_column in object_motl.df.columns
+                    else "?"
+                )
+                warnings.warn(
+                    f"{type(self).__name__}: ray-ray intersection failed for object {obj_id!r} "
+                    f"({exc}); falling back to barycentric centre.  "
+                    "Consider center_method='barycentric'.",
+                    stacklevel=3,
+                )
+                return geom.barycenter(coords), 0.0
+
+        caught: list = []
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                center, radius, _ = geom.fit_circle_3d_pratt(coords)
+        except Exception as exc:
+            obj_id = (
+                object_motl.df[self.affiliation_column].iloc[0]
+                if self.affiliation_column in object_motl.df.columns
+                else "?"
+            )
+            warnings.warn(
+                f"{type(self).__name__}: circle fit failed for object {obj_id!r} "
+                f"({exc}); falling back to barycentric centre.  "
+                "Consider center_method='barycentric'.",
+                stacklevel=3,
+            )
+            return geom.barycenter(coords), 0.0
+
+        if caught:
+            obj_id = (
+                object_motl.df[self.affiliation_column].iloc[0]
+                if self.affiliation_column in object_motl.df.columns
+                else "?"
+            )
+            msg = "; ".join(str(w.message) for w in caught)
+            warnings.warn(
+                f"{type(self).__name__}: circle fit warning for object {obj_id!r} "
+                f"({msg}); falling back to barycentric centre.  "
+                "Consider center_method='barycentric'.",
+                stacklevel=3,
+            )
+            return geom.barycenter(coords), 0.0
+
+        return center, radius
+
+    def get_centers_as_motl(self) -> "cryomotl.Motl":
+        """Return a Motl with one centre particle per object per tomogram.
+
+        Overrides the barycentric base implementation: uses the Pratt
+        circle fit (for ``center_method='circle_fit'``) with automatic
+        fallback to barycentric when the fit fails.
+
+        Returns
+        -------
+        Motl
+            One row per (tomogram, object) pair.  ``tomo_id`` holds the
+            tomogram identifier and ``object_id`` holds the affiliation value.
+            All other columns are zero-filled.
+        """
+        central_points: list[np.ndarray] = []
+        tomo_ids: list[float] = []
+        object_ids: list[float] = []
+
+        for t in self.motl.get_unique_values(self.tomo_id_column):
+            tm = self.motl.get_motl_subset(
+                column_values=[t], column_name=self.tomo_id_column, reset_index=True
+            )
+            for o in tm.get_unique_values(self.affiliation_column):
+                om = tm.get_motl_subset(
+                    column_values=[o], column_name=self.affiliation_column, reset_index=True
+                )
+                center, _ = self._compute_object_center(om)
+                central_points.append(center)
+                tomo_ids.append(float(t))
+                object_ids.append(float(o))
+
+        out = cryomotl.Motl()
+        if central_points:
+            pts = np.vstack(central_points)
+            out.fill({
+                "x": pts[:, 0],
+                "y": pts[:, 1],
+                "z": pts[:, 2],
+                "tomo_id": np.array(tomo_ids),
+                "object_id": np.array(object_ids),
+            })
+            out.renumber_particles()
+        out.df.fillna(0.0, inplace=True)
+        return out
+
+    def _circumradius_for_group(self, coords: np.ndarray) -> float:
+        """Return the circumradius for a group of coordinates.
+
+        Tries :func:`geom.fit_circle_3d_pratt` (≥ 4 points); if the fit
+        fails or returns zero, falls back to the mean distance from the
+        barycenter.
+
+        Parameters
+        ----------
+        coords : numpy.ndarray, shape (N, 3)
+            Particle coordinates for one object.
+
+        Returns
+        -------
+        float
+            Circumradius in voxels; zero if *coords* is empty.
+        """
+        if coords.shape[0] == 0:
+            return 0.0
+        if coords.shape[0] >= 4:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    _, radius, _ = geom.fit_circle_3d_pratt(coords)
+                if radius > 0:
+                    return float(radius)
+            except Exception:
+                pass
+        center = geom.barycenter(coords)
+        return float(np.mean(np.linalg.norm(coords - center, axis=1)))
+
+    def circumference(self, *, pixel_size: float = 1.0) -> pd.DataFrame:
+        """Per-object circumference derived from the circumradius.
+
+        Computes ``2 π × circumradius × pixel_size`` for each object.
+        The circumradius is estimated via the Pratt circle fit (≥ 4 particles)
+        or falls back to the mean particle–to–barycenter distance.
+
+        Parameters
+        ----------
+        pixel_size : float, default=1.0
+            Ångström-per-voxel scale factor.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns ``tomo_id``, ``object_id``, ``circumference``.
+
+        Raises
+        ------
+        ValueError
+            If ``affiliation_column`` is absent from ``self.motl.df``.
+        """
+        self._require_affiliation()
+
+        coord = self.motl.get_coordinates()
+        rows: list[dict] = []
+
+        for keys, group in self.motl.df.groupby(self._ring_group_columns):
+            tomo_id, object_id = keys[0], keys[1]
+            coords_grp = coord[group.index.to_numpy(), :]
+            r = self._circumradius_for_group(coords_grp)
+            row: dict = {
+                "tomo_id": float(tomo_id),
+                "object_id": float(object_id),
+                "circumference": 2.0 * np.pi * r * pixel_size,
+            }
+            for extra_col, extra_val in zip(self._ring_group_columns[2:], keys[2:]):
+                row[extra_col] = extra_val
+            rows.append(row)
+
+        return pd.DataFrame(rows)
+
+    # ------------------------------------------------------------------
+    # Symmetry-derived properties
+    # ------------------------------------------------------------------
+
+    @property
+    def central_angle(self) -> float:
+        """Angle between adjacent subunits (360 / n degrees)."""
+        return 360.0 / self.n
+
+    @property
+    def interior_angle(self) -> float:
+        """Interior angle of the regular Cn polygon ((n-2)*180 / n degrees)."""
+        return (self.n - 2) * 180.0 / self.n
+
+    # ------------------------------------------------------------------
+    # Cyclic subunit ordering
+    # ------------------------------------------------------------------
+
+    def _cyclic_indices_for_object(
+        self,
+        object_motl: "cryomotl.Motl",
+    ) -> list[int]:
+        """Compute 1-based cyclic subunit indices for one object.
+
+        Parameters
+        ----------
+        object_motl : Motl
+            Particles belonging to one ring object.
+
+        Returns
+        -------
+        list of int
+            Indices, same length as ``object_motl.df``.  The first particle
+            always receives index 1.
+        """
+        center, _ = self._compute_object_center(object_motl)
+        su_coord = object_motl.get_coordinates()
+        vectors = su_coord - np.tile(center, (su_coord.shape[0], 1))
+        div_angle = self.central_angle
+        s_idx: list[int] = [1]
+        for vec in vectors[1:]:
+            angle = geom.vector_angular_distance(vectors[0], vec) / div_angle
+            s_idx.append(
+                int(decimal.Decimal(angle).to_integral_value(rounding=decimal.ROUND_HALF_UP)) + 1
+            )
+        return s_idx
+
+    def assign_subunit_order(self) -> None:
+        """Assign 1-based cyclic subunit indices into ``self.order_column``.
+
+        For every ring group (as defined by ``_ring_group_columns``): computes
+        the angular position of each particle relative to the first particle
+        (stepping by ``central_angle`` = 360 / n), and writes the resulting
+        1-based index into ``self.motl.df[self.order_column]``.
+
+        Notes
+        -----
+        Object centres are determined by :meth:`_compute_object_center`, which
+        respects ``self.center_method``.  Modifies ``self.motl.df`` in place.
+        """
+        for keys, group in self.motl.df.groupby(self._ring_group_columns):
+            om = cryomotl.Motl(group.reset_index(drop=True))
+            s_idx = self._cyclic_indices_for_object(om)
+            self.motl.df.loc[group.index, self.order_column] = s_idx
+
+    # ------------------------------------------------------------------
+    # Per-object evaluations
+    # ------------------------------------------------------------------
+
+    def diameter(
+        self,
+        *,
+        pixel_size: float = 1.0,
+        store_column: MotlColumn = "geom4",
+    ) -> tuple[pd.DataFrame, "cryomotl.Motl"]:
+        """Compute the mean diameter for each object.
+
+        For even *n* with ``order_column`` present, opposite-subunit pairs
+        ``(i, i + n//2)`` are matched (1-based, matching
+        :meth:`assign_subunit_order`'s convention).  For odd *n* or when
+        ``order_column`` is absent, the diameter is derived from the
+        circumradius (``2 × circumradius × pixel_size``).
+
+        Parameters
+        ----------
+        pixel_size : float, default=1.0
+            Ångström-per-voxel scale factor applied to all distances.
+        store_column : MotlColumn, default='geom4'
+            Column in the returned *motl_out* that carries each object's
+            mean diameter on every row; ``NaN`` for objects with no result.
+
+        Returns
+        -------
+        summary_df : pandas.DataFrame
+            One row per ``(tomo_id, object_id)`` with columns
+            ``tomo_id``, ``object_id``, ``mean_diameter``, ``n_pairs``.
+            ``n_pairs`` is 0 for the circumradius fallback.
+        motl_out : Motl
+            Copy of ``self.motl`` with *store_column* populated.
+
+        Raises
+        ------
+        ValueError
+            If ``affiliation_column`` is absent from ``self.motl.df``.
+
+        Warns
+        -----
+        UserWarning
+            When the circumradius fallback is used (odd *n*, missing
+            ``order_column``, or even *n* but no pairs could be matched).
+        """
+        self._require_affiliation()
+
+        motl_out = cryomotl.Motl(self.motl.df.copy())
+        motl_out.df.reset_index(drop=True, inplace=True)
+
+        has_order = self.order_column in motl_out.df.columns
+        even_n = self.n % 2 == 0
+        use_pairs = even_n and has_order
+
+        if not has_order and even_n:
+            warnings.warn(
+                f"{type(self).__name__}.diameter: order column {self.order_column!r} not in motl; "
+                "diameter derived from 2 × circumradius for all objects.",
+                stacklevel=2,
+            )
+        elif not even_n:
+            warnings.warn(
+                f"{type(self).__name__}.diameter: n={self.n} is odd — no exact opposite subunit; "
+                "diameter derived from 2 × circumradius for all objects.",
+                stacklevel=2,
+            )
+
+        coord = motl_out.get_coordinates()
+        diameters_col = np.full(len(motl_out.df), np.nan)
+        rows: list[dict] = []
+
+        for keys, group in motl_out.df.groupby(self._ring_group_columns):
+            tomo_id, object_id = keys[0], keys[1]
+            grp_idx = group.index.to_numpy()
+            coords_grp = coord[grp_idx, :]
+            mean_d: float
+            n_pairs: int
+
+            if use_pairs:
+                half = self.n // 2
+                pair_rows: list[list[int]] = []
+                for i in range(1, half + 1):
+                    j = i + half
+                    mask_i = group[self.order_column] == i
+                    mask_j = group[self.order_column] == j
+                    if mask_i.any() and mask_j.any():
+                        pair_rows.append([
+                            group.index[mask_i][0],
+                            group.index[mask_j][0],
+                        ])
+
+                if pair_rows:
+                    idx = np.asarray(pair_rows)
+                    dists = geom.point_pairwise_dist(
+                        coord[idx[:, 0], :], coord[idx[:, 1], :]
+                    ) * pixel_size
+                    mean_d = float(np.mean(dists))
+                    n_pairs = int(len(dists))
+                else:
+                    warnings.warn(
+                        f"{type(self).__name__}.diameter: no opposite-pair matches for object "
+                        f"{object_id!r} in tomo {tomo_id!r} (even n={self.n} but no "
+                        "paired subunit indices); diameter derived from 2 × circumradius.",
+                        stacklevel=2,
+                    )
+                    mean_d = 2.0 * self._circumradius_for_group(coords_grp) * pixel_size
+                    n_pairs = 0
+            else:
+                mean_d = 2.0 * self._circumradius_for_group(coords_grp) * pixel_size
+                n_pairs = 0
+
+            diameters_col[grp_idx] = mean_d
+            row: dict = {
+                "tomo_id": float(tomo_id),
+                "object_id": float(object_id),
+                "mean_diameter": mean_d,
+                "n_pairs": n_pairs,
+            }
+            for extra_col, extra_val in zip(self._ring_group_columns[2:], keys[2:]):
+                row[extra_col] = extra_val
+            rows.append(row)
+
+        motl_out.df[store_column] = diameters_col
+        base_cols = ["tomo_id", "object_id", "mean_diameter", "n_pairs"]
+        extra_cols = list(self._ring_group_columns[2:])
+        summary_df = pd.DataFrame(
+            rows if rows else [],
+            columns=base_cols + extra_cols,
+        )
+        return summary_df, motl_out
+
+    def get_object_stats(self, *, pixel_size: float = 1.0) -> pd.DataFrame:
+        """Comprehensive per-object statistics table.
+
+        Composes :meth:`occupancy`, :meth:`circumference`,
+        :meth:`diameter`, and centre/radius computation into one row per
+        ``(tomo_id, object_id)`` group.
+
+        Parameters
+        ----------
+        pixel_size : float, default=1.0
+            Ångström-per-voxel scale factor for distance columns.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per ``(tomo_id, object_id)``.  Columns:
+
+            ``tomo_id``, ``object_id``
+                Group identifiers.
+            ``n_present``, ``occupancy``, ``missing``
+                From :meth:`occupancy`.
+            ``x``, ``y``, ``z``
+                Object centre coordinates (voxels).
+            ``radius``
+                Circumradius (voxels).
+            ``circumference``
+                From :meth:`circumference`.
+            ``mean_diameter``, ``n_pairs``
+                From :meth:`diameter`.
+
+        Raises
+        ------
+        ValueError
+            If ``affiliation_column`` is absent from ``self.motl.df``.
+        """
+        self._require_affiliation()
+
+        occ_df = self.occupancy()
+        circ_df = self.circumference(pixel_size=pixel_size)
+        diam_df, _ = self.diameter(pixel_size=pixel_size)
+
+        coord = self.motl.get_coordinates()
+        center_rows: list[dict] = []
+        for (tomo_id, object_id), group in self.motl.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        ):
+            coords_grp = coord[group.index.to_numpy(), :]
+            r = self._circumradius_for_group(coords_grp)
+            center = geom.barycenter(coords_grp) if coords_grp.shape[0] > 0 else np.zeros(3)
+            center_rows.append({
+                "tomo_id": float(tomo_id),
+                "object_id": float(object_id),
+                "x": float(center[0]),
+                "y": float(center[1]),
+                "z": float(center[2]),
+                "radius": r,
+            })
+        geo_df = pd.DataFrame(center_rows)
+
+        result = occ_df.merge(geo_df, on=["tomo_id", "object_id"], how="outer")
+        result = result.merge(circ_df, on=["tomo_id", "object_id"], how="left")
+        result = result.merge(
+            diam_df[["tomo_id", "object_id", "mean_diameter", "n_pairs"]],
+            on=["tomo_id", "object_id"],
+            how="left",
+        )
+        return result
+
+
+# =============================================================================
+# DnComplex — dihedral Dn-symmetric structures (two stacked Cn rings)
+# =============================================================================
+
+
+class DnComplex(CnComplex):
+    """Dihedral Dn-symmetric structure modelled as two stacked Cn rings.
+
+    Extends :class:`CnComplex` with ring-splitting, ring-aware subunit
+    ordering (1 … n for the top ring, n+1 … 2n for the bottom ring), and
+    inter-ring metrics (axial spacing, rotational twist).
+
+    Parameters
+    ----------
+    motl : MotlSource
+        Subunit particle list.
+    symmetry : Symmetry
+        Dihedral fold, e.g. ``"D6"`` or ``6`` (integer folds are accepted
+        and treated as Dn).  Non-dihedral symmetries raise :class:`ValueError`.
+    affiliation_column : MotlColumn, default='object_id'
+        Column that identifies which object each particle belongs to.
+    order_column : MotlColumn, default='geom1'
+        Column that :meth:`assign_subunit_order` writes subunit indices into.
+    tomo_id_column : MotlColumn, default='tomo_id'
+        Column that identifies the tomogram.
+    center_method : {'circle_fit', 'barycentric'}, default='circle_fit'
+        Algorithm used by centre-computation helpers.
+
+    Raises
+    ------
+    ValueError
+        When *symmetry* is not a dihedral Dn group.
+
+    Notes
+    -----
+    ``n_subunits`` equals ``2 * fold`` (full dihedral group size).  ``n``
+    (inherited from :class:`CnComplex` via :meth:`_cyclic_setup`) equals
+    ``fold`` — the per-ring subunit count.
+
+    Ring 0 is the ring whose subunits have a *higher* mean axial coordinate
+    along ``_split_axis`` (the "top" ring).  Ring 1 is the "bottom" ring.
+    After :meth:`assign_subunit_order`, ring 0 subunits receive indices
+    1 … n and ring 1 subunits receive indices n+1 … 2n.
+    """
+
+    def __init__(
+        self,
+        motl: MotlSource,
+        symmetry: Symmetry,
+        *,
+        affiliation_column: MotlColumn = "object_id",
+        order_column: MotlColumn = "geom1",
+        tomo_id_column: MotlColumn = "tomo_id",
+        center_method: Literal["circle_fit", "barycentric"] = "circle_fit",
+    ) -> None:
+        self._setup(
+            motl,
+            symmetry,
+            affiliation_column=affiliation_column,
+            order_column=order_column,
+            tomo_id_column=tomo_id_column,
+        )
+        if self.group != "D":
+            raise ValueError(
+                f"DnComplex requires dihedral Dn symmetry, got {symmetry!r}."
+            )
+        self.center_method: Literal["circle_fit", "barycentric"] = center_method
+        self._cyclic_setup()
+        self._ring_column: MotlColumn = "geom5"
+        self._split_axis: np.ndarray = np.array([0.0, 0.0, 1.0])
+        self._rings_split: bool = False
+
+    # ------------------------------------------------------------------
+    # Ring splitting
+    # ------------------------------------------------------------------
+
+    def split_rings(
+        self,
+        *,
+        ring_column: MotlColumn = "geom5",
+        axis: ArrayLike = (0.0, 0.0, 1.0),
+    ) -> "cryomotl.Motl":
+        """Partition subunits into two axial rings and label them 0 / 1.
+
+        For each object, projects every subunit's position relative to the
+        object barycentre along *axis*.  Subunits with a non-negative
+        projection (higher axial coordinate) are labelled ring 0; those
+        with a negative projection are labelled ring 1.
+
+        The result is written into ``motl.df[ring_column]`` and
+        ``self._ring_group_columns`` is updated to
+        ``[tomo_id_column, affiliation_column, ring_column]``.
+
+        Parameters
+        ----------
+        ring_column : MotlColumn, default='geom5'
+            Column to write ring labels (0 or 1) into.
+        axis : array-like of shape (3,), default=(0, 0, 1)
+            Splitting axis.  Need not be normalised.
+
+        Returns
+        -------
+        cryomotl.Motl
+            ``self.motl`` with *ring_column* populated in place.
+        """
+        axis_arr = np.asarray(axis, dtype=float)
+        axis_arr = axis_arr / np.linalg.norm(axis_arr)
+        self._split_axis = axis_arr
+        self._ring_column = ring_column
+
+        coord = self.motl.get_coordinates()
+        ring_labels = np.zeros(len(self.motl.df), dtype=float)
+
+        for keys, group in self.motl.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        ):
+            grp_idx = group.index.to_numpy()
+            coords_grp = coord[grp_idx, :]
+            bary = geom.barycenter(coords_grp) if coords_grp.shape[0] > 0 else np.zeros(3)
+            projections = (coords_grp - bary) @ axis_arr
+            ring_labels[grp_idx] = np.where(projections >= 0, 0.0, 1.0)
+
+        self.motl.df[ring_column] = ring_labels
+
+        self._ring_group_columns = [
+            self.tomo_id_column,
+            self.affiliation_column,
+            ring_column,
+        ]
+        self._rings_split = True
+        return self.motl
+
+    # ------------------------------------------------------------------
+    # Subunit ordering (ring-aware)
+    # ------------------------------------------------------------------
+
+    def assign_subunit_order(self) -> None:
+        """Assign 1-based subunit indices across both rings.
+
+        Calls :meth:`split_rings` when the ring column is absent from
+        ``self.motl.df``.  Then delegates per-ring cyclic ordering to
+        :meth:`CnComplex.assign_subunit_order` (indices 1 … n within
+        each ring).  Finally offsets ring 1 indices by ``self.n`` so that
+        the full range is 1 … 2n (ring 0 first, ring 1 second).
+
+        Modifies ``self.motl.df`` in place.
+        """
+        if not self._rings_split:
+            self.split_rings(ring_column=self._ring_column, axis=self._split_axis)
+
+        super().assign_subunit_order()
+
+        ring1_mask = self.motl.df[self._ring_column] == 1.0
+        self.motl.df.loc[ring1_mask, self.order_column] = (
+            self.motl.df.loc[ring1_mask, self.order_column] + self.n
+        )
+
+    # ------------------------------------------------------------------
+    # Inter-ring metrics
+    # ------------------------------------------------------------------
+
+    def ring_spacing(self, *, pixel_size: float = 1.0) -> pd.DataFrame:
+        """Axial distance between the two rings for each object.
+
+        Computes the mean position of ring 0 and ring 1 subunits separately
+        and returns the absolute axial distance between them projected onto
+        ``self._split_axis``.
+
+        Parameters
+        ----------
+        pixel_size : float, default=1.0
+            Ångström-per-voxel scale factor.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns ``tomo_id``, ``object_id``, ``ring_spacing``.
+        """
+        if not self._rings_split:
+            self.split_rings(ring_column=self._ring_column, axis=self._split_axis)
+
+        coord = self.motl.get_coordinates()
+        rows: list[dict] = []
+
+        for (tomo_id, object_id), group in self.motl.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        ):
+            mask0 = (group[self._ring_column] == 0.0).to_numpy()
+            mask1 = (group[self._ring_column] == 1.0).to_numpy()
+            grp_idx = group.index.to_numpy()
+            coords_grp = coord[grp_idx, :]
+
+            if not mask0.any() or not mask1.any():
+                spacing = np.nan
+            else:
+                c0 = np.mean(coords_grp[mask0, :], axis=0)
+                c1 = np.mean(coords_grp[mask1, :], axis=0)
+                spacing = float(abs(np.dot(c0 - c1, self._split_axis)) * pixel_size)
+
+            rows.append({
+                "tomo_id": float(tomo_id),
+                "object_id": float(object_id),
+                "ring_spacing": spacing,
+            })
+
+        return pd.DataFrame(rows)
+
+    def inter_ring_twist(self, *, degrees: bool = True) -> pd.DataFrame:
+        """Rotational twist between the two rings for each object.
+
+        For each ring, projects subunit positions onto the plane perpendicular
+        to ``self._split_axis`` and computes the n-fold circular mean phase:
+        ``angle(Σ exp(i·n·θ_k)) / n``.  The twist is the phase difference
+        ring 1 − ring 0, wrapped into ``[0, 2π/n)``.
+
+        A perfectly staggered arrangement gives ``180 / n`` degrees; an
+        eclipsed arrangement gives ``0`` degrees.
+
+        Parameters
+        ----------
+        degrees : bool, default=True
+            Return twist in degrees when ``True``, radians when ``False``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns ``tomo_id``, ``object_id``, ``inter_ring_twist``.
+        """
+        if not self._rings_split:
+            self.split_rings(ring_column=self._ring_column, axis=self._split_axis)
+
+        axis = self._split_axis
+        e1 = np.array([1.0, 0.0, 0.0])
+        if abs(np.dot(e1, axis)) > 0.9:
+            e1 = np.array([0.0, 1.0, 0.0])
+        e1 = e1 - np.dot(e1, axis) * axis
+        e1 /= np.linalg.norm(e1)
+        e2 = np.cross(axis, e1)
+
+        coord = self.motl.get_coordinates()
+        rows: list[dict] = []
+
+        for (tomo_id, object_id), group in self.motl.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        ):
+            mask0 = (group[self._ring_column] == 0.0).to_numpy()
+            mask1 = (group[self._ring_column] == 1.0).to_numpy()
+            grp_idx = group.index.to_numpy()
+            coords_grp = coord[grp_idx, :]
+            bary = geom.barycenter(coords_grp) if coords_grp.shape[0] > 0 else np.zeros(3)
+            rel = coords_grp - bary
+
+            if not mask0.any() or not mask1.any():
+                twist = np.nan
+            else:
+                def _ring_phase(rel_grp: np.ndarray) -> float:
+                    angles = np.arctan2(rel_grp @ e2, rel_grp @ e1)
+                    z = np.sum(np.exp(1j * self.n * angles))
+                    return float(np.angle(z) / self.n)
+
+                phase0 = _ring_phase(rel[mask0, :])
+                phase1 = _ring_phase(rel[mask1, :])
+                central_angle_rad = 2.0 * np.pi / self.n
+                twist_rad = (phase1 - phase0) % central_angle_rad
+                twist = float(np.degrees(twist_rad)) if degrees else float(twist_rad)
+
+            rows.append({
+                "tomo_id": float(tomo_id),
+                "object_id": float(object_id),
+                "inter_ring_twist": twist,
+            })
+
+        return pd.DataFrame(rows)
+
+    # ------------------------------------------------------------------
+    # Per-object statistics
+    # ------------------------------------------------------------------
+
+    def get_object_stats(self, *, pixel_size: float = 1.0) -> pd.DataFrame:
+        """Comprehensive per-object statistics for dihedral structures.
+
+        Composes per-object occupancy, ring spacing, inter-ring twist, and
+        per-ring diameter/circumference (averaged to one row per object).
+
+        Parameters
+        ----------
+        pixel_size : float, default=1.0
+            Ångström-per-voxel scale factor for distance columns.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per ``(tomo_id, object_id)``.  Columns:
+
+            ``tomo_id``, ``object_id``
+                Group identifiers.
+            ``n_present``, ``occupancy``, ``missing``
+                From :meth:`occupancy`.
+            ``x``, ``y``, ``z``
+                Object barycentre (voxels).
+            ``radius``
+                Mean circumradius across both rings (voxels).
+            ``ring_spacing``
+                Axial distance between rings (scaled by *pixel_size*).
+            ``inter_ring_twist``
+                Rotational twist between rings (degrees).
+            ``circumference``
+                Mean per-ring circumference (scaled by *pixel_size*).
+            ``mean_diameter``, ``n_pairs``
+                Mean per-ring diameter and total pair count.
+
+        Raises
+        ------
+        ValueError
+            If ``affiliation_column`` is absent from ``self.motl.df``.
+        """
+        self._require_affiliation()
+
+        occ_df = self.occupancy()
+        spacing_df = self.ring_spacing(pixel_size=pixel_size)
+        twist_df = self.inter_ring_twist(degrees=True)
+
+        circ_df_ring = self.circumference(pixel_size=pixel_size)
+        diam_df_ring, _ = self.diameter(pixel_size=pixel_size)
+
+        merge_cols = ["tomo_id", "object_id"]
+        circ_agg = (
+            circ_df_ring.groupby(merge_cols)["circumference"]
+            .mean()
+            .reset_index()
+        )
+        diam_agg = (
+            diam_df_ring.groupby(merge_cols)
+            .agg(mean_diameter=("mean_diameter", "mean"), n_pairs=("n_pairs", "sum"))
+            .reset_index()
+        )
+
+        coord = self.motl.get_coordinates()
+        center_rows: list[dict] = []
+        for (tomo_id, object_id), group in self.motl.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        ):
+            coords_grp = coord[group.index.to_numpy(), :]
+            bary = geom.barycenter(coords_grp) if coords_grp.shape[0] > 0 else np.zeros(3)
+            r = self._circumradius_for_group(coords_grp)
+            center_rows.append({
+                "tomo_id": float(tomo_id),
+                "object_id": float(object_id),
+                "x": float(bary[0]),
+                "y": float(bary[1]),
+                "z": float(bary[2]),
+                "radius": r,
+            })
+        geo_df = pd.DataFrame(center_rows)
+
+        result = occ_df.merge(geo_df, on=merge_cols, how="outer")
+        result = result.merge(spacing_df, on=merge_cols, how="left")
+        result = result.merge(twist_df, on=merge_cols, how="left")
+        result = result.merge(circ_agg, on=merge_cols, how="left")
+        result = result.merge(diam_agg, on=merge_cols, how="left")
+        return result
+
+
+# =============================================================================
+# NPC
+# =============================================================================
+
+
+class NPC(CnComplex):
+    """NPC-specific extensions of :class:`CnComplex`.
+
+    Inherits all single-ring methods (centre computation, subunit ordering,
+    and object merging) from :class:`CnComplex`.
+    The methods below are NPC-specific: orientation unification,
+    multi-ring assembly, and opposite-subunit diameter analysis.
+
+    Typical workflow:
+
+    1. :meth:`cluster_subunits_to_rings` — trace subunits into rings and
+       merge nearby rings.
+    2. :meth:`unify_nn_orientations` — flip ambiguous orientations.
+    3. :meth:`merge_rings` — merge rings from multiple ring-motls.
+    """
 
     @staticmethod
     def cluster_subunits_to_rings(
@@ -708,238 +2181,359 @@ class NPC:
         chain.get_occupancy()
         motl = chain.add_traced_info(motl)
 
-        return NPC.merge_subunits(motl, npc_radius=npc_radius)
+        return NPC._merge_by_radius(motl, npc_radius)
 
-    @staticmethod
-    def get_center_with_radius(object_motl: MotlSource, radius: float) -> np.ndarray:
-        """Estimate the NPC centre by shifting each subunit inward by *radius*.
+    # ------------------------------------------------------------------
+    # Orientation unification
+    # ------------------------------------------------------------------
 
-        Shifts every particle by ``(-radius, 0, 0)`` along the local X axis
-        (i.e. toward the pore centre) and returns the mean of the shifted
-        positions.
+    def unify_nn_orientations(self, dist_threshold: float = 10000) -> None:
+        """Flip orientations so that neighbouring subunits point consistently.
+
+        Traces particles into chains via :func:`nnana.trace_chains`, then walks
+        each chain and applies a 180° rotation around X whenever the cone angle
+        between successive subunits exceeds 90°.  Updates ``self.motl``
+        in place.
 
         Parameters
         ----------
-        object_motl : MotlSource
-            Subunit particles belonging to a single NPC ring.
-        radius : float
+        dist_threshold : float, default=10000
+            Maximum nearest-neighbour distance for tracing (voxels).
+        """
+        traced_motl = nnana.trace_chains(
+            self.motl,
+            motl_exit=None,
+            max_distance=dist_threshold,
+            min_distance=0,
+            column_name=self.tomo_id_column,
+            output_motl=None,
+            store_idx1=self.affiliation_column,
+            store_idx2="geom2",
+            store_dist="geom4",
+        )
+
+        rot_180 = srot.from_euler("zxz", angles=[0, 180, 0], degrees=True)
+
+        for t in traced_motl.get_unique_values(self.tomo_id_column):
+            tm = traced_motl.get_motl_subset(
+                column_values=[t], column_name=self.tomo_id_column, reset_index=True
+            )
+            rotations = tm.get_rotations()
+            for i in np.arange(1, tm.df["geom2"].max(), dtype=int):
+                cone_angle = geom.cone_distance(rotations[i - 1], rotations[i])
+                if cone_angle > 90.0:
+                    rotations[i] = rotations[i] * rot_180
+
+            angles = rotations.as_euler("zxz", degrees=True)
+            tm.fill({"angles": angles})
+            traced_motl.df.loc[traced_motl.df[self.tomo_id_column] == t, :] = tm.df.values
+
+        self.motl = cryomotl.Motl(traced_motl.df.sort_values(by="subtomo_id"))
+
+    # ------------------------------------------------------------------
+    # NPC-specific private helpers (radius-shift centre estimation)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _center_by_radius_shift(
+        object_motl: "cryomotl.Motl",
+        npc_radius: float,
+    ) -> np.ndarray:
+        """Estimate ring centre by shifting each subunit inward by *npc_radius*.
+
+        Shifts every particle by ``(-npc_radius, 0, 0)`` along its local X
+        axis (i.e. toward the pore centre) and returns the mean of the
+        resulting positions.  Works for any number of subunits including 1.
+
+        Parameters
+        ----------
+        object_motl : cryomotl.Motl
+            Subunit particles belonging to one ring.
+        npc_radius : float
             Approximate ring radius in voxels.
 
         Returns
         -------
         numpy.ndarray
-            Estimated centre coordinates, shape ``(3,)``.
+            Estimated centre, shape ``(3,)``.
         """
-        vector_x = np.asarray([-radius, 0, 0])
-        shifted_motl = cryomotl.Motl(object_motl.df.copy())
-        shifted_motl.shift_positions(vector_x)
-        center_coordinates = shifted_motl.get_coordinates()
-        return np.mean(center_coordinates, axis=0)
+        shifted = cryomotl.Motl(object_motl.df.copy())
+        shifted.shift_positions(np.asarray([-npc_radius, 0.0, 0.0]))
+        return np.mean(shifted.get_coordinates(), axis=0)
 
     @staticmethod
-    def get_center_and_radius(
-        object_motl: MotlSource,
-        include_singles: bool = False,
-    ) -> tuple[np.ndarray, float]:
-        """Fit a circle to the subunit positions and return its centre and radius.
-
-        For fewer than 4 particles the centre is estimated from ray-ray
-        intersections; for 4 or more the Pratt algebraic fit is used.
-
-        Parameters
-        ----------
-        object_motl : MotlSource
-            Subunit particles belonging to a single NPC ring.
-        include_singles : bool, default=False
-            When ``True``, a single-particle motl returns its own coordinates
-            with radius 0 instead of a zero vector.
-
-        Returns
-        -------
-        circle_center : numpy.ndarray
-            Centre of the fitted circle, shape ``(3,)``.
-        circle_radius : float
-            Radius of the fitted circle (0.0 for ≤ 3 particles).
-        """
-        vector_x = np.asarray([-1, 0, 0])
-
-        if object_motl.df.shape[0] <= 1:
-            if include_singles:
-                return object_motl.get_coordinates(), 0
-            else:
-                return np.zeros((3,)), 0
-
-        start_coord = object_motl.get_coordinates()
-        if object_motl.df.shape[0] <= 3:
-            rot = object_motl.get_rotations()
-            rot_vec = rot.apply(vector_x)
-            end_coord = start_coord + rot_vec
-            circle_center, _ = geom.ray_ray_intersection_3d(starting_points=start_coord, ending_points=end_coord)
-            circle_radius = 0.0
-        else:
-            circle_center, circle_radius, confidence = geom.fit_circle_3d_pratt(start_coord)
-
-        return circle_center, circle_radius
-
-    @staticmethod
-    def get_centers_as_motl(
-        tomo_motl: MotlSource,
-        tomo_id: int,
-        radius: float,
-    ) -> "cryomotl.Motl":
-        """Build a motl of estimated NPC centres for all rings in one tomogram.
-
-        For each unique ``object_id`` in *tomo_motl* the ring centre is
-        estimated via :meth:`get_center_with_radius` and collected into a
-        new motl.
-
-        Parameters
-        ----------
-        tomo_motl : MotlSource
-            Subunit motl for a single tomogram.
-        tomo_id : int
-            Tomogram identifier written into the output motl.
-        radius : float
-            Approximate ring radius in voxels, forwarded to
-            :meth:`get_center_with_radius`.
-
-        Returns
-        -------
-        Motl
-            One particle per ring, with ``x/y/z`` at the estimated centre and
-            ``object_id`` matching the source ring identifier.
-        """
-        central_points = []
-        object_idx = []
-        for o in tomo_motl.get_unique_values("object_id"):
-            om = tomo_motl.get_motl_subset(column_values=[o], column_name="object_id", reset_index=True)
-            cetroid = NPC.get_center_with_radius(om, radius)
-            central_points.append(cetroid)
-            object_idx.append(o)
-
-        new_object_motl = cryomotl.Motl()
-        if len(central_points) > 0:
-            central_points = np.vstack(central_points)
-            new_object_motl.fill(
-                {
-                    "x": central_points[:, 0],
-                    "y": central_points[:, 1],
-                    "z": central_points[:, 2],
-                    "tomo_id": tomo_id,
-                    "object_id": object_idx,
-                }
-            )
-            new_object_motl.renumber_particles()
-
-        new_object_motl.df.fillna(0.0, inplace=True)
-        return new_object_motl
-
-    @staticmethod
-    def get_new_subunit_idx(
-        object_motl: MotlSource,
+    def _assign_subunit_index(
+        object_motl: "cryomotl.Motl",
         npc_radius: float,
         symmetry: int = 8,
     ) -> list[int]:
-        """Assign angular subunit indices after ring merging.
+        """Assign 1-based angular subunit indices for a merged NPC ring.
 
-        Computes the angle of each subunit relative to the first one, divides
-        by the expected angular step (``360 / symmetry``), and rounds to the
-        nearest integer to obtain a 1-based subunit index.
+        Computes each subunit's angle relative to the first one using the
+        radius-shift centre estimate, divides by ``360 / symmetry``, and
+        rounds to the nearest integer.
 
         Parameters
         ----------
-        object_motl : MotlSource
-            Subunit particles belonging to a single merged NPC ring.
+        object_motl : cryomotl.Motl
+            Subunit particles of the merged ring.
         npc_radius : float
-            Approximate ring radius in voxels, used to locate the ring centre.
+            Approximate ring radius in voxels.
         symmetry : int, default=8
-            Rotational symmetry order of the NPC (determines the angular step).
+            Rotational symmetry order.
 
         Returns
         -------
         list of int
-            Subunit indices, same length as ``object_motl.df``.  The first
-            particle always receives index 1.
+            1-based subunit indices, same length as ``object_motl.df``.
         """
-        npc_center = NPC.get_center_with_radius(object_motl, npc_radius)
-        su_coord = object_motl.get_coordinates()
-        vectors = su_coord - np.tile(npc_center, (su_coord.shape[0], 1))
-
+        center = NPC._center_by_radius_shift(object_motl, npc_radius)
+        coords = object_motl.get_coordinates()
+        vectors = coords - center
         div_angle = 360.0 / symmetry
         s_idx = [1]
         for vec in vectors[1:]:
             angle = geom.vector_angular_distance(vectors[0], vec) / div_angle
-            s_idx.append(int(decimal.Decimal(angle).to_integral_value(rounding=decimal.ROUND_HALF_UP)) + 1)
-
+            s_idx.append(
+                int(decimal.Decimal(angle).to_integral_value(rounding=decimal.ROUND_HALF_UP)) + 1
+            )
         return s_idx
 
     @staticmethod
-    def merge_subunits(
-        input_motl: MotlSource,
-        npc_radius: float = 55,
+    def _merge_by_radius(
+        motl: "cryomotl.Motl",
+        npc_radius: float,
     ) -> "cryomotl.Motl":
-        """Merge NPC rings whose centres are closer than *npc_radius*.
+        """Merge NPC chains whose radius-shift centres are within *npc_radius*.
 
-        For each tomogram:
+        Restores the original ``NPC.merge_subunits`` behaviour: centre
+        estimation uses :meth:`_center_by_radius_shift` so that even single-
+        particle chains correctly converge to the ring centre, enabling robust
+        merging.  Sets ``geom1`` to the merged group count and recomputes
+        ``geom2`` (subunit index) for any rings that were actually merged.
 
-        1. Estimate ring centres with :meth:`get_centers_as_motl`.
-        2. Find rings whose centres are within *npc_radius* of each other
-           using :func:`nnana.get_nn_within_distance`.
-        3. Re-assign the ``object_id`` of close rings to the nearest partner.
-        4. Re-compute ``geom1`` (ring size) and ``geom2`` (subunit index) for
-           merged rings.
+        Parameters
+        ----------
+        motl : cryomotl.Motl
+            Chain-traced motl with ``object_id`` and ``geom2`` populated.
+        npc_radius : float
+            Distance threshold for merging (voxels).
+
+        Returns
+        -------
+        cryomotl.Motl
+            Updated motl with consolidated ring labels.
+        """
+        for t in motl.get_unique_values("tomo_id"):
+            tm = motl.get_motl_subset(
+                column_values=[t], column_name="tomo_id", reset_index=True
+            )
+
+            # Build centres motl using radius-shift approach
+            central_points: list[np.ndarray] = []
+            obj_ids: list[float] = []
+            for o in tm.get_unique_values("object_id"):
+                om = tm.get_motl_subset(
+                    column_values=[o], column_name="object_id", reset_index=True
+                )
+                central_points.append(NPC._center_by_radius_shift(om, npc_radius))
+                obj_ids.append(o)
+
+            centers_motl = cryomotl.Motl()
+            if central_points:
+                ca = np.vstack(central_points)
+                centers_motl.fill(
+                    {"x": ca[:, 0], "y": ca[:, 1], "z": ca[:, 2],
+                     "tomo_id": t, "object_id": obj_ids}
+                )
+                centers_motl.renumber_particles()
+            centers_motl.df.fillna(0.0, inplace=True)
+
+            changed_objects: list[float] = []
+            if centers_motl.df.shape[0] > 1:
+                center_stats = nnana.get_nn_stats(centers_motl, centers_motl)
+                if any(center_stats["distance"] <= npc_radius):
+                    center_idx, nn_idx_list = nnana.get_nn_within_distance(
+                        centers_motl, npc_radius
+                    )
+                    for i, pos in enumerate(center_idx):
+                        o_id1 = centers_motl.df.loc[
+                            centers_motl.df.index[pos], "object_id"
+                        ]
+                        changed_objects.append(o_id1)
+                        for j in nn_idx_list[i]:
+                            o_id2 = centers_motl.df.loc[
+                                centers_motl.df.index[j], "object_id"
+                            ]
+                            tm.df.loc[tm.df["object_id"] == o_id2, "object_id"] = o_id1
+
+            tm.df["geom1"] = (
+                tm.df.groupby("object_id")["object_id"].transform("count")
+            )
+            for o in changed_objects:
+                om = tm.get_motl_subset(
+                    column_values=o, column_name="object_id", reset_index=True
+                )
+                s_idx = NPC._assign_subunit_index(om, npc_radius)
+                tm.df.loc[tm.df["object_id"] == o, "geom2"] = s_idx
+
+            tm.df["object_id"] = tm.df["object_id"].rank(method="dense").astype(int)
+            motl.df.loc[
+                motl.df["tomo_id"] == t, ["object_id", "geom1", "geom2"]
+            ] = tm.df[["object_id", "geom1", "geom2"]].values
+
+        motl.df.reset_index(inplace=True, drop=True)
+        motl.df["geom1"] = motl.df.groupby(["tomo_id", "object_id"])[
+            "object_id"
+        ].transform("count")
+        motl.df["object_id"] = motl.df["object_id"].rank(method="dense").astype(int)
+        return motl
+
+    @staticmethod
+    def compute_diameter(
+        input_motl: MotlSource,
+        *,
+        pixel_size: float = 1.0,
+        store_column: MotlColumn = "geom4",
+        symmetry: int = 8,
+    ) -> tuple[pd.DataFrame, "cryomotl.Motl"]:
+        """Compute the mean NPC diameter per ring using opposite-subunit pairs.
+
+        Matches subunit pairs ``(i, i + symmetry//2)`` using the 1-based
+        index stored in ``geom2``.  Objects with no matching opposite pair
+        are omitted from the summary and receive ``NaN`` in *store_column*.
+        Unlike :meth:`CnComplex.diameter`, no circumradius fallback is
+        applied.
 
         Parameters
         ----------
         input_motl : MotlSource
-            Subunit motl, already annotated with ``object_id`` ring labels.
-        npc_radius : float, default=55
-            Distance threshold in voxels.  Ring centres closer than this are
-            merged into one ring.
+            Particle list with NPC subunits.  Requires ``object_id`` for ring
+            affiliation and ``geom2`` for the 1-based subunit order within
+            each ring.
+        pixel_size : float, default=1.0
+            Ångström-per-voxel scale factor applied to all distances.
+        store_column : MotlColumn, default='geom4'
+            Column in the returned motl that carries each ring's mean
+            diameter.  ``NaN`` for rings with no opposite-pair matches.
+        symmetry : int, default=8
+            Rotational symmetry order.  Determines the pair offset
+            ``symmetry // 2``.
+
+        Returns
+        -------
+        summary_df : pandas.DataFrame
+            One row per ``(tomo_id, object_id)`` that produced at least one
+            opposite-subunit pair.  Columns:
+            ``tomo_id``, ``object_id``, ``mean_diameter``, ``n_pairs``.
+            Empty when no ring has matching pairs.
+        motl_out : Motl
+            Copy of *input_motl* with *store_column* populated; ``NaN``
+            for rings without pairs.
+        """
+        motl = cryomotl.Motl.load(input_motl)
+        motl_out = cryomotl.Motl(motl.df.copy())
+        motl_out.df.reset_index(drop=True, inplace=True)
+
+        coord = motl_out.get_coordinates()
+        diameters_col = np.full(len(motl_out.df), np.nan)
+        half = symmetry // 2
+        rows: list[dict] = []
+
+        for (tomo_id, object_id), group in motl_out.df.groupby(["tomo_id", "object_id"]):
+            grp_idx = group.index.to_numpy()
+            pair_rows: list[list[int]] = []
+            for i in range(1, half + 1):
+                j = i + half
+                mask_i = group["geom2"] == i
+                mask_j = group["geom2"] == j
+                if mask_i.any() and mask_j.any():
+                    pair_rows.append([
+                        group.index[mask_i][0],
+                        group.index[mask_j][0],
+                    ])
+            if not pair_rows:
+                continue
+            idx = np.asarray(pair_rows)
+            dists = (
+                geom.point_pairwise_dist(coord[idx[:, 0], :], coord[idx[:, 1], :])
+                * pixel_size
+            )
+            mean_d = float(np.mean(dists))
+            diameters_col[grp_idx] = mean_d
+            rows.append({
+                "tomo_id": float(tomo_id),
+                "object_id": float(object_id),
+                "mean_diameter": mean_d,
+                "n_pairs": int(len(dists)),
+            })
+
+        motl_out.df[store_column] = diameters_col
+        summary_df = pd.DataFrame(
+            rows if rows else [],
+            columns=["tomo_id", "object_id", "mean_diameter", "n_pairs"],
+        )
+        return summary_df, motl_out
+
+    @staticmethod
+    def get_centers_as_motl(
+        tomo_motl: MotlSource,
+        *,
+        tomo_id: float | None = None,
+        radius: float = 55.0,
+    ) -> "cryomotl.Motl":
+        """Return one centre particle per ring using the radius-shift estimator.
+
+        Shifts each subunit by ``(-radius, 0, 0)`` along its local X axis
+        and averages the resulting positions to estimate the NPC ring centre.
+        Unlike the inherited :meth:`CnComplex.get_centers_as_motl`, this
+        method works correctly for any ring occupancy including a single
+        subunit.
+
+        Parameters
+        ----------
+        tomo_motl : MotlSource
+            Particle list for one tomogram (or all tomograms).
+        tomo_id : float, optional
+            Tomogram identifier stored in the output motl.  Defaults to the
+            ``tomo_id`` value found on each ring's particles.
+        radius : float, default=55.0
+            Approximate NPC ring radius in voxels.
 
         Returns
         -------
         Motl
-            Updated motl with consolidated ring labels.
+            One row per unique ``object_id`` with the estimated ring centre
+            in ``x``, ``y``, ``z``.
         """
-        if isinstance(input_motl, (str, pd.DataFrame)):
-            input_motl = cryomotl.Motl.load(input_motl)
+        motl = cryomotl.Motl.load(tomo_motl)
+        centers: list[np.ndarray] = []
+        tomo_ids: list[float] = []
+        object_ids: list[float] = []
 
-        for t in input_motl.get_unique_values("tomo_id"):
-            tm = input_motl.get_motl_subset(column_values=[t], column_name="tomo_id", reset_index=True)
-            new_object_motl = NPC.get_centers_as_motl(tm, t, radius=npc_radius)
+        for o in motl.get_unique_values("object_id"):
+            om = motl.get_motl_subset(
+                column_values=[o], column_name="object_id", reset_index=True
+            )
+            center = NPC._center_by_radius_shift(om, npc_radius=radius)
+            centers.append(center)
+            t = float(tomo_id) if tomo_id is not None else float(om.df["tomo_id"].iloc[0])
+            tomo_ids.append(t)
+            object_ids.append(float(o))
 
-            changed_objects = []
-            if new_object_motl.df.shape[0] > 1:
-                center_stats = nnana.get_nn_stats(new_object_motl, new_object_motl)
-
-                if any(center_stats["distance"] <= npc_radius):
-                    center_idx, nn_idx = nnana.get_nn_within_distance(new_object_motl, npc_radius)
-                    for i, o in enumerate(center_idx):
-                        o_id1 = new_object_motl.df.loc[new_object_motl.df.index[o], "object_id"]
-                        changed_objects.append(o_id1)
-                        for j in nn_idx[i]:
-                            o_id2 = new_object_motl.df.loc[new_object_motl.df.index[j], "object_id"]
-                            tm.df.loc[tm.df["object_id"] == o_id2, "object_id"] = o_id1
-
-            tm.df["geom1"] = tm.df.groupby(["object_id"])["object_id"].transform("count")
-
-            for o in changed_objects:
-                om = tm.get_motl_subset(column_values=o, column_name="object_id", reset_index=True)
-                s_idx = NPC.get_new_subunit_idx(om, npc_radius)
-                tm.df.loc[tm.df["object_id"] == o, "geom2"] = s_idx
-
-            tm.df["object_id"] = tm.df["object_id"].rank(method="dense").astype(int)
-
-            input_motl.df.loc[input_motl.df["tomo_id"] == t, ["object_id", "geom1", "geom2"]] = tm.df[
-                ["object_id", "geom1", "geom2"]
-            ].values
-
-        input_motl.df.reset_index(inplace=True, drop=True)
-        input_motl.df["geom1"] = input_motl.df.groupby(["tomo_id", "object_id"])["object_id"].transform("count")
-        input_motl.df["object_id"] = input_motl.df["object_id"].rank(method="dense").astype(int)
-
-        return input_motl
+        result = cryomotl.Motl()
+        if centers:
+            pts_arr = np.vstack(centers)
+            result.fill({
+                "x": pts_arr[:, 0],
+                "y": pts_arr[:, 1],
+                "z": pts_arr[:, 2],
+                "tomo_id": tomo_ids,
+                "object_id": object_ids,
+            })
+            result.renumber_particles()
+        result.df.fillna(0.0, inplace=True)
+        return result
 
     @staticmethod
     def merge_rings(
@@ -999,8 +2593,8 @@ class NPC:
                 tm1 = ring_motls[i[0]].get_motl_subset(column_values=[t], column_name="tomo_id", reset_index=True)
                 tm2 = ring_motls[i[1]].get_motl_subset(column_values=[t], column_name="tomo_id", reset_index=True)
                 if tm2.df.shape[0] > 0:
-                    centers1 = NPC.get_centers_as_motl(tm1, t, radius=npc_radius)
-                    centers2 = NPC.get_centers_as_motl(tm2, t, radius=npc_radius)
+                    centers1 = CnComplex(tm1, symmetry=8).get_centers_as_motl()
+                    centers2 = CnComplex(tm2, symmetry=8).get_centers_as_motl()
 
                     _, obj1_idx, distances, _ = nnana.find_nn_indices(
                         centers2.get_coordinates(),
@@ -3156,328 +4750,291 @@ class ParametricSurface:
         return motl
 
 
-class Icosahedron:
-    """Icosahedron class defined by the center coordinates of its vertices, edges and faces.
+# =============================================================================
+# PolyhedralComplex — T/O/I Platonic-solid motl analysis
+# =============================================================================
+
+
+class PolyhedralComplex(SymmetricComplex):
+    """Motl-analysis class for tetrahedral, octahedral, or icosahedral symmetry.
+
+    Parameterises the solid from the symmetry letter (T/O/I).  Like
+    :class:`CnComplex` parameterises the fold, ``PolyhedralComplex``
+    parameterises the solid — no separate subclasses for T/O/I.
 
     Parameters
     ----------
-    radius : int or float
-    rotation : RotationLike
-    vertices : np.ndarray
-    edges : np.ndarray
-    faces : np.ndarray
+    motl : MotlSource
+        Input motive list.
+    symmetry : Symmetry
+        ``"T"``, ``"O"``, or ``"I"`` (case-insensitive).
+    affiliation_column : MotlColumn, default="object_id"
+        Column identifying which complex each particle belongs to.
+    order_column : MotlColumn, default="geom1"
+        Column that receives the per-subunit index after
+        :meth:`assign_subunit_order`.
+    tomo_id_column : MotlColumn, default="tomo_id"
+        Column identifying the tomogram.
+
+    Raises
+    ------
+    ValueError
+        When *symmetry* is not T/O/I.
     """
 
-    def __init__(self, radius: float | int = 1, R: RotationLike | None = None):
-        """If radius and rotation are both None, then returns canonical icosahedron
+    _SOLIDS: dict = {
+        "T": geom.Tetrahedron,
+        "O": geom.Octahedron,
+        "I": geom.Icosahedron,
+    }
+
+    def __init__(
+        self,
+        motl: MotlSource,
+        symmetry: Symmetry,
+        *,
+        affiliation_column: MotlColumn = "object_id",
+        order_column: MotlColumn = "geom1",
+        tomo_id_column: MotlColumn = "tomo_id",
+    ) -> None:
+        self._setup(
+            motl,
+            symmetry,
+            affiliation_column=affiliation_column,
+            order_column=order_column,
+            tomo_id_column=tomo_id_column,
+        )
+        if self.group not in self._SOLIDS:
+            raise ValueError(
+                f"PolyhedralComplex requires T/O/I symmetry, got {symmetry!r}."
+            )
+        self._solid = self._SOLIDS[self.group]
+
+    # ------------------------------------------------------------------
+    # Core interface
+    # ------------------------------------------------------------------
+
+    def assign_subunit_order(self) -> None:
+        """Assign 1-based subunit indices ordered by x→y→z (ascending)."""
+        for (_tomo_id, _aff_id), group in self.motl.df.groupby(
+            [self.tomo_id_column, self.affiliation_column]
+        ):
+            orig_idx = group.index.to_numpy()
+            coords = self.motl.df.loc[orig_idx, ["x", "y", "z"]].to_numpy()
+            sorted_positions = np.lexsort((coords[:, 2], coords[:, 1], coords[:, 0]))
+            ranks = np.empty(len(sorted_positions), dtype=int)
+            ranks[sorted_positions] = np.arange(1, len(sorted_positions) + 1)
+            self.motl.df.loc[orig_idx, self.order_column] = ranks
+
+    # ------------------------------------------------------------------
+    # Geometry helpers
+    # ------------------------------------------------------------------
+
+    def feature_vectors(
+        self,
+        mode: Literal["vertices", "edges", "faces"] = "vertices",
+        radius: float = 1.0,
+    ) -> np.ndarray:
+        """Return canonical feature centres for the solid at *radius*.
 
         Parameters
-        -----------
-        radius : int or float, optional
-            The radius of the icosahedron. Defaults to 1.0.
-        R : RotationLike, optional
-            Rotation to orient the canonical icosahedron to the desired orientation. Normalized via :func:`cryocat.utils.geom.as_rotation`.
-            If None, R will correspond to the identity matrix and no rotation is applied. Defaults to None.
-        """
+        ----------
+        mode : {"vertices", "edges", "faces"}, default="vertices"
+            Which feature centres to return.
+        radius : float, default=1.0
+            Circumscribed-sphere radius passed to the solid constructor.
 
-        if R is None:
-            R = np.eye(3) #identity matrix
-        R = geom.as_rotation(R)
-
-        self.radius = float(radius)
-        self.rotation = R
-
-        # build canonical icosahedron
-        self.vertices = geom.icosahedron()
-        self.edges = geom.icosahedron_edges(self.vertices)
-        self.faces = geom.icosahedron_faces(self.vertices, self.edges)
-
-        # Vertices
-        self.vertices = R.apply(self.vertices)
-        self.vertices = self.vertices * radius
-        
-        # Edges - center coordinates
-        self.edges = (self.vertices[self.edges[:,0]]+self.vertices[self.edges[:,1]]) / 2
-
-        # Faces - center coordinates
-        edges=geom.icosahedron_edges(self.vertices)
-        faces=geom.icosahedron_faces(self.vertices, edges)
-        self.faces = (self.vertices[faces[:,0]]+self.vertices[faces[:,1]]+ self.vertices[faces[:,2]])/ 3 
-
-
-    @classmethod
-    def compute_icosahedron(
-        cls, 
-        shift_vector1: ArrayLike | None = None, 
-        shift_vector2: ArrayLike | None = None
-        ) -> "Icosahedron":
-
-        """Compute an icosahedron from two input vectors defining two non-collinear vertices from the 
-        center of the icosahedron. If any of the two vectors is None, the canonical icosahedron is returned.
-
-        Parameters
-        -----------
-        shift_vector1 : ArrayLike, optional 
-            Vector defining the first vertex. Normalized via ``np.asarray()``.
-        shift_vector2 : ArrayLike, optional 
-            Vector defining the second vertex, which has to be non-collinear to the first vertex.
-            Normalized via :func:`np.asarray()`.
-        
         Returns
-        --------
-        Icosahedron
-            An instance of the Icosahedron class with vertices, edges and faces computed based on the provided shift vectors.
+        -------
+        np.ndarray
+            Array of shape (N, 3).
         """
+        return getattr(self._solid(radius), mode)
 
-        if shift_vector1 is None or shift_vector2 is None:
-            radius = 1
-            R = None
-    
-        else:
-            shift_vector1 = np.asarray(shift_vector1)
-            shift_vector2 = np.asarray(shift_vector2)
+    # ------------------------------------------------------------------
+    # Symmetry expansion
+    # ------------------------------------------------------------------
 
-            # compute radius of the icosahedron
-            r1 = np.linalg.norm(shift_vector1)
-            r2 = np.linalg.norm(shift_vector2)
-            radius = 0.5 * (r1 + r2)
+    def expand(
+        self,
+        *,
+        mode: Literal["vertices", "edges", "faces"] = "vertices",
+        radius: float = 1.0,
+        shift_vecs: np.ndarray | None = None,
+        original_id_col: MotlColumn = "object_id",
+        order_id_col: MotlColumn = "geom1",
+        output_motl_type: MotlType = "emmotl",
+        output_path: PathOrStr | None = None,
+        **output_kwargs,
+    ) -> MotlSource:
+        """Expand each particle into subparticles at polyhedral feature positions.
 
-            # build orientation frame in the box
-            F_box = geom.orthonormal_frame(shift_vector1, shift_vector2)
+        Parameters
+        ----------
+        mode : {"vertices", "edges", "faces"}, default="vertices"
+            Feature type used when *shift_vecs* is None.
+        radius : float, default=1.0
+            Solid radius used when *shift_vecs* is None.
+        shift_vecs : np.ndarray of shape (N, 3), optional
+            Explicit shift vectors.  When None, vectors are taken from
+            :meth:`feature_vectors`.
+        original_id_col : MotlColumn, default="object_id"
+            Column that stores the ``subtomo_id`` of the source particle.
+        order_id_col : MotlColumn, default="geom1"
+            Column that stores the 0-based subunit extraction index.
+        output_motl_type : MotlType, default="emmotl"
+            Format of the returned/written motive list.
+        output_path : PathOrStr, optional
+            Write path.  No file is written when None.
+        **output_kwargs
+            Forwarded to :func:`cryocat.core.cryomotl.motl_converter_kwargs`.
 
-            # Build canonical frame from two canonical adjacent vertices
-            verts_can = geom.icosahedron()
-            edges_can = geom.icosahedron_edges(verts_can)
-            v1_can = verts_can[0]
-            # pick neighbor (first edge involving vertex 0)
-            for e in edges_can:
-                if 0 in e:
-                    v2_can = verts_can[e[0] if e[1] == 0 else e[1]]
-                    break
-            F_can = geom.orthonormal_frame(v1_can, v2_can)
+        Returns
+        -------
+        MotlSource
+            Expanded motive list in the requested format.
 
-            # Compute rotation from canonical frame to box frame
-            R = F_box @ F_can.T
+        Raises
+        ------
+        ValueError
+            If *shift_vecs* has wrong shape or a required column is missing.
+        """
+        if shift_vecs is None:
+            shift_vecs = self.feature_vectors(mode, radius)
+        if (
+            not isinstance(shift_vecs, np.ndarray)
+            or shift_vecs.ndim != 2
+            or shift_vecs.shape[1] != 3
+        ):
+            raise ValueError("shift_vecs should be a numpy array of shape (N, 3)")
+        for col in [original_id_col, order_id_col]:
+            if col not in self.motl.df.columns:
+                raise ValueError(
+                    f"original_id_col {col} not found in the columns of the input motive list"
+                )
 
-        # compute icosahedron
-        icosahedron = cls(radius=radius, R=R)
+        idx = np.lexsort((shift_vecs[:, 2], shift_vecs[:, 1], shift_vecs[:, 0]))
+        shift_vecs = shift_vecs[idx]
 
-        return icosahedron
+        motl_subparticles = []
+        for shift in range(len(shift_vecs)):
+            df_copy = self.motl.df.copy()
+            df_copy["score"] = 0
+            df_copy["subtomo_mean"] = 0
+            df_copy[original_id_col] = self.motl.df["subtomo_id"]
+            df_copy[order_id_col] = shift
 
+            motl_subparticle = cryomotl.Motl(df_copy)
+            motl_subparticle.shift_positions(shift_vecs[shift])
+            motl_subparticle.update_coordinates()
+
+            target_normal = geom.normalize_vector(shift_vecs[shift])
+            reference_normal = np.array([0, 0, 1])
+            rotation_axis = geom.normalize_vector(
+                np.cross(reference_normal, target_normal)
+            )
+            rotation_angle = np.arccos(
+                np.clip(np.dot(reference_normal, target_normal), -1.0, 1.0)
+            )
+            rotation = srot.from_rotvec(rotation_angle * rotation_axis)
+            motl_subparticle.apply_rotation(rotation)
+            motl_subparticle.fill(
+                {"phi": np.random.rand(len(motl_subparticle.df)) * 360}
+            )
+            motl_subparticles.append(motl_subparticle)
+
+        output_motl = motl_subparticles[0]
+        for mp in motl_subparticles[1:]:
+            output_motl = output_motl + mp
+
+        output_motl.df = output_motl.df.sort_values(
+            by=[original_id_col, order_id_col], ascending=[True, True]
+        ).reset_index(drop=True)
+        output_motl.renumber_particles()
+        return cryomotl.motl_converter_kwargs(
+            output_motl, output_motl_type, output_path=output_path, **output_kwargs
+        )
+
+    # ------------------------------------------------------------------
+    # Feature recovery
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def recover_icosahedral_features(
-        input_cmm_file: PathOrStr, 
-        input_map: PathOrStr, 
-        center: TripletLike | None = None, 
+    def recover_features(
+        input_cmm_file: PathOrStr,
+        input_map: PathOrStr,
+        symmetry: Symmetry,
+        *,
+        center: TripletLike | None = None,
         mode: Literal["vertices", "edges", "faces"] = "vertices",
         project_to_sphere: bool = False,
-        output_cmm_file: PathOrStr | None = None):
+        output_cmm_file: PathOrStr | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Recover polyhedral feature coordinates from two marker positions.
 
-        """Calculates the center coordinates of the desired feature (vertices, edges or faces) of the icosahedron 
-        based on the coordinates of the markers for two non-collinear vertices and the center of the input map (in voxels) within
-        its box. If desired, the coordinates of the features can be written out as a .cmm file that can be loaded in ChimeraX. 
-        The pixel size is retrieved directly from the input map via :func:`cryocat.core.cryomap.get_metadata` and is applied 
-        to the marker coordinates. Please note that if you provide a loaded numpy array as ``input_map``, the pixel size is 1.0.
+        Generalises ``Icosahedron.recover_icosahedral_features`` to any T/O/I
+        solid.
 
         Parameters
-        -----------
+        ----------
         input_cmm_file : PathOrStr
-            Path to the .cmm file containing the coordinates of the markers for two non-collinear vertices
-        input_map : PathOrStr 
-            Path to the input map used to prepare the markers file or the input map as a numpy array. 
+            Path to a ``.cmm`` file with markers for two non-collinear vertices.
+        input_map : PathOrStr
+            Map used to prepare the marker file (supplies pixel size and box
+            dimensions).
+        symmetry : Symmetry
+            ``"T"``, ``"O"``, or ``"I"``.
         center : TripletLike, optional
-            Specify the center of the icosahedron within the box of the input map to calulate the vectors 
-            defining the selected non-collinear vertices. Normalized via :func:`cryocat.utils.geom.as_triplet`. 
-            If not specified, the center will be taken as the center of the box of the input map (e.g. for box 
-            size of 64 the center will be at (32, 32, 32) when numbered from 0). Defaults to None.
+            Centre of the solid in map voxels.  Defaults to the box centre.
         mode : {"vertices", "edges", "faces"}, default="vertices"
-            Feature to be recovered.
+            Feature type to recover.
         project_to_sphere : bool, default=False
-            Whether to project the recovered features to the sphere defined by the radius of the icosahedron.
-            This is useful when the input structure is made of subunits that exhibit icosahedral symmetry but 
-            form a spherical assembly rather than displaying icosahedral morphology.
+            Project features to the circumscribed sphere.
         output_cmm_file : PathOrStr, optional
-            Path to write out the markers of the extracted features. If not specified, 
-            no marker file is written out. Defaults to None.
-        
-        Returns
-        --------
-        feature_vec : np.ndarray
-            An array of shape (N, 3) containing the vectors defining the desired features (vertices, edges or faces) from the center of the reference icosahedron
-            
-        features_coords : np.ndarray
-            An array of shape (N, 3) containing the coordinates of the recovered features (vertices, edges or faces) in the box of the input map
-        
-        Raises
-        -------
-        ValueError
-            If the mode is not one of "vertices", "edges", or "faces".
-        """
+            If given, write recovered features to this ``.cmm`` file.
 
-        # get the center of the icosahedron in the map box
+        Returns
+        -------
+        feature_vec : np.ndarray of shape (N, 3)
+            Vectors from the solid centre to each feature.
+        features_coords : np.ndarray of shape (N, 3)
+            Feature positions in the map box (in Å).
+
+        Raises
+        ------
+        ValueError
+            If *mode* or *symmetry* is invalid.
+        """
+        if mode not in ("vertices", "edges", "faces"):
+            raise ValueError(
+                f"Invalid mode: {mode}. Mode should be one of 'vertices', 'edges', or 'faces'."
+            )
+        group, _ = geom.as_symmetry(symmetry)
+        if group not in PolyhedralComplex._SOLIDS:
+            raise ValueError(
+                f"recover_features requires T/O/I symmetry, got {symmetry!r}."
+            )
+        solid_cls = PolyhedralComplex._SOLIDS[group]
+
         input_map_metadata = cryomap.get_metadata(input_map)
         map_size = geom.as_triplet(input_map_metadata[0])
-        center=geom.as_triplet(center, reference_size=map_size)
-        
-        # read the coordinates of the markers for two non-collinear vertices
-        input_vert_marks = ioutils.marker_coords_load(input_cmm_file) # pd.DataFrame
-        v1 = input_vert_marks.iloc[0].to_numpy() / input_map_metadata[1] 
+        center = geom.as_triplet(center, reference_size=map_size)
+
+        input_vert_marks = ioutils.marker_coords_load(input_cmm_file)
+        v1 = input_vert_marks.iloc[0].to_numpy() / input_map_metadata[1]
         v2 = input_vert_marks.iloc[1].to_numpy() / input_map_metadata[1]
 
-        # compute the vectors defining center -> vertex1 and center -> vertex2
-        shift_vector1 = v1 - center
-        shift_vector2 = v2 - center
+        solid = solid_cls.from_vectors(v1 - center, v2 - center)
+        feature_vec = getattr(solid, mode)
 
-        # compute the icosahedron based on the two vectors
-        icosahedron = Icosahedron.compute_icosahedron(shift_vector1, shift_vector2)
-
-        # select the desired features - get vectors defing center -> feature 
-        if mode == "vertices":
-            feature_vec = icosahedron.vertices
-        elif mode == "edges":
-            feature_vec = icosahedron.edges
-        elif mode == "faces":
-            feature_vec = icosahedron.faces
-        else:
-            raise ValueError(f"Invalid mode: {mode}. Mode should be one of 'vertices', 'edges', or 'faces'.")
-
-        # spherical projection (optional)
         if project_to_sphere:
             norms = np.linalg.norm(feature_vec, axis=1)
-            feature_vec = (
-                feature_vec /
-                norms[:, None]
-            ) * icosahedron.radius
+            feature_vec = (feature_vec / norms[:, None]) * solid.radius
 
-        # add the center coordinates to get the feature coordinates in the map box and convert to Å
         features_coords = np.add(feature_vec, center) * input_map_metadata[1]
 
-        # write out the features as .cmm file if desired
         if output_cmm_file is not None:
             ioutils.write_coords_to_cmm_file(features_coords, output_cmm_file)
 
         return feature_vec, features_coords
 
-
-    @staticmethod
-    def icosahedral_sym_expansion(
-        input_motl: MotlSource,
-        shift_vecs: np.ndarray,
-        original_id_col: MotlColumn = "object_id",
-        order_id_col: MotlColumn = "geom1",
-        output_motl_type: MotlType = "emmotl",
-        output_path: PathOrStr | None = None,
-        **output_kwargs
-    ) -> "MotlSource":
-
-        """Create motive list where particle coordinates define the center of the extracted feature of the original icosahedral particles 
-        (e.g. vertices, edges or faces) based on the shift vectors provided. The extracted subparticles will have randomized in-plane angle.
-        The affiliation of the original particle is retained in the column specified by original_id_col and the new motive list is written 
-        out if output_path is specified.
-
-        Parameters
-        -----------
-        input_motl : MotlSource
-            Path to the input motive list or the input motive list as a cryomotl.Motl object. 
-            The motive list should contain particles corresponding to the original icosahedral particles 
-        shift_vecs : np.ndarray
-            An array of shape (N,3) defining the shift vectors form the center of the reference icosahedron 
-            to the desired features (vertices, edges or faces) that should be extracted.
-        original_id_col : MoltColumn, default="object_id"
-            Column in which to store the subtomo_id of the original particle (retain the afiliation to the original particle)
-        order_id_col : MotlColumn, deafult="geom1"
-            Column in which to store the order of subunit extraction for each original particle (0-numbering).
-            The order of the subunit extrcation is hierarchical and follows the following order:
-            1. ascending based on x coordinate;
-            2. ascending based on y coordinate;
-            3. ascending based on z coordinate.
-        output_motl_type : MotlType, default="emmotl"
-            Format of the output particle list.
-        output_path : PathOrStr, optional
-            Path to write the output motl.  No file is written when None.
-            Defaults to None.
-        **output_kwargs
-            Additional keyword arguments passed to the motl converter when preparing the
-            output motive list and writing the output file.  
-            See :func:`cryocat.core.cryomotl.motl_converter_kwargs` for details.
-
-        Returns
-        --------
-        cryomotl.Motl
-            A new motive list as a cryomotl.Motl object with icosahedral symmetry expansion applied 
-            according to the shift vectors passed as input
-        
-        Raises
-        -------
-        ValueError
-            If shift_vecs is not a numpy array of shape (N, 3), if original_id_col or order_id_col is not a valid column.
-        """
-
-        original_motl = cryomotl.Motl.load(input_motl)
-
-        if not isinstance(shift_vecs, np.ndarray) or shift_vecs.ndim !=2 or shift_vecs.shape[1] != 3:
-            raise ValueError("shift_vecs should be a numpy array of shape (N, 3)")
-        
-        for col in [original_id_col, order_id_col]:
-            if col not in original_motl.df.columns:
-                raise ValueError(f"original_id_col {col} not found in the columns of the input motive list")
-
-        # create as many new Motl instances as number of subparticles to be extracted
-        motl_subparticles = []
-
-        # sort the single 1d arrays forming feature_vec based on the following criterium:
-        # ascending order of x -> ascending order of y -> ascending order of z
-        idx = np.lexsort((shift_vecs[:,2], shift_vecs[:,1], shift_vecs[:,0]))
-        shift_vecs = shift_vecs[idx]
-
-        for shift in range(len(shift_vecs)):
-            df_copy = original_motl.df.copy()
-
-            #reset columns
-            df_copy["score"]=0
-            df_copy["subtomo_mean"]=0
-
-            df_copy[original_id_col] = original_motl.df["subtomo_id"] # retain affiliation of the original particle in the column specified by original_id_col
-            df_copy[order_id_col] = shift # subunits order, 0-numbering
-
-            motl_subparticle = cryomotl.Motl(df_copy)
-
-            # Apply the shifts to update the coordinates
-            motl_subparticle.shift_positions(shift_vecs[shift])
-            motl_subparticle.update_coordinates()
-
-            #Normalize the shift vector to use as target normal direction
-            target_normal = geom.normalize_vector(shift_vecs[shift])
-
-            #Define the reference normal (default z-axis in particle frame)  
-            reference_normal = np.array([0, 0, 1])
-
-            # Create a scipy Rotation object to align the original reference normal with the new target normal
-            # Use Rodrigues' rotation formula -> refer to geom.rotate_point_rodrigues()
-            rotation_axis = np.cross(reference_normal, target_normal)
-            rotation_axis = geom.normalize_vector(rotation_axis)
-            rotation_angle = np.arccos(np.clip(np.dot(reference_normal, target_normal), -1.0, 1.0))
-            rotation = srot.from_rotvec(rotation_angle * rotation_axis)
-
-            # Apply the rotations to align to the local frame of each subparticle
-            motl_subparticle.apply_rotation(rotation)
-
-            # Randomize in-plane angle
-            random_phi = np.random.rand(len(motl_subparticle.df)) * 360
-            motl_subparticle.fill({"phi": random_phi})
-
-            motl_subparticles.append(motl_subparticle)
-        
-        # merge all copies
-        output_motl = motl_subparticles[0]
-        for motl_subparticle in motl_subparticles[1:]:
-            output_motl = output_motl + motl_subparticle
-        
-        output_motl.df = output_motl.df.sort_values(by=[original_id_col, order_id_col],
-                                          ascending=[True, True]).reset_index(drop=True) # get particles sorted according to the original particle IDs and by their subunit extraction
-        output_motl.renumber_particles() # renumber the particles -> update subtomo_id
-
-        output_motl = cryomotl.motl_converter_kwargs(output_motl, output_motl_type, output_path=output_path, **output_kwargs)
-
-        return output_motl

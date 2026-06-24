@@ -371,6 +371,7 @@ def register_table_callbacks(app, prefix: str, csv_only=True, connected_motl_pre
             col_def = {
                 "field": col,
                 "headerName": col,
+                "headerTooltip": col,
                 "checkboxSelection": True if i == 0 else False,
                 "filter": True,
                 "floatingFilter": False,

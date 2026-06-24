@@ -215,9 +215,15 @@ def apply_settings_to_figure(fig_dict, settings):
             marker = trace.get("marker", {})
             if not isinstance(marker.get("color"), list):
                 trace.setdefault("marker", {})["color"] = color
-            line = trace.get("line", {})
-            if not isinstance(line.get("color"), list):
-                trace.setdefault("line", {})["color"] = color
+            if trace.get("type") in ("histogram", "violin", "box"):
+                # these trace types carry line styling inside marker.line, not top-level
+                mline = trace.setdefault("marker", {}).setdefault("line", {})
+                if not isinstance(mline.get("color"), list):
+                    mline["color"] = color
+            else:
+                line = trace.get("line", {})
+                if not isinstance(line.get("color"), list):
+                    trace.setdefault("line", {})["color"] = color
 
     if settings.get("continuous_palette"):
         scale = settings["continuous_palette"]

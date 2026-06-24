@@ -442,23 +442,23 @@ def test_matrix_dual_basis_so3():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
-    "fn, expected_count",
+    "cls, expected_count",
     [
-        (tetrahedron, 4),
-        (octahedron, 6),
-        (cube, 8),
-        (icosahedron, 12),
-        (dodecahedron, 20),
+        (Tetrahedron, 4),
+        (Octahedron, 6),
+        (Cube, 8),
+        (Icosahedron, 12),
+        (Dodecahedron, 20),
     ],
 )
-def test_platonic_vertex_count(fn, expected_count):
-    v = fn()
+def test_platonic_vertex_count(cls, expected_count):
+    v = cls().vertices
     assert v.shape == (expected_count, 3)
 
 
-@pytest.mark.parametrize("fn", [tetrahedron, octahedron, cube, icosahedron])
-def test_platonic_vertices_on_unit_sphere(fn):
-    v = fn()
+@pytest.mark.parametrize("cls", [Tetrahedron, Octahedron, Cube, Icosahedron])
+def test_platonic_vertices_on_unit_sphere(cls):
+    v = cls().vertices
     norms = np.linalg.norm(v, axis=1)
     assert np.allclose(norms, 1.0, atol=1e-10)
 
@@ -1412,28 +1412,16 @@ class TestCanonicalIcosahedronEdgesAndFaces:
 
     @pytest.fixture
     def sample_vertices(self):
-        return icosahedron()
+        return Icosahedron().vertices
 
     @pytest.fixture
-    def sample_edges(self, sample_vertices):
-        return icosahedron_edges(sample_vertices)
-
-    @pytest.fixture
-    def incorrect_vertices_coords(self):
-        return np.random.rand(10,3)
-
-    @pytest.fixture
-    def incorrect_edges_idx(self):
-        return np.random.rand(2,10)
-
-    def test_edges_incorrect_vertices_shape(self, incorrect_vertices_coords):
-        with pytest.raises(ValueError, match="12 vertices need to be provided"):
-            icosahedron_edges(incorrect_vertices_coords)
+    def sample_edges(self):
+        return Icosahedron()._edge_idx
 
     def test_edges_output_shape(self, sample_edges):
         assert isinstance(sample_edges, np.ndarray)
         assert sample_edges.shape == (30,2)
-    
+
     def test_equal_edge_lengths(self, sample_vertices, sample_edges):
         # look up the coordinates of each vertex using the indices
         start_vertices = sample_vertices[sample_edges[:, 0]]   # shape (30, 3)
@@ -1446,24 +1434,68 @@ class TestCanonicalIcosahedronEdgesAndFaces:
         counts = Counter(idx for edge in sample_edges for idx in edge)
         assert all(c == 5 for c in counts.values())
 
-    def test_faces_incorrect_edges_shape(self, sample_vertices, incorrect_edges_idx):
-        with pytest.raises(ValueError, match="12 vertices and 30 edges need to be provided"):
-            icosahedron_faces(sample_vertices, incorrect_edges_idx)
-    
-    def test_faces_incorrect_verts_shape(self, incorrect_vertices_coords, sample_edges):
-        with pytest.raises(ValueError, match="12 vertices and 30 edges need to be provided"):
-            icosahedron_faces(incorrect_vertices_coords, sample_edges)
-    
     def test_faces_output_shape(self, sample_vertices, sample_edges):
-        result = icosahedron_faces(sample_vertices, sample_edges)
+        result = np.array(Icosahedron()._face_groups)
         assert isinstance(result, np.ndarray)
         assert result.shape == (20, 3)
-    
+
     def test_equal_faces_area(self, sample_vertices, sample_edges):
-        faces = icosahedron_faces(sample_vertices, sample_edges)
+        faces = np.array(Icosahedron()._face_groups)
         v0 = sample_vertices[faces[:, 0]]                # shape (20, 3)
         v1 = sample_vertices[faces[:, 1]]                # shape (20, 3)
         v2 = sample_vertices[faces[:, 2]]                # shape (20, 3)
         cross = np.cross(v1 - v0, v2 - v0)       # shape (20, 3)
         areas = 0.5 * np.linalg.norm(cross, axis=1)   # shape (20,)
         assert np.allclose(areas, areas[0], atol=1e-6)
+
+
+class TestBarycenter:
+    def test_unweighted_centroid(self):
+        coords = np.array([[0.0, 0.0, 0.0], [2.0, 2.0, 2.0]])
+        np.testing.assert_allclose(barycenter(coords), [1.0, 1.0, 1.0])
+
+    def test_weighted_com(self):
+        coords = np.array([[0.0, 0.0, 0.0], [2.0, 2.0, 2.0]])
+        weights = np.array([1.0, 3.0])
+        np.testing.assert_allclose(barycenter(coords, weights), [1.5, 1.5, 1.5])
+
+    def test_single_point(self):
+        coords = np.array([[3.0, 4.0, 5.0]])
+        np.testing.assert_allclose(barycenter(coords), [3.0, 4.0, 5.0])
+
+    def test_raises_on_empty(self):
+        with pytest.raises(ValueError, match="empty"):
+            barycenter(np.zeros((0, 3)))
+
+    def test_raises_on_wrong_shape(self):
+        with pytest.raises(ValueError, match="shape"):
+            barycenter(np.ones((4, 2)))
+
+
+class TestAsSymmetryPlatonicGroups:
+    @pytest.mark.parametrize(
+        "source, expected",
+        [
+            ("T", ("T", 12)),
+            ("t", ("T", 12)),
+            ("O", ("O", 24)),
+            ("o", ("O", 24)),
+            ("I", ("I", 60)),
+            ("i", ("I", 60)),
+        ],
+    )
+    def test_platonic_groups(self, source, expected):
+        assert as_symmetry(source) == expected
+
+    @pytest.mark.parametrize("source", ["C5", "D3", 4])
+    def test_cyclic_dihedral_unchanged(self, source):
+        result = as_symmetry(source)
+        assert result[0] in ("C", "D")
+
+    def test_unknown_string_raises(self):
+        with pytest.raises(ValueError):
+            as_symmetry("X")
+
+    def test_no_digits_raises(self):
+        with pytest.raises(ValueError):
+            as_symmetry("C")

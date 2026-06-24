@@ -588,23 +588,23 @@ class SymmParticle(Particle):
         if isinstance(symm, str):
             if symm.__contains__("tetra"):
                 self.category = "tetrahedron"  # 1
-                vertices = geom.tetrahedron()
+                vertices = geom.Tetrahedron().vertices
                 platonic = True
             elif symm.__contains__("octa"):
                 self.category = "octahedron"  # 2
-                vertices = geom.octahedron()
+                vertices = geom.Octahedron().vertices
                 platonic = True
             elif symm.__contains__("cube"):
                 self.category = "cube"  # 3
-                vertices = geom.cube()
+                vertices = geom.Cube().vertices
                 platonic = True
             elif symm.__contains__("ico"):
                 self.category = "icosahedron"  # 4
-                vertices = geom.icosahedron()
+                vertices = geom.Icosahedron().vertices
                 platonic = True
             elif symm.__contains__("dodeca"):
                 self.category = "dodecahedron"  # 5
-                vertices = geom.dodecahedron()
+                vertices = geom.Dodecahedron().vertices
                 platonic = True
             elif symm.startswith("c"):
                 self.category = int(re.findall(r"\d+", symm)[-1])
