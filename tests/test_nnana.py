@@ -83,7 +83,7 @@ def test_get_nn_stats(motl, column_name, rotation_type):
     df = df.round(4)
     df.reset_index(inplace=True, drop=True)
 
-    pd.testing.assert_frame_equal(df, exp_df, atol=1e-10)
+    pd.testing.assert_frame_equal(df, exp_df, atol=1e-10, check_dtype=False)
 
 
 @pytest.mark.parametrize(
@@ -585,9 +585,201 @@ def test_nn_get_angular_distances_returns_array():
 def test_nn_get_nn_subset_filters_by_motl_id_and_feature():
     """Subsetting by an existing (motl_id, tomo_id) pair returns a non-empty NearestNeighbors."""
     nn = _nn_from_two_particle_motl()
-    # The class stores the partition column on .feature_id when subsetting; we
-    # exercise the happy path matching the only present motl_id (1) and tomo_id (1).
-    nn.feature_id = "tomo_id"
     sub = nn.get_nn_subset(motl_id_values=1, column_values=1)
     assert isinstance(sub, nnana.NearestNeighbors)
     assert sub.df is not None and len(sub.df) > 0
+
+
+# =============================================================================
+# Helpers for new tests
+# =============================================================================
+
+
+def _four_particle_motl_two_objects():
+    """4 particles: 2 in object 1, 2 in object 2, all tomo_id=1.
+    Particle distances: p1-p2=3 (same obj), p1-p3=4 (diff obj), p2-p4=4 (diff obj).
+    """
+    df = cryomotl.Motl.create_empty_motl_df()
+    rows = [
+        {"subtomo_id": 1, "tomo_id": 1, "object_id": 1, "class": 1,
+         "x": 0., "y": 0., "z": 0., "shift_x": 0., "shift_y": 0., "shift_z": 0.,
+         "phi": 0., "theta": 0., "psi": 0., "score": 1.},
+        {"subtomo_id": 2, "tomo_id": 1, "object_id": 1, "class": 1,
+         "x": 3., "y": 0., "z": 0., "shift_x": 0., "shift_y": 0., "shift_z": 0.,
+         "phi": 10., "theta": 0., "psi": 0., "score": 1.},
+        {"subtomo_id": 3, "tomo_id": 1, "object_id": 2, "class": 1,
+         "x": 4., "y": 0., "z": 0., "shift_x": 0., "shift_y": 0., "shift_z": 0.,
+         "phi": 20., "theta": 0., "psi": 0., "score": 1.},
+        {"subtomo_id": 4, "tomo_id": 1, "object_id": 2, "class": 1,
+         "x": 7., "y": 0., "z": 0., "shift_x": 0., "shift_y": 0., "shift_z": 0.,
+         "phi": 30., "theta": 0., "psi": 0., "score": 1.},
+    ]
+    return cryomotl.Motl(motl_df=pd.concat([df, pd.DataFrame(rows)], ignore_index=True))
+
+
+# =============================================================================
+# TestDtypes
+# =============================================================================
+
+
+class TestDtypes:
+    """int32 ids, float32 geometry after construction."""
+
+    def test_int_columns_are_int32(self):
+        m = _two_particle_motl()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        for col in ("motl_id", "tomo_id", "qp_id", "qp_subtomo_id", "nn_id", "nn_subtomo_id"):
+            assert nn.df[col].dtype == np.int32, f"{col} should be int32"
+
+    def test_float_columns_are_float32(self):
+        m = _two_particle_motl()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        for col in ("qp_angles_phi", "qp_coord_x", "nn_angles_phi", "nn_coord_x", "nn_dist"):
+            assert nn.df[col].dtype == np.float32, f"{col} should be float32"
+
+    def test_radius_mode_no_nn_dist(self):
+        m = _two_particle_motl()
+        nn = nnana.NearestNeighbors(m, nn_type="radius", type_param=5.0)
+        assert "nn_dist" not in nn.df.columns
+        for col in ("qp_angles_phi", "qp_coord_x"):
+            assert nn.df[col].dtype == np.float32
+
+
+# =============================================================================
+# TestMotls
+# =============================================================================
+
+
+class TestMotls:
+    """self.motls stores live references."""
+
+    def test_motls_set_after_construction(self):
+        m = _two_particle_motl()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        assert nn.motls is not None
+        assert len(nn.motls) == 2  # [query, nn_motl] (same object for single-motl)
+
+    def test_motls_none_when_no_input(self):
+        nn = nnana.NearestNeighbors()
+        assert nn.motls is None
+
+
+# =============================================================================
+# TestAddMotlColumns
+# =============================================================================
+
+
+class TestAddMotlColumns:
+    def test_qp_object_id_matches_source(self):
+        m = _four_particle_motl_two_objects()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        nn.add_motl_columns("object_id")
+        expected = m.df.set_index("subtomo_id")["object_id"]
+        for _, row in nn.df.iterrows():
+            assert row["qp_object_id"] == expected[row["qp_subtomo_id"]]
+
+    def test_nn_object_id_matches_source(self):
+        m = _four_particle_motl_two_objects()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        nn.add_motl_columns("object_id")
+        expected = m.df.set_index("subtomo_id")["object_id"]
+        for _, row in nn.df.iterrows():
+            assert row["nn_object_id"] == expected[row["nn_subtomo_id"]]
+
+    def test_qp_side_only(self):
+        m = _four_particle_motl_two_objects()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        nn.add_motl_columns("object_id", sides="qp")
+        assert "qp_object_id" in nn.df.columns
+        assert "nn_object_id" not in nn.df.columns
+
+    def test_raises_when_motls_is_none(self):
+        nn = nnana.NearestNeighbors()
+        nn.motls = None
+        with pytest.raises(RuntimeError, match="No source motls"):
+            nn.add_motl_columns("object_id")
+
+    def test_raises_when_column_missing(self):
+        m = _four_particle_motl_two_objects()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        with pytest.raises(KeyError):
+            nn.add_motl_columns("nonexistent_column")
+
+    def test_idempotent_overwrite(self):
+        m = _four_particle_motl_two_objects()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        nn.add_motl_columns("object_id")
+        nn.add_motl_columns("object_id")  # should not raise or duplicate columns
+        assert "qp_object_id" in nn.df.columns
+
+
+# =============================================================================
+# TestExcludeColumnName
+# =============================================================================
+
+
+class TestExcludeColumnName:
+    """Particles in the same object are excluded from NN candidates."""
+
+    def test_closest_dist_excludes_same_object(self):
+        m = _four_particle_motl_two_objects()
+        nn = nnana.NearestNeighbors(
+            m, nn_type="closest_dist", type_param=1,
+            exclude_column_name="object_id",
+        )
+        nn.add_motl_columns("object_id")
+        # Every returned NN must belong to a different object than qp
+        assert (nn.df["qp_object_id"] != nn.df["nn_object_id"]).all()
+
+    def test_radius_excludes_same_object(self):
+        m = _four_particle_motl_two_objects()
+        # radius=5 would normally catch same-object neighbors (distance=3)
+        nn = nnana.NearestNeighbors(
+            m, nn_type="radius", type_param=5.0,
+            exclude_column_name="object_id",
+        )
+        nn.add_motl_columns("object_id")
+        assert (nn.df["qp_object_id"] != nn.df["nn_object_id"]).all()
+
+    def test_same_column_warns(self):
+        m = _two_particle_motl()
+        with pytest.warns(UserWarning):
+            nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1,
+                                   exclude_column_name="tomo_id")
+
+
+# =============================================================================
+# TestGetNnSubsetFixed
+# =============================================================================
+
+
+class TestGetNnSubsetFixed:
+    """get_nn_subset: feature_id bug fixed, motls propagated."""
+
+    def test_subset_returns_nonempty(self):
+        m = _two_particle_motl()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        sub = nn.get_nn_subset(motl_id_values=1, column_values=1)
+        assert sub.df is not None and len(sub.df) > 0
+
+    def test_subset_carries_motls(self):
+        m = _two_particle_motl()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        sub = nn.get_nn_subset(motl_id_values=1, column_values=1)
+        assert sub.motls is nn.motls
+
+    def test_scalar_and_list_give_same_result(self):
+        m = _two_particle_motl()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        sub1 = nn.get_nn_subset(motl_id_values=1, column_values=1)
+        sub2 = nn.get_nn_subset(motl_id_values=[1], column_values=[1])
+        pd.testing.assert_frame_equal(sub1.df.reset_index(drop=True),
+                                      sub2.df.reset_index(drop=True))
+
+    def test_subset_add_motl_columns_works(self):
+        """add_motl_columns should work on subsets since motls are propagated."""
+        m = _four_particle_motl_two_objects()
+        nn = nnana.NearestNeighbors(m, nn_type="closest_dist", type_param=1)
+        sub = nn.get_nn_subset(motl_id_values=1, column_values=1)
+        sub.add_motl_columns("object_id")  # must not raise
+        assert "qp_object_id" in sub.df.columns

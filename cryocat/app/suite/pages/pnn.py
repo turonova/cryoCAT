@@ -5,6 +5,9 @@ Computation is decoupled from clustering:
 * **Compute NN analysis** -- builds the per-pair table from the suite-pool
   motl(s) using ``NearestNeighbors`` with the auto-generated parameter form,
   optionally adds angular-distance columns, and renders the xyz panels.
+* **Post-processing** -- enriches the existing NN table without recomputing:
+  pulls extra columns from source motls via ``add_motl_columns``, or adds
+  angular / Euclidean distances after the fact.
 * **Clustering** -- K-means or proximity clustering on the NN result columns.
   Select the clustering type in the sidebar accordion; parameters and results
   appear in the main area below the scatter panels.
@@ -30,14 +33,14 @@ from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
 
 
-
 _MOTL_COL_OPTIONS = [{"label": c, "value": c} for c in Motl.motl_columns]
+_NN_TRANSFER_EXCLUDE = {"motl_id", "qp_id", "nn_id"}
 
 
 # ── Layout ──────────────────────────────────────────────────────────────────────
 
 def _create_motl_sidebar_content():
-    """Sidebar content for the 'Create motl from selection' accordion item."""
+    """Sidebar content for the 'Create motl from NN table' accordion item."""
     hint = {"fontSize": "0.8rem", "color": "var(--color9)", "marginBottom": "0.4rem"}
     lbl = {"fontWeight": "bold", "fontSize": "0.85rem", "marginBottom": "0.2rem"}
     return html.Div(
@@ -103,18 +106,21 @@ def _create_motl_sidebar_content():
             html.Div(
                 [
                     html.Hr(style={"margin": "0.4rem 0"}),
-                    html.Label("Transfer extra columns:", style=lbl),
-                    dcc.Checklist(
-                        id="nn-cluster-col-checklist",
+                    html.Label("Transfer NN columns to motl:", style=lbl),
+                    html.P(
+                        "Select columns from the NN table to carry over. "
+                        "Map each to a target motl column.",
+                        style=hint,
+                    ),
+                    dcc.Dropdown(
+                        id="nn-sel-nn-cols",
                         options=[],
                         value=[],
-                        labelStyle={
-                            "display": "block",
-                            "marginBottom": "0.2rem",
-                            "fontSize": "0.85rem",
-                        },
+                        multi=True,
+                        placeholder="Select NN columns to transfer…",
+                        style={"marginBottom": "0.4rem"},
                     ),
-                    html.Div(id="nn-cluster-target-rows"),
+                    html.Div(id="nn-sel-nn-col-target-rows"),
                 ],
                 id="nn-cluster-transfer-wrap",
                 style={"display": "none"},
@@ -152,6 +158,80 @@ def _create_motl_sidebar_content():
                 id="nn-sel-motl-status",
                 style={"fontSize": "0.85rem", "color": "var(--color9)",
                        "marginTop": "0.4rem", "wordBreak": "break-word"},
+            ),
+        ]
+    )
+
+
+def _postprocess_sidebar_content():
+    """Sidebar content for the 'Post-processing' accordion item."""
+    hint = {"fontSize": "0.8rem", "color": "var(--color9)", "marginBottom": "0.4rem"}
+    lbl = {"fontWeight": "bold", "fontSize": "0.85rem", "marginBottom": "0.2rem"}
+    return html.Div(
+        [
+            html.Label("Add columns from source motls:", style=lbl),
+            html.P(
+                "Enrich the NN table with extra columns pulled from the original motls. "
+                "Columns are added as qp_<col> and/or nn_<col>.",
+                style=hint,
+            ),
+            dcc.Dropdown(
+                id="nn-pp-add-cols",
+                options=_MOTL_COL_OPTIONS,
+                multi=True,
+                placeholder="Select motl columns to add…",
+                style={"marginBottom": "0.3rem"},
+            ),
+            html.Label("Add for sides:", style={"fontSize": "0.85rem", "marginBottom": "0.2rem"}),
+            dbc.Checklist(
+                id="nn-pp-sides",
+                options=[
+                    {"label": "Query particle (qp)", "value": "qp"},
+                    {"label": "Neighbor (nn)", "value": "nn"},
+                ],
+                value=["qp", "nn"],
+                inline=True,
+                labelStyle={"fontSize": "0.85rem"},
+                style={"marginBottom": "0.5rem"},
+            ),
+            html.Hr(style={"margin": "0.4rem 0"}),
+            dbc.Checkbox(
+                id="nn-pp-angular-toggle",
+                label="Add angular distances",
+                value=False,
+                style={"marginBottom": "0.3rem"},
+            ),
+            html.Div(
+                build_form(
+                    NearestNeighbors.get_angular_distances,
+                    id_type="nn-forms-params",
+                    id_extra={"cls_name": "nn-pp-angular"},
+                ),
+                id="nn-pp-angular-form-wrap",
+                style={"display": "none"},
+            ),
+            html.Hr(style={"margin": "0.4rem 0"}),
+            dbc.Checkbox(
+                id="nn-pp-dist-toggle",
+                label="Add NN distances",
+                value=False,
+                style={"marginBottom": "0.5rem"},
+            ),
+            dbc.Button(
+                "Apply",
+                id="nn-pp-apply-btn",
+                color="primary",
+                size="sm",
+                style={"width": "100%"},
+            ),
+            html.Div(
+                id="nn-pp-status",
+                style={
+                    "fontSize": "0.85rem",
+                    "color": "var(--color9)",
+                    "marginTop": "0.4rem",
+                    "wordBreak": "break-word",
+                },
             ),
         ]
     )
@@ -215,8 +295,61 @@ def _sidebar():
                                         NearestNeighbors,
                                         id_type="nn-forms-params",
                                         id_extra={"cls_name": "nn-params"},
-                                        exclude=["input_data", "nn_type"],
+                                        exclude=["input_data", "nn_type", "exclude_column_name"],
                                     ),
+                                ),
+                                # exclude_column_name: clearable motl-column dropdown (None by default)
+                                html.Div(
+                                    [
+                                        html.Div(
+                                            [
+                                                html.Label(
+                                                    "Exclude column name (opt.)",
+                                                    id="nn-excl-col-lbl",
+                                                    style={"fontSize": "0.85rem", "margin": 0},
+                                                ),
+                                                dbc.Tooltip(
+                                                    "When set, NN candidates sharing the query "
+                                                    "particle's value in this column are excluded. "
+                                                    "For closest-distance (k-NN) mode the row count "
+                                                    "is unchanged (k neighbors are still returned, "
+                                                    "just from different objects) and distances "
+                                                    "typically increase. For radius mode the row "
+                                                    "count can decrease because excluded candidates "
+                                                    "are simply dropped.",
+                                                    target="nn-excl-col-lbl",
+                                                    placement="right",
+                                                ),
+                                            ],
+                                            style={
+                                                "width": "45%", "display": "flex",
+                                                "alignItems": "center", "boxSizing": "border-box",
+                                                "paddingRight": "4px",
+                                            },
+                                        ),
+                                        html.Div(
+                                            dcc.Dropdown(
+                                                id={
+                                                    "type": "nn-forms-params",
+                                                    "param": "exclude_column_name",
+                                                    "tag": "Literal",
+                                                    "cls_name": "nn-params",
+                                                },
+                                                options=_MOTL_COL_OPTIONS,
+                                                value=None,
+                                                clearable=True,
+                                                searchable=True,
+                                                placeholder="None (optional)",
+                                                style={"width": "100%"},
+                                            ),
+                                            style={"width": "55%"},
+                                        ),
+                                    ],
+                                    style={
+                                        "display": "flex", "flexDirection": "row",
+                                        "marginBottom": "0.25rem", "width": "100%",
+                                        "alignItems": "center",
+                                    },
                                 ),
                                 html.Div(
                                     dbc.Checkbox(
@@ -263,8 +396,13 @@ def _sidebar():
                             item_id="nn-acc-params",
                         ),
                         dbc.AccordionItem(
+                            _postprocess_sidebar_content(),
+                            title="Post-processing",
+                            item_id="nn-acc-postprocess",
+                        ),
+                        dbc.AccordionItem(
                             _create_motl_sidebar_content(),
-                            title="Create motl from selection",
+                            title="Create motl from NN table",
                             item_id="nn-acc-create",
                         ),
                     ],
@@ -341,6 +479,7 @@ def register_callbacks(app):
         table_grid_id="nn-out-tabv-grid",
         cluster_cols_store_id="nn-cluster-cols-store",
     )
+
     @app.callback(
         Output("nn-dist-toggle-wrap", "style"),
         Input({"type": "nn-forms-params", "param": "nn_type", "tag": "Literal", "cls_name": "nn-params"}, "value"),
@@ -348,36 +487,29 @@ def register_callbacks(app):
     def _toggle_dist_form(nn_type):
         return {"display": "block"} if nn_type == "radius" else {"display": "none"}
 
-    _NN_EXTRA_COLS = ["nn_dist", "angular_distance", "cone_distance", "in_plane_distance"]
-
     @app.callback(
-        Output("nn-cluster-col-checklist", "options"),
-        Output("nn-cluster-col-checklist", "value"),
+        Output("nn-sel-nn-cols", "options"),
         Output("nn-cluster-transfer-wrap", "style"),
-        Input("nn-cluster-cols-store", "data"),
         Input("nn-out-tabv-global-data-store", "data"),
     )
-    def _update_cluster_transfer_ui(cluster_cols, table_data):
-        available = []
-        if table_data:
-            df_cols = set(pd.DataFrame(table_data).columns)
-            for col in _NN_EXTRA_COLS:
-                if col in df_cols:
-                    available.append(col)
-        if cluster_cols:
-            for col in cluster_cols:
-                if col not in available:
-                    available.append(col)
-        if not available:
-            return [], [], {"display": "none"}
-        opts = [{"label": c, "value": c} for c in available]
-        return opts, list(available), {"display": "block"}
+    def _update_nn_col_transfer_options(table_data):
+        if not table_data:
+            return [], {"display": "none"}
+        df_cols = pd.DataFrame(table_data).columns.tolist()
+        opts = [
+            {"label": c, "value": c}
+            for c in df_cols
+            if c not in _NN_TRANSFER_EXCLUDE
+        ]
+        if not opts:
+            return [], {"display": "none"}
+        return opts, {"display": "block"}
 
     @app.callback(
-        Output("nn-cluster-target-rows", "children"),
-        Input("nn-cluster-col-checklist", "value"),
+        Output("nn-sel-nn-col-target-rows", "children"),
+        Input("nn-sel-nn-cols", "value"),
     )
-    def _build_cluster_target_rows(selected_cols):
+    def _build_nn_col_target_rows(selected_cols):
         if not selected_cols:
             return []
         rows = []
@@ -395,7 +527,7 @@ def register_callbacks(app):
                             },
                         ),
                         dcc.Dropdown(
-                            id={"type": "nn-cluster-target", "col": col},
+                            id={"type": "nn-sel-nn-col-target", "col": col},
                             options=_MOTL_COL_OPTIONS,
                             placeholder="Motl column…",
                             searchable=True,
@@ -418,6 +550,13 @@ def register_callbacks(app):
         Input("nn-angular-toggle", "value"),
     )
     def _toggle_angular_form(angular_on):
+        return {"display": "block"} if angular_on else {"display": "none"}
+
+    @app.callback(
+        Output("nn-pp-angular-form-wrap", "style"),
+        Input("nn-pp-angular-toggle", "value"),
+    )
+    def _toggle_pp_angular_form(angular_on):
         return {"display": "block"} if angular_on else {"display": "none"}
 
     # ── Compute NN: fills the table and the xyz panel. ────────────────────────
@@ -467,11 +606,12 @@ def register_callbacks(app):
         status_bits = []
         if nn_kwargs.get("nn_type") == "closest_dist" and "nn_dist" in nn_stats.df:
             status_bits.append(
+                f"{len(nn_stats.df)} rows — "
                 f"Mean distance: {nn_stats.df['nn_dist'].mean():.3f}; "
                 f"Median distance: {nn_stats.df['nn_dist'].median():.3f}"
             )
         else:
-            status_bits.append(f"NN analysis complete - {len(nn_stats.df)} neighbor rows.")
+            status_bits.append(f"NN analysis complete — {len(nn_stats.df)} neighbor rows.")
 
         if compute_dist and nn_kwargs.get("nn_type") == "radius":
             try:
@@ -518,6 +658,104 @@ def register_callbacks(app):
             xyz_graph, table_data, " | ".join(status_bits), table_data,
             used_motls_store,
         )
+
+    # ── Post-processing: enrich existing NN table without recomputing. ────────
+    @app.callback(
+        Output("nn-result", "data", allow_duplicate=True),
+        Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
+        Output("nn-pp-status", "children"),
+        Input("nn-pp-apply-btn", "n_clicks"),
+        State("nn-result", "data"),
+        State("nn-used-motls-store", "data"),
+        State("pool-motls", "data"),
+        State("nn-pp-add-cols", "value"),
+        State("nn-pp-sides", "value"),
+        State("nn-pp-angular-toggle", "value"),
+        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        State("nn-pp-dist-toggle", "value"),
+        prevent_initial_call=True,
+    )
+    def _apply_postprocessing(
+        n_clicks, nn_result, used_motls, pool_motls,
+        add_cols, sides, angular_on, param_values, param_ids, dist_on,
+    ):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        if not nn_result:
+            return no_update, no_update, "Run NN analysis first."
+
+        df = pd.DataFrame(nn_result)
+        status_bits = []
+
+        # Add columns from source motls via add_motl_columns
+        if add_cols:
+            if not used_motls:
+                status_bits.append("Cannot add motl columns: no NN run found.")
+            else:
+                all_names = used_motls.get("names", [])
+                is_multi = used_motls.get("is_multi", False)
+                pool_motls = pool_motls or {}
+                motl_list = [
+                    Motl(pd.DataFrame(pool_motls[name]))
+                    for name in all_names
+                    if pool_motls.get(name)
+                ]
+                # Single-motl NearestNeighbors stores motls=[motl, motl] so that
+                # motls[motl_id=1] is valid; mirror that here.
+                if not is_multi and len(motl_list) == 1:
+                    motl_list = [motl_list[0], motl_list[0]]
+                if not motl_list:
+                    status_bits.append("Cannot add motl columns: source motls not in pool.")
+                else:
+                    try:
+                        nn_obj = NearestNeighbors(input_data=None)
+                        nn_obj.df = df
+                        nn_obj.motls = motl_list
+                        active_sides = sides or ["qp", "nn"]
+                        nn_obj.add_motl_columns(add_cols, sides=active_sides, add_to_df=True)
+                        df = nn_obj.df
+                        status_bits.append(f"Added {len(add_cols)} column(s) from source motls.")
+                    except Exception as exc:
+                        status_bits.append(f"add_motl_columns failed: {exc}")
+
+        # Add angular distances
+        if angular_on:
+            try:
+                angular_kwargs = _kwargs_by_cls(param_ids, param_values, "nn-pp-angular")
+                rot_type = angular_kwargs.get("rotation_type", "angular_distance")
+                nn_obj = NearestNeighbors(input_data=None)
+                nn_obj.df = df
+                ang = nn_obj.get_angular_distances(rotation_type=rot_type)
+                if rot_type == "all":
+                    df["angular_distance"] = ang[0]
+                    df["cone_distance"] = ang[1]
+                    df["in_plane_distance"] = ang[2]
+                    status_bits.append("Angular distances: all 3 metrics added.")
+                else:
+                    df[rot_type] = ang
+                    status_bits.append(f"Angular distance ({rot_type}) added.")
+            except Exception as exc:
+                status_bits.append(f"Angular distances failed: {exc}")
+
+        # Add Euclidean NN distances from stored coordinates
+        if dist_on:
+            try:
+                qp = df[["qp_coord_x", "qp_coord_y", "qp_coord_z"]].to_numpy()
+                nn = df[["nn_coord_x", "nn_coord_y", "nn_coord_z"]].to_numpy()
+                df["nn_dist"] = np.linalg.norm(nn - qp, axis=1)
+                status_bits.append(
+                    f"NN distances added — mean: {df['nn_dist'].mean():.3f}, "
+                    f"median: {df['nn_dist'].median():.3f}."
+                )
+            except Exception as exc:
+                status_bits.append(f"NN distances failed: {exc}")
+
+        if not status_bits:
+            return no_update, no_update, "Nothing selected."
+
+        new_data = df.to_dict("records")
+        return new_data, new_data, " | ".join(status_bits)
 
     # ── Create motl from selection (sidebar) ────────────────────────────────────
 
@@ -581,9 +819,9 @@ def register_callbacks(app):
         State("pool-motls", "data"),
         State("pool-registry", "data"),
         State("pool-next-id", "data"),
-        State("nn-cluster-col-checklist", "value"),
-        State({"type": "nn-cluster-target", "col": ALL}, "value"),
-        State({"type": "nn-cluster-target", "col": ALL}, "id"),
+        State("nn-sel-nn-cols", "value"),
+        State({"type": "nn-sel-nn-col-target", "col": ALL}, "value"),
+        State({"type": "nn-sel-nn-col-target", "col": ALL}, "id"),
         prevent_initial_call=True,
     )
     def _build_and_act(
@@ -591,7 +829,7 @@ def register_callbacks(app):
         selected_rows, all_rows, rows_mode,
         checked_motls, used_motls, id_type, id_col,
         save_path, editor_label, pool_motls, registry, next_id,
-        cluster_cols, cluster_target_vals, cluster_target_ids,
+        nn_cols, nn_col_target_vals, nn_col_target_ids,
     ):
         trigger = ctx.triggered_id
         rows_mode = rows_mode or "all"
@@ -611,18 +849,17 @@ def register_callbacks(app):
         is_multi = used_motls.get("is_multi", False)
         pool_motls = pool_motls or {}
 
-        # Build cluster column mapping: {source_cluster_col: target_motl_col}
+        # Build NN-column → motl-column mapping
         col_mapping = {}
-        if cluster_cols and cluster_target_vals:
-            for tid, tval in zip(cluster_target_ids, cluster_target_vals):
+        if nn_cols and nn_col_target_vals:
+            for tid, tval in zip(nn_col_target_ids, nn_col_target_vals):
                 src = tid.get("col")
-                if src and src in cluster_cols and tval:
+                if src and src in nn_cols and tval:
                     col_mapping[src] = tval
-            # Validate no duplicate targets
             used_targets = list(col_mapping.values())
             if len(used_targets) != len(set(used_targets)):
                 return (
-                    "Two cluster columns cannot map to the same motl column.",
+                    "Two NN columns cannot map to the same motl column.",
                     no_update, no_update, no_update,
                 )
 
@@ -661,13 +898,13 @@ def register_callbacks(app):
                     slice_df = sel_df
                 for src_col, dst_col in col_mapping.items():
                     if src_col in slice_df.columns:
-                        id_to_cluster = (
+                        id_to_val = (
                             slice_df.drop_duplicates(subset=[id_col_nn])
                             .set_index(id_col_nn)[src_col]
                             .dropna()
                             .to_dict()
                         )
-                        subset[dst_col] = subset["subtomo_id"].map(id_to_cluster)
+                        subset[dst_col] = subset["subtomo_id"].map(id_to_val)
             if len(subset) == 0:
                 continue
             if id_col and len(checked_motls) > 1:

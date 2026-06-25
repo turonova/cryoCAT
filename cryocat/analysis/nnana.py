@@ -36,6 +36,7 @@ from scipy.spatial.transform import Rotation as srot
 
 from cryocat._types import (
     ArrayLike,
+    ListLike,
     MapSource,
     MotlColumn,
     NNType,
@@ -61,6 +62,8 @@ def find_nn_indices(
     coords_nn: ArrayLike,
     k: int = 1,
     remove_qp: bool = False,
+    qp_labels: np.ndarray | None = None,
+    nn_labels: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """k-nearest-neighbor search on raw coordinate arrays.
 
@@ -75,6 +78,12 @@ def find_nn_indices(
     remove_qp : bool, default=False
         Set to True when ``coords_qp is coords_nn`` (or otherwise share
         particles) and the trivial zero-distance self-match should be dropped.
+    qp_labels : numpy.ndarray or None, optional
+        Shape ``(N,)``.  Label for each query particle.
+    nn_labels : numpy.ndarray or None, optional
+        Shape ``(M,)``.  Label for each candidate.  When both *qp_labels* and
+        *nn_labels* are given, candidate ``j`` is excluded from query ``i``'s
+        result when ``nn_labels[j] == qp_labels[i]``.
 
     Returns
     -------
@@ -101,6 +110,36 @@ def find_nn_indices(
     nn_idx = np.atleast_2d(nn_idx)
     qp_idx = np.arange(nn_idx.shape[0])
 
+    if qp_labels is not None and nn_labels is not None:
+        max_group = int(np.bincount(nn_labels.astype(int)).max()) if len(nn_labels) else 0
+        over_k = min(k + int(remove_qp) + max_group, coords_nn.shape[0])
+        kdt2 = sn.KDTree(coords_nn)
+        nn_dist_over, nn_idx_over = kdt2.query(coords_qp, k=over_k)
+        nn_dist_over = np.atleast_2d(nn_dist_over)
+        nn_idx_over = np.atleast_2d(nn_idx_over)
+        # Drop self-match and same-label candidates per row; keep first k
+        kept_idx = []
+        kept_dist = []
+        for i in range(nn_idx_over.shape[0]):
+            row_idx = nn_idx_over[i]
+            row_dist = nn_dist_over[i]
+            mask = np.ones(len(row_idx), dtype=bool)
+            if remove_qp:
+                mask &= row_idx != i
+            mask &= nn_labels[row_idx] != qp_labels[i]
+            row_idx = row_idx[mask][:k]
+            row_dist = row_dist[mask][:k]
+            kept_idx.append(row_idx)
+            kept_dist.append(row_dist)
+        # Pad to k if exhausted
+        k_eff = k
+        nn_idx = np.zeros((len(kept_idx), k), dtype=int)
+        nn_dist = np.zeros((len(kept_dist), k))
+        for i, (ri, rd) in enumerate(zip(kept_idx, kept_dist)):
+            nn_idx[i, :len(ri)] = ri
+            nn_dist[i, :len(rd)] = rd
+        return np.arange(nn_idx.shape[0]), nn_idx, nn_dist, k_eff
+
     if remove_qp:
         nn_dist = nn_dist[:, 1 : k + 1]
         nn_idx = nn_idx[:, 1 : k + 1]
@@ -113,6 +152,8 @@ def find_nn_within_radius(
     coords_nn: ArrayLike,
     radius: float,
     remove_qp: bool = False,
+    qp_labels: np.ndarray | None = None,
+    nn_labels: np.ndarray | None = None,
 ) -> tuple[list[int], list[np.ndarray]]:
     """Radius search on raw coordinate arrays.
 
@@ -125,6 +166,12 @@ def find_nn_within_radius(
     remove_qp : bool, default=False
         Drop self-matches (only meaningful when query and reference are the
         same set).
+    qp_labels : numpy.ndarray or None, optional
+        Shape ``(N,)``.  Label for each query particle.
+    nn_labels : numpy.ndarray or None, optional
+        Shape ``(M,)``.  Label for each candidate.  When both *qp_labels* and
+        *nn_labels* are given, candidate ``j`` is excluded from query ``i``'s
+        result when ``nn_labels[j] == qp_labels[i]``.
 
     Returns
     -------
@@ -143,6 +190,8 @@ def find_nn_within_radius(
     for i, neighbors in enumerate(raw):
         if remove_qp:
             neighbors = neighbors[neighbors != i]
+        if qp_labels is not None and nn_labels is not None:
+            neighbors = neighbors[nn_labels[neighbors] != qp_labels[i]]
         if len(neighbors) > 0:
             qp_idx.append(i)
             nn_idx.append(np.sort(neighbors))
@@ -415,6 +464,16 @@ class NearestNeighbors:
         Drop duplicate ``(qp_id, nn_id)`` pairs from the resulting table.
     paired : bool, default=False
         If True, angles are taken from ``motl_a`` only (entry/exit pairs).
+    exclude_column_name : str or None, default=None
+        When set, NN candidates sharing the query particle's value in this
+        column are excluded from the result.  See also :meth:`add_motl_columns`.
+
+    Notes
+    -----
+    ``self.motls`` holds live references to the loaded Motl objects
+    (``motls[0]`` = query, ``motls[1:]`` = neighbour motls).  Mutating the
+    originals is visible here; call ``motl.copy()`` explicitly if you need a
+    snapshot.
     """
 
     _QP_COORD_COLS = ["qp_coord_x", "qp_coord_y", "qp_coord_z"]
@@ -433,16 +492,28 @@ class NearestNeighbors:
         remove_qp: bool | None = None,
         remove_duplicates: bool = False,
         paired: bool = False,
+        exclude_column_name: MotlColumn | None = None,
     ) -> None:
         if input_data is None:
             self.features = None
             self.df = None
+            self.motls = None
             self.column_name = column_name
             self.paired = paired
+            self.exclude_column_name = exclude_column_name
             return
 
         self.column_name = column_name
         self.paired = paired
+        self.exclude_column_name = exclude_column_name
+
+        if exclude_column_name is not None and exclude_column_name == column_name:
+            import warnings
+            warnings.warn(
+                f"exclude_column_name={exclude_column_name!r} is the same as column_name; "
+                "this excludes the entire partition (all candidates share the feature label).",
+                UserWarning, stacklevel=2,
+            )
 
         if not isinstance(input_data, list):
             motl_list = [cryomotl.Motl.load(input_data), cryomotl.Motl.load(input_data)]
@@ -480,12 +551,17 @@ class NearestNeighbors:
                 nn_coord = fm_nn.get_coordinates()
                 nn_angles = qp_angles if paired else fm_nn.get_angles()
 
+                qp_labels = fm_qp.df[exclude_column_name].values if exclude_column_name else None
+                nn_labels = fm_nn.df[exclude_column_name].values if exclude_column_name else None
+
                 if nn_type == "closest_dist":
                     # type_param is the K of K-nearest neighbours; sklearn's
                     # kneighbors needs an int, but the GUI form yields a float.
                     nn_count = int(type_param) if type_param else 1
                     qp_idx, nn_idx, nn_dist, _ = find_nn_indices(
-                        qp_coord, nn_coord, k=nn_count, remove_qp=single_motl or paired
+                        qp_coord, nn_coord, k=nn_count,
+                        remove_qp=single_motl or paired,
+                        qp_labels=qp_labels, nn_labels=nn_labels,
                     )
                     stacked = self._stack_nn_results(
                         motl_idx, f, qp_idx, nn_idx,
@@ -497,7 +573,9 @@ class NearestNeighbors:
                 elif nn_type == "radius":
                     radius = type_param or 1
                     qp_idx, nn_idx_list = find_nn_within_radius(
-                        qp_coord, nn_coord, radius=radius, remove_qp=single_motl or paired
+                        qp_coord, nn_coord, radius=radius,
+                        remove_qp=single_motl or paired,
+                        qp_labels=qp_labels, nn_labels=nn_labels,
                     )
                     stacked = self._stack_nn_results_radius(
                         motl_idx, f, qp_idx, nn_idx_list,
@@ -517,9 +595,23 @@ class NearestNeighbors:
             pd.DataFrame(columns=columns) if not results
             else pd.DataFrame(np.vstack(results), columns=columns)
         )
+
+        int_cols = ["motl_id", column_name, "qp_id", "qp_subtomo_id", "nn_id", "nn_subtomo_id"]
+        float_cols = [
+            *self._QP_ANGLE_COLS, *self._QP_COORD_COLS,
+            *self._NN_ANGLE_COLS, *self._NN_COORD_COLS,
+        ]
+        if nn_type == "closest_dist":
+            float_cols.append("nn_dist")
+        if not self.df.empty:
+            self.df = self.df.astype(
+                {**{c: np.int32 for c in int_cols}, **{c: np.float32 for c in float_cols}}
+            )
+
         if remove_duplicates:
             self.df = self.drop_symmetric_duplicates()
         self.features = features
+        self.motls = motl_list
 
     @staticmethod
     def _stack_nn_results(
@@ -671,7 +763,7 @@ class NearestNeighbors:
 
     def get_nn_subset(
         self,
-        motl_id_values: int | list[int],
+        motl_id_values: "ListLike[int]",
         column_values: Any,
     ) -> "NearestNeighbors":
         """Return a new :class:`NearestNeighbors` restricted to the given subset.
@@ -688,16 +780,17 @@ class NearestNeighbors:
         NearestNeighbors
             New instance with a filtered ``df`` and matching ``features``.
         """
+        from cryocat.utils.classutils import as_list
+
         sub = NearestNeighbors()
-        sub.feature_id = self.feature_id
+        sub.column_name = self.column_name
         sub.paired = self.paired
-        if not isinstance(motl_id_values, list):
-            motl_id_values = [motl_id_values]
-        if not isinstance(column_values, list):
-            column_values = [column_values]
+        sub.motls = self.motls
+        motl_id_values = as_list(motl_id_values)
+        column_values = as_list(column_values)
         sub.df = self.df[
             (self.df["motl_id"].isin(motl_id_values))
-            & (self.df[self.feature_id].isin(column_values))
+            & (self.df[self.column_name].isin(column_values))
         ].copy()
         sub.features = column_values
         return sub
@@ -748,6 +841,65 @@ class NearestNeighbors:
         if add_to_df:
             self.df[self._ROT_COORD_COLS] = rot
         return rot
+
+    def add_motl_columns(
+        self,
+        column_names: "ListLike[MotlColumn]",
+        *,
+        sides: "ListLike[str]" = ("qp", "nn"),
+        add_to_df: bool = True,
+    ) -> "NearestNeighbors":
+        """Enrich ``self.df`` with extra columns pulled from the source motls.
+
+        Parameters
+        ----------
+        column_names : str or list of str
+            One or more Motl column names to pull (e.g. ``"object_id"``).
+        sides : str or list of str, default=("qp", "nn")
+            Which side(s) to populate.  Each entry must be ``"qp"`` or ``"nn"``.
+        add_to_df : bool, default=True
+            Write the new columns into ``self.df`` and return ``self``; when
+            ``False``, return without modifying ``self.df`` (dry-run / validate).
+
+        Returns
+        -------
+        NearestNeighbors
+            ``self`` (for chaining).
+
+        Raises
+        ------
+        RuntimeError
+            When ``self.motls is None`` (instance was created with
+            ``input_data=None``).
+        KeyError
+            When a requested column is absent from a source motl.
+        """
+        from cryocat.utils.classutils import as_list
+
+        if self.motls is None:
+            raise RuntimeError(
+                "No source motls stored on this instance. "
+                "Construct NearestNeighbors with input_data != None to use add_motl_columns."
+            )
+        column_names = as_list(column_names)
+        sides = as_list(sides)
+
+        for col in column_names:
+            if "qp" in sides:
+                src = self.motls[0].df.set_index("subtomo_id")
+                if col not in src.columns:
+                    raise KeyError(f"Column {col!r} not found in query motl.")
+                self.df[f"qp_{col}"] = self.df["qp_subtomo_id"].map(src[col])
+            if "nn" in sides:
+                nn_col_data = pd.Series(index=self.df.index, dtype=object)
+                for mid in self.df["motl_id"].unique():
+                    mask = self.df["motl_id"] == mid
+                    src = self.motls[int(mid)].df.set_index("subtomo_id")
+                    if col not in src.columns:
+                        raise KeyError(f"Column {col!r} not found in motl[{int(mid)}].")
+                    nn_col_data[mask] = self.df.loc[mask, "nn_subtomo_id"].map(src[col])
+                self.df[f"nn_{col}"] = nn_col_data
+        return self
 
     def get_qp_rotations(self) -> srot:
         """Return the query-particle rotations as a scipy ``Rotation`` object.
