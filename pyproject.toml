@@ -53,3 +53,8 @@ tm_ana = "cryocat.cli:tm_ana"
 tango_app = "cryocat.app.app:tango_app"
 [tool.setuptools.package-data]
 "cryocat" = ["example_files/*.tlt"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: end-to-end tests that run the full pipeline against real data (slow)",
+]

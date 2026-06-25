@@ -1,8 +1,10 @@
+import shutil
 import numpy as np
 import pandas as pd
 import os
 from glob import glob
 from cryocat.analysis import pana
+from cryocat.core import cryomap
 from cryocat.utils import imageutils
 from cryocat.utils import wedgeutils
 import pytest
@@ -109,31 +111,33 @@ class TestCreateTomoName:
 
 class TestCreateWedgeNames:
     def test_default_filter_is_half_boxsize(self):
-        tomo_w, tmpl_w = pana.create_wedge_names("/w/", 1, 80, 4)
+        tomo_w, tmpl_w = pana.create_wedge_names("/w/", 80)
         assert "_f40.em" in tomo_w
         assert "_f40.em" in tmpl_w
 
     def test_custom_filter(self):
-        tomo_w, tmpl_w = pana.create_wedge_names("/w/", 5, 64, 2, filter=20)
+        tomo_w, tmpl_w = pana.create_wedge_names("/w/", 64, filter=20)
         assert "_f20.em" in tomo_w
         assert "_f20.em" in tmpl_w
 
-    def test_tomo_number_in_name(self):
-        tomo_w, _ = pana.create_wedge_names("/w/", 7, 80, 3)
-        assert "_t7_" in tomo_w
+    def test_boxsize_in_name(self):
+        tomo_w, _ = pana.create_wedge_names("/w/", 80)
+        assert "80_" in tomo_w
 
-    def test_binning_in_name(self):
-        tomo_w, _ = pana.create_wedge_names("/w/", 1, 80, 3)
-        assert "_b3_" in tomo_w
-
-    def test_tile_and_tmpl_prefixes(self):
-        tomo_w, tmpl_w = pana.create_wedge_names("/w/", 1, 64, 2)
-        assert "tile_filt_" in tomo_w
-        assert "tmpl_filt_" in tmpl_w
+    def test_target_and_template_prefixes(self):
+        tomo_w, tmpl_w = pana.create_wedge_names("/w/", 64)
+        assert "target_wm_" in tomo_w
+        assert "template_wm_" in tmpl_w
 
     def test_returns_two_strings(self):
-        result = pana.create_wedge_names("/w/", 1, 64, 2)
+        result = pana.create_wedge_names("/w/", 64)
         assert len(result) == 2 and all(isinstance(s, str) for s in result)
+
+    def test_no_tomo_number_or_binning_in_name(self):
+        """Removed parameters must not appear in generated names."""
+        tomo_w, tmpl_w = pana.create_wedge_names("/w/", 80)
+        assert "_t" not in tomo_w
+        assert "_b" not in tomo_w
 
 
 class TestCreateOutputNames:
@@ -613,50 +617,6 @@ class TestShapeStats:
         assert len(pana.shape_stats(mask)) == 2
 
 
-class TestBuildSummaryFigure:
-    @pytest.fixture
-    def minimal_inputs(self):
-        np.random.seed(0)
-        n = 10
-        rot_info = pd.DataFrame({
-            "Tight mask overlap": np.arange(n, dtype=float),
-            "ang_dist": np.linspace(0, 90, n),
-            "ccc_masked": np.random.rand(n),
-        })
-        line_profiles = pd.DataFrame({
-            "x": np.random.rand(8), "y": np.random.rand(8), "z": np.random.rand(8),
-        })
-        s2 = np.random.rand(8, 8)
-        cross_slices = [[s2, s2, s2] for _ in range(6)]
-        dicts = [[["k1", "v1"], ["k2", "v2"]], [["k3", "v3"]], [["k4", "v4"]]]
-        return dicts, rot_info, line_profiles, cross_slices
-
-    def test_returns_figure(self, minimal_inputs):
-        import plotly.graph_objects as go
-        dicts, rot_info, line_profiles, cross_slices = minimal_inputs
-        fig = pana.build_summary_figure("Test", dicts, rot_info, line_profiles, cross_slices, 1.0)
-        assert isinstance(fig, go.Figure)
-
-    def test_with_hist_returns_figure(self, minimal_inputs):
-        import plotly.graph_objects as go
-        dicts, rot_info, line_profiles, cross_slices = minimal_inputs
-        hist_info = pd.DataFrame({
-            "ang_dist": np.random.rand(100),
-            "cone_dist": np.random.rand(100),
-            "inplane_dist": np.random.rand(100),
-        })
-        hist_info2 = pd.DataFrame({
-            "ccc_masked": np.random.rand(359),
-            "cone_ccc_masked": np.random.rand(359),
-            "inplane_ccc_masked": np.random.rand(359),
-        })
-        fig = pana.build_summary_figure(
-            "Test", dicts, rot_info, line_profiles, cross_slices, 1.0,
-            hist_info=hist_info, hist_info2=hist_info2,
-        )
-        assert isinstance(fig, go.Figure)
-
-
 class TestRunAnalysisArgsFromRow:
     @pytest.fixture
     def tmpl_row(self):
@@ -685,28 +645,95 @@ class TestRunAnalysisArgsFromRow:
             "Symmetry": 1,
         })
 
+    @pytest.fixture
+    def subtomo_row_with_wedge(self):
+        return pd.Series({
+            "Structure": "ribosome",
+            "Template": "mytemplate",
+            "Mask": "mymask",
+            "Compare": "subtomo",
+            "Target map": "tomofile",
+            "Tomogram": "ts_001",
+            "Apply wedge": True,
+            "Boxsize": 80,
+            "Binning": 4,
+            "Phi": 0.0, "Theta": 0.0, "Psi": 0.0,
+            "Symmetry": 1,
+        })
+
     def test_returns_required_keys(self, tmpl_row):
-        result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
+        result = pana._run_analysis_args_from_row(tmpl_row, "/base/")
         assert set(result.keys()) == {
             "structure_name", "template", "mask", "target_map",
             "wedge_target", "wedge_tmpl", "starting_angle", "cyclic_symmetry",
         }
 
     def test_tmpl_compare_tomo_equals_template(self, tmpl_row):
-        result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
+        result = pana._run_analysis_args_from_row(tmpl_row, "/base/")
         assert result["target_map"] == result["template"]
 
     def test_no_wedge_when_apply_wedge_false(self, subtomo_row):
-        result = pana._run_analysis_args_from_row(subtomo_row, "/base/", "/wedge/")
+        result = pana._run_analysis_args_from_row(subtomo_row, "/base/")
         assert result["wedge_target"] is None
         assert result["wedge_tmpl"] is None
 
+    def test_apply_wedge_true_uses_auto_naming(self, subtomo_row_with_wedge):
+        """When Apply wedge=True and no explicit columns, auto-names are built."""
+        result = pana._run_analysis_args_from_row(subtomo_row_with_wedge, "/base/")
+        assert result["wedge_target"] is not None and "target_wm_" in result["wedge_target"]
+        assert result["wedge_tmpl"] is not None and "template_wm_" in result["wedge_tmpl"]
+
+    def test_explicit_wedge_masks_override_autoname(self, subtomo_row_with_wedge):
+        """Explicit column values replace the auto-named wedge paths entirely."""
+        row = subtomo_row_with_wedge.copy()
+        row["Target wedge mask"] = "my_target_wedge.em"
+        row["Template wedge mask"] = "my_tmpl_wedge.em"
+        result = pana._run_analysis_args_from_row(row, "/base/")
+        assert "my_target_wedge" in result["wedge_target"]
+        assert "my_tmpl_wedge" in result["wedge_tmpl"]
+        assert "target_wm_" not in result["wedge_target"]
+        assert "template_wm_" not in result["wedge_tmpl"]
+
+    def test_explicit_target_wedge_only_tmpl_falls_back(self, subtomo_row_with_wedge):
+        """Only Target wedge mask set: target uses explicit path, tmpl falls back to auto."""
+        row = subtomo_row_with_wedge.copy()
+        row["Target wedge mask"] = "explicit_target.em"
+        result = pana._run_analysis_args_from_row(row, "/base/")
+        assert "explicit_target" in result["wedge_target"]
+        assert result["wedge_tmpl"] is not None and "template_wm_" in result["wedge_tmpl"]
+
+    def test_explicit_wedge_without_apply_wedge(self, subtomo_row):
+        """Explicit columns work even when Apply wedge=False (no auto-naming fallback)."""
+        row = subtomo_row.copy()
+        row["Target wedge mask"] = "my_target_wedge.em"
+        row["Template wedge mask"] = "my_tmpl_wedge.em"
+        result = pana._run_analysis_args_from_row(row, "/base/")
+        assert "my_target_wedge" in result["wedge_target"]
+        assert "my_tmpl_wedge" in result["wedge_tmpl"]
+
+    def test_explicit_wedge_on_tmpl_compare(self, tmpl_row):
+        """Explicit wedge columns work in tmpl compare mode too."""
+        row = tmpl_row.copy()
+        row["Template wedge mask"] = "wedge_tmpl.em"
+        result = pana._run_analysis_args_from_row(row, "/base/")
+        assert "wedge_tmpl" in result["wedge_tmpl"]
+
+    def test_nan_explicit_wedge_treated_as_absent(self, subtomo_row_with_wedge):
+        """NaN in explicit wedge columns behaves like the column being absent."""
+        row = subtomo_row_with_wedge.copy()
+        row["Target wedge mask"] = float("nan")
+        row["Template wedge mask"] = float("nan")
+        result = pana._run_analysis_args_from_row(row, "/base/")
+        # Apply wedge=True still triggers auto-naming since explicit values are NaN
+        assert result["wedge_target"] is not None and "target_wm_" in result["wedge_target"]
+        assert result["wedge_tmpl"] is not None and "template_wm_" in result["wedge_tmpl"]
+
     def test_starting_angle_shape(self, tmpl_row):
-        result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
+        result = pana._run_analysis_args_from_row(tmpl_row, "/base/")
         assert result["starting_angle"].shape == (1, 3)
 
     def test_structure_name_in_result(self, tmpl_row):
-        result = pana._run_analysis_args_from_row(tmpl_row, "/base/", "/wedge/")
+        result = pana._run_analysis_args_from_row(tmpl_row, "/base/")
         assert result["structure_name"] == "ribosome"
 
 
@@ -1252,13 +1279,13 @@ def test_pipeline_fns_skip_when_not_done(fn_name, csv_all_not_done, tmp_path):
     fn = getattr(pana, fn_name)
     parent = str(tmp_path) + "/"
     extra = {
-        "compute_sharp_mask_overlap": dict(angle_list_path=parent, parent_folder_path=parent),
-        "check_existing_tight_mask_values": dict(parent_folder_path=parent, angle_list_path=parent),
+        "compute_sharp_mask_overlap": dict(parent_folder_path=parent),
+        "check_existing_tight_mask_values": dict(parent_folder_path=parent),
         "compute_dist_maps_voxels": dict(parent_folder_path=parent),
         "compute_center_peak_stats_and_profiles": dict(parent_folder_path=parent),
         "compute_peak_shapes": dict(parent_folder_path=parent),
         "correct_bbox": {},
-        "recompute_dist_maps": dict(parent_folder_path=parent, angle_list_path=parent),
+        "recompute_dist_maps": dict(parent_folder_path=parent),
         "create_summary_html": dict(parent_folder_path=parent),
     }[fn_name]
     assert fn(csv_all_not_done, [0], **extra) is None
@@ -1344,12 +1371,15 @@ def test_run_analysis_marks_processed_rows_done(mocker, csv_all_not_done, tmp_pa
     ))
     mocker.patch("cryocat.analysis.pana.analyze_rotations",
                  return_value=(pd.DataFrame(), None, None, None))
+    # run_analysis now calls ioutils.euler_angles_load before create_angular_distance_maps;
+    # mock it so no actual angle file needs to exist on disk.
+    mocker.patch("cryocat.analysis.pana.ioutils.euler_angles_load",
+                 return_value=np.zeros((3, 3)))
     mocker.patch("cryocat.analysis.pana.tmana.create_angular_distance_maps",
                  return_value=(None, None, None))
 
     parent = str(tmp_path) + "/"
-    pana.run_analysis(csv_all_not_done, [0], angle_list_path=parent,
-                      wedge_path=parent, parent_folder_path=parent)
+    pana.run_analysis(csv_all_not_done, [0], parent_folder_path=parent)
     out_df = pd.read_csv(csv_all_not_done, index_col=0)
     assert bool(out_df.at[0, "Done"]) is True
 
@@ -1367,7 +1397,7 @@ def test_run_angle_analysis_runs_per_index_without_write_output(mocker, csv_all_
                  return_value=(pd.DataFrame(), pd.DataFrame()))
     parent = str(tmp_path) + "/"
     assert pana.run_angle_analysis(csv_all_not_done, [0],
-                                   wedge_path=parent, parent_folder_path=parent,
+                                   parent_folder_path=parent,
                                    angular_range=5, write_output=False) is None
 
 
@@ -1687,3 +1717,139 @@ class TestParamsToTemplateRow:
         cols = ["Target map", "Structure"]
         row = pana.params_to_template_row(params_csv, template_columns=cols)
         assert pd.isna(row["Structure"])
+
+
+# =============================================================================
+# Integration test — full pipeline against stored ground truth
+# =============================================================================
+
+_PANA_DATA = Path(__file__).parent / "test_data" / "pana_data"
+_GROUND_TRUTH = _PANA_DATA / "ribosome" / "ground_truth"
+
+
+@pytest.mark.integration
+class TestIntegrationPipeline:
+    """Run the complete pana pipeline on real data and compare against stored ground truth.
+
+    The pipeline is executed once (class-scoped fixture) and all assertions share
+    those results.  Input files are copied to a temp directory so the source tree
+    is never modified.
+    """
+
+    @pytest.fixture(scope="class")
+    def pipeline_results(self, tmp_path_factory):
+        work = tmp_path_factory.mktemp("pana_pipeline")
+        shutil.copytree(_PANA_DATA, work / "pana_data",
+                        ignore=shutil.ignore_patterns("ground_truth"))
+
+        parent_folder_path = str(work / "pana_data") + "/"
+        template_list = str(work / "pana_data" / "template_list.csv")
+        indices = [0]
+
+        pana.run_analysis(template_list, indices, parent_folder_path)
+        pana.compute_dist_maps_voxels(template_list, indices, parent_folder_path)
+        pana.get_mask_stats(template_list, indices, parent_folder_path)
+        pana.compute_center_peak_stats_and_profiles(template_list, indices, parent_folder_path)
+        pana.check_existing_tight_mask_values(template_list, indices, parent_folder_path)
+        pana.run_angle_analysis(template_list, indices, parent_folder_path,
+                                write_output=True, angular_range=20)
+
+        results_dir = work / "pana_data" / "ribosome" / "id_0_results"
+        gt_results_dir = _GROUND_TRUTH / "id_0_results"
+        return results_dir, gt_results_dir, template_list
+
+    # ── template_list.csv ────────────────────────────────────────────────────
+
+    def test_template_list_done_and_output_folder(self, pipeline_results):
+        _, _, tl_path = pipeline_results
+        result = pd.read_csv(tl_path, index_col=0)
+        assert bool(result.at[0, "Done"]) is True
+        assert result.at[0, "Output folder"] == "id_0_results"
+
+    def test_template_list_numeric_results(self, pipeline_results):
+        _, _, tl_path = pipeline_results
+        result = pd.read_csv(tl_path, index_col=0)
+        gt = pd.read_csv(str(_GROUND_TRUTH / "template_list.csv"), index_col=0)
+        numeric_cols = [
+            "Voxels", "Voxels TM", "Dim x", "Dim y", "Dim z", "Solidity",
+            "Peak value", "Peak x", "Peak y", "Peak z",
+            "VC dist_all", "VC dist_normals", "VC dist_inplane",
+            "Solidity dist_all", "Solidity dist_normals", "Solidity dist_inplane",
+        ]
+        for col in numeric_cols:
+            if col in gt.columns and pd.notna(gt.at[0, col]):
+                np.testing.assert_allclose(
+                    float(result.at[0, col]), float(gt.at[0, col]),
+                    rtol=1e-4, err_msg=f"template_list.csv column {col!r}",
+                )
+
+    # ── id_0.csv (per-rotation CC data) ──────────────────────────────────────
+
+    def test_rotation_csv(self, pipeline_results):
+        results_dir, gt_results_dir, _ = pipeline_results
+        result = pd.read_csv(str(results_dir / "id_0.csv"), index_col=0)
+        gt = pd.read_csv(str(gt_results_dir / "id_0.csv"), index_col=0)
+        pd.testing.assert_frame_equal(result, gt, rtol=1e-4, check_like=True)
+
+    # ── params.csv ────────────────────────────────────────────────────────────
+
+    def test_params_csv_numeric_inputs(self, pipeline_results):
+        results_dir, gt_results_dir, _ = pipeline_results
+        result = pd.read_csv(str(results_dir / "params.csv")).iloc[0]
+        gt = pd.read_csv(str(gt_results_dir / "params.csv")).iloc[0]
+        for col in ("Boxsize", "Binning", "Pixelsize", "Degrees", "Phi", "Theta", "Psi"):
+            np.testing.assert_allclose(float(result[col]), float(gt[col]), rtol=1e-5,
+                                       err_msg=f"params.csv column {col!r}")
+
+    def test_params_csv_file_basenames(self, pipeline_results):
+        results_dir, gt_results_dir, _ = pipeline_results
+        result = pd.read_csv(str(results_dir / "params.csv")).iloc[0]
+        gt = pd.read_csv(str(gt_results_dir / "params.csv")).iloc[0]
+        for col in ("Target map", "Template", "Mask", "Angles",
+                    "Target wedge mask", "Template wedge mask"):
+            gt_val = str(gt[col]) if pd.notna(gt[col]) else ""
+            res_val = str(result[col]) if pd.notna(result[col]) else ""
+            assert os.path.basename(res_val) == os.path.basename(gt_val), \
+                f"params.csv column {col!r}: basename mismatch"
+
+    # ── .em files ─────────────────────────────────────────────────────────────
+
+    @pytest.mark.parametrize("fname", [
+        "id_0_scores.em",
+        "id_0_angles.em",
+        "id_0_angles_dist_all.em",
+        "id_0_angles_dist_normals.em",
+        "id_0_angles_dist_inplane.em",
+        "id_0_angles_dist_all_label.em",
+        "id_0_angles_dist_all_label_open.em",
+        "id_0_angles_dist_normals_label.em",
+        "id_0_angles_dist_normals_label_open.em",
+        "id_0_angles_dist_inplane_label.em",
+        "id_0_angles_dist_inplane_label_open.em",
+    ])
+    def test_em_file(self, pipeline_results, fname):
+        results_dir, gt_results_dir, _ = pipeline_results
+        result_arr = cryomap.read(str(results_dir / fname))
+        gt_arr = cryomap.read(str(gt_results_dir / fname))
+        np.testing.assert_allclose(result_arr, gt_arr, rtol=1e-4,
+                                   err_msg=f"{fname} mismatch")
+
+    # ── CSV outputs written by pipeline steps ─────────────────────────────────
+
+    def test_peak_line_profiles(self, pipeline_results):
+        results_dir, gt_results_dir, _ = pipeline_results
+        result = pd.read_csv(str(results_dir / "id_0_peak_line_profiles.csv"), index_col=0)
+        gt = pd.read_csv(str(gt_results_dir / "id_0_peak_line_profiles.csv"), index_col=0)
+        pd.testing.assert_frame_equal(result, gt, rtol=1e-4)
+
+    def test_gradual_angles_analysis(self, pipeline_results):
+        results_dir, gt_results_dir, _ = pipeline_results
+        result = pd.read_csv(str(results_dir / "id_0_gradual_angles_analysis.csv"), index_col=0)
+        gt = pd.read_csv(str(gt_results_dir / "id_0_gradual_angles_analysis.csv"), index_col=0)
+        pd.testing.assert_frame_equal(result, gt, rtol=1e-4, check_like=True)
+
+    def test_gradual_angles_histograms(self, pipeline_results):
+        results_dir, gt_results_dir, _ = pipeline_results
+        result = pd.read_csv(str(results_dir / "id_0_gradual_angles_histograms.csv"), index_col=0)
+        gt = pd.read_csv(str(gt_results_dir / "id_0_gradual_angles_histograms.csv"), index_col=0)
+        pd.testing.assert_frame_equal(result, gt, rtol=1e-4)

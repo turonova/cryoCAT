@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from unittest.mock import patch
 from cryocat.analysis import tmana
 from cryocat.core import cryomotl
 
@@ -592,9 +593,50 @@ class TestScoresExtractParticlesAroundPositions:
         assert (np.all(motl.df["psi"] == 30))
         assert (np.all(motl.df["theta"] == 20))
 
-        
 
+# ── create_angular_distance_maps ──────────────────────────────────────────────
 
+class TestCreateAngularDistanceMaps:
+    """Verify 0-based index convention and -1 sentinel handling."""
 
+    def _run(self, angles_map_arr, angles):
+        with patch("cryocat.analysis.tmana.cryomap.read", return_value=angles_map_arr), \
+             patch("cryocat.analysis.tmana.ioutils.euler_angles_load", return_value=angles), \
+             patch("cryocat.analysis.tmana.cryomap.write"):
+            return tmana.create_angular_distance_maps(
+                angles_map_arr, angles, write_out_maps=False
+            )
+
+    def test_identity_angle_gives_zero_distance(self):
+        angles = np.array([[0.0, 0.0, 0.0], [0.0, 90.0, 0.0]])
+        amap = np.full((3, 3, 3), -1, dtype=int)
+        amap[1, 1, 1] = 0
+        dist_all, dist_normals, dist_inplane = self._run(amap, angles)
+        assert dist_all[1, 1, 1] == pytest.approx(0.0, abs=1e-6)
+        assert dist_normals[1, 1, 1] == pytest.approx(0.0, abs=1e-6)
+        assert dist_inplane[1, 1, 1] == pytest.approx(0.0, abs=1e-6)
+
+    def test_nonzero_angle_gives_nonzero_distance(self):
+        angles = np.array([[0.0, 0.0, 0.0], [0.0, 90.0, 0.0]])
+        amap = np.full((3, 3, 3), -1, dtype=int)
+        amap[1, 1, 1] = 1
+        dist_all, _, _ = self._run(amap, angles)
+        assert dist_all[1, 1, 1] > 1.0
+
+    def test_sentinel_voxels_get_zero_distance(self):
+        angles = np.array([[0.0, 0.0, 0.0], [0.0, 90.0, 0.0]])
+        amap = np.full((3, 3, 3), -1, dtype=int)
+        dist_all, dist_normals, dist_inplane = self._run(amap, angles)
+        assert np.all(dist_all == 0.0)
+        assert np.all(dist_normals == 0.0)
+        assert np.all(dist_inplane == 0.0)
+
+    def test_output_shape_matches_input(self):
+        angles = np.array([[0.0, 0.0, 0.0], [45.0, 0.0, 0.0]])
+        amap = np.zeros((5, 6, 7), dtype=int)
+        dist_all, dist_normals, dist_inplane = self._run(amap, angles)
+        assert dist_all.shape == (5, 6, 7)
+        assert dist_normals.shape == (5, 6, 7)
+        assert dist_inplane.shape == (5, 6, 7)
 
     

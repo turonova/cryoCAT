@@ -925,7 +925,8 @@ def create_angular_distance_maps(
     
     """Compute per-voxel angular distance maps relative to the first entry in the angles list.
 
-    Each voxel of ``angles_map`` stores a 1-based index into ``angles_list``.
+    Each voxel of ``angles_map`` stores a 0-based index into ``angles_list``
+    (unset voxels carry the sentinel value ``-1`` and receive distance 0).
     For every orientation in the list the total angular distance, the distance
     of the rotation axis (normals), and the in-plane rotation distance relative
     to ``angles_list[0]`` are computed.  These distances are then mapped back
@@ -935,7 +936,7 @@ def create_angular_distance_maps(
     ----------
     angles_map : MapSource
         Path to the orientation-index map or a pre-loaded integer array.
-        Values are 1-based indices (subtracted by 1 internally before lookup).
+        Values are 0-based indices; ``-1`` marks voxels with no valid orientation.
     angles_list : EulerAngles
         Path to the rotation-angles file or a pre-loaded (N, 3) array of
         Euler angles.  The angle convention is given by ``angles_order``.
@@ -967,8 +968,10 @@ def create_angular_distance_maps(
     Notes
     -----
     - All distances are measured relative to the *first* angle in
-      ``angles_list`` (index 0 after the 1-based offset is removed), not
-      relative to a zero rotation.
+      ``angles_list`` (index 0).  Pass applied angles (output of
+      :func:`cryocat.utils.geom.apply_starting_and_offset`) so that
+      ``angles_list[0]`` equals the starting orientation.
+    - Voxels with index ``-1`` (no valid orientation) receive distance 0.
     - If ``output_file_base`` cannot be determined and ``write_out_maps`` is
       True, writing is silently disabled (the ``ValueError`` in the code is
       constructed but not raised; this is a known limitation).
@@ -987,16 +990,23 @@ def create_angular_distance_maps(
 
     map_shape = angles_map.shape
 
-    angles = ioutils.euler_angles_load(angles_list, angles_order)
-
     zero_rotations = np.tile(angles[0, :], (angles.shape[0], 1))
     dist_all, dist_normals, dist_inplane = geom.compare_rotations(zero_rotations, angles, cyclic_symmetry)
 
-    angles_array = angles_map.flatten() - 1
+    # angles_map stores 0-based indices; -1 marks voxels with no valid angle.
+    idx_flat = angles_map.flatten()
+    valid = idx_flat >= 0
 
-    ang_dist_map = dist_all[angles_array].reshape(map_shape)
-    dist_normals_map = dist_normals[angles_array].reshape(map_shape)
-    dist_inplane_map = dist_inplane[angles_array].reshape(map_shape)
+    ang_dist_flat = np.zeros(idx_flat.size)
+    dist_normals_flat = np.zeros(idx_flat.size)
+    dist_inplane_flat = np.zeros(idx_flat.size)
+    ang_dist_flat[valid] = dist_all[idx_flat[valid]]
+    dist_normals_flat[valid] = dist_normals[idx_flat[valid]]
+    dist_inplane_flat[valid] = dist_inplane[idx_flat[valid]]
+
+    ang_dist_map = ang_dist_flat.reshape(map_shape)
+    dist_normals_map = dist_normals_flat.reshape(map_shape)
+    dist_inplane_map = dist_inplane_flat.reshape(map_shape)
 
     if write_out_maps:
         cryomap.write(ang_dist_map, output_file_base + "_dist_all.em", data_type=np.single)

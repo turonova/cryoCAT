@@ -5,7 +5,7 @@ Three-layer design
 Layer 1  Pure-compute functions (no I/O): ``mask_stats``, ``sharp_mask_overlap``,
          ``find_matching_overlap_row``, ``dist_map_stats``, ``peak_stats_and_profiles``,
          ``peak_shapes``, ``shape_stats``, ``filter_template_df``,
-         ``build_summary_figure``, ``_run_analysis_args_from_row``.
+         ``_run_analysis_args_from_row``.
 
 Layer 2  Single-case orchestrators that run one (target, template, angles) triple
          and optionally write their own artifacts: ``analyze_rotations``,
@@ -147,10 +147,8 @@ def create_tomo_name(
     return tomo_name
 
 
-def create_wedge_names(
-    wedge_path: PathOrStr, tomo_number: int, boxsize: int, binning: int, filter: int | None = None
-) -> tuple[str, str]:
-    """Generate filenames for tomogram and template wedge masks with filtering info.
+def create_wedge_names(wedge_path: PathOrStr, boxsize: int, filter: int | None = None) -> tuple[str, str]:
+    """Generate filenames for target and template wedge masks with filtering info.
 
     If no filter size is provided, it defaults to half of the box size.
 
@@ -158,19 +156,15 @@ def create_wedge_names(
     ----------
     wedge_path : PathOrStr
         Directory path where the wedge files will be stored.
-    tomo_number : int
-        Number of the tomogram.
     boxsize : int
         Size of the subtomogram box in voxels.
-    binning : int
-        Binning level applied to the tomogram.
     filter : int, optional
         Size of the filter applied during processing.
 
     Returns
     -------
-    tomo_wedge : str
-        Filename for the filtered tomogram wedge mask.
+    target_wedge : str
+        Filename for the filtered target wedge mask.
     tmpl_wedge : str
         Filename for the filtered template wedge mask.
     """
@@ -178,11 +172,11 @@ def create_wedge_names(
     if filter is None:
         filter = boxsize // 2
 
-    file_ending = str(boxsize) + "_t" + str(tomo_number) + "_b" + str(binning) + "_f" + str(filter) + ".em"
-    tomo_wedge = wedge_path + "tile_filt_" + file_ending
-    tmpl_wedge = wedge_path + "tmpl_filt_" + file_ending
+    file_ending = str(boxsize) + "_f" + str(filter) + ".em"
+    target_wedge = wedge_path + "target_wm_" + file_ending
+    tmpl_wedge = wedge_path + "template_wm_" + file_ending
 
-    return tomo_wedge, tmpl_wedge
+    return target_wedge, tmpl_wedge
 
 
 def create_output_base_name(tmpl_index: int) -> str:
@@ -896,7 +890,6 @@ def get_mask_stats(template_list: PathOrStr, indices: list[int], parent_folder_p
 def compute_sharp_mask_overlap(
     template_list: PathOrStr,
     indices: list[int],
-    angle_list_path: PathOrStr,
     parent_folder_path: PathOrStr,
     angles_order: str = "zxz",
 ) -> None:
@@ -913,10 +906,9 @@ def compute_sharp_mask_overlap(
         Path to the CSV template list file.
     indices : list of int
         List of row indices in the CSV to process.
-    angle_list_path : PathOrStr
-        Path to the directory containing angle list files used for rotation.
     parent_folder_path : PathOrStr
-        Base directory where folders for all structures are.
+        Base directory where folders for all structures are. If "Angles" contains a
+        bare filename, it is resolved via ``parent_folder/structure/``.
     angles_order : str, default='zxz'
         The rotation order used to interpret the Euler angles.
     """
@@ -931,7 +923,7 @@ def compute_sharp_mask_overlap(
         structure_name = temp_df.at[i, "Structure"]
         mask_name = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tight mask"])
         mask = cryomap.read(mask_name)
-        angle_list = angle_list_path + temp_df.at[i, "Angles"]
+        angle_list = _resolve_input_path(temp_df.at[i, "Angles"], parent_folder_path, structure_name)
         angles = ioutils.euler_angles_load(angle_list, angles_order)
         rotations = srot.from_euler("zxz", angles, degrees=True)
 
@@ -950,7 +942,6 @@ def check_existing_tight_mask_values(
     template_list: PathOrStr,
     indices: list[int],
     parent_folder_path: PathOrStr,
-    angle_list_path: PathOrStr,
     angles_order: str = "zxz",
 ) -> None:
     """Check and populate "Tight mask overlap" values for given rows in template list.
@@ -967,9 +958,8 @@ def check_existing_tight_mask_values(
     indices : list of int
         List of row indices in `template_list` to check.
     parent_folder_path : PathOrStr
-        Base directory where structure folders are located.
-    angle_list_path : PathOrStr
-        Path to the directory containing rotation angle list files.
+        Base directory where structure folders are located. If "Angles" contains a
+        bare filename, it is resolved via ``parent_folder/structure/``.
     angles_order : str, default='zxz'
         Rotation order to interpret the Euler angles when computing overlaps.
     """
@@ -1012,9 +1002,7 @@ def check_existing_tight_mask_values(
         # if the value is not found in "same" analysis, computes it
         if not data_found:
             print(f"Computing sharp mask overlap for index {i}")
-            compute_sharp_mask_overlap(
-                template_list, [i], angle_list_path, parent_folder_path, angles_order=angles_order
-            )
+            compute_sharp_mask_overlap(template_list, [i], parent_folder_path, angles_order=angles_order)
 
 
 def compute_dist_maps_voxels(
@@ -1400,6 +1388,8 @@ _TEMPLATE_INPUT_COLS: tuple[str, ...] = (
     "Psi",
     "Apply angular offset",
     "Apply wedge",
+    "Target wedge mask",
+    "Template wedge mask",
     "Boxsize",
     "Binning",
     "Pixelsize",
@@ -1544,8 +1534,7 @@ def gather_case_results(
             if src is None:
                 continue
             _dm = cryomap.read(src)
-            _ds = dist_map_stats(_dm, peak_center, degrees, is_all=(j == 0),
-                                 morph_footprint=morph_footprint)
+            _ds = dist_map_stats(_dm, peak_center, degrees, is_all=(j == 0), morph_footprint=morph_footprint)
             result[f"VC {name}"] = _ds["vc"]
             result[f"Solidity {name}"] = _ds["solidity"]
             result[f"VCO {name}"] = _ds["vco"]
@@ -2004,13 +1993,19 @@ def _make_slice_figure(
     n_axes = n_rows * 3
     for i in range(n_axes):
         sfx = "" if i == 0 else str(i + 1)
-        fig.update_layout(**{
-            f"xaxis{sfx}": {"constrain": "domain", "showticklabels": False,
-                            "showgrid": False, "zeroline": False},
-            f"yaxis{sfx}": {"scaleanchor": f"x{sfx}", "scaleratio": 1,
-                            "constrain": "domain", "showticklabels": False,
-                            "showgrid": False, "zeroline": False},
-        })
+        fig.update_layout(
+            **{
+                f"xaxis{sfx}": {"constrain": "domain", "showticklabels": False, "showgrid": False, "zeroline": False},
+                f"yaxis{sfx}": {
+                    "scaleanchor": f"x{sfx}",
+                    "scaleratio": 1,
+                    "constrain": "domain",
+                    "showticklabels": False,
+                    "showgrid": False,
+                    "zeroline": False,
+                },
+            }
+        )
 
     _t = 40 if title else 0
     fig.update_layout(
@@ -2380,8 +2375,10 @@ def run_single_case(
     _tgt_path = _path_or_inmemory(target_map)
     _compare = (
         "tmpl"
-        if _tmpl_path and _tgt_path
-        and _tmpl_path != "<in-memory>" and _tgt_path != "<in-memory>"
+        if _tmpl_path
+        and _tgt_path
+        and _tmpl_path != "<in-memory>"
+        and _tgt_path != "<in-memory>"
         and os.path.abspath(_tmpl_path) == os.path.abspath(_tgt_path)
         else "subtomo"
     )
@@ -2399,6 +2396,8 @@ def run_single_case(
         "Symmetry": cyclic_symmetry,
         "Compare": _compare,
         "Apply wedge": wedge_mask_target is not None or wedge_mask_tmpl is not None,
+        "Target wedge mask": _path_or_inmemory(wedge_mask_target),
+        "Template wedge mask": _path_or_inmemory(wedge_mask_tmpl),
         "Apply angular offset": angular_offset is not None,
         "Phi": _phi,
         "Theta": _theta,
@@ -2413,20 +2412,25 @@ def run_single_case(
 
 
 def _read_template_list(path: PathOrStr) -> pd.DataFrame:
-    """Read a template-list CSV and ensure string columns keep object dtype.
+    """Read a template-list CSV and ensure column dtypes are correct.
 
     pandas promotes columns that contain only NaN to float64, which causes
     TypeError when strings are later written into them (e.g. "Output folder").
-    This wrapper casts those columns back to object right after reading.
+    Conversely, angle columns (Phi/Theta/Psi) stored as integers in the CSV
+    would trigger a pandas 2.x upcast error when float values are assigned.
+    This wrapper coerces both cases right after reading.
     """
     df = pd.read_csv(path, index_col=0)
     for _col in ("Output folder", "Done"):
         if _col in df.columns and df[_col].dtype != object:
             df[_col] = df[_col].astype(object)
+    for _col in ("Phi", "Theta", "Psi"):
+        if _col in df.columns and df[_col].dtype != float:
+            df[_col] = df[_col].astype(float)
     return df
 
 
-def _run_analysis_args_from_row(row: pd.Series, parent_folder_path: PathOrStr, wedge_path: PathOrStr) -> dict:
+def _run_analysis_args_from_row(row: pd.Series, parent_folder_path: PathOrStr) -> dict:
     """Resolve file paths and rotation args for one template-list row.
 
     Parameters
@@ -2435,8 +2439,6 @@ def _run_analysis_args_from_row(row: pd.Series, parent_folder_path: PathOrStr, w
         A single row of the template-list DataFrame, indexed by column name.
     parent_folder_path : PathOrStr
         Root folder containing structure subfolders, templates, and tomograms.
-    wedge_path : PathOrStr
-        Directory containing wedge mask files.
 
     Returns
     -------
@@ -2456,11 +2458,21 @@ def _run_analysis_args_from_row(row: pd.Series, parent_folder_path: PathOrStr, w
         target_map = template
     elif row["Compare"] == "subtomo":
         target_map = _resolve_input_path(row["Target map"], parent_folder_path, structure_name)
-        tomo_number = re.findall(r"\d+", row["Tomogram"])[0]
         if row["Apply wedge"]:
-            wedge_target, wedge_tmpl = create_wedge_names(wedge_path, tomo_number, row["Boxsize"], row["Binning"])
+            wedge_target, wedge_tmpl = create_wedge_names(
+                create_structure_path(parent_folder_path, structure_name), row["Boxsize"]
+            )
     else:
         target_map = create_em_path(parent_folder_path, row["Compare"], row["Target map"])
+
+    # Explicit wedge mask columns override auto-named paths (or set them when Apply wedge is False).
+    # row.get() returns None when the column is absent (old CSVs without these columns).
+    _explicit_tgt = row.get("Target wedge mask")
+    _explicit_tmpl = row.get("Template wedge mask")
+    if pd.notna(_explicit_tgt) and str(_explicit_tgt).strip():
+        wedge_target = _resolve_input_path(str(_explicit_tgt).strip(), parent_folder_path, structure_name)
+    if pd.notna(_explicit_tmpl) and str(_explicit_tmpl).strip():
+        wedge_tmpl = _resolve_input_path(str(_explicit_tmpl).strip(), parent_folder_path, structure_name)
 
     starting_angle = row[["Phi", "Theta", "Psi"]].to_numpy().reshape(1, 3)
     cyclic_symmetry = row["Symmetry"]
@@ -2480,8 +2492,6 @@ def _run_analysis_args_from_row(row: pd.Series, parent_folder_path: PathOrStr, w
 def run_analysis(
     template_list: PathOrStr,
     indices: list[int],
-    angle_list_path: PathOrStr,
-    wedge_path: PathOrStr,
     parent_folder_path: PathOrStr,
     cc_radius_tol: int = 10,
 ) -> None:
@@ -2516,15 +2526,10 @@ def run_analysis(
         - Symmetry (C symmetry)
     indices : sequence of int
         List or array of row indices (0-based) in `template_list` to process.
-    angle_list_path : PathOrStr
-        Base directory path where the angle list files are stored.
-        The angle file name from the CSV's "Angles" column is appended to this path.
-    wedge_path : PathOrStr
-        Base directory containing wedge mask files. Used only if "Apply wedge"
-        is set for the current row.
     parent_folder_path : PathOrStr
         Root folder containing all structure subfolders, templates, tomograms,
-        and masks referenced in `template_list`.
+        masks, and angle list files referenced in `template_list`. If "Angles"
+        contains a bare filename, it is resolved via ``parent_folder/structure/``.
     cc_radius_tol : int, default=10
         Radius (in voxels) of the spherical mask used for computing local
         cross-correlation scores in `analyze_rotations`.
@@ -2553,9 +2558,9 @@ def run_analysis(
     temp_df = _read_template_list(template_list)
 
     for i in indices:
-        args = _run_analysis_args_from_row(temp_df.loc[i], parent_folder_path, wedge_path)
+        args = _run_analysis_args_from_row(temp_df.loc[i], parent_folder_path)
 
-        angle_list = angle_list_path + temp_df.at[i, "Angles"]
+        angle_list = _resolve_input_path(temp_df.at[i, "Angles"], parent_folder_path, args["structure_name"])
 
         if temp_df.at[i, "Apply angular offset"]:
             angular_offset = np.full((3,), temp_df.at[i, "Degrees"] / 2.0)
@@ -2582,14 +2587,24 @@ def run_analysis(
             cyclic_symmetry=args["cyclic_symmetry"],
         )[0]
 
+        applied_angles = geom.apply_starting_and_offset(
+            ioutils.euler_angles_load(angle_list),
+            args["starting_angle"],
+            angular_offset,
+        )
         angles_map = output_folder + "/" + output_base + "_angles.em"
-        _, _, _ = tmana.create_angular_distance_maps(angles_map, angle_list, write_out_maps=True)
+        _, _, _ = tmana.create_angular_distance_maps(
+            angles_map, applied_angles, write_out_maps=True, cyclic_symmetry=args["cyclic_symmetry"]
+        )
 
         temp_df.at[i, "Done"] = True
         temp_df.to_csv(template_list)  # save what was finished in case of a crush
 
         params_input = {col: temp_df.at[i, col] for col in _TEMPLATE_INPUT_COLS if col in temp_df.columns}
         params_input["Output base"] = output_base
+        # Store the actually-used wedge paths (may be auto-named); empty string when not used.
+        params_input["Target wedge mask"] = _path_or_inmemory(args["wedge_target"])
+        params_input["Template wedge mask"] = _path_or_inmemory(args["wedge_tmpl"])
         params_df = build_params_record(params_input, {})
         params_df.to_csv(output_folder + "params.csv", index=False)
 
@@ -2718,7 +2733,6 @@ def run_single_gradual_case(
 def run_angle_analysis(
     template_list: PathOrStr,
     indices: list[int],
-    wedge_path: PathOrStr,
     parent_folder_path: PathOrStr,
     angular_range: int = 359,
     write_output: bool = False,
@@ -2739,8 +2753,6 @@ def run_angle_analysis(
         tomograms, masks, and analysis parameters.
     indices : list of int
         List of row indices in `template_list` to process.
-    wedge_path : PathOrStr
-        Directory path containing wedge mask files.
     parent_folder_path : PathOrStr
         Root directory containing structure and template data.
     angular_range : int, default=359
@@ -2770,7 +2782,7 @@ def run_angle_analysis(
     temp_df = _read_template_list(template_list)
 
     for i in indices:
-        args = _run_analysis_args_from_row(temp_df.loc[i], parent_folder_path, wedge_path)
+        args = _run_analysis_args_from_row(temp_df.loc[i], parent_folder_path)
 
         final_df, hist_df = run_single_gradual_case(
             target_map=args["target_map"],
@@ -2792,207 +2804,6 @@ def run_angle_analysis(
             hist_df.to_csv(output_base + "_gradual_angles_histograms.csv")
 
 
-def build_summary_figure(
-    figure_title: str,
-    dicts: list,
-    rot_info: pd.DataFrame,
-    line_profiles: pd.DataFrame,
-    cross_slices: list,
-    peak_val: float,
-    hist_info: pd.DataFrame | None = None,
-    hist_info2: pd.DataFrame | None = None,
-) -> go.Figure:
-    """Build a multi-panel Plotly figure summarising one peak-analysis result.
-
-    Parameters
-    ----------
-    figure_title : str
-        Title string rendered at the top of the figure.
-    dicts : list of list of [str, str]
-        Three sub-lists, each a sequence of ``[key, value]`` pairs used to
-        populate the three summary tables in row 1.
-    rot_info : pandas.DataFrame
-        Per-rotation CC data with columns ``"Tight mask overlap"``,
-        ``"ang_dist"``, and ``"ccc_masked"``.
-    line_profiles : pandas.DataFrame
-        Line profiles along x/y/z through the peak, one column each.
-    cross_slices : list
-        Cross-section arrays from ``cryomap.get_cross_slices``.
-    peak_val : float
-        Maximum CC score; sets the upper bound of the viridis colorbar.
-    hist_info : pandas.DataFrame or None, optional
-        Histogram CSV data (row 3 is included only when not None).
-    hist_info2 : pandas.DataFrame or None, optional
-        Gradual-angles analysis CSV data (paired with *hist_info*).
-
-    Returns
-    -------
-    plotly.graph_objects.Figure
-    """
-    add_hist = hist_info is not None
-
-    n_hm_rows = len(cross_slices)
-    n_top_rows = 2 + (1 if add_hist else 0)
-    total_rows = n_top_rows + n_hm_rows
-
-    specs = [
-        [{"type": "table"}, {"type": "table"}, {"type": "table"}],
-        [{"type": "xy"}, {"type": "xy"}, {"type": "xy"}],
-    ]
-    if add_hist:
-        specs.append([{"type": "xy"}, {"type": "xy"}, None])
-    for _ in range(n_hm_rows):
-        specs.append([{"type": "xy"}, {"type": "xy"}, {"type": "xy"}])
-
-    row_heights_w = [2.5, 1.2]
-    if add_hist:
-        row_heights_w.append(0.8)
-    row_heights_w.extend([1.0] * n_hm_rows)
-
-    # Calculate colorbar y positions based on row layout
-    vs = 0.02
-    content_h = 1.0 - (total_rows - 1) * vs
-    total_w = sum(row_heights_w)
-    row_h_frac = [w / total_w * content_h for w in row_heights_w]
-    row_tops, row_bottoms = [], []
-    cum = 0.0
-    for k, h in enumerate(row_h_frac):
-        top = 1.0 - cum - (vs if k > 0 else 0)
-        row_tops.append(top)
-        row_bottoms.append(top - h)
-        cum += h + (vs if k < total_rows - 1 else 0)
-
-    s = n_top_rows  # index of first heatmap row
-    ca1_y = (row_tops[s] + row_bottoms[s]) / 2
-    ca1_len = row_tops[s] - row_bottoms[s]
-    ca2_y = (row_tops[s + 1] + row_bottoms[s + 2]) / 2
-    ca2_len = row_tops[s + 1] - row_bottoms[s + 2]
-    ca3_y = (row_tops[s + 3] + row_bottoms[s + 5]) / 2
-    ca3_len = row_tops[s + 3] - row_bottoms[s + 5]
-
-    fig = make_subplots(
-        rows=total_rows,
-        cols=3,
-        specs=specs,
-        row_heights=row_heights_w,
-        horizontal_spacing=0.03,
-        vertical_spacing=vs,
-    )
-
-    # Row 1: tables
-    for j, d in enumerate(dicts, start=1):
-        keys = [row[0] for row in d]
-        values = [row[1] for row in d]
-        fig.add_trace(
-            go.Table(
-                header=dict(values=["Parameter", "Value"], align="left", fill_color="lightgrey", font=dict(size=10)),
-                cells=dict(values=[keys, values], align="left", font=dict(size=10)),
-            ),
-            row=1,
-            col=j,
-        )
-
-    # Row 2: scatter + line plots
-    fig.add_trace(
-        go.Scatter(
-            x=rot_info["Tight mask overlap"],
-            y=rot_info["ccc_masked"],
-            mode="markers",
-            marker=dict(size=3),
-            showlegend=False,
-        ),
-        row=2,
-        col=1,
-    )
-    fig.update_xaxes(title_text="Tight mask overlap (in voxels)", row=2, col=1)
-    fig.update_yaxes(title_text="CCC", row=2, col=1)
-
-    fig.add_trace(
-        go.Scatter(
-            x=rot_info["ang_dist"], y=rot_info["ccc_masked"], mode="markers", marker=dict(size=3), showlegend=False
-        ),
-        row=2,
-        col=2,
-    )
-    fig.update_xaxes(title_text="Angular distance (in degrees)", row=2, col=2)
-
-    x_pos = list(range(len(line_profiles)))
-    for col_name in ["x", "y", "z"]:
-        fig.add_trace(
-            go.Scatter(x=x_pos, y=line_profiles[col_name], mode="lines", name=col_name),
-            row=2,
-            col=3,
-        )
-    fig.update_xaxes(title_text="Position (in voxels)", row=2, col=3)
-
-    # Row 3 (optional): histogram line plots
-    if add_hist:
-        x100 = np.linspace(0.0, 1.0, num=100)
-        for col_name in ["ang_dist", "cone_dist", "inplane_dist"]:
-            fig.add_trace(
-                go.Scatter(x=x100, y=hist_info[col_name], mode="lines", name=col_name, showlegend=False),
-                row=3,
-                col=1,
-            )
-        fig.update_yaxes(range=[0, 250], title_text="Number of CCC values (bin size 0.1)", row=3, col=1)
-        fig.update_xaxes(title_text="CCC", row=3, col=1)
-
-        x359 = np.linspace(0.0, 359.0, num=359)
-        for col_name in ["ccc_masked", "cone_ccc_masked", "inplane_ccc_masked"]:
-            fig.add_trace(
-                go.Scatter(x=x359, y=hist_info2[col_name], mode="lines", name=col_name, showlegend=False),
-                row=3,
-                col=2,
-            )
-        fig.update_yaxes(title_text="CCC", row=3, col=2)
-        fig.update_xaxes(title_text="Rotation (in degrees)", row=3, col=2)
-
-    # Heatmap rows (coloraxis1=gray/tight mask, coloraxis2=viridis/scores, coloraxis3=cividis/angles)
-    for c, slice_group in enumerate(cross_slices):
-        if c == 0:
-            coloraxis, annot_fmt = "coloraxis1", None
-        elif c == 1:
-            coloraxis, annot_fmt = "coloraxis2", None
-        elif c == 2:
-            coloraxis, annot_fmt = "coloraxis2", ".2f"
-        else:  # c >= 3
-            coloraxis, annot_fmt = "coloraxis3", ".1f"
-
-        hm_row = n_top_rows + c + 1
-        visplot.add_xyz_heatmap_row(
-            fig,
-            slice_group,
-            row=hm_row,
-            coloraxis=coloraxis,
-            annot_format=annot_fmt,
-        )
-
-    fig.update_layout(
-        title_text=figure_title,
-        height=max(900, 280 * total_rows),
-        coloraxis1=dict(
-            colorscale="gray",
-            cmin=0,
-            cmax=1.0,
-            colorbar=dict(title="Tight mask", thickness=12, len=ca1_len, y=ca1_y, yanchor="middle", x=1.02),
-        ),
-        coloraxis2=dict(
-            colorscale="viridis",
-            cmin=0,
-            cmax=peak_val,
-            colorbar=dict(title="Score", thickness=12, len=ca2_len, y=ca2_y, yanchor="middle", x=1.10),
-        ),
-        coloraxis3=dict(
-            colorscale="cividis",
-            cmin=0,
-            cmax=180,
-            colorbar=dict(title="Angle (°)", thickness=12, len=ca3_len, y=ca3_y, yanchor="middle", x=1.18),
-        ),
-    )
-
-    return fig
-
-
 def _flex_pair(a_html: str, b_html: str) -> str:
     """Wrap two HTML fragments in a flex row that stays side-by-side at any width."""
     return (
@@ -3003,37 +2814,47 @@ def _flex_pair(a_html: str, b_html: str) -> str:
     )
 
 
-def _summary_table_figure(row: pd.Series) -> go.Figure:
-    """Single 4-column table: input parameters (blue) on the left, results (green) on the right."""
+def _summary_table_html(row: pd.Series) -> str:
+    """Single 4-column native HTML table: input parameters (blue) / results (green).
+
+    Rendered as a real ``<table>`` so browser text-selection and copy work natively.
+    """
+
     def _v(col: str) -> str:
         val = row.get(col)
         return "—" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
 
+    def _vfile(col: str) -> str:
+        val = _v(col)
+        return val if val == "—" else os.path.basename(val) or val
+
     input_params = [
-        ("Structure",       _v("Structure")),
-        ("Compare",         _v("Compare")),
-        ("Target map",      _v("Target map")),
-        ("Template",        _v("Template")),
-        ("Mask",            _v("Mask")),
-        ("Symmetry",        _v("Symmetry")),
-        ("Apply wedge",     _v("Apply wedge")),
-        ("Angles",          _v("Angles")),
-        ("Degrees",         _v("Degrees")),
-        ("Binning",         _v("Binning")),
-        ("Pixel size (Å)",  _v("Pixelsize")),
-        ("Box size (vox)",  _v("Boxsize")),
+        ("Structure", _v("Structure")),
+        ("Compare", _v("Compare")),
+        ("Target map", _vfile("Target map")),
+        ("Template", _vfile("Template")),
+        ("Mask", _vfile("Mask")),
+        ("Symmetry", _v("Symmetry")),
+        ("Apply wedge", _v("Apply wedge")),
+        ("Target wedge mask", _vfile("Target wedge mask")),
+        ("Template wedge mask", _vfile("Template wedge mask")),
+        ("Angles", _v("Angles")),
+        ("Degrees", _v("Degrees")),
+        ("Binning", _v("Binning")),
+        ("Pixel size (Å)", _v("Pixelsize")),
+        ("Box size (vox)", _v("Boxsize")),
     ]
     result_params = [
-        ("Peak value",            _v("Peak value")),
+        ("Peak value", _v("Peak value")),
         ("Peak position (x,y,z)", f"{_v('Peak x')}, {_v('Peak y')}, {_v('Peak z')}"),
-        ("Voxels (soft mask)",    _v("Voxels")),
-        ("Voxels (tight mask)",   _v("Voxels TM")),
-        ("Dimensions (x,y,z)",   f"{_v('Dim x')}, {_v('Dim y')}, {_v('Dim z')}"),
-        ("Solidity",              _v("Solidity")),
-        ("VC dist all",           _v("VC dist_all")),
-        ("VC dist normals",       _v("VC dist_normals")),
-        ("VC dist inplane",       _v("VC dist_inplane")),
-        ("Solidity dist all",     _v("Solidity dist_all")),
+        ("Voxels (soft mask)", _v("Voxels")),
+        ("Voxels (tight mask)", _v("Voxels TM")),
+        ("Dimensions (x,y,z)", f"{_v('Dim x')}, {_v('Dim y')}, {_v('Dim z')}"),
+        ("Solidity", _v("Solidity")),
+        ("VC dist all", _v("VC dist_all")),
+        ("VC dist normals", _v("VC dist_normals")),
+        ("VC dist inplane", _v("VC dist_inplane")),
+        ("Solidity dist all", _v("Solidity dist_all")),
         ("Solidity dist normals", _v("Solidity dist_normals")),
         ("Solidity dist inplane", _v("Solidity dist_inplane")),
     ]
@@ -3044,31 +2865,30 @@ def _summary_table_figure(row: pd.Series) -> go.Figure:
     while len(result_params) < n:
         result_params.append(("", ""))
 
-    in_names   = [p[0] for p in input_params]
-    in_values  = [p[1] for p in input_params]
-    res_names  = [p[0] for p in result_params]
-    res_values = [p[1] for p in result_params]
+    _ts = "border-collapse:collapse;width:100%;font-family:sans-serif;font-size:12px"
+    _in_th = "padding:5px 8px;text-align:left;background:#3a3a5e;color:white;font-size:13px"
+    _res_th = "padding:5px 8px;text-align:left;background:#3a5e3a;color:white;font-size:13px"
+    _in_td = "padding:4px 8px;background:#ddeef6;user-select:text"
+    _res_td = "padding:4px 8px;background:#ddf0dd;user-select:text"
 
-    fig = go.Figure(go.Table(
-        header=dict(
-            values=["<b>Input parameter</b>", "<b>Value</b>",
-                    "<b>Result</b>", "<b>Value</b>"],
-            fill_color=["#3a3a5e", "#3a3a5e", "#3a5e3a", "#3a5e3a"],
-            font=dict(color="white", size=13),
-            align="left",
-            height=28,
-        ),
-        cells=dict(
-            values=[in_names, in_values, res_names, res_values],
-            fill_color=["#ddeef6", "#ddeef6", "#ddf0dd", "#ddf0dd"],
-            align="left",
-            font=dict(size=12),
-            height=24,
-        ),
-    ))
-    fig.update_layout(margin=dict(l=0, r=0, t=4, b=0),
-                      height=30 + 28 + 24 * n)
-    return fig
+    header = (
+        f"<thead><tr>"
+        f'<th style="{_in_th}">Input parameter</th>'
+        f'<th style="{_in_th}">Value</th>'
+        f'<th style="{_res_th}">Result</th>'
+        f'<th style="{_res_th}">Value</th>'
+        f"</tr></thead>"
+    )
+    body_rows = "".join(
+        f"<tr>"
+        f'<td style="{_in_td}">{in_name}</td>'
+        f'<td style="{_in_td}">{in_val}</td>'
+        f'<td style="{_res_td}">{res_name}</td>'
+        f'<td style="{_res_td}">{res_val}</td>'
+        f"</tr>"
+        for (in_name, in_val), (res_name, res_val) in zip(input_params, result_params)
+    )
+    return f'<table style="{_ts}">{header}<tbody>{body_rows}</tbody></table>'
 
 
 def _ccc_scatter_figure(rot_df: pd.DataFrame) -> go.Figure:
@@ -3079,16 +2899,18 @@ def _ccc_scatter_figure(rot_df: pd.DataFrame) -> go.Figure:
         overlap_col, overlap_label = "common_voxels", "Common voxels"
     fig = make_subplots(rows=1, cols=2, horizontal_spacing=0.08)
     fig.add_trace(
-        go.Scatter(x=rot_df["ang_dist"], y=rot_df["ccc_masked"],
-                   mode="markers", marker=dict(size=3), showlegend=False),
-        row=1, col=1,
+        go.Scatter(x=rot_df["ang_dist"], y=rot_df["ccc_masked"], mode="markers", marker=dict(size=3), showlegend=False),
+        row=1,
+        col=1,
     )
     fig.update_xaxes(title_text="Angular distance (in degrees)", row=1, col=1)
     fig.update_yaxes(title_text="CCC", row=1, col=1)
     fig.add_trace(
-        go.Scatter(x=rot_df[overlap_col], y=rot_df["ccc_masked"],
-                   mode="markers", marker=dict(size=3), showlegend=False),
-        row=1, col=2,
+        go.Scatter(
+            x=rot_df[overlap_col], y=rot_df["ccc_masked"], mode="markers", marker=dict(size=3), showlegend=False
+        ),
+        row=1,
+        col=2,
     )
     fig.update_xaxes(title_text=overlap_label, row=1, col=2)
     fig.update_yaxes(title_text="CCC", row=1, col=2)
@@ -3104,28 +2926,28 @@ def _angle_development_figure(hist_df: pd.DataFrame, analysis_df: pd.DataFrame) 
     """
     fig = make_subplots(rows=1, cols=2, horizontal_spacing=0.08)
 
-    hist_cols   = ["ang_dist",   "cone_dist",       "inplane_dist"]
+    hist_cols = ["ang_dist", "cone_dist", "inplane_dist"]
     masked_cols = ["ccc_masked", "cone_ccc_masked", "inplane_ccc_masked"]
-    labels      = ["ang_dist",   "cone",            "inplane"]
+    labels = ["ang_dist", "cone", "inplane"]
 
     # Left: CCC histogram from hist_df (original, correct)
     x100 = np.linspace(0.0, 1.0, num=100)
     for col, label in zip(hist_cols, labels):
         fig.add_trace(
-            go.Scatter(x=x100, y=hist_df[col], mode="lines",
-                       name=label, legendgroup=label, showlegend=True),
-            row=1, col=1,
+            go.Scatter(x=x100, y=hist_df[col], mode="lines", name=label, legendgroup=label, showlegend=True),
+            row=1,
+            col=1,
         )
     fig.update_yaxes(range=[0, 250], title_text="Number of CCC values (bin size 0.1)", row=1, col=1)
     fig.update_xaxes(title_text="CCC", row=1, col=1)
 
-    # Right: masked CCC vs rotation angle (0–359°) for all three distance types
-    x359 = np.linspace(0.0, 359.0, num=len(analysis_df))
+    # Right: masked CCC vs rotation angle for all three distance types
+    x359 = np.linspace(0.0, float(len(analysis_df) - 1), num=len(analysis_df))
     for col, label in zip(masked_cols, labels):
         fig.add_trace(
-            go.Scatter(x=x359, y=analysis_df[col], mode="lines",
-                       name=label, legendgroup=label, showlegend=False),
-            row=1, col=2,
+            go.Scatter(x=x359, y=analysis_df[col], mode="lines", name=label, legendgroup=label, showlegend=False),
+            row=1,
+            col=2,
         )
     fig.update_xaxes(title_text="Rotation (in degrees)", row=1, col=2)
     fig.update_yaxes(title_text="Masked CCC", row=1, col=2)
@@ -3153,13 +2975,13 @@ _RESIZE_SCRIPT = (
 # Flat-file names written by run_single_case mapped from the batch-style
 # suffix used by the batch pipeline (used in _write_case_summary_html).
 _SINGLE_CASE_FILE_MAP: dict[str, str] = {
-    "_scores.em":                     "scores.em",
-    "_angles_dist_all.em":            "distance_map_all.em",
-    "_angles_dist_normals.em":        "distance_map_normals.em",
-    "_angles_dist_inplane.em":        "distance_map_inplane.em",
-    "_stats.json":                    "stats.json",
+    "_scores.em": "scores.em",
+    "_angles_dist_all.em": "distance_map_all.em",
+    "_angles_dist_normals.em": "distance_map_normals.em",
+    "_angles_dist_inplane.em": "distance_map_inplane.em",
+    "_stats.json": "stats.json",
     "_gradual_angles_histograms.csv": "gradual_angles_histograms.csv",
-    "_gradual_angles_analysis.csv":   "gradual_angles_analysis.csv",
+    "_gradual_angles_analysis.csv": "gradual_angles_analysis.csv",
 }
 
 
@@ -3195,19 +3017,23 @@ def _write_case_summary_html(
         Path to the written HTML file.
     """
     if output_base:
+
         def _p(suffix: str) -> str | None:
             path = output_folder + output_base + suffix
             return path if os.path.isfile(path) else None
+
         rot_csv = _p(".csv")
         html_out = output_folder + output_base + "_summary.html"
         title_str = title or f"Summary — {output_base}"
     else:
+
         def _p(suffix: str) -> str | None:
             fname = _SINGLE_CASE_FILE_MAP.get(suffix, "")
             if not fname:
                 return None
             path = output_folder + fname
             return path if os.path.isfile(path) else None
+
         rot_csv = None
         html_out = output_folder + "summary.html"
         title_str = title or "Summary"
@@ -3222,18 +3048,21 @@ def _write_case_summary_html(
 
     html_parts: list[str] = []
 
-    # ── Section 1: input parameters | results (combined 4-column table) ────
-    tbl_html = _summary_table_figure(row).to_html(include_plotlyjs="cdn", full_html=False)
-    html_parts.append("<h2>Run parameters &amp; results</h2>\n" + tbl_html)
+    # ── Section 1: input parameters | results (native HTML table — copyable) ─
+    html_parts.append("<h2>Run parameters &amp; results</h2>\n" + _summary_table_html(row))
 
     # ── Section 2: line profiles | peak shape ──────────────────────────────
     _resp = {"responsive": True}
-    lp_html = (figs["line_profiles"].to_html(include_plotlyjs=False, full_html=False,
-               default_width="100%", config=_resp)
-               if "line_profiles" in figs else None)
-    ps_html = (figs["peak_shape"].to_html(include_plotlyjs=False, full_html=False,
-               default_width="100%", config=_resp)
-               if "peak_shape" in figs else None)
+    lp_html = (
+        figs["line_profiles"].to_html(include_plotlyjs=False, full_html=False, default_width="100%", config=_resp)
+        if "line_profiles" in figs
+        else None
+    )
+    ps_html = (
+        figs["peak_shape"].to_html(include_plotlyjs=False, full_html=False, default_width="100%", config=_resp)
+        if "peak_shape" in figs
+        else None
+    )
     if lp_html and ps_html:
         html_parts.append("<h2>Line profiles &amp; peak shape</h2>\n" + _flex_pair(lp_html, ps_html))
     elif lp_html:
@@ -3267,44 +3096,42 @@ def _write_case_summary_html(
         except Exception:
             pass
 
-    # ── Section 5: tight mask cross-sections ───────────────────────────────
+    # ── Section 5: tight mask cross-sections (centered) ────────────────────
     if tight_mask_path and os.path.isfile(tight_mask_path):
         try:
             mask_arr = cryomap.read(tight_mask_path)
+            fig_html = _make_slice_figure(mask_arr, colorscale="gray", title="", show_zoom=False).to_html(
+                include_plotlyjs=False, full_html=False
+            )
             html_parts.append(
                 "<h2>Tight mask cross-sections</h2>\n"
-                + _make_slice_figure(mask_arr, colorscale="gray",
-                                     title="",
-                                     show_zoom=False).to_html(
-                    include_plotlyjs=False, full_html=False)
+                + f'<div style="display:flex;justify-content:center">{fig_html}</div>'
             )
         except Exception:
             pass
 
-    # ── Section 6: orthogonal cross-sections ───────────────────────────────
+    # ── Section 6: orthogonal cross-sections (centered) ────────────────────
     for key, section_title in [
-        ("score_slices",            "Score map cross-sections"),
-        ("distance_slices_all",     "Distance map (all) cross-sections"),
+        ("score_slices", "Score map cross-sections"),
+        ("distance_slices_all", "Distance map (all) cross-sections"),
         ("distance_slices_normals", "Distance map (normals) cross-sections"),
         ("distance_slices_inplane", "Distance map (in-plane) cross-sections"),
     ]:
         if key in figs:
             figs[key].update_layout(title_text="", margin_t=0)
+            fig_html = figs[key].to_html(include_plotlyjs=False, full_html=False)
             html_parts.append(
-                f"<h2>{section_title}</h2>\n"
-                + figs[key].to_html(include_plotlyjs=False, full_html=False)
+                f"<h2>{section_title}</h2>\n" + f'<div style="display:flex;justify-content:center">{fig_html}</div>'
             )
 
     full_html = (
         "<!DOCTYPE html>\n<html>\n<head>\n"
         '<meta charset="utf-8">\n'
         f"<title>{title_str}</title>\n"
-        "<style>body{font-family:sans-serif;margin:1rem}</style>\n"
+        '<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>\n'
+        "<style>body{font-family:sans-serif;margin:1rem}h1,h2{text-align:center}</style>\n"
         "</head>\n<body>\n"
-        f"<h1>{title_str}</h1>\n"
-        + "\n".join(html_parts)
-        + "\n" + _RESIZE_SCRIPT
-        + "\n</body>\n</html>"
+        f"<h1>{title_str}</h1>\n" + "\n".join(html_parts) + "\n" + _RESIZE_SCRIPT + "\n</body>\n</html>"
     )
 
     with open(html_out, "w", encoding="utf-8") as fh:
@@ -3357,8 +3184,18 @@ def create_summary_html(template_list: PathOrStr, indices: list[int], parent_fol
             if os.path.isfile(candidate):
                 tight_mask_path = candidate
 
+        # Use the params.csv wedge mask values (which hold auto-named paths when
+        # the columns were not explicitly set in the template list).
+        row = temp_df.loc[i].copy()
+        params_csv_path = output_folder + "params.csv"
+        if os.path.isfile(params_csv_path):
+            params_row = pd.read_csv(params_csv_path).iloc[0]
+            for _col in ("Target wedge mask", "Template wedge mask"):
+                if _col in params_row.index and pd.notna(params_row[_col]):
+                    row[_col] = params_row[_col]
+
         _write_case_summary_html(
-            row=temp_df.loc[i],
+            row=row,
             output_folder=output_folder,
             output_base=output_base,
             tight_mask_path=tight_mask_path,
@@ -3752,9 +3589,7 @@ def correct_bbox(template_list: PathOrStr, indices: list[int]) -> None:
         temp_df.to_csv(template_list)
 
 
-def recompute_dist_maps(
-    template_list: PathOrStr, indices: list[int], parent_folder_path: PathOrStr, angle_list_path: PathOrStr
-) -> None:
+def recompute_dist_maps(template_list: PathOrStr, indices: list[int], parent_folder_path: PathOrStr) -> None:
     """
     Recompute angular distance maps for specified entries in a template list.
 
@@ -3769,9 +3604,8 @@ def recompute_dist_maps(
     indices : iterable of int
         List or array of row indices in the CSV file to process.
     parent_folder_path : PathOrStr
-        Base path to the parent folder where structure and output folders are.
-    angle_list_path : PathOrStr
-        Base path to the directory containing angle list files referenced in the CSV.
+        Base path to the parent folder where structure and output folders are. If "Angles"
+        contains a bare filename, it is resolved via ``parent_folder/structure/``.
     """
 
     temp_df = _read_template_list(template_list)
@@ -3785,8 +3619,18 @@ def recompute_dist_maps(
         output_base = create_output_base_name(i)
         output_folder = create_output_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
         angles_map = output_folder + output_base + "_angles.em"
-        angle_list = angle_list_path + temp_df.at[i, "Angles"]
+        angle_list = _resolve_input_path(temp_df.at[i, "Angles"], parent_folder_path, structure_name)
         cyclic_symmetry = temp_df.at[i, "Symmetry"]
+        starting_angle = np.array([temp_df.at[i, "Phi"], temp_df.at[i, "Theta"], temp_df.at[i, "Psi"]], dtype=float)
+        if temp_df.at[i, "Apply angular offset"]:
+            angular_offset = np.full((3,), float(temp_df.at[i, "Degrees"]) / 2.0)
+        else:
+            angular_offset = None
+        applied_angles = geom.apply_starting_and_offset(
+            ioutils.euler_angles_load(angle_list),
+            starting_angle,
+            angular_offset,
+        )
         _, _, _ = tmana.create_angular_distance_maps(
-            angles_map, angle_list, write_out_maps=True, cyclic_symmetry=cyclic_symmetry
+            angles_map, applied_angles, write_out_maps=True, cyclic_symmetry=cyclic_symmetry
         )
