@@ -783,3 +783,143 @@ class TestGetNnSubsetFixed:
         sub = nn.get_nn_subset(motl_id_values=1, column_values=1)
         sub.add_motl_columns("object_id")  # must not raise
         assert "qp_object_id" in sub.df.columns
+
+
+# =============================================================================
+# TestRoundTrip
+# =============================================================================
+
+
+def _two_motl_pair():
+    """Return (qp_motl, nn_motl) — two separate 2-particle motls sharing tomo_id=1."""
+    def _make(subtomo_ids, xs, phis):
+        df = cryomotl.Motl.create_empty_motl_df()
+        rows = [
+            {"subtomo_id": sid, "tomo_id": 1, "object_id": 1, "class": 1,
+             "x": x, "y": 0.0, "z": 0.0,
+             "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+             "phi": phi, "theta": 0.0, "psi": 0.0, "score": 1.0}
+            for sid, x, phi in zip(subtomo_ids, xs, phis)
+        ]
+        return cryomotl.Motl(motl_df=pd.concat([df, pd.DataFrame(rows)], ignore_index=True))
+
+    qp = _make([1, 2], [0.0, 5.0], [0.0, 10.0])
+    nn = _make([3, 4], [1.0, 6.0], [20.0, 30.0])
+    return qp, nn
+
+
+class TestRoundTrip:
+    """CSV round-trip via write_out / load."""
+
+    def test_round_trip_values_and_dtypes(self, tmp_path):
+        """write_out then load reproduces the DataFrame with correct dtypes."""
+        qp, nn_motl = _two_motl_pair()
+        orig = nnana.NearestNeighbors([qp, nn_motl], column_name="tomo_id")
+        csv = tmp_path / "nn.csv"
+        orig.write_out(csv)
+
+        loaded = nnana.NearestNeighbors.load(csv, motls=[qp, nn_motl])
+
+        # same columns (order doesn't matter), same values
+        pd.testing.assert_frame_equal(
+            orig.df.reset_index(drop=True),
+            loaded.df[orig.df.columns].reset_index(drop=True),
+            check_like=False,
+            atol=1e-6,
+        )
+        # dtypes preserved
+        for col in ("motl_id", "tomo_id", "qp_subtomo_id", "nn_subtomo_id"):
+            assert loaded.df[col].dtype == np.int32, f"{col} should be int32"
+        for col in ("qp_coord_x", "nn_coord_x", "nn_dist"):
+            assert loaded.df[col].dtype == np.float32, f"{col} should be float32"
+
+        # metadata
+        assert loaded.column_name == "tomo_id"
+        np.testing.assert_array_equal(loaded.features, orig.features)
+        assert loaded.motls is not None
+        assert len(loaded.motls) == 2
+
+    def test_round_trip_add_motl_columns_and_get_nn_subset(self, tmp_path):
+        """After load, add_motl_columns and get_nn_subset work correctly."""
+        qp, nn_motl = _two_motl_pair()
+        orig = nnana.NearestNeighbors([qp, nn_motl], column_name="tomo_id")
+        csv = tmp_path / "nn.csv"
+        orig.write_out(csv)
+        loaded = nnana.NearestNeighbors.load(csv, motls=[qp, nn_motl])
+
+        loaded.add_motl_columns("object_id")
+        assert "qp_object_id" in loaded.df.columns
+        assert "nn_object_id" in loaded.df.columns
+
+        # get_nn_subset on an existing (motl_id=1, tomo_id=1) pair
+        sub = loaded.get_nn_subset(motl_id_values=1, column_values=1)
+        assert sub.df is not None and len(sub.df) > 0
+
+    def test_column_name_recovery_with_extra_columns(self, tmp_path):
+        """column_name is still inferred correctly when extra columns exist."""
+        qp, nn_motl = _two_motl_pair()
+        orig = nnana.NearestNeighbors([qp, nn_motl], column_name="tomo_id")
+        csv = tmp_path / "nn.csv"
+        orig.write_out(csv)
+
+        # add extra columns after the lead columns and re-save
+        df_extra = pd.read_csv(csv)
+        df_extra["qp_object_id"] = 1
+        df_extra["nn_object_id"] = 1
+        df_extra["cluster"] = 0
+        modified_csv = tmp_path / "nn_extra.csv"
+        df_extra.to_csv(modified_csv, index=False)
+
+        loaded = nnana.NearestNeighbors.load(modified_csv, motls=[qp, nn_motl])
+        assert loaded.column_name == "tomo_id"
+
+    def test_load_no_motls(self, tmp_path):
+        """load without motls produces a df-only instance."""
+        qp, nn_motl = _two_motl_pair()
+        orig = nnana.NearestNeighbors([qp, nn_motl], column_name="tomo_id")
+        csv = tmp_path / "nn.csv"
+        orig.write_out(csv)
+
+        loaded = nnana.NearestNeighbors.load(csv)
+        assert loaded.motls is None
+        assert loaded.df is not None and not loaded.df.empty
+
+    def test_load_bad_first_column_raises(self, tmp_path):
+        """ValueError is raised when first column is not motl_id and column_name is absent."""
+        bad_csv = tmp_path / "bad.csv"
+        pd.DataFrame({"wrong_col": [1], "tomo_id": [1]}).to_csv(bad_csv, index=False)
+        with pytest.raises(ValueError, match="motl_id"):
+            nnana.NearestNeighbors.load(bad_csv)
+
+    def test_load_motl_list_too_short_raises(self, tmp_path):
+        """ValueError is raised when the motl list is shorter than required by motl_id values."""
+        qp, nn_motl = _two_motl_pair()
+        orig = nnana.NearestNeighbors([qp, nn_motl], column_name="tomo_id")
+        csv = tmp_path / "nn.csv"
+        orig.write_out(csv)
+
+        # supply only qp (motl_id=1 in the table requires motl_list[1])
+        with pytest.raises(ValueError, match="motl"):
+            nnana.NearestNeighbors.load(csv, motls=[qp])
+
+    def test_load_subtomo_id_mismatch_raises(self, tmp_path):
+        """ValueError is raised when nn_subtomo_ids don't match the supplied motl."""
+        qp, nn_motl = _two_motl_pair()
+        orig = nnana.NearestNeighbors([qp, nn_motl], column_name="tomo_id")
+        csv = tmp_path / "nn.csv"
+        orig.write_out(csv)
+
+        # build a nn motl with completely different subtomo_ids
+        def _make_bogus():
+            df = cryomotl.Motl.create_empty_motl_df()
+            rows = [
+                {"subtomo_id": 99, "tomo_id": 1, "object_id": 1, "class": 1,
+                 "x": 0., "y": 0., "z": 0.,
+                 "shift_x": 0., "shift_y": 0., "shift_z": 0.,
+                 "phi": 0., "theta": 0., "psi": 0., "score": 1.},
+            ]
+            return cryomotl.Motl(motl_df=pd.concat([df, pd.DataFrame(rows)], ignore_index=True))
+
+        bogus_nn = _make_bogus()
+        with pytest.raises(ValueError, match="subtomo_id"):
+            nnana.NearestNeighbors.load(csv, motls=[qp, bogus_nn])

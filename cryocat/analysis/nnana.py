@@ -44,7 +44,7 @@ from cryocat._types import (
     RotationDistanceType,
 )
 from cryocat.core import cryomap, cryomotl
-from cryocat.utils import geom
+from cryocat.utils import geom, ioutils
 
 if TYPE_CHECKING:
     # Import the alias lazily to avoid the cryomotl ↔ nnana circular import
@@ -794,6 +794,136 @@ class NearestNeighbors:
         ].copy()
         sub.features = column_values
         return sub
+
+    def write_out(self, file_path: PathOrStr) -> None:
+        """Write the per-pair NN table to CSV.
+
+        The ``motl_id`` and feature (``column_name``) columns are written first
+        and second so :meth:`load` can recover the feature column by position
+        regardless of any extra columns present.  Motls and metadata are not
+        stored; reattach motls via :meth:`load`.
+
+        Parameters
+        ----------
+        file_path : PathOrStr
+            Destination CSV path.
+        """
+        lead = ["motl_id", self.column_name]
+        cols = lead + [c for c in self.df.columns if c not in lead]
+        self.df[cols].to_csv(file_path, index=False)
+
+    @classmethod
+    def load(
+        cls,
+        file_path: PathOrStr,
+        motls: "MotlSource | list[MotlSource] | None" = None,
+        column_name: "MotlColumn | None" = None,
+        paired: bool = False,
+        exclude_column_name: "MotlColumn | None" = None,
+    ) -> "NearestNeighbors":
+        """Load a ``NearestNeighbors`` instance from a CSV written by :meth:`write_out`.
+
+        Parameters
+        ----------
+        file_path : PathOrStr
+            Path to the CSV file.
+        motls : MotlSource or list of MotlSource or None, optional
+            Source motls to reattach, in the same order as the original
+            ``input_data`` (``[qp, nn1, nn2, …]``).  Pass ``None`` to get a
+            df-only instance (``motls`` will be ``None``).
+        column_name : MotlColumn or None, optional
+            Feature column used to partition the NN search.  Inferred from the
+            second column of the CSV when not given (``write_out`` guarantees
+            ``motl_id`` first and the feature column second).
+        paired : bool, default=False
+            Stored as provenance only; does not affect behaviour of the loaded
+            instance.
+        exclude_column_name : MotlColumn or None, optional
+            Stored as provenance only.
+
+        Returns
+        -------
+        NearestNeighbors
+            Loaded instance with ``df``, ``column_name``, ``features``, and
+            optionally ``motls`` populated.
+
+        Raises
+        ------
+        ValueError
+            If the first column of the CSV is not ``"motl_id"`` and
+            ``column_name`` was not supplied, or if the supplied motl list does
+            not cover all ``motl_id`` values in the table, or if any
+            ``qp_subtomo_id`` / ``nn_subtomo_id`` value is absent from the
+            corresponding source motl.
+        """
+        from cryocat.utils.classutils import as_list
+
+        df = ioutils.df_load(str(file_path))
+
+        # ── column_name recovery ─────────────────────────────────────────────
+        if column_name is None:
+            if df.columns[0] != "motl_id":
+                raise ValueError(
+                    f"First column of {file_path!r} is {df.columns[0]!r}, not 'motl_id'. "
+                    "The file does not follow the NearestNeighbors CSV convention; "
+                    "pass column_name explicitly."
+                )
+            column_name = str(df.columns[1])
+
+        # ── re-apply dtypes ──────────────────────────────────────────────────
+        int_base = ["motl_id", column_name, "qp_id", "qp_subtomo_id", "nn_id", "nn_subtomo_id"]
+        float_patterns = ("_angle", "_coord", "nn_dist")
+        int_cols = {c for c in int_base if c in df.columns}
+        float_cols = {
+            c for c in df.columns
+            if any(p in c for p in float_patterns) and c not in int_cols
+        }
+        cast = {**{c: np.int32 for c in int_cols}, **{c: np.float32 for c in float_cols}}
+        if cast:
+            df = df.astype(cast)
+
+        # ── build instance ───────────────────────────────────────────────────
+        obj = cls()
+        obj.df = df
+        obj.column_name = column_name
+        obj.paired = paired
+        obj.exclude_column_name = exclude_column_name
+        obj.features = np.unique(df[column_name].values) if not df.empty else df[column_name].values
+
+        # ── reattach motls ───────────────────────────────────────────────────
+        if motls is None:
+            obj.motls = None
+        else:
+            motl_list = [cryomotl.Motl.load(m) for m in as_list(motls)]
+            obj.motls = motl_list
+
+            # validate coverage
+            max_mid = int(df["motl_id"].max())
+            if max_mid >= len(motl_list):
+                raise ValueError(
+                    f"motl_id {max_mid} in the table requires motl_list[{max_mid}], "
+                    f"but only {len(motl_list)} motl(s) were supplied. "
+                    "Check the motl list order: [qp_motl, nn_motl1, nn_motl2, …]."
+                )
+            qp_ids = set(motl_list[0].df["subtomo_id"].values)
+            missing_qp = set(df["qp_subtomo_id"].values) - qp_ids
+            if missing_qp:
+                raise ValueError(
+                    f"{len(missing_qp)} qp_subtomo_id value(s) not found in motls[0] "
+                    f"(first missing: {next(iter(missing_qp))})."
+                )
+            for mid in df["motl_id"].unique():
+                nn_ids = set(motl_list[int(mid)].df["subtomo_id"].values)
+                mask = df["motl_id"] == mid
+                missing_nn = set(df.loc[mask, "nn_subtomo_id"].values) - nn_ids
+                if missing_nn:
+                    raise ValueError(
+                        f"{len(missing_nn)} nn_subtomo_id value(s) for motl_id={mid} "
+                        f"not found in motls[{int(mid)}] "
+                        f"(first missing: {next(iter(missing_nn))})."
+                    )
+
+        return obj
 
     def get_normalized_coord(self, add_to_df: bool = True) -> np.ndarray:
         """Return centered NN coordinates ``nn_coord - qp_coord``.

@@ -37,6 +37,18 @@ _MOTL_COL_OPTIONS = [{"label": c, "value": c} for c in Motl.motl_columns]
 _NN_TRANSFER_EXCLUDE = {"motl_id", "qp_id", "nn_id"}
 
 
+def _nn_csv_save(path, grid_data, used_motls):
+    """CSV saver for the NN table: puts motl_id first and column_name second."""
+    df = pd.DataFrame(grid_data)
+    column_name = (used_motls or {}).get("column_name")
+    if column_name and column_name in df.columns:
+        lead = [c for c in ("motl_id", column_name) if c in df.columns]
+        cols = lead + [c for c in df.columns if c not in lead]
+        df = df[cols]
+    df.to_csv(path, index=False)
+    return False, f"Saved to {path}"
+
+
 # ── Layout ──────────────────────────────────────────────────────────────────────
 
 def _create_motl_sidebar_content():
@@ -237,6 +249,46 @@ def _postprocess_sidebar_content():
     )
 
 
+def _load_csv_sidebar_content():
+    """Sidebar content for the 'Load from CSV' accordion item."""
+    hint = {"fontSize": "0.8rem", "color": "var(--color9)", "marginBottom": "0.4rem"}
+    lbl = {"fontWeight": "bold", "fontSize": "0.85rem", "marginBottom": "0.2rem"}
+    return html.Div(
+        [
+            html.P(
+                "Load a previously saved NN table. Motls selected in "
+                "'Input motls' will be reattached; leave none selected for a "
+                "data-only load (post-processing will still work, but 'Create "
+                "motl from NN table' requires attached motls).",
+                style=hint,
+            ),
+            html.Label("CSV file path:", style=lbl),
+            dbc.Input(
+                id="nn-load-csv-path",
+                placeholder="Path to .csv file…",
+                size="sm",
+                style={"marginBottom": "0.5rem"},
+            ),
+            dbc.Button(
+                "Load",
+                id="nn-load-csv-btn",
+                color="primary",
+                size="sm",
+                style={"width": "100%"},
+            ),
+            html.Div(
+                id="nn-load-csv-status",
+                style={
+                    "fontSize": "0.85rem",
+                    "color": "var(--color9)",
+                    "marginTop": "0.4rem",
+                    "wordBreak": "break-word",
+                },
+            ),
+        ]
+    )
+
+
 def _sidebar():
     return dbc.Col(
         html.Div(
@@ -392,8 +444,13 @@ def _sidebar():
                                     },
                                 ),
                             ],
-                            title="NN parameters",
+                            title="Compute NN table",
                             item_id="nn-acc-params",
+                        ),
+                        dbc.AccordionItem(
+                            _load_csv_sidebar_content(),
+                            title="Load existing NN table",
+                            item_id="nn-acc-load",
                         ),
                         dbc.AccordionItem(
                             _postprocess_sidebar_content(),
@@ -468,7 +525,11 @@ def _kwargs_by_cls(param_ids, param_values, target_cls):
 
 def register_callbacks(app):
     register_motl_source_callbacks(app, "nn", multi=True)
-    register_table_callbacks(app, "nn-out-tabv", csv_only=True)
+    register_table_callbacks(
+        app, "nn-out-tabv", csv_only=True,
+        extra_csv_states=[State("nn-used-motls-store", "data")],
+        custom_csv_save_fn=_nn_csv_save,
+    )
     register_table_plot_callbacks(
         app, "nn-out-tabv-table-plot", "nn-out-tabv-global-data-store",
         special_graphs=["Orientational distribution", "Polar NN distances"],
@@ -652,7 +713,11 @@ def register_callbacks(app):
             )
         )
 
-        used_motls_store = {"names": selected, "is_multi": len(selected) > 1}
+        used_motls_store = {
+            "names": selected,
+            "is_multi": len(selected) > 1,
+            "column_name": nn_stats.column_name,
+        }
 
         return (
             xyz_graph, table_data, " | ".join(status_bits), table_data,
@@ -949,3 +1014,73 @@ def register_callbacks(app):
             )
 
         return no_update, no_update, no_update, no_update
+
+    # ── Load NN table from CSV ────────────────────────────────────────────────
+    @app.callback(
+        Output("nn-xyz-graph-area", "children", allow_duplicate=True),
+        Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
+        Output("nn-result", "data", allow_duplicate=True),
+        Output("nn-used-motls-store", "data", allow_duplicate=True),
+        Output("nn-load-csv-status", "children"),
+        Input("nn-load-csv-btn", "n_clicks"),
+        State("nn-load-csv-path", "value"),
+        State("nn-motl-select", "value"),
+        State("pool-motls", "data"),
+        prevent_initial_call=True,
+    )
+    def _load_nn_from_csv(n_clicks, csv_path, selected, pool_motls):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        if not csv_path:
+            return no_update, no_update, no_update, no_update, "Specify a CSV file path."
+
+        pool_motls = pool_motls or {}
+        motl_list = None
+        selected_names = []
+        is_multi = False
+
+        if selected:
+            if isinstance(selected, str):
+                selected = [selected]
+            motl_objs = [Motl(pd.DataFrame(pool_motls[m])) for m in selected if pool_motls.get(m)]
+            if motl_objs:
+                selected_names = [m for m in selected if pool_motls.get(m)]
+                is_multi = len(selected_names) > 1
+                # Single-motl NearestNeighbors stores motls=[motl, motl]
+                if not is_multi:
+                    motl_list = [motl_objs[0], motl_objs[0]]
+                else:
+                    motl_list = motl_objs
+
+        try:
+            nn_stats = NearestNeighbors.load(csv_path, motls=motl_list)
+        except Exception as exc:
+            return no_update, no_update, no_update, no_update, f"Load failed: {exc}"
+
+        xyz_graph = no_update
+        try:
+            normalized = nn_stats.get_normalized_coord(add_to_df=True)
+            nn_stats.get_rotated_coord(add_to_df=True)
+            nn_df = pd.DataFrame(
+                np.column_stack((normalized, nn_stats.df["nn_subtomo_id"].values)),
+                columns=["x", "y", "z", "nn_subtomo_id"],
+            )
+            xyz_graph = dcc.Graph(
+                figure=visplot.plot_scatter_xyz_panels(
+                    nn_df, coord_columns=["x", "y", "z"], hover_column_name="nn_subtomo_id"
+                )
+            )
+        except Exception:
+            pass
+
+        table_data = nn_stats.df.to_dict("records")
+        used_motls_store = {
+            "names": selected_names,
+            "is_multi": is_multi,
+            "column_name": nn_stats.column_name,
+        }
+
+        n_rows = len(nn_stats.df)
+        motl_note = f" ({len(selected_names)} motl(s) attached)" if selected_names else " (no motls attached)"
+        status = f"Loaded {n_rows} rows{motl_note}."
+        return xyz_graph, table_data, table_data, used_motls_store, status

@@ -333,7 +333,29 @@ def get_table_component(prefix: str, connected_motl_prefix=None, show_create_fro
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
 
-def register_table_callbacks(app, prefix: str, csv_only=True, connected_motl_prefix=None, slot_idx=None, max_motls=None):
+def register_table_callbacks(
+    app,
+    prefix: str,
+    csv_only=True,
+    connected_motl_prefix=None,
+    slot_idx=None,
+    max_motls=None,
+    extra_csv_states=None,
+    custom_csv_save_fn=None,
+):
+    """Register all table callbacks for *prefix*.
+
+    Parameters
+    ----------
+    extra_csv_states : list of dash.State, optional
+        Additional State(…) objects appended to the CSV-save callback.
+        Their values are forwarded as extra positional args to
+        *custom_csv_save_fn* in the same order.
+    custom_csv_save_fn : callable, optional
+        Called as ``fn(path, grid_data, *extra)`` when the user saves.
+        Should return ``(modal_is_open, status_text)`` or ``None`` to
+        fall through to the default ``pd.DataFrame.to_csv`` behaviour.
+    """
 
     motl_mode = connected_motl_prefix is not None
 
@@ -593,12 +615,17 @@ def register_table_callbacks(app, prefix: str, csv_only=True, connected_motl_pre
         Input(f"{prefix}-csv-save-btn", "n_clicks"),
         State(f"{prefix}-csv-path", "value"),
         State(f"{prefix}-grid", "rowData"),
+        *(extra_csv_states or []),
         prevent_initial_call=True,
     )
-    def do_csv_save(_, path, grid_data):
+    def do_csv_save(_, path, grid_data, *extra):
         if not path or not grid_data:
             return no_update, "Specify a filename."
         try:
+            if custom_csv_save_fn is not None:
+                result = custom_csv_save_fn(path, grid_data, *extra)
+                if result is not None:
+                    return result
             pd.DataFrame(grid_data).to_csv(path, index=False)
             return False, f"Saved to {path}"
         except Exception as e:
