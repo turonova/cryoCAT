@@ -628,29 +628,43 @@ class TestPolyhedralComplex:
 
     @pytest.fixture
     def ico_complex(self, sample_motl):
-        return structure.PolyhedralComplex(sample_motl, "I")
+        return structure.IcosahedralComplex(sample_motl)
 
     @pytest.fixture
     def shift_vecs_test(self, path_test_marker_file, mrc_file):
-        vecs, _ = structure.PolyhedralComplex.recover_features(
-            path_test_marker_file, str(mrc_file), symmetry="I", project_to_sphere=True
+        vecs, _ = structure.IcosahedralComplex.recover_features(
+            path_test_marker_file, str(mrc_file), project_to_sphere=True
         )
         return vecs
 
-    # ------------------------------------------------------------------ constructor
+    # ------------------------------------------------------------------ abstract guard
 
-    @pytest.mark.parametrize("sym", ["T", "O", "I"])
-    def test_valid_symmetry(self, sample_motl, sym):
-        pc = structure.PolyhedralComplex(sample_motl, sym)
+    def test_abstract_base_raises(self, sample_motl):
+        with pytest.raises(TypeError, match="abstract"):
+            structure.PolyhedralComplex(sample_motl)
+
+    def test_abstract_recover_features_raises(self, path_test_marker_file, mrc_file):
+        with pytest.raises(TypeError, match="concrete subclass"):
+            structure.PolyhedralComplex.recover_features(
+                path_test_marker_file, str(mrc_file)
+            )
+
+    # ------------------------------------------------------------------ concrete subclasses
+
+    @pytest.mark.parametrize("cls, sym, n_subunits, solid_cls", [
+        (structure.TetrahedralComplex, "T", 12, geom.Tetrahedron),
+        (structure.OctahedralComplex, "O", 24, geom.Octahedron),
+        (structure.IcosahedralComplex, "I", 60, geom.Icosahedron),
+    ])
+    def test_concrete_class_attributes(self, sample_motl, cls, sym, n_subunits, solid_cls):
+        pc = cls(sample_motl)
         assert pc.group == sym
-
-    def test_invalid_symmetry_raises(self, sample_motl):
-        with pytest.raises(ValueError, match="T/O/I"):
-            structure.PolyhedralComplex(sample_motl, "C4")
+        assert pc.n_subunits == n_subunits
+        assert pc._solid is solid_cls
 
     def test_stores_column_names(self, sample_motl):
-        pc = structure.PolyhedralComplex(
-            sample_motl, "I",
+        pc = structure.IcosahedralComplex(
+            sample_motl,
             affiliation_column="geom3", order_column="geom4",
         )
         assert pc.affiliation_column == "geom3"
@@ -658,13 +672,19 @@ class TestPolyhedralComplex:
 
     # ------------------------------------------------------------------ feature_vectors
 
-    @pytest.mark.parametrize("sym, mode, expected_n", [
-        ("T", "vertices", 4), ("T", "edges", 6), ("T", "faces", 4),
-        ("O", "vertices", 6), ("O", "edges", 12), ("O", "faces", 8),
-        ("I", "vertices", 12), ("I", "edges", 30), ("I", "faces", 20),
+    @pytest.mark.parametrize("cls, mode, expected_n", [
+        (structure.TetrahedralComplex, "vertices", 4),
+        (structure.TetrahedralComplex, "edges", 6),
+        (structure.TetrahedralComplex, "faces", 4),
+        (structure.OctahedralComplex, "vertices", 6),
+        (structure.OctahedralComplex, "edges", 12),
+        (structure.OctahedralComplex, "faces", 8),
+        (structure.IcosahedralComplex, "vertices", 12),
+        (structure.IcosahedralComplex, "edges", 30),
+        (structure.IcosahedralComplex, "faces", 20),
     ])
-    def test_feature_vectors_count(self, sample_motl, sym, mode, expected_n):
-        pc = structure.PolyhedralComplex(sample_motl, sym)
+    def test_feature_vectors_count(self, sample_motl, cls, mode, expected_n):
+        pc = cls(sample_motl)
         vecs = pc.feature_vectors(mode=mode)
         assert vecs.shape == (expected_n, 3)
 
@@ -685,7 +705,7 @@ class TestPolyhedralComplex:
             })
         m = cryomotl.Motl()
         m.df = pd.DataFrame(rows)
-        pc = structure.PolyhedralComplex(m, "I")
+        pc = structure.IcosahedralComplex(m)
         pc.assign_subunit_order()
         # particle lexicographically first (x→y→z) gets rank 1
         df = pc.motl.df
@@ -696,27 +716,21 @@ class TestPolyhedralComplex:
 
     def test_recover_features_invalid_mode(self, path_test_marker_file, mrc_file):
         with pytest.raises(ValueError, match="Invalid mode"):
-            structure.PolyhedralComplex.recover_features(
-                path_test_marker_file, str(mrc_file), symmetry="I", mode="random"
-            )
-
-    def test_recover_features_invalid_symmetry(self, path_test_marker_file, mrc_file):
-        with pytest.raises(ValueError, match="T/O/I"):
-            structure.PolyhedralComplex.recover_features(
-                path_test_marker_file, str(mrc_file), symmetry="C4"
+            structure.IcosahedralComplex.recover_features(
+                path_test_marker_file, str(mrc_file), mode="random"
             )
 
     def test_recover_features_returns_two_arrays(self, path_test_marker_file, mrc_file):
-        v1, v2 = structure.PolyhedralComplex.recover_features(
-            path_test_marker_file, str(mrc_file), symmetry="I"
+        v1, v2 = structure.IcosahedralComplex.recover_features(
+            path_test_marker_file, str(mrc_file)
         )
         assert isinstance(v1, np.ndarray)
         assert isinstance(v2, np.ndarray)
 
     def test_recover_features_output_cmm_is_created(self, path_test_marker_file, tmp_path, mrc_file):
         output_path = tmp_path / "test_out.cmm"
-        structure.PolyhedralComplex.recover_features(
-            path_test_marker_file, str(mrc_file), symmetry="I",
+        structure.IcosahedralComplex.recover_features(
+            path_test_marker_file, str(mrc_file),
             output_cmm_file=str(output_path),
         )
         assert output_path.exists()
@@ -733,8 +747,8 @@ class TestPolyhedralComplex:
         shift_v2 = np.asarray([184.2, 111.9, 156.7]) - 112.0
         expected_radius = geom.Icosahedron.from_vectors(shift_v1, shift_v2).radius
 
-        vecs, _ = structure.PolyhedralComplex.recover_features(
-            path_test_marker_file, str(mrc_file), symmetry="I", mode=mode
+        vecs, _ = structure.IcosahedralComplex.recover_features(
+            path_test_marker_file, str(mrc_file), mode=mode
         )
         distances = np.linalg.norm(vecs, axis=1)
         assert np.allclose(distances / expected_radius, expected_ratio, atol=1e-1)
@@ -747,8 +761,8 @@ class TestPolyhedralComplex:
         shift_v2 = np.asarray([184.2, 111.9, 156.7]) - 112.0
         expected_radius = geom.Icosahedron.from_vectors(shift_v1, shift_v2).radius
 
-        vecs, _ = structure.PolyhedralComplex.recover_features(
-            path_test_marker_file, str(mrc_file), symmetry="I", mode=mode,
+        vecs, _ = structure.IcosahedralComplex.recover_features(
+            path_test_marker_file, str(mrc_file), mode=mode,
             project_to_sphere=True,
         )
         distances = np.linalg.norm(vecs, axis=1)

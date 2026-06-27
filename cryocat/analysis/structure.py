@@ -4751,64 +4751,54 @@ class ParametricSurface:
 
 
 # =============================================================================
-# PolyhedralComplex — T/O/I Platonic-solid motl analysis
+# PolyhedralComplex — abstract base for T/O/I Platonic-solid motl analysis
 # =============================================================================
 
 
 class PolyhedralComplex(SymmetricComplex):
-    """Motl-analysis class for tetrahedral, octahedral, or icosahedral symmetry.
+    """Abstract base for Platonic-solid (T/O/I) motl-analysis complexes.
 
-    Parameterises the solid from the symmetry letter (T/O/I).  Like
-    :class:`CnComplex` parameterises the fold, ``PolyhedralComplex``
-    parameterises the solid — no separate subclasses for T/O/I.
+    Do not instantiate this class directly.  Use one of the concrete
+    subclasses:
 
-    Parameters
-    ----------
-    motl : MotlSource
-        Input motive list.
-    symmetry : Symmetry
-        ``"T"``, ``"O"``, or ``"I"`` (case-insensitive).
-    affiliation_column : MotlColumn, default="object_id"
-        Column identifying which complex each particle belongs to.
-    order_column : MotlColumn, default="geom1"
-        Column that receives the per-subunit index after
-        :meth:`assign_subunit_order`.
-    tomo_id_column : MotlColumn, default="tomo_id"
-        Column identifying the tomogram.
+    * :class:`TetrahedralComplex` — tetrahedral symmetry (T, order 12)
+    * :class:`OctahedralComplex` — octahedral symmetry (O, order 24)
+    * :class:`IcosahedralComplex` — icosahedral symmetry (I, order 60)
 
-    Raises
-    ------
-    ValueError
-        When *symmetry* is not T/O/I.
+    Subclasses declare two class attributes:
+
+    ``_solid``
+        The :mod:`cryocat.utils.geom` solid class
+        (e.g. ``geom.Icosahedron``).
+    ``_symmetry``
+        The symmetry letter ``"T"``, ``"O"``, or ``"I"``.
+
+    All logic lives here; subclasses only override those two attributes.
     """
 
-    _SOLIDS: dict = {
-        "T": geom.Tetrahedron,
-        "O": geom.Octahedron,
-        "I": geom.Icosahedron,
-    }
+    _solid: type | None = None
+    _symmetry: str | None = None
 
     def __init__(
         self,
         motl: MotlSource,
-        symmetry: Symmetry,
         *,
         affiliation_column: MotlColumn = "object_id",
         order_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
     ) -> None:
+        if self._symmetry is None or self._solid is None:
+            raise TypeError(
+                "PolyhedralComplex is abstract; use TetrahedralComplex, "
+                "OctahedralComplex, or IcosahedralComplex."
+            )
         self._setup(
             motl,
-            symmetry,
+            self._symmetry,
             affiliation_column=affiliation_column,
             order_column=order_column,
             tomo_id_column=tomo_id_column,
         )
-        if self.group not in self._SOLIDS:
-            raise ValueError(
-                f"PolyhedralComplex requires T/O/I symmetry, got {symmetry!r}."
-            )
-        self._solid = self._SOLIDS[self.group]
 
     # ------------------------------------------------------------------
     # Core interface
@@ -4959,11 +4949,11 @@ class PolyhedralComplex(SymmetricComplex):
     # Feature recovery
     # ------------------------------------------------------------------
 
-    @staticmethod
+    @classmethod
     def recover_features(
+        cls,
         input_cmm_file: PathOrStr,
         input_map: PathOrStr,
-        symmetry: Symmetry,
         *,
         center: TripletLike | None = None,
         mode: Literal["vertices", "edges", "faces"] = "vertices",
@@ -4972,8 +4962,8 @@ class PolyhedralComplex(SymmetricComplex):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Recover polyhedral feature coordinates from two marker positions.
 
-        Generalises ``Icosahedron.recover_icosahedral_features`` to any T/O/I
-        solid.
+        Must be called on a concrete subclass
+        (``TetrahedralComplex.recover_features(…)``, etc.).
 
         Parameters
         ----------
@@ -4982,8 +4972,6 @@ class PolyhedralComplex(SymmetricComplex):
         input_map : PathOrStr
             Map used to prepare the marker file (supplies pixel size and box
             dimensions).
-        symmetry : Symmetry
-            ``"T"``, ``"O"``, or ``"I"``.
         center : TripletLike, optional
             Centre of the solid in map voxels.  Defaults to the box centre.
         mode : {"vertices", "edges", "faces"}, default="vertices"
@@ -5002,19 +4990,21 @@ class PolyhedralComplex(SymmetricComplex):
 
         Raises
         ------
+        TypeError
+            When called on :class:`PolyhedralComplex` directly rather than on
+            a concrete subclass.
         ValueError
-            If *mode* or *symmetry* is invalid.
+            If *mode* is invalid.
         """
+        if cls._solid is None:
+            raise TypeError(
+                "recover_features must be called on a concrete subclass "
+                "(TetrahedralComplex, OctahedralComplex, or IcosahedralComplex)."
+            )
         if mode not in ("vertices", "edges", "faces"):
             raise ValueError(
                 f"Invalid mode: {mode}. Mode should be one of 'vertices', 'edges', or 'faces'."
             )
-        group, _ = geom.as_symmetry(symmetry)
-        if group not in PolyhedralComplex._SOLIDS:
-            raise ValueError(
-                f"recover_features requires T/O/I symmetry, got {symmetry!r}."
-            )
-        solid_cls = PolyhedralComplex._SOLIDS[group]
 
         input_map_metadata = cryomap.get_metadata(input_map)
         map_size = geom.as_triplet(input_map_metadata[0])
@@ -5024,7 +5014,7 @@ class PolyhedralComplex(SymmetricComplex):
         v1 = input_vert_marks.iloc[0].to_numpy() / input_map_metadata[1]
         v2 = input_vert_marks.iloc[1].to_numpy() / input_map_metadata[1]
 
-        solid = solid_cls.from_vectors(v1 - center, v2 - center)
+        solid = cls._solid.from_vectors(v1 - center, v2 - center)
         feature_vec = getattr(solid, mode)
 
         if project_to_sphere:
@@ -5037,4 +5027,30 @@ class PolyhedralComplex(SymmetricComplex):
             ioutils.write_coords_to_cmm_file(features_coords, output_cmm_file)
 
         return feature_vec, features_coords
+
+
+# =============================================================================
+# Concrete T/O/I subclasses
+# =============================================================================
+
+
+class TetrahedralComplex(PolyhedralComplex):
+    """Tetrahedral (T, order 12) motl-analysis complex."""
+
+    _solid = geom.Tetrahedron
+    _symmetry = "T"
+
+
+class OctahedralComplex(PolyhedralComplex):
+    """Octahedral (O, order 24) motl-analysis complex."""
+
+    _solid = geom.Octahedron
+    _symmetry = "O"
+
+
+class IcosahedralComplex(PolyhedralComplex):
+    """Icosahedral (I, order 60) motl-analysis complex."""
+
+    _solid = geom.Icosahedron
+    _symmetry = "I"
 
