@@ -716,6 +716,8 @@ def total_dose_load(input_dose, sort_mdoc=True):
             # if PriorDose exists - it should be used
             if "PriorRecordDose" in mdoc_file.imgs:
                 prior_dose = mdoc_file.get_image_feature("PriorRecordDose").values
+                mask_nan = pd.isna(prior_dose) | (pd.Series(prior_dose).astype(str).str.lower() == 'nan')
+                prior_dose = np.where(mask_nan, 0.0, prior_dose).astype(float)
                 total_dose = image_dose + prior_dose
                 return total_dose
             else:
