@@ -991,7 +991,7 @@ def register_callbacks(app):
                     thickness_csv=str(csv_path),
                     pixel_size_nm=float(resolved_ps) if resolved_ps else None,
                 )
-                rid = mreg.register_results(bundle)
+                rid = mreg.registry.add(bundle)
                 handle = mreg.make_handle(bundle)
                 handle["id"] = rid
                 loaded.append(handle)
@@ -1102,7 +1102,7 @@ def register_callbacks(app):
             return figures
         if not selected_ids:
             return figures
-        bundles = [b for b in (mreg.get_results(rid) for rid in selected_ids) if b is not None]
+        bundles = [b for b in (mreg.registry.get(rid) for rid in selected_ids) if b is not None]
         if not bundles:
             return figures
 
@@ -1179,7 +1179,7 @@ def register_callbacks(app):
             raise PreventUpdate
         if not membrane_id:
             return "Load a membrane first.", no_update
-        bundle = mreg.get_results(membrane_id)
+        bundle = mreg.registry.get(membrane_id)
         if bundle is None:
             return "Selected membrane is no longer in the registry.", no_update
         try:
@@ -1216,7 +1216,7 @@ def register_callbacks(app):
             raise PreventUpdate
         if not membrane_id:
             return "Load a membrane first."
-        bundle = mreg.get_results(membrane_id)
+        bundle = mreg.registry.get(membrane_id)
         if bundle is None:
             return "Selected membrane is no longer in the registry."
         try:

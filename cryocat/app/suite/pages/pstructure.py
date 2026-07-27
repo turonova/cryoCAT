@@ -666,7 +666,7 @@ def _adopt_result(result: Any, parent_id: str | None, label_root: str) -> list[t
 
     def _add(surface, label: str):
         psurf = surface if isinstance(surface, PleomorphicSurface) else PleomorphicSurface(surface)
-        sid = sr.register_surface(psurf)
+        sid = sr.registry.add(psurf)
         handle = sr.make_handle(psurf, label=label, parent_id=parent_id, visible=True)
         out.append((sid, handle))
 
@@ -829,7 +829,8 @@ def register_callbacks(app):
             return no_update, no_update, f"Load failed: {exc}"
 
         if op["result"] == "parametric":
-            handle = pr.set_active_fit(result, source=source_tag)
+            pr.registry.add(result)
+            handle = pr.make_handle(result, source=source_tag)
             return no_update, handle, (
                 f"Loaded {handle['n_quadrics']} parametric surface(s) "
                 f"({source_tag})."
@@ -949,7 +950,7 @@ def register_callbacks(app):
                 if not selected_id or selected_id not in pool:
                     return (no_update,) * 6 + (
                         "Select a surface from the list first.",)
-                psurf = sr.get_surface(selected_id)
+                psurf = sr.registry.get(selected_id)
                 if psurf is None:
                     return (no_update,) * 6 + (
                         f"Surface {selected_id} is no longer in the registry.",)
@@ -1023,7 +1024,8 @@ def register_callbacks(app):
                              if v not in (None, "", [])}
             kwargs.update(scalar_kwargs)
             if op["needs_active_fit"]:
-                psurf = pr.get_active_fit()
+                _pkeys = pr.registry.keys()
+                psurf = pr.registry.get(_pkeys[0]) if _pkeys else None
                 if psurf is None:
                     return (no_update,) * 6 + (
                         "No active fit -- load a parametric surface first.",)
@@ -1057,7 +1059,7 @@ def register_callbacks(app):
         if op["category"] == "intersection":
             if not selected_id:
                 return (no_update,) * 6 + ("Select a mesh surface first.",)
-            psurf = sr.get_surface(selected_id)
+            psurf = sr.registry.get(selected_id)
             if psurf is None or not psurf.is_mesh:
                 return (no_update,) * 6 + ("Selected surface must be a mesh.",)
             if not isect_motl_id:
@@ -1244,7 +1246,7 @@ def register_callbacks(app):
         idx = regions.get(region_name)
         if not idx:
             return no_update, f"Region '{region_name}' has no indices."
-        psurf = sr.get_surface(selected_surface)
+        psurf = sr.registry.get(selected_surface)
         if psurf is None or not psurf.is_mesh:
             return no_update, "Source surface no longer in the registry."
         try:
@@ -1413,7 +1415,7 @@ def register_callbacks(app):
             raise dash.exceptions.PreventUpdate
         sid = triggered["sid"]
         pool = {k: v for k, v in (pool or {}).items() if k != sid}
-        sr.remove_surface(sid)
+        sr.registry.remove(sid)
         new_selected = None if selected_id == sid else selected_id
         return pool, new_selected
 
@@ -1470,7 +1472,7 @@ def register_callbacks(app):
             raise dash.exceptions.PreventUpdate
         if not selected_id:
             return no_update, "No surface selected."
-        psurf = sr.get_surface(selected_id)
+        psurf = sr.registry.get(selected_id)
         if psurf is None or not psurf.is_point_cloud:
             return no_update, "Selected surface is not a point cloud."
         try:

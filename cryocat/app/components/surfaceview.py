@@ -34,7 +34,7 @@ import plotly.graph_objects as go
 from dash import dcc, html, Input, Output, State
 
 from cryocat.app import ids
-from cryocat.app.components import surface_registry as _registry
+from cryocat.app.components.surface_registry import registry as _surface_registry
 from cryocat.app.components.graphsettings import styled_figure
 
 
@@ -255,7 +255,7 @@ def _build_figure(
     for i, (sid, h) in enumerate(handles.items()):
         if not h.get("visible", True):
             continue
-        psurf = _registry.get_surface(sid)
+        psurf = _surface_registry.get(sid)
         if psurf is None:
             continue
         color = _PALETTE[i % len(_PALETTE)]
