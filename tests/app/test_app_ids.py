@@ -25,9 +25,20 @@ from __future__ import annotations
 import json
 from collections import Counter
 
+import dash
 import pytest
 
 from tests.app.conftest import collect_id_paths, collect_ids
+
+# Fail loudly if Dash changes its internal representation of dict-pattern ids.
+# In 4.1.0 they are JSON-encoded strings in _callback_list; a future version
+# might return Python dicts.  If the assertion trips, re-audit _is_wildcard and
+# _norm_id before removing it.  (§11.3, GUI_CONVENTIONS.md)
+_DASH_TESTED_VERSION = "4.1.0"
+assert dash.__version__ == _DASH_TESTED_VERSION, (
+    f"Dash version changed from {_DASH_TESTED_VERSION!r} to {dash.__version__!r}. "
+    "Re-audit _is_wildcard/_norm_id in this file before updating _DASH_TESTED_VERSION."
+)
 
 try:
     from dash import ALL, ALLSMALLER, MATCH
