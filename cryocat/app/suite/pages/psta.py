@@ -44,7 +44,7 @@ from cryocat.analysis import sta as sta_mod
 from cryocat.analysis import visplot
 from cryocat.app import formgen, ids
 from cryocat.app.components.anglesbuilder import register_angles_builder_callbacks
-from cryocat.app.components.graphsettings import apply_settings_to_figure
+from cryocat.app.components.graphsettings import styled_figure, error_figure
 from cryocat.utils.geom import generate_angles
 from cryocat.app.pageshell import page_shell, sidebar_accordion
 
@@ -352,12 +352,12 @@ def _slim_angles_builder(prefix: str) -> html.Div:
             dbc.Row(
                 [
                     dbc.Col(
-                        dcc.Graph(id=f"{prefix}-preview",
+                        dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "preview"},
                                   style={"height": "260px"}),
                         width=6,
                     ),
                     dbc.Col(
-                        dcc.Graph(id=f"{prefix}-inplane-preview",
+                        dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "inplane"},
                                   style={"height": "260px"}),
                         width=6,
                     ),
@@ -516,20 +516,6 @@ def _sidebar() -> list:
     ]
 
 
-# ── Empty-state figure ──────────────────────────────────────────────────────
-
-
-def _empty_figure(message: str) -> go.Figure:
-    return go.Figure().update_layout(
-        annotations=[{
-            "text": message,
-            "showarrow": False, "xref": "paper", "yref": "paper",
-            "x": 0.5, "y": 0.5,
-        }],
-        xaxis={"visible": False}, yaxis={"visible": False},
-        margin=dict(t=20, b=20, l=20, r=20),
-    )
-
 
 # ── Tab content builders ─────────────────────────────────────────────────────
 
@@ -564,7 +550,7 @@ def _tab_alignment() -> html.Div:
         [
             dcc.Graph(
                 id="sta-alignment-graph",
-                figure=_empty_figure(
+                figure=error_figure(
                     "Load a config and click 'Alignment evaluation' to compute "
                     "compute_alignment_statistics."
                 ),
@@ -580,7 +566,7 @@ def _tab_classification() -> html.Div:
         [
             dcc.Graph(
                 id="sta-classification-graph",
-                figure=_empty_figure(
+                figure=error_figure(
                     "Load a config and click 'Classification evaluation' to "
                     "compute evaluate_classification."
                 ),
@@ -714,7 +700,7 @@ def _build_stats_grid(records: list[dict], x_key: str, cols: int = 3) -> go.Figu
     than the default so the grid stays compact when there are many stats.
     """
     if not records:
-        return _empty_figure("No iterations to plot.")
+        return error_figure("No iterations to plot.")
 
     xs = [row.get(x_key) for row in records]
     stat_cols: list[str] = []
@@ -725,7 +711,7 @@ def _build_stats_grid(records: list[dict], x_key: str, cols: int = 3) -> go.Figu
             stat_cols.append(key)
 
     if not stat_cols:
-        return _empty_figure("No numeric statistics available in the result.")
+        return error_figure("No numeric statistics available in the result.")
 
     rows = math.ceil(len(stat_cols) / cols)
     fig = make_subplots(
@@ -993,12 +979,12 @@ def register_callbacks(app):
                 motl_type=config["motl_type"],
             )
         except Exception as exc:
-            return (_empty_figure(f"Alignment evaluation failed: {exc}"),
+            return (error_figure(f"Alignment evaluation failed: {exc}"),
                     f"Alignment evaluation failed: {exc}",
                     no_update)
 
         if stats_df is None or stats_df.empty:
-            return (_empty_figure("Alignment evaluation returned no rows."),
+            return (error_figure("Alignment evaluation returned no rows."),
                     "Alignment evaluation returned no rows.",
                     no_update)
 
@@ -1046,12 +1032,12 @@ def register_callbacks(app):
                 plot_results=False,
             )
         except Exception as exc:
-            return (_empty_figure(f"Classification evaluation failed: {exc}"),
+            return (error_figure(f"Classification evaluation failed: {exc}"),
                     f"Classification evaluation failed: {exc}",
                     no_update)
 
         if not occupancy:
-            return (_empty_figure("Classification evaluation returned no classes."),
+            return (error_figure("Classification evaluation returned no classes."),
                     "Classification evaluation returned no classes.",
                     no_update)
 
@@ -1060,7 +1046,7 @@ def register_callbacks(app):
                 occupancy, changes, graph_title="Classification progress",
             )
         except Exception as exc:
-            return (_empty_figure(f"Classification plot failed: {exc}"),
+            return (error_figure(f"Classification plot failed: {exc}"),
                     f"Classification plot failed: {exc}",
                     no_update)
 
@@ -1106,8 +1092,8 @@ def register_callbacks(app):
     #    markers between roughly -40 and +40 instead of 0..70).
     @app.callback(
         Output(f"{_ANGLES_PREFIX}-angles", "data"),
-        Output(f"{_ANGLES_PREFIX}-preview", "figure"),
-        Output(f"{_ANGLES_PREFIX}-inplane-preview", "figure"),
+        Output({"type": "styled-graph", "owner": _ANGLES_PREFIX, "name": "preview"}, "figure"),
+        Output({"type": "styled-graph", "owner": _ANGLES_PREFIX, "name": "inplane"}, "figure"),
         Input(f"{_ANGLES_PREFIX}-visualize-btn", "n_clicks"),
         State(f"{_ANGLES_PREFIX}-params", "data"),
         State(ids.GRAPH_SETTINGS_STORE, "data"),
@@ -1117,10 +1103,10 @@ def register_callbacks(app):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not params:
-            err = _empty_figure("Fill the form first.")
+            err = error_figure("Fill the form first.")
             return no_update, err, err
         if params.get("cone_angle") is None or params.get("cone_sampling") is None:
-            err = _empty_figure(
+            err = error_figure(
                 "Set at least cone_angle and cone_sampling.")
             return no_update, err, err
 
@@ -1128,21 +1114,19 @@ def register_callbacks(app):
             kwargs = {k: v for k, v in params.items() if v is not None}
             angles = generate_angles(**kwargs)
         except Exception as exc:
-            err = _empty_figure(f"generate_angles failed: {exc}")
+            err = error_figure(f"generate_angles failed: {exc}")
             return no_update, err, err
 
         # Cone-sphere panel: same path as the canonical builder.
         try:
             sphere_raw = visplot.plot_rotation_normals(angles)
-            sphere_dict = sphere_raw.to_plotly_json()
-            sphere_dict = apply_settings_to_figure(sphere_dict, gs)
-            sphere_dict.setdefault("layout", {}).update({
-                "uirevision": f"{_ANGLES_PREFIX}-preview",
-                "margin": {"l": 0, "r": 0, "t": 30, "b": 0},
-            })
-            sphere_fig = go.Figure(sphere_dict)
+            sphere_fig = styled_figure(
+                sphere_raw, gs or {},
+                uirevision=f"{_ANGLES_PREFIX}-preview",
+                margin={"l": 0, "r": 0, "t": 30, "b": 0},
+            )
         except Exception as exc:
-            sphere_fig = _empty_figure(f"Sphere plot error: {exc}")
+            sphere_fig = error_figure(f"Sphere plot error: {exc}")
 
         # Inplane polar panel: centre on 0 so e.g. inplane_angle=80 shows
         # markers symmetric around the X axis instead of 0..80.
@@ -1175,12 +1159,9 @@ def register_callbacks(app):
                 ),
                 margin=dict(l=40, r=40, t=40, b=30),
             )
-            if gs:
-                inplane_dict = inplane_fig.to_plotly_json()
-                inplane_dict = apply_settings_to_figure(inplane_dict, gs)
-                inplane_fig = go.Figure(inplane_dict)
+            inplane_fig = styled_figure(inplane_fig, gs or {}, uirevision=f"{_ANGLES_PREFIX}-inplane")
         except Exception as exc:
-            inplane_fig = _empty_figure(f"Inplane plot error: {exc}")
+            inplane_fig = error_figure(f"Inplane plot error: {exc}")
 
         return angles.tolist(), sphere_fig, inplane_fig
 

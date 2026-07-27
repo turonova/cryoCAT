@@ -25,7 +25,7 @@ import plotly.graph_objects as go
 from dash import html, dcc, Input, Output, State
 
 from cryocat.app import ids
-from cryocat.app.components.graphsettings import apply_settings_to_figure
+from cryocat.app.components.graphsettings import styled_figure
 
 
 # ── Private helpers ────────────────────────────────────────────────────────────
@@ -63,18 +63,6 @@ def _scene_layout(shape):
     }
 
 
-def _finalize(fig, gs, shape):
-    """Apply graph settings, then stamp fixed scene + uirevision on the dict."""
-    fig_dict = apply_settings_to_figure(fig.to_plotly_json(), gs)
-    layout = fig_dict.setdefault("layout", {})
-    layout["uirevision"] = "volume-view"
-    layout["height"] = 620
-    layout["margin"] = {"t": 0, "b": 0, "l": 0, "r": 0}
-    if shape:
-        layout["scene"] = _scene_layout(shape)
-    return go.Figure(fig_dict)
-
-
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def get_volume_view(prefix: str):
@@ -86,7 +74,7 @@ def get_volume_view(prefix: str):
             dcc.Store(id=f"{prefix}-mask-mesh"),
             dcc.Store(id=f"{prefix}-mask-store"),
             dcc.Graph(
-                id=f"{prefix}-3d-graph",
+                id={"type": "styled-graph", "owner": prefix, "name": "3d"},
                 style={"height": "620px"},
                 config={"scrollZoom": True},
             ),
@@ -159,7 +147,7 @@ def register_volume_view_callbacks(app, prefix: str, register_mask: bool = True)
 
     # ── Figure assembly ────────────────────────────────────────────────────────
     @app.callback(
-        Output(f"{prefix}-3d-graph", "figure"),
+        Output({"type": "styled-graph", "owner": prefix, "name": "3d"}, "figure"),
         Input(f"{prefix}-map-mesh", "data"),
         Input(f"{prefix}-mask-mesh", "data"),
         Input(f"{prefix}-mask-opacity-slider", "value"),
@@ -214,4 +202,10 @@ def register_volume_view_callbacks(app, prefix: str, register_mask: bool = True)
                         name="Mask: core (=1.0)", hoverinfo="skip",
                     ))
 
-        return _finalize(go.Figure(data=traces), gs, shape)
+        return styled_figure(
+            go.Figure(data=traces), gs or {},
+            uirevision="volume-view",
+            height=620,
+            margin={"t": 0, "b": 0, "l": 0, "r": 0},
+            scene=_scene_layout(shape) if shape else None,
+        )

@@ -28,7 +28,7 @@ from cryocat.app.components.anglesbuilder import (
     _inplane_figure,
     _ID_TYPE as _ANGLES_ID_TYPE,
 )
-from cryocat.app.components.graphsettings import apply_settings_to_figure
+from cryocat.app.components.graphsettings import styled_figure, error_figure
 from cryocat.app.components.wedgepreview import wedge_xz_figure
 from cryocat.utils.geom import generate_angles
 from cryocat.utils.wedgeutils import generate_wedge_mask
@@ -170,12 +170,6 @@ layout = _build_layout()
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
 
-def _err_fig(msg: str) -> go.Figure:
-    fig = go.Figure()
-    fig.update_layout(annotations=[{"text": msg, "showarrow": False, "xref": "paper", "yref": "paper"}])
-    return fig
-
-
 def _err_panel(msg: str) -> html.Div:
     """Plain text panel for cases where we want a message rather than a figure
     in the shared output area."""
@@ -222,22 +216,19 @@ def register_callbacks(app) -> None:
 
                 try:
                     fig1 = visplot.plot_rotation_normals(angles)
-                    fig1_dict = fig1.to_plotly_json()
-                    if gs:
-                        fig1_dict = apply_settings_to_figure(fig1_dict, gs)
-                    fig1_dict.setdefault("layout", {}).update({
-                        "uirevision": f"{_prefix}-preview",
-                        "title": {"text": f"Cone sampling — {n_cone} angles", "font": {"size": 12}},
-                        "margin": {"l": 0, "r": 0, "t": 40, "b": 0},
-                    })
-                    sphere_fig = go.Figure(fig1_dict)
+                    sphere_fig = styled_figure(
+                        fig1, gs or {},
+                        uirevision=f"{_prefix}-preview",
+                        title={"text": f"Cone sampling — {n_cone} angles", "font": {"size": 12}},
+                        margin={"l": 0, "r": 0, "t": 40, "b": 0},
+                    )
                 except Exception as exc:
-                    sphere_fig = _err_fig(f"Sphere plot error: {exc}")
+                    sphere_fig = error_figure(f"Sphere plot error: {exc}")
 
                 try:
                     inplane_fig = _inplane_figure(angles, gs)
                 except Exception as exc:
-                    inplane_fig = _err_fig(f"Inplane plot error: {exc}")
+                    inplane_fig = error_figure(f"Inplane plot error: {exc}")
 
                 output = dbc.Row(
                     [

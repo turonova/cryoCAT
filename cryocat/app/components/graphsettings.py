@@ -1,3 +1,6 @@
+import copy
+
+import plotly.graph_objects as go
 from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 
@@ -181,13 +184,45 @@ def register_graph_settings_callbacks(app):
         }
         return settings, "Applied."
 
+    @app.callback(
+        Output({"type": "styled-graph", "owner": ALL}, "figure"),
+        Input(ids.GRAPH_SETTINGS_STORE, "data"),
+        State({"type": "styled-graph", "owner": ALL}, "figure"),
+        prevent_initial_call=True,
+        allow_duplicate=True,
+    )
+    def _restyle_all_graphs(settings, all_figs):
+        if not settings or not all_figs:
+            return [no_update] * len(all_figs)
+        return [apply_settings_to_figure(copy.deepcopy(fig), settings) for fig in all_figs]
+
 
 _DISCRETE_TRACE_TYPES = {"scatter", "scattergl", "scatter3d", "bar", "histogram", "violin", "box"}
-_CONTINUOUS_TRACE_TYPES = {"heatmap", "contour", "surface", "densitymapbox"}
+_CONTINUOUS_TRACE_TYPES = {
+    "heatmap", "contour", "surface", "densitymapbox",
+    "mesh3d", "isosurface", "volume", "histogram2d",
+}
 
 
-def apply_settings_to_figure(fig_dict, settings):
-    """Apply settings to a Plotly figure dict in-place. Returns the dict."""
+def _is_dark(color: str) -> bool:
+    """Return True when the color has approximate relative luminance < 0.35."""
+    _NAMES = {"white": "#ffffff", "black": "#000000"}
+    c = _NAMES.get(color.lower(), color)
+    if not c.startswith("#") or len(c) not in (4, 7):
+        return False
+    if len(c) == 4:
+        c = f"#{c[1]*2}{c[2]*2}{c[3]*2}"
+    r, g, b = int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) < (0.35 * 255)
+
+
+def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = False) -> dict:
+    """Apply settings to a Plotly figure dict in-place. Returns the dict.
+
+    When *override* is False (default), ``marker.size``, ``line.width``, and
+    ``line.dash`` are only written when the trace does not already carry an
+    explicit scalar value.  Pass ``override=True`` to unconditionally overwrite.
+    """
     if not settings or not isinstance(fig_dict, dict):
         return fig_dict
 
@@ -203,8 +238,16 @@ def apply_settings_to_figure(fig_dict, settings):
             font["size"] = settings["font_size"]
 
     if settings.get("bg_color"):
-        layout["paper_bgcolor"] = settings["bg_color"]
-        layout["plot_bgcolor"] = settings["bg_color"]
+        bg = settings["bg_color"]
+        layout["paper_bgcolor"] = bg
+        layout["plot_bgcolor"] = bg
+        if _is_dark(bg):
+            text_color = "#e0e0e0"
+            layout.setdefault("font", {}).setdefault("color", text_color)
+            for axis_key in ("xaxis", "yaxis", "zaxis"):
+                ax = layout.setdefault(axis_key, {})
+                ax.setdefault("gridcolor", "#444444")
+                ax.setdefault("tickfont", {}).setdefault("color", text_color)
 
     if settings.get("discrete_palette"):
         palette = resolve_palette(settings["discrete_palette"])
@@ -241,14 +284,56 @@ def apply_settings_to_figure(fig_dict, settings):
         trace_type = trace.get("type", "")
         if trace_type in ("scatter", "scattergl", "scatter3d") and marker_size:
             marker = trace.setdefault("marker", {})
-            if isinstance(marker.get("size"), (int, float, type(None))):
+            if override or marker.get("size") is None:
                 marker["size"] = marker_size
         if trace_type in ("scatter", "scattergl", "scatter3d"):
             if line_width or line_dash:
                 line = trace.setdefault("line", {})
-                if line_width:
+                if line_width and (override or line.get("width") is None):
                     line["width"] = line_width
-                if line_dash:
+                if line_dash and (override or line.get("dash") is None):
                     line["dash"] = line_dash
 
     return fig_dict
+
+
+def styled_figure(
+    fig: go.Figure,
+    settings: dict,
+    *,
+    uirevision: str,
+    title: dict | str | None = None,
+    margin: dict | None = None,
+    scene: dict | None = None,
+    height: int | None = None,
+) -> go.Figure:
+    """Apply settings to *fig* and stamp invariant layout keys. Returns a new Figure.
+
+    The sole entry point for turning a go.Figure into a display-ready figure.
+    *uirevision* is required so Dash preserves interactive state (zoom,
+    selection) across data updates.
+    """
+    fig_dict = apply_settings_to_figure(fig.to_plotly_json(), settings or {})
+    layout = fig_dict.setdefault("layout", {})
+    layout["uirevision"] = uirevision
+    if title is not None:
+        layout["title"] = title if isinstance(title, dict) else {"text": title}
+    if margin is not None:
+        layout["margin"] = margin
+    if scene is not None:
+        layout["scene"] = scene
+    if height is not None:
+        layout["height"] = height
+    return go.Figure(fig_dict)
+
+
+def error_figure(msg: str) -> go.Figure:
+    """Return a zero-trace figure with a centred annotation. Use for error states."""
+    return go.Figure(layout={
+        "annotations": [{
+            "text": msg, "showarrow": False,
+            "xref": "paper", "yref": "paper", "x": 0.5, "y": 0.5,
+        }],
+        "xaxis": {"visible": False},
+        "yaxis": {"visible": False},
+    })

@@ -18,7 +18,7 @@ from cryocat.utils.classutils import get_class_names_by_parent
 from cryocat.app import ids
 from cryocat.app.apputils import save_output
 from cryocat.app.components.customel import LabeledDropdown, InlineLabeledDropdown, InlineInputForm
-from cryocat.app.components.graphsettings import apply_settings_to_figure, get_graph_settings_button
+from cryocat.app.components.graphsettings import styled_figure, get_graph_settings_button
 
 # motl_types = [{"label": name, "value": name} for name in get_class_names_by_parent("Motl", "cryocat.cryomotl")]
 
@@ -702,14 +702,11 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                         trace.update(mode="lines+markers", marker=dict(size=6, opacity=0.01))
                 fig.update_layout(dragmode="select")
                 # Apply global graph settings to the new figure
-                if settings:
-                    fig_dict = fig.to_dict()
-                    apply_settings_to_figure(fig_dict, settings)
-                    fig = go.Figure(fig_dict)
+                fig = styled_figure(fig, settings or {}, uirevision=f"{prefix}-graph-{graph_counter}")
                 graph_meta = graph_meta or {}
                 graph_meta[str(graph_counter)] = {"type": graph_type, "x_cols": x_values}
                 new_graph = dcc.Graph(
-                    id={"type": f"{prefix}-graph", "index": graph_counter},
+                    id={"type": "styled-graph", "owner": prefix, "name": graph_counter},
                     figure=fig,
                 )
                 return graph_area + [new_graph], [], graph_meta, graph_counter + 1
@@ -735,24 +732,12 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
 
         return False
 
-    @app.callback(
-        Output({"type": f"{prefix}-graph", "index": ALL}, "figure"),
-        Input(ids.GRAPH_SETTINGS_STORE, "data"),
-        State({"type": f"{prefix}-graph", "index": ALL}, "figure"),
-        prevent_initial_call=True,
-    )
-    def apply_settings_to_existing_graphs(settings, all_figures):
-        import copy
-        if not settings or not all_figures:
-            return [no_update] * len(all_figures)
-        return [apply_settings_to_figure(copy.deepcopy(fig), settings) for fig in all_figures]
-
     if table_grid_id is not None:
 
         @app.callback(
             Output(table_grid_id, "selectedRows"),
-            Input({"type": f"{prefix}-graph", "index": ALL}, "clickData"),
-            Input({"type": f"{prefix}-graph", "index": ALL}, "selectedData"),
+            Input({"type": "styled-graph", "owner": prefix, "name": ALL}, "clickData"),
+            Input({"type": "styled-graph", "owner": prefix, "name": ALL}, "selectedData"),
             State(f"{prefix}-graph-meta-store", "data"),
             State(table_grid_id, "rowData"),
             State(f"{prefix}-selection-mode", "value"),
@@ -768,7 +753,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             if not data_value or not data_value.get("points"):
                 raise dash.exceptions.PreventUpdate
 
-            graph_idx = triggered.get("index")
+            graph_idx = triggered.get("name")
             meta_entry = graph_meta.get(str(graph_idx))
             if meta_entry is None:
                 raise dash.exceptions.PreventUpdate

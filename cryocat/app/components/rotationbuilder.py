@@ -31,7 +31,7 @@ from dash.exceptions import PreventUpdate
 
 from cryocat.analysis import visplot
 from cryocat.app import ids, styles
-from cryocat.app.components.graphsettings import apply_settings_to_figure
+from cryocat.app.components.graphsettings import styled_figure, error_figure
 
 _ROT_TYPES = [
     {"label": "Euler angles (degrees)", "value": "euler"},
@@ -163,7 +163,7 @@ def get_rotation_builder_sidebar_content(prefix: str) -> html.Div:
 
 def get_rotation_builder_graph(prefix: str) -> dcc.Graph:
     """Preview graph only — companion to :func:`get_rotation_builder_sidebar_content`."""
-    return dcc.Graph(id=f"{prefix}-rot-preview", style={"height": "400px"})
+    return dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "rot-preview"}, style={"height": "400px"})
 
 
 def get_rotation_builder_panel(prefix: str) -> html.Div:
@@ -181,7 +181,7 @@ def get_rotation_builder_panel(prefix: str) -> html.Div:
             [
                 dbc.Col(html.Div(_controls(prefix)), width=5),
                 dbc.Col(
-                    dcc.Graph(id=f"{prefix}-rot-preview", style={"height": "340px"}),
+                    dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "rot-preview"}, style={"height": "340px"}),
                     width=7,
                 ),
             ],
@@ -226,7 +226,7 @@ def register_rotation_builder_callbacks(app: dash.Dash, prefix: str) -> None:
 
     @app.callback(
         Output(f"{prefix}-rot-euler-store", "data"),
-        Output(f"{prefix}-rot-preview", "figure"),
+        Output({"type": "styled-graph", "owner": prefix, "name": "rot-preview"}, "figure"),
         Output(f"{prefix}-rot-status", "children"),
         Input(f"{prefix}-rot-type", "value"),
         Input(f"{prefix}-euler-phi", "value"),
@@ -272,16 +272,14 @@ def register_rotation_builder_callbacks(app: dash.Dash, prefix: str) -> None:
             fig = visplot.plot_orientational_distribution(
                 coordinates=direction, projection="stereo"
             )
-            fig_dict = fig.to_plotly_json()
-            if gs:
-                fig_dict = apply_settings_to_figure(fig_dict, gs)
-            fig_dict.setdefault("layout", {}).update({
-                "margin": {"l": 10, "r": 10, "t": 30, "b": 10},
-                "uirevision": f"{prefix}-rot-preview",
-            })
-            return euler_str, go.Figure(fig_dict), f"Euler zxz (deg): {euler_str}"
+            result_fig = styled_figure(
+                fig, gs or {},
+                uirevision=f"{prefix}-rot-preview",
+                margin={"l": 10, "r": 10, "t": 30, "b": 10},
+            )
+            return euler_str, result_fig, f"Euler zxz (deg): {euler_str}"
 
         except PreventUpdate:
             raise
         except Exception as exc:
-            return no_update, go.Figure(), f"Error: {exc}"
+            return no_update, error_figure(f"Error: {exc}"), f"Error: {exc}"

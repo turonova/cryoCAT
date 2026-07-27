@@ -35,7 +35,7 @@ from dash import dcc, html, Input, Output, State
 
 from cryocat.app import ids
 from cryocat.app.components import surface_registry as _registry
-from cryocat.app.components.graphsettings import apply_settings_to_figure
+from cryocat.app.components.graphsettings import styled_figure
 
 
 # Curvature color-by options. Values match
@@ -273,18 +273,13 @@ def _build_figure(
         # Unknown representations are skipped (handle is informational only).
 
     fig = go.Figure(data=traces)
-    fig_dict = apply_settings_to_figure(fig.to_plotly_json(), gs)
-    layout = fig_dict.setdefault("layout", {})
-    layout["uirevision"] = "surface-view"
-    layout["height"] = 620
-    layout["margin"] = {"t": 0, "b": 0, "l": 0, "r": 0}
-    layout["scene"] = {
-        "xaxis": {"title": "x"},
-        "yaxis": {"title": "y"},
-        "zaxis": {"title": "z"},
-        "aspectmode": "data",
-    }
-    return go.Figure(fig_dict)
+    return styled_figure(
+        fig, gs or {},
+        uirevision="surface-view",
+        height=620,
+        margin={"t": 0, "b": 0, "l": 0, "r": 0},
+        scene={"xaxis": {"title": "x"}, "yaxis": {"title": "y"}, "zaxis": {"title": "z"}, "aspectmode": "data"},
+    )
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -329,7 +324,7 @@ def get_surface_view(prefix: str):
                        "gap": "0.5rem", "marginBottom": "0.4rem"},
             ),
             dcc.Graph(
-                id=f"{prefix}-graph",
+                id={"type": "styled-graph", "owner": prefix, "name": "graph"},
                 style={"height": "620px"},
                 config={"scrollZoom": True},
             ),
@@ -372,22 +367,22 @@ def register_surface_view_callbacks(
 
     if selected_store_id is None:
         @app.callback(
-            Output(f"{prefix}-graph", "figure"),
+            Output({"type": "styled-graph", "owner": prefix, "name": "graph"}, "figure"),
             Input(pool_store_id, "data"),
-            Input(ids.GRAPH_SETTINGS_STORE, "data"),
             Input(color_by_id, "value"),
+            State(ids.GRAPH_SETTINGS_STORE, "data"),
             prevent_initial_call=False,
         )
-        def _draw(handles, gs, color_by):
+        def _draw(handles, color_by, gs):
             return _build_figure(handles, None, gs, color_by=color_by)
     else:
         @app.callback(
-            Output(f"{prefix}-graph", "figure"),
+            Output({"type": "styled-graph", "owner": prefix, "name": "graph"}, "figure"),
             Input(pool_store_id, "data"),
             Input(selected_store_id, "data"),
-            Input(ids.GRAPH_SETTINGS_STORE, "data"),
             Input(color_by_id, "value"),
+            State(ids.GRAPH_SETTINGS_STORE, "data"),
             prevent_initial_call=False,
         )
-        def _draw(handles, selected_id, gs, color_by):
+        def _draw(handles, selected_id, color_by, gs):
             return _build_figure(handles, selected_id, gs, color_by=color_by)

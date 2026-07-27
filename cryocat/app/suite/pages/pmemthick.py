@@ -42,7 +42,7 @@ from cryocat.app import formgen, ids
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components import memthick_widgets as mw
 from cryocat.app.components import memthick_registry as mreg
-from cryocat.app.components.graphsettings import apply_settings_to_figure
+from cryocat.app.components.graphsettings import apply_settings_to_figure, error_figure
 from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
 from cryocat.app.components.motlsink import (
     get_send_to_editor_button, register_send_to_editor_callbacks,
@@ -672,7 +672,7 @@ def _plot_tab(tab_id: str, label: str) -> dcc.Tab:
         )
     else:
         body = dcc.Graph(
-            id={"type": "memthick-plot", "tab": tab_id},
+            id={"type": "styled-graph", "owner": "memthick", "name": tab_id},
             style={"height": "calc(100vh - 140px)", "width": "100%"},
             config={"displayModeBar": True, "scrollZoom": True},
         )
@@ -1046,7 +1046,7 @@ def register_callbacks(app):
 
     # ── M2: Render plots ─────────────────────────────────────────────────────
     @app.callback(
-        Output({"type": "memthick-plot", "tab": ALL}, "figure"),
+        Output({"type": "styled-graph", "owner": "memthick", "name": ALL}, "figure"),
         Input("memthick-main-tabs", "value"),
         Input("memthick-membrane-select", "value"),
         Input("memthick-filter-thick-min", "value"),
@@ -1075,8 +1075,8 @@ def register_callbacks(app):
         Input("memthick-plot-ply-base", "value"),
         Input("memthick-plot-mesh-opacity", "value"),
         Input("memthick-plot-show-scatter", "value"),
-        Input(ids.GRAPH_SETTINGS_STORE, "data"),
-        State({"type": "memthick-plot", "tab": ALL}, "id"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
+        State({"type": "styled-graph", "owner": "memthick", "name": ALL}, "id"),
         prevent_initial_call=True,
     )
     def _render_plots(
@@ -1150,17 +1150,16 @@ def register_callbacks(app):
                 outlier_kwargs=outlier_kwargs,
             )
         except Exception as exc:
-            fig_dict = _error_figure(str(exc))
-            apply_settings_to_figure(fig_dict, graph_settings or {})
+            err = error_figure(str(exc)).to_dict()
             for i, tid in enumerate(tab_ids):
-                if tid.get("tab") == active_tab:
-                    figures[i] = fig_dict
+                if tid.get("name") == active_tab:
+                    figures[i] = err
             return figures
 
         fig_dict = fig.to_dict() if hasattr(fig, "to_dict") else fig
         apply_settings_to_figure(fig_dict, graph_settings or {})
         for i, tid in enumerate(tab_ids):
-            if tid.get("tab") == active_tab:
+            if tid.get("name") == active_tab:
                 figures[i] = fig_dict
         return figures
 
@@ -1244,23 +1243,6 @@ def _tuple_or_none(lo, hi):
         float(lo) if lo not in (None, "") else None,
         float(hi) if hi not in (None, "") else None,
     )
-
-
-def _error_figure(message: str) -> dict:
-    return {
-        "data": [],
-        "layout": {
-            "annotations": [{
-                "text": message,
-                "xref": "paper", "yref": "paper",
-                "x": 0.5, "y": 0.5,
-                "showarrow": False,
-                "font": {"size": 14, "color": "red"},
-            }],
-            "xaxis": {"visible": False},
-            "yaxis": {"visible": False},
-        },
-    }
 
 
 def _build_plot_for_tab(

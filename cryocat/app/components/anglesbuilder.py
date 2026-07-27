@@ -29,7 +29,7 @@ from dash.exceptions import PreventUpdate
 from cryocat.utils.geom import generate_angles
 from cryocat.app import formgen, ids, styles
 from cryocat.app.apputils import generate_kwargs, run_operation
-from cryocat.app.components.graphsettings import apply_settings_to_figure
+from cryocat.app.components.graphsettings import styled_figure, error_figure
 
 _ID_TYPE = "angles-param"
 
@@ -58,12 +58,7 @@ def _inplane_figure(angles: np.ndarray, gs) -> go.Figure:
         title=dict(text=f"Inplane sampling (φ) — {len(phi)} angles", font=dict(size=12)),
         margin=dict(l=50, r=50, t=40, b=50),
     )
-    if gs:
-        from cryocat.app.components.graphsettings import apply_settings_to_figure
-        fig_dict = fig.to_plotly_json()
-        fig_dict = apply_settings_to_figure(fig_dict, gs)
-        return go.Figure(fig_dict)
-    return fig
+    return styled_figure(fig, gs or {}, uirevision="inplane-preview")
 
 
 def get_angles_builder_sidebar_content(prefix: str, preview_btn: bool = False) -> html.Div:
@@ -192,8 +187,8 @@ def get_angles_builder_panel(prefix: str) -> html.Div:
             # Two graphs side-by-side (same as Utilities page)
             dbc.Row(
                 [
-                    dbc.Col(dcc.Graph(id=f"{prefix}-preview", style={"height": "320px"}), width=6),
-                    dbc.Col(dcc.Graph(id=f"{prefix}-inplane-preview", style={"height": "320px"}), width=6),
+                    dbc.Col(dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "preview"}, style={"height": "320px"}), width=6),
+                    dbc.Col(dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "inplane"}, style={"height": "320px"}), width=6),
                 ],
                 className="g-1",
             ),
@@ -233,8 +228,8 @@ def register_angles_builder_callbacks(app: dash.Dash, prefix: str, skip_preview:
     if not skip_preview:
         @app.callback(
             Output(f"{prefix}-angles", "data"),
-            Output(f"{prefix}-preview", "figure"),
-            Output(f"{prefix}-inplane-preview", "figure"),
+            Output({"type": "styled-graph", "owner": prefix, "name": "preview"}, "figure"),
+            Output({"type": "styled-graph", "owner": prefix, "name": "inplane"}, "figure"),
             Input(f"{prefix}-params", "data"),
             State(ids.GRAPH_SETTINGS_STORE, "data"),
             prevent_initial_call=True,
@@ -245,16 +240,11 @@ def register_angles_builder_callbacks(app: dash.Dash, prefix: str, skip_preview:
             if params.get("cone_angle") is None or params.get("cone_sampling") is None:
                 raise PreventUpdate
 
-            def _err(msg):
-                f = go.Figure()
-                f.update_layout(annotations=[{"text": msg, "showarrow": False, "xref": "paper", "yref": "paper"}])
-                return f
-
             try:
                 kwargs = {k: v for k, v in params.items() if v is not None}
                 angles = generate_angles(**kwargs)
             except Exception as exc:
-                err = _err(f"Error: {exc}")
+                err = error_figure(f"Error: {exc}")
                 return dash.no_update, err, err
 
             from cryocat.analysis import visplot
@@ -263,21 +253,19 @@ def register_angles_builder_callbacks(app: dash.Dash, prefix: str, skip_preview:
 
             try:
                 fig1 = visplot.plot_rotation_normals(angles)
-                fig1_dict = fig1.to_plotly_json()
-                fig1_dict = apply_settings_to_figure(fig1_dict, gs)
-                fig1_dict.setdefault("layout", {}).update({
-                    "uirevision": f"{prefix}-preview",
-                    "title": {"text": f"Cone sampling — {n_cone} angles", "font": {"size": 12}},
-                    "margin": {"l": 0, "r": 0, "t": 40, "b": 0},
-                })
-                sphere_fig = go.Figure(fig1_dict)
+                sphere_fig = styled_figure(
+                    fig1, gs or {},
+                    uirevision=f"{prefix}-preview",
+                    title={"text": f"Cone sampling — {n_cone} angles", "font": {"size": 12}},
+                    margin={"l": 0, "r": 0, "t": 40, "b": 0},
+                )
             except Exception as exc:
-                sphere_fig = _err(f"Sphere plot error: {exc}")
+                sphere_fig = error_figure(f"Sphere plot error: {exc}")
 
             try:
                 inplane_fig = _inplane_figure(angles, gs)
             except Exception as exc:
-                inplane_fig = _err(f"Inplane plot error: {exc}")
+                inplane_fig = error_figure(f"Inplane plot error: {exc}")
 
             return angles.tolist(), sphere_fig, inplane_fig
 
