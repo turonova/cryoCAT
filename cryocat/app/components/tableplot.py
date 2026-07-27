@@ -15,7 +15,8 @@ import plotly.graph_objects as go
 from cryocat.analysis import visplot
 from cryocat.core.cryomotl import Motl
 from cryocat.utils.classutils import get_class_names_by_parent
-from cryocat.app.apputils import get_print_out, save_output
+from cryocat.app import ids
+from cryocat.app.apputils import save_output
 from cryocat.app.components.customel import LabeledDropdown, InlineLabeledDropdown, InlineInputForm
 from cryocat.app.components.graphsettings import apply_settings_to_figure, get_graph_settings_button
 
@@ -500,7 +501,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         State(f"{prefix}-plot-color-palette-dropdown", "value"),
         State(f"{prefix}-graph-meta-store", "data"),
         State(f"{prefix}-graph-counter", "data"),
-        State("graph-settings-store", "data"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
     def plot_graphs(
@@ -736,7 +737,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
 
     @app.callback(
         Output({"type": f"{prefix}-graph", "index": ALL}, "figure"),
-        Input("graph-settings-store", "data"),
+        Input(ids.GRAPH_SETTINGS_STORE, "data"),
         State({"type": f"{prefix}-graph", "index": ALL}, "figure"),
         prevent_initial_call=True,
     )

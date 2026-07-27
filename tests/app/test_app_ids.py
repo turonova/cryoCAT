@@ -29,6 +29,7 @@ import dash
 import pytest
 
 from tests.app.conftest import collect_id_paths, collect_ids
+from cryocat.app import ids as _ids
 
 # Fail loudly if Dash changes its internal representation of dict-pattern ids.
 # In 4.1.0 they are JSON-encoded strings in _callback_list; a future version
@@ -58,19 +59,19 @@ _WILDCARD_JSON: tuple = (["ALL"], ["MATCH"], ["ALLSMALLER"])
 
 _PERMITTED_EXACT: frozenset[str] = frozenset(
     {
-        "graph-settings-store",
-        "pool-registry",
-        "pool-motls",
-        "pool-extra",
-        "pool-meta",
-        "pool-next-id",
-        "suite-url",
-        "suite-tool-selector",
-        "suite-page-content",
+        _ids.GRAPH_SETTINGS_STORE,
+        _ids.POOL_REGISTRY,
+        _ids.POOL_MOTLS,
+        _ids.POOL_EXTRA,
+        _ids.POOL_META,
+        _ids.POOL_NEXT_ID,
+        _ids.SUITE_URL,
+        _ids.SUITE_TOOL_SELECTOR,
+        _ids.SUITE_PAGE_CONTENT,
     }
 )
 
-_PERMITTED_PREFIXES: tuple[str, ...] = ("page-wrap-", "suite-log-")
+_PERMITTED_PREFIXES: tuple[str, ...] = (_ids.PAGE_WRAP_PREFIX, _ids.SUITE_LOG_PREFIX)
 
 
 def _is_permitted_global(component_id: object) -> bool:

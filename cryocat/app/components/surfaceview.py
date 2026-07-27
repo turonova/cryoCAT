@@ -33,6 +33,7 @@ import numpy as np
 import plotly.graph_objects as go
 from dash import dcc, html, Input, Output, State
 
+from cryocat.app import ids
 from cryocat.app.components import surface_registry as _registry
 from cryocat.app.components.graphsettings import apply_settings_to_figure
 
@@ -373,7 +374,7 @@ def register_surface_view_callbacks(
         @app.callback(
             Output(f"{prefix}-graph", "figure"),
             Input(pool_store_id, "data"),
-            Input("graph-settings-store", "data"),
+            Input(ids.GRAPH_SETTINGS_STORE, "data"),
             Input(color_by_id, "value"),
             prevent_initial_call=False,
         )
@@ -384,7 +385,7 @@ def register_surface_view_callbacks(
             Output(f"{prefix}-graph", "figure"),
             Input(pool_store_id, "data"),
             Input(selected_store_id, "data"),
-            Input("graph-settings-store", "data"),
+            Input(ids.GRAPH_SETTINGS_STORE, "data"),
             Input(color_by_id, "value"),
             prevent_initial_call=False,
         )

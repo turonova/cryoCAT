@@ -18,6 +18,7 @@ import dash
 from dash import html, dcc, Input, Output
 import dash_bootstrap_components as dbc
 
+from cryocat.app import ids
 from cryocat.app.suite.tools import TOOLS, DEFAULT_PATH
 from cryocat.app.components.graphsettings import (
     get_graph_settings_components,
@@ -41,11 +42,11 @@ app = dash.Dash(
 # changes and every tool can read/write it. ``motl_id`` is a stable string key
 # (``motl-<n>`` using the ``pool-next-id`` counter) — there is no fixed slot cap.
 POOL_STORES = [
-    dcc.Store(id="pool-registry", data={}),  # { motl_id: {label, type, n_rows, active} }
-    dcc.Store(id="pool-motls", data={}),     # { motl_id: <serialized motl rows> }
-    dcc.Store(id="pool-extra", data={}),     # { motl_id: <stopgap/relion/dynamo extra df> }
-    dcc.Store(id="pool-meta", data={}),      # { motl_id: <relion params, data_type, ...> }
-    dcc.Store(id="pool-next-id", data=0),    # incrementing counter for stable motl_id
+    dcc.Store(id=ids.POOL_REGISTRY, data={}),  # { motl_id: {label, type, n_rows, active} }
+    dcc.Store(id=ids.POOL_MOTLS, data={}),     # { motl_id: <serialized motl rows> }
+    dcc.Store(id=ids.POOL_EXTRA, data={}),     # { motl_id: <stopgap/relion/dynamo extra df> }
+    dcc.Store(id=ids.POOL_META, data={}),      # { motl_id: <relion params, data_type, ...> }
+    dcc.Store(id=ids.POOL_NEXT_ID, data=0),    # incrementing counter for stable motl_id
 ]
 
 
@@ -82,7 +83,7 @@ def _page_wrappers():
     return [
         html.Div(
             _PAGES[t["id"]].layout,
-            id=f"page-wrap-{t['id']}",
+            id=ids.page_wrap_id(t["id"]),
             style={"display": "none"},
         )
         for t in TOOLS
@@ -92,13 +93,13 @@ def _page_wrappers():
 # ── Layout ──────────────────────────────────────────────────────────────────────
 app.layout = dbc.Container(
     [
-        dcc.Location(id="suite-url"),
+        dcc.Location(id=ids.SUITE_URL),
         *POOL_STORES,
         *get_graph_settings_components(),
         *get_log_panel("suite-log"),
         html.Div(
             [
-                html.Div(id="suite-tool-selector", style={"flex": "1"}),
+                html.Div(id=ids.SUITE_TOOL_SELECTOR, style={"flex": "1"}),
                 dbc.Button(
                     "Show log",
                     id="suite-open-log-btn",
@@ -110,7 +111,7 @@ app.layout = dbc.Container(
             className="suite-nav-bar",
             style={"display": "flex", "alignItems": "center"},
         ),
-        html.Div(_page_wrappers(), id="suite-page-content"),
+        html.Div(_page_wrappers(), id=ids.SUITE_PAGE_CONTENT),
     ],
     fluid=True,
     className="p-0",
@@ -120,12 +121,12 @@ app.layout = dbc.Container(
 # ── Router ──────────────────────────────────────────────────────────────────────
 # All pages are mounted once at startup. Navigation only toggles display style —
 # no React tree is destroyed, so in-page state is fully preserved across routes.
-_route_outputs = [Output(f"page-wrap-{t['id']}", "style") for t in TOOLS] + [
-    Output("suite-tool-selector", "children")
+_route_outputs = [Output(ids.page_wrap_id(t["id"]), "style") for t in TOOLS] + [
+    Output(ids.SUITE_TOOL_SELECTOR, "children")
 ]
 
 
-@app.callback(*_route_outputs, Input("suite-url", "pathname"))
+@app.callback(*_route_outputs, Input(ids.SUITE_URL, "pathname"))
 def _route(pathname):
     active_id = _resolve_active_tool(pathname)
     styles = [

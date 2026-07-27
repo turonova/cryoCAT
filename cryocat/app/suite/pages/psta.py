@@ -42,7 +42,7 @@ from plotly.subplots import make_subplots
 
 from cryocat.analysis import sta as sta_mod
 from cryocat.analysis import visplot
-from cryocat.app import formgen
+from cryocat.app import formgen, ids
 from cryocat.app.components.anglesbuilder import register_angles_builder_callbacks
 from cryocat.app.components.graphsettings import apply_settings_to_figure
 from cryocat.utils.geom import generate_angles
@@ -1133,7 +1133,7 @@ def register_callbacks(app):
         Output(f"{_ANGLES_PREFIX}-inplane-preview", "figure"),
         Input(f"{_ANGLES_PREFIX}-visualize-btn", "n_clicks"),
         State(f"{_ANGLES_PREFIX}-params", "data"),
-        State("graph-settings-store", "data"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
     def _visualize_angles(n_clicks, params, gs):

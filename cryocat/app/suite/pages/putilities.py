@@ -20,7 +20,7 @@ from dash import html, dcc, Input, Output, State, ALL
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
-from cryocat.app import formgen
+from cryocat.app import formgen, ids
 from cryocat.app.apputils import iter_standalone_builders, generate_kwargs, run_operation
 from cryocat.app.components.anglesbuilder import (
     get_angles_builder_sidebar_content,
@@ -239,7 +239,7 @@ def register_callbacks(app) -> None:
                 Input(f"{prefix}-preview-btn", "n_clicks"),
                 State({"type": _ANGLES_ID_TYPE, "builder": prefix, "param": ALL, "tag": ALL}, "value"),
                 State({"type": _ANGLES_ID_TYPE, "builder": prefix, "param": ALL, "tag": ALL}, "id"),
-                State("graph-settings-store", "data"),
+                State(ids.GRAPH_SETTINGS_STORE, "data"),
                 prevent_initial_call=True,
             )
             def _preview(n_clicks, values, ids, gs, _prefix=prefix):

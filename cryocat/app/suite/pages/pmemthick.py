@@ -38,7 +38,7 @@ from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
 from cryocat.analysis import memthick
-from cryocat.app import formgen
+from cryocat.app import formgen, ids
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components import memthick_widgets as mw
 from cryocat.app.components import memthick_registry as mreg
@@ -1096,7 +1096,7 @@ def register_callbacks(app):
         Input("memthick-plot-ply-base", "value"),
         Input("memthick-plot-mesh-opacity", "value"),
         Input("memthick-plot-show-scatter", "value"),
-        Input("graph-settings-store", "data"),
+        Input(ids.GRAPH_SETTINGS_STORE, "data"),
         State({"type": "memthick-plot", "tab": ALL}, "id"),
         prevent_initial_call=True,
     )

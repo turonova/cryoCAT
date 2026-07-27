@@ -27,7 +27,7 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
 from cryocat.utils.geom import generate_angles
-from cryocat.app import formgen
+from cryocat.app import formgen, ids
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components.graphsettings import apply_settings_to_figure
 
@@ -239,7 +239,7 @@ def register_angles_builder_callbacks(app: dash.Dash, prefix: str, skip_preview:
             Output(f"{prefix}-preview", "figure"),
             Output(f"{prefix}-inplane-preview", "figure"),
             Input(f"{prefix}-params", "data"),
-            State("graph-settings-store", "data"),
+            State(ids.GRAPH_SETTINGS_STORE, "data"),
             prevent_initial_call=True,
         )
         def _preview(params, gs):

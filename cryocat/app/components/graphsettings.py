@@ -1,6 +1,7 @@
 from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 
+from cryocat.app import ids
 from cryocat.app.components.paletteloader import get_palette_loader, register_palette_loader_callbacks
 
 GRAPH_SETTINGS_DEFAULTS = {
@@ -43,7 +44,7 @@ def _setting_row(label, control):
 def get_graph_settings_components():
     """Global store + modal dialog; add to app.layout."""
     return [
-        dcc.Store(id="graph-settings-store", data=GRAPH_SETTINGS_DEFAULTS),
+        dcc.Store(id=ids.GRAPH_SETTINGS_STORE, data=GRAPH_SETTINGS_DEFAULTS),
         dbc.Modal(
             id="graph-settings-modal",
             is_open=False,
@@ -153,7 +154,7 @@ def register_graph_settings_callbacks(app):
         return no_update
 
     @app.callback(
-        Output("graph-settings-store", "data"),
+        Output(ids.GRAPH_SETTINGS_STORE, "data"),
         Output("gs-status", "children"),
         Input("gs-apply-btn", "n_clicks"),
         State("gs-font-family", "value"),

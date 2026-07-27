@@ -24,6 +24,7 @@ import numpy as np
 import plotly.graph_objects as go
 from dash import html, dcc, Input, Output, State
 
+from cryocat.app import ids
 from cryocat.app.components.graphsettings import apply_settings_to_figure
 
 
@@ -47,9 +48,6 @@ def mesh_at(volume, level):
     except Exception:
         return None
 
-
-# Keep the private alias for backward compat within this module.
-_mesh_at = mesh_at
 
 
 def _scene_layout(shape):
@@ -166,7 +164,7 @@ def register_volume_view_callbacks(app, prefix: str, register_mask: bool = True)
         Input(f"{prefix}-mask-mesh", "data"),
         Input(f"{prefix}-mask-opacity-slider", "value"),
         State(f"{prefix}-map-store", "data"),
-        State("graph-settings-store", "data"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
     def _draw(map_mesh, mask_mesh, mask_opacity, map_data, gs):

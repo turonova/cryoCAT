@@ -30,6 +30,7 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
 from cryocat.analysis import visplot
+from cryocat.app import ids
 from cryocat.app.components.graphsettings import apply_settings_to_figure
 
 
@@ -240,7 +241,7 @@ def register_rotation_builder_callbacks(app: dash.Dash, prefix: str) -> None:
         Input(f"{prefix}-quat-w", "value"),
         *mat_inputs,
         Input(f"{prefix}-euler-order", "value"),
-        State("graph-settings-store", "data"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
     def _update(
