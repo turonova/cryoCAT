@@ -64,6 +64,7 @@ from cryocat.app.suite.pages._pstructure_intersect import (
     motl_rows_to_rays,
     subset_motl_rows,
 )
+from cryocat.app.pageshell import page_shell, sidebar_accordion
 
 
 # ── Module-level styles ──────────────────────────────────────────────────────
@@ -561,87 +562,64 @@ def _surfaces_panel() -> html.Div:
     )
 
 
-def _sidebar() -> dbc.Col:
-    return dbc.Col(
-        html.Div(
+def _sidebar() -> list:
+    return [
+        sidebar_accordion(
             [
-                dbc.Accordion(
-                    [
-                        dbc.AccordionItem(
-                            _load_panel(),
-                            title="Loading",
-                            item_id="surfaces-acc-load",
-                        ),
-                        dbc.AccordionItem(
-                            _op_panel(),
-                            title="Operations",
-                            item_id="surfaces-acc-op",
-                        ),
-                    ],
-                    always_open=True,
-                    active_item=["surfaces-acc-load", "surfaces-acc-op"],
+                dbc.AccordionItem(
+                    _load_panel(),
+                    title="Loading",
+                    item_id="surfaces-acc-load",
                 ),
-                _surfaces_panel(),
+                dbc.AccordionItem(
+                    _op_panel(),
+                    title="Operations",
+                    item_id="surfaces-acc-op",
+                ),
             ],
-            className="sidebar",
-            style={
-                "padding": "0.5rem",
-                "overflowY": "auto",
-                "height": "100vh",
-                "display": "flex",
-                "flexDirection": "column",
-            },
+            active_item=["surfaces-acc-load", "surfaces-acc-op"],
         ),
-        width=3,
-        style={"margin": "0", "padding": "0", "height": "100vh",
-               "position": "sticky", "top": "0px"},
-    )
+        _surfaces_panel(),
+    ]
 
 
-def _main() -> dbc.Col:
-    return dbc.Col(
+def _main() -> list:
+    return [
+        html.H4("Surfaces", style={"marginBottom": "0.5rem"}),
+        get_surface_view("surfaces-view"),
+        html.Hr(style={"margin": "0.5rem 0"}),
+        # Scalar-result panel (surface area, etc.) populated by the
+        # Operations Run dispatch when the op's kind is "scalar".
         html.Div(
-            [
-                html.H4("Surfaces", style={"marginBottom": "0.5rem"}),
-                get_surface_view("surfaces-view"),
-                html.Hr(style={"margin": "0.5rem 0"}),
-                # Scalar-result panel (surface area, etc.) populated by the
-                # Operations Run dispatch when the op's kind is "scalar".
-                html.Div(
-                    id="surfaces-scalar-results-area",
-                    children=html.Div(
-                        "Scalar operation results (e.g. surface area) appear here.",
-                        style=_HINT,
-                    ),
-                    style={"marginBottom": "0.5rem"},
-                ),
-                # Intersection results live here; populated after Cast.
-                html.Div(
-                    id="surfaces-isect-results-area",
-                    children=html.Div(
-                        "Run a particle–mesh intersection from the sidebar "
-                        "to see hits, region summary, and distance histogram.",
-                        style=_HINT,
-                    ),
-                ),
-                # Parametric DataFrame results.
-                html.Div(
-                    id="surfaces-param-results-area",
-                    children=html.Div(
-                        "Parametric ops that return motls go to the editor "
-                        "via the side panel. Ops that return a table "
-                        "(intersection distances) render here.",
-                        style=_HINT,
-                    ),
-                ),
-                # motlsink for parametric motl outputs.
-                get_send_to_editor_button("surfaces-param-send"),
-            ],
-            style={"padding": "0.5rem"},
+            id="surfaces-scalar-results-area",
+            children=html.Div(
+                "Scalar operation results (e.g. surface area) appear here.",
+                style=_HINT,
+            ),
+            style={"marginBottom": "0.5rem"},
         ),
-        width=9,
-        style={"margin": "0", "padding": "0"},
-    )
+        # Intersection results live here; populated after Cast.
+        html.Div(
+            id="surfaces-isect-results-area",
+            children=html.Div(
+                "Run a particle–mesh intersection from the sidebar "
+                "to see hits, region summary, and distance histogram.",
+                style=_HINT,
+            ),
+        ),
+        # Parametric DataFrame results.
+        html.Div(
+            id="surfaces-param-results-area",
+            children=html.Div(
+                "Parametric ops that return motls go to the editor "
+                "via the side panel. Ops that return a table "
+                "(intersection distances) render here.",
+                style=_HINT,
+            ),
+        ),
+        # motlsink for parametric motl outputs.
+        get_send_to_editor_button("surfaces-param-send"),
+    ]
 
 
 layout = html.Div(
@@ -663,8 +641,7 @@ layout = html.Div(
         dcc.Store(id="parametric-active"),
         dcc.Store(id="surfaces-param-result-motl"),
         dcc.Store(id="surfaces-param-intersection-df"),
-        dbc.Row([_sidebar(), _main()], className="g-0",
-                style={"margin": "0", "padding": "0"}),
+        page_shell(_sidebar(), _main()),
     ],
     style={"margin": "0", "padding": "0"},
 )

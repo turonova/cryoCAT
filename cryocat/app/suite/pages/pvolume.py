@@ -21,6 +21,7 @@ from cryocat.core import cryomap, cryomask
 from cryocat.app.components.volumeview import (
     get_volume_view, register_volume_view_callbacks, mesh_at,
 )
+from cryocat.app.pageshell import page_shell, sidebar_accordion
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -336,196 +337,178 @@ def _layer_row(layer, idx, n_total, is_selected):
     )
 
 
-def _sidebar():
+def _sidebar() -> list:
     type_options = [{"label": v["label"], "value": k} for k, v in MASK_REGISTRY.items()]
-    return dbc.Col(
-        html.Div(
+    return [
+        sidebar_accordion(
             [
-                dbc.Accordion(
+                # ── Map ───────────────────────────────────────────────
+                dbc.AccordionItem(
                     [
-                        # ── Map ───────────────────────────────────────────────
-                        dbc.AccordionItem(
+                        html.Div(
                             [
-                                html.Div(
-                                    [
-                                        html.Label("Map file", style={"fontSize": "0.85rem",
-                                                                       "width": "40%", "flexShrink": 0,
-                                                                       "paddingRight": "0.4rem"}),
-                                        dbc.Input(id="vol-path-input", type="text",
-                                                  placeholder="Path to .em / .mrc file",
-                                                  style={"flex": 1}),
-                                    ],
-                                    style={"display": "flex", "alignItems": "center",
-                                           "marginBottom": "0.3rem"},
-                                ),
-                                html.Div(
-                                    [
-                                        html.Label("Bin factor", style={"fontSize": "0.85rem",
-                                                                         "width": "40%", "flexShrink": 0,
-                                                                         "paddingRight": "0.4rem"}),
-                                        dbc.Input(id="vol-bin-input", type="number",
-                                                  value=1, min=1, max=16, step=1,
-                                                  style={"flex": 1}),
-                                    ],
-                                    style={"display": "flex", "alignItems": "center",
-                                           "marginBottom": "0.3rem"},
-                                ),
-                                dbc.Button("Load map", id="vol-load-btn", color="primary",
-                                           size="sm", style={"width": "100%"}),
-                                html.Div(id="vol-load-status",
-                                         style={"fontSize": "0.8rem", "color": "var(--color9)",
-                                                "marginTop": "0.4rem", "wordBreak": "break-word"}),
+                                html.Label("Map file", style={"fontSize": "0.85rem",
+                                                               "width": "40%", "flexShrink": 0,
+                                                               "paddingRight": "0.4rem"}),
+                                dbc.Input(id="vol-path-input", type="text",
+                                          placeholder="Path to .em / .mrc file",
+                                          style={"flex": 1}),
                             ],
-                            title="Map", item_id="vol-acc-map",
+                            style={"display": "flex", "alignItems": "center",
+                                   "marginBottom": "0.3rem"},
                         ),
-                        # ── Display ───────────────────────────────────────────
-                        dbc.AccordionItem(
+                        html.Div(
                             [
-                                _slider_row("Isosurface level",   "vol-iso-slider",          "vol-iso-input",
-                                            min_=0.0, max_=1.0, step=0.01, value=0.5),
-                                _slider_row("Mask overlay opacity","vol-mask-opacity-slider", "vol-mask-opacity-input",
-                                            min_=0.0, max_=1.0, step=0.05, value=0.3),
+                                html.Label("Bin factor", style={"fontSize": "0.85rem",
+                                                                 "width": "40%", "flexShrink": 0,
+                                                                 "paddingRight": "0.4rem"}),
+                                dbc.Input(id="vol-bin-input", type="number",
+                                          value=1, min=1, max=16, step=1,
+                                          style={"flex": 1}),
                             ],
-                            title="Display", item_id="vol-acc-display",
+                            style={"display": "flex", "alignItems": "center",
+                                   "marginBottom": "0.3rem"},
                         ),
-                        # ── Mask layers ───────────────────────────────────────
-                        dbc.AccordionItem(
+                        dbc.Button("Load map", id="vol-load-btn", color="primary",
+                                   size="sm", style={"width": "100%"}),
+                        html.Div(id="vol-load-status",
+                                 style={"fontSize": "0.8rem", "color": "var(--color9)",
+                                        "marginTop": "0.4rem", "wordBreak": "break-word"}),
+                    ],
+                    title="Map", item_id="vol-acc-map",
+                ),
+                # ── Display ───────────────────────────────────────────
+                dbc.AccordionItem(
+                    [
+                        _slider_row("Isosurface level",   "vol-iso-slider",          "vol-iso-input",
+                                    min_=0.0, max_=1.0, step=0.01, value=0.5),
+                        _slider_row("Mask overlay opacity","vol-mask-opacity-slider", "vol-mask-opacity-input",
+                                    min_=0.0, max_=1.0, step=0.05, value=0.3),
+                    ],
+                    title="Display", item_id="vol-acc-display",
+                ),
+                # ── Mask layers ───────────────────────────────────────
+                dbc.AccordionItem(
+                    [
+                        # Add-layer row
+                        html.Div(
                             [
-                                # Add-layer row
-                                html.Div(
-                                    [
-                                        dcc.Dropdown(
-                                            id="vol-add-type-dropdown",
-                                            options=type_options,
-                                            value="sphere",
-                                            clearable=False,
-                                            searchable=False,
-                                            style={"flex": 1, "fontSize": "0.8rem"},
-                                        ),
-                                        dbc.Button("Add", id="vol-add-layer-btn",
-                                                   color="primary", size="sm",
-                                                   style={"marginLeft": "0.4rem"}),
-                                    ],
-                                    style={"display": "flex", "alignItems": "center",
-                                           "marginBottom": "0.5rem"},
+                                dcc.Dropdown(
+                                    id="vol-add-type-dropdown",
+                                    options=type_options,
+                                    value="sphere",
+                                    clearable=False,
+                                    searchable=False,
+                                    style={"flex": 1, "fontSize": "0.8rem"},
                                 ),
-                                # Layer list
-                                html.Div(id="vol-layer-list",
-                                         children=[html.Div("No layers yet.",
-                                                            style={"fontSize": "0.8rem",
-                                                                   "color": "var(--color9)"})],
-                                         style={"marginBottom": "0.5rem"}),
-                                html.Hr(style={"margin": "0.4rem 0"}),
-                                # Combine controls
-                                html.Div(
-                                    [
-                                        html.Label("Combine", style={"fontSize": "0.85rem",
-                                                                      "width": "40%", "flexShrink": 0}),
-                                        dcc.Dropdown(
-                                            id="vol-bool-op",
-                                            options=[
-                                                {"label": "Union",        "value": "union"},
-                                                {"label": "Intersection", "value": "intersection"},
-                                                {"label": "Subtraction",  "value": "subtraction"},
-                                                {"label": "Difference",   "value": "difference"},
-                                            ],
-                                            value="union", clearable=False,
-                                            searchable=False,
-                                            style={"flex": 1, "fontSize": "0.8rem"},
-                                        ),
-                                    ],
-                                    style={"display": "flex", "alignItems": "center",
-                                           "marginBottom": "0.3rem"},
-                                ),
-                                html.Div(
-                                    [
-                                        html.Label("View", style={"fontSize": "0.85rem",
-                                                                   "width": "40%", "flexShrink": 0}),
-                                        dcc.RadioItems(
-                                            id="vol-view-mode",
-                                            options=[{"label": " Layers", "value": "layers"},
-                                                     {"label": " Result", "value": "result"}],
-                                            value="layers", inline=True,
-                                            style={"fontSize": "0.8rem", "display": "flex",
-                                                   "alignItems": "center"},
-                                        ),
-                                    ],
-                                    style={"display": "flex", "alignItems": "center"},
-                                ),
+                                dbc.Button("Add", id="vol-add-layer-btn",
+                                           color="primary", size="sm",
+                                           style={"marginLeft": "0.4rem"}),
                             ],
-                            title="Mask layers", item_id="vol-acc-layers",
+                            style={"display": "flex", "alignItems": "center",
+                                   "marginBottom": "0.5rem"},
                         ),
-                        # ── Selected layer params ─────────────────────────────
-                        dbc.AccordionItem(
+                        # Layer list
+                        html.Div(id="vol-layer-list",
+                                 children=[html.Div("No layers yet.",
+                                                    style={"fontSize": "0.8rem",
+                                                           "color": "var(--color9)"})],
+                                 style={"marginBottom": "0.5rem"}),
+                        html.Hr(style={"margin": "0.4rem 0"}),
+                        # Combine controls
+                        html.Div(
                             [
-                                html.Div(id="vol-layer-params-form",
-                                         children=[html.Div("Select a layer to edit.",
-                                                            style={"fontSize": "0.8rem",
-                                                                   "color": "var(--color9)"})]),
+                                html.Label("Combine", style={"fontSize": "0.85rem",
+                                                              "width": "40%", "flexShrink": 0}),
+                                dcc.Dropdown(
+                                    id="vol-bool-op",
+                                    options=[
+                                        {"label": "Union",        "value": "union"},
+                                        {"label": "Intersection", "value": "intersection"},
+                                        {"label": "Subtraction",  "value": "subtraction"},
+                                        {"label": "Difference",   "value": "difference"},
+                                    ],
+                                    value="union", clearable=False,
+                                    searchable=False,
+                                    style={"flex": 1, "fontSize": "0.8rem"},
+                                ),
                             ],
-                            title="Layer parameters", item_id="vol-acc-lparams",
+                            style={"display": "flex", "alignItems": "center",
+                                   "marginBottom": "0.3rem"},
                         ),
-                        # ── Create mask ───────────────────────────────────────
-                        dbc.AccordionItem(
+                        html.Div(
                             [
-                                html.Div(
-                                    [
-                                        html.Label("Output path", style={"fontSize": "0.85rem",
-                                                                          "width": "40%", "flexShrink": 0,
-                                                                          "paddingRight": "0.4rem"}),
-                                        dbc.Input(id="vol-output-path-input", type="text",
-                                                  placeholder="output_mask.em",
-                                                  style={"flex": 1}),
-                                    ],
-                                    style={"display": "flex", "alignItems": "center",
-                                           "marginBottom": "0.3rem"},
+                                html.Label("View", style={"fontSize": "0.85rem",
+                                                           "width": "40%", "flexShrink": 0}),
+                                dcc.RadioItems(
+                                    id="vol-view-mode",
+                                    options=[{"label": " Layers", "value": "layers"},
+                                             {"label": " Result", "value": "result"}],
+                                    value="layers", inline=True,
+                                    style={"fontSize": "0.8rem", "display": "flex",
+                                           "alignItems": "center"},
                                 ),
-                                html.Div(
-                                    [
-                                        html.Label("Pixel size (Å)", style={"fontSize": "0.85rem",
-                                                                              "width": "40%", "flexShrink": 0,
-                                                                              "paddingRight": "0.4rem"}),
-                                        dbc.Input(id="vol-pixel-size-input", type="number",
-                                                  value=1.0, min=0.001, step=0.001,
-                                                  style={"flex": 1}),
-                                    ],
-                                    style={"display": "flex", "alignItems": "center",
-                                           "marginBottom": "0.3rem"},
-                                ),
-                                dbc.Button("Create mask", id="vol-create-btn",
-                                           size="sm",
-                                           style={"width": "100%", "backgroundColor": "var(--color12)", "borderColor": "var(--color12)"}),
-                                html.Div(id="vol-create-status",
-                                         style={"fontSize": "0.8rem", "color": "var(--color9)",
-                                                "marginTop": "0.4rem", "wordBreak": "break-word"}),
                             ],
-                            title="Create mask", item_id="vol-acc-create",
+                            style={"display": "flex", "alignItems": "center"},
                         ),
                     ],
-                    always_open=True,
-                    active_item=["vol-acc-map", "vol-acc-display", "vol-acc-layers",
-                                 "vol-acc-lparams", "vol-acc-create"],
+                    title="Mask layers", item_id="vol-acc-layers",
+                ),
+                # ── Selected layer params ─────────────────────────────
+                dbc.AccordionItem(
+                    [
+                        html.Div(id="vol-layer-params-form",
+                                 children=[html.Div("Select a layer to edit.",
+                                                    style={"fontSize": "0.8rem",
+                                                           "color": "var(--color9)"})]),
+                    ],
+                    title="Layer parameters", item_id="vol-acc-lparams",
+                ),
+                # ── Create mask ───────────────────────────────────────
+                dbc.AccordionItem(
+                    [
+                        html.Div(
+                            [
+                                html.Label("Output path", style={"fontSize": "0.85rem",
+                                                                  "width": "40%", "flexShrink": 0,
+                                                                  "paddingRight": "0.4rem"}),
+                                dbc.Input(id="vol-output-path-input", type="text",
+                                          placeholder="output_mask.em",
+                                          style={"flex": 1}),
+                            ],
+                            style={"display": "flex", "alignItems": "center",
+                                   "marginBottom": "0.3rem"},
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Pixel size (Å)", style={"fontSize": "0.85rem",
+                                                                      "width": "40%", "flexShrink": 0,
+                                                                      "paddingRight": "0.4rem"}),
+                                dbc.Input(id="vol-pixel-size-input", type="number",
+                                          value=1.0, min=0.001, step=0.001,
+                                          style={"flex": 1}),
+                            ],
+                            style={"display": "flex", "alignItems": "center",
+                                   "marginBottom": "0.3rem"},
+                        ),
+                        dbc.Button("Create mask", id="vol-create-btn",
+                                   size="sm",
+                                   style={"width": "100%", "backgroundColor": "var(--color12)", "borderColor": "var(--color12)"}),
+                        html.Div(id="vol-create-status",
+                                 style={"fontSize": "0.8rem", "color": "var(--color9)",
+                                        "marginTop": "0.4rem", "wordBreak": "break-word"}),
+                    ],
+                    title="Create mask", item_id="vol-acc-create",
                 ),
             ],
-            className="sidebar",
-            style={"padding": "0.5rem", "overflowY": "auto", "height": "100vh",
-                   "display": "flex", "flexDirection": "column"},
+            active_item=["vol-acc-map", "vol-acc-display", "vol-acc-layers",
+                         "vol-acc-lparams", "vol-acc-create"],
         ),
-        width=3,
-        style={"margin": "0", "padding": "0", "height": "100vh",
-               "position": "sticky", "top": "0px"},
-    )
+    ]
 
 
-def _main():
-    return dbc.Col(
-        html.Div(
-            [get_volume_view("vol")],
-            style={"padding": "0.5rem"},
-        ),
-        width=9,
-        style={"margin": "0", "padding": "0"},
-    )
+def _main() -> list:
+    return [get_volume_view("vol")]
 
 
 layout = html.Div(
@@ -533,8 +516,7 @@ layout = html.Div(
         dcc.Store(id="vol-meta-store"),
         dcc.Store(id="vol-mask-layers", data=[]),
         dcc.Store(id="vol-selected-layer", data=None),
-        dbc.Row([_sidebar(), _main()], className="g-0",
-                style={"margin": "0", "padding": "0"}),
+        page_shell(_sidebar(), _main()),
     ],
     style={"margin": "0", "padding": "0"},
 )

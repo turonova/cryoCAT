@@ -31,6 +31,7 @@ from cryocat.app.components.motlsource import get_motl_source, register_motl_sou
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
+from cryocat.app.pageshell import page_shell, sidebar_accordion
 
 
 _MOTL_COL_OPTIONS = [{"label": c, "value": c} for c in Motl.motl_columns]
@@ -289,212 +290,190 @@ def _load_csv_sidebar_content():
     )
 
 
-def _sidebar():
-    return dbc.Col(
-        html.Div(
+def _sidebar() -> list:
+    return [
+        sidebar_accordion(
             [
-                dbc.Accordion(
+                dbc.AccordionItem(
+                    get_motl_source("nn", multi=True),
+                    title="Input motls",
+                    item_id="nn-acc-input",
+                ),
+                dbc.AccordionItem(
                     [
-                        dbc.AccordionItem(
-                            get_motl_source("nn", multi=True),
-                            title="Input motls",
-                            item_id="nn-acc-input",
-                        ),
-                        dbc.AccordionItem(
+                        # nn_type: manual dropdown so labels are user-friendly
+                        html.Div(
                             [
-                                # nn_type: manual dropdown so labels are user-friendly
                                 html.Div(
-                                    [
-                                        html.Div(
-                                            html.Label(
-                                                "Nn type",
-                                                style={"fontSize": "0.85rem", "margin": 0},
-                                            ),
-                                            style={
-                                                "width": "45%", "display": "flex",
-                                                "alignItems": "center", "boxSizing": "border-box",
-                                                "paddingRight": "4px",
-                                            },
-                                        ),
-                                        html.Div(
-                                            dcc.Dropdown(
-                                                id={
-                                                    "type": "nn-forms-params",
-                                                    "param": "nn_type",
-                                                    "tag": "Literal",
-                                                    "cls_name": "nn-params",
-                                                },
-                                                options=[
-                                                    {"label": "Closest distance", "value": "closest_dist"},
-                                                    {"label": "Radius", "value": "radius"},
-                                                ],
-                                                value="closest_dist",
-                                                clearable=False,
-                                                searchable=False,
-                                                style={"width": "100%"},
-                                            ),
-                                            style={"width": "55%"},
-                                        ),
-                                    ],
+                                    html.Label(
+                                        "Nn type",
+                                        style={"fontSize": "0.85rem", "margin": 0},
+                                    ),
                                     style={
-                                        "display": "flex", "flexDirection": "row",
-                                        "marginBottom": "0.25rem", "width": "100%",
-                                        "alignItems": "center",
+                                        "width": "45%", "display": "flex",
+                                        "alignItems": "center", "boxSizing": "border-box",
+                                        "paddingRight": "4px",
                                     },
                                 ),
                                 html.Div(
-                                    build_form(
-                                        NearestNeighbors,
-                                        id_type="nn-forms-params",
-                                        id_extra={"cls_name": "nn-params"},
-                                        exclude=["input_data", "nn_type", "exclude_column_name"],
+                                    dcc.Dropdown(
+                                        id={
+                                            "type": "nn-forms-params",
+                                            "param": "nn_type",
+                                            "tag": "Literal",
+                                            "cls_name": "nn-params",
+                                        },
+                                        options=[
+                                            {"label": "Closest distance", "value": "closest_dist"},
+                                            {"label": "Radius", "value": "radius"},
+                                        ],
+                                        value="closest_dist",
+                                        clearable=False,
+                                        searchable=False,
+                                        style={"width": "100%"},
                                     ),
-                                ),
-                                # exclude_column_name: clearable motl-column dropdown (None by default)
-                                html.Div(
-                                    [
-                                        html.Div(
-                                            [
-                                                html.Label(
-                                                    "Exclude column name (opt.)",
-                                                    id="nn-excl-col-lbl",
-                                                    style={"fontSize": "0.85rem", "margin": 0},
-                                                ),
-                                                dbc.Tooltip(
-                                                    "When set, NN candidates sharing the query "
-                                                    "particle's value in this column are excluded. "
-                                                    "For closest-distance (k-NN) mode the row count "
-                                                    "is unchanged (k neighbors are still returned, "
-                                                    "just from different objects) and distances "
-                                                    "typically increase. For radius mode the row "
-                                                    "count can decrease because excluded candidates "
-                                                    "are simply dropped.",
-                                                    target="nn-excl-col-lbl",
-                                                    placement="right",
-                                                ),
-                                            ],
-                                            style={
-                                                "width": "45%", "display": "flex",
-                                                "alignItems": "center", "boxSizing": "border-box",
-                                                "paddingRight": "4px",
-                                            },
-                                        ),
-                                        html.Div(
-                                            dcc.Dropdown(
-                                                id={
-                                                    "type": "nn-forms-params",
-                                                    "param": "exclude_column_name",
-                                                    "tag": "Literal",
-                                                    "cls_name": "nn-params",
-                                                },
-                                                options=_MOTL_COL_OPTIONS,
-                                                value=None,
-                                                clearable=True,
-                                                searchable=True,
-                                                placeholder="None (optional)",
-                                                style={"width": "100%"},
-                                            ),
-                                            style={"width": "55%"},
-                                        ),
-                                    ],
-                                    style={
-                                        "display": "flex", "flexDirection": "row",
-                                        "marginBottom": "0.25rem", "width": "100%",
-                                        "alignItems": "center",
-                                    },
-                                ),
-                                html.Div(
-                                    dbc.Checkbox(
-                                        id="nn-dist-toggle",
-                                        label="Compute euclidean distances",
-                                        value=False,
-                                    ),
-                                    id="nn-dist-toggle-wrap",
-                                    style={"display": "none", "marginTop": "0.3rem"},
-                                ),
-                                dbc.Checkbox(
-                                    id="nn-angular-toggle",
-                                    label="Compute angular distances",
-                                    value=False,
-                                    style={"marginTop": "0.5rem", "marginBottom": "0.4rem"},
-                                ),
-                                html.Div(
-                                    build_form(
-                                        NearestNeighbors.get_angular_distances,
-                                        id_type="nn-forms-params",
-                                        id_extra={"cls_name": "nn-angular"},
-                                    ),
-                                    id="nn-angular-form-wrap",
-                                    style={"display": "none"},
-                                ),
-                                dbc.Button(
-                                    "Compute NN analysis",
-                                    id="nn-compute-btn",
-                                    color="primary",
-                                    size="sm",
-                                    style={"width": "100%", "marginTop": "0.5rem"},
-                                ),
-                                html.Div(
-                                    id="nn-stats-text",
-                                    style={
-                                        "fontSize": "0.85rem",
-                                        "color": "var(--color9)",
-                                        "marginTop": "0.5rem",
-                                        "wordBreak": "break-word",
-                                    },
+                                    style={"width": "55%"},
                                 ),
                             ],
-                            title="Compute NN table",
-                            item_id="nn-acc-params",
+                            style={
+                                "display": "flex", "flexDirection": "row",
+                                "marginBottom": "0.25rem", "width": "100%",
+                                "alignItems": "center",
+                            },
                         ),
-                        dbc.AccordionItem(
-                            _load_csv_sidebar_content(),
-                            title="Load existing NN table",
-                            item_id="nn-acc-load",
+                        html.Div(
+                            build_form(
+                                NearestNeighbors,
+                                id_type="nn-forms-params",
+                                id_extra={"cls_name": "nn-params"},
+                                exclude=["input_data", "nn_type", "exclude_column_name"],
+                            ),
                         ),
-                        dbc.AccordionItem(
-                            _postprocess_sidebar_content(),
-                            title="Post-processing",
-                            item_id="nn-acc-postprocess",
+                        # exclude_column_name: clearable motl-column dropdown (None by default)
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.Label(
+                                            "Exclude column name (opt.)",
+                                            id="nn-excl-col-lbl",
+                                            style={"fontSize": "0.85rem", "margin": 0},
+                                        ),
+                                        dbc.Tooltip(
+                                            "When set, NN candidates sharing the query "
+                                            "particle's value in this column are excluded. "
+                                            "For closest-distance (k-NN) mode the row count "
+                                            "is unchanged (k neighbors are still returned, "
+                                            "just from different objects) and distances "
+                                            "typically increase. For radius mode the row "
+                                            "count can decrease because excluded candidates "
+                                            "are simply dropped.",
+                                            target="nn-excl-col-lbl",
+                                            placement="right",
+                                        ),
+                                    ],
+                                    style={
+                                        "width": "45%", "display": "flex",
+                                        "alignItems": "center", "boxSizing": "border-box",
+                                        "paddingRight": "4px",
+                                    },
+                                ),
+                                html.Div(
+                                    dcc.Dropdown(
+                                        id={
+                                            "type": "nn-forms-params",
+                                            "param": "exclude_column_name",
+                                            "tag": "Literal",
+                                            "cls_name": "nn-params",
+                                        },
+                                        options=_MOTL_COL_OPTIONS,
+                                        value=None,
+                                        clearable=True,
+                                        searchable=True,
+                                        placeholder="None (optional)",
+                                        style={"width": "100%"},
+                                    ),
+                                    style={"width": "55%"},
+                                ),
+                            ],
+                            style={
+                                "display": "flex", "flexDirection": "row",
+                                "marginBottom": "0.25rem", "width": "100%",
+                                "alignItems": "center",
+                            },
                         ),
-                        dbc.AccordionItem(
-                            _create_motl_sidebar_content(),
-                            title="Create motl from NN table",
-                            item_id="nn-acc-create",
+                        html.Div(
+                            dbc.Checkbox(
+                                id="nn-dist-toggle",
+                                label="Compute euclidean distances",
+                                value=False,
+                            ),
+                            id="nn-dist-toggle-wrap",
+                            style={"display": "none", "marginTop": "0.3rem"},
+                        ),
+                        dbc.Checkbox(
+                            id="nn-angular-toggle",
+                            label="Compute angular distances",
+                            value=False,
+                            style={"marginTop": "0.5rem", "marginBottom": "0.4rem"},
+                        ),
+                        html.Div(
+                            build_form(
+                                NearestNeighbors.get_angular_distances,
+                                id_type="nn-forms-params",
+                                id_extra={"cls_name": "nn-angular"},
+                            ),
+                            id="nn-angular-form-wrap",
+                            style={"display": "none"},
+                        ),
+                        dbc.Button(
+                            "Compute NN analysis",
+                            id="nn-compute-btn",
+                            color="primary",
+                            size="sm",
+                            style={"width": "100%", "marginTop": "0.5rem"},
+                        ),
+                        html.Div(
+                            id="nn-stats-text",
+                            style={
+                                "fontSize": "0.85rem",
+                                "color": "var(--color9)",
+                                "marginTop": "0.5rem",
+                                "wordBreak": "break-word",
+                            },
                         ),
                     ],
-                    always_open=True,
-                    active_item=["nn-acc-input", "nn-acc-params"],
+                    title="Compute NN table",
+                    item_id="nn-acc-params",
+                ),
+                dbc.AccordionItem(
+                    _load_csv_sidebar_content(),
+                    title="Load existing NN table",
+                    item_id="nn-acc-load",
+                ),
+                dbc.AccordionItem(
+                    _postprocess_sidebar_content(),
+                    title="Post-processing",
+                    item_id="nn-acc-postprocess",
+                ),
+                dbc.AccordionItem(
+                    _create_motl_sidebar_content(),
+                    title="Create motl from NN table",
+                    item_id="nn-acc-create",
                 ),
             ],
-            className="sidebar",
-            style={
-                "padding": "0.5rem",
-                "overflowY": "auto",
-                "height": "100vh",
-                "display": "flex",
-                "flexDirection": "column",
-            },
+            active_item=["nn-acc-input", "nn-acc-params"],
         ),
-        width=3,
-        style={"margin": "0", "padding": "0", "height": "100vh", "position": "sticky", "top": "0px"},
-    )
+    ]
 
 
-def _main():
-    return dbc.Col(
-        html.Div(
-            [
-                dcc.Store(id="nn-out-tabv-global-data-store"),
-                get_table_component("nn-out-tabv"),
-                html.Hr(style={"margin": "0.5rem 0"}),
-                html.Div(id="nn-xyz-graph-area"),
-            ],
-            style={"padding": "0.5rem"},
-        ),
-        width=9,
-        style={"margin": "0", "padding": "0"},
-    )
+def _main() -> list:
+    return [
+        dcc.Store(id="nn-out-tabv-global-data-store"),
+        get_table_component("nn-out-tabv"),
+        html.Hr(style={"margin": "0.5rem 0"}),
+        html.Div(id="nn-xyz-graph-area"),
+    ]
 
 
 layout = html.Div(
@@ -503,7 +482,7 @@ layout = html.Div(
         # Ordered list of pool motl-ids used in the last NN run, plus is_multi flag.
         dcc.Store(id="nn-used-motls-store"),
         dcc.Store(id="nn-cluster-cols-store", data=[]),
-        dbc.Row([_sidebar(), _main()], className="g-0", style={"margin": "0", "padding": "0"}),
+        page_shell(_sidebar(), _main()),
     ],
     style={"margin": "0", "padding": "0"},
 )

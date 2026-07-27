@@ -32,6 +32,7 @@ from cryocat.app.apputils import (
 )
 from cryocat.app.formgen import build_form
 from cryocat.app.logger import dash_logger, invoke_operation
+from cryocat.app.pageshell import _SIDEBAR_STYLE, _SIDEBAR_COL_STYLE
 
 # Number of editor *view slots* (rendered table/viewer surfaces). The motl pool
 # itself is unbounded — this only caps how many motls are open as tabs at once.
@@ -199,23 +200,11 @@ def get_motl_editor_sidebar():
                 ),
             ],
             className="sidebar",
-            style={
-                "padding": "0.5rem",
-                "overflowY": "auto",
-                "height": "100vh",
-                "display": "flex",
-                "flexDirection": "column",
-            },
+            style=_SIDEBAR_STYLE,
         ),
         id="me-sidebar",
         width=3,
-        style={
-            "margin": "0",
-            "padding": "0",
-            "height": "100vh",
-            "position": "sticky",
-            "top": "0px",
-        },
+        style=_SIDEBAR_COL_STYLE,
     )
 
 

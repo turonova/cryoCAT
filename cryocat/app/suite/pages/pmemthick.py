@@ -49,6 +49,7 @@ from cryocat.app.components.motlsink import (
 )
 from cryocat.app.suite.pages import _memthick_analysis as analysis_helpers
 from cryocat.app.suite.pages import _memthick_codegen as codegen
+from cryocat.app.pageshell import page_shell, sidebar_accordion
 
 
 # Lazy import of the tutorial's analyze/plot module. It lives next to the
@@ -632,35 +633,20 @@ def _analyze_section() -> html.Div:
     )
 
 
-def _sidebar() -> dbc.Col:
-    return dbc.Col(
-        html.Div(
+def _sidebar() -> list:
+    return [
+        sidebar_accordion(
             [
-                dbc.Accordion(
-                    [
-                        dbc.AccordionItem(_configure_section(), title="Configure",
-                                          item_id="memthick-acc-config"),
-                        dbc.AccordionItem(_generate_section(), title="Generate code",
-                                          item_id="memthick-acc-gen"),
-                        dbc.AccordionItem(_analyze_section(), title="Analyze",
-                                          item_id="memthick-acc-analyze"),
-                    ],
-                    always_open=True,
-                    active_item=["memthick-acc-config", "memthick-acc-gen"],
-                ),
+                dbc.AccordionItem(_configure_section(), title="Configure",
+                                  item_id="memthick-acc-config"),
+                dbc.AccordionItem(_generate_section(), title="Generate code",
+                                  item_id="memthick-acc-gen"),
+                dbc.AccordionItem(_analyze_section(), title="Analyze",
+                                  item_id="memthick-acc-analyze"),
             ],
-            className="sidebar",
-            style={
-                "padding": "0.5rem",
-                "overflowY": "auto",
-                "height": "100vh",
-                "display": "flex",
-                "flexDirection": "column",
-            },
+            active_item=["memthick-acc-config", "memthick-acc-gen"],
         ),
-        width=4,
-        style={"margin": 0, "padding": 0, "height": "100vh", "position": "sticky", "top": "0px"},
-    )
+    ]
 
 
 def _plot_tab(tab_id: str, label: str) -> dcc.Tab:
@@ -693,29 +679,22 @@ def _plot_tab(tab_id: str, label: str) -> dcc.Tab:
     return dcc.Tab(label=label, value=tab_id, children=body)
 
 
-def _main() -> dbc.Col:
-    return dbc.Col(
-        html.Div(
-            [
-                dcc.Tabs(
-                    id="memthick-main-tabs",
-                    value="code",
-                    children=[_plot_tab(tab_id, label) for tab_id, label in _PLOT_TABS],
-                    style={"marginBottom": "0.25rem"},
-                ),
-                dcc.Store(id="memthick-built-store"),
-                dcc.Download(id="memthick-download"),
-            ],
-            style={"padding": "0.25rem"},
+def _main() -> list:
+    return [
+        dcc.Tabs(
+            id="memthick-main-tabs",
+            value="code",
+            children=[_plot_tab(tab_id, label) for tab_id, label in _PLOT_TABS],
+            style={"marginBottom": "0.25rem"},
         ),
-        width=8,
-        style={"margin": 0, "padding": 0},
-    )
+        dcc.Store(id="memthick-built-store"),
+        dcc.Download(id="memthick-download"),
+    ]
 
 
 layout = html.Div(
     [
-        dbc.Row([_sidebar(), _main()], className="g-0", style={"margin": 0, "padding": 0}),
+        page_shell(_sidebar(), _main(), sidebar_width=4),
         *get_log_panel("memthick-log"),
     ],
     style={"margin": 0, "padding": 0},

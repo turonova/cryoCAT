@@ -46,6 +46,7 @@ from cryocat.app import formgen, ids
 from cryocat.app.components.anglesbuilder import register_angles_builder_callbacks
 from cryocat.app.components.graphsettings import apply_settings_to_figure
 from cryocat.utils.geom import generate_angles
+from cryocat.app.pageshell import page_shell, sidebar_accordion
 
 
 _HINT = {"fontSize": "0.8rem", "color": "var(--color9)", "margin": "0.3rem 0"}
@@ -490,45 +491,29 @@ def _placeholder_panel(text: str = _PLACEHOLDER) -> html.Div:
     return html.Div(text, style=_HINT)
 
 
-def _sidebar() -> dbc.Col:
-    return dbc.Col(
-        html.Div(
+def _sidebar() -> list:
+    return [
+        sidebar_accordion(
             [
-                dbc.Accordion(
-                    [
-                        dbc.AccordionItem(
-                            _evaluation_panel(),
-                            title="Evaluation",
-                            item_id="sta-acc-eval",
-                        ),
-                        dbc.AccordionItem(
-                            _sta_setup_panel(),
-                            title="STA setup",
-                            item_id="sta-acc-sta-setup",
-                        ),
-                        dbc.AccordionItem(
-                            _placeholder_panel(),
-                            title="Classification setup",
-                            item_id="sta-acc-class-setup",
-                        ),
-                    ],
-                    always_open=True,
-                    active_item=["sta-acc-eval"],
+                dbc.AccordionItem(
+                    _evaluation_panel(),
+                    title="Evaluation",
+                    item_id="sta-acc-eval",
+                ),
+                dbc.AccordionItem(
+                    _sta_setup_panel(),
+                    title="STA setup",
+                    item_id="sta-acc-sta-setup",
+                ),
+                dbc.AccordionItem(
+                    _placeholder_panel(),
+                    title="Classification setup",
+                    item_id="sta-acc-class-setup",
                 ),
             ],
-            className="sidebar",
-            style={
-                "padding": "0.5rem",
-                "overflowY": "auto",
-                "height": "100vh",
-                "display": "flex",
-                "flexDirection": "column",
-            },
+            active_item=["sta-acc-eval"],
         ),
-        width=3,
-        style={"margin": "0", "padding": "0", "height": "100vh",
-               "position": "sticky", "top": "0px"},
-    )
+    ]
 
 
 # ── Empty-state figure ──────────────────────────────────────────────────────
@@ -683,34 +668,27 @@ def _tab_setup_output() -> html.Div:
     )
 
 
-def _main() -> dbc.Col:
-    return dbc.Col(
-        html.Div(
-            [
-                dcc.Tabs(
-                    id="sta-main-tabs",
-                    value="tab-params",
-                    children=[
-                        dcc.Tab(label="Parameter file",
-                                value="tab-params",
-                                children=_tab_params()),
-                        dcc.Tab(label="Alignment evaluation",
-                                value="tab-align",
-                                children=_tab_alignment()),
-                        dcc.Tab(label="Classification evaluation",
-                                value="tab-class",
-                                children=_tab_classification()),
-                        dcc.Tab(label="STA setup output",
-                                value="tab-setup",
-                                children=_tab_setup_output()),
-                    ],
-                ),
+def _main() -> list:
+    return [
+        dcc.Tabs(
+            id="sta-main-tabs",
+            value="tab-params",
+            children=[
+                dcc.Tab(label="Parameter file",
+                        value="tab-params",
+                        children=_tab_params()),
+                dcc.Tab(label="Alignment evaluation",
+                        value="tab-align",
+                        children=_tab_alignment()),
+                dcc.Tab(label="Classification evaluation",
+                        value="tab-class",
+                        children=_tab_classification()),
+                dcc.Tab(label="STA setup output",
+                        value="tab-setup",
+                        children=_tab_setup_output()),
             ],
-            style={"padding": "0.5rem"},
         ),
-        width=9,
-        style={"margin": "0", "padding": "0"},
-    )
+    ]
 
 
 layout = html.Div(
@@ -721,8 +699,7 @@ layout = html.Div(
         dcc.Store(id="sta-params-store"),
         # Created setup df: {"records": ..., "columns": ...}.
         dcc.Store(id="sta-setup-df-store"),
-        dbc.Row([_sidebar(), _main()], className="g-0",
-                style={"margin": "0", "padding": "0"}),
+        page_shell(_sidebar(), _main()),
     ],
     style={"margin": "0", "padding": "0"},
 )

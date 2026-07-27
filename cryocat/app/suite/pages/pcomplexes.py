@@ -48,6 +48,7 @@ from cryocat.app.components.motlsource import (
 from cryocat.app.components.motlsink import (
     get_send_to_editor_button, register_send_to_editor_callbacks,
 )
+from cryocat.app.pageshell import page_shell
 
 
 _HINT = {"fontSize": "0.8rem", "color": "var(--color9)", "margin": "0.3rem 0"}
@@ -610,69 +611,46 @@ def _poly_accordion_item(cpx_id: str, label: str, cls: type) -> dbc.AccordionIte
 # ── Full layout ───────────────────────────────────────────────────────────────
 
 
-def _sidebar() -> dbc.Col:
-    return dbc.Col(
-        html.Div(
+def _sidebar() -> list:
+    return [
+        dbc.Accordion(
             [
-                dbc.Accordion(
-                    [
-                        _motl_accordion_item(),
-                        _cn_accordion_item(),
-                        _dn_accordion_item(),
-                        _poly_accordion_item("tet", "Tetrahedral", TetrahedralComplex),
-                        _poly_accordion_item("oct", "Octahedral",  OctahedralComplex),
-                        _poly_accordion_item("ico", "Icosahedral", IcosahedralComplex),
-                    ],
-                    always_open=False,
-                    active_item="cpx-motl",
-                    id="cpx-main-accordion",
-                ),
+                _motl_accordion_item(),
+                _cn_accordion_item(),
+                _dn_accordion_item(),
+                _poly_accordion_item("tet", "Tetrahedral", TetrahedralComplex),
+                _poly_accordion_item("oct", "Octahedral",  OctahedralComplex),
+                _poly_accordion_item("ico", "Icosahedral", IcosahedralComplex),
             ],
-            className="sidebar",
-            style={
-                "padding": "0.5rem",
-                "overflowY": "auto",
-                "height": "100vh",
-                "display": "flex",
-                "flexDirection": "column",
-            },
+            always_open=False,
+            active_item="cpx-motl",
+            id="cpx-main-accordion",
         ),
-        width=4,
-        style={"margin": 0, "padding": 0, "height": "100vh",
-               "position": "sticky", "top": "0px"},
-    )
+    ]
 
 
-def _main() -> dbc.Col:
-    return dbc.Col(
-        html.Div(
-            [
-                html.Div("Result motl(s)", style=_SECTION_HEADER),
-                get_send_to_editor_button("complexes-export"),
-                html.Div(id="complexes-export-extra",
-                         style={**_HINT, "marginTop": "0.3rem"}),
-                dcc.Store(id="complexes-result-motl"),
-                dcc.Store(id="complexes-result-motls"),
-                html.Hr(style={"margin": "0.6rem 0"}),
-                html.Div("Results table", style=_SECTION_HEADER),
-                html.Div(id="complexes-result-table", style={"padding": "0.25rem"}),
-                dcc.Store(id="complexes-result-df-store"),
-                html.Hr(style={"margin": "0.6rem 0"}),
-                html.Div("Diameter results", style=_SECTION_HEADER),
-                html.Div(id="complexes-diameter-table", style={"padding": "0.25rem"}),
-                dcc.Store(id="complexes-diameter-store"),
-            ],
-            style={"padding": "0.5rem"},
-        ),
-        width=8,
-        style={"margin": 0, "padding": 0},
-    )
+def _main() -> list:
+    return [
+        html.Div("Result motl(s)", style=_SECTION_HEADER),
+        get_send_to_editor_button("complexes-export"),
+        html.Div(id="complexes-export-extra",
+                 style={**_HINT, "marginTop": "0.3rem"}),
+        dcc.Store(id="complexes-result-motl"),
+        dcc.Store(id="complexes-result-motls"),
+        html.Hr(style={"margin": "0.6rem 0"}),
+        html.Div("Results table", style=_SECTION_HEADER),
+        html.Div(id="complexes-result-table", style={"padding": "0.25rem"}),
+        dcc.Store(id="complexes-result-df-store"),
+        html.Hr(style={"margin": "0.6rem 0"}),
+        html.Div("Diameter results", style=_SECTION_HEADER),
+        html.Div(id="complexes-diameter-table", style={"padding": "0.25rem"}),
+        dcc.Store(id="complexes-diameter-store"),
+    ]
 
 
 layout = html.Div(
     [
-        dbc.Row([_sidebar(), _main()], className="g-0",
-                style={"margin": 0, "padding": 0}),
+        page_shell(_sidebar(), _main(), sidebar_width=4),
         *get_log_panel("complexes-log"),
     ],
     style={"margin": 0, "padding": 0},

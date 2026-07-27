@@ -48,6 +48,7 @@ from cryocat.app.components.anglesfield import get_angles_field, register_angles
 from cryocat.utils.wedgeutils import generate_wedge_mask
 from cryocat.app.components.wedgepreview import wedge_xz_figure
 from cryocat.app.suite.pages import _pana_codegen as codegen
+from cryocat.app.pageshell import page_shell, sidebar_accordion
 
 
 # ── Form helpers ─────────────────────────────────────────────────────────────
@@ -417,44 +418,29 @@ def _generate_script_form():
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
-def _sidebar():
-    return dbc.Col(
-        html.Div(
+def _sidebar() -> list:
+    return [
+        sidebar_accordion(
             [
-                dbc.Accordion(
-                    [
-                        dbc.AccordionItem(
-                            _single_case_form(),
-                            title="Single case",
-                            item_id="ppana-acc-single",
-                        ),
-                        dbc.AccordionItem(
-                            _visualize_form(),
-                            title="Visualize existing",
-                            item_id="ppana-acc-visualize",
-                        ),
-                        dbc.AccordionItem(
-                            _generate_script_form(),
-                            title="Generate script",
-                            item_id="ppana-acc-script",
-                        ),
-                    ],
-                    always_open=True,
-                    active_item=["ppana-acc-single"],
+                dbc.AccordionItem(
+                    _single_case_form(),
+                    title="Single case",
+                    item_id="ppana-acc-single",
+                ),
+                dbc.AccordionItem(
+                    _visualize_form(),
+                    title="Visualize existing",
+                    item_id="ppana-acc-visualize",
+                ),
+                dbc.AccordionItem(
+                    _generate_script_form(),
+                    title="Generate script",
+                    item_id="ppana-acc-script",
                 ),
             ],
-            className="sidebar",
-            style={
-                "padding": "0.5rem",
-                "overflowY": "auto",
-                "height": "100vh",
-                "display": "flex",
-                "flexDirection": "column",
-            },
+            active_item=["ppana-acc-single"],
         ),
-        width=3,
-        style={"margin": "0", "padding": "0", "height": "100vh", "position": "sticky", "top": "0px"},
-    )
+    ]
 
 
 def _csv_tab_content():
@@ -509,54 +495,47 @@ def _slot_placeholder(i: int):
     )
 
 
-def _main():
+def _main() -> list:
     slot_tabs = [dcc.Tab(label=f"Result {i}", value=f"tab-r{i}",
                          children=[html.Div(id=f"ppana-slot-{i}", children=_slot_placeholder(i))])
                  for i in range(1, _N_SLOTS + 1)]
 
-    return dbc.Col(
+    return [
         html.Div(
-            [
-                html.Div(
-                    id="ppana-status",
-                    style={
-                        "fontSize": "0.9rem",
-                        "color": "var(--color9)",
-                        "padding": "0.3rem 0.5rem 0",
-                        "whiteSpace": "pre-wrap",
-                        "wordBreak": "break-word",
-                        "minHeight": "1.4rem",
-                    },
-                ),
-                dcc.Tabs(
-                    id="ppana-main-tabs",
-                    value="tab-csv",
-                    children=[
-                        dcc.Tab(
-                            label="Results table",
-                            value="tab-csv",
-                            children=[_csv_tab_content()],
-                        ),
-                        *slot_tabs,
-                    ],
-                    style={"marginBottom": "0"},
-                ),
-                # Stores
-                dcc.Store(id="ppana-slots-store", data={}),
-                dcc.Store(id="ppana-csv-rows-store", data=[]),
-                dcc.Store(id="ppana-next-slot", data=1),
-                dcc.Store(id="ppana-s-last-run", data={}),
-            ],
-            style={"padding": "0.5rem 0.5rem 0 0.5rem"},
+            id="ppana-status",
+            style={
+                "fontSize": "0.9rem",
+                "color": "var(--color9)",
+                "padding": "0.3rem 0.5rem 0",
+                "whiteSpace": "pre-wrap",
+                "wordBreak": "break-word",
+                "minHeight": "1.4rem",
+            },
         ),
-        width=9,
-        style={"margin": "0", "padding": "0"},
-    )
+        dcc.Tabs(
+            id="ppana-main-tabs",
+            value="tab-csv",
+            children=[
+                dcc.Tab(
+                    label="Results table",
+                    value="tab-csv",
+                    children=[_csv_tab_content()],
+                ),
+                *slot_tabs,
+            ],
+            style={"marginBottom": "0"},
+        ),
+        # Stores
+        dcc.Store(id="ppana-slots-store", data={}),
+        dcc.Store(id="ppana-csv-rows-store", data=[]),
+        dcc.Store(id="ppana-next-slot", data=1),
+        dcc.Store(id="ppana-s-last-run", data={}),
+    ]
 
 
 layout = html.Div(
     [
-        dbc.Row([_sidebar(), _main()], className="g-0", style={"margin": "0", "padding": "0"}),
+        page_shell(_sidebar(), _main()),
         _wedge_mask_modal(),
         *get_log_panel("ppana-log"),
     ],

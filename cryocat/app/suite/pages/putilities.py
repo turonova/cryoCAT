@@ -32,6 +32,7 @@ from cryocat.app.components.graphsettings import apply_settings_to_figure
 from cryocat.app.components.wedgepreview import wedge_xz_figure
 from cryocat.utils.geom import generate_angles
 from cryocat.utils.wedgeutils import generate_wedge_mask
+from cryocat.app.pageshell import page_shell, sidebar_accordion
 
 
 _OUTPUT_AREA_ID = "util-output-area"
@@ -110,7 +111,7 @@ def _wedge_mask_sidebar_content(prefix: str) -> html.Div:
 # ── Layout builders ────────────────────────────────────────────────────────────
 
 
-def _sidebar(builders: list) -> dbc.Col:
+def _sidebar(builders: list) -> list:
     if not builders:
         items = [
             html.P(
@@ -128,38 +129,14 @@ def _sidebar(builders: list) -> dbc.Col:
             for b in builders
         ]
 
-    return dbc.Col(
-        html.Div(
-            [
-                dbc.Accordion(
-                    items,
-                    always_open=True,
-                    active_item=[f"util-acc-{b['id']}" for b in builders],
-                )
-                if builders
-                else items[0],
-            ],
-            className="sidebar",
-            style={
-                "padding": "0.5rem",
-                "overflowY": "auto",
-                "height": "100vh",
-                "display": "flex",
-                "flexDirection": "column",
-            },
-        ),
-        width=3,
-        style={
-            "margin": "0",
-            "padding": "0",
-            "height": "100vh",
-            "position": "sticky",
-            "top": "0px",
-        },
-    )
+    return [
+        sidebar_accordion(items, active_item=[f"util-acc-{b['id']}" for b in builders])
+        if builders
+        else items[0],
+    ]
 
 
-def _main(builders: list) -> dbc.Col:
+def _main(builders: list) -> list:
     if not builders:
         body = html.P(
             "No standalone builder tools registered.",
@@ -174,27 +151,14 @@ def _main(builders: list) -> dbc.Col:
             ),
         )
 
-    return dbc.Col(
-        html.Div(
-            [
-                body,
-            ],
-            style={"padding": "0.5rem"},
-        ),
-        width=9,
-        style={"margin": "0", "padding": "0"},
-    )
+    return [body]
 
 
 def _build_layout() -> html.Div:
     builders = _all_builders()
     return html.Div(
         [
-            dbc.Row(
-                [_sidebar(builders), _main(builders)],
-                className="g-0",
-                style={"margin": "0", "padding": "0"},
-            )
+            page_shell(_sidebar(builders), _main(builders)),
         ],
         style={"margin": "0", "padding": "0"},
     )
