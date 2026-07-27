@@ -20,7 +20,7 @@ from dash import html, dcc, Input, Output, State, ALL
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
-from cryocat.app import formgen, ids
+from cryocat.app import formgen, ids, styles
 from cryocat.app.apputils import iter_standalone_builders, generate_kwargs, run_operation
 from cryocat.app.components.anglesbuilder import (
     get_angles_builder_sidebar_content,
@@ -52,11 +52,6 @@ def _all_builders() -> list:
 
 
 # ── Sidebar helpers ────────────────────────────────────────────────────────────
-
-_HINT_STYLE = {"fontSize": "0.85rem", "color": "var(--color9)"}
-_LABEL_STYLE = {"fontSize": "0.85rem", "flex": "0 0 45%", "marginBottom": "0"}
-_ROW_STYLE = {"display": "flex", "alignItems": "center", "gap": "0.5rem", "marginBottom": "0.35rem"}
-_INPUT_WRAPPER = {"flex": "1 1 auto", "minWidth": "0"}
 
 
 def _sidebar_content(builder: dict) -> html.Div:
@@ -100,7 +95,7 @@ def _wedge_mask_sidebar_content(prefix: str) -> html.Div:
             ),
             html.Div(
                 id=f"{prefix}-status",
-                style={**_HINT_STYLE, "marginTop": "0.25rem", "wordBreak": "break-word"},
+                style={**styles.HINT, "marginTop": "0.25rem", "wordBreak": "break-word"},
             ),
             dcc.Store(id=f"{prefix}-params"),
         ],

@@ -35,6 +35,13 @@ import pandas as pd
 
 from cryocat.analysis import pana
 from cryocat.app import formgen
+from cryocat.app.styles import (
+    HINT as _HINT,
+    CTRL_ROW as _ROW_STYLE,
+    CTRL_LABEL as _LABEL_STYLE,
+    CTRL_INPUT as _INPUT_WRAPPER,
+    SECTION_HEADER as _SECTION_HEADER,
+)
 from cryocat.app.apputils import run_operation, generate_kwargs
 from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
 from cryocat.app.components.anglesfield import get_angles_field, register_angles_field_callbacks
@@ -45,20 +52,6 @@ from cryocat.app.suite.pages import _pana_codegen as codegen
 
 # ── Form helpers ─────────────────────────────────────────────────────────────
 
-_ROW_STYLE = {
-    "display": "flex",
-    "alignItems": "center",
-    "gap": "0.5rem",
-    "marginBottom": "0.35rem",
-}
-_LABEL_STYLE = {
-    "fontSize": "0.85rem",
-    "flex": "0 0 45%",
-    "marginBottom": "0",
-}
-_INPUT_WRAPPER = {"flex": "1 1 auto", "minWidth": "0"}
-_HINT = {"fontSize": "0.8rem", "color": "var(--color9)"}
-_SECTION_HEADER = {"fontSize": "0.9rem", "fontWeight": 600, "margin": "0.5rem 0 0.2rem"}
 
 _COLLAPSE_INNER = {
     "backgroundColor": "rgba(var(--bs-secondary-rgb), 0.05)",

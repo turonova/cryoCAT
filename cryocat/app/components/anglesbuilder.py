@@ -27,12 +27,9 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
 from cryocat.utils.geom import generate_angles
-from cryocat.app import formgen, ids
+from cryocat.app import formgen, ids, styles
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components.graphsettings import apply_settings_to_figure
-
-
-_HINT_STYLE = {"fontSize": "0.85rem", "color": "var(--color9)"}
 
 _ID_TYPE = "angles-param"
 
@@ -125,7 +122,7 @@ def get_angles_builder_sidebar_content(prefix: str, preview_btn: bool = False) -
             html.Div(
                 id=f"{prefix}-status",
                 style={
-                    **_HINT_STYLE,
+                    **styles.HINT,
                     "marginTop": "0.25rem",
                     "wordBreak": "break-word",
                 },

@@ -30,11 +30,8 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
 from cryocat.analysis import visplot
-from cryocat.app import ids
+from cryocat.app import ids, styles
 from cryocat.app.components.graphsettings import apply_settings_to_figure
-
-
-_HINT_STYLE = {"fontSize": "0.85rem", "color": "var(--color9)"}
 
 _ROT_TYPES = [
     {"label": "Euler angles (degrees)", "value": "euler"},
@@ -141,7 +138,7 @@ def _controls(prefix: str) -> list:
         _matrix_block(prefix),
         html.Div(
             id=f"{prefix}-rot-status",
-            style={**_HINT_STYLE, "marginTop": "0.5rem", "wordBreak": "break-word"},
+            style={**styles.HINT, "marginTop": "0.5rem", "wordBreak": "break-word"},
         ),
         dcc.Store(id=f"{prefix}-rot-euler-store"),
     ]

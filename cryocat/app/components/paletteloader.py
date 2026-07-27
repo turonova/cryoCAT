@@ -25,8 +25,7 @@ from dash import html, dcc, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
-
-_HINT_STYLE = {"fontSize": "0.75rem", "color": "var(--color9)", "marginTop": "2px"}
+from cryocat.app import styles
 
 _DISCRETE_PRESETS = [
     "Monet", "MonetWhite",
@@ -141,7 +140,7 @@ def get_palette_loader(prefix: str, mode: str = "discrete", default: str | None 
                 size="sm",
                 style={"marginTop": "0.3rem"},
             ),
-            html.Div(id=f"{prefix}-status", style=_HINT_STYLE),
+            html.Div(id=f"{prefix}-status", style=styles.HINT_SM),
             html.Div(
                 id=f"{prefix}-swatch",
                 children=_make_swatch(default, mode) if default else [],

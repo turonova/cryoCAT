@@ -19,19 +19,7 @@ from dash import html, dcc
 import dash_bootstrap_components as dbc
 
 from cryocat.utils.classutils import resolve_param_type, process_method_docstring, TYPE_HANDLERS
-
-
-_HINT_STYLE = {"fontSize": "0.85rem", "color": "var(--color9)", "padding": "2px 0"}
-_LABEL_STYLE = {"width": "45%", "display": "flex", "alignItems": "center",
-                "boxSizing": "border-box", "paddingRight": "4px"}
-_INPUT_STYLE = {"width": "55%"}
-_ROW_STYLE = {"display": "flex", "flexDirection": "row", "marginBottom": "0.25rem",
-              "width": "100%", "alignItems": "center"}
-_COMPACT_INPUT_STYLE = {
-    "width": "100%", "height": "22px", "minHeight": "22px",
-    "padding": "0 6px", "fontSize": "11px", "lineHeight": "20px",
-    "boxSizing": "border-box", "borderRadius": "3px",
-}
+from cryocat.app import styles
 
 
 def _empty(default):
@@ -75,7 +63,7 @@ def _text_field(cid, default, required, choices=None):
         type="text", id=cid,
         value="" if _empty(default) else str(default),
         placeholder="Optional" if _truly_optional(required, default) else "",
-        style=_COMPACT_INPUT_STYLE,
+        style=styles.FORM_COMPACT_INPUT,
     )
 
 
@@ -84,7 +72,7 @@ def _number_field(cid, default, required, choices=None):
         type="number", id=cid,
         value=None if _empty(default) else default,
         placeholder="Optional" if _truly_optional(required, default) else "",
-        style=_COMPACT_INPUT_STYLE,
+        style=styles.FORM_COMPACT_INPUT,
     )
 
 
@@ -99,7 +87,7 @@ def _path_field(cid, default, required, choices=None):
         type="text", id=cid,
         value="" if _empty(default) else str(default),
         placeholder=f"path to file{suffix}",
-        style=_COMPACT_INPUT_STYLE,
+        style=styles.FORM_COMPACT_INPUT,
     )
 
 
@@ -113,7 +101,7 @@ def _triplet_field(cid, default, required, choices=None):
     return dcc.Input(
         type="text", id=cid, value=val,
         placeholder="e.g. 64,64,64 or 64",
-        style=_COMPACT_INPUT_STYLE,
+        style=styles.FORM_COMPACT_INPUT,
     )
 
 
@@ -214,7 +202,7 @@ def _tuple_field(cid, default, required, choices=None, extra=None):
                     type="number", id=slot_cid,
                     value=None if slot_value is None else slot_value,
                     placeholder="Optional" if _truly_optional(required, default) else "",
-                    style=_COMPACT_INPUT_STYLE,
+                    style=styles.FORM_COMPACT_INPUT,
                 ),
                 style={"flex": "1 1 0", "minWidth": "0"},
             )
@@ -247,9 +235,9 @@ def _form_row(name, widget, description, truly_optional=False, label_id=None):
             html.Label(label_text, id=label_id, style={"fontSize": "0.85rem", "margin": 0}),
             dbc.Tooltip(description, target=label_id, placement="right") if description else None,
         ],
-        style=_LABEL_STYLE,
+        style=styles.FORM_LABEL,
     )
-    return html.Div([label, html.Div(widget, style=_INPUT_STYLE)], style=_ROW_STYLE)
+    return html.Div([label, html.Div(widget, style=styles.FORM_INPUT)], style=styles.FORM_ROW)
 
 
 def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
@@ -282,7 +270,7 @@ def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
     try:
         sig = inspect.signature(fn)
     except (ValueError, TypeError):
-        return [html.Div("No parameters.", style=_HINT_STYLE)]
+        return [html.Div("No parameters.", style=styles.FORM_HINT)]
 
     # `from __future__ import annotations` (PEP 563) makes all annotations lazy
     # strings. `get_type_hints` evaluates them back to live types so
@@ -329,5 +317,5 @@ def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
         rows.append(_form_row(name, widget, descriptions.get(name, ""), truly_optional, label_id=lbl_id))
 
     if not rows:
-        return [html.Div("No parameters required.", style=_HINT_STYLE)]
+        return [html.Div("No parameters required.", style=styles.FORM_HINT)]
     return rows
