@@ -17,7 +17,7 @@ from cryocat.utils import geom
 def motl_from_rows(rows: list[dict]) -> Motl:
     """Reconstruct a :class:`Motl` from pool-store rows.
 
-    The page's ``dcc.Store(id="pool-motls")`` carries
+    The pool-motls store carries
     ``{motl_id: [row, row, ...]}`` where each row is a dict (the
     ``DataFrame.to_dict("records")`` round-trip). This helper builds a fresh
     :class:`Motl` from such a list.

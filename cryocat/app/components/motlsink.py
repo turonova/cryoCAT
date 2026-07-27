@@ -3,9 +3,9 @@
 A tool drops ``get_send_to_editor_button(prefix)`` into its layout and calls
 ``register_send_to_editor_callbacks(app, prefix, result_store_id)`` in its
 ``register_callbacks``. On click, the motl currently in ``result_store_id`` is
-appended to the suite-global pool (``pool-registry`` / ``pool-motls``, declared
-in :mod:`cryocat.app.suite.app`) as a new active entry. The editor surfaces it
-as a new tab via the same pool-driven tab creation as a fresh load.
+appended to the suite-global pool (see :mod:`cryocat.app.ids` and
+:mod:`cryocat.app.pool`) as a new active entry. The editor surfaces it as a
+new tab via the same pool-driven tab creation as a fresh load.
 
 Used by tools that emit motls (STA, NN, future structure). Pana does *not* use
 this — it produces CSVs, not motls.
@@ -13,6 +13,9 @@ this — it produces CSVs, not motls.
 
 from dash import html, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
+
+from cryocat.app import ids
+from cryocat.app.pool import PoolState, insert_motl
 
 
 def get_send_to_editor_button(prefix):
@@ -52,9 +55,8 @@ def register_send_to_editor_callbacks(app, prefix, result_store_id):
     """Wire the 'Send to editor' button to the suite pool.
 
     On click: read the tool's result motl from ``result_store_id``, allocate a
-    new ``motl_id`` (using the ``pool-next-id`` counter), and append it to
-    ``pool-registry`` / ``pool-motls`` as an active entry. The editor picks it
-    up reactively as a new tab.
+    new ``motl_id`` via :func:`~cryocat.app.pool.insert_motl`, and append it to
+    all four pool data stores. The editor picks it up reactively as a new tab.
 
     Parameters
     ----------
@@ -67,41 +69,30 @@ def register_send_to_editor_callbacks(app, prefix, result_store_id):
     """
 
     @app.callback(
-        Output("pool-registry", "data", allow_duplicate=True),
-        Output("pool-motls", "data", allow_duplicate=True),
-        Output("pool-next-id", "data", allow_duplicate=True),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
+        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output(f"{prefix}-send-status", "children"),
         Input(f"{prefix}-send-to-editor", "n_clicks"),
         State(result_store_id, "data"),
         State(f"{prefix}-send-label", "value"),
-        State("pool-registry", "data"),
-        State("pool-motls", "data"),
-        State("pool-next-id", "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_MOTLS, "data"),
+        State(ids.POOL_EXTRA, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def _send(n_clicks, result_data, label, registry, pool_motls, next_id):
+    def _send(n_clicks, result_data, label, registry, pool_motls, pool_extra, pool_meta, next_id):
         if not n_clicks:
-            return no_update, no_update, no_update, no_update
+            return no_update, no_update, no_update, no_update, no_update, no_update
         if not result_data:
-            return no_update, no_update, no_update, "No result motl to send."
+            return no_update, no_update, no_update, no_update, no_update, "No result motl to send."
 
-        registry = dict(registry or {})
-        pool_motls = dict(pool_motls or {})
-        next_id = next_id or 0
-
-        motl_id = f"motl-{next_id}"
-        try:
-            n_rows = len(result_data)
-        except TypeError:
-            n_rows = 0
-
-        display_label = label or f"Motl {next_id + 1}"
-        registry[motl_id] = {
-            "label": display_label,
-            "type": "emmotl",
-            "n_rows": n_rows,
-            "active": True,
-        }
-        pool_motls[motl_id] = result_data
-
-        return registry, pool_motls, next_id + 1, f"Sent '{display_label}' to the editor."
+        state = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
+        # TODO(doc-2): route through run_operation_to_pool
+        state, motl_id = insert_motl(state, result_data, label=label)
+        display_label = state.registry[motl_id]["label"]
+        return (*state.to_stores(), f"Sent '{display_label}' to the editor.")

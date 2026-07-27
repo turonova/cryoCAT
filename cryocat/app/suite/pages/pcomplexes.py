@@ -39,8 +39,9 @@ from cryocat.analysis.structure import (
     CnComplex, DnComplex, NPC,
     TetrahedralComplex, OctahedralComplex, IcosahedralComplex,
 )
-from cryocat.app import formgen
+from cryocat.app import ids, formgen
 from cryocat.app.apputils import generate_kwargs, run_operation
+from cryocat.app.pool import PoolState, insert_motl
 from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
 from cryocat.app.components.motlsource import (
     get_motl_source, register_motl_source_callbacks,
@@ -710,7 +711,7 @@ def register_callbacks(app: dash.Dash) -> None:
         Input("cpx-cn-create-btn", "n_clicks"),
         State("cpx-cn-subtype", "value"),
         State("cpx-cn-main-motl-select", "value"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State({"type": "cpx-init-param", "cpx": "cn", "param": ALL, "tag": ALL}, "value"),
         State({"type": "cpx-init-param", "cpx": "cn", "param": ALL, "tag": ALL}, "id"),
         prevent_initial_call=True,
@@ -740,7 +741,7 @@ def register_callbacks(app: dash.Dash) -> None:
         State("cpx-cn-subtype", "value"),
         State("cpx-cn-method-dd", "value"),
         State("cpx-cn-main-motl-select", "value"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State({"type": "cpx-init-param", "cpx": "cn", "param": ALL, "tag": ALL}, "value"),
         State({"type": "cpx-init-param", "cpx": "cn", "param": ALL, "tag": ALL}, "id"),
         State({"type": "cpx-meth-param", "cpx": "cn", "param": ALL, "tag": ALL}, "value"),
@@ -805,7 +806,7 @@ def register_callbacks(app: dash.Dash) -> None:
         Output("cpx-cn-npc-op-status", "children"),
         Input("cpx-cn-npc-op-run-btn", "n_clicks"),
         State("cpx-cn-npc-op-dd", "value"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State({"type": "cpx-npc-op-param", "cpx": "npc", "op": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "cpx-npc-op-param", "cpx": "npc", "op": ALL, "param": ALL, "tag": ALL}, "id"),
         State("cpx-cn-npc-cluster_subunits-input_motl-motl-select",  "value"),
@@ -911,7 +912,7 @@ def register_callbacks(app: dash.Dash) -> None:
         Output("cpx-dn-create-status", "children"),
         Input("cpx-dn-create-btn", "n_clicks"),
         State("cpx-dn-main-motl-select", "value"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State({"type": "cpx-init-param", "cpx": "dn", "param": ALL, "tag": ALL}, "value"),
         State({"type": "cpx-init-param", "cpx": "dn", "param": ALL, "tag": ALL}, "id"),
         prevent_initial_call=True,
@@ -946,7 +947,7 @@ def register_callbacks(app: dash.Dash) -> None:
         Input("cpx-dn-run-btn", "n_clicks"),
         State("cpx-dn-method-dd", "value"),
         State("cpx-dn-main-motl-select", "value"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State({"type": "cpx-init-param", "cpx": "dn", "param": ALL, "tag": ALL}, "value"),
         State({"type": "cpx-init-param", "cpx": "dn", "param": ALL, "tag": ALL}, "id"),
         State({"type": "cpx-meth-param", "cpx": "dn", "param": ALL, "tag": ALL}, "value"),
@@ -1005,41 +1006,36 @@ def register_callbacks(app: dash.Dash) -> None:
     # ── Push merge_rings motls to pool ────────────────────────────────────────
 
     @app.callback(
-        Output("pool-registry", "data", allow_duplicate=True),
-        Output("pool-motls",    "data", allow_duplicate=True),
-        Output("pool-next-id",  "data", allow_duplicate=True),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_MOTLS,    "data", allow_duplicate=True),
+        Output(ids.POOL_EXTRA,    "data", allow_duplicate=True),
+        Output(ids.POOL_META,     "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID,  "data", allow_duplicate=True),
         Output("complexes-export-extra", "children", allow_duplicate=True),
         Input("complexes-result-motls", "data"),
-        State("pool-registry", "data"),
-        State("pool-motls",    "data"),
-        State("pool-next-id",  "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_MOTLS,    "data"),
+        State(ids.POOL_EXTRA,    "data"),
+        State(ids.POOL_META,     "data"),
+        State(ids.POOL_NEXT_ID,  "data"),
         prevent_initial_call=True,
     )
-    def _push_motls_list(motls_rows, registry, pool_motls, next_id):
+    def _push_motls_list(motls_rows, registry, pool_motls, pool_extra, pool_meta, next_id):
         if not motls_rows:
             raise PreventUpdate
-        registry   = dict(registry  or {})
-        pool_motls = dict(pool_motls or {})
-        next_id    = int(next_id or 0)
+        state = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
         pushed: list[str] = []
         for i, rows in enumerate(motls_rows):
             if not rows:
                 continue
-            mid = f"motl-{next_id}"
-            registry[mid] = {
-                "label": f"merged-{i + 1}",
-                "type": "emmotl",
-                "n_rows": len(rows),
-                "active": True,
-            }
-            pool_motls[mid] = rows
+            # TODO(doc-2): route through run_operation_to_pool
+            state, mid = insert_motl(state, rows, label=f"merged-{i + 1}")
             pushed.append(mid)
-            next_id += 1
         msg = html.Small(
             f"Pushed {len(pushed)} motl(s) to pool: {', '.join(pushed)}.",
             style=_HINT,
         )
-        return registry, pool_motls, next_id, msg
+        return (*state.to_stores(), msg)
 
 
 # ── Out-of-line callback helpers ──────────────────────────────────────────────
@@ -1052,7 +1048,7 @@ def _register_poly_callbacks(app: dash.Dash, cpx_id: str, cls: type) -> None:
         Output(f"cpx-{cpx_id}-create-status", "children"),
         Input(f"cpx-{cpx_id}-create-btn", "n_clicks"),
         State(f"cpx-{cpx_id}-main-motl-select", "value"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State({"type": "cpx-init-param", "cpx": cpx_id, "param": ALL, "tag": ALL}, "value"),
         State({"type": "cpx-init-param", "cpx": cpx_id, "param": ALL, "tag": ALL}, "id"),
         prevent_initial_call=True,
@@ -1091,7 +1087,7 @@ def _register_poly_callbacks(app: dash.Dash, cpx_id: str, cls: type) -> None:
         Input(f"cpx-{cpx_id}-run-btn", "n_clicks"),
         State(f"cpx-{cpx_id}-method-dd", "value"),
         State(f"cpx-{cpx_id}-main-motl-select", "value"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State({"type": "cpx-init-param", "cpx": cpx_id, "param": ALL, "tag": ALL}, "value"),
         State({"type": "cpx-init-param", "cpx": cpx_id, "param": ALL, "tag": ALL}, "id"),
         State({"type": "cpx-meth-param", "cpx": cpx_id, "param": ALL, "tag": ALL}, "value"),

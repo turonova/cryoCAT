@@ -42,7 +42,7 @@ import dash_bootstrap_components as dbc
 from cryocat.analysis.structure import ParametricSurface, PleomorphicSurface
 from cryocat.core.cryomotl import Motl
 from cryocat.core.surface import Mesh, OrientedPointCloud, DiscreteSurface
-from cryocat.app import formgen
+from cryocat.app import ids, formgen
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components import parametric_registry as pr
 from cryocat.app.components import surface_registry as sr
@@ -794,7 +794,7 @@ def register_callbacks(app):
         State({"type": _LOAD_ID_TYPE, "op": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": _LOAD_ID_TYPE, "op": ALL, "param": ALL, "tag": ALL}, "id"),
         State("surfaces-load-motl-motl-select", "value"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State("surfaces-pool", "data"),
         prevent_initial_call=True,
     )
@@ -910,7 +910,7 @@ def register_callbacks(app):
         State({"type": _OP_ID_TYPE, "op": ALL, "param": ALL, "tag": ALL}, "id"),
         State("surfaces-pool", "data"),
         State("surfaces-selected", "data"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State("surfaces-scalar-result", "data"),
         # Parametric pickers.
         State(f"{_PARAM_INPUT_PICKER}-motl-select", "value"),

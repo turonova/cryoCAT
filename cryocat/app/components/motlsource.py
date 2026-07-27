@@ -27,6 +27,7 @@ Parameters of note:
 from dash import html, dcc, Input, Output, no_update
 import dash_bootstrap_components as dbc
 
+from cryocat.app import ids
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
@@ -94,7 +95,7 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
         Output(f"{prefix}-motl-select", "options"),
         Output(f"{prefix}-motl-select", "value"),
         Output(f"{prefix}-motl-source-status", "children"),
-        Input("pool-registry", "data"),
+        Input(ids.POOL_REGISTRY, "data"),
     )
     def _populate(registry):
         registry = registry or {}
@@ -119,7 +120,7 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
         @app.callback(
             Output(f"{prefix}-src-tabv-global-data-store", "data"),
             Input(f"{prefix}-motl-select", "value"),
-            Input("pool-motls", "data"),
+            Input(ids.POOL_MOTLS, "data"),
             prevent_initial_call=True,
         )
         def _to_table(selected, pool_motls):
@@ -222,7 +223,7 @@ def register_multi_motl_picker_callbacks(app, prefix):
         Output(f"{prefix}-main-select", "options"),
         Output(f"{prefix}-second-select", "options"),
         Output(f"{prefix}-list-select", "options"),
-        Input("pool-registry", "data"),
+        Input(ids.POOL_REGISTRY, "data"),
     )
     def _populate(registry):
         registry = registry or {}

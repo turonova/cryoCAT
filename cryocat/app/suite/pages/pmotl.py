@@ -19,6 +19,8 @@ import dash
 from dash import html, dcc, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 
+from cryocat.app import ids
+from cryocat.app.pool import PoolState, insert_motl
 from cryocat.app.suite.motlsidebar import (
     get_motl_editor_sidebar,
     register_motl_editor_sidebar_callbacks,
@@ -196,7 +198,7 @@ def register_callbacks(app):
         *[Output(f"me-tab-slot-{i}", "label") for i in range(N_SLOTS)],
         *[Output(f"me-tab-slot-{i}", "disabled") for i in range(N_SLOTS)],
         Input("me-slot-map", "data"),
-        Input("pool-registry", "data"),
+        Input(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
     def update_tab_labels(slot_map, registry):
@@ -249,9 +251,9 @@ def _register_pool_sync(app):
         *[Output(f"me-{i}-relion-params-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-undo-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         Input("me-slot-map", "data"),
-        State("pool-motls", "data"),
-        State("pool-extra", "data"),
-        State("pool-meta", "data"),
+        State(ids.POOL_MOTLS, "data"),
+        State(ids.POOL_EXTRA, "data"),
+        State(ids.POOL_META, "data"),
         prevent_initial_call=True,
     )
     def sync_pool_to_slots(slot_map, pool_motls, pool_extra, pool_meta):
@@ -281,12 +283,12 @@ def _register_pool_sync(app):
 
     # slots -> pool: fires when any slot's table data changes (edits/operations).
     @app.callback(
-        Output("pool-motls", "data", allow_duplicate=True),
-        Output("pool-registry", "data", allow_duplicate=True),
+        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
         *[Input(f"me-{i}-tabv-global-data-store", "data") for i in range(N_SLOTS)],
         State("me-slot-map", "data"),
-        State("pool-motls", "data"),
-        State("pool-registry", "data"),
+        State(ids.POOL_MOTLS, "data"),
+        State(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
     def sync_slots_to_pool(*args):
@@ -322,21 +324,21 @@ def _register_create_from_selected(app):
     from that grid's selected rows, and surfaces it in the first free slot."""
 
     @app.callback(
-        Output("pool-registry", "data", allow_duplicate=True),
-        Output("pool-motls", "data", allow_duplicate=True),
-        Output("pool-extra", "data", allow_duplicate=True),
-        Output("pool-meta", "data", allow_duplicate=True),
-        Output("pool-next-id", "data", allow_duplicate=True),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
+        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("me-slot-map", "data", allow_duplicate=True),
         Output("me-tabs", "active_tab", allow_duplicate=True),
         *[Input(f"me-{i}-tabv-create-from-selected-btn", "n_clicks") for i in range(N_SLOTS)],
         *[State(f"me-{i}-tabv-grid", "selectedRows") for i in range(N_SLOTS)],
         State("me-slot-map", "data"),
-        State("pool-registry", "data"),
-        State("pool-motls", "data"),
-        State("pool-extra", "data"),
-        State("pool-meta", "data"),
-        State("pool-next-id", "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_MOTLS, "data"),
+        State(ids.POOL_EXTRA, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
     def create_from_selected(*args):
@@ -358,37 +360,30 @@ def _register_create_from_selected(app):
         if not selected_rows:
             raise dash.exceptions.PreventUpdate
 
-        registry = dict(registry or {})
-        pool_motls = dict(pool_motls or {})
-        pool_extra = dict(pool_extra or {})
-        pool_meta = dict(pool_meta or {})
-        next_id = next_id or 0
+        state = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
         slot_map = list(slot_map or [None] * N_SLOTS)
         while len(slot_map) < N_SLOTS:
             slot_map.append(None)
 
         src_mid = slot_map[src] if src < len(slot_map) else None
-        src_meta = registry.get(src_mid, {}) if src_mid else {}
+        src_meta = state.registry.get(src_mid, {}) if src_mid else {}
         src_label = src_meta.get("label", f"Slot {src + 1}")
         src_type = src_meta.get("type", "emmotl")
         short = src_label[:15] + "…" if len(src_label) > 15 else src_label
 
-        mid = f"motl-{next_id}"
-        registry[mid] = {
-            "label": f"Sel from {short} ({len(selected_rows)})",
-            "type": src_type,
-            "n_rows": len(selected_rows),
-            "active": True,
-        }
-        pool_motls[mid] = selected_rows
-        pool_extra[mid] = None
-        pool_meta[mid] = {
-            "data_type": src_type,
-            "relion_optics": None,
-            "relion5_tomos": None,
-            "relion5_tomos_filename": None,
-            "relion_params": None,
-        }
+        # TODO(doc-2): route through run_operation_to_pool
+        state, mid = insert_motl(
+            state, selected_rows,
+            label=f"Sel from {short} ({len(selected_rows)})",
+            motl_type=src_type,
+            meta={
+                "data_type": src_type,
+                "relion_optics": None,
+                "relion5_tomos": None,
+                "relion5_tomos_filename": None,
+                "relion_params": None,
+            },
+        )
 
         free = next((i for i in range(N_SLOTS) if not slot_map[i]), None)
         active_tab = no_update
@@ -396,7 +391,7 @@ def _register_create_from_selected(app):
             slot_map[free] = mid
             active_tab = f"me-tab-{free}"
 
-        return registry, pool_motls, pool_extra, pool_meta, next_id + 1, slot_map, active_tab
+        return (*state.to_stores(), slot_map, active_tab)
 
 
 # ── Per-slot connecting callbacks ────────────────────────────────────────────────

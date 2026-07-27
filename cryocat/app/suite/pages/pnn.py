@@ -26,7 +26,8 @@ from cryocat.core.cryomotl import Motl
 from cryocat.analysis.nnana import NearestNeighbors
 from cryocat.analysis import visplot
 from cryocat.app.apputils import generate_kwargs
-from cryocat.app import formgen
+from cryocat.app import ids, formgen
+from cryocat.app.pool import PoolState, insert_motl as _insert_motl
 from cryocat.app.components.motlsource import get_motl_source, register_motl_source_callbacks
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
@@ -582,7 +583,7 @@ def register_callbacks(app):
         Output("nn-used-motls-store", "data"),
         Input("nn-compute-btn", "n_clicks"),
         State("nn-motl-select", "value"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State("nn-angular-toggle", "value"),
@@ -685,7 +686,7 @@ def register_callbacks(app):
         Input("nn-pp-apply-btn", "n_clicks"),
         State("nn-result", "data"),
         State("nn-used-motls-store", "data"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         State("nn-pp-add-cols", "value"),
         State("nn-pp-sides", "value"),
         State("nn-pp-angular-toggle", "value"),
@@ -783,7 +784,7 @@ def register_callbacks(app):
         Output("nn-sel-motl-id-type-wrap", "style"),
         Output("nn-sel-motl-info", "children"),
         Input("nn-used-motls-store", "data"),
-        State("pool-registry", "data"),
+        State(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
     def _populate_sel_panel(used_motls, registry):
@@ -820,9 +821,11 @@ def register_callbacks(app):
 
     @app.callback(
         Output("nn-sel-motl-status", "children"),
-        Output("pool-registry", "data", allow_duplicate=True),
-        Output("pool-motls", "data", allow_duplicate=True),
-        Output("pool-next-id", "data", allow_duplicate=True),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
+        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("nn-sel-motl-save-btn", "n_clicks"),
         Input("nn-sel-motl-send-btn", "n_clicks"),
         State("nn-out-tabv-grid", "selectedRows"),
@@ -834,9 +837,11 @@ def register_callbacks(app):
         State("nn-sel-motl-id-col", "value"),
         State("nn-sel-motl-save-path", "value"),
         State("nn-sel-motl-editor-label", "value"),
-        State("pool-motls", "data"),
-        State("pool-registry", "data"),
-        State("pool-next-id", "data"),
+        State(ids.POOL_MOTLS, "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_EXTRA, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         State("nn-sel-nn-cols", "value"),
         State({"type": "nn-sel-nn-col-target", "col": ALL}, "value"),
         State({"type": "nn-sel-nn-col-target", "col": ALL}, "id"),
@@ -846,7 +851,7 @@ def register_callbacks(app):
         _save_click, _send_click,
         selected_rows, all_rows, rows_mode,
         checked_motls, used_motls, id_type, id_col,
-        save_path, editor_label, pool_motls, registry, next_id,
+        save_path, editor_label, pool_motls, registry, pool_extra, pool_meta, next_id,
         nn_cols, nn_col_target_vals, nn_col_target_ids,
     ):
         trigger = ctx.triggered_id
@@ -855,13 +860,14 @@ def register_callbacks(app):
             active_rows = all_rows or []
         else:
             active_rows = selected_rows or []
+        _nu5 = (no_update,) * 5
         if not active_rows:
             msg = "No rows in the table." if rows_mode == "all" else "No rows selected in the table."
-            return msg, no_update, no_update, no_update
+            return msg, *_nu5
         if not checked_motls:
-            return "No motls checked.", no_update, no_update, no_update
+            return "No motls checked.", *_nu5
         if not used_motls:
-            return "Run NN analysis first.", no_update, no_update, no_update
+            return "Run NN analysis first.", *_nu5
 
         all_names = used_motls.get("names", [])
         is_multi = used_motls.get("is_multi", False)
@@ -933,40 +939,33 @@ def register_callbacks(app):
             return (
                 "No particles matched the selection. "
                 "Make sure rows are selected and the motl IDs align.",
-                no_update, no_update, no_update,
+                *_nu5,
             )
 
         merged_df = pd.concat(parts, ignore_index=True)
 
         if trigger == "nn-sel-motl-save-btn":
             if not save_path:
-                return "Specify an output file path.", no_update, no_update, no_update
+                return "Specify an output file path.", *_nu5
             try:
                 Motl(merged_df).write_out(save_path)
             except Exception as exc:
-                return f"Save failed: {exc}", no_update, no_update, no_update
-            return (
-                f"Saved {len(merged_df)} particles to {save_path}.",
-                no_update, no_update, no_update,
-            )
+                return f"Save failed: {exc}", *_nu5
+            return f"Saved {len(merged_df)} particles to {save_path}.", *_nu5
 
         if trigger == "nn-sel-motl-send-btn":
-            registry = dict(registry or {})
-            pool_out = dict(pool_motls)
-            next_id = next_id or 0
-            new_id = f"motl-{next_id}"
-            display_label = editor_label or f"Motl {next_id + 1}"
-            registry[new_id] = {
-                "label": display_label, "type": "emmotl",
-                "n_rows": len(merged_df), "active": True,
-            }
-            pool_out[new_id] = merged_df.to_dict("records")
+            pool_state = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
+            # TODO(doc-2): route through run_operation_to_pool
+            pool_state, new_id = _insert_motl(
+                pool_state, merged_df.to_dict("records"), label=editor_label,
+            )
+            display_label = pool_state.registry[new_id]["label"]
             return (
                 f"Sent '{display_label}' ({len(merged_df)} particles) to the editor.",
-                registry, pool_out, next_id + 1,
+                *pool_state.to_stores(),
             )
 
-        return no_update, no_update, no_update, no_update
+        return no_update, *_nu5
 
     # ── Load NN table from CSV ────────────────────────────────────────────────
     @app.callback(
@@ -978,7 +977,7 @@ def register_callbacks(app):
         Input("nn-load-csv-btn", "n_clicks"),
         State("nn-load-csv-path", "value"),
         State("nn-motl-select", "value"),
-        State("pool-motls", "data"),
+        State(ids.POOL_MOTLS, "data"),
         prevent_initial_call=True,
     )
     def _load_nn_from_csv(n_clicks, csv_path, selected, pool_motls):

@@ -30,9 +30,11 @@ from cryocat.app.components.motlsource import (
 from cryocat.app.apputils import (
     generate_kwargs, get_single_motl_methods, get_multi_motl_methods,
 )
+from cryocat.app import ids
 from cryocat.app.formgen import build_form
 from cryocat.app.logger import dash_logger, invoke_operation
 from cryocat.app.pageshell import _SIDEBAR_STYLE, _SIDEBAR_COL_STYLE
+from cryocat.app.pool import PoolState, insert_motl
 
 # Number of editor *view slots* (rendered table/viewer surfaces). The motl pool
 # itself is unbounded — this only caps how many motls are open as tabs at once.
@@ -300,11 +302,11 @@ def register_motl_editor_sidebar_callbacks(app):
     # A freshly loaded motl is appended to the pool with a new motl_id and
     # auto-assigned to the first free view slot (if any).
     @app.callback(
-        Output("pool-registry", "data", allow_duplicate=True),
-        Output("pool-motls", "data", allow_duplicate=True),
-        Output("pool-extra", "data", allow_duplicate=True),
-        Output("pool-meta", "data", allow_duplicate=True),
-        Output("pool-next-id", "data", allow_duplicate=True),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
+        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("me-slot-map", "data", allow_duplicate=True),
         Output("me-tabs", "active_tab", allow_duplicate=True),
         Output("me-load-status", "children", allow_duplicate=True),
@@ -316,11 +318,11 @@ def register_motl_editor_sidebar_callbacks(app):
         State("me-load-relion5-tomos-filename", "data"),
         State("me-load-motl-upload", "filename"),
         State("me-load-relion-params-store", "data"),
-        State("pool-registry", "data"),
-        State("pool-motls", "data"),
-        State("pool-extra", "data"),
-        State("pool-meta", "data"),
-        State("pool-next-id", "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_MOTLS, "data"),
+        State(ids.POOL_EXTRA, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         State("me-slot-map", "data"),
         prevent_initial_call=True,
     )
@@ -331,34 +333,28 @@ def register_motl_editor_sidebar_callbacks(app):
         if not motl_data:
             raise dash.exceptions.PreventUpdate
 
-        registry = dict(registry or {})
-        pool_motls = dict(pool_motls or {})
-        pool_extra = dict(pool_extra or {})
-        pool_meta = dict(pool_meta or {})
-        next_id = next_id or 0
         slot_map = list(slot_map or [None] * N_SLOTS)
         while len(slot_map) < N_SLOTS:
             slot_map.append(None)
 
-        mid = f"motl-{next_id}"
-        label = filename or f"Motl {next_id + 1}"
-
-        registry[mid] = {
-            "label": label,
-            "type": dtype or "emmotl",
-            "n_rows": len(motl_data),
-            "active": True,
-        }
-        pool_motls[mid] = motl_data
-        pool_extra[mid] = extra
-        pool_meta[mid] = {
-            "data_type": dtype,
-            "relion_optics": optics,
-            "relion5_tomos": r5t,
-            "relion5_tomos_filename": r5tn,
-            "relion_params": relion_params,
-            "script_expr": f"cryomotl.Motl.load({(filename or label)!r}, {(dtype or 'emmotl')!r})",
-        }
+        _nid = next_id or 0
+        label = filename or f"Motl {_nid + 1}"
+        # TODO(doc-2): route through run_operation_to_pool
+        pool_state, mid = insert_motl(
+            PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id),
+            motl_data,
+            label=label,
+            motl_type=dtype or "emmotl",
+            extra=extra,
+            meta={
+                "data_type": dtype,
+                "relion_optics": optics,
+                "relion5_tomos": r5t,
+                "relion5_tomos_filename": r5tn,
+                "relion_params": relion_params,
+                "script_expr": f"cryomotl.Motl.load({(filename or label)!r}, {(dtype or 'emmotl')!r})",
+            },
+        )
 
         free = _first_free_slot(slot_map)
         if free is not None:
@@ -373,12 +369,12 @@ def register_motl_editor_sidebar_callbacks(app):
             )
         status += _relion_params_summary(relion_params)
 
-        return registry, pool_motls, pool_extra, pool_meta, next_id + 1, slot_map, active_tab, status
+        return (*pool_state.to_stores(), slot_map, active_tab, status)
 
     # ── Pool motl list ─────────────────────────────────────────────────────────
     @app.callback(
         Output("me-motl-list", "children"),
-        Input("pool-registry", "data"),
+        Input(ids.POOL_REGISTRY, "data"),
         Input("me-slot-map", "data"),
         prevent_initial_call=True,
     )
@@ -433,7 +429,7 @@ def register_motl_editor_sidebar_callbacks(app):
     @app.callback(
         Output({"type": "me-slot-assign", "slot": ALL}, "options"),
         Output({"type": "me-slot-assign", "slot": ALL}, "value"),
-        Input("pool-registry", "data"),
+        Input(ids.POOL_REGISTRY, "data"),
         Input("me-slot-map", "data"),
         prevent_initial_call=True,
     )
@@ -519,17 +515,17 @@ def register_motl_editor_sidebar_callbacks(app):
 
     # ── Close a pool motl: drop it from the pool and free its slot ─────────────
     @app.callback(
-        Output("pool-registry", "data", allow_duplicate=True),
-        Output("pool-motls", "data", allow_duplicate=True),
-        Output("pool-extra", "data", allow_duplicate=True),
-        Output("pool-meta", "data", allow_duplicate=True),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
+        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
         Output("me-slot-map", "data", allow_duplicate=True),
         Output("me-tabs", "active_tab", allow_duplicate=True),
         Input({"type": "me-close-motl", "mid": ALL}, "n_clicks"),
-        State("pool-registry", "data"),
-        State("pool-motls", "data"),
-        State("pool-extra", "data"),
-        State("pool-meta", "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_MOTLS, "data"),
+        State(ids.POOL_EXTRA, "data"),
+        State(ids.POOL_META, "data"),
         State("me-slot-map", "data"),
         State("me-tabs", "active_tab"),
         prevent_initial_call=True,
@@ -604,11 +600,11 @@ def register_motl_editor_sidebar_callbacks(app):
         return build_form(fn, id_type="me-multi-param", exclude=exclude)
 
     @app.callback(
-        Output("pool-registry", "data", allow_duplicate=True),
-        Output("pool-motls", "data", allow_duplicate=True),
-        Output("pool-extra", "data", allow_duplicate=True),
-        Output("pool-meta", "data", allow_duplicate=True),
-        Output("pool-next-id", "data", allow_duplicate=True),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
+        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("me-slot-map", "data", allow_duplicate=True),
         Output("me-tabs", "active_tab", allow_duplicate=True),
         Output("me-multi-op-status", "children", allow_duplicate=True),
@@ -619,11 +615,11 @@ def register_motl_editor_sidebar_callbacks(app):
         State("me-multi-list-select", "value"),
         State({"type": "me-multi-param", "param": ALL, "tag": ALL}, "value"),
         State({"type": "me-multi-param", "param": ALL, "tag": ALL}, "id"),
-        State("pool-registry", "data"),
-        State("pool-motls", "data"),
-        State("pool-extra", "data"),
-        State("pool-meta", "data"),
-        State("pool-next-id", "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_MOTLS, "data"),
+        State(ids.POOL_EXTRA, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         State("me-slot-map", "data"),
         prevent_initial_call=True,
     )
@@ -692,33 +688,25 @@ def register_motl_editor_sidebar_callbacks(app):
             return _err(f"'{method_name}' did not return a Motl (got {type(result).__name__}).")
 
         # 4) Add the new motl to the pool and assign to a free slot.
-        registry = dict(registry or {})
-        pool_motls = dict(pool_motls or {})
-        pool_extra = dict(pool_extra or {})
-        pool_meta = dict(pool_meta or {})
-        next_id = next_id or 0
+        new_rows = result.df.to_dict("records")
+        gui = getattr(getattr(Motl, method_name).__func__, "_gui", {})
+        op_label = gui.get("label", method_name)
+        src_labels = [(registry.get(oid) or {}).get("label", oid) for oid in ordered_ids]
         slot_map = list(slot_map or [None] * N_SLOTS)
         while len(slot_map) < N_SLOTS:
             slot_map.append(None)
 
-        new_rows = result.df.to_dict("records")
-        gui = getattr(getattr(Motl, method_name).__func__, "_gui", {})
-        op_label = gui.get("label", method_name)
-        src_labels = [(registry.get(mid) or {}).get("label", mid) for mid in ordered_ids]
-        mid = f"motl-{next_id}"
-        registry[mid] = {
-            "label": f"{op_label} of {' + '.join(src_labels)}",
-            "type": "emmotl",
-            "n_rows": len(new_rows),
-            "active": True,
-        }
-        pool_motls[mid] = new_rows
-        pool_extra[mid] = None
-        pool_meta[mid] = {
-            "data_type": None, "relion_optics": None, "relion5_tomos": None,
-            "relion5_tomos_filename": None, "relion_params": None,
-            "script_expr": dash_logger.last_script_line,
-        }
+        # TODO(doc-2): route through run_operation_to_pool
+        pool_state, mid = insert_motl(
+            PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id),
+            new_rows,
+            label=f"{op_label} of {' + '.join(src_labels)}",
+            meta={
+                "data_type": None, "relion_optics": None, "relion5_tomos": None,
+                "relion5_tomos_filename": None, "relion_params": None,
+                "script_expr": dash_logger.last_script_line,
+            },
+        )
 
         free = _first_free_slot(slot_map)
         if free is not None:
@@ -735,7 +723,7 @@ def register_motl_editor_sidebar_callbacks(app):
                 f"({len(new_rows)} particles; no free slot, use 'Slot assignment')."
             )
 
-        return registry, pool_motls, pool_extra, pool_meta, next_id + 1, slot_map, active, status
+        return (*pool_state.to_stores(), slot_map, active, status)
 
     # ── Single-motl operation form ─────────────────────────────────────────────
     @app.callback(
@@ -756,11 +744,11 @@ def register_motl_editor_sidebar_callbacks(app):
         *[Output(f"me-{i}-motl-data-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-undo-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         Output("me-op-status", "children", allow_duplicate=True),
-        Output("pool-registry", "data", allow_duplicate=True),
-        Output("pool-motls", "data", allow_duplicate=True),
-        Output("pool-extra", "data", allow_duplicate=True),
-        Output("pool-meta", "data", allow_duplicate=True),
-        Output("pool-next-id", "data", allow_duplicate=True),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
+        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("me-slot-map", "data", allow_duplicate=True),
         Output("me-tabs", "active_tab", allow_duplicate=True),
         Input("me-op-apply-btn", "n_clicks"),
@@ -769,11 +757,11 @@ def register_motl_editor_sidebar_callbacks(app):
         State({"type": "me-op-param", "param": ALL, "tag": ALL}, "value"),
         State({"type": "me-op-param", "param": ALL, "tag": ALL}, "id"),
         *[State(f"me-{i}-motl-data-store", "data") for i in range(N_SLOTS)],
-        State("pool-registry", "data"),
-        State("pool-motls", "data"),
-        State("pool-extra", "data"),
-        State("pool-meta", "data"),
-        State("pool-next-id", "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_MOTLS, "data"),
+        State(ids.POOL_EXTRA, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         State("me-slot-map", "data"),
         prevent_initial_call=True,
     )
@@ -817,31 +805,23 @@ def register_motl_editor_sidebar_callbacks(app):
 
         # Operation produces a NEW motl -> add it to the pool, keep the source.
         if gui.get("output") == "motl" and isinstance(result, Motl):
-            registry = dict(registry or {})
-            pool_motls = dict(pool_motls or {})
-            pool_extra = dict(pool_extra or {})
-            pool_meta = dict(pool_meta or {})
-            next_id = next_id or 0
             slot_map = list(slot_map or [None] * N_SLOTS)
             while len(slot_map) < N_SLOTS:
                 slot_map.append(None)
 
             new_rows = result.df.to_dict("records")
-            mid = f"motl-{next_id}"
             src_label = (registry.get(slot_map[slot_idx]) or {}).get("label", f"Slot {slot_idx + 1}")
-            registry[mid] = {
-                "label": f"{gui['label']} of {src_label}",
-                "type": "emmotl",
-                "n_rows": len(new_rows),
-                "active": True,
-            }
-            pool_motls[mid] = new_rows
-            pool_extra[mid] = None
-            pool_meta[mid] = {
-                "data_type": None, "relion_optics": None, "relion5_tomos": None,
-                "relion5_tomos_filename": None, "relion_params": None,
-                "script_expr": dash_logger.last_script_line,
-            }
+            # TODO(doc-2): route through run_operation_to_pool
+            pool_state, mid = insert_motl(
+                PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id),
+                new_rows,
+                label=f"{gui['label']} of {src_label}",
+                meta={
+                    "data_type": None, "relion_optics": None, "relion5_tomos": None,
+                    "relion5_tomos_filename": None, "relion_params": None,
+                    "script_expr": dash_logger.last_script_line,
+                },
+            )
             free = next((i for i in range(N_SLOTS) if not slot_map[i]), None)
             if free is not None:
                 slot_map[free] = mid
@@ -852,7 +832,7 @@ def register_motl_editor_sidebar_callbacks(app):
                 status = f"'{method_name}' -> new motl in the pool (no free slot; use 'Slot assignment')."
             return _ret(
                 nochange, nochange, status,
-                pool=(registry, pool_motls, pool_extra, pool_meta, next_id + 1, slot_map, active),
+                pool=(*pool_state.to_stores(), slot_map, active),
             )
 
         # In-place operation — update the active slot.
