@@ -14,12 +14,16 @@ drift.
 
 import inspect
 import typing
+from collections.abc import Callable
+from typing import Any
 
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 
 from cryocat.utils.classutils import resolve_param_type, process_method_docstring, TYPE_HANDLERS
 from cryocat.app import styles
+
+WidgetFactory = Callable[[dict, Any, bool, list | None, dict | None], Any]
 
 
 def _empty(default):
@@ -58,7 +62,7 @@ def _truly_optional(required, default):
     return not required and _empty(default)
 
 
-def _text_field(cid, default, required, choices=None):
+def _text_field(cid, default, required, choices=None, extra=None):
     return dcc.Input(
         type="text", id=cid,
         value="" if _empty(default) else str(default),
@@ -67,7 +71,7 @@ def _text_field(cid, default, required, choices=None):
     )
 
 
-def _number_field(cid, default, required, choices=None):
+def _number_field(cid, default, required, choices=None, extra=None):
     return dcc.Input(
         type="number", id=cid,
         value=None if _empty(default) else default,
@@ -76,12 +80,12 @@ def _number_field(cid, default, required, choices=None):
     )
 
 
-def _bool_dropdown(cid, default, required, choices=None):
+def _bool_dropdown(cid, default, required, choices=None, extra=None):
     val = "True" if default is True else "False" if default is False else None
     return make_dropdown(cid, ["True", "False"], val)
 
 
-def _path_field(cid, default, required, choices=None):
+def _path_field(cid, default, required, choices=None, extra=None):
     suffix = " (optional)" if _truly_optional(required, default) else ""
     return dcc.Input(
         type="text", id=cid,
@@ -91,7 +95,7 @@ def _path_field(cid, default, required, choices=None):
     )
 
 
-def _triplet_field(cid, default, required, choices=None):
+def _triplet_field(cid, default, required, choices=None, extra=None):
     if _empty(default):
         val = ""
     elif isinstance(default, (list, tuple)):
@@ -105,7 +109,7 @@ def _triplet_field(cid, default, required, choices=None):
     )
 
 
-def _choice_dropdown(cid, default, required, choices=None):
+def _choice_dropdown(cid, default, required, choices=None, extra=None):
     choices = list(choices or [])
     val = default if not _empty(default) else (choices[0] if choices else None)
     return make_dropdown(
@@ -115,7 +119,7 @@ def _choice_dropdown(cid, default, required, choices=None):
     )
 
 
-def _rotation_field(cid, default, required, choices=None):
+def _rotation_field(cid, default, required, choices=None, extra=None):
     from cryocat.app.components.rotationbuilder import get_rotation_builder_panel
     type_ = cid.get("type", "x") if isinstance(cid, dict) else str(cid)
     param_ = cid.get("param", "x") if isinstance(cid, dict) else "x"
@@ -213,7 +217,7 @@ def _tuple_field(cid, default, required, choices=None, extra=None):
     )
 
 
-_WIDGET_FACTORIES = {
+WIDGET_FACTORIES: dict[str, WidgetFactory] = {
     "path":     _path_field,
     "triplet":  _triplet_field,
     "csv_text": _text_field,
@@ -226,7 +230,7 @@ _WIDGET_FACTORIES = {
 }
 
 
-def _form_row(name, widget, description, truly_optional=False, label_id=None):
+def form_row(name, widget, description, truly_optional=False, label_id=None):
     if label_id is None:
         label_id = f"formgen-lbl-{name}"
     label_text = name.replace("_", " ").capitalize() + (" (opt.)" if truly_optional else "")
@@ -305,16 +309,13 @@ def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
         cid = _mk_id(id_type, name, tag, id_extra)
         # Composite widgets (Tuple) need length/elem from `extra`; pass it
         # through so simpler factories can ignore it without breaking.
-        widget_fn = _WIDGET_FACTORIES[handler["widget"]]
-        try:
-            widget = widget_fn(cid, default, required, choices=choices, extra=extra)
-        except TypeError:
-            widget = widget_fn(cid, default, required, choices=choices)
+        widget_fn = WIDGET_FACTORIES[handler["widget"]]
+        widget = widget_fn(cid, default, required, choices=choices, extra=extra)
         # Build a label ID that is unique across all mounted pages by incorporating
         # id_type and all id_extra values (sorted for stability).
         extra_str = "_".join(str(v) for _, v in sorted((id_extra or {}).items()))
         lbl_id = f"formgen-lbl_{id_type}_{extra_str}_{name}" if extra_str else f"formgen-lbl_{id_type}_{name}"
-        rows.append(_form_row(name, widget, descriptions.get(name, ""), truly_optional, label_id=lbl_id))
+        rows.append(form_row(name, widget, descriptions.get(name, ""), truly_optional, label_id=lbl_id))
 
     if not rows:
         return [html.Div("No parameters required.", style=styles.FORM_HINT)]

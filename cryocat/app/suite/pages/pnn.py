@@ -26,7 +26,7 @@ from cryocat.core.cryomotl import Motl
 from cryocat.analysis.nnana import NearestNeighbors
 from cryocat.analysis import visplot
 from cryocat.app.apputils import generate_kwargs
-from cryocat.app.formgen import build_form
+from cryocat.app import formgen
 from cryocat.app.components.motlsource import get_motl_source, register_motl_source_callbacks
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
@@ -215,7 +215,7 @@ def _postprocess_sidebar_content():
                 style={"marginBottom": "0.3rem"},
             ),
             html.Div(
-                build_form(
+                formgen.build_form(
                     NearestNeighbors.get_angular_distances,
                     id_type="nn-forms-params",
                     id_extra={"cls_name": "nn-pp-angular"},
@@ -301,48 +301,22 @@ def _sidebar() -> list:
                 ),
                 dbc.AccordionItem(
                     [
-                        # nn_type: manual dropdown so labels are user-friendly
-                        html.Div(
-                            [
-                                html.Div(
-                                    html.Label(
-                                        "Nn type",
-                                        style={"fontSize": "0.85rem", "margin": 0},
-                                    ),
-                                    style={
-                                        "width": "45%", "display": "flex",
-                                        "alignItems": "center", "boxSizing": "border-box",
-                                        "paddingRight": "4px",
-                                    },
-                                ),
-                                html.Div(
-                                    dcc.Dropdown(
-                                        id={
-                                            "type": "nn-forms-params",
-                                            "param": "nn_type",
-                                            "tag": "Literal",
-                                            "cls_name": "nn-params",
-                                        },
-                                        options=[
-                                            {"label": "Closest distance", "value": "closest_dist"},
-                                            {"label": "Radius", "value": "radius"},
-                                        ],
-                                        value="closest_dist",
-                                        clearable=False,
-                                        searchable=False,
-                                        style={"width": "100%"},
-                                    ),
-                                    style={"width": "55%"},
-                                ),
-                            ],
-                            style={
-                                "display": "flex", "flexDirection": "row",
-                                "marginBottom": "0.25rem", "width": "100%",
-                                "alignItems": "center",
-                            },
+                        # nn_type: user-friendly labels; build widget manually, wrap with form_row
+                        formgen.form_row(
+                            "nn_type",
+                            formgen.make_dropdown(
+                                formgen._mk_id("nn-forms-params", "nn_type", "Literal", {"cls_name": "nn-params"}),
+                                [
+                                    {"label": "Closest distance", "value": "closest_dist"},
+                                    {"label": "Radius", "value": "radius"},
+                                ],
+                                "closest_dist",
+                                clearable=False,
+                            ),
+                            "",
                         ),
                         html.Div(
-                            build_form(
+                            formgen.build_form(
                                 NearestNeighbors,
                                 id_type="nn-forms-params",
                                 id_extra={"cls_name": "nn-params"},
@@ -418,7 +392,7 @@ def _sidebar() -> list:
                             style={"marginTop": "0.5rem", "marginBottom": "0.4rem"},
                         ),
                         html.Div(
-                            build_form(
+                            formgen.build_form(
                                 NearestNeighbors.get_angular_distances,
                                 id_type="nn-forms-params",
                                 id_extra={"cls_name": "nn-angular"},
