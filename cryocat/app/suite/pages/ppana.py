@@ -48,6 +48,7 @@ from cryocat.app.components.anglesfield import get_angles_field, register_angles
 from cryocat.utils.wedgeutils import generate_wedge_mask
 from cryocat.app.components.wedgepreview import wedge_xz_figure
 from cryocat.app.suite.pages import _pana_codegen as codegen
+from cryocat.app.suite.pages._codegen_base import parse_sbatch_text as _parse_sbatch_text
 from cryocat.app.pageshell import page_shell, sidebar_accordion
 
 
@@ -1462,7 +1463,7 @@ def register_callbacks(app):
 
             if fmt == "slurm":
                 slurm_path = save_path.replace(".py", ".sh")
-                cluster_params = codegen._parse_sbatch_text(sbatch_text or "")
+                cluster_params = _parse_sbatch_text(sbatch_text or "")
                 module_loads = [m.strip() for m in (modules_text or "").splitlines() if m.strip()]
                 slurm_script = codegen.render_slurm_wrapper(save_path, cluster_params, module_loads)
                 with open(slurm_path, "w", encoding="utf-8") as fh:

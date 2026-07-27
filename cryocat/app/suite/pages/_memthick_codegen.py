@@ -17,17 +17,21 @@ Public API
 * :func:`render_pipeline_py(kwargs)`        -> ``str``
 * :func:`render_pipeline_ipynb(kwargs)`     -> ``dict`` (nb v4)
 * :func:`render_pipeline_ipynb_json(kwargs)`-> ``str`` (JSON-encoded notebook)
-* :func:`render_slurm_wrapper(py_filename, cluster_params, module_loads)`
-  -> ``str``
-
-Backwards-compatible aliases ``render_py`` / ``render_ipynb`` /
-``render_ipynb_json`` / ``wrap_slurm`` are also exported.
+* :func:`render_slurm_wrapper`              -> re-exported from
+  :mod:`cryocat.app.suite.pages._codegen_base`
 """
 from __future__ import annotations
 
-import io
 import json
 from typing import Any
+
+from cryocat.app.suite.pages._codegen_base import (
+    Verbatim as _Verbatim,
+    format_value as _format_value,
+    format_dict as _format_dict,
+    format_kwargs as _format_kwargs,
+    render_slurm_wrapper,  # noqa: F401 — re-exported for callers
+)
 
 
 _PIPELINE_FN = "run_full_pipeline"
@@ -73,57 +77,6 @@ def _split_kwargs(kwargs: dict[str, Any]) -> tuple[dict, dict, dict, dict]:
     return paths, labels, analyzer_kwargs, call_kwargs
 
 
-# ── value formatters ────────────────────────────────────────────────────────
-
-
-class _Verbatim:
-    """Marker so :func:`_format_value` emits a bare identifier (variable
-    name) instead of quoting it."""
-
-    __slots__ = ("expr",)
-
-    def __init__(self, expr: str) -> None:
-        self.expr = expr
-
-    def __repr__(self) -> str:  # pragma: no cover - trivial
-        return self.expr
-
-
-def _format_value(value: Any) -> str:
-    """Return a Python source representation of ``value``.
-
-    ``repr`` handles every leaf type we expect from the form (str, int,
-    float, bool, None, tuple of numbers). :class:`_Verbatim` is used to
-    inject already-defined identifiers (e.g. the path variables and the
-    constructed analyzer) into the pipeline call.
-    """
-    if isinstance(value, _Verbatim):
-        return value.expr
-    if isinstance(value, dict):
-        return _format_dict(value)
-    return repr(value)
-
-
-def _format_dict(d: dict, indent: str = "    ") -> str:
-    """Render a dict literal across multiple indented lines."""
-    if not d:
-        return "{}"
-    items = "\n".join(
-        f"{indent}    {_format_value(k)}: {_format_value(v)},"
-        for k, v in d.items()
-    )
-    return "{\n" + items + f"\n{indent}}}"
-
-
-def _format_kwargs(kwargs: dict[str, Any], indent: str = "    ") -> str:
-    """Multi-line ``key=value`` block for inlining into a function call."""
-    if not kwargs:
-        return ""
-    return "\n".join(
-        f"{indent}{name}={_format_value(value)}," for name, value in kwargs.items()
-    )
-
-
 # ── .py renderer ────────────────────────────────────────────────────────────
 
 
@@ -143,8 +96,7 @@ def render_pipeline_py(kwargs: dict[str, Any]) -> str:
     Parameters
     ----------
     kwargs : dict
-        Combined form state. The page passes the pipeline kwargs as
-        top-level keys plus ``kwargs["analyzer"]`` (a dict of
+        Combined form state. Pass ``kwargs["analyzer"]`` (a dict of
         :class:`IntensityProfileAnalyzer` kwargs) when the user filled the
         analyzer sub-form.
     """
@@ -287,81 +239,3 @@ def render_pipeline_ipynb(kwargs: dict[str, Any]) -> dict:
 def render_pipeline_ipynb_json(kwargs: dict[str, Any]) -> str:
     """:func:`render_pipeline_ipynb` then ``json.dumps`` with stable indent."""
     return json.dumps(render_pipeline_ipynb(kwargs), indent=1)
-
-
-# ── SLURM wrapper ───────────────────────────────────────────────────────────
-
-
-def render_slurm_wrapper(
-    py_filename: str,
-    cluster_params: dict | None = None,
-    module_loads: list[str] | None = None,
-    interpreter: str = "#!/bin/bash",
-) -> str:
-    """Wrap a generated ``.py`` script in a SLURM submission script.
-
-    Delegates SBATCH directive emission to
-    :func:`cryocat.utils.scriptutils.process_cluster_params` so the format
-    matches the rest of the codebase. The shebang, ``module load`` lines,
-    and final ``python <py_filename>`` command are added around it.
-
-    Parameters
-    ----------
-    py_filename : str
-        Path the cluster will see for the generated python script.
-    cluster_params : dict, optional
-        SBATCH parameters. Keys starting with ``--`` produce
-        ``#SBATCH --key=value``; keys starting with ``-`` produce
-        ``#SBATCH -key value``.
-    module_loads : list of str, optional
-        ``module load`` directives.
-    interpreter : str
-        Shebang line.
-    """
-    from cryocat.utils.scriptutils import process_cluster_params
-
-    buf = io.StringIO()
-    buf.write(interpreter + "\n")
-    if cluster_params:
-        process_cluster_params(buf, cluster_params)
-    for mod in module_loads or []:
-        buf.write(f"module load {mod}\n")
-    buf.write(f"python {py_filename}\n")
-    return buf.getvalue()
-
-
-# ── Backwards-compatible aliases ────────────────────────────────────────────
-
-
-def render_py(kwargs: dict[str, Any], analyzer_kwargs: dict[str, Any] | None = None) -> str:
-    """Compatibility shim: accepts the older ``(kwargs, analyzer_kwargs)`` split."""
-    merged = dict(kwargs)
-    if analyzer_kwargs:
-        merged["analyzer"] = dict(analyzer_kwargs)
-    return render_pipeline_py(merged)
-
-
-def render_ipynb(kwargs: dict[str, Any], analyzer_kwargs: dict[str, Any] | None = None) -> dict:
-    """Compatibility shim mirroring :func:`render_py`."""
-    merged = dict(kwargs)
-    if analyzer_kwargs:
-        merged["analyzer"] = dict(analyzer_kwargs)
-    return render_pipeline_ipynb(merged)
-
-
-def render_ipynb_json(kwargs: dict[str, Any], analyzer_kwargs: dict[str, Any] | None = None) -> str:
-    """Compatibility shim mirroring :func:`render_py`."""
-    merged = dict(kwargs)
-    if analyzer_kwargs:
-        merged["analyzer"] = dict(analyzer_kwargs)
-    return render_pipeline_ipynb_json(merged)
-
-
-def wrap_slurm(
-    py_path: str,
-    cluster_params: dict | None = None,
-    module_loads: list[str] | None = None,
-    interpreter: str = "#!/bin/bash",
-) -> str:
-    """Compatibility shim for :func:`render_slurm_wrapper`."""
-    return render_slurm_wrapper(py_path, cluster_params, module_loads, interpreter)

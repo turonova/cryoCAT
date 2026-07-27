@@ -12,48 +12,28 @@ means the generated code does not depend on importing any of
 Public API
 ----------
 * :func:`render_analysis_py(kwargs)`  -> ``str``
-* :func:`render_slurm_wrapper(py_filename, cluster_params, module_loads)` -> ``str``
+* :func:`render_slurm_wrapper`        -> re-exported from
+  :mod:`cryocat.app.suite.pages._codegen_base`
 """
 from __future__ import annotations
 
-import io
 from typing import Any
+
+from cryocat.app.suite.pages._codegen_base import (
+    Verbatim as _Verbatim,
+    format_value as _format_value,
+    format_kwargs as _format_kwargs,
+    render_slurm_wrapper,  # noqa: F401 — re-exported for callers
+)
 
 
 # Path params hoisted to named variables at the top of the generated script.
 _PATH_PARAMS: dict[str, str] = {
-    "template_list":     "template_list",
+    "template_list":      "template_list",
     "parent_folder_path": "parent_folder_path",
-    "angle_list_path":   "angle_list_path",
-    "wedge_path":        "wedge_path",
+    "angle_list_path":    "angle_list_path",
+    "wedge_path":         "wedge_path",
 }
-
-
-# ── value formatters ────────────────────────────────────────────────────────
-
-
-def _format_value(value: Any) -> str:
-    """Return a Python source representation of *value*."""
-    if isinstance(value, _Verbatim):
-        return value.expr
-    return repr(value)
-
-
-class _Verbatim:
-    """Marker so :func:`_format_value` emits a bare identifier."""
-
-    __slots__ = ("expr",)
-
-    def __init__(self, expr: str) -> None:
-        self.expr = expr
-
-
-def _format_kwargs(kwargs: dict[str, Any], indent: str = "    ") -> str:
-    if not kwargs:
-        return ""
-    return "\n".join(
-        f"{indent}{name}={_format_value(value)}," for name, value in kwargs.items()
-    )
 
 
 # ── .py renderer ────────────────────────────────────────────────────────────
@@ -73,7 +53,6 @@ def render_analysis_py(kwargs: dict[str, Any]) -> str:
         :data:`_PATH_PARAMS` becomes a top-level variable; everything else is
         inlined as a keyword argument.
     """
-    # Split path params from scalar params
     paths: dict[str, Any] = {}
     for kwarg_name, var_name in _PATH_PARAMS.items():
         if kwargs.get(kwarg_name) is not None:
@@ -89,13 +68,11 @@ def render_analysis_py(kwargs: dict[str, Any]) -> str:
         "",
     ]
 
-    # ── path variables ─────────────────────────────────────────────────────
     if paths:
         for var_name, value in paths.items():
             lines.append(f"{var_name} = {_format_value(value)}")
         lines.append("")
 
-    # ── run_analysis call ──────────────────────────────────────────────────
     referenced: dict[str, Any] = {}
     for kwarg_name, var_name in _PATH_PARAMS.items():
         if var_name in paths:
@@ -109,55 +86,3 @@ def render_analysis_py(kwargs: dict[str, Any]) -> str:
     lines.append('print("done")')
     lines.append("")
     return "\n".join(lines)
-
-
-# ── SLURM wrapper ───────────────────────────────────────────────────────────
-
-
-def render_slurm_wrapper(
-    py_filename: str,
-    cluster_params: dict | None = None,
-    module_loads: list[str] | None = None,
-    interpreter: str = "#!/bin/bash",
-) -> str:
-    """Wrap a generated ``.py`` script in a SLURM submission script.
-
-    Parameters
-    ----------
-    py_filename : str
-        Path the cluster will see for the generated python script.
-    cluster_params : dict, optional
-        SBATCH parameters. Keys starting with ``--`` produce
-        ``#SBATCH --key=value``; keys starting with ``-`` produce
-        ``#SBATCH -key value``.
-    module_loads : list of str, optional
-        ``module load`` directives.
-    interpreter : str
-        Shebang line.
-    """
-    from cryocat.utils.scriptutils import process_cluster_params
-
-    buf = io.StringIO()
-    buf.write(interpreter + "\n")
-    if cluster_params:
-        process_cluster_params(buf, cluster_params)
-    for mod in module_loads or []:
-        buf.write(f"module load {mod}\n")
-    buf.write(f"python {py_filename}\n")
-    return buf.getvalue()
-
-
-def _parse_sbatch_text(text: str) -> dict:
-    """Parse newline-separated SBATCH directive lines into a kwargs dict."""
-    result: dict[str, Any] = {}
-    for line in (text or "").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            k, _, v = line.partition("=")
-            result[k.strip()] = v.strip()
-        else:
-            parts = line.split(None, 1)
-            result[parts[0]] = parts[1] if len(parts) > 1 else ""
-    return result

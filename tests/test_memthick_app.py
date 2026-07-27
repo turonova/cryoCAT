@@ -148,10 +148,11 @@ def test_read_analyzer_kwargs_filters_empties():
 
 
 def test_render_py_is_valid_python():
-    py = codegen.render_py(
-        {"segmentation_map": "/x/seg.mrc", "output_path": "/x/out"},
-        {"smooth_sigma_intensity_profiles": 0.7, "minima_search_nm": (2.8, 4.1)},
-    )
+    py = codegen.render_pipeline_py({
+        "segmentation_map": "/x/seg.mrc",
+        "output_path": "/x/out",
+        "analyzer": {"smooth_sigma_intensity_profiles": 0.7, "minima_search_nm": (2.8, 4.1)},
+    })
     ast.parse(py)
     assert "from cryocat.analysis import memthick" in py
     assert "IntensityProfileAnalyzer" in py
@@ -163,21 +164,17 @@ def test_render_py_is_valid_python():
 
 
 def test_render_py_omits_analyzer_when_unspecified():
-    py = codegen.render_py(
-        {"segmentation_map": "/x/seg.mrc"},
-        None,
-    )
+    py = codegen.render_pipeline_py({"segmentation_map": "/x/seg.mrc"})
     ast.parse(py)
     assert "IntensityProfileAnalyzer" not in py
     assert "analyzer" not in py
 
 
 def test_render_py_indented_dict_for_membrane_labels():
-    py = codegen.render_py(
-        {"segmentation_map": "/x/seg.mrc",
-         "membrane_labels": {"outer": 1, "inner": 2}},
-        None,
-    )
+    py = codegen.render_pipeline_py({
+        "segmentation_map": "/x/seg.mrc",
+        "membrane_labels": {"outer": 1, "inner": 2},
+    })
     ast.parse(py)
     # Dict with > 1 entry should be rendered as a multi-line literal.
     assert "'outer': 1" in py
@@ -185,10 +182,10 @@ def test_render_py_indented_dict_for_membrane_labels():
 
 
 def test_render_ipynb_structure():
-    nb = codegen.render_ipynb(
-        {"segmentation_map": "/x/seg.mrc"},
-        {"smooth_sigma_intensity_profiles": 0.7},
-    )
+    nb = codegen.render_pipeline_ipynb({
+        "segmentation_map": "/x/seg.mrc",
+        "analyzer": {"smooth_sigma_intensity_profiles": 0.7},
+    })
     assert nb["nbformat"] == 4
     cell_types = [c["cell_type"] for c in nb["cells"]]
     assert cell_types[0] == "markdown"
@@ -199,15 +196,13 @@ def test_render_ipynb_structure():
 
 
 def test_render_ipynb_json_round_trips():
-    text = codegen.render_ipynb_json(
-        {"segmentation_map": "/x/seg.mrc"}, None,
-    )
+    text = codegen.render_pipeline_ipynb_json({"segmentation_map": "/x/seg.mrc"})
     parsed = json.loads(text)
     assert parsed["nbformat"] == 4
 
 
 def test_wrap_slurm_emits_directives_in_order():
-    out = codegen.wrap_slurm(
+    out = codegen.render_slurm_wrapper(
         "/scratch/run.py",
         cluster_params={"--mem": "32G", "-N": 1},
         module_loads=["cryocat/1.0", "cuda/12.1"],
@@ -221,7 +216,7 @@ def test_wrap_slurm_emits_directives_in_order():
 
 
 def test_wrap_slurm_no_params_is_valid():
-    out = codegen.wrap_slurm("/scratch/run.py")
+    out = codegen.render_slurm_wrapper("/scratch/run.py")
     assert out.splitlines() == ["#!/bin/bash", "python /scratch/run.py"]
 
 
@@ -249,7 +244,7 @@ def test_round_trip_form_state_to_python_script():
     pipeline_kwargs = {k: v for k, v in pipeline_kwargs.items() if v not in (None, "", [])}
     analyzer_kwargs = mw.read_analyzer_kwargs(an_ids, an_vals)
 
-    py = codegen.render_py(pipeline_kwargs, analyzer_kwargs)
+    py = codegen.render_pipeline_py({**pipeline_kwargs, "analyzer": analyzer_kwargs})
     ast.parse(py)
     # segmentation_map is hoisted to a top variable now.
     assert "segmentation_path = '/scratch/seg.mrc'" in py
