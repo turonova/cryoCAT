@@ -11,10 +11,12 @@ from scipy.spatial.transform import Rotation as R
 if "emfile" not in sys.modules:
     sys.modules["emfile"] = types.ModuleType("emfile")
 
+from cryocat.analysis import nnana
 from cryocat.analysis.tango import (
     Particle,
     SymmParticle,
     Descriptor,
+    TwistDescriptor,
 )
 
 
@@ -553,4 +555,91 @@ class TestDescriptorFilterFeatures:
     def test_list_no_valid_features_raises(self, desc_with_df):
         with pytest.raises(ValueError):
             desc_with_df.filter_features(desc_with_df.desc, feature_ids=["nonexistent"])
+
+
+# ===========================================================================
+# TwistDescriptor.process_tomo_twist
+# ===========================================================================
+
+def _make_nn(column_name="tomo_id", feature_value=1, n_pairs=2):
+    """Return a blank NearestNeighbors with a minimal df for process_tomo_twist."""
+    nn = nnana.NearestNeighbors()
+    nn.column_name = column_name
+    nn.df = pd.DataFrame({
+        column_name:       [feature_value] * n_pairs,
+        "qp_subtomo_id":   list(range(1, n_pairs + 1)),
+        "nn_subtomo_id":   list(range(n_pairs + 1, 2 * n_pairs + 1)),
+        "qp_angles_phi":   [0.0]  * n_pairs,
+        "qp_angles_theta": [0.0]  * n_pairs,
+        "qp_angles_psi":   [0.0]  * n_pairs,
+        "nn_angles_phi":   [90.0] * n_pairs,
+        "nn_angles_theta": [45.0] * n_pairs,
+        "nn_angles_psi":   [0.0]  * n_pairs,
+        "qp_coord_x":      [0.0]  * n_pairs,
+        "qp_coord_y":      [0.0]  * n_pairs,
+        "qp_coord_z":      [0.0]  * n_pairs,
+        "nn_coord_x":      [10.0] * n_pairs,
+        "nn_coord_y":      [10.0] * n_pairs,
+        "nn_coord_z":      [10.0] * n_pairs,
+    })
+    return nn
+
+
+class TestTwistDescriptorProcessTwist:
+    """Regression tests for process_tomo_twist exercising the t_nn.column_name attribute.
+
+    Before the fix in tango.py, this code path contained ``t_nn.feature_id``
+    (the old attribute name after nnana.py renamed it to ``column_name``).
+    The bug was never caught because no test instantiated TwistDescriptor with
+    input_motl + nn_radius, nor called process_tomo_twist directly.
+    These tests would have surfaced the AttributeError immediately.
+    """
+
+    def test_returns_dataframe(self):
+        result = TwistDescriptor.process_tomo_twist(_make_nn())
+        assert isinstance(result, pd.DataFrame)
+
+    def test_row_count_matches_input(self):
+        result = TwistDescriptor.process_tomo_twist(_make_nn(n_pairs=3))
+        assert len(result) == 3
+
+    def test_output_columns_no_symm(self):
+        nn = _make_nn(column_name="tomo_id")
+        result = TwistDescriptor.process_tomo_twist(nn)
+        expected = {
+            "qp_id", "nn_id", "tomo_id",
+            "twist_so_x", "twist_so_y", "twist_so_z",
+            "twist_x", "twist_y", "twist_z",
+            "qp_inplane", "nn_inplane",
+        }
+        assert set(result.columns) == expected
+
+    def test_column_name_drives_output_column(self):
+        """t_nn.column_name must appear in the output — this catches the feature_id rename."""
+        nn = _make_nn(column_name="tomo_id", feature_value=7)
+        result = TwistDescriptor.process_tomo_twist(nn)
+        assert "tomo_id" in result.columns
+        assert (result["tomo_id"] == 7).all()
+
+    def test_custom_column_name_in_output(self):
+        """When column_name is not tomo_id the output column name must follow."""
+        nn = _make_nn(column_name="object_id", feature_value=42)
+        result = TwistDescriptor.process_tomo_twist(nn)
+        assert "object_id" in result.columns
+        assert "tomo_id" not in result.columns
+        assert (result["object_id"] == 42).all()
+
+    def test_twist_vectors_are_finite(self):
+        result = TwistDescriptor.process_tomo_twist(_make_nn())
+        for col in ["twist_so_x", "twist_so_y", "twist_so_z", "twist_x", "twist_y", "twist_z"]:
+            assert np.isfinite(result[col]).all(), f"{col} contains non-finite values"
+
+    def test_identity_rotation_zero_so_twist(self):
+        nn = _make_nn()
+        nn.df["nn_angles_phi"]   = 0.0
+        nn.df["nn_angles_theta"] = 0.0
+        nn.df["nn_angles_psi"]   = 0.0
+        result = TwistDescriptor.process_tomo_twist(nn)
+        np.testing.assert_allclose(result[["twist_so_x", "twist_so_y", "twist_so_z"]].values,
+                                   0.0, atol=1e-6)
 

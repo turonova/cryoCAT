@@ -345,6 +345,8 @@ def get_motl_simple_save_component(prefix: str):
                 id=f"{prefix}-save-output-modal",
                 is_open=False,
             ),
+        dcc.Store(id=f"{prefix}-relion5-tomos-store"),
+        dcc.Store(id=f"{prefix}-relion5-tomos-filename"),
         ]
     )
 

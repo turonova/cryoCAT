@@ -234,6 +234,12 @@ def get_table_component(prefix: str, connected_motl_prefix=None, show_create_fro
             className="me-1",
         ),
         dbc.Button(
+            "Remove Selected Cols",
+            id=f"{prefix}-remove-cols-btn",
+            color="primary",
+            className="me-1",
+        ),
+        dbc.Button(
             "Plot",
             id=f"{prefix}-plot-graphs-btn",
             color="primary",
