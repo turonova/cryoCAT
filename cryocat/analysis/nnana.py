@@ -1788,109 +1788,125 @@ def _get_nn_dist(
 
 
 def _add_chain_suffix(
-    chain_df: pd.DataFrame,
-    motl: "cryomotl.Motl",
-    traced_df: pd.DataFrame,
+    ch_cls: int,
+    ch_orders: list,
+    nfm_idx1: np.ndarray,
+    nfm_idx2: np.ndarray,
+    nfm_dist: np.ndarray,
+    pos_of_sub: dict,
+    cls_to_rows: dict,
+    exit_subtomos: np.ndarray,
     subtomo_id: int,
     current_dist: float,
-    store_idx1: str = "object_id",
-    store_idx2: str = "geom2",
-    store_dist: str = "geom4",
-) -> bool:
+) -> int | None:
     """Append the current chain after an existing one.
 
-    Looks up the particle at *subtomo_id* in *traced_df*, finds the chain it
-    belongs to, and — if the link is the last in that chain and the new
+    Looks up the particle at *subtomo_id* in the nfm arrays, finds the chain
+    it belongs to, and — if the link is the last in that chain and the new
     distance is shorter — re-assigns the tail of the old chain to the current
-    chain or vice versa.
+    chain or vice versa.  All lookups are O(1) via *pos_of_sub* / *cls_to_rows*.
 
     Parameters
     ----------
-    chain_df : pandas.DataFrame
-        Rows representing the new chain fragment being built.
-    motl : Motl
-        The exit motl for the current feature (used to resolve ``subtomo_id``).
-    traced_df : pandas.DataFrame
-        Accumulator holding all chains traced so far for this feature.
+    ch_cls : int
+        Current chain-class id of the chain being built.
+    ch_orders : list of int
+        Within-chain position values for each row in the chain (modified in place).
+    nfm_idx1 : numpy.ndarray
+        store_idx1 (class) column for committed nfm rows (modified in place).
+    nfm_idx2 : numpy.ndarray
+        store_idx2 (order) column for committed nfm rows (modified in place).
+    nfm_dist : numpy.ndarray
+        store_dist column for committed nfm rows (modified in place).
+    pos_of_sub : dict
+        subtomo_id → row position in the nfm arrays (O(1) lookup).
+    cls_to_rows : dict
+        class_id → list of row positions (modified in place).
+    exit_subtomos : numpy.ndarray
+        ``subtomo_id`` values for the exit motl, indexed by row position.
     subtomo_id : int
-        Row index (within *motl*) of the particle whose chain we are appending to.
+        Row index (within exit motl) of the particle whose chain we append to.
     current_dist : float
         Distance of the new link being considered.
-    store_idx1 : str, default='object_id'
-        Column storing the chain identifier.
-    store_idx2 : str, default='geom2'
-        Column storing within-chain position (1-based).
-    store_dist : str, default='geom4'
-        Column storing link distance to the next particle.
 
     Returns
     -------
-    bool
-        ``True`` if the chain was successfully appended; ``False`` if the
-        existing link was shorter and the append was aborted.
+    int or None
+        New ``ch_cls`` on success; ``None`` if the existing link was shorter
+        and the append was aborted.
     """
-    particle_id = motl.df.loc[motl.df.index[subtomo_id], "subtomo_id"]
-    temp_cl_id, order_id, previous_dist = traced_df.loc[
-        traced_df["subtomo_id"] == particle_id,
-        [store_idx1, store_idx2, store_dist],
-    ].values[0]
-    chain_max_order = np.max(traced_df.loc[traced_df[store_idx1] == temp_cl_id, [store_idx2]].values)
+    particle_id = int(exit_subtomos[subtomo_id])
+    row_pos = pos_of_sub[particle_id]
+    temp_cl_id = int(nfm_idx1[row_pos])
+    order_id = int(nfm_idx2[row_pos])
+    previous_dist = float(nfm_dist[row_pos])
+    chain_rows = cls_to_rows[temp_cl_id]
+    chain_max_order = int(nfm_idx2[chain_rows].max())
 
     if chain_max_order != order_id:
         if previous_dist <= current_dist:
-            return False
-        current_class = chain_df[store_idx1].values[0]
-        traced_df.loc[
-            (traced_df[store_idx1] == temp_cl_id) & (traced_df[store_idx2] > order_id),
-            store_idx1,
-        ] = current_class
-        new_size = traced_df.loc[traced_df[store_idx1] == current_class, store_idx2].shape[0]
-        traced_df.loc[traced_df[store_idx1] == current_class, store_idx2] = np.arange(1, new_size + 1)
-        chain_max_order = np.max(traced_df.loc[traced_df[store_idx1] == temp_cl_id, [store_idx2]].values)
+            return None
+        head = [r for r in chain_rows if nfm_idx2[r] <= order_id]
+        tail = [r for r in chain_rows if nfm_idx2[r] > order_id]
+        for r in tail:
+            nfm_idx1[r] = ch_cls
+        cls_to_rows[temp_cl_id] = head
+        cls_to_rows.setdefault(ch_cls, []).extend(tail)
+        for new_pos, r in enumerate(cls_to_rows[ch_cls]):
+            nfm_idx2[r] = new_pos + 1
+        chain_max_order = int(nfm_idx2[head].max()) if head else 0
 
-    traced_df.loc[traced_df["subtomo_id"] == particle_id, store_dist] = current_dist
-    chain_df[store_idx1] = temp_cl_id
-    chain_df[store_idx2] += chain_max_order
-    return True
+    nfm_dist[row_pos] = current_dist
+    for k_i in range(len(ch_orders)):
+        ch_orders[k_i] += chain_max_order
+    return temp_cl_id
 
 
 def _add_chain_prefix(
-    chain_df: pd.DataFrame,
-    motl: "cryomotl.Motl",
-    traced_df: pd.DataFrame,
+    ch_cls: int,
+    ch_orders: list,
+    ch_dists: list,
+    nfm_idx1: np.ndarray,
+    nfm_idx2: np.ndarray,
+    nfm_dist: np.ndarray,
+    pos_of_sub: dict,
+    cls_to_rows: dict,
+    entry_subtomos: np.ndarray,
     subtomo_id: int,
     current_dist: float,
-    store_idx1: str = "object_id",
-    store_idx2: str = "geom2",
-    store_dist: str = "geom4",
     class_max: tuple[int, int] | None = None,
 ) -> int | None:
     """Prepend the current chain before an existing one.
 
-    Looks up the particle at *subtomo_id* in *traced_df* and inserts the
+    Looks up the particle at *subtomo_id* in the nfm arrays and inserts the
     current chain fragment at the beginning of that particle's chain, shifting
-    existing within-chain positions accordingly.  If the particle is not the
-    head of its chain, the shorter-distance rule is applied to decide whether
-    the prefix operation proceeds.
+    existing within-chain positions accordingly.  All lookups are O(1).
 
     Parameters
     ----------
-    chain_df : pandas.DataFrame
-        Rows representing the new chain fragment to prepend.
-    motl : Motl
-        The entry motl for the current feature.
-    traced_df : pandas.DataFrame
-        Accumulator holding all chains traced so far for this feature.
+    ch_cls : int
+        Current chain-class id of the chain being built.
+    ch_orders : list of int
+        Within-chain position values for each row in the chain.
+    ch_dists : list of float
+        Distance values for each row in the chain (last element modified in place).
+    nfm_idx1 : numpy.ndarray
+        store_idx1 (class) column for committed nfm rows (modified in place).
+    nfm_idx2 : numpy.ndarray
+        store_idx2 (order) column for committed nfm rows (modified in place).
+    nfm_dist : numpy.ndarray
+        store_dist column for committed nfm rows (modified in place).
+    pos_of_sub : dict
+        subtomo_id → row position in the nfm arrays.
+    cls_to_rows : dict
+        class_id → list of row positions (modified in place).
+    entry_subtomos : numpy.ndarray
+        ``subtomo_id`` values for the entry motl, indexed by row position.
     subtomo_id : int
-        Row index (within *motl*) of the particle at the start of the existing chain.
+        Row index (within entry motl) of the particle at the start of the
+        existing chain.
     current_dist : float
         Distance of the new link being considered.
-    store_idx1 : str, default='object_id'
-        Column storing the chain identifier.
-    store_idx2 : str, default='geom2'
-        Column storing within-chain position (1-based).
-    store_dist : str, default='geom4'
-        Column storing link distance to the next particle.
     class_max : tuple of int or None, default=None
         When not ``None``, a ``(max_order, fallback_class)`` pair used when
         both a suffix and prefix merge happen simultaneously.
@@ -1898,44 +1914,54 @@ def _add_chain_prefix(
     Returns
     -------
     int or None
-        Returns ``-1`` if the existing link is shorter and the operation is
-        aborted; otherwise returns ``None`` (modifies *chain_df* and
-        *traced_df* in place).
+        New ``ch_cls`` on success; ``None`` if the existing link was shorter
+        and the operation was aborted.
     """
-    particle_id = motl.df.loc[motl.df.index[subtomo_id], "subtomo_id"]
-    class_to_change = traced_df.loc[traced_df["subtomo_id"] == particle_id, store_idx1].values[0]
-    order_id = traced_df.loc[traced_df["subtomo_id"] == particle_id, store_idx2].values[0]
-    current_class = chain_df[store_idx1].values[0]
+    particle_id = int(entry_subtomos[subtomo_id])
+    row_pos_nm = pos_of_sub[particle_id]
+    class_to_change = int(nfm_idx1[row_pos_nm])
+    order_id = int(nfm_idx2[row_pos_nm])
     cut_off_size = 0
 
     if order_id != 1:
-        previous_dist = traced_df.loc[
-            (traced_df[store_idx1] == class_to_change)
-            & (traced_df[store_idx2] == order_id - 1),
-            store_dist,
-        ].values[0]
-        if previous_dist <= current_dist:
-            return -1
-        cut_off_size = traced_df.loc[
-            (traced_df[store_idx1] == class_to_change) & (traced_df[store_idx2] < order_id)
-        ].shape[0]
-        traced_df.loc[
-            (traced_df[store_idx1] == class_to_change) & (traced_df[store_idx2] < order_id),
-            store_idx1,
-        ] = (current_class if class_max is None else -1)
+        ctc_rows = cls_to_rows[class_to_change]
+        prev_row = next(r for r in ctc_rows if nfm_idx2[r] == order_id - 1)
+        if nfm_dist[prev_row] <= current_dist:
+            return None
+        cut_rows = [r for r in ctc_rows if nfm_idx2[r] < order_id]
+        cut_off_size = len(cut_rows)
+        sentinel = ch_cls if class_max is None else -1
+        for r in cut_rows:
+            nfm_idx1[r] = sentinel
+        cls_to_rows.setdefault(sentinel, []).extend(cut_rows)
+        cls_to_rows[class_to_change] = [r for r in ctc_rows if nfm_idx2[r] >= order_id]
+
+    ctc_remain = cls_to_rows[class_to_change]
 
     if class_max is None:
-        chain_df[store_idx1] = class_to_change
-        class_max_val = np.max(chain_df[store_idx2].values)
-        traced_df.loc[traced_df[store_idx1] == class_to_change, [store_idx2]] += class_max_val - cut_off_size
+        new_ch_cls = class_to_change
+        class_max_val = max(ch_orders) if ch_orders else 0
+        offset = class_max_val - cut_off_size
+        for r in ctc_remain:
+            nfm_idx2[r] += offset
     else:
-        temp_cl_id = chain_df[store_idx1][0]
-        traced_df.loc[traced_df[store_idx1] == class_to_change, [store_idx2]] += class_max[0] - cut_off_size
-        traced_df.loc[traced_df[store_idx1] == class_to_change, [store_idx1]] = temp_cl_id
+        temp_cl_id = ch_cls
+        offset = class_max[0] - cut_off_size
+        for r in ctc_remain:
+            nfm_idx2[r] += offset
+            nfm_idx1[r] = temp_cl_id
+        if temp_cl_id != class_to_change:
+            cls_to_rows.setdefault(temp_cl_id, []).extend(ctc_remain)
+            del cls_to_rows[class_to_change]
         if order_id != 1:
-            traced_df.loc[traced_df[store_idx1] == -1, [store_idx1]] = class_max[1]
+            neg_rows = cls_to_rows.pop(-1, [])
+            for r in neg_rows:
+                nfm_idx1[r] = class_max[1]
+            cls_to_rows.setdefault(class_max[1], []).extend(neg_rows)
+        new_ch_cls = ch_cls
 
-    chain_df.loc[chain_df.index[-1], store_dist] = current_dist
+    ch_dists[-1] = current_dist
+    return new_ch_cls
 
 
 def trace_chains(
@@ -2005,36 +2031,50 @@ def trace_chains(
 
     for f in features1:
         fm_entry = motl_entry.get_motl_subset(f, column_name, reset_index=False)
-        fm_exit = motl_exit.get_motl_subset(f, column_name, reset_index=False)
-        nfm_df = cryomotl.Motl.create_empty_motl_df()
+        fm_exit  = motl_exit.get_motl_subset(f, column_name, reset_index=False)
 
         fm_size = fm_entry.df.shape[0]
-        remain_entry = np.full((fm_size,), True)
-        remain_exit = np.full((fm_size,), True)
+        remain_entry = np.full(fm_size, True)
+        remain_exit  = np.full(fm_size, True)
         class_c = 1
 
         coord_entry = fm_entry.get_coordinates()
-        coord_exit = fm_exit.get_coordinates()
+        coord_exit  = fm_exit.get_coordinates()
         kdt_entry = sn.KDTree(coord_entry)
-        kdt_exit = sn.KDTree(coord_exit)
+        kdt_exit  = sn.KDTree(coord_exit)
+
+        entry_subtomos = fm_entry.df["subtomo_id"].values
+        exit_subtomos  = fm_exit.df["subtomo_id"].values
+
+        # Pre-allocate nfm working arrays (filled row-by-row as chains complete).
+        _nfm_rows = np.empty(fm_size, dtype=int)   # positional index into fm_entry.df
+        _nfm_idx1 = np.zeros(fm_size, dtype=int)   # store_idx1 (chain class)
+        _nfm_idx2 = np.zeros(fm_size, dtype=int)   # store_idx2 (within-chain order)
+        _nfm_dist = np.zeros(fm_size, dtype=float)  # store_dist
+        _nfm_filled = 0
+        _pos_of_sub  = {}   # subtomo_id → nfm row position (O(1) lookup)
+        _cls_to_rows = {}   # class_id   → list of nfm row positions
 
         for i, current_point in enumerate(coord_exit):
             if not remain_exit[i]:
                 continue
 
-            ch_m = cryomotl.Motl.create_empty_motl_df()
-            chain_id = 1
+            ch_row_idxs = []   # positional indices into fm_entry.df
+            ch_orders   = []   # store_idx2 values (1-based within-chain positions)
+            ch_dists    = []   # store_dist values (0.0 until a next link is found)
+            chain_id    = 1
             trace_chain = True
-            p_idx = i
-            used_idx = []
+            p_idx       = i
+            used_idx    = []
 
             while trace_chain:
-                ch_m = pd.concat([ch_m, fm_entry.df.iloc[[p_idx]]], ignore_index=True)
-                ch_m.loc[ch_m.index[-1], [store_idx2]] = chain_id
+                ch_row_idxs.append(p_idx)
+                ch_orders.append(chain_id)
+                ch_dists.append(0.0)
                 chain_id += 1
 
                 remain_entry[p_idx] = False
-                remain_exit[p_idx] = False
+                remain_exit[p_idx]  = False
                 used_idx.append(p_idx)
 
                 p_coord = coord_exit[p_idx, None, :]
@@ -2048,18 +2088,20 @@ def trace_chains(
 
                 if np_idx != -1:
                     p_idx = np_idx
-                    ch_m.loc[ch_m.index[-1], [store_dist]] = np_dist
+                    ch_dists[-1] = np_dist
                 else:
-                    ch_m.loc[:, store_idx1] = class_c
+                    ch_cls  = class_c
                     class_c += 1
 
-                    if nfm_df.size != 0:
+                    if _nfm_filled > 0:
+                        first_pos = ch_row_idxs[0]
+                        first_row = fm_entry.df.iloc[first_pos]
                         first_coord = (
-                            ch_m.loc[ch_m.index[0], ["x", "y", "z"]].values
-                            + ch_m.loc[ch_m.index[0], ["shift_x", "shift_y", "shift_z"]].values
+                            first_row[["x", "y", "z"]].values
+                            + first_row[["shift_x", "shift_y", "shift_z"]].values
                         ).reshape(1, 3)
                         remain_entry[used_idx] = True
-                        remain_exit[used_idx] = True
+                        remain_exit[used_idx]  = True
                         nm_idx, nm_dist = _get_nn_dist(
                             kdt_entry, p_coord, max_distance, min_distance, remain_entry, False
                         )
@@ -2067,18 +2109,18 @@ def trace_chains(
                             kdt_exit, first_coord, max_distance, min_distance, remain_exit, False
                         )
                         remain_entry[used_idx] = False
-                        remain_exit[used_idx] = False
+                        remain_exit[used_idx]  = False
 
-                        if first_idx == nm_idx and first_idx != -1 and ch_m.shape[0] == 1:
+                        if first_idx == nm_idx and first_idx != -1 and len(ch_row_idxs) == 1:
                             if first_dist <= nm_dist:
                                 nm_idx = -1
                             else:
                                 first_idx = -1
                         elif first_idx != -1 and nm_idx != -1:
-                            part1 = fm_exit.df.loc[fm_exit.df.index[first_idx], "subtomo_id"]
-                            part2 = fm_entry.df.loc[fm_entry.df.index[nm_idx], "subtomo_id"]
-                            cl1 = nfm_df.loc[nfm_df["subtomo_id"] == part1, store_idx1].values[0]
-                            cl2 = nfm_df.loc[nfm_df["subtomo_id"] == part2, store_idx1].values[0]
+                            part1 = int(exit_subtomos[first_idx])
+                            part2 = int(entry_subtomos[nm_idx])
+                            cl1 = int(_nfm_idx1[_pos_of_sub[part1]])
+                            cl2 = int(_nfm_idx1[_pos_of_sub[part2]])
                             if cl1 == cl2:
                                 if first_dist <= nm_dist:
                                     nm_idx = -1
@@ -2087,27 +2129,53 @@ def trace_chains(
 
                         ch_changed = False
                         if first_idx != -1:
-                            ch_changed = _add_chain_suffix(
-                                ch_m, fm_exit, nfm_df, first_idx, first_dist,
-                                store_idx1, store_idx2,
+                            result = _add_chain_suffix(
+                                ch_cls, ch_orders,
+                                _nfm_idx1, _nfm_idx2, _nfm_dist,
+                                _pos_of_sub, _cls_to_rows,
+                                exit_subtomos, first_idx, first_dist,
                             )
+                            if result is not None:
+                                ch_cls     = result
+                                ch_changed = True
                         if nm_idx != -1:
                             class_max = None
                             if ch_changed:
                                 current_class = class_c - 1
-                                cl_max = np.max(ch_m[store_idx2].values)
+                                cl_max = max(ch_orders) if ch_orders else 0
                                 if cl_max > 1:
                                     class_max = (cl_max, current_class)
-                            _add_chain_prefix(
-                                ch_m, fm_entry, nfm_df, nm_idx, nm_dist,
-                                store_idx1, store_idx2,
+                            result = _add_chain_prefix(
+                                ch_cls, ch_orders, ch_dists,
+                                _nfm_idx1, _nfm_idx2, _nfm_dist,
+                                _pos_of_sub, _cls_to_rows,
+                                entry_subtomos, nm_idx, nm_dist,
                                 class_max=class_max,
                             )
+                            if result is not None:
+                                ch_cls = result
 
-                    nfm_df = pd.concat([nfm_df, ch_m])
+                    # Commit this chain's rows to the nfm working arrays.
+                    start = _nfm_filled
+                    for k_i, p in enumerate(ch_row_idxs):
+                        sub_id = int(entry_subtomos[p])
+                        _nfm_rows[_nfm_filled] = p
+                        _nfm_idx1[_nfm_filled] = ch_cls
+                        _nfm_idx2[_nfm_filled] = ch_orders[k_i]
+                        _nfm_dist[_nfm_filled] = ch_dists[k_i]
+                        _pos_of_sub[sub_id]    = _nfm_filled
+                        _nfm_filled += 1
+                    _cls_to_rows.setdefault(ch_cls, []).extend(range(start, start + len(ch_row_idxs)))
+
                     trace_chain = False
 
-        traced_motl = pd.concat([traced_motl, nfm_df])
+        # Reconstruct the feature's nfm DataFrame from the pre-allocated arrays.
+        if _nfm_filled > 0:
+            nfm_df = fm_entry.df.iloc[_nfm_rows[:_nfm_filled]].copy().reset_index(drop=True)
+            nfm_df[store_idx1] = _nfm_idx1[:_nfm_filled]
+            nfm_df[store_idx2] = _nfm_idx2[:_nfm_filled]
+            nfm_df[store_dist] = _nfm_dist[:_nfm_filled]
+            traced_motl = pd.concat([traced_motl, nfm_df])
 
     traced_motl = cryomotl.Motl(motl_df=traced_motl)
     if output_motl is not None:
