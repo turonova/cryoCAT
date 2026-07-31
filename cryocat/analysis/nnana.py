@@ -100,50 +100,38 @@ def find_nn_indices(
     coords_qp = np.atleast_2d(coords_qp)
     coords_nn = np.atleast_2d(coords_nn)
 
+    if qp_labels is not None and nn_labels is not None:
+        # Determine how many extra candidates we need to absorb same-label exclusions.
+        max_group = int(np.unique(nn_labels, return_counts=True)[1].max()) if len(nn_labels) else 0
+        over_k = min(k + int(remove_qp) + max_group, coords_nn.shape[0])
+        kdt = sn.KDTree(coords_nn)
+        nn_dist_over, nn_idx_over = kdt.query(coords_qp, k=over_k)
+        nn_dist_over = np.atleast_2d(nn_dist_over)
+        nn_idx_over  = np.atleast_2d(nn_idx_over)
+        # Build a keep-mask: True where candidate passes label filter (and self filter).
+        mask = nn_labels[nn_idx_over] != qp_labels[:, None]
+        if remove_qp:
+            mask &= nn_idx_over != np.arange(nn_idx_over.shape[0])[:, None]
+        # Stable argsort puts kept candidates (mask=True → ~mask=0) before excluded ones
+        # while preserving distance order within the kept group.
+        order = np.argsort(~mask, axis=1, kind="stable")
+        sel  = np.take_along_axis(nn_idx_over,  order, axis=1)[:, :k]
+        seld = np.take_along_axis(nn_dist_over, order, axis=1)[:, :k]
+        keep = np.take_along_axis(mask,          order, axis=1)[:, :k]
+        nn_idx  = np.where(keep, sel,  0).astype(int)
+        nn_dist = np.where(keep, seld, 0.0)
+        return np.arange(nn_idx.shape[0]), nn_idx, nn_dist, k
+
     query_k = k + 1 if remove_qp else k
     query_k = min(query_k, coords_nn.shape[0])
-
     kdt = sn.KDTree(coords_nn)
     nn_dist, nn_idx = kdt.query(coords_qp, k=query_k)
-
     nn_dist = np.atleast_2d(nn_dist)
-    nn_idx = np.atleast_2d(nn_idx)
-    qp_idx = np.arange(nn_idx.shape[0])
-
-    if qp_labels is not None and nn_labels is not None:
-        max_group = int(np.bincount(nn_labels.astype(int)).max()) if len(nn_labels) else 0
-        over_k = min(k + int(remove_qp) + max_group, coords_nn.shape[0])
-        kdt2 = sn.KDTree(coords_nn)
-        nn_dist_over, nn_idx_over = kdt2.query(coords_qp, k=over_k)
-        nn_dist_over = np.atleast_2d(nn_dist_over)
-        nn_idx_over = np.atleast_2d(nn_idx_over)
-        # Drop self-match and same-label candidates per row; keep first k
-        kept_idx = []
-        kept_dist = []
-        for i in range(nn_idx_over.shape[0]):
-            row_idx = nn_idx_over[i]
-            row_dist = nn_dist_over[i]
-            mask = np.ones(len(row_idx), dtype=bool)
-            if remove_qp:
-                mask &= row_idx != i
-            mask &= nn_labels[row_idx] != qp_labels[i]
-            row_idx = row_idx[mask][:k]
-            row_dist = row_dist[mask][:k]
-            kept_idx.append(row_idx)
-            kept_dist.append(row_dist)
-        # Pad to k if exhausted
-        k_eff = k
-        nn_idx = np.zeros((len(kept_idx), k), dtype=int)
-        nn_dist = np.zeros((len(kept_dist), k))
-        for i, (ri, rd) in enumerate(zip(kept_idx, kept_dist)):
-            nn_idx[i, :len(ri)] = ri
-            nn_dist[i, :len(rd)] = rd
-        return np.arange(nn_idx.shape[0]), nn_idx, nn_dist, k_eff
-
+    nn_idx  = np.atleast_2d(nn_idx)
+    qp_idx  = np.arange(nn_idx.shape[0])
     if remove_qp:
         nn_dist = nn_dist[:, 1 : k + 1]
-        nn_idx = nn_idx[:, 1 : k + 1]
-
+        nn_idx  = nn_idx[:, 1 : k + 1]
     return qp_idx, nn_idx, nn_dist, nn_dist.shape[1]
 
 
