@@ -784,6 +784,9 @@ class Mesh(DiscreteSurface):
         self._mean_curvature = None           # N array (k1 + k2)/2
         self._gaussian_curvature = None       # N array k1 * k2
         self._curvature_tensors = None        # Nx2x2 array
+        self._shape_index = None              # N array in [-1, 1]
+        self._curvedness = None               # N array >= 0
+        self._surface_type = None             # N array of category codes (-1..8)
         
         # Cached geometric properties for optimization
         self._edge_vectors = None
@@ -946,6 +949,9 @@ class Mesh(DiscreteSurface):
         self._mean_curvature = None
         self._gaussian_curvature = None
         self._curvature_tensors = None
+        self._shape_index = None
+        self._curvedness = None
+        self._surface_type = None
         self._edge_vectors = None
         self._edge_lengths = None
         self._face_areas = None
@@ -1037,6 +1043,15 @@ class Mesh(DiscreteSurface):
                 copied_curvatures = True
             if self._curvature_tensors is not None:
                 sub._curvature_tensors = self._curvature_tensors[unique_vertices].copy()
+                copied_curvatures = True
+            if self._shape_index is not None:
+                sub._shape_index = self._shape_index[unique_vertices].copy()
+                copied_curvatures = True
+            if self._curvedness is not None:
+                sub._curvedness = self._curvedness[unique_vertices].copy()
+                copied_curvatures = True
+            if self._surface_type is not None:
+                sub._surface_type = self._surface_type[unique_vertices].copy()
                 copied_curvatures = True
             if copied_curvatures:
                 sub._curvature_cache = True
@@ -2450,6 +2465,13 @@ class Mesh(DiscreteSurface):
             k2 = np.asarray(pd["k2"], dtype=np.float64).ravel()
             mesh._principal_curvatures = np.column_stack([k1, k2])
             curvatures_loaded = True
+        if "shape_index" in pd:
+            mesh._shape_index = np.asarray(pd["shape_index"], dtype=np.float64).ravel()
+            curvatures_loaded = True
+        if "curvedness" in pd:
+            mesh._curvedness = np.asarray(pd["curvedness"], dtype=np.float64).ravel()
+        if "shape_category" in pd:
+            mesh._surface_type = np.asarray(pd["shape_category"], dtype=np.int64).ravel()
 
         if "principal_direction_1" in pd and "principal_direction_2" in pd:
             d1 = np.asarray(pd["principal_direction_1"], dtype=np.float64)
@@ -2666,7 +2688,8 @@ class Mesh(DiscreteSurface):
             Requires curvatures to be computed first via compute_curvatures().
             
             Curvature fields saved:
-            - Scalars: mean_curvature, gaussian_curvature, k1, k2, curvature_anisotropy
+            - Scalars: mean_curvature, gaussian_curvature, k1, k2, curvature_anisotropy,
+              shape_index, curvedness, shape_category
             - Vectors: normals, principal_direction_1, principal_direction_2
         
         Returns
@@ -2790,7 +2813,15 @@ class Mesh(DiscreteSurface):
         dir1 = self._principal_directions[:, :, 0]
         dir2 = self._principal_directions[:, :, 1]
         curvature_anisotropy = np.abs(k1 - k2)
-        
+
+        # Shape descriptors (compute on the fly if not cached, e.g. loaded from disk)
+        if self._shape_index is not None:
+            shape_index, curvedness, surface_type = (
+                self._shape_index, self._curvedness, self._surface_type
+            )
+        else:
+            shape_index, curvedness, surface_type = self._compute_shape_descriptors(k1, k2)
+
         # Create PyVista mesh
         faces_vtk = np.hstack([
             np.full((len(self.faces), 1), 3),
@@ -2805,7 +2836,10 @@ class Mesh(DiscreteSurface):
         mesh_pv.point_data['k1'] = k1
         mesh_pv.point_data['k2'] = k2
         mesh_pv.point_data['curvature_anisotropy'] = curvature_anisotropy
-        
+        mesh_pv.point_data['shape_index'] = shape_index
+        mesh_pv.point_data['curvedness'] = curvedness
+        mesh_pv.point_data['shape_category'] = surface_type
+
         # Add vector fields
         if self.normals is not None:
             mesh_pv.point_data['normals'] = self.normals
@@ -2837,12 +2871,15 @@ class Mesh(DiscreteSurface):
         print(f"  Format: VTP (VTK PolyData)")
         print(f"  Vertices: {len(self.vertices):,}")
         print(f"  Faces: {len(self.faces):,}")
-        print(f"  Scalar fields (5):")
+        print(f"  Scalar fields (8):")
         print(f"    - mean_curvature: [{H.min():.6e}, {H.max():.6e}]")
         print(f"    - gaussian_curvature: [{K.min():.6e}, {K.max():.6e}]")
         print(f"    - k1: [{k1.min():.6e}, {k1.max():.6e}]")
         print(f"    - k2: [{k2.min():.6e}, {k2.max():.6e}]")
         print(f"    - curvature_anisotropy: [{curvature_anisotropy.min():.6e}, {curvature_anisotropy.max():.6e}]")
+        print(f"    - shape_index: [{shape_index.min():.6e}, {shape_index.max():.6e}]")
+        print(f"    - curvedness: [{curvedness.min():.6e}, {curvedness.max():.6e}]")
+        print(f"    - shape_category: [{int(surface_type.min())}, {int(surface_type.max())}] (int codes)")
         print(f"  Vector fields (3): normals, principal_direction_1, principal_direction_2")
         if self.units:
             unit_info = Mesh._get_curvature_unit_str(self.units)
@@ -2857,14 +2894,17 @@ class Mesh(DiscreteSurface):
             'n_vertices': len(self.vertices),
             'n_faces': len(self.faces),
             'coordinate_units': self.units,  # ← Added
-            'scalar_fields': ['mean_curvature', 'gaussian_curvature', 'k1', 'k2', 'curvature_anisotropy'],
+            'scalar_fields': ['mean_curvature', 'gaussian_curvature', 'k1', 'k2', 'curvature_anisotropy',
+                              'shape_index', 'curvedness', 'shape_category'],
             'vector_fields': ['normals', 'principal_direction_1', 'principal_direction_2'],
             'statistics': {
                 'mean_curvature': {'min': float(H.min()), 'max': float(H.max()), 'mean': float(H.mean())},
                 'gaussian_curvature': {'min': float(K.min()), 'max': float(K.max()), 'mean': float(K.mean())},
                 'k1': {'min': float(k1.min()), 'max': float(k1.max()), 'mean': float(k1.mean())},
                 'k2': {'min': float(k2.min()), 'max': float(k2.max()), 'mean': float(k2.mean())},
-                'curvature_anisotropy': {'min': float(curvature_anisotropy.min()), 'max': float(curvature_anisotropy.max()), 'mean': float(curvature_anisotropy.mean())}
+                'curvature_anisotropy': {'min': float(curvature_anisotropy.min()), 'max': float(curvature_anisotropy.max()), 'mean': float(curvature_anisotropy.mean())},
+                'shape_index': {'min': float(shape_index.min()), 'max': float(shape_index.max()), 'mean': float(shape_index.mean())},
+                'curvedness': {'min': float(curvedness.min()), 'max': float(curvedness.max()), 'mean': float(curvedness.mean())}
             }
         }
         
@@ -3126,6 +3166,34 @@ class Mesh(DiscreteSurface):
             self.compute_curvatures()
         return self._gaussian_curvature
     
+    def get_shape_index(self):
+        """Return shape index S = (2/pi) * arctan2(k1 + k2, k1 - k2), range [-1, 1]."""
+        if self._shape_index is None:
+            self.compute_curvatures()
+        return self._shape_index
+
+    def get_curvedness(self):
+        """Return curvedness C = sqrt((k1^2 + k2^2) / 2), range [0, inf)."""
+        if self._curvedness is None:
+            self.compute_curvatures()
+        return self._curvedness
+
+    def get_surface_type(self, as_labels=False):
+        """Return per-vertex surface type.
+
+        Parameters
+        ----------
+        as_labels : bool, default=False
+            If True, return an array of string labels (e.g. ``"cap"``) via
+            :attr:`SURFACE_TYPE_LABELS`; otherwise return integer category codes
+            (-1 for flat, 0 cup .. 8 cap).
+        """
+        if self._surface_type is None:
+            self.compute_curvatures()
+        if as_labels:
+            return np.array([Mesh.SURFACE_TYPE_LABELS[int(c)] for c in self._surface_type])
+        return self._surface_type
+
     def get_curvature_directions(self):
         """Return principal curvature directions."""
         if self._principal_directions is None:
@@ -3205,13 +3273,19 @@ class Mesh(DiscreteSurface):
         # Compute derived quantities
         mean_curvature = 0.5 * (principal_curvatures[:, 0] + principal_curvatures[:, 1])
         gaussian_curvature = principal_curvatures[:, 0] * principal_curvatures[:, 1]
-        
+        shape_index, curvedness, surface_type = self._compute_shape_descriptors(
+            principal_curvatures[:, 0], principal_curvatures[:, 1]
+        )
+
         # Store results in class attributes
         self._principal_curvatures = principal_curvatures
         self._principal_directions = principal_directions
         self._mean_curvature = mean_curvature
         self._gaussian_curvature = gaussian_curvature
         self._curvature_tensors = vertex_tensors
+        self._shape_index = shape_index
+        self._curvedness = curvedness
+        self._surface_type = surface_type
         
         # Mark as cached
         self._curvature_cache = True
@@ -3584,6 +3658,54 @@ class Mesh(DiscreteSurface):
         
         return r_new_u, r_new_v
     
+    # Categorical surface types from shape index (Koenderink & van Doorn, 1992).
+    # Codes run cup (0) -> cap (8); -1 marks near-planar vertices where shape is undefined.
+    SURFACE_TYPE_LABELS = {
+        -1: "flat",
+         0: "cup",          1: "trough",       2: "rut",   3: "saddle rut", 4: "saddle",
+         5: "saddle ridge", 6: "ridge",        7: "dome",  8: "cap",
+    }
+    # Bin edges at the midpoints between the nine representative shape-index values.
+    _SHAPE_TYPE_EDGES = np.array([-0.875, -0.625, -0.375, -0.125, 0.125, 0.375, 0.625, 0.875])
+
+    @staticmethod
+    def _classify_shape_index(shape_index, curvedness=None, flat_threshold=1e-6):
+        """Bin shape index into the 9 Koenderink surface types (codes 0..8).
+
+        Near-planar vertices (``curvedness < flat_threshold``) and non-finite shape
+        indices are labelled ``-1`` ("flat"), where local shape is undefined.
+        """
+        codes = np.digitize(shape_index, Mesh._SHAPE_TYPE_EDGES).astype(np.int64)
+        codes[~np.isfinite(shape_index)] = -1
+        if curvedness is not None:
+            codes[curvedness < flat_threshold] = -1
+        return codes
+
+    def _compute_shape_descriptors(self, k1, k2, flat_threshold=1e-6):
+        """Derive shape index, curvedness, and surface type from principal curvatures.
+
+        Parameters
+        ----------
+        k1, k2 : np.ndarray
+            Per-vertex principal curvatures, with the ``k1 >= k2`` convention.
+        flat_threshold : float, default=1e-6
+            Curvedness below which a vertex is treated as flat (shape undefined).
+            Scale-dependent: expressed in the mesh's curvature units (1/length).
+
+        Returns
+        -------
+        tuple of np.ndarray
+            ``(shape_index, curvedness, surface_type)``. ``shape_index`` is in
+            ``[-1, 1]`` (``arctan2`` keeps umbilic points finite), ``curvedness`` is
+            ``>= 0``, and ``surface_type`` holds integer category codes (-1..8).
+        """
+        k1 = np.asarray(k1, dtype=np.float64)
+        k2 = np.asarray(k2, dtype=np.float64)
+        shape_index = (2.0 / np.pi) * np.arctan2(k1 + k2, k1 - k2)   # [-1, 1]
+        curvedness = np.sqrt((k1**2 + k2**2) / 2.0)                  # [0, inf)
+        surface_type = Mesh._classify_shape_index(shape_index, curvedness, flat_threshold)
+        return shape_index, curvedness, surface_type
+
     def _extract_principal_curvatures(self, vertex_tensors, up_vectors, vp_vectors, vertex_normals):
         """Vectorized extraction of principal curvatures and directions."""
 

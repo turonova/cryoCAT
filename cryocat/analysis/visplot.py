@@ -150,6 +150,24 @@ def resolve_colorscale(spec: str | Colorscale | list[Color] | None) -> Colorscal
     return [(float(p), c) for p, c in spec]  # type: ignore
 
 
+def discrete_colorscale(colors: list[Color]) -> Colorscale:
+    """Build a stepped (banded) Plotly colorscale from an ordered list of colors.
+
+    Each color fills one equal-width band with hard edges, so an ``n``-color list
+    renders as ``n`` flat blocks rather than a smooth gradient. Useful for mapping a
+    small set of integer category codes to distinct colors (see ``categorical`` in
+    :func:`plot_vtp_mesh`).
+    """
+    n = len(colors)
+    if n == 0:
+        raise ValueError("discrete_colorscale needs at least one color.")
+    stops: Colorscale = []
+    for i, c in enumerate(colors):
+        stops.append((i / n, c))
+        stops.append(((i + 1) / n, c))
+    return stops
+
+
 def _is_pair_list(obj: Any) -> bool:
     return isinstance(obj, (list, tuple)) and len(obj) > 0 and isinstance(obj[0], (list, tuple)) and len(obj[0]) == 2
 
@@ -284,6 +302,31 @@ register_colorscale("Monet", ["#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B
 
 register_palette("MonetWhite", ["#FFFFFF", "#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B96"])
 register_colorscale("MonetWhite", ["#FFFFFF", "#AEC684", "#4EACB6", "#C0A3BA", "#7D82AB", "#865B96"])
+
+# cryoCAT painter-themed palettes (extends the Monet family).
+# StarryNight: accent palette built from the logo blues + a gold highlight.
+register_palette("StarryNight", ["#0c1f45", "#466AA1", "#7D9DD8", "#EAAE47"])
+register_colorscale("StarryNight", ["#0c1f45", "#466AA1", "#7D9DD8", "#EAAE47"])
+
+# StarryNightDiverging: diverging scale (navy -> ivory -> dark red) with the neutral
+# ivory pinned at the 0.5 midpoint (9 evenly-spaced stops). For signed scalar fields
+# such as shape index and mean/Gaussian curvature.
+register_colorscale(
+    "StarryNightDiverging",
+    ["#0c1f45", "#466AA1", "#7D9DD8", "#E1F1FF", "#F7F5F0", "#FFE5DD", "#E09990", "#C1554D", "#892323"],
+)
+
+# StarryNightBlues: single-hue sequential (light -> dark navy) for unsigned magnitudes
+# such as curvedness.
+register_colorscale("StarryNightBlues", ["#EAF2FB", "#7D9DD8", "#466AA1", "#0c1f45"])
+register_palette("StarryNightBlues", ["#EAF2FB", "#7D9DD8", "#466AA1", "#0c1f45"])
+
+# Klimt: high-contrast categorical palette (blue / neutral / gold / red).
+register_palette("Klimt", ["#466AA1", "#DFE0DF", "#EAAE47", "#C1554D"])
+
+# Hokusai: extended blue -> teal accent palette.
+register_palette("Hokusai", ["#0c1f45", "#466AA1", "#7D9DD8", "#E1F5F3", "#75C6C0", "#3D908B"])
+register_colorscale("Hokusai", ["#0c1f45", "#466AA1", "#7D9DD8", "#E1F5F3", "#75C6C0", "#3D908B"])
 
 
 def set_defaults(**kwargs: Any) -> None:
@@ -2326,6 +2369,8 @@ def plot_vtp_mesh(
     colors: str | list[Color] | None = None,
     colorscale: str = "RdBu_r",
     colorscale_range: tuple[float, float] | None = None,
+    categorical: bool = False,
+    category_labels: dict[int, str] | None = None,
     opacity: float = 0.9,
     overlay_points: ArrayLike | list[ArrayLike] | None = None,
     overlay_names: list[str] | None = None,
@@ -2339,9 +2384,10 @@ def plot_vtp_mesh(
     Each file is loaded via ``pyvista.read`` and rendered as a
     :class:`plotly.graph_objects.Mesh3d` trace. When ``color_by`` is given, a
     per-vertex scalar field (e.g. ``"mean_curvature"``, ``"gaussian_curvature"``,
-    ``"k1"``, ``"k2"``, ``"curvature_anisotropy"``) is mapped to the trace's
-    ``intensity`` array using a diverging colorscale. A single colorbar is shown
-    when coloring a single mesh; multi-mesh plots share the same scale.
+    ``"k1"``, ``"k2"``, ``"curvature_anisotropy"``, ``"shape_index"``,
+    ``"curvedness"``, ``"shape_category"``) is mapped to the trace's ``intensity``
+    array using a diverging colorscale. A single colorbar is shown when coloring a
+    single mesh; multi-mesh plots share the same scale.
 
     Point clouds passed via ``overlay_points`` are added as
     :class:`plotly.graph_objects.Scatter3d` traces on top of the mesh(es),
@@ -2360,11 +2406,23 @@ def plot_vtp_mesh(
     colors : str or list of str, optional
         Flat-color palette used when ``color_by`` is ``None``.
     colorscale : str, default ``"RdBu_r"``
-        Plotly colorscale name used when ``color_by`` is set.
+        Colorscale used when ``color_by`` is set. Accepts any built-in Plotly name
+        (``"Viridis"``, ``"RdBu_r"``), a registered cryoCAT scale
+        (``"StarryNightDiverging"``, ``"StarryNightBlues"``, ``"Monet"``, …), or a raw
+        ``[(pos, color), …]`` list.
     colorscale_range : tuple of (float, float), optional
         Explicit ``(cmin, cmax)`` for the colorscale. When ``None`` the range is
         derived from the data across all loaded meshes. Useful for comparing
-        multiple meshes on a shared scale or for clipping outliers.
+        multiple meshes on a shared scale or for clipping outliers. Ignored when
+        ``categorical=True``.
+    categorical : bool, default=False
+        Treat ``color_by`` as integer category codes rather than a continuous field.
+        Each code gets a discrete color sampled from ``colorscale`` at its ordinal
+        position (negative codes, e.g. flat ``-1``, render gray) and the colorbar
+        becomes a named legend. Intended for fields like ``"shape_category"``.
+    category_labels : dict of {int: str}, optional
+        Mapping from category code to label shown on the categorical colorbar
+        (e.g. ``surface.Mesh.SURFACE_TYPE_LABELS``). Only used when ``categorical``.
     opacity : float, default=0.9
         Mesh opacity (0–1).
     overlay_points : N×3 array or list of N×3 arrays, optional
@@ -2412,6 +2470,49 @@ def plot_vtp_mesh(
             global_min = lo if global_min is None else min(global_min, lo)
             global_max = hi if global_max is None else max(global_max, hi)
 
+    # Resolve a registered custom colorscale name to its stops. Built-in Plotly names
+    # ("RdBu_r", "Viridis") and raw [pos, color] lists are left untouched (pass-through).
+    plot_colorscale: Any = colorscale
+    if isinstance(colorscale, str) and colorscale.lower() in CUSTOM_SCALES:
+        plot_colorscale = CUSTOM_SCALES[colorscale.lower()]
+
+    # Categorical coloring: map integer category codes to discrete colors sampled from the
+    # (resolved) colorscale, with a named colorbar. Negative codes (e.g. flat) render gray.
+    cat_colorscale = cat_cmin = cat_cmax = cat_colorbar = None
+    if categorical and color_by is not None:
+        codes_all = [
+            np.unique(np.asarray(m.point_data[color_by]))
+            for m in meshes if color_by in m.point_data
+        ]
+        if codes_all:
+            codes = np.unique(np.concatenate(codes_all)).astype(int)
+            base_scale = [[float(p), c] for p, c in resolve_colorscale(plot_colorscale)]
+            nonneg = codes[codes >= 0]
+            if len(nonneg) > 1:
+                positions = (nonneg - nonneg.min()) / (nonneg.max() - nonneg.min())
+            else:
+                positions = np.full(len(nonneg), 0.5)
+            sampled = (
+                px.colors.sample_colorscale(base_scale, list(positions))
+                if len(nonneg) else []
+            )
+            code_to_color = {int(c): col for c, col in zip(nonneg, sampled)}
+            cat_cmin, cat_cmax = float(codes.min()) - 0.5, float(codes.max()) + 0.5
+            span = cat_cmax - cat_cmin
+            cat_colorscale = []
+            for c in codes:
+                col = "#bdbdbd" if c < 0 else code_to_color[int(c)]
+                lo = (c - 0.5 - cat_cmin) / span
+                hi = (c + 0.5 - cat_cmin) / span
+                cat_colorscale.append((lo, col))
+                cat_colorscale.append((hi, col))
+            cat_colorbar = dict(
+                title=color_by,
+                tickmode="array",
+                tickvals=[float(c) for c in codes],
+                ticktext=[(category_labels or {}).get(int(c), str(int(c))) for c in codes],
+            )
+
     fig = go.Figure()
     for mesh, name, color in zip(meshes, mesh_labels, palette):
         verts = np.asarray(mesh.points)
@@ -2428,15 +2529,26 @@ def plot_vtp_mesh(
 
         if color_by is not None and color_by in mesh.point_data:
             vals = np.asarray(mesh.point_data[color_by])
-            trace_kwargs.update(dict(
-                intensity=vals,
-                intensitymode="vertex",
-                colorscale=colorscale,
-                cmin=global_min,
-                cmax=global_max,
-                showscale=(n == 1),
-                colorbar=dict(title=color_by) if n == 1 else None,
-            ))
+            if categorical and cat_colorscale is not None:
+                trace_kwargs.update(dict(
+                    intensity=vals,
+                    intensitymode="vertex",
+                    colorscale=cat_colorscale,
+                    cmin=cat_cmin,
+                    cmax=cat_cmax,
+                    showscale=(n == 1),
+                    colorbar=cat_colorbar if n == 1 else None,
+                ))
+            else:
+                trace_kwargs.update(dict(
+                    intensity=vals,
+                    intensitymode="vertex",
+                    colorscale=plot_colorscale,
+                    cmin=global_min,
+                    cmax=global_max,
+                    showscale=(n == 1),
+                    colorbar=dict(title=color_by) if n == 1 else None,
+                ))
         else:
             trace_kwargs["color"] = color
 
