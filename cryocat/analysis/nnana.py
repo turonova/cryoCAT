@@ -742,12 +742,15 @@ class NearestNeighbors:
 
     def drop_symmetric_duplicates(self) -> pd.DataFrame:
         """Return a copy of ``self.df`` with symmetric (a, b)/(b, a) pairs deduped."""
-        pairs = self.df[["qp_subtomo_id", "nn_subtomo_id"]].apply(
-            lambda row: tuple(sorted(row)), axis=1
-        )
-        df = self.df.copy()
-        df["_pair_key"] = pairs
-        return df.drop_duplicates(subset="_pair_key").drop(columns="_pair_key")
+        a  = self.df["qp_subtomo_id"].values
+        b  = self.df["nn_subtomo_id"].values
+        lo = np.minimum(a, b)
+        hi = np.maximum(a, b)
+        pairs = np.empty(len(lo), dtype=[("lo", lo.dtype), ("hi", hi.dtype)])
+        pairs["lo"] = lo
+        pairs["hi"] = hi
+        _, keep_idx = np.unique(pairs, return_index=True)
+        return self.df.iloc[np.sort(keep_idx)]
 
     def get_unique_values(self) -> np.ndarray:
         """Return the feature values present in ``self.df``.
