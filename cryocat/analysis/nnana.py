@@ -562,7 +562,7 @@ class NearestNeighbors:
                         qp_labels=qp_labels, nn_labels=nn_labels,
                     )
                     stacked = self._stack_nn_results(
-                        motl_idx, f, qp_idx, nn_idx,
+                        motl_idx, column_name, f, qp_idx, nn_idx,
                         qp_subtomos, nn_subtomos,
                         qp_angles, nn_angles,
                         qp_coord, nn_coord,
@@ -576,7 +576,7 @@ class NearestNeighbors:
                         qp_labels=qp_labels, nn_labels=nn_labels,
                     )
                     stacked = self._stack_nn_results_radius(
-                        motl_idx, f, qp_idx, nn_idx_list,
+                        motl_idx, column_name, f, qp_idx, nn_idx_list,
                         qp_subtomos, nn_subtomos,
                         qp_angles, nn_angles,
                         qp_coord, nn_coord,
@@ -589,10 +589,11 @@ class NearestNeighbors:
                 if stacked is not None:
                     results.append(stacked)
 
-        self.df = (
-            pd.DataFrame(columns=columns) if not results
-            else pd.DataFrame(np.vstack(results), columns=columns)
-        )
+        if not results:
+            self.df = pd.DataFrame(columns=columns)
+        else:
+            merged = {col: np.concatenate([r[col] for r in results]) for col in results[0]}
+            self.df = pd.DataFrame(merged, columns=columns)
 
         int_cols = ["motl_id", column_name, "qp_id", "qp_subtomo_id", "nn_id", "nn_subtomo_id"]
         float_cols = [
@@ -614,6 +615,7 @@ class NearestNeighbors:
     @staticmethod
     def _stack_nn_results(
         motl_idx: int,
+        column_name: str,
         column_value: Any,
         qp_idx: np.ndarray,
         nn_idx: np.ndarray,
@@ -624,62 +626,51 @@ class NearestNeighbors:
         qp_coord: np.ndarray,
         nn_coord: np.ndarray,
         nn_dist: np.ndarray,
-    ) -> np.ndarray | None:
-        """Stack k-NN pair data into a single 2-D array for one feature/motl.
+    ) -> dict | None:
+        """Stack k-NN pair data into a column-keyed dict of 1-D arrays.
 
-        Parameters
-        ----------
-        motl_idx : int
-            Index of the neighbor motl (1-based) used to fill the ``motl_id`` column.
-        column_value : scalar
-            Feature value (e.g. tomo ID) shared by all pairs in this block.
-        qp_idx : numpy.ndarray, shape ``(N,)``
-            Row indices of query particles in their coordinate / angle arrays.
-        nn_idx : numpy.ndarray, shape ``(N, k)``
-            Row indices of the *k* nearest neighbors for each query particle.
-        qp_subtomos : numpy.ndarray, shape ``(N,)``
-            ``subtomo_id`` values for query particles.
-        nn_subtomos : numpy.ndarray, shape ``(M,)``
-            ``subtomo_id`` values for all candidate neighbor particles.
-        qp_angles : numpy.ndarray, shape ``(N, 3)``
-            zxz Euler angles (degrees) for query particles.
-        nn_angles : numpy.ndarray, shape ``(M, 3)``
-            zxz Euler angles (degrees) for neighbor particles.
-        qp_coord : numpy.ndarray, shape ``(N, 3)``
-            Coordinates of query particles.
-        nn_coord : numpy.ndarray, shape ``(M, 3)``
-            Coordinates of candidate neighbor particles.
-        nn_dist : numpy.ndarray, shape ``(N, k)``
-            Euclidean distances from each query particle to each of its *k* neighbors.
-
-        Returns
-        -------
-        numpy.ndarray or None
-            2-D array of shape ``(N * k, n_cols)`` stacking all pair-level data
-            as columns.  Returns ``None`` when *k* is 0.
+        Returns ``None`` when *k* is 0.  Each value is a 1-D array of length
+        ``N * k``; integer columns are returned as integer arrays (no float64
+        detour).
         """
-        nn_idx = np.atleast_2d(nn_idx)
+        nn_idx  = np.atleast_2d(nn_idx)
         nn_dist = np.atleast_2d(nn_dist)
         k = nn_idx.shape[1]
         if k == 0:
             return None
-        # tile so all nn1 rows come before all nn2 rows (matches legacy ordering)
         qp_expanded = np.tile(qp_idx, k)
-        nn_flat = nn_idx.T.reshape(-1)
-        n_pairs = len(nn_flat)
-        return np.column_stack([
-            np.repeat(motl_idx, n_pairs),
-            np.repeat(column_value, n_pairs),
-            qp_expanded, qp_subtomos[qp_expanded],
-            nn_flat, nn_subtomos[nn_flat],
-            qp_angles[qp_expanded], qp_coord[qp_expanded],
-            nn_angles[nn_flat], nn_coord[nn_flat],
-            nn_dist.T.reshape(-1),
-        ])
+        nn_flat     = nn_idx.T.reshape(-1)
+        n_pairs     = len(nn_flat)
+        qa = qp_angles[qp_expanded]
+        qc = qp_coord[qp_expanded]
+        na = nn_angles[nn_flat]
+        nc = nn_coord[nn_flat]
+        return {
+            "motl_id":           np.repeat(motl_idx,     n_pairs),
+            column_name:         np.repeat(column_value, n_pairs),
+            "qp_id":             qp_expanded,
+            "qp_subtomo_id":     qp_subtomos[qp_expanded],
+            "nn_id":             nn_flat,
+            "nn_subtomo_id":     nn_subtomos[nn_flat],
+            "qp_angles_phi":     qa[:, 0],
+            "qp_angles_theta":   qa[:, 1],
+            "qp_angles_psi":     qa[:, 2],
+            "qp_coord_x":        qc[:, 0],
+            "qp_coord_y":        qc[:, 1],
+            "qp_coord_z":        qc[:, 2],
+            "nn_angles_phi":     na[:, 0],
+            "nn_angles_theta":   na[:, 1],
+            "nn_angles_psi":     na[:, 2],
+            "nn_coord_x":        nc[:, 0],
+            "nn_coord_y":        nc[:, 1],
+            "nn_coord_z":        nc[:, 2],
+            "nn_dist":           nn_dist.T.reshape(-1),
+        }
 
     @staticmethod
     def _stack_nn_results_radius(
         motl_idx: int,
+        column_name: str,
         column_value: Any,
         qp_idx: list[int] | np.ndarray,
         nn_idx_list: list[np.ndarray],
@@ -689,56 +680,45 @@ class NearestNeighbors:
         nn_angles: np.ndarray,
         qp_coord: np.ndarray,
         nn_coord: np.ndarray,
-    ) -> np.ndarray | None:
-        """Stack radius-NN pair data into a single 2-D array for one feature/motl.
+    ) -> dict | None:
+        """Stack radius-NN pair data into a column-keyed dict of 1-D arrays.
 
-        Parameters
-        ----------
-        motl_idx : int
-            Index of the neighbor motl (1-based).
-        column_value : scalar
-            Feature value shared by all pairs in this block.
-        qp_idx : list of int
-            Query-particle indices that have at least one neighbor.
-        nn_idx_list : list of numpy.ndarray
-            Per-query-particle sorted neighbor indices, as returned by
-            :func:`find_nn_within_radius`.
-        qp_subtomos : numpy.ndarray, shape ``(N,)``
-            ``subtomo_id`` values for query particles.
-        nn_subtomos : numpy.ndarray, shape ``(M,)``
-            ``subtomo_id`` values for candidate neighbor particles.
-        qp_angles : numpy.ndarray, shape ``(N, 3)``
-            zxz Euler angles (degrees) for query particles.
-        nn_angles : numpy.ndarray, shape ``(M, 3)``
-            zxz Euler angles (degrees) for neighbor particles.
-        qp_coord : numpy.ndarray, shape ``(N, 3)``
-            Coordinates of query particles.
-        nn_coord : numpy.ndarray, shape ``(M, 3)``
-            Coordinates of candidate neighbor particles.
-
-        Returns
-        -------
-        numpy.ndarray or None
-            2-D array stacking all pair-level data as columns.  Returns ``None``
-            when ``nn_idx_list`` is empty or the total neighbor count is zero.
+        Returns ``None`` when ``nn_idx_list`` is empty or the total neighbor
+        count is zero.
         """
         if not nn_idx_list:
             return None
         counts = np.array([len(n) for n in nn_idx_list])
         if counts.sum() == 0:
             return None
-        qp_idx_arr = np.asarray(qp_idx)
-        nn_flat = np.concatenate(nn_idx_list).astype(int)
+        qp_idx_arr  = np.asarray(qp_idx)
+        nn_flat     = np.concatenate(nn_idx_list).astype(int)
         qp_expanded = np.repeat(qp_idx_arr, counts)
-        n_pairs = counts.sum()
-        return np.column_stack([
-            np.repeat(motl_idx, n_pairs),
-            np.repeat(column_value, n_pairs),
-            qp_expanded, qp_subtomos[qp_expanded],
-            nn_flat, nn_subtomos[nn_flat],
-            qp_angles[qp_expanded], qp_coord[qp_expanded],
-            nn_angles[nn_flat], nn_coord[nn_flat],
-        ])
+        n_pairs     = counts.sum()
+        qa = qp_angles[qp_expanded]
+        qc = qp_coord[qp_expanded]
+        na = nn_angles[nn_flat]
+        nc = nn_coord[nn_flat]
+        return {
+            "motl_id":           np.repeat(motl_idx,     n_pairs),
+            column_name:         np.repeat(column_value, n_pairs),
+            "qp_id":             qp_expanded,
+            "qp_subtomo_id":     qp_subtomos[qp_expanded],
+            "nn_id":             nn_flat,
+            "nn_subtomo_id":     nn_subtomos[nn_flat],
+            "qp_angles_phi":     qa[:, 0],
+            "qp_angles_theta":   qa[:, 1],
+            "qp_angles_psi":     qa[:, 2],
+            "qp_coord_x":        qc[:, 0],
+            "qp_coord_y":        qc[:, 1],
+            "qp_coord_z":        qc[:, 2],
+            "nn_angles_phi":     na[:, 0],
+            "nn_angles_theta":   na[:, 1],
+            "nn_angles_psi":     na[:, 2],
+            "nn_coord_x":        nc[:, 0],
+            "nn_coord_y":        nc[:, 1],
+            "nn_coord_z":        nc[:, 2],
+        }
 
     def drop_symmetric_duplicates(self) -> pd.DataFrame:
         """Return a copy of ``self.df`` with symmetric (a, b)/(b, a) pairs deduped."""
