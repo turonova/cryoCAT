@@ -1674,15 +1674,17 @@ def assign_class_by_nn(
     motl = cryomotl.Motl.load(motl_unassigned)
     motl.df["class"] = unassigned_class
     classified, overlaps, cl = 0, 0, starting_class
+    _tomo_pos = dict(motl.df.groupby("tomo_id").indices)
 
     for m in motl_list:
         cm = cryomotl.Motl.load(m)
         classified += cm.df.shape[0]
         for t in np.unique(cm.df.loc[:, "tomo_id"].values):
+            tomo_rows = _tomo_pos[t]
             tm_coord = cm.get_coordinates(t)
             all_coord = motl.get_coordinates(t)
             tm = cm.get_motl_subset(t, return_df=True, reset_index=False)
-            tm_all = motl.get_motl_subset(t, return_df=True, reset_index=False)
+            tm_all = motl.df.iloc[tomo_rows].copy()
             tm_idx = np.arange(tm.shape[0])
 
             kdt = sn.KDTree(all_coord)
@@ -1714,7 +1716,7 @@ def assign_class_by_nn(
                     tm.loc[tm.index[tm_idx], ["x", "y", "z"]].values
                     + tm.loc[tm.index[tm_idx], ["shift_x", "shift_y", "shift_z"]].values
                 )
-            motl.df.loc[motl.df["tomo_id"] == t] = tm_all
+            motl.df.iloc[tomo_rows] = tm_all.values
         cl += 1
 
     assigned = motl.df.loc[motl.df["geom1"] > 0].shape[0]
