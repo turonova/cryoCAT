@@ -526,21 +526,31 @@ class NearestNeighbors:
         if nn_type == "closest_dist":
             columns.append("nn_dist")
 
+        # Pre-extract per-motl arrays once; slice per feature via groupby indices
+        # to avoid repeated get_motl_subset / get_coordinates / get_angles calls.
+        _m_coords   = [m.get_coordinates()               for m in motl_list]
+        _m_angles   = [m.get_angles()                    for m in motl_list]
+        _m_subtomos = [m.df["subtomo_id"].values         for m in motl_list]
+        _m_labels   = [
+            m.df[exclude_column_name].values if exclude_column_name else None
+            for m in motl_list
+        ]
+        _m_groups   = [dict(m.df.groupby(column_name).indices) for m in motl_list]
+
         results = []
         for f in features:
-            fm_qp = motl_list[0].get_motl_subset(column_values=f, column_name=column_name)
-            qp_subtomos = fm_qp.df["subtomo_id"].values
-            qp_coord = fm_qp.get_coordinates()
-            qp_angles = fm_qp.get_angles()
+            qp_rows     = _m_groups[0][f]
+            qp_subtomos = _m_subtomos[0][qp_rows]
+            qp_coord    = _m_coords[0][qp_rows]
+            qp_angles   = _m_angles[0][qp_rows]
+            qp_labels   = _m_labels[0][qp_rows] if _m_labels[0] is not None else None
 
-            for motl_idx, m in enumerate(motl_list[1:], start=1):
-                fm_nn = m.get_motl_subset(column_values=f, column_name=column_name)
-                nn_subtomos = fm_nn.df["subtomo_id"].values
-                nn_coord = fm_nn.get_coordinates()
-                nn_angles = qp_angles if paired else fm_nn.get_angles()
-
-                qp_labels = fm_qp.df[exclude_column_name].values if exclude_column_name else None
-                nn_labels = fm_nn.df[exclude_column_name].values if exclude_column_name else None
+            for motl_idx in range(1, len(motl_list)):
+                nn_rows     = _m_groups[motl_idx][f]
+                nn_subtomos = _m_subtomos[motl_idx][nn_rows]
+                nn_coord    = _m_coords[motl_idx][nn_rows]
+                nn_angles   = qp_angles if paired else _m_angles[motl_idx][nn_rows]
+                nn_labels   = _m_labels[motl_idx][nn_rows] if _m_labels[motl_idx] is not None else None
 
                 if nn_type == "closest_dist":
                     # type_param is the K of K-nearest neighbours; sklearn's
