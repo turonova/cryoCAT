@@ -32,6 +32,7 @@ from cryocat.core.surface import (
 )
 from collections.abc import Callable
 from typing import Any, Literal
+from cryocat.utils.classutils import gui_exposed
 
 # =============================================================================
 # Chain — generic linear-chain analysis on traced particles
@@ -595,6 +596,7 @@ class SymmetricComplex:
     # Centre computation
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Get centers as motl", group="Statistics", order=10, returns="motl")
     def get_centers_as_motl(self) -> "cryomotl.Motl":
         """Return a Motl with one barycentric centre particle per object per tomogram.
 
@@ -674,6 +676,7 @@ class SymmetricComplex:
     # Per-object evaluations
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Occupancy", group="Statistics", order=20, returns="dataframe")
     def occupancy(self) -> pd.DataFrame:
         """Per-object subunit occupancy.
 
@@ -728,6 +731,7 @@ class SymmetricComplex:
 
         return pd.DataFrame(rows)
 
+    @gui_exposed(label="Clean per object", group="Statistics", order=30, returns="motl")
     def clean_per_object(
         self,
         column: MotlColumn,
@@ -784,6 +788,7 @@ class SymmetricComplex:
     # Object deduplication
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Merge subunits", group="Affiliation", order=20, returns="none")
     def merge_subunits(self, radius: float = 55) -> None:
         """Merge near-duplicate objects whose centres are within *radius*.
 
@@ -864,6 +869,7 @@ class SymmetricComplex:
     # Affiliation creation
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Create affiliation", group="Affiliation", order=10, returns="motl")
     def create_affiliation(
         self,
         method: Literal["tracing", "radius"] = "radius",
@@ -1303,6 +1309,7 @@ class CnComplex(SymmetricComplex):
 
         return center, radius
 
+    @gui_exposed(label="Get centers as motl", group="Statistics", order=10, returns="motl")
     def get_centers_as_motl(self) -> "cryomotl.Motl":
         """Return a Motl with one centre particle per object per tomogram.
 
@@ -1379,6 +1386,7 @@ class CnComplex(SymmetricComplex):
         center = geom.barycenter(coords)
         return float(np.mean(np.linalg.norm(coords - center, axis=1)))
 
+    @gui_exposed(label="Circumference", group="Statistics", order=40, returns="dataframe")
     def circumference(self, *, pixel_size: float = 1.0) -> pd.DataFrame:
         """Per-object circumference derived from the circumradius.
 
@@ -1468,6 +1476,7 @@ class CnComplex(SymmetricComplex):
             )
         return s_idx
 
+    @gui_exposed(label="Assign subunit order", group="Affiliation", order=30, returns="none")
     def assign_subunit_order(self) -> None:
         """Assign 1-based cyclic subunit indices into ``self.order_column``.
 
@@ -1618,6 +1627,7 @@ class CnComplex(SymmetricComplex):
         )
         return summary_df, motl_out
 
+    @gui_exposed(label="Get object stats", group="Statistics", order=50, returns="dataframe")
     def get_object_stats(self, *, pixel_size: float = 1.0) -> pd.DataFrame:
         """Comprehensive per-object statistics table.
 
@@ -1763,6 +1773,7 @@ class DnComplex(CnComplex):
     # Ring splitting
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Split rings", group="Affiliation", order=40, returns="motl")
     def split_rings(
         self,
         *,
@@ -1823,6 +1834,7 @@ class DnComplex(CnComplex):
     # Subunit ordering (ring-aware)
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Assign subunit order", group="Affiliation", order=30, returns="none")
     def assign_subunit_order(self) -> None:
         """Assign 1-based subunit indices across both rings.
 
@@ -1848,6 +1860,7 @@ class DnComplex(CnComplex):
     # Inter-ring metrics
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Ring spacing", group="Statistics", order=40, returns="dataframe")
     def ring_spacing(self, *, pixel_size: float = 1.0) -> pd.DataFrame:
         """Axial distance between the two rings for each object.
 
@@ -1894,6 +1907,7 @@ class DnComplex(CnComplex):
 
         return pd.DataFrame(rows)
 
+    @gui_exposed(label="Inter-ring twist", group="Statistics", order=45, returns="dataframe")
     def inter_ring_twist(self, *, degrees: bool = True) -> pd.DataFrame:
         """Rotational twist between the two rings for each object.
 
@@ -1965,6 +1979,7 @@ class DnComplex(CnComplex):
     # Per-object statistics
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Get object stats", group="Statistics", order=50, returns="dataframe")
     def get_object_stats(self, *, pixel_size: float = 1.0) -> pd.DataFrame:
         """Comprehensive per-object statistics for dihedral structures.
 
@@ -2187,6 +2202,7 @@ class NPC(CnComplex):
     # Orientation unification
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Unify NN orientations", group="Affiliation", order=50, returns="none")
     def unify_nn_orientations(self, dist_threshold: float = 10000) -> None:
         """Flip orientations so that neighbouring subunits point consistently.
 
@@ -4779,6 +4795,10 @@ class PolyhedralComplex(SymmetricComplex):
     _solid: type | None = None
     _symmetry: str | None = None
 
+    # Instance-level geometry slot; set by fit_geometry.
+    solid: "geom.Polyhedron | None" = None
+    center: "np.ndarray | None" = None
+
     def __init__(
         self,
         motl: MotlSource,
@@ -4792,6 +4812,9 @@ class PolyhedralComplex(SymmetricComplex):
                 "PolyhedralComplex is abstract; use TetrahedralComplex, "
                 "OctahedralComplex, or IcosahedralComplex."
             )
+        self.solid = None
+        self.center = None
+        self._pixel_size: float | None = None
         self._setup(
             motl,
             self._symmetry,
@@ -4801,9 +4824,42 @@ class PolyhedralComplex(SymmetricComplex):
         )
 
     # ------------------------------------------------------------------
+    # Geometry fitting
+    # ------------------------------------------------------------------
+
+    @gui_exposed(label="Fit geometry from markers", group="Geometry", order=10, returns="none")
+    def fit_geometry(
+        self,
+        markers: PathOrStr,
+        reference_map: PathOrStr,
+        center: TripletLike | None = None,
+    ) -> None:
+        """Fit self.solid and self.center from two non-collinear markers.
+
+        Reads the first two marker positions from *markers*, resolves the box
+        centre from *reference_map* when *center* is None, and sets
+        ``self.solid = self._solid.from_vectors(v1 - c, v2 - c)``.
+        Pixel size is read from the map and used to convert marker coordinates
+        (Å) to voxels before building the solid.
+        """
+        input_map_metadata = cryomap.get_metadata(reference_map)
+        map_size = geom.as_triplet(input_map_metadata[0])
+        pixel_size = input_map_metadata[1]
+        center_vox = geom.as_triplet(center, reference_size=map_size)
+
+        input_vert_marks = ioutils.marker_coords_load(markers)
+        v1 = input_vert_marks.iloc[0].to_numpy() / pixel_size
+        v2 = input_vert_marks.iloc[1].to_numpy() / pixel_size
+
+        self.solid = self._solid.from_vectors(v1 - center_vox, v2 - center_vox)
+        self.center = center_vox
+        self._pixel_size = float(pixel_size)
+
+    # ------------------------------------------------------------------
     # Core interface
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Assign subunit order", group="Affiliation", order=50, returns="none")
     def assign_subunit_order(self) -> None:
         """Assign 1-based subunit indices ordered by x→y→z (ascending)."""
         for (_tomo_id, _aff_id), group in self.motl.df.groupby(
@@ -4820,35 +4876,88 @@ class PolyhedralComplex(SymmetricComplex):
     # Geometry helpers
     # ------------------------------------------------------------------
 
+    @gui_exposed(label="Feature vectors", group="Geometry", order=20, returns="features")
     def feature_vectors(
         self,
         mode: Literal["vertices", "edges", "faces"] = "vertices",
+        project_to_sphere: bool = False,
         radius: float = 1.0,
     ) -> np.ndarray:
-        """Return canonical feature centres for the solid at *radius*.
+        """Return feature centres for the fitted solid (or a canonical one at *radius*).
+
+        Uses ``self.solid`` when geometry has been fitted via :meth:`fit_geometry`;
+        otherwise falls back to the canonical solid at *radius*.
 
         Parameters
         ----------
         mode : {"vertices", "edges", "faces"}, default="vertices"
             Which feature centres to return.
+        project_to_sphere : bool, default=False
+            When True, rescale each vector to the circumscribed sphere radius.
         radius : float, default=1.0
-            Circumscribed-sphere radius passed to the solid constructor.
+            Fallback radius when no geometry is fitted.
 
         Returns
         -------
         np.ndarray
             Array of shape (N, 3).
         """
-        return getattr(self._solid(radius), mode)
+        solid = self.solid if self.solid is not None else self._solid(radius)
+        vecs = getattr(solid, mode)
+        if project_to_sphere:
+            norms = np.linalg.norm(vecs, axis=1)
+            vecs = (vecs / norms[:, None]) * solid.radius
+        return vecs
+
+    @gui_exposed(label="Write features to CMM", group="Geometry", order=25, returns="none")
+    def write_features_cmm(
+        self,
+        output_path: PathOrStr,
+        mode: Literal["vertices", "edges", "faces"] = "vertices",
+        project_to_sphere: bool = False,
+    ) -> None:
+        """Write feature vectors as ChimeraX marker coordinates to a .cmm file.
+
+        Requires that :meth:`fit_geometry` has been called first.
+
+        Parameters
+        ----------
+        output_path : PathOrStr
+            Destination ``.cmm`` file path.
+        mode : {"vertices", "edges", "faces"}, default="vertices"
+            Feature type to write.
+        project_to_sphere : bool, default=False
+            Project features to the circumscribed sphere before writing.
+
+        Raises
+        ------
+        ValueError
+            When no geometry has been fitted yet.
+        """
+        if self.solid is None or self.center is None or self._pixel_size is None:
+            raise ValueError(
+                "No geometry fitted. Call fit_geometry(markers, reference_map) first."
+            )
+        vecs = self.feature_vectors(mode=mode, project_to_sphere=project_to_sphere)
+        features_coords = (vecs + self.center) * self._pixel_size
+        ioutils.write_coords_to_cmm_file(features_coords, output_path)
 
     # ------------------------------------------------------------------
     # Symmetry expansion
     # ------------------------------------------------------------------
 
+    @gui_exposed(
+        label="Expand to subparticles",
+        group="Expansion",
+        order=30,
+        returns="motl",
+        hide=("shift_vecs",),
+    )
     def expand(
         self,
         *,
         mode: Literal["vertices", "edges", "faces"] = "vertices",
+        project_to_sphere: bool = False,
         radius: float = 1.0,
         shift_vecs: np.ndarray | None = None,
         original_id_col: MotlColumn = "object_id",
@@ -4863,10 +4972,14 @@ class PolyhedralComplex(SymmetricComplex):
         ----------
         mode : {"vertices", "edges", "faces"}, default="vertices"
             Feature type used when *shift_vecs* is None.
+        project_to_sphere : bool, default=False
+            Project features to the circumscribed sphere (passed to
+            :meth:`feature_vectors`).
         radius : float, default=1.0
-            Solid radius used when *shift_vecs* is None.
+            Fallback solid radius when no geometry is fitted and *shift_vecs*
+            is None.
         shift_vecs : np.ndarray of shape (N, 3), optional
-            Explicit shift vectors.  When None, vectors are taken from
+            Explicit shift vectors.  When None, vectors are derived from
             :meth:`feature_vectors`.
         original_id_col : MotlColumn, default="object_id"
             Column that stores the ``subtomo_id`` of the source particle.
@@ -4890,7 +5003,9 @@ class PolyhedralComplex(SymmetricComplex):
             If *shift_vecs* has wrong shape or a required column is missing.
         """
         if shift_vecs is None:
-            shift_vecs = self.feature_vectors(mode, radius)
+            shift_vecs = self.feature_vectors(
+                mode=mode, project_to_sphere=project_to_sphere, radius=radius
+            )
         if (
             not isinstance(shift_vecs, np.ndarray)
             or shift_vecs.ndim != 2
@@ -4949,6 +5064,13 @@ class PolyhedralComplex(SymmetricComplex):
     # Feature recovery
     # ------------------------------------------------------------------
 
+    @gui_exposed(
+        label="Recover features",
+        group="Geometry",
+        order=90,
+        returns="features",
+        hide=("output_cmm_file",),
+    )
     @classmethod
     def recover_features(
         cls,

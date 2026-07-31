@@ -28,24 +28,29 @@ from cryocat.app.components.motlsource import (
     get_multi_motl_picker, register_multi_motl_picker_callbacks,
 )
 from cryocat.app.apputils import (
-    generate_kwargs, get_single_motl_methods, get_multi_motl_methods,
+    generate_kwargs, run_operation_to_pool, record_load_to_pool,
 )
 from cryocat.app import ids
+from cryocat.app import discovery as _discovery
 from cryocat.app.formgen import build_form
-from cryocat.app.logger import dash_logger, invoke_operation
+from cryocat.app.logger import invoke_operation
+from cryocat.app import session as _session
+from cryocat.app.event import message_event
 from cryocat.app.pageshell import _SIDEBAR_STYLE, _SIDEBAR_COL_STYLE
-from cryocat.app.pool import PoolState, insert_motl
+from cryocat.app.pool import PoolState
 
 # Number of editor *view slots* (rendered table/viewer surfaces). The motl pool
 # itself is unbounded — this only caps how many motls are open as tabs at once.
 N_SLOTS = 5
 
-# Fetched once at import time from the live Motl class — no hardcoding.
-_MOTL_METHODS = get_single_motl_methods()
-_MULTI_MOTL_METHODS = get_multi_motl_methods()
-# Lookup of `method_name -> _gui["motls"]` spec for the run callback. Built from
-# the same collector so adding a new multi-motl op (decorator change only) flows
-# through with no edits here.
+# Fetched at import time from GUI_REGISTRY — adding a new @gui_exposed method
+# to Motl is sufficient; no edits needed here.
+_MOTL_METHODS       = [{"label": e.label, "value": e.fn.__name__}
+                       for e in _discovery.single_motl_ops()
+                       if e.fn.__module__ == "cryocat.core.cryomotl"]
+_MULTI_MOTL_METHODS = [{"label": e.label, "value": e.fn.__name__, "motls": e.motls}
+                       for e in _discovery.multi_motl_ops()]
+# Lookup of `method_name -> motls spec` for the run callback.
 _MULTI_MOTL_SPECS = {m["value"]: m["motls"] for m in _MULTI_MOTL_METHODS}
 
 _NONE_OPT = "__none__"  # dropdown sentinel for an empty slot
@@ -246,57 +251,9 @@ def _relion_params_summary(relion_params):
     return ("  |  " + ",  ".join(parts)) if parts else ""
 
 
-def _register_rotation_fields_for_form(app, id_type: str, methods: list) -> None:
-    """Pre-register rotation-builder modal callbacks for @gui_exposed Motl methods
-    that have RotationLike parameters and use the given id_type."""
-    import typing
-    from cryocat.utils.classutils import resolve_param_type
-    from cryocat.app.components.rotationbuilder import register_rotation_builder_callbacks
-
-    for method_info in methods:
-        fn = getattr(Motl, method_info["value"], None)
-        if fn is None:
-            continue
-        try:
-            hints = typing.get_type_hints(fn)
-        except Exception:
-            hints = {}
-        for param, ann in hints.items():
-            tag, _ = resolve_param_type(ann)
-            if tag != "RotationLike":
-                continue
-            rprefix = f"rotfld-{id_type}-{param}"
-            register_rotation_builder_callbacks(app, f"{rprefix}-inner")
-
-            def _register(rprefix_=rprefix, param_=param, id_type_=id_type):
-                @app.callback(
-                    Output(f"{rprefix_}-modal", "is_open"),
-                    Input(f"{rprefix_}-build-btn", "n_clicks"),
-                    Input(f"{rprefix_}-close-btn", "n_clicks"),
-                    Input(f"{rprefix_}-use-btn", "n_clicks"),
-                    State(f"{rprefix_}-modal", "is_open"),
-                    prevent_initial_call=True,
-                )
-                def _toggle(_open, _close, _use, is_open):
-                    return not is_open
-
-                @app.callback(
-                    Output({"type": id_type_, "param": param_, "tag": "RotationLike"}, "value", allow_duplicate=True),
-                    Input(f"{rprefix_}-use-btn", "n_clicks"),
-                    State(f"{rprefix_}-inner-rot-euler-store", "data"),
-                    prevent_initial_call=True,
-                )
-                def _use(_n, euler_str):
-                    return euler_str or no_update
-
-            _register()
-
-
 def register_motl_editor_sidebar_callbacks(app):
 
     register_motl_load_callbacks(app, "me-load")
-    _register_rotation_fields_for_form(app, "me-op-param", _MOTL_METHODS)
-    _register_rotation_fields_for_form(app, "me-multi-param", _MULTI_MOTL_METHODS)
 
     # ── Load → pool ────────────────────────────────────────────────────────────
     # A freshly loaded motl is appended to the pool with a new motl_id and
@@ -314,9 +271,9 @@ def register_motl_editor_sidebar_callbacks(app):
         State("me-load-motl-extra-data-store", "data"),
         State("me-load-motl-data-type", "data"),
         State("me-load-relion-optics-store", "data"),
-        State("me-load-relion5-tomos-store", "data"),
-        State("me-load-relion5-tomos-filename", "data"),
-        State("me-load-motl-upload", "filename"),
+        State("me-load-rln-tomos-store", "data"),
+        State("me-load-rln-tomos-filename", "data"),
+        State({"type": "path-input", "owner": "me-load-motl-path"}, "value"),
         State("me-load-relion-params-store", "data"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_MOTLS, "data"),
@@ -327,34 +284,71 @@ def register_motl_editor_sidebar_callbacks(app):
         prevent_initial_call=True,
     )
     def route_motl(
-        motl_data, extra, dtype, optics, r5t, r5tn, filename, relion_params,
+        motl_data, extra, dtype, optics, r5t, r5tn, motl_path, relion_params,
         registry, pool_motls, pool_extra, pool_meta, next_id, slot_map,
     ):
+        import os as _os
+        from cryocat.app.components.filesystem import resolve_input as _resolve
+
         if not motl_data:
             raise dash.exceptions.PreventUpdate
 
         slot_map = list(slot_map or [None] * N_SLOTS)
         while len(slot_map) < N_SLOTS:
             slot_map.append(None)
+        # Drop stale slot references from a previous session if the pool restarted.
+        _live_ids = set((registry or {}).keys())
+        slot_map = [m if (m and m in _live_ids) else None for m in slot_map]
 
         _nid = next_id or 0
-        label = filename or f"Motl {_nid + 1}"
-        # TODO(doc-2): route through run_operation_to_pool
-        pool_state, mid = insert_motl(
-            PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id),
-            motl_data,
-            label=label,
-            motl_type=dtype or "emmotl",
-            extra=extra,
-            meta={
-                "data_type": dtype,
-                "relion_optics": optics,
-                "relion5_tomos": r5t,
-                "relion5_tomos_filename": r5tn,
-                "relion_params": relion_params,
-                "script_expr": f"cryomotl.Motl.load({(filename or label)!r}, {(dtype or 'emmotl')!r})",
-            },
-        )
+        # Use the basename of the resolved path as the label; fall back to a counter.
+        resolved_path, _err = _resolve(motl_path or "")
+        label = _os.path.basename(resolved_path) if resolved_path and not _err else f"Motl {_nid + 1}"
+        effective_type = dtype or "emmotl"
+
+        # Build rln_kwargs for script rendering (pixel_size/binning/version/formats).
+        rln_kwargs: dict = {}
+        if effective_type in ("relion", "relion5", "relion5_1") and relion_params:
+            if effective_type == "relion":
+                ver_str = relion_params.get("version", "")
+                try:
+                    rln_kwargs["version"] = float(str(ver_str).split()[-1])
+                except (ValueError, IndexError):
+                    pass
+            ps = relion_params.get("pixel_size")
+            if ps:
+                try:
+                    rln_kwargs["pixel_size"] = float(ps)
+                except (TypeError, ValueError):
+                    pass  # per-particle (multi-optics): not representable as a single kwarg
+            bn = relion_params.get("binning")
+            if bn:
+                rln_kwargs["binning"] = float(bn)
+            tf = relion_params.get("tomo_format")
+            if tf:
+                rln_kwargs["tomo_format"] = tf
+            sf = relion_params.get("subtomo_format")
+            if sf:
+                rln_kwargs["subtomo_format"] = sf
+
+        current_pool = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
+        try:
+            pool_state, mid, _ = record_load_to_pool(
+                motl_data, effective_type, resolved_path or label, rln_kwargs,
+                current_pool,
+                label=label,
+                extra=extra,
+                meta={
+                    "data_type": dtype,
+                    "relion_optics": optics,
+                    "relion5_tomos": r5t,
+                    "relion5_tomos_filename": r5tn,
+                    "relion_params": relion_params,
+                },
+            )
+        except Exception as exc:
+            return (no_update, no_update, no_update, no_update, no_update,
+                    slot_map, no_update, f"Load failed: {exc}")
 
         free = _first_free_slot(slot_map)
         if free is not None:
@@ -389,7 +383,7 @@ def register_motl_editor_sidebar_callbacks(app):
                 dbc.ListGroupItem(
                     [
                         html.Span(
-                            label,
+                            f"{label} (id: {mid.replace('-', '_')})",
                             style={
                                 "flex": "1",
                                 "overflow": "hidden",
@@ -613,8 +607,8 @@ def register_motl_editor_sidebar_callbacks(app):
         State("me-multi-main-select", "value"),
         State("me-multi-second-select", "value"),
         State("me-multi-list-select", "value"),
-        State({"type": "me-multi-param", "param": ALL, "tag": ALL}, "value"),
-        State({"type": "me-multi-param", "param": ALL, "tag": ALL}, "id"),
+        State({"type": "me-multi-param", "owner": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "me-multi-param", "owner": ALL, "param": ALL, "tag": ALL}, "id"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_MOTLS, "data"),
         State(ids.POOL_EXTRA, "data"),
@@ -661,17 +655,25 @@ def register_motl_editor_sidebar_callbacks(app):
                 if not rows:
                     return _err(f"Pool entry '{mid}' has no data.")
                 motl_obj = Motl(pd.DataFrame(rows))
-                src_expr = (pool_meta.get(mid) or {}).get("script_expr")
-                if src_expr:
-                    dash_logger.record_motl_source(motl_obj, src_expr)
+                motl_obj._pool_motl_id = mid
                 motls.append(motl_obj)
         except Exception as exc:
+            _session.emit(message_event(f"Error preparing motls: {exc}", level="error"))
             return _err(f"Error preparing motls: {exc}")
 
         # 2) Scalar kwargs from the auto-form.
         kwargs = generate_kwargs(param_ids, param_values) if param_ids else {}
 
-        # 3) Build + run the call. These ops are classmethods on Motl.
+        # 3) Pre-compute label (does not depend on result).
+        gui = getattr(getattr(Motl, method_name).__func__, "_gui", {})
+        op_label = gui.get("label", method_name)
+        src_labels = [(registry.get(oid) or {}).get("label", oid) for oid in ordered_ids]
+        slot_map = list(slot_map or [None] * N_SLOTS)
+        while len(slot_map) < N_SLOTS:
+            slot_map.append(None)
+        current_pool = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
+
+        # 4) Build kwargs and run through the atomic chokepoint.
         try:
             fn = getattr(Motl, method_name)
             if spec["arity"] == "pair":
@@ -680,33 +682,15 @@ def register_motl_editor_sidebar_callbacks(app):
             else:
                 list_param = spec.get("param", "motl_list")
                 full_kwargs = {list_param: motls, **kwargs}
-            result = invoke_operation(fn, full_kwargs)
+            pool_state, mid, result = run_operation_to_pool(
+                fn, full_kwargs, current_pool,
+                label=f"{op_label} of {' + '.join(src_labels)}",
+            )
         except Exception as exc:
             return _err(f"Error running '{method_name}': {exc}")
 
         if not isinstance(result, Motl):
             return _err(f"'{method_name}' did not return a Motl (got {type(result).__name__}).")
-
-        # 4) Add the new motl to the pool and assign to a free slot.
-        new_rows = result.df.to_dict("records")
-        gui = getattr(getattr(Motl, method_name).__func__, "_gui", {})
-        op_label = gui.get("label", method_name)
-        src_labels = [(registry.get(oid) or {}).get("label", oid) for oid in ordered_ids]
-        slot_map = list(slot_map or [None] * N_SLOTS)
-        while len(slot_map) < N_SLOTS:
-            slot_map.append(None)
-
-        # TODO(doc-2): route through run_operation_to_pool
-        pool_state, mid = insert_motl(
-            PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id),
-            new_rows,
-            label=f"{op_label} of {' + '.join(src_labels)}",
-            meta={
-                "data_type": None, "relion_optics": None, "relion5_tomos": None,
-                "relion5_tomos_filename": None, "relion_params": None,
-                "script_expr": dash_logger.last_script_line,
-            },
-        )
 
         free = _first_free_slot(slot_map)
         if free is not None:
@@ -714,13 +698,13 @@ def register_motl_editor_sidebar_callbacks(app):
             active = f"me-tab-{free}"
             status = (
                 f"'{op_label}' -> new motl in slot {free + 1} "
-                f"({len(new_rows)} particles, from {len(motls)} input motl(s))."
+                f"({len(result.df)} particles, from {len(motls)} input motl(s))."
             )
         else:
             active = no_update
             status = (
                 f"'{op_label}' -> new motl in the pool "
-                f"({len(new_rows)} particles; no free slot, use 'Slot assignment')."
+                f"({len(result.df)} particles; no free slot, use 'Slot assignment')."
             )
 
         return (*pool_state.to_stores(), slot_map, active, status)
@@ -754,8 +738,8 @@ def register_motl_editor_sidebar_callbacks(app):
         Input("me-op-apply-btn", "n_clicks"),
         State("me-op-func-select", "value"),
         State("me-tabs", "active_tab"),
-        State({"type": "me-op-param", "param": ALL, "tag": ALL}, "value"),
-        State({"type": "me-op-param", "param": ALL, "tag": ALL}, "id"),
+        State({"type": "me-op-param", "owner": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "me-op-param", "owner": ALL, "param": ALL, "tag": ALL}, "id"),
         *[State(f"me-{i}-motl-data-store", "data") for i in range(N_SLOTS)],
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_MOTLS, "data"),
@@ -790,43 +774,29 @@ def register_motl_editor_sidebar_callbacks(app):
             return _ret(nochange, nochange, "No data in the active slot.")
 
         kwargs = generate_kwargs(param_ids, param_values) if param_ids else {}
-
-        try:
-            slot_mid = slot_map[slot_idx] if slot_idx < len(slot_map or []) else None
-            src_expr = (pool_meta.get(slot_mid) or {}).get("script_expr") if slot_mid else None
-            motl = Motl(pd.DataFrame(current_data))
-            if src_expr:
-                dash_logger.record_motl_source(motl, src_expr)
-            result = invoke_operation(getattr(motl, method_name), kwargs)
-        except Exception:
-            return _ret(nochange, nochange, f"Error running '{method_name}' — see log.")
-
         gui = getattr(getattr(Motl, method_name), "_gui", {})
 
-        # Operation produces a NEW motl -> add it to the pool, keep the source.
-        if gui.get("output") == "motl" and isinstance(result, Motl):
+        # Operation produces a NEW motl — route through the atomic chokepoint.
+        if gui.get("output") == "motl":
             slot_map = list(slot_map or [None] * N_SLOTS)
             while len(slot_map) < N_SLOTS:
                 slot_map.append(None)
-
-            new_rows = result.df.to_dict("records")
             src_label = (registry.get(slot_map[slot_idx]) or {}).get("label", f"Slot {slot_idx + 1}")
-            # TODO(doc-2): route through run_operation_to_pool
-            pool_state, mid = insert_motl(
-                PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id),
-                new_rows,
-                label=f"{gui['label']} of {src_label}",
-                meta={
-                    "data_type": None, "relion_optics": None, "relion5_tomos": None,
-                    "relion5_tomos_filename": None, "relion_params": None,
-                    "script_expr": dash_logger.last_script_line,
-                },
-            )
+            motl = Motl(pd.DataFrame(current_data))
+            motl._pool_motl_id = slot_map[slot_idx]
+            current_pool = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
+            try:
+                pool_state, mid, result = run_operation_to_pool(
+                    getattr(motl, method_name), kwargs, current_pool,
+                    label=f"{gui.get('label', method_name)} of {src_label}",
+                )
+            except Exception as exc:
+                return _ret(nochange, nochange, f"Error running '{method_name}': {exc}")
             free = next((i for i in range(N_SLOTS) if not slot_map[i]), None)
             if free is not None:
                 slot_map[free] = mid
                 active = f"me-tab-{free}"
-                status = f"'{method_name}' -> new motl in slot {free + 1} ({len(new_rows)} particles)."
+                status = f"'{method_name}' -> new motl in slot {free + 1} ({len(result.df)} particles)."
             else:
                 active = no_update
                 status = f"'{method_name}' -> new motl in the pool (no free slot; use 'Slot assignment')."
@@ -836,6 +806,14 @@ def register_motl_editor_sidebar_callbacks(app):
             )
 
         # In-place operation — update the active slot.
+        try:
+            motl = Motl(pd.DataFrame(current_data))
+            slot_map_list = list(slot_map or [])
+            motl._pool_motl_id = slot_map_list[slot_idx] if slot_idx < len(slot_map_list) else None
+            result = invoke_operation(getattr(motl, method_name), kwargs)
+        except Exception as exc:
+            return _ret(nochange, nochange, f"Error running '{method_name}': {exc}")
+
         if isinstance(result, Motl):
             new_data = result.df.to_dict("records")
         elif result is None:

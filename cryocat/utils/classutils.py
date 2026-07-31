@@ -17,6 +17,8 @@ import sys
 import typing
 import types as _stdtypes
 from collections.abc import Callable
+from dataclasses import dataclass, field as _field
+from enum import StrEnum
 from typing import Any, Literal
 
 from numpydoc.docscrape import NumpyDocString
@@ -184,11 +186,93 @@ def get_class_names_by_prefix(prefix: str) -> list[str]:
 
 
 # ===========================================================================
+# GuiCategory / GuiEntry — unified GUI registry types (Phase 4 / doc 4)
+# ===========================================================================
+
+class GuiCategory(StrEnum):
+    """Closed set of GUI tiers.  Extend only when a third tier is genuinely needed."""
+    MOTL_OP = "motl-op"
+    BUILDER  = "builder"
+
+
+@dataclass(frozen=True)
+class GuiEntry:
+    """Immutable descriptor for one ``@gui_exposed`` callable.
+
+    The ``key`` is the stable registry identifier derived from owner + name
+    (e.g. ``"Motl.clean_by_distance"``, ``"geom.generate_angles"``).
+    ``fn`` and ``motls`` are excluded from ``__hash__`` so the entry can be
+    stored in sets/dict-keys even though ``fn`` is a callable and ``motls``
+    is a mutable dict.
+    """
+    key:      str
+    fn:       Callable        = _field(hash=False)
+    label:    str             = ""
+    category: GuiCategory     = GuiCategory.MOTL_OP
+    owner:    str             = ""
+    kind:     str             = "function"
+    group:    str             = ""
+    order:    int             = 100
+    hide:     frozenset[str]  = _field(default_factory=frozenset)
+    output:   str | None      = None
+    motls:    dict | None     = _field(default=None, hash=False)
+    standalone: bool          = False
+    preview:  str | None      = None
+    returns:  str | None      = None
+
+
+GUI_REGISTRY: dict[str, GuiEntry] = {}
+"""Single source of truth for every ``@gui_exposed`` callable.
+
+Populated at decoration time as each annotated module is imported.
+Read via :mod:`cryocat.app.discovery` — never walk ``inspect.getmembers``
+or read this dict directly in app code.
+"""
+
+_VALID_MOTLS_KEYS: frozenset[str] = frozenset({"arity", "ordered", "main_first", "param"})
+
+
+# ===========================================================================
 # @gui_exposed — mark a method as GUI-exposable + carry presentation metadata
 # ===========================================================================
 
-_GUI_BUILDER_REGISTRY: list[dict] = []
-"""Registry of ``@gui_exposed`` functions with ``category="builder"`` and ``standalone=True``."""
+
+def _infer_returns(fn: Callable) -> str | None:
+    """Infer the 'returns' dispatch kind from the return-type annotation.
+
+    Returns ``None`` when the annotation is absent or ambiguous (e.g. a tuple
+    or ndarray) — the caller must supply an explicit ``returns=`` override.
+    """
+    try:
+        sig = inspect.signature(fn)
+        ret = sig.return_annotation
+    except Exception:
+        return None
+    if ret is inspect.Parameter.empty:
+        return None
+    if ret is None or ret is type(None):
+        return "none"
+    # Forward-reference string (e.g. "cryomotl.Motl")
+    if isinstance(ret, str):
+        if ret in ("None", "none"):
+            return "none"
+        if "Motl" in ret:
+            return "motl"
+        if "DataFrame" in ret:
+            return "dataframe"
+        return None
+    # Actual type object
+    name = getattr(ret, "__name__", "")
+    if name in ("Motl", "EmMotl", "RelionMotl", "RelionMotlv5",
+                "RelionMotlv5_1", "StopgapMotl", "DynamoMotl", "ModMotl"):
+        return "motl"
+    if name == "DataFrame":
+        return "dataframe"
+    # Fallback: string representation for e.g. union types
+    ret_str = str(ret)
+    if "Motl" in ret_str and "tuple" not in ret_str:
+        return "motl"
+    return None
 
 
 def gui_exposed(
@@ -196,67 +280,158 @@ def gui_exposed(
     *,
     label: str | None = None,
     category: str | None = None,
+    group: str = "",
+    order: int = 100,
     hide: tuple[str, ...] = (),
-    output: Literal["motl", "figure", "dataframe"] | None = None,
+    output: str | None = None,
     motls: dict | None = None,
     standalone: bool = False,
     preview: str | None = None,
+    returns: str | None = None,
 ):
-    """Mark a method as GUI-exposable and carry presentation metadata.
+    """Mark a callable as GUI-exposable and register it in :data:`GUI_REGISTRY`.
 
     Parameters
     ----------
     label : str, optional
         Display name in the operation dropdown. Defaults to the function name.
     category : str, optional
-        Grouping for the dropdown (e.g. "Cleaning", "Geometry"). None = ungrouped.
-        Use ``"builder"`` to flag a value-producing function (e.g. an angle-list
-        generator) that should not appear in the main tool dropdown.
+        Grouping for the dropdown (e.g. ``"Cleaning"``, ``"Geometry"``).
+        Use ``"builder"`` for standalone value-producing functions.
+        ``None`` = ungrouped motl-op.
     hide : tuple of str, optional
-        Parameter names the GUI/CLI should NOT surface (beyond ``self`` / ``cls``,
-        which are always hidden).
-    output : {"motl", "figure", "dataframe", None}, optional
-        What the method returns, so the GUI knows how to route the result
-        ("motl" -> wire to send-to-editor; "figure"/"dataframe" -> display;
-        None -> in-place / no surfaced result).
+        Parameter names the GUI/CLI should NOT surface (beyond ``self`` /
+        ``cls``, which are always hidden).
+    output : str or None, optional
+        What the callable returns — ``"motl"``, ``"figure"``,
+        ``"dataframe"``, ``"map"``, etc.  Used by the GUI to route the result.
     motls : dict, optional
-        Marks a MULTI-motl operation. Keys:
-          - ``"arity"``: ``"pair"`` (exactly 2) or ``"list"`` (N >= 2).
-          - ``"ordered"``: bool — when True the user's selection order is
-            preserved and passed through (the GUI surfaces it as numbered chips
-            so it stays editable).
-          - ``"main_first"``: bool — when True the first selected motl is the
-            *privileged* one (lead ``motl1``, or the duplicate kept on
-            collision) and the GUI labels it "Main". Distinct from ``ordered``:
-            an op can preserve order without any entry being privileged
-            (e.g. ``merge_and_renumber`` — order matters, but no motl is "main").
-          - ``"param"``: the function parameter that receives the motls
-            (``"motl_list"`` for list ops; pair ops pass two motls positionally
-            so this is omitted).
+        Marks a MULTI-motl operation.  Required key ``"arity"``:
+        ``"pair"`` (exactly 2) or ``"list"`` (N >= 2).  Optional keys:
+        ``"ordered"``, ``"main_first"``, ``"param"``.
         ``None`` (default) => single-motl operation.
-    standalone : bool, default=False
-        When ``True`` (and ``category="builder"``), the function is also listed
-        on the Utilities page as a standalone panel. Registered in
-        :data:`_GUI_BUILDER_REGISTRY` at decoration time.
+    standalone : bool, default ``False``
+        When ``True`` and ``category="builder"``, the function is listed on
+        the Utilities page as its own panel.
     preview : str, optional
-        Name of the preview plot style to render in the builder panel
-        (e.g. ``"orientational"``). Passed through as-is; the panel component
-        interprets the value.
+        Preview plot style string interpreted by the builder panel component.
 
     Notes
     -----
-    A function is GUI-exposed iff ``getattr(fn, "_gui", None) is not None``.
-    A bare ``@gui_exposed`` (no parentheses) works. When stacking with
-    ``@classmethod``, place ``@gui_exposed`` **above** so ``_gui`` lands on the
-    underlying function; the collector unwraps via ``__func__``.
+    Malformed metadata (bad motls spec, empty label) raises :exc:`ValueError`
+    **at decoration time**, naming the offending callable.
+
+    A bare ``@gui_exposed`` (no parentheses) is accepted.  Stack
+    ``@classmethod`` **below** so ``_gui`` lands on the underlying function
+    and the collector can read it through ``__func__``.
+
+    Re-decorating the same key with identical essential metadata is a no-op
+    (safe for hot-reload / module reimport).  Conflicting metadata raises
+    :exc:`RuntimeError`.
     """
 
     def wrap(fn):
-        # When stacked above @classmethod / @staticmethod, `fn` is the descriptor
-        # but `_gui` must land on the underlying function so the collector can
-        # read it through `__func__`.
-        target = fn.__func__ if isinstance(fn, (classmethod, staticmethod)) else fn
+        # Unwrap classmethod/staticmethod so we can read qualname/module.
+        if isinstance(fn, classmethod):
+            target = fn.__func__
+            kind = "classmethod"
+        elif isinstance(fn, staticmethod):
+            target = fn.__func__
+            kind = "staticmethod"
+        else:
+            target = fn
+            params_list = list(inspect.signature(target).parameters.keys())
+            if params_list and params_list[0] == "self":
+                kind = "method"
+            elif params_list and params_list[0] == "cls":
+                kind = "classmethod"
+            else:
+                kind = "function"
+
         gui_label = label or target.__name__.replace("_", " ").capitalize()
+        if not gui_label:
+            raise ValueError(
+                f"@gui_exposed on {target.__qualname__!r}: label must be non-empty"
+            )
+
+        # Validate motls spec eagerly.
+        if motls is not None:
+            if "arity" not in motls:
+                raise ValueError(
+                    f"@gui_exposed on {target.__qualname__!r}: motls spec missing 'arity'"
+                )
+            if motls["arity"] not in ("pair", "list"):
+                raise ValueError(
+                    f"@gui_exposed on {target.__qualname__!r}: "
+                    f"motls['arity'] must be 'pair' or 'list', got {motls['arity']!r}"
+                )
+            unknown = set(motls) - _VALID_MOTLS_KEYS
+            if unknown:
+                raise ValueError(
+                    f"@gui_exposed on {target.__qualname__!r}: "
+                    f"unknown motls keys {unknown}"
+                )
+
+        # Derive tier and display group.
+        # `group` (explicit) takes precedence; fall back to `category` for legacy callers.
+        if category == "builder":
+            gui_category = GuiCategory.BUILDER
+            gui_group: str = group  # explicit group name, or "" for ungrouped
+        else:
+            gui_category = GuiCategory.MOTL_OP
+            gui_group = group or (category or "")
+
+        # Derive stable key and owner from qualname / module.
+        qualname = target.__qualname__
+        module   = target.__module__ or ""
+        if "<locals>" in qualname:
+            # Nested / closure functions (test helpers, lambdas).
+            # Use the sanitized full qualname so every such function is unique.
+            sanitized = qualname.replace("<locals>.", "").replace("<locals>", "")
+            mod_short = module.rsplit(".", 1)[-1] if module else ""
+            owner_str = module
+            reg_key   = f"{mod_short}.{sanitized}" if mod_short else sanitized
+        elif "." in qualname:
+            class_part  = qualname.rsplit(".", 1)[0]
+            short_class = class_part.split(".")[-1]
+            owner_str   = f"{module}.{class_part}" if module else class_part
+            reg_key     = f"{short_class}.{target.__name__}"
+        else:
+            mod_short = module.rsplit(".", 1)[-1] if module else ""
+            owner_str = module
+            reg_key   = f"{mod_short}.{target.__name__}" if mod_short else target.__name__
+
+        returns_val = returns if returns is not None else _infer_returns(target)
+
+        entry = GuiEntry(
+            key=reg_key,
+            fn=target,
+            label=gui_label,
+            category=gui_category,
+            owner=owner_str,
+            kind=kind,
+            group=gui_group,
+            order=order,
+            hide=frozenset(hide),
+            output=output,
+            motls=motls,
+            standalone=standalone,
+            preview=preview,
+            returns=returns_val,
+        )
+
+        existing = GUI_REGISTRY.get(reg_key)
+        if existing is not None:
+            if existing.label != gui_label or existing.category != gui_category:
+                raise RuntimeError(
+                    f"@gui_exposed: conflicting registration for {reg_key!r}; "
+                    f"existing label={existing.label!r} category={existing.category!r}, "
+                    f"new label={gui_label!r} category={gui_category!r}"
+                )
+        else:
+            GUI_REGISTRY[reg_key] = entry
+
+        # Keep fn._gui for backward compatibility (formgen.build_form reads it).
         target._gui = {
             "label": gui_label,
             "category": category,
@@ -266,13 +441,6 @@ def gui_exposed(
             "standalone": standalone,
             "preview": preview,
         }
-        if category == "builder" and standalone:
-            _GUI_BUILDER_REGISTRY.append({
-                "id": target.__name__,
-                "label": gui_label,
-                "fn": target,
-                "preview": preview,
-            })
         return fn
 
     return wrap(_fn) if _fn is not None else wrap

@@ -6,10 +6,16 @@ import dash_bootstrap_components as dbc
 from cryocat.app.tango.sidebar import get_column_sidebar
 from cryocat.app.tango.table import get_main_content
 from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
+from cryocat.app.components.graphsettings import get_graph_settings_components
+from cryocat.app.components.filebrowser import get_file_browser
+from cryocat.app.components.rotationmodal import get_rotation_modal
 
 
 layout = html.Div(
     [
+        get_file_browser(),
+        get_rotation_modal(),
+        *get_graph_settings_components(),
         dcc.Store(id="main-motl-data-store"),
         dcc.Store(id="nn-motl-data-store"),
         dcc.Store(id="main-motl-extra-data-store"),
@@ -34,14 +40,8 @@ layout = html.Div(
         dcc.Store(id="twist-global-radius"),
         dcc.Store(id="main-relion-optics-store"),
         dcc.Store(id="nn-relion-optics-store"),
-        dcc.Store(id="main-relion5-tomos-store"),
-        dcc.Store(id="nn-relion5-tomos-store"),
-        dcc.Store(id="main-relion5-tomos-filename"),
-        dcc.Store(id="nn-relion5-tomos-filename"),
         dcc.Store(id="main-relion-params-store"),
         dcc.Store(id="nn-relion-params-store"),
-        dcc.Store(id="save-main-relion5-tomos-store"),
-        dcc.Store(id="save-main-relion5-tomos-filename"),
         dcc.Store(id="kmeans-global-data-store"),
         dcc.Store(id="tabv-motl-global-data-store"),
         dcc.Store(id="tabv-motl-nn-global-data-store"),

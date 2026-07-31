@@ -24,13 +24,32 @@ Parameters of note:
                       selection so the user can inspect entries before picking.
 """
 
-from dash import html, dcc, Input, Output, no_update
+from dash import html, dcc, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 
 from cryocat.app import ids
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
+
+
+def picker_options(registry: dict | None, current, multi: bool) -> tuple:
+    """Compute picker options, preserving the current selection when still valid."""
+    registry = registry or {}
+    options = [
+        {"label": f"{meta.get('label', mid)} ({mid.replace('-', '_')})", "value": mid}
+        for mid, meta in registry.items()
+        if meta.get("active", True)
+    ]
+    if not options:
+        return [], ([] if multi else None), "Pool is empty — load a motl in the editor."
+    active_values = [o["value"] for o in options]
+    status = f"{len(options)} motl(s) in the pool."
+    if multi:
+        kept = [v for v in (current or []) if v in active_values]
+        return options, kept or active_values, status
+    value = current if current in active_values else active_values[0]
+    return options, value, status
 
 
 def get_motl_source(prefix, show_table=False, multi=False):
@@ -96,24 +115,10 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
         Output(f"{prefix}-motl-select", "value"),
         Output(f"{prefix}-motl-source-status", "children"),
         Input(ids.POOL_REGISTRY, "data"),
+        State(f"{prefix}-motl-select", "value"),
     )
-    def _populate(registry):
-        registry = registry or {}
-        options = []
-        active_ids = []
-        for mid, meta in registry.items():
-            if not meta.get("active", True):
-                continue
-            options.append({"label": meta.get("label", mid), "value": mid})
-            active_ids.append(mid)
-
-        if not options:
-            return [], ([] if multi else None), "Pool is empty — load a motl in the editor."
-
-        status = f"{len(options)} motl(s) in the pool."
-        if multi:
-            return options, active_ids, status
-        return options, active_ids[0], status
+    def _populate(registry, current):
+        return picker_options(registry, current, multi)
 
     if show_table:
 
@@ -132,7 +137,7 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
                 return no_update
             return pool_motls.get(mid)
 
-        register_table_callbacks(app, f"{prefix}-src-tabv", csv_only=True)
+        register_table_callbacks(app, f"{prefix}-src-tabv")
         register_table_plot_callbacks(
             app,
             f"{prefix}-src-tabv-table-plot",
@@ -228,7 +233,7 @@ def register_multi_motl_picker_callbacks(app, prefix):
     def _populate(registry):
         registry = registry or {}
         options = [
-            {"label": meta.get("label", mid), "value": mid}
+            {"label": f"{meta.get('label', mid)} ({mid.replace('-', '_')})", "value": mid}
             for mid, meta in registry.items()
             if meta.get("active", True)
         ]

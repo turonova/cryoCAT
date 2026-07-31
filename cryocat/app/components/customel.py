@@ -35,11 +35,12 @@ def LabeledDropdown(id_, label, **dropdown_kwargs):
 
 
 def InlineLabeledDropdown(id_, label, default_visibility="flex", tooltip_text="", **dropdown_kwargs):
-
-    if tooltip_text == "":
+    if not tooltip_text:
         tooltip_text = label
 
-    class_style = dropdown_kwargs.get("className", default_visibility)
+    class_style = dropdown_kwargs.pop("className", default_visibility)
+    default_style = {"flex": "1", "padding": "0"}
+    final_style, dropdown_kwargs = extract_style(default_style, dropdown_kwargs)
 
     return html.Div(
         [
@@ -47,16 +48,12 @@ def InlineLabeledDropdown(id_, label, default_visibility="flex", tooltip_text=""
                 label,
                 id=f"{id_}-lbl",
                 html_for=id_,
-                className=f"label-dark mb-0 me-2",  # right margin so it doesn't stick to dropdown
-                style={"whiteSpace": "nowrap"},  # keep label on one line
+                className="label-dark mb-0 me-2",
+                style={"whiteSpace": "nowrap"},
             ),
             dcc.Dropdown(
                 id=id_,
-                style={
-                    "flex": "1",  # take up remaining horizontal space
-                    "padding": "0",  # reduce padding
-                    # "marginBottom": "0.5rem",
-                },
+                style=final_style,
                 **dropdown_kwargs,
             ),
             dbc.Tooltip(
@@ -64,15 +61,14 @@ def InlineLabeledDropdown(id_, label, default_visibility="flex", tooltip_text=""
                 target=f"{id_}-lbl",
             ),
         ],
-        style={"display": "flex", "alignItems": "center", "marginBottom": "0.5rem"},  # horizontal alignment
+        style={"display": "flex", "alignItems": "center", "marginBottom": "0.5rem"},
         className=class_style,
         id=f"{id_}-topdiv",
     )
 
 
 def InlineInputForm(id_, label, default_visibility="flex", **input_kwargs):
-
-    class_style = input_kwargs.get("className", default_visibility)
+    class_style = input_kwargs.pop("className", default_visibility)
     default_style = {"flex": "1"}
 
     final_style, input_kwargs = extract_style(default_style, input_kwargs)

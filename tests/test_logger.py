@@ -46,7 +46,7 @@ def test_render_call_instance_method():
 # ── _render_python_line ────────────────────────────────────────────────────────
 
 def test_render_python_line_plain_function():
-    line, imports = _render_python_line(plain_function, {"x": 1, "y": 2})
+    line, imports, _ = _render_python_line(plain_function, {"x": 1, "y": 2})
     # module is "tests.test_logger" → short is "test_logger"
     assert "plain_function" in line
     assert "x=1" in line and "y=2" in line
@@ -54,7 +54,7 @@ def test_render_python_line_plain_function():
 
 def test_render_python_line_classmethod():
     fn = _Dummy.class_method
-    line, imports = _render_python_line(fn, {"a": 10, "b": 20})
+    line, imports, _ = _render_python_line(fn, {"a": 10, "b": 20})
     # Must produce something like "test_logger._Dummy.class_method(a=10, b=20)"
     assert "_Dummy.class_method" in line
     assert "a=10" in line
@@ -63,7 +63,7 @@ def test_render_python_line_classmethod():
 
 def test_render_python_line_instance_method():
     fn = _dummy_instance.instance_method
-    line, imports = _render_python_line(fn, {"a": 5})
+    line, imports, _ = _render_python_line(fn, {"a": 5})
     # Instance method renders as <receiver_expr>.instance_method(a=5)
     assert "instance_method" in line
     assert "a=5" in line

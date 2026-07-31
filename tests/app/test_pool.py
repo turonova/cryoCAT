@@ -20,9 +20,9 @@ _ROWS = [{"x": 1}, {"x": 2}]
 
 
 class TestInsertMotl:
-    def test_first_insert_yields_motl_0(self):
+    def test_first_insert_yields_motl_1(self):
         state, mid = insert_motl(_EMPTY, _ROWS)
-        assert mid == "motl-0"
+        assert mid == "motl-1"
 
     def test_next_id_increments(self):
         state, _ = insert_motl(_EMPTY, _ROWS)
@@ -87,19 +87,19 @@ class TestIdsNeverReused:
         s1, m0 = insert_motl(s0, _ROWS)
         s2, m1 = insert_motl(s1, _ROWS)
         s3, m2 = insert_motl(s2, _ROWS)
-        assert m0 == "motl-0"
-        assert m1 == "motl-1"
-        assert m2 == "motl-2"
+        assert m0 == "motl-1"
+        assert m1 == "motl-2"
+        assert m2 == "motl-3"
 
     def test_remove_then_insert_yields_next_id(self):
-        """Ids are never reused: insert ×3, remove motl-1, insert → motl-3."""
+        """Ids are never reused: insert ×3, remove motl-2, insert → motl-4."""
         s = _EMPTY
-        s, _ = insert_motl(s, _ROWS)   # motl-0
         s, _ = insert_motl(s, _ROWS)   # motl-1
         s, _ = insert_motl(s, _ROWS)   # motl-2
-        s = remove_motl(s, "motl-1")
-        s, m3 = insert_motl(s, _ROWS)
-        assert m3 == "motl-3"
+        s, _ = insert_motl(s, _ROWS)   # motl-3
+        s = remove_motl(s, "motl-2")
+        s, m4 = insert_motl(s, _ROWS)
+        assert m4 == "motl-4"
 
 
 class TestRemoveMotl:
@@ -152,17 +152,17 @@ class TestGetRows:
 class TestActiveIds:
     def test_preserves_insertion_order(self):
         s = _EMPTY
-        s, _ = insert_motl(s, _ROWS)   # motl-0
         s, _ = insert_motl(s, _ROWS)   # motl-1
         s, _ = insert_motl(s, _ROWS)   # motl-2
-        assert active_ids(s) == ["motl-0", "motl-1", "motl-2"]
+        s, _ = insert_motl(s, _ROWS)   # motl-3
+        assert active_ids(s) == ["motl-1", "motl-2", "motl-3"]
 
     def test_inactive_excluded(self):
         s = _EMPTY
-        s, _ = insert_motl(s, _ROWS)   # motl-0
         s, _ = insert_motl(s, _ROWS)   # motl-1
-        s = set_active(s, "motl-0", False)
-        assert active_ids(s) == ["motl-1"]
+        s, _ = insert_motl(s, _ROWS)   # motl-2
+        s = set_active(s, "motl-1", False)
+        assert active_ids(s) == ["motl-2"]
 
 
 class TestJsonRoundTrip:

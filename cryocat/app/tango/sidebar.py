@@ -1,5 +1,4 @@
 from cryocat.app.logger import dash_logger
-import base64
 import io
 import numpy as np
 from dash import html, dcc, ALL
@@ -9,6 +8,7 @@ import pandas as pd
 from dash import Input, Output, State, no_update
 from cryocat.app.components.motlio import get_motl_load_component, register_motl_load_callbacks
 from cryocat.app.components.motlio import get_motl_save_component, register_motl_save_callbacks
+from cryocat.app.components.pathfield import get_path_field
 
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
@@ -20,6 +20,9 @@ from cryocat.analysis.tango import TwistDescriptor, Descriptor, CustomDescriptor
 from cryocat.analysis import visplot
 
 from cryocat.app.apputils import generate_kwargs
+from cryocat.app.logger import invoke_operation
+from cryocat.app import provenance as _prov
+from cryocat.app import session as _session
 from cryocat.app.formgen import build_form
 
 descriptors = get_class_names_by_parent("Descriptor", "cryocat.analysis.tango")
@@ -125,10 +128,19 @@ def get_sidebar():
                     ),
                     dbc.AccordionItem(
                         [
-                            dcc.Upload(
-                                id="upload-twist",
-                                children=dbc.Button("Upload twist", color="light", className="upload-button"),
-                                multiple=False,
+                            get_path_field(
+                                "twist-file",
+                                mode="open",
+                                kind="csv",
+                                extensions=(".csv",),
+                                placeholder="Path to twist CSV file",
+                            ),
+                            dbc.Button(
+                                "Load twist",
+                                id="load-twist-btn",
+                                color="light",
+                                style={"width": "100%", "marginTop": "0.4rem"},
+                                className="upload-button",
                             ),
                             html.Div(
                                 "or",
@@ -369,24 +381,23 @@ def register_tango_sidebar_callbacks(app):
         Output("table-tabs", "active_tab", allow_duplicate=True),
         Output("tabv-twist-global-data-store", "data", allow_duplicate=True),
         Output("twist-global-radius", "data", allow_duplicate=True),
-        Input("upload-twist", "contents"),
+        Input("load-twist-btn", "n_clicks"),
+        State({"type": "path-input", "owner": "twist-file"}, "value"),
         prevent_initial_call=True,
     )
-    def load_twist(upload_content):
-
-        _, content_string = upload_content.split(",")
-        decoded = base64.b64decode(content_string)
+    def load_twist(n_clicks, path):
+        if not n_clicks or not path:
+            raise PreventUpdate
 
         try:
-            # Read CSV into a DataFrame
-            df = pd.read_csv(io.StringIO(decoded.decode("utf-8")))
+            df = pd.read_csv(path)
             from cryocat.app.tango import global_twist
             global_twist["obj"] = TwistDescriptor(input_twist=pd.DataFrame(df))
 
             radius = int(np.ceil(df["euclidean_distance"].max()))
 
             return False, "twist-tab", df.to_dict("records"), radius
-        except Exception as e:
+        except Exception:
             return True, no_update, "motl-tab", None
 
     @app.callback(
@@ -427,8 +438,8 @@ def register_tango_sidebar_callbacks(app):
         State("main-motl-data-store", "data"),
         State("nn-motl-data-store", "data"),
         State("use-nn-motl-checkbox", "value"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         prevent_initial_call=True,
     )
     def show_nn_motl_option(n_clicks, main_motl_df, nn_motl_df, use_single_motl, nn_values, nn_ids):
@@ -589,12 +600,12 @@ def register_tango_sidebar_callbacks(app):
         State("support-dropdown", "value"),
         State("feat-multi-dropdown", "value"),
         State("tabv-twist-global-data-store", "data"),
-        State({"type": "support-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": "support-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
-        State({"type": "desc-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": "desc-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
-        State({"type": "feat-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": "feat-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": "support-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "support-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": "desc-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "desc-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": "feat-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "feat-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         prevent_initial_call=True,
     )
     def process_selection(
@@ -769,14 +780,21 @@ def register_tango_sidebar_callbacks(app):
     )
     def compute_k_means(_, cluster_data, twist_data, desc_data, motl_data, cluster_options, n_clusters):
 
-        twist_desc = TwistDescriptor(input_twist=pd.DataFrame(twist_data))
+        try:
+            desc_id = _prov.next_desc_id()
+            var = _prov.bind(desc_id)
+            twist_desc = invoke_operation(TwistDescriptor, {"input_twist": pd.DataFrame(twist_data)}, assign_to=var)
+            twist_desc._pool_motl_id = desc_id
+            _prov.record(desc_id, _session.last_seq())
 
-        if cluster_data == "Twist descriptor base":
-            twist_desc.desc = twist_desc.df  # clustering is computed on desc, but here we want to use original base
-        else:  # Unique descriptor
-            twist_desc.desc = pd.DataFrame(desc_data)
+            if cluster_data == "Twist descriptor base":
+                twist_desc.desc = twist_desc.df  # clustering is computed on desc, but here we want to use original base
+            else:  # Unique descriptor
+                twist_desc.desc = pd.DataFrame(desc_data)
 
-        km_df = twist_desc.k_means_clustering(n_clusters, feature_ids=cluster_options)
+            km_df = invoke_operation(twist_desc.k_means_clustering, {"n_clusters": n_clusters, "feature_ids": cluster_options})
+        except Exception:
+            return no_update, no_update, no_update, no_update, no_update
 
         # Replace NaNs and shift by 1 -> unassigned cluster will have 0
         km_df["cluster"] = km_df["cluster"].fillna(-1).astype(int) + 1

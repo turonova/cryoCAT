@@ -17,7 +17,7 @@ import typing
 from collections.abc import Callable
 from typing import Any
 
-from dash import html, dcc
+from dash import html, dcc, ALL
 import dash_bootstrap_components as dbc
 
 from cryocat.utils.classutils import resolve_param_type, process_method_docstring, TYPE_HANDLERS
@@ -33,12 +33,17 @@ def _empty(default):
 def _mk_id(id_type, name, tag, id_extra):
     """Build a pattern-matchable control id.
 
+    All ids include "owner" (Phase 11 invariant).  "builder" in id_extra is
+    silently remapped to "owner" for backward compatibility.  Other extra keys
+    (cls_name, op, …) are carried through unchanged.
+
     Dash dict-id values must be str/number/bool, so no list (e.g. Literal
     choices) is stored here — ``generate_kwargs`` parses Literal values without
     needing them (the dropdown already yields a valid choice)."""
-    cid = {"type": id_type, "param": name, "tag": tag}
-    if id_extra:
-        cid.update(id_extra)
+    extra = dict(id_extra) if id_extra else {}
+    owner = extra.pop("owner", None) or extra.pop("builder", "") or ""
+    cid = {"type": id_type, "owner": owner, "param": name, "tag": tag}
+    cid.update(extra)
     return cid
 
 
@@ -86,12 +91,44 @@ def _bool_dropdown(cid, default, required, choices=None, extra=None):
 
 
 def _path_field(cid, default, required, choices=None, extra=None):
+    """Wrap the path input with a Browse button.
+
+    The text input keeps its canonical ``cid`` so :func:`generate_kwargs`
+    and the collecting callback's State pattern are unchanged.  The Browse
+    button has a derived id that encodes the target cid; the app-level
+    file-browser modal reads this to know where to write back (Z4).
+    """
+    import json as _json
+
     suffix = " (optional)" if _truly_optional(required, default) else ""
-    return dcc.Input(
-        type="text", id=cid,
-        value="" if _empty(default) else str(default),
-        placeholder=f"path to file{suffix}",
-        style=styles.FORM_COMPACT_INPUT,
+    val = "" if _empty(default) else str(default)
+
+    # Stable JSON encoding of cid used as the "owner" key on the browse
+    # button and its meta store so the modal can route the result back.
+    owner = _json.dumps(dict(sorted(cid.items()))) if isinstance(cid, dict) else str(cid)
+
+    from dash import dcc as _dcc
+    return html.Div(
+        [
+            dcc.Store(
+                id={"type": "path-browse-meta", "owner": owner},
+                data={"mode": "open", "kind": "", "extensions": []},
+            ),
+            _dcc.Input(
+                type="text", id=cid,
+                value=val,
+                placeholder=f"path to file{suffix}",
+                style={**styles.FORM_COMPACT_INPUT, "flex": "1 1 0", "minWidth": "0"},
+            ),
+            dbc.Button(
+                "Browse…",
+                id={"type": "path-browse-btn", "owner": owner},
+                color="secondary",
+                size="sm",
+                style={"flexShrink": "0"},
+            ),
+        ],
+        style={"display": "flex", "gap": "0.35rem", "width": "100%", "alignItems": "center"},
     )
 
 
@@ -120,53 +157,28 @@ def _choice_dropdown(cid, default, required, choices=None, extra=None):
 
 
 def _rotation_field(cid, default, required, choices=None, extra=None):
-    from cryocat.app.components.rotationbuilder import get_rotation_builder_panel
-    type_ = cid.get("type", "x") if isinstance(cid, dict) else str(cid)
-    param_ = cid.get("param", "x") if isinstance(cid, dict) else "x"
-    builder_ = cid.get("builder", "") if isinstance(cid, dict) else ""
-    rprefix = (
-        f"rotfld-{builder_}-{type_}-{param_}" if builder_
-        else f"rotfld-{type_}-{param_}"
-    )
+    # Phase 11 R3: inert widget — the app-level rotation modal owns all callbacks.
+    owner = cid.get("owner", "") if isinstance(cid, dict) else ""
+    param = cid.get("param", "") if isinstance(cid, dict) else ""
     if _empty(default):
         val = ""
     elif isinstance(default, (list, tuple)):
         val = ",".join(str(x) for x in default)
     else:
         val = str(default)
-    return html.Div(
+    return dbc.InputGroup(
         [
-            dbc.InputGroup(
-                [
-                    dbc.Input(
-                        id=cid,
-                        type="text",
-                        value=val,
-                        placeholder="phi,theta,psi (zxz, degrees)",
-                    ),
-                    dbc.Button("Build…", id=f"{rprefix}-build-btn", color="secondary", size="sm"),
-                ]
+            dbc.Input(
+                id=cid,
+                type="text",
+                value=val,
+                placeholder="phi,theta,psi (zxz, degrees)",
             ),
-            dbc.Modal(
-                [
-                    dbc.ModalHeader(dbc.ModalTitle("Build rotation")),
-                    dbc.ModalBody(get_rotation_builder_panel(f"{rprefix}-inner")),
-                    dbc.ModalFooter(
-                        [
-                            dbc.Button(
-                                "Use this rotation",
-                                id=f"{rprefix}-use-btn",
-                                color="primary",
-                                className="me-2",
-                            ),
-                            dbc.Button("Close", id=f"{rprefix}-close-btn", color="secondary"),
-                        ]
-                    ),
-                ],
-                id=f"{rprefix}-modal",
-                size="lg",
-                is_open=False,
-                centered=True,
+            dbc.Button(
+                "Build…",
+                id={"type": "rotation-build-btn", "owner": owner, "param": param},
+                color="secondary",
+                size="sm",
             ),
         ]
     )
@@ -244,14 +256,16 @@ def form_row(name, widget, description, truly_optional=False, label_id=None):
     return html.Div([label, html.Div(widget, style=styles.FORM_INPUT)], style=styles.FORM_ROW)
 
 
-def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
+def build_form(fn_or_entry, id_type="op-param", id_extra=None, exclude=()):
     """Build Dash form rows for a callable from its signature.
 
     Parameters
     ----------
-    fn : callable or class
-        The function/method whose parameters become the form. A class is
-        accepted — its ``__init__`` signature is used.
+    fn_or_entry : callable, class, or GuiEntry
+        The function/method whose parameters become the form.  Pass a
+        :class:`~cryocat.utils.classutils.GuiEntry` to use validated registry
+        metadata (preferred).  A plain callable or class is also accepted for
+        backward compatibility.
     id_type : str, default="op-param"
         The ``"type"`` field of every control's pattern-matchable id.
     id_extra : dict, optional
@@ -268,8 +282,14 @@ def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
         Dash component rows. Each control id is
         ``{"type": id_type, "param": name, "tag": tag, "choices": [...], **id_extra}``.
     """
-    gui = getattr(fn, "_gui", {})
-    hide = set(gui.get("hide", ())) | {"self"} | set(exclude)
+    from cryocat.utils.classutils import GuiEntry
+    if isinstance(fn_or_entry, GuiEntry):
+        fn = fn_or_entry.fn
+        hide = fn_or_entry.hide | {"self"} | set(exclude)
+    else:
+        fn = fn_or_entry
+        gui = getattr(fn, "_gui", {})
+        hide = set(gui.get("hide", ())) | {"self"} | set(exclude)
 
     try:
         sig = inspect.signature(fn)
@@ -320,3 +340,44 @@ def build_form(fn, id_type="op-param", id_extra=None, exclude=()):
     if not rows:
         return [html.Div("No parameters required.", style=styles.FORM_HINT)]
     return rows
+
+
+def register_path_writeback(app, id_type: str, id_extra: dict | None = None) -> None:
+    """Register a callback that writes browser confirm results to formgen path inputs.
+
+    Call once per unique ``(id_type, id_extra)`` combination used in
+    :func:`build_form` calls that produce path-tagged parameters.  The
+    app-level modal writes to :data:`~cryocat.app.ids.BROWSER_RESULT`; this
+    callback routes that result to the matching ``dcc.Input``.
+
+    Parameters
+    ----------
+    app:
+        The Dash app instance.
+    id_type:
+        The ``"type"`` field used in the :func:`build_form` call.
+    id_extra:
+        The ``id_extra`` dict used in the :func:`build_form` call (or
+        ``None`` / ``{}`` for forms with no extra fields).
+    """
+    import json as _json
+    from dash import Input, Output, no_update, ctx
+    from cryocat.app import ids as _ids
+
+    id_extra = id_extra or {}
+    pattern = {"type": id_type, "param": ALL, "tag": "path", **id_extra}
+
+    @app.callback(
+        Output(pattern, "value"),
+        Input(_ids.BROWSER_RESULT, "data"),
+        prevent_initial_call=True,
+    )
+    def _writeback_form_paths(result):
+        if not result:
+            raise __import__("dash").exceptions.PreventUpdate
+        target_owner = result.get("owner", "")
+        final_value = result.get("value", "")
+        return [
+            final_value if _json.dumps(dict(sorted(e["id"].items()))) == target_owner else no_update
+            for e in ctx.outputs_list
+        ]

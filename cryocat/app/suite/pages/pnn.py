@@ -25,7 +25,7 @@ import dash_bootstrap_components as dbc
 from cryocat.core.cryomotl import Motl
 from cryocat.analysis.nnana import NearestNeighbors
 from cryocat.analysis import visplot
-from cryocat.app.apputils import generate_kwargs
+from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app import ids, formgen
 from cryocat.app.pool import PoolState, insert_motl as _insert_motl
 from cryocat.app.components.motlsource import get_motl_source, register_motl_source_callbacks
@@ -47,7 +47,7 @@ def _nn_csv_save(path, grid_data, used_motls):
         lead = [c for c in ("motl_id", column_name) if c in df.columns]
         cols = lead + [c for c in df.columns if c not in lead]
         df = df[cols]
-    df.to_csv(path, index=False)
+    run_operation(df.to_csv, {"path_or_buf": path, "index": False})
     return False, f"Saved to {path}"
 
 
@@ -357,6 +357,7 @@ def _sidebar() -> list:
                                     dcc.Dropdown(
                                         id={
                                             "type": "nn-forms-params",
+                                            "owner": "",
                                             "param": "exclude_column_name",
                                             "tag": "Literal",
                                             "cls_name": "nn-params",
@@ -480,7 +481,7 @@ def _kwargs_by_cls(param_ids, param_values, target_cls):
 def register_callbacks(app):
     register_motl_source_callbacks(app, "nn", multi=True)
     register_table_callbacks(
-        app, "nn-out-tabv", csv_only=True,
+        app, "nn-out-tabv",
         extra_csv_states=[State("nn-used-motls-store", "data")],
         custom_csv_save_fn=_nn_csv_save,
     )
@@ -497,7 +498,7 @@ def register_callbacks(app):
 
     @app.callback(
         Output("nn-dist-toggle-wrap", "style"),
-        Input({"type": "nn-forms-params", "param": "nn_type", "tag": "Literal", "cls_name": "nn-params"}, "value"),
+        Input({"type": "nn-forms-params", "owner": "", "param": "nn_type", "tag": "Literal", "cls_name": "nn-params"}, "value"),
     )
     def _toggle_dist_form(nn_type):
         return {"display": "block"} if nn_type == "radius" else {"display": "none"}
@@ -584,8 +585,8 @@ def register_callbacks(app):
         Input("nn-compute-btn", "n_clicks"),
         State("nn-motl-select", "value"),
         State(ids.POOL_MOTLS, "data"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State("nn-angular-toggle", "value"),
         State("nn-dist-toggle", "value"),
         prevent_initial_call=True,
@@ -690,8 +691,8 @@ def register_callbacks(app):
         State("nn-pp-add-cols", "value"),
         State("nn-pp-sides", "value"),
         State("nn-pp-angular-toggle", "value"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": "nn-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State("nn-pp-dist-toggle", "value"),
         prevent_initial_call=True,
     )
@@ -948,14 +949,15 @@ def register_callbacks(app):
             if not save_path:
                 return "Specify an output file path.", *_nu5
             try:
-                Motl(merged_df).write_out(save_path)
+                m = Motl(merged_df)
+                run_operation(m.save_to, {"output_path": save_path})
             except Exception as exc:
                 return f"Save failed: {exc}", *_nu5
             return f"Saved {len(merged_df)} particles to {save_path}.", *_nu5
 
         if trigger == "nn-sel-motl-send-btn":
             pool_state = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
-            # TODO(doc-2): route through run_operation_to_pool
+            # TODO(P9): route through run_operation_to_pool once NN merge is tracked.
             pool_state, new_id = _insert_motl(
                 pool_state, merged_df.to_dict("records"), label=editor_label,
             )

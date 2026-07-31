@@ -12,7 +12,11 @@ Each tool is a page module exposing ``layout`` (attribute) and
 """
 
 import importlib
-import os
+
+# Start the session stream now so events are captured when running standalone
+# (server.py calls this before importing us; start_session() is idempotent).
+from cryocat.app import session as _session
+_session.start_session()
 
 import dash
 from dash import html, dcc, Input, Output
@@ -25,7 +29,19 @@ from cryocat.app.components.graphsettings import (
     register_graph_settings_callbacks,
 )
 from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
-from cryocat.app.logger import dash_logger
+from cryocat.app.components.consoleui import (
+    get_console_offcanvas,
+    get_console_toggle_btn,
+    register_console_callbacks,
+)
+from cryocat.app.components.filebrowser import (
+    get_file_browser,
+    register_file_browser_callbacks,
+)
+from cryocat.app.components.rotationmodal import (
+    get_rotation_modal,
+    register_rotation_modal_callbacks,
+)
 
 app = dash.Dash(
     __name__,
@@ -95,11 +111,15 @@ app.layout = dbc.Container(
     [
         dcc.Location(id=ids.SUITE_URL),
         *POOL_STORES,
+        get_file_browser(),
+        get_rotation_modal(),
         *get_graph_settings_components(),
         *get_log_panel("suite-log"),
+        *get_console_offcanvas("suite-console"),
         html.Div(
             [
                 html.Div(id=ids.SUITE_TOOL_SELECTOR, style={"flex": "1"}),
+                get_console_toggle_btn("suite-console"),
                 dbc.Button(
                     "Show log",
                     id="suite-open-log-btn",
@@ -140,10 +160,11 @@ def _route(pathname):
 # Registered once, up front. All page IDs are live from the start because every
 # page is mounted in the layout — suppress_callback_exceptions is still set as a
 # safety net but is no longer strictly required.
-dash_logger.start_session(os.path.expanduser("~/.cryocat/sessions"))
-
+register_file_browser_callbacks(app)
+register_rotation_modal_callbacks(app)
 register_graph_settings_callbacks(app)
 register_log_panel_callbacks(app, "suite-log", open_btn_id="suite-open-log-btn")
+register_console_callbacks(app, "suite-console")
 for _t in TOOLS:
     _PAGES[_t["id"]].register_callbacks(app)
 

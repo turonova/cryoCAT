@@ -28,6 +28,7 @@ from cryocat.app.suite.motlsidebar import (
 )
 from cryocat.app.components.tomoview import get_viewer_component, register_viewer_callbacks
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
+from cryocat.app.components.tablesave import register_table_save_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
 from cryocat.app.components.motlio import get_motl_simple_save_component, register_motl_simple_save_callbacks
@@ -41,15 +42,13 @@ from cryocat.app.apputils import _format_relion_params
 
 def _make_stores():
     stores = [
-        dcc.Store(id="me-slot-map", data=[None] * N_SLOTS, storage_type="session"),
+        dcc.Store(id="me-slot-map", data=[None] * N_SLOTS),
         dcc.Store(id="me-results-store"),
         dcc.Store(id="me-results-label-store"),
         dcc.Store(id="me-load-motl-data-store"),
         dcc.Store(id="me-load-motl-extra-data-store"),
         dcc.Store(id="me-load-motl-data-type"),
         dcc.Store(id="me-load-relion-optics-store"),
-        dcc.Store(id="me-load-relion5-tomos-store"),
-        dcc.Store(id="me-load-relion5-tomos-filename"),
         dcc.Store(id="me-load-relion-params-store"),
         dcc.Store(id="me-res-tv-data"),
         dcc.Store(id="me-res-tv-index", data=0),
@@ -57,8 +56,8 @@ def _make_stores():
         dcc.Store(id="me-res-motl-data-type"),
         dcc.Store(id="me-res-motl-extra-data-store"),
         dcc.Store(id="me-res-relion-optics-store"),
-        dcc.Store(id="me-res-relion5-tomos-store"),
-        dcc.Store(id="me-res-relion5-tomos-filename"),
+        dcc.Store(id="me-res-rln-tomos-store"),
+        dcc.Store(id="me-res-rln-tomos-filename"),
     ]
     for i in range(N_SLOTS):
         stores += [
@@ -66,8 +65,8 @@ def _make_stores():
             dcc.Store(id=f"me-{i}-motl-extra-data-store"),
             dcc.Store(id=f"me-{i}-motl-data-type"),
             dcc.Store(id=f"me-{i}-relion-optics-store"),
-            dcc.Store(id=f"me-{i}-relion5-tomos-store"),
-            dcc.Store(id=f"me-{i}-relion5-tomos-filename"),
+            dcc.Store(id=f"me-{i}-rln-tomos-store"),
+            dcc.Store(id=f"me-{i}-rln-tomos-filename"),
             dcc.Store(id=f"me-{i}-relion-params-store"),
             dcc.Store(id=f"me-{i}-tv-data"),
             dcc.Store(id=f"me-{i}-tv-index", data=0),
@@ -162,12 +161,8 @@ def register_callbacks(app):
     # with literal prefixes (shared components are untouched).
     for _i in range(N_SLOTS):
         register_viewer_callbacks(app, f"me-{_i}-tv", tabs_id=None)
-        register_table_callbacks(
-            app,
-            f"me-{_i}-tabv",
-            csv_only=False,
-            connected_motl_prefix=f"me-{_i}",
-        )
+        register_table_callbacks(app, f"me-{_i}-tabv")
+        register_table_save_callbacks(app, f"me-{_i}-tabv", connected_motl_prefix=f"me-{_i}")
         register_table_plot_callbacks(
             app,
             f"me-{_i}-tabv-table-plot",
@@ -184,7 +179,8 @@ def register_callbacks(app):
 
     # Results tab
     register_viewer_callbacks(app, "me-res-tv", tabs_id=None)
-    register_table_callbacks(app, "me-res-tabv", csv_only=False, connected_motl_prefix="me-res")
+    register_table_callbacks(app, "me-res-tabv")
+    register_table_save_callbacks(app, "me-res-tabv", connected_motl_prefix="me-res")
     register_table_plot_callbacks(app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store")
     register_table_cluster_callbacks(app, "me-res-tabv-table-cluster", "me-res-tabv-global-data-store")
 
@@ -246,8 +242,8 @@ def _register_pool_sync(app):
         *[Output(f"me-{i}-motl-extra-data-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-motl-data-type", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-relion-optics-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
-        *[Output(f"me-{i}-relion5-tomos-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
-        *[Output(f"me-{i}-relion5-tomos-filename", "data", allow_duplicate=True) for i in range(N_SLOTS)],
+        *[Output(f"me-{i}-rln-tomos-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
+        *[Output(f"me-{i}-rln-tomos-filename", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-relion-params-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-undo-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         Input("me-slot-map", "data"),
@@ -371,7 +367,7 @@ def _register_create_from_selected(app):
         src_type = src_meta.get("type", "emmotl")
         short = src_label[:15] + "…" if len(src_label) > 15 else src_label
 
-        # TODO(doc-2): route through run_operation_to_pool
+        # TODO(P9): route through run_operation_to_pool once selection is tracked.
         state, mid = insert_motl(
             state, selected_rows,
             label=f"Sel from {short} ({len(selected_rows)})",

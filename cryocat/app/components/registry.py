@@ -21,11 +21,11 @@ class Registry[T]:
         the limit evicts the oldest entry first (FIFO).
     """
 
-    def __init__(self, prefix: str, *, max_items: int | None = None) -> None:
+    def __init__(self, prefix: str, *, max_items: int | None = None, start: int = 0) -> None:
         self._prefix = prefix
         self._max_items = max_items
         self._store: dict[str, T] = {}
-        self._counter = count(0)
+        self._counter = count(start)
 
     def add(self, obj: T) -> str:
         """Store *obj* and return a fresh, stable key."""

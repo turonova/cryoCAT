@@ -82,7 +82,7 @@ def get_volume_view(prefix: str):
     )
 
 
-def register_volume_view_callbacks(app, prefix: str, register_mask: bool = True):
+def register_volume_view_callbacks(app, prefix: str, *, register_mask: bool):
     """Register callbacks for the volume viewer.
 
     Parameters

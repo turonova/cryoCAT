@@ -7,6 +7,7 @@ import dash_bootstrap_components as dbc
 from dash import Input, Output, State, ALL, ctx, no_update
 from cryocat.app.components.tomoview import get_viewer_component, register_viewer_callbacks
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
+from cryocat.app.components.tablesave import register_table_save_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
 
@@ -355,8 +356,10 @@ def register_tango_table_callbacks(app):
     register_viewer_callbacks(app, "tviewer-kmeans", show_dual_graph=False, hover_info=["subtomo_id", "class"])
     register_viewer_callbacks(app, "tviewer-proximity", show_dual_graph=False, hover_info=["subtomo_id", "class"])
 
-    register_table_callbacks(app, "tabv-motl", csv_only=False, connected_motl_prefix="main")
-    register_table_callbacks(app, "tabv-motl-nn", csv_only=False, connected_motl_prefix="nn")
+    register_table_callbacks(app, "tabv-motl")
+    register_table_save_callbacks(app, "tabv-motl", connected_motl_prefix="main")
+    register_table_callbacks(app, "tabv-motl-nn")
+    register_table_save_callbacks(app, "tabv-motl-nn", connected_motl_prefix="nn")
     register_table_callbacks(app, "tabv-nn")
     register_table_callbacks(app, "tabv-twist")
     register_table_callbacks(app, "tabv-desc")
@@ -566,8 +569,8 @@ def register_tango_table_callbacks(app):
         State("tabv-motl-global-data-store", "data"),
         State("symmetry-dropdown", "value"),
         State("c-symmetry-value", "value"),
-        State({"type": "twist-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": "twist-forms-params", "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": "twist-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "twist-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         prevent_initial_call=True,
     )
     def compute_twist_vector(trigger, motl_df, symm_type, symm_value, param_values, param_ids):

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import emfile
 import numpy as np
 import os
@@ -19,7 +21,7 @@ from cryocat.analysis import nnana
 from cryocat.utils import imod
 from cryocat._types import ArrayLike, BoundaryType, MapSource, MotlColumn, MotlType, PathOrStr, RotationLike, Symmetry, TomoDimensions, RelionVersion
 from cryocat.utils.classutils import gui_exposed
-from typing import Dict, List, Optional, Tuple, Union, Literal
+from typing import Literal
 
 from math import ceil
 from pathlib import Path
@@ -101,7 +103,7 @@ class Motl:
         "class",
     ]
 
-    def __init__(self, motl_df: Optional[pd.DataFrame] = None) -> None:
+    def __init__(self, motl_df: pd.DataFrame | None = None) -> None:
         if motl_df is not None:
             if self.check_df_correct_format(motl_df):
                 self.df = motl_df[Motl.motl_columns].copy()
@@ -284,7 +286,73 @@ class Motl:
         self.df[["phi", "theta", "psi"]] = self.df[["phi", "theta", "psi"]].astype(float)
         self.df.loc[:, ["phi", "theta", "psi"]] = angles
 
-    def assign_column(self, input_df: pd.DataFrame, column_pairs: Dict[str, str]) -> None:
+    @gui_exposed(category="Geometry")
+    def randomize_angles(
+        self,
+        angles: Literal["phi", "psi", "theta", "all"] = "all",
+        range: tuple[float, float] | None = None,
+    ) -> None:
+        """Randomize Euler angles of all particles in-place.
+
+        Parameters
+        ----------
+        angles : {"phi", "psi", "theta", "all"}, default="all"
+            Which Euler angle(s) to randomize. ``"all"`` randomizes all three.
+        range : tuple of (float, float), optional
+            ``(min, max)`` in degrees applied to the selected angle(s).
+            When ``None``, each angle uses its natural range: ``(0, 360)``
+            for phi and psi, ``(0, 180)`` for theta.
+            When provided, the same range is applied to every selected angle.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If *angles* is not one of the recognised selection strings.
+
+        Notes
+        -----
+        This method modifies the ``df`` attribute in-place.
+
+        Examples
+        --------
+        Randomize all angles using default full ranges::
+
+            motl.randomize_angles()
+
+        Randomize only phi::
+
+            motl.randomize_angles("phi")
+
+        Apply a restricted range to all three angles::
+
+            motl.randomize_angles("all", range=(0, 90))
+
+        """
+        _VALID = {"phi", "psi", "theta", "all"}
+        if angles not in _VALID:
+            raise ValueError(
+                f"Invalid angle selection {angles!r}. "
+                f"Choose from: {sorted(_VALID)}."
+            )
+
+        _DEFAULT_RANGES: dict[str, tuple[float, float]] = {
+            "phi":   (0.0, 360.0),
+            "psi":   (0.0, 360.0),
+            "theta": (0.0, 180.0),
+        }
+
+        selected = ["phi", "psi", "theta"] if angles == "all" else [angles]
+
+        n = len(self.df)
+        for angle in selected:
+            lo, hi = range if range is not None else _DEFAULT_RANGES[angle]
+            self.df[angle] = np.random.uniform(lo, hi, size=n)
+
+    def assign_column(self, input_df: pd.DataFrame, column_pairs: dict[str, str]) -> None:
         """The assign_column function takes a dataframe and a dictionary of column pairs.
         The function then iterates through the dictionary, checking if the paired key is in
         the input_df columns. If it is, it assigns that column to the em_key in self.df.
@@ -308,7 +376,7 @@ class Motl:
 
         for em_key, paired_key in column_pairs.items():
             if paired_key in input_df.columns:
-                self.df[em_key] = pd.to_numeric(input_df[paired_key])
+                self.df[em_key] = pd.to_numeric(input_df[paired_key], errors="coerce")
 
     @gui_exposed(category="Cleaning")
     def clean_by_distance(
@@ -317,7 +385,7 @@ class Motl:
         column_name: MotlColumn,
         metric_column_name: MotlColumn = "score",
         keep_greater: bool = True,
-        dist_mask: Optional[MapSource] = None,
+        dist_mask: MapSource | None = None,
     ) -> None:
         """Cleans `df` by removing particles closer than a given distnace threshold (in voxels).
 
@@ -398,8 +466,8 @@ class Motl:
         radius_in_voxels: float,
         column_name: MotlColumn = "tomo_id",
         inplace: bool = True,
-        output_path: Optional[PathOrStr] = None,
-    ) -> Optional["Motl"]:
+        output_path: PathOrStr | None = None,
+    ) -> "Motl" | None:
         """Cleans the motl by removing points that are within a specified radius of any point in a the provided dataframe
         with points.
 
@@ -472,7 +540,7 @@ class Motl:
             return cleaned_motl
 
     @staticmethod
-    def _boundary_from_type(boundary_type: BoundaryType, box_size: Optional[int]) -> int:
+    def _boundary_from_type(boundary_type: BoundaryType, box_size: int | None) -> int:
         """Resolve ``(boundary_type, box_size)`` into a numeric per-axis boundary.
 
         Internal helper shared by :meth:`clean_by_tomo_mask` and
@@ -491,12 +559,12 @@ class Motl:
     def clean_by_tomo_mask(
         self,
         tomo_list: TomoDimensions,
-        tomo_masks: Union[MapSource, List[MapSource]],
+        tomo_masks: MapSource | list[MapSource],
         inplace: bool = True,
         boundary_type: BoundaryType = "center",
-        box_size: Optional[int] = None,
-        output_path: Optional[PathOrStr] = None,
-    ) -> Optional["Motl"]:
+        box_size: int | None = None,
+        output_path: PathOrStr | None = None,
+    ) -> "Motl" | None:
         """Removes particles from the motive list based on provided tomomgram masks.
 
         Parameters
@@ -590,7 +658,7 @@ class Motl:
         return cleaned_motl
 
     @gui_exposed(category="Cleaning")
-    def clean_by_otsu(self, column_name: MotlColumn, histogram_bin: Optional[int] = None, global_level: bool = False) -> None:
+    def clean_by_otsu(self, column_name: MotlColumn, histogram_bin: int | None = None, global_level: bool = False) -> None:
         """Clean the DataFrame by applying Otsu's thresholding algorithm on the scores.
 
         Parameters
@@ -861,7 +929,7 @@ class Motl:
         self.df["class"] = r_classes
 
     @gui_exposed(category="Geometry")
-    def flip_handedness(self, tomo_dimensions: Optional[TomoDimensions] = None) -> None:
+    def flip_handedness(self, tomo_dimensions: TomoDimensions | None = None) -> None:
         """Flip the handedness of the particles in the motl.
 
         Parameters
@@ -902,7 +970,7 @@ class Motl:
                     z_dim = float(dims.loc[dims["tomo_id"] == t, "z"].iloc[0]) + 1
                     self.df.loc[self.df["tomo_id"] == t, "z"] = z_dim - self.df.loc[self.df["tomo_id"] == t, "z"]
 
-    def get_angles(self, tomo_number: Optional[int] = None) -> np.ndarray:
+    def get_angles(self, tomo_number: int | None = None) -> np.ndarray:
         """This function takes in a tomo_number and returns the angles of all particles in that
         tomogram. If no tomo_number is given, it will return the angles of all particles.
 
@@ -925,7 +993,7 @@ class Motl:
 
         return np.atleast_2d(angles)
 
-    def get_coordinates(self, tomo_number: Optional[int] = None) -> np.ndarray:
+    def get_coordinates(self, tomo_number: int | None = None) -> np.ndarray:
         """This function takes in a tomo_number and returns the coordinates of all particles in that
         tomogram. If no tomo_number is given, it will return the coordinates of all particles. The coordinates are
         computes as x + shift_x, y + shift_y, z + shift_z.
@@ -971,7 +1039,7 @@ class Motl:
         max_tomo_id = self.df[column_name].max()
         return len(str(max_tomo_id))
 
-    def get_rotations(self, tomo_number: Optional[int] = None) -> Union[rot, List]:
+    def get_rotations(self, tomo_number: int | None = None) -> rot | list:
         """The get_rotations function returns rotations for all particles.
 
         Parameters
@@ -1049,7 +1117,7 @@ class Motl:
         self,
         idx: ArrayLike,
         new_coords: np.ndarray,
-        new_angles: Optional[np.ndarray] = None,
+        new_angles: np.ndarray | None = None,
     ) -> "Motl":
         """Build a new Motl that inherits ``tomo_id`` and ``object_id`` from a subset of self.
 
@@ -1089,7 +1157,7 @@ class Motl:
         new_motl.update_coordinates()
         return new_motl
 
-    def get_feature(self, column_name: Union[MotlColumn, List[MotlColumn]]) -> np.ndarray:
+    def get_feature(self, column_name: MotlColumn | list[MotlColumn]) -> np.ndarray:
         """Returns the values from the column in self.df specified by column_name.
 
         Parameters
@@ -1127,7 +1195,7 @@ class Motl:
     # else:
     #     raise UserInputError(f"The class Motl does not contain column with name {feature_id}")
 
-    def get_motl_subset(self, column_values: Union[ArrayLike, int, float], column_name: MotlColumn = "tomo_id", return_df: bool = False, reset_index: bool = True) -> Union["Motl", pd.DataFrame]:
+    def get_motl_subset(self, column_values: ArrayLike | int | float, column_name: MotlColumn = "tomo_id", return_df: bool = False, reset_index: bool = True) -> "Motl" | pd.DataFrame:
         """Get a subset of the Motl object based on specified column values.
 
         Parameters
@@ -1229,7 +1297,7 @@ class Motl:
         # Apply the custom function to each group
         self.df = df_reset.groupby("tomo_id", group_keys=False).apply(assign_new_object_id)
 
-    def get_relative_position(self, idx: ArrayLike, nn_idx: ArrayLike) -> Tuple["Motl", np.ndarray]:
+    def get_relative_position(self, idx: ArrayLike, nn_idx: ArrayLike) -> tuple["Motl", np.ndarray]:
         """Returns a new Motl object with coordinates corresponding to the center between the particles
         (speficied by their indices within idx) and their nearest neigbors (specified by their indices within nn_idx).
 
@@ -1333,7 +1401,7 @@ class Motl:
             raise UserInputError(f"Provided motl file {input_motl} has format that is currently not supported.")
 
     @gui_exposed(category="Cleaning")
-    def remove_feature(self, column_name: MotlColumn, column_values: Union[ArrayLike, int, float]) -> None:
+    def remove_feature(self, column_name: MotlColumn, column_values: ArrayLike | int | float) -> None:
         """The function removes particles based on a column value (e.g. tomo number).
 
         Parameters
@@ -1400,7 +1468,7 @@ class Motl:
         cols = ["x", "y", "z", "shift_x", "shift_y", "shift_z"]
         self.df[cols] = self.df[cols] * scaling_factor
 
-    def split_by_feature(self, column_name: MotlColumn, write_out: bool = False, output_prefix: str = "") -> List["Motl"]:
+    def split_by_feature(self, column_name: MotlColumn, write_out: bool = False, output_prefix: str = "") -> list["Motl"]:
         """Splits motl by the column_name and writes them out.
 
         Parameters
@@ -1480,7 +1548,18 @@ class Motl:
         else:
             raise UserInputError(f"Provided motl file {output_path} has format that is currently not supported.")
 
-    def write_to_model_file(self, column_name: MotlColumn, output_base: str, point_size: int, binning: float = 1.0, zero_padding: Optional[int] = None) -> None:
+    def save_to(self, output_path: "PathOrStr", **kwargs) -> str:
+        """Save via :meth:`write_out` and return the written path as a string.
+
+        Designed for use with ``run_operation`` / ``run_operation_to_pool`` so
+        that save operations appear in the event stream.  The ``str`` return
+        value causes the result summary to record the path (via
+        :func:`~cryocat.app.event.summarise_result`).
+        """
+        self.write_out(output_path, **kwargs)
+        return str(output_path)
+
+    def write_to_model_file(self, column_name: MotlColumn, output_base: str, point_size: int, binning: float = 1.0, zero_padding: int | None = None) -> None:
         """It splits the dataframe based on column_name and writes them out as mod files (from IMOD). The values in "class"
         column are used to created different objects, the countour is always the same. This function requires IMOD's
         point2model function to exist and being in PATH.
@@ -1583,7 +1662,7 @@ class Motl:
         warnings.warn("The coordinates for subtomogram extraction were changed, new extraction is necessary!")
 
     @classmethod
-    def _concat_with_renumbered_objects(cls, motl_list: List["MotlSource"]) -> "Motl":
+    def _concat_with_renumbered_objects(cls, motl_list: list["MotlSource"]) -> "Motl":
         """Concatenate motls while bumping ``object_id`` to keep it unique across the merged result.
 
         Internal helper shared by :meth:`merge_and_renumber` and
@@ -1625,7 +1704,7 @@ class Motl:
         motls={"arity": "list", "ordered": True, "main_first": False, "param": "motl_list"},
     )
     @classmethod
-    def merge_and_renumber(cls, motl_list: List["MotlSource"]) -> "Motl":
+    def merge_and_renumber(cls, motl_list: list["MotlSource"]) -> "Motl":
         """Merge a list of Motl instances or paths to motl files to a single motl. It renumbers its particles and objects
          to ensure uniqueness.
 
@@ -1654,7 +1733,7 @@ class Motl:
         motls={"arity": "list", "ordered": True, "main_first": True, "param": "motl_list"},
     )
     @classmethod
-    def merge_and_drop_duplicates(cls, motl_list: List["MotlSource"]) -> "Motl":
+    def merge_and_drop_duplicates(cls, motl_list: list["MotlSource"]) -> "Motl":
         """Merge a list of Motl instances or paths to motl files to a single motl. Does not renumber particles - uniqueness
         has to be inherent to the instances!
 
@@ -1680,7 +1759,7 @@ class Motl:
         return merged_motl
 
     @gui_exposed(category="Cleaning")
-    def remove_out_of_bounds_particles(self, dimensions: TomoDimensions, boundary_type: BoundaryType = "center", box_size: Optional[int] = None) -> None:
+    def remove_out_of_bounds_particles(self, dimensions: TomoDimensions, boundary_type: BoundaryType = "center", box_size: int | None = None) -> None:
         """Removes particles that are out of tomogram bounds.
 
         Parameters
@@ -1784,7 +1863,7 @@ class Motl:
         self.df.reset_index(inplace=True, drop=True)
 
     @staticmethod
-    def recenter_to_subparticle(input_motl: "MotlSource", input_map: MapSource, input_rotation: Optional[RotationLike] = None, motl_type: MotlType = "emmotl", **kwargs) -> "Motl":
+    def recenter_to_subparticle(input_motl: "MotlSource", input_map: MapSource, input_rotation: RotationLike | None = None, motl_type: MotlType = "emmotl", **kwargs) -> "Motl":
         """Computes the center of mass of the provided binary mask and computes the necessary shift between the mask box
         center and the center of mass. This shift is applied to the motl positions. If input_rotation is specified it applies
         it to the shifted particles as well.
@@ -1888,7 +1967,7 @@ class Motl:
         return feature_motl
 
     @gui_exposed(category="Geometry", hide=("inplace",))
-    def shift_positions(self, shift: ArrayLike, inplace: bool = True) -> Optional["Motl"]:
+    def shift_positions(self, shift: ArrayLike, inplace: bool = True) -> "Motl" | None:
         """Shifts the coordinates by the provided shift.
 
         Parameters
@@ -1998,7 +2077,7 @@ class EmMotl(Motl):
         If ``input_motl`` is of an unsupported type.
     """
 
-    def __init__(self, input_motl: Optional["MotlSource"] = None, header: Optional[dict] = None) -> None:
+    def __init__(self, input_motl: "MotlSource" | None = None, header: dict | None = None) -> None:
         if input_motl is not None:
             if isinstance(input_motl, EmMotl):
                 self.df = input_motl.df.copy()
@@ -2040,7 +2119,7 @@ class EmMotl(Motl):
         raise ValueError("Provided motl does not have the correct format.")
 
     @staticmethod
-    def read_in(input_path: PathOrStr) -> Tuple[pd.DataFrame, dict]:
+    def read_in(input_path: PathOrStr) -> tuple[pd.DataFrame, dict]:
         """Reads in an EM file and returns a pandas DataFrame and header.
 
         Parameters
@@ -4577,7 +4656,7 @@ class StopgapMotl(Motl):
         "class",
     ]
 
-    def __init__(self, input_motl: Optional["MotlSource"] = None) -> None:
+    def __init__(self, input_motl: "MotlSource" | None = None) -> None:
         super().__init__()
         self.sg_df = pd.DataFrame()
 
@@ -4794,7 +4873,7 @@ class DynamoMotl(Motl):
         If ``input_motl`` is of an unsupported type.
     """
 
-    def __init__(self, input_motl: Optional["MotlSource"] = None) -> None:
+    def __init__(self, input_motl: "MotlSource" | None = None) -> None:
         super().__init__()
         self.dynamo_df = pd.DataFrame()
 
@@ -4964,7 +5043,7 @@ class ModMotl(Motl):
 
     columns = ["object_id", "contour_id", "x", "y", "z", "object_radius", "mod_id"]
 
-    def __init__(self, input_motl: Optional["MotlSource"] = None, mod_prefix: str = "", mod_suffix: str = ".mod") -> None:
+    def __init__(self, input_motl: "MotlSource" | None = None, mod_prefix: str = "", mod_suffix: str = ".mod") -> None:
         super().__init__()
         self.mod_df = pd.DataFrame()
 
@@ -5192,11 +5271,11 @@ class ModMotl(Motl):
 def emmotl2relion(
     input_motl: "MotlSource",
     relion_version: float,
-    output_path: Optional[PathOrStr] = None,
+    output_path: PathOrStr | None = None,
     flip_handedness: bool = False,
-    tomo_dim: Optional[TomoDimensions] = None,
-    load_kwargs: Optional[dict] = None,
-    write_kwargs: Optional[dict] = None,
+    tomo_dim: TomoDimensions | None = None,
+    load_kwargs: dict | None = None,
+    write_kwargs: dict | None = None,
 ) -> "RelionMotl":
     """Converts an EmMotl to RelionMotl format and optionally writes it to file.
 
@@ -5254,13 +5333,13 @@ def emmotl2relion(
 def relion2emmotl(
     input_motl: "MotlSource",
     relion_version: float,
-    load_kwargs: Optional[dict] = None,
-    output_path: Optional[PathOrStr] = None,
-    pixel_size: Optional[float] = None,
-    binning: Optional[float] = None,
+    load_kwargs: dict | None = None,
+    output_path: PathOrStr | None = None,
+    pixel_size: float | None = None,
+    binning: float | None = None,
     update_coordinates: bool = False,
     flip_handedness: bool = False,
-    tomo_dim: Optional[TomoDimensions] = None,
+    tomo_dim: TomoDimensions | None = None,
 ) -> "EmMotl":
     """Converts a RelionMotl to EmMotl format and optionally writes it to a file.
 
@@ -5316,7 +5395,7 @@ def relion2emmotl(
     return em_motl
 
 
-def stopgap2emmotl(input_motl: "MotlSource", output_path: Optional[PathOrStr] = None, update_coordinates: bool = False) -> "EmMotl":
+def stopgap2emmotl(input_motl: "MotlSource", output_path: PathOrStr | None = None, update_coordinates: bool = False) -> "EmMotl":
     """Converts a StopgapMotl to EmMotl format and optionally writes it to a file.
 
     Parameters
@@ -5345,7 +5424,7 @@ def stopgap2emmotl(input_motl: "MotlSource", output_path: Optional[PathOrStr] = 
     return em_motl
 
 
-def emmotl2stopgap(input_motl: "MotlSource", output_path: Optional[PathOrStr] = None, update_coordinates: bool = False, reset_index: bool = False) -> "StopgapMotl":
+def emmotl2stopgap(input_motl: "MotlSource", output_path: PathOrStr | None = None, update_coordinates: bool = False, reset_index: bool = False) -> "StopgapMotl":
     """Converts an EmMotl to StopgapMotl format and optionally writes it to a file.
 
     Parameters
@@ -5379,8 +5458,8 @@ def emmotl2stopgap(input_motl: "MotlSource", output_path: Optional[PathOrStr] = 
 def relion2stopgap(
     input_motl: "MotlSource",
     relion_version: float,
-    load_kwargs: Optional[dict] = None,
-    output_path: Optional[PathOrStr] = None,
+    load_kwargs: dict | None = None,
+    output_path: PathOrStr | None = None,
     update_coordinates: bool = False,
     reset_index: bool = False,
 ) -> "StopgapMotl":
@@ -5430,11 +5509,11 @@ def relion2stopgap(
 def stopgap2relion(
     input_motl: "MotlSource",
     relion_version: float,
-    output_path: Optional[PathOrStr] = None,
+    output_path: PathOrStr | None = None,
     flip_handedness: bool = False,
-    tomo_dim: Optional[TomoDimensions] = None,
-    load_kwargs: Optional[dict] = None,
-    write_kwargs: Optional[dict] = None,
+    tomo_dim: TomoDimensions | None = None,
+    load_kwargs: dict | None = None,
+    write_kwargs: dict | None = None,
 ) -> "RelionMotl":
     """Converts a StopgapMotl to RelionMotl format and optionally writes it to file.
 
@@ -5486,7 +5565,7 @@ def stopgap2relion(
     return rln_motl
 
 
-def emmotl2mod(input_motl: "MotlSource", output_path: Optional[PathOrStr] = None, mod_prefix: str = "", mod_suffix: str = ".mod") -> "ModMotl":
+def emmotl2mod(input_motl: "MotlSource", output_path: PathOrStr | None = None, mod_prefix: str = "", mod_suffix: str = ".mod") -> "ModMotl":
     """Converts an EmMotl to ModMotl format and optionally writes it to a .mod file.
 
     Parameters
@@ -5515,7 +5594,7 @@ def emmotl2mod(input_motl: "MotlSource", output_path: Optional[PathOrStr] = None
     return mod_motl
 
 
-def mod2emmotl(input_mod: "MotlSource", output_path: Optional[PathOrStr] = None, mod_prefix: str = "", mod_suffix: str = ".mod", update_coordinates: bool = False) -> "EmMotl":
+def mod2emmotl(input_mod: "MotlSource", output_path: PathOrStr | None = None, mod_prefix: str = "", mod_suffix: str = ".mod", update_coordinates: bool = False) -> "EmMotl":
     """Converts a ModMotl to EmMotl format and optionally writes it to a file.
 
     Parameters
@@ -5551,9 +5630,9 @@ def mod2emmotl(input_mod: "MotlSource", output_path: Optional[PathOrStr] = None,
 
 def motl_converter_kwargs(
         input_motl: "MotlSource",
-        output_motl_type: Optional[MotlType] = "emmotl",
-        output_path: Optional[PathOrStr] = None,
-        relion_version: Optional[RelionVersion] = None,
+        output_motl_type: MotlType | None = "emmotl",
+        output_path: PathOrStr | None = None,
+        relion_version: RelionVersion | None = None,
         **output_kwargs
 ) -> "MotlSource":
     """Convert a motl (EmMotl) to a specified output motl type and optionally write it to file.

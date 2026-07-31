@@ -92,7 +92,7 @@ def register_send_to_editor_callbacks(app, prefix, result_store_id):
             return no_update, no_update, no_update, no_update, no_update, "No result motl to send."
 
         state = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
-        # TODO(doc-2): route through run_operation_to_pool
+        # TODO(P9): route through run_operation_to_pool once load is tracked.
         state, motl_id = insert_motl(state, result_data, label=label)
         display_label = state.registry[motl_id]["label"]
         return (*state.to_stores(), f"Sent '{display_label}' to the editor.")

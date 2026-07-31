@@ -11,6 +11,81 @@ from cryocat.app.apputils import make_axis_trace
 from cryocat.analysis import visplot
 
 
+def hover_template(columns, hover_info) -> str:
+    if hover_info == "full":
+        parts = [f"{col}: %{{customdata[{i}]}}" for i, col in enumerate(columns)]
+    else:
+        cols_list = list(columns)
+        parts = [
+            f"{col}: %{{customdata[{cols_list.index(col)}]}}"
+            for col in hover_info
+            if col in cols_list
+        ]
+    return "<br>".join(parts) + "<extra></extra>"
+
+
+def aspect_ratio_dict(coords) -> dict:
+    ranges = [coords[:, i].max() - coords[:, i].min() for i in range(3)]
+    max_r = max(ranges) or 1
+    return {"x": ranges[0] / max_r, "y": ranges[1] / max_r, "z": ranges[2] / max_r}
+
+
+def tomo_figure(data, index, color_col, colorscale, marker_size, hover_info, show_dual_graph) -> tuple:
+    motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
+    tomo_ids = sorted(motl.df["tomo_id"].unique())
+    tomo = tomo_ids[index]
+    tm = motl.get_motl_subset(tomo)
+    coords = tm.get_coordinates()
+    color_vals = tm.df[color_col] if color_col in tm.df else tm.df["score"]
+    hovertemplate = hover_template(tm.df.columns, hover_info)
+    scale = visplot.resolve_colorscale(colorscale)
+    fig = go.Figure(go.Scatter3d(
+        x=coords[:, 0], y=coords[:, 1], z=coords[:, 2],
+        customdata=tm.df.values, hovertemplate=hovertemplate,
+        mode="markers",
+        marker=dict(size=marker_size or 5, opacity=0.8, color=color_vals, colorscale=scale),
+    ))
+    fig.update_layout(
+        height=500, margin=dict(t=0, b=0, l=0, r=0),
+        scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z",
+                   aspectmode="manual", aspectratio=aspect_ratio_dict(coords)),
+    )
+    graph_width = 6 if show_dual_graph else 12
+    return fig, graph_width, {"display": "block", "marginTop": "1rem"}, f"Tomo ID: {tomo}"
+
+
+def detail_figure(clickData, data, twist_data, radius) -> go.Figure | None:
+    clicked_row = clickData["points"][0]["customdata"]
+    clicked_df = pd.DataFrame([clicked_row], columns=pd.DataFrame(data).columns)
+    subtomo_id = clicked_row[clicked_df.columns.get_loc("subtomo_id")]
+    qp_df = pd.DataFrame(twist_data)
+    qp_df = qp_df[qp_df["qp_id"] == subtomo_id]
+    if qp_df.empty:
+        return None
+    fig = go.Figure()
+    fig.add_trace(go.Scatter3d(
+        x=qp_df["twist_x"], y=qp_df["twist_y"], z=qp_df["twist_z"],
+        mode="markers", marker=dict(size=3, color="#83BA99", opacity=0.8),
+        name="Neighbor Points",
+    ))
+    fig.add_trace(go.Scatter3d(
+        x=[0], y=[0], z=[0], mode="markers",
+        marker=dict(size=6, color="orange"), name="Clicked Point",
+    ))
+    make_axis_trace(fig, length=5)
+    fig.update_layout(
+        height=500, margin=dict(t=0, b=0, l=0, r=0),
+        scene=dict(
+            xaxis=dict(title="X", range=[-radius, radius]),
+            yaxis=dict(title="Y", range=[-radius, radius]),
+            zaxis=dict(title="Z", range=[-radius, radius]),
+            aspectmode="cube",
+        ),
+        showlegend=False,
+    )
+    return fig
+
+
 def get_viewer_component(prefix: str):
     return html.Div(
         id=f"{prefix}-container",
@@ -175,7 +250,6 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         return [{"label": col, "value": col} for col in numeric_cols if col not in ["tomo_id"]]
 
     @app.callback(
-        # Output(f"{prefix}-graph", "figure"),
         Output(f"{prefix}-graph", "figure"),
         Output(f"{prefix}-graph1-col", "width"),
         Output(f"{prefix}-container", "style", allow_duplicate=True),
@@ -190,82 +264,7 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
     def update_plot(index, color_col, colorscale, marker_size, data):
         if not data:
             raise exceptions.PreventUpdate
-
-        motl_df = pd.DataFrame(data)
-        motl = cryomotl.Motl(motl_df[cryomotl.Motl.motl_columns])
-        tomo_ids = sorted(motl.df["tomo_id"].unique())
-        if tomo_ids is None:
-            raise exceptions.PreventUpdate
-
-        tomo = tomo_ids[index]
-        tm = motl.get_motl_subset(tomo)
-
-        coords = tm.get_coordinates()
-
-        color_vals = tm.df[color_col] if color_col in tm.df else tm.df["score"]
-
-        # Convert full rows to a 2D array for customdata
-        customdata = tm.df.values
-        columns = tm.df.columns  # to generate hovertemplate dynamically
-
-        if hover_info == "full":
-            hover_lines = [f"{col}: %{{customdata[{i}]}}" for i, col in enumerate(columns)]
-            hovertemplate = "<br>".join(hover_lines) + "<extra></extra>"
-        else:
-            hover_lines = [
-                f"{col}: %{{customdata[{list(columns).index(col)}]}}" for col in hover_info if col in columns
-            ]
-            hovertemplate = "<br>".join(hover_lines) + "<extra></extra>"
-
-        scale = visplot.resolve_colorscale(colorscale)
-
-        fig = go.Figure(
-            go.Scatter3d(
-                x=coords[:, 0],
-                y=coords[:, 1],
-                z=coords[:, 2],
-                customdata=customdata,
-                hovertemplate=hovertemplate,
-                mode="markers",
-                marker=dict(
-                    size=marker_size or 5,
-                    opacity=0.8,
-                    color=color_vals,
-                    colorscale=scale,
-                ),
-            )
-        )
-
-        # Calculate data ranges
-        x_range = coords[:, 0].max() - coords[:, 0].min()
-        y_range = coords[:, 1].max() - coords[:, 1].min()
-        z_range = coords[:, 2].max() - coords[:, 2].min()
-
-        # Avoid divide by zero (fallback to 1)
-        max_range = max(x_range, y_range, z_range) or 1
-
-        aspect_ratio = dict(
-            x=x_range / max_range,
-            y=y_range / max_range,
-            z=z_range / max_range,
-        )
-
-        fig.update_layout(
-            # title=f"Tomo ID: {tomo} • Color by: {color_col or 'z'}",
-            height=500,
-            margin=dict(t=0, b=0, l=0, r=0),
-            scene=dict(
-                xaxis_title="X", yaxis_title="Y", zaxis_title="Z", aspectmode="manual", aspectratio=aspect_ratio
-            ),
-        )
-
-        # graph = dcc.Graph(id=f"{prefix}-graph", figure=fig)
-
-        graph_width = 12
-        if show_dual_graph:
-            graph_width = 6
-
-        return fig, graph_width, {"display": "block", "marginTop": "1rem"}, f"Tomo ID: {tomo}"
+        return tomo_figure(data, index, color_col, colorscale, marker_size, hover_info, show_dual_graph)
 
     @app.callback(
         Output(f"{prefix}-tomo-selector", "children"),
@@ -278,13 +277,13 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         df = pd.DataFrame(data)
         tomo_ids = sorted(df["tomo_id"].unique())
         return [
-            dbc.DropdownMenuItem(f"Tomo {tid}", id={"type": f"{prefix}-menu-item", "index": f"{tid}"}, n_clicks=0)
+            dbc.DropdownMenuItem(f"Tomo {tid}", id={"type": "tomo-menu-item", "owner": prefix, "index": f"{tid}"}, n_clicks=0)
             for tid in tomo_ids
         ]
 
     @app.callback(
         Output(f"{prefix}-index", "data", allow_duplicate=True),
-        Input({"type": f"{prefix}-menu-item", "index": ALL}, "n_clicks"),
+        Input({"type": "tomo-menu-item", "owner": prefix, "index": ALL}, "n_clicks"),
         State(f"{prefix}-data", "data"),
         prevent_initial_call=True,
     )
@@ -318,56 +317,7 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         def show_detail_on_click(clickData, data, twist_data, radius):
             if not clickData or not data:
                 raise dash.exceptions.PreventUpdate
-
-            # Get index of clicked point from customdata
-            clicked_row = clickData["points"][0]["customdata"]
-            clicked_df = pd.DataFrame([clicked_row], columns=pd.DataFrame(data).columns)
-
-            subtomo_index = clicked_df.columns.get_loc("subtomo_id")
-            subtomo_id = clicked_row[subtomo_index]
-
-            qp_df = pd.DataFrame(twist_data)
-            qp_df = qp_df[qp_df["qp_id"] == subtomo_id]
-
-            if qp_df.empty:
+            fig = detail_figure(clickData, data, twist_data, radius)
+            if fig is None:
                 raise exceptions.PreventUpdate
-
-            ax_limit = radius
-
-            fig = go.Figure()
-
-            fig.add_trace(
-                go.Scatter3d(
-                    x=qp_df["twist_x"],
-                    y=qp_df["twist_y"],
-                    z=qp_df["twist_z"],
-                    mode="markers",
-                    marker=dict(size=3, color="#83BA99", opacity=0.8),
-                    name="Neighbor Points",
-                )
-            )
-
-            fig.add_trace(
-                go.Scatter3d(
-                    x=[0], y=[0], z=[0],
-                    mode="markers",
-                    marker=dict(size=6, color="orange"),
-                    name="Clicked Point",
-                )
-            )
-
-            make_axis_trace(fig, length=5)
-
-            fig.update_layout(
-                height=500,
-                margin=dict(t=0, b=0, l=0, r=0),
-                scene=dict(
-                    xaxis=dict(title="X", range=[-ax_limit, ax_limit]),
-                    yaxis=dict(title="Y", range=[-ax_limit, ax_limit]),
-                    zaxis=dict(title="Z", range=[-ax_limit, ax_limit]),
-                    aspectmode="cube",
-                ),
-                showlegend=False,
-            )
-
             return dcc.Graph(id=f"{prefix}-detail-graph", figure=fig)

@@ -64,7 +64,7 @@ def insert_motl(
     meta: dict | None = None,
 ) -> tuple[PoolState, str]:
     """Append one motl; returns the new state and the fresh ``motl_id``."""
-    motl_id = f"motl-{state.next_id}"
+    motl_id = f"motl-{state.next_id + 1}"
     entry = PoolEntry(
         label=label or default_label(state.next_id),
         type=motl_type,
@@ -100,6 +100,36 @@ def set_active(state: PoolState, motl_id: str, active: bool) -> PoolState:
     return PoolState(
         registry={**state.registry, motl_id: {**state.registry[motl_id], "active": active}},
         motls=state.motls,
+        extra=state.extra,
+        meta=state.meta,
+        next_id=state.next_id,
+    )
+
+
+def replace_motl_rows(
+    state: PoolState,
+    motl_id: str,
+    rows: list,
+    *,
+    label: str | None = None,
+    motl_type: str | None = None,
+) -> PoolState:
+    """Update the rows (and optionally label / type) for an existing entry.
+
+    A no-op if *motl_id* is not in the registry.  ``next_id`` is unchanged
+    (the entry keeps its original counter slot).
+    """
+    if motl_id not in state.registry:
+        return state
+    entry = dict(state.registry[motl_id])
+    entry["n_rows"] = len(rows) if rows is not None else 0
+    if label is not None:
+        entry["label"] = label
+    if motl_type is not None:
+        entry["type"] = motl_type
+    return PoolState(
+        registry={**state.registry, motl_id: entry},
+        motls={**state.motls, motl_id: rows},
         extra=state.extra,
         meta=state.meta,
         next_id=state.next_id,

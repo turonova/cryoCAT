@@ -829,7 +829,8 @@ def _analytical_wedgemask_slices(
 
 @gui_exposed(
     label="Generate wedge mask",
-    category="Mask",
+    category="builder",
+    standalone=True,
     output="map",
     hide=("output_path",),
 )

@@ -140,7 +140,7 @@ def _controls(prefix: str) -> list:
             id=f"{prefix}-rot-status",
             style={**styles.HINT, "marginTop": "0.5rem", "wordBreak": "break-word"},
         ),
-        dcc.Store(id=f"{prefix}-rot-euler-store"),
+        dcc.Store(id=f"{prefix}-value"),
     ]
 
 
@@ -225,7 +225,7 @@ def register_rotation_builder_callbacks(app: dash.Dash, prefix: str) -> None:
     mat_inputs = [Input(f"{prefix}-mat-{i}{j}", "value") for i in range(3) for j in range(3)]
 
     @app.callback(
-        Output(f"{prefix}-rot-euler-store", "data"),
+        Output(f"{prefix}-value", "data"),
         Output({"type": "styled-graph", "owner": prefix, "name": "rot-preview"}, "figure"),
         Output(f"{prefix}-rot-status", "children"),
         Input(f"{prefix}-rot-type", "value"),

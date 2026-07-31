@@ -792,11 +792,11 @@ def register_callbacks(app):
         Output("memthick-save-status", "children", allow_duplicate=True),
         Input("memthick-build-btn", "n_clicks"),
         # pipeline form
-        State({"type": _PIPELINE_ID_TYPE, "param": ALL, "tag": ALL}, "value"),
-        State({"type": _PIPELINE_ID_TYPE, "param": ALL, "tag": ALL}, "id"),
+        State({"type": _PIPELINE_ID_TYPE, "owner": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": _PIPELINE_ID_TYPE, "owner": ALL, "param": ALL, "tag": ALL}, "id"),
         # pipeline form -- Tuple slot ids carry extra `slot`/`elem` keys.
-        State({"type": _PIPELINE_ID_TYPE, "param": ALL, "tag": ALL, "slot": ALL, "elem": ALL}, "value"),
-        State({"type": _PIPELINE_ID_TYPE, "param": ALL, "tag": ALL, "slot": ALL, "elem": ALL}, "id"),
+        State({"type": _PIPELINE_ID_TYPE, "owner": ALL, "param": ALL, "tag": ALL, "slot": ALL, "elem": ALL}, "value"),
+        State({"type": _PIPELINE_ID_TYPE, "owner": ALL, "param": ALL, "tag": ALL, "slot": ALL, "elem": ALL}, "id"),
         # label dict
         State("memthick-labels-rows", "data"),
         # per-membrane mode
@@ -805,11 +805,11 @@ def register_callbacks(app):
         State({"type": "memthick-mode-per-label-mode", "label": ALL}, "value"),
         State({"type": "memthick-mode-per-label-mode", "label": ALL}, "id"),
         # analyzer sub-form (scalar + tuple slots)
-        State({"type": _ANALYZER_PREFIX, "param": ALL, "tag": ALL}, "value"),
-        State({"type": _ANALYZER_PREFIX, "param": ALL, "tag": ALL}, "id"),
-        State({"type": _ANALYZER_PREFIX, "param": ALL, "tag": ALL,
+        State({"type": _ANALYZER_PREFIX, "owner": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": _ANALYZER_PREFIX, "owner": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": _ANALYZER_PREFIX, "owner": ALL, "param": ALL, "tag": ALL,
                "slot": ALL, "elem": ALL}, "value"),
-        State({"type": _ANALYZER_PREFIX, "param": ALL, "tag": ALL,
+        State({"type": _ANALYZER_PREFIX, "owner": ALL, "param": ALL, "tag": ALL,
                "slot": ALL, "elem": ALL}, "id"),
         # output format + slurm extras
         State("memthick-format", "value"),

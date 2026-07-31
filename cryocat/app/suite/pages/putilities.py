@@ -3,7 +3,7 @@
 Every function decorated with ``@gui_exposed(category="builder", standalone=True)``
 appears here as its own panel.  Adding a new standalone builder requires only the
 decorator on the function; the page discovers it automatically via
-:func:`~cryocat.app.apputils.iter_standalone_builders`.
+:func:`~cryocat.app.discovery.standalone_builders`.
 
 Layout mirrors the other suite pages: a sticky sidebar on the left holds the
 form controls for each tool; the main column on the right shows the corresponding
@@ -20,55 +20,44 @@ from dash import html, dcc, Input, Output, State, ALL
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
-from cryocat.app import formgen, ids, styles
-from cryocat.app.apputils import iter_standalone_builders, generate_kwargs, run_operation
+from cryocat.app import formgen, ids, styles, discovery
+from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components.anglesbuilder import (
     get_angles_builder_sidebar_content,
     register_angles_builder_callbacks,
-    _inplane_figure,
+    inplane_figure,
     _ID_TYPE as _ANGLES_ID_TYPE,
 )
 from cryocat.app.components.graphsettings import styled_figure, error_figure
 from cryocat.app.components.wedgepreview import wedge_xz_figure
 from cryocat.utils.geom import generate_angles
-from cryocat.utils.wedgeutils import generate_wedge_mask
 from cryocat.app.pageshell import page_shell, sidebar_accordion
+from cryocat.utils.classutils import GuiEntry
 
 
 _OUTPUT_AREA_ID = "util-output-area"
 
-
 _WEDGE_ID_TYPE = "wedge-util-param"
-
-_WEDGE_BUILDER = {
-    "id": "generate_wedge_mask",
-    "label": "Generate wedge mask",
-    "fn": generate_wedge_mask,
-    "preview": None,
-}
-
-
-def _all_builders() -> list:
-    return list(iter_standalone_builders()) + [_WEDGE_BUILDER]
 
 
 # ── Sidebar helpers ────────────────────────────────────────────────────────────
 
 
-def _sidebar_content(builder: dict) -> html.Div:
-    prefix = f"util-{builder['id']}"
-    if builder["id"] == "generate_angles":
+def _sidebar_content(builder: GuiEntry) -> html.Div:
+    prefix = f"util-{builder.fn.__name__}"
+    if builder.fn.__name__ == "generate_angles":
         return get_angles_builder_sidebar_content(prefix, preview_btn=True)
-    if builder["id"] == "generate_wedge_mask":
+    if builder.fn.__name__ == "generate_wedge_mask":
         return _wedge_mask_sidebar_content(prefix)
     return html.Div("Controls not yet implemented.", style={"color": "grey"})
 
 
 def _wedge_mask_sidebar_content(prefix: str) -> html.Div:
+    entry = discovery.get("wedgeutils.generate_wedge_mask")
     form_rows = formgen.build_form(
-        generate_wedge_mask,
+        entry,
         id_type=_WEDGE_ID_TYPE,
-        id_extra={"builder": prefix},
+        id_extra={"owner": prefix},
     )
     return html.Div(
         [
@@ -111,7 +100,7 @@ def _wedge_mask_sidebar_content(prefix: str) -> html.Div:
 # ── Layout builders ────────────────────────────────────────────────────────────
 
 
-def _sidebar(builders: list) -> list:
+def _sidebar(builders: list[GuiEntry]) -> list:
     if not builders:
         items = [
             html.P(
@@ -123,20 +112,20 @@ def _sidebar(builders: list) -> list:
         items = [
             dbc.AccordionItem(
                 _sidebar_content(b),
-                title=b["label"],
-                item_id=f"util-acc-{b['id']}",
+                title=b.label,
+                item_id=f"util-acc-{b.fn.__name__}",
             )
             for b in builders
         ]
 
     return [
-        sidebar_accordion(items, active_item=[f"util-acc-{b['id']}" for b in builders])
+        sidebar_accordion(items, active_item=[f"util-acc-{b.fn.__name__}" for b in builders])
         if builders
         else items[0],
     ]
 
 
-def _main(builders: list) -> list:
+def _main(builders: list[GuiEntry]) -> list:
     if not builders:
         body = html.P(
             "No standalone builder tools registered.",
@@ -155,7 +144,7 @@ def _main(builders: list) -> list:
 
 
 def _build_layout() -> html.Div:
-    builders = _all_builders()
+    builders = discovery.standalone_builders()
     return html.Div(
         [
             page_shell(_sidebar(builders), _main(builders)),
@@ -179,19 +168,19 @@ def _err_panel(msg: str) -> html.Div:
 def register_callbacks(app) -> None:
     from cryocat.analysis import visplot
 
-    for b in _all_builders():
-        prefix = f"util-{b['id']}"
-        if b["id"] == "generate_angles":
+    for b in discovery.standalone_builders():
+        prefix = f"util-{b.fn.__name__}"
+        if b.fn.__name__ == "generate_angles":
             # Register _collect_params and _create from anglesbuilder;
             # skip the built-in single-graph preview so we own both outputs.
-            register_angles_builder_callbacks(app, prefix, skip_preview=True)
+            register_angles_builder_callbacks(app, prefix, with_graphs=False)
 
             @app.callback(
                 Output(f"{prefix}-angles", "data"),
                 Output(_OUTPUT_AREA_ID, "children", allow_duplicate=True),
                 Input(f"{prefix}-preview-btn", "n_clicks"),
-                State({"type": _ANGLES_ID_TYPE, "builder": prefix, "param": ALL, "tag": ALL}, "value"),
-                State({"type": _ANGLES_ID_TYPE, "builder": prefix, "param": ALL, "tag": ALL}, "id"),
+                State({"type": _ANGLES_ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "value"),
+                State({"type": _ANGLES_ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "id"),
                 State(ids.GRAPH_SETTINGS_STORE, "data"),
                 prevent_initial_call=True,
             )
@@ -226,7 +215,7 @@ def register_callbacks(app) -> None:
                     sphere_fig = error_figure(f"Sphere plot error: {exc}")
 
                 try:
-                    inplane_fig = _inplane_figure(angles, gs)
+                    inplane_fig = inplane_figure(angles, gs)
                 except Exception as exc:
                     inplane_fig = error_figure(f"Inplane plot error: {exc}")
 
@@ -239,15 +228,15 @@ def register_callbacks(app) -> None:
                 )
                 return angles_list, output
 
-        elif b["id"] == "generate_wedge_mask":
+        elif b.fn.__name__ == "generate_wedge_mask":
             _register_wedge_mask_callbacks(app, prefix)
 
 
 def _register_wedge_mask_callbacks(app, prefix: str) -> None:
     @app.callback(
         Output(f"{prefix}-params", "data"),
-        Input({"type": _WEDGE_ID_TYPE, "builder": prefix, "param": ALL, "tag": ALL}, "value"),
-        State({"type": _WEDGE_ID_TYPE, "builder": prefix, "param": ALL, "tag": ALL}, "id"),
+        Input({"type": _WEDGE_ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "value"),
+        State({"type": _WEDGE_ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "id"),
     )
     def _collect_params(values, ids):
         if not values or not ids:
@@ -274,7 +263,8 @@ def _register_wedge_mask_callbacks(app, prefix: str) -> None:
         try:
             # In-memory only: drop any output_path the user typed for the actual generate.
             kwargs = {k: v for k, v in params.items() if v is not None and k != "output_path"}
-            result = generate_wedge_mask(**kwargs)
+            _wedge_fn = discovery.get("wedgeutils.generate_wedge_mask").fn
+            result = _wedge_fn(**kwargs)
             mask = result["mask"] if isinstance(result, dict) else result
             output = dcc.Graph(
                 figure=wedge_xz_figure(mask),
@@ -305,7 +295,7 @@ def _register_wedge_mask_callbacks(app, prefix: str) -> None:
             kwargs = {k: v for k, v in params.items() if v is not None}
             if out_path and str(out_path).strip():
                 kwargs["output_path"] = out_path
-            run_operation(generate_wedge_mask, kwargs)
+            run_operation(discovery.get("wedgeutils.generate_wedge_mask").fn, kwargs)
             msg = f"Wedge mask generated"
             if out_path:
                 msg += f" → {out_path}"

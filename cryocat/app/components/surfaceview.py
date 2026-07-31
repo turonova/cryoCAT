@@ -36,6 +36,7 @@ from dash import dcc, html, Input, Output, State
 from cryocat.app import ids
 from cryocat.app.components.surface_registry import registry as _surface_registry
 from cryocat.app.components.graphsettings import styled_figure
+from cryocat.analysis.visplot import resolve_palette as _resolve_palette
 
 
 # Curvature color-by options. Values match
@@ -89,14 +90,6 @@ def _vertex_field(psurf, color_by: str) -> np.ndarray | None:
         denom = np.abs(k1) + np.abs(k2) + 1e-12
         return np.abs(k1 - k2) / denom
     return None
-
-
-# Colour palette used to distinguish multiple visible surfaces. Cycles when
-# there are more visible surfaces than entries; not tied to graph-settings.
-_PALETTE = [
-    "#7FB3D3", "#85C1E9", "#5DADE2", "#4EACB6",
-    "#AEC684", "#C0A3BA", "#7D82AB", "#865B96",
-]
 
 
 # ── Trace builders ────────────────────────────────────────────────────────────
@@ -251,6 +244,7 @@ def _build_figure(
         flat palette colors.
     """
     handles = handles or {}
+    palette = _resolve_palette((gs or {}).get("discrete_palette"))
     traces: list = []
     for i, (sid, h) in enumerate(handles.items()):
         if not h.get("visible", True):
@@ -258,7 +252,7 @@ def _build_figure(
         psurf = _surface_registry.get(sid)
         if psurf is None:
             continue
-        color = _PALETTE[i % len(_PALETTE)]
+        color = palette[i % len(palette)]
         label = h.get("label", sid)
         is_sel = (selected_id is not None and sid == selected_id)
         rep = h.get("representation")

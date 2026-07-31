@@ -6,6 +6,8 @@ from cryocat.app.tango.sidebar import register_tango_sidebar_callbacks
 from cryocat.app.tango.table import register_tango_table_callbacks
 from cryocat.app.tango.callbacks import register_tango_callbacks
 from cryocat.app.components.graphsettings import register_graph_settings_callbacks
+from cryocat.app.components.filebrowser import register_file_browser_callbacks
+from cryocat.app.components.rotationmodal import register_rotation_modal_callbacks
 
 app = dash.Dash(
     __name__,
@@ -17,6 +19,8 @@ app = dash.Dash(
 
 app.layout = layout
 
+register_file_browser_callbacks(app)
+register_rotation_modal_callbacks(app)
 register_tango_sidebar_callbacks(app)
 register_tango_table_callbacks(app)
 register_tango_callbacks(app)

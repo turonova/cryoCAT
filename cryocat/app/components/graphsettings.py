@@ -129,7 +129,7 @@ def get_graph_settings_button(prefix: str):
     """Button to embed in the plot panel for a given prefix."""
     return dbc.Button(
         "Graph Settings",
-        id={"type": "open-graph-settings-btn", "index": prefix},
+        id={"type": "open-graph-settings-btn", "owner": prefix},
         color="light",
         style={"width": "100%"},
     )
@@ -140,7 +140,7 @@ def register_graph_settings_callbacks(app):
     register_palette_loader_callbacks(app, "gs-continuous-pal", mode="continuous")
     @app.callback(
         Output("graph-settings-modal", "is_open"),
-        Input({"type": "open-graph-settings-btn", "index": ALL}, "n_clicks"),
+        Input({"type": "open-graph-settings-btn", "owner": ALL}, "n_clicks"),
         Input("gs-close-btn", "n_clicks"),
         State("graph-settings-modal", "is_open"),
         prevent_initial_call=True,

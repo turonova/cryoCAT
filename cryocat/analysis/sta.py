@@ -1,7 +1,9 @@
 import math
 import re
+import warnings
+from dataclasses import dataclass as _dataclass, field as _field
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable, Literal, get_args
 
 import numpy as np
 import pandas as pd
@@ -215,7 +217,7 @@ def evaluate_alignment(
                 filter_rows=filter_rows[i],
                 filter_column_name=filter_column_name[i],
                 output_path=stats_file_name,
-                load_kwargs=load_kwargs
+                load_kwargs=load_kwargs,
             )
         )
 
@@ -318,7 +320,6 @@ def compute_alignment_statistics(
     ... )
     """
 
-
     stats_df = pd.DataFrame(
         columns=[
             "cone_mean",
@@ -349,7 +350,9 @@ def compute_alignment_statistics(
             m.df = m.df[m.df[filter_column_name].isin(filter_rows)]
         motls.append(m)
 
-    for i in np.arange(0, end_it-start_it): ## FIXME this fixes 'index out of range' when start_it=!0, but does not account for the correct plot labels in such case (when called by evaluate_alignment)
+    for i in np.arange(
+        0, end_it - start_it
+    ):  ## FIXME this fixes 'index out of range' when start_it=!0, but does not account for the correct plot labels in such case (when called by evaluate_alignment)
         current_rot = motls[i].get_rotations()
         next_rot = motls[i + 1].get_rotations()
 
@@ -566,7 +569,8 @@ def create_denovo_multiref_run(
         motl, output_file_base=output_motl_base + "_" + str(iteration_number), output_motl_type=output_motl_type
     )
 
-    #instead of calling conversion functions kind of the same is happening
+    # instead of calling conversion functions kind of the same is happening
+
 
 def evaluate_multirun_stability(
     input_motls: list[MotlSource],
@@ -764,8 +768,7 @@ def evaluate_classification(
         merged = pd.concat(
             [it, occupancy_df, subtomos_df], axis=1, keys=["Iteration", "Class occupancy", "Class changes"]
         )
-        merged.columns = [f'{col[0]}_{col[1]}' if col[1] else col[0]
-                          for col in merged.columns]
+        merged.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in merged.columns]
         merged.to_csv(output_file_stats, index=False)
 
     return occupancy, changing_subtomos
@@ -824,6 +827,7 @@ def get_class_occupancy(
 
     return occupancy
 
+
 def get_motl_filename(
     motl_base_name: str,
     iteration: int,
@@ -870,33 +874,706 @@ def get_motl_filename(
 # Wrappers:          evaluate_alignment_from_params
 #                    compute_alignment_statistics_from_params
 
-
-# ── Internal column/key mapping tables ────────────────────────────────────────
-
-# Canonical (novaSTA-convention) column names for df
 # Run-level novaSTA keys — not broadcast per iteration, not stored in df
-_NOVA_RUN_LEVEL_KEYS = {"iter", "startIndex", "createRef"}
+_NOVA_RUN_LEVEL_KEYS: frozenset[str] = frozenset({"iter", "startIndex", "createRef"})
 
-# Raw STOPGAP angle columns — converted to unified names on load, back on write
-_STOPGAP_ANGLE_COLS = {"_angiter", "_angincr", "_phi_angiter", "_phi_angincr"}
+# ── §2: Type aliases ─────────────────────────────────────────────────────────
 
-# One cross-format map: STOPGAP display name → novaSTA display name.
-# Columns whose display names already match (e.g. 'iteration', 'symmetry',
-# 'binning', 'cone angle', 'cone sampling', ...) are NOT listed here.
-_SG_TO_NOVA_NAME = {
-    "motl name":      "motl",
-    "ref name":       "ref",
-    "mask name":      "mask",
-    "ccmask name":    "cc mask",
-    "wedgelist name": "wedge list",
-    "lp rad":         "low pass",
-    "hp rad":         "high pass",
-    "score thresh":   "threshold",
+StaRefFamily = Literal["singleref", "multiref", "multiclass"]
+StaSubtomoMode = Literal[
+    "ali_singleref", "ali_multiref", "ali_multiclass", "avg_singleref", "avg_multiref", "avg_multiclass"
+]
+StaSearchMode = Literal["hc", "shc"]
+StaConeSearchType = Literal["coarse", "complete"]
+StaAvgMode = Literal["full", "partial"]
+StaScoringFcn = Literal["flcf", "pearson"]
+StaRotMode = Literal["linear", "cubic"]
+
+# ── Sentinels and context ─────────────────────────────────────────────────────
+
+
+class _Sentinel:
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __repr__(self) -> str:
+        return self._name
+
+
+MANDATORY: _Sentinel = _Sentinel("MANDATORY")
+DERIVED: _Sentinel = _Sentinel("DERIVED")
+
+
+@_dataclass
+class StaParamContext:
+    """Context passed to ``mandatory_if`` lambdas during validation and write.
+
+    Parameters
+    ----------
+    create_ref : bool
+        Whether an averaging pre-step is materialised on write.
+    ref_family : StaRefFamily
+        Reference strategy (``"singleref"``, ``"multiref"``, ``"multiclass"``).
+    n_iterations : int
+        Total number of alignment iterations.
+    is_avg_row : bool
+        ``True`` when building the optional averaging row (STOPGAP only).
+    sta_type : str
+        Target format — ``"stopgap"`` or ``"novasta"``.  Used by format-aware
+        ``mandatory_if`` lambdas (e.g. ``rootdir`` is mandatory for STOPGAP
+        only; ``fsc mask`` and ``pixel size`` are mandatory for novaSTA only).
+    use_euler_search : bool
+        When ``True`` and ``sta_type == "stopgap"``, the Euler parameterisation
+        replaces the cone search — the four canonical angle extents become
+        optional and the seven Euler columns become required.
+    _row : dict
+        Snapshot of the current row's canonical column values (for
+        cross-parameter dependencies in ``mandatory_if``).
+    """
+
+    create_ref: bool
+    ref_family: StaRefFamily
+    n_iterations: int
+    is_avg_row: bool
+    sta_type: Literal["stopgap", "novasta"]
+    use_euler_search: bool
+    _row: dict
+
+    def get(self, name: str, default: Any = None) -> Any:
+        return self._row.get(name, default)
+
+
+# Backward-compatible alias (internal name removed from public surface)
+_WriteCtx = StaParamContext
+
+
+# ── StaParamSpec dataclass ────────────────────────────────────────────────────
+
+
+@_dataclass(frozen=True)
+class StaParamSpec:
+    """Descriptor for a single STA parameter across formats.
+
+    Parameters
+    ----------
+    canonical : str or None
+        Canonical df column name.  ``None`` means STOPGAP-derived-only (e.g.
+        ``angincr``), which has no df column of its own.
+    stopgap : str or None
+        STOPGAP STAR column name **without** leading ``_``.
+        ``None`` = novaSTA only.
+    novasta : str or None
+        novaSTA camelCase key.  ``None`` = STOPGAP only.
+    dtype : type
+        Expected Python type (``int``, ``float``, ``str``, ``bool``).
+    default : Any
+        Default value, or the sentinel ``MANDATORY`` / ``DERIVED``.  Use
+        ``None`` for optional parameters that have no meaningful default.
+    literals : Any, optional
+        ``Literal`` type alias whose ``get_args`` gives allowed string values.
+    per_iteration : bool, optional
+        True when the parameter may vary per alignment iteration.
+    group : str, optional
+        Logical group: ``"core"``, ``"filters"``, ``"angles"``, ``"full"``,
+        ``"euler"``, ``"spectral"``, ``"cleaning"``, ``"extraction"``.
+    mandatory_if : callable or None, optional
+        ``(ctx: StaParamContext) -> bool``; parameter is required when this
+        returns ``True`` AND ``default is MANDATORY`` (or ``default`` is a
+        fall-back value for conditional requirements).
+    to_format : callable or None, optional
+        ``(value, sta_type: str) -> Any``; converts the canonical value to the
+        format-specific representation on write.  Used for parameters whose
+        on-disk encoding differs between formats (e.g. ``symmetry`` Schoenflies
+        vs. integer, ``split into even odd`` vs. ``ignore_halfsets`` inversion).
+    from_format : callable or None, optional
+        ``(value, sta_type: str) -> Any``; converts a format-specific value read
+        from disk to the canonical representation on load.  Symmetric with
+        ``to_format``.
+    note : str, optional
+        Free-text remark (e.g. open questions marked ``# CONFIRM:``).
+    """
+
+    canonical: str | None
+    stopgap: str | None
+    novasta: str | None
+    dtype: type
+    default: Any
+    literals: Any = None
+    per_iteration: bool = False
+    group: str = "core"
+    mandatory_if: Callable | None = _field(default=None, hash=False, compare=False)
+    to_format: Callable | None = _field(default=None, hash=False, compare=False)
+    from_format: Callable | None = _field(default=None, hash=False, compare=False)
+    note: str = ""
+
+
+# ── Schema table ──────────────────────────────────────────────────────────────
+# The first 34 entries (those with stopgap is not None and group in
+# {"core","filters","angles"}) determine STOPGAP write order for param_set="basic".
+
+
+# ── Format converters (to_format / from_format for StaParamSpec) ──────────────
+# _is_none_val is defined later in the module but resolved at call time (fine).
+
+def _sym_to_format(v: Any, sta_type: str) -> Any:
+    """Canonical symmetry → format-specific: Schoenflies for STOPGAP, integer for novaSTA."""
+    if v is None:
+        return v
+    s = str(v).strip()
+    if sta_type == "stopgap":
+        # Ensure Schoenflies form; plain integer → "Cn"
+        if re.match(r"^\d+$", s):
+            return f"C{int(s)}"
+        return s
+    # novaSTA expects an integer
+    if re.match(r"^[Cc](\d+)$", s):
+        return int(s[1:])
+    if re.match(r"^\d+$", s):
+        return int(s)
+    warnings.warn(
+        f"Non-cyclic symmetry {s!r} cannot be represented as a novaSTA integer; writing 1.",
+        stacklevel=4,
+    )
+    return 1
+
+
+def _sym_from_format(v: Any, sta_type: str) -> Any:
+    """Load symmetry from disk → canonical Schoenflies string."""
+    if v is None:
+        return v
+    s = str(v).strip()
+    if sta_type == "novasta" and re.match(r"^\d+$", s):
+        return f"C{int(s)}"
+    return s  # STOPGAP already Schoenflies; leave non-cyclic as-is
+
+
+def _halfset_to_format(v: Any, sta_type: str) -> Any:
+    """split into even odd (bool, True=do split) → format integer.
+
+    STOPGAP ``ignore_halfsets=0`` means halfsets ARE used (= DO split), so the
+    mapping inverts: True→0, False→1.  novaSTA ``splitIntoEvenOdd=1`` means DO
+    split: True→1, False→0.
+    """
+    b = bool(v)
+    if sta_type == "stopgap":
+        return 0 if b else 1
+    return 1 if b else 0
+
+
+def _halfset_from_format(v: Any, sta_type: str) -> Any:
+    """Format integer → canonical bool (True = do split).
+
+    STOPGAP: ``ignore_halfsets=0`` → True (split); invert.
+    novaSTA: ``splitIntoEvenOdd=1`` → True (split); same direction.
+    """
+    try:
+        i = int(v)
+    except (TypeError, ValueError):
+        return bool(v)
+    if sta_type == "stopgap":
+        return i == 0  # invert: 0 means "do not ignore" = do split
+    return i != 0
+
+_STA_SCHEMA: list[StaParamSpec] = [
+    # ── 34 core STOPGAP columns (STOPGAP write order is authoritative) ────────
+    StaParamSpec(canonical="completed ali", stopgap="completed_ali", novasta=None, dtype=int, default=DERIVED),
+    StaParamSpec(canonical="completed p avg", stopgap="completed_p_avg", novasta=None, dtype=int, default=DERIVED),
+    StaParamSpec(canonical="completed f avg", stopgap="completed_f_avg", novasta=None, dtype=int, default=DERIVED),
+    StaParamSpec(canonical="iteration", stopgap="iteration", novasta=None, dtype=int, default=DERIVED),
+    StaParamSpec(
+        canonical="subtomo mode",
+        stopgap="subtomo_mode",
+        novasta=None,
+        dtype=str,
+        default=DERIVED,
+        literals=StaSubtomoMode,
+    ),
+    StaParamSpec(canonical="rootdir", stopgap="rootdir", novasta="folder", dtype=str, default=None,
+                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap"),
+    StaParamSpec(canonical="motl", stopgap="motl_name", novasta="motl", dtype=str, default=MANDATORY),
+    StaParamSpec(canonical="wedge list", stopgap="wedgelist_name", novasta="wedgeList", dtype=str, default=MANDATORY),
+    StaParamSpec(canonical="binning", stopgap="binning", novasta=None, dtype=int, default=1),
+    StaParamSpec(canonical="ref", stopgap="ref_name", novasta="ref", dtype=str, default=MANDATORY),
+    StaParamSpec(
+        canonical="subtomo name", stopgap="subtomo_name", novasta="subtomograms", dtype=str, default=MANDATORY
+    ),
+    StaParamSpec(canonical="mask", stopgap="mask_name", novasta="mask", dtype=str, default=MANDATORY),
+    StaParamSpec(
+        canonical="cc mask",
+        stopgap="ccmask_name",
+        novasta="ccMask",
+        dtype=str,
+        default=MANDATORY,
+        mandatory_if=lambda ctx: not ctx.is_avg_row,
+    ),
+    StaParamSpec(
+        canonical="search mode", stopgap="search_mode", novasta=None, dtype=str, default="hc", literals=StaSearchMode
+    ),
+    # STOPGAP angle iteration columns (canonical=None; derived from cone angle/sampling on write)
+    StaParamSpec(canonical=None, stopgap="angincr", novasta=None, dtype=float, default=DERIVED, group="angles"),
+    StaParamSpec(canonical=None, stopgap="angiter", novasta=None, dtype=int, default=DERIVED, group="angles"),
+    StaParamSpec(canonical=None, stopgap="phi_angincr", novasta=None, dtype=float, default=DERIVED, group="angles"),
+    StaParamSpec(canonical=None, stopgap="phi_angiter", novasta=None, dtype=int, default=DERIVED, group="angles"),
+    StaParamSpec(
+        canonical="cone search type",
+        stopgap="cone_search_type",
+        novasta=None,
+        dtype=str,
+        default="coarse",
+        literals=StaConeSearchType,
+    ),
+    StaParamSpec(canonical="apply laplacian", stopgap="apply_laplacian", novasta=None, dtype=bool, default=False),
+    StaParamSpec(
+        canonical="low pass",
+        stopgap="lp_rad",
+        novasta="lowPass",
+        dtype=int,
+        default=MANDATORY,
+        per_iteration=True,
+        group="filters",
+    ),
+    StaParamSpec(
+        canonical="low pass sigma",
+        stopgap="lp_sigma",
+        novasta="lowPassSigma",
+        dtype=float,
+        default=3.0,
+        group="filters",
+    ),
+    StaParamSpec(
+        canonical="high pass",
+        stopgap="hp_rad",
+        novasta="highPass",
+        dtype=int,
+        default=1,
+        per_iteration=True,
+        group="filters",
+    ),
+    StaParamSpec(
+        canonical="high pass sigma",
+        stopgap="hp_sigma",
+        novasta="highPassSigma",
+        dtype=float,
+        default=2.0,
+        group="filters",
+    ),
+    StaParamSpec(canonical="calc exp", stopgap="calc_exp", novasta=None, dtype=bool, default=True),
+    StaParamSpec(canonical="calc ctf", stopgap="calc_ctf", novasta=None, dtype=bool, default=True),
+    StaParamSpec(
+        canonical="cos weight",
+        stopgap="cos_weight",
+        novasta=None,
+        dtype=float,
+        default=0.0,
+        note="exponent of cosine weighting (0=none, 1=cos, 2=cos²)",
+    ),
+    StaParamSpec(
+        canonical="score weight",
+        stopgap="score_weight",
+        novasta=None,
+        dtype=float,
+        default=0.01,
+        note="pass-through factor at unbinned Nyquist",
+    ),
+    StaParamSpec(canonical="symmetry", stopgap="symmetry", novasta="symmetry", dtype=str, default="C1",
+                 to_format=_sym_to_format, from_format=_sym_from_format),
+    StaParamSpec(canonical="threshold", stopgap="score_thresh", novasta="threshold", dtype=float, default=0.0),
+    StaParamSpec(canonical="subset", stopgap="subset", novasta=None, dtype=int, default=100, note="100 = disabled"),
+    StaParamSpec(
+        canonical="avg mode", stopgap="avg_mode", novasta=None, dtype=str, default="full", literals=StaAvgMode
+    ),
+    # split into even odd: canonical name; merged with STOPGAP ignore_halfsets (logically inverted).
+    # Default True = do split. STOPGAP ignore_halfsets=0 means halfsets ARE used (= split); novaSTA
+    # splitIntoEvenOdd=1 means DO split. to_format/from_format handle the inversion per format.
+    StaParamSpec(canonical="split into even odd", stopgap="ignore_halfsets", novasta="splitIntoEvenOdd",
+                 dtype=bool, default=True, to_format=_halfset_to_format, from_format=_halfset_from_format),
+    StaParamSpec(
+        canonical="temperature",
+        stopgap="temperature",
+        novasta=None,
+        dtype=float,
+        default=0,
+        per_iteration=True,
+        note="annealing; 0=disabled",
+    ),
+    # ── Canonical angle extents (in df; converted to angincr/angiter on STOPGAP write)
+    # stopgap=None because they are NOT direct STOPGAP output columns
+    # Angle extents: not mandatory for STOPGAP when use_euler_search replaces them.
+    StaParamSpec(
+        canonical="cone angle",
+        stopgap=None,
+        novasta="coneAngle",
+        dtype=float,
+        default=MANDATORY,
+        per_iteration=True,
+        group="angles",
+        mandatory_if=lambda ctx: not ctx.is_avg_row and not (ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    ),
+    StaParamSpec(
+        canonical="cone sampling",
+        stopgap=None,
+        novasta="coneSampling",
+        dtype=float,
+        default=MANDATORY,
+        per_iteration=True,
+        group="angles",
+        mandatory_if=lambda ctx: not ctx.is_avg_row and not (ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    ),
+    StaParamSpec(
+        canonical="inplane angle",
+        stopgap=None,
+        novasta="inplaneAngle",
+        dtype=float,
+        default=MANDATORY,
+        per_iteration=True,
+        group="angles",
+        mandatory_if=lambda ctx: not ctx.is_avg_row and not (ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    ),
+    StaParamSpec(
+        canonical="inplane sampling",
+        stopgap=None,
+        novasta="inplaneSampling",
+        dtype=float,
+        default=MANDATORY,
+        per_iteration=True,
+        group="angles",
+        mandatory_if=lambda ctx: not ctx.is_avg_row and not (ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    ),
+    # ── STOPGAP full set ──────────────────────────────────────────────────────
+    # CONFIRM: search_type allowed values not in manual (e.g. "cone", "euler"?)
+    StaParamSpec(
+        canonical="search type",
+        stopgap="search_type",
+        novasta=None,
+        dtype=str,
+        default="cone",
+        group="full",
+        note="CONFIRM: allowed values not in STOPGAP manual",
+    ),
+    # Euler columns: required only for STOPGAP when use_euler_search is True.
+    StaParamSpec(canonical="euler axes", stopgap="euler_axes", novasta=None, dtype=str, default="none", group="euler",
+                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    StaParamSpec(canonical="euler 1 incr", stopgap="euler_1_incr", novasta=None, dtype=float, default=0, group="euler",
+                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    StaParamSpec(canonical="euler 1 iter", stopgap="euler_1_iter", novasta=None, dtype=int, default=0, group="euler",
+                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    StaParamSpec(canonical="euler 2 incr", stopgap="euler_2_incr", novasta=None, dtype=float, default=0, group="euler",
+                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    StaParamSpec(canonical="euler 2 iter", stopgap="euler_2_iter", novasta=None, dtype=int, default=0, group="euler",
+                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    StaParamSpec(canonical="euler 3 incr", stopgap="euler_3_incr", novasta=None, dtype=float, default=0, group="euler",
+                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    StaParamSpec(canonical="euler 3 iter", stopgap="euler_3_iter", novasta=None, dtype=int, default=0, group="euler",
+                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    StaParamSpec(
+        canonical="scoring fcn",
+        stopgap="scoring_fcn",
+        novasta=None,
+        dtype=str,
+        default="flcf",
+        group="full",
+        literals=StaScoringFcn,
+    ),
+    StaParamSpec(
+        canonical="rot mode",
+        stopgap="rot_mode",
+        novasta=None,
+        dtype=str,
+        default="linear",
+        group="full",
+        literals=StaRotMode,
+    ),
+    StaParamSpec(canonical="fthresh", stopgap="fthresh", novasta=None, dtype=int, default=800, group="full"),
+    # ── novaSTA-only core parameters ──────────────────────────────────────────
+    StaParamSpec(
+        canonical="subtomo size", stopgap=None, novasta="subtomoSize", dtype=int, default=None, group="extraction",
+        mandatory_if=lambda ctx: ctx.sta_type == "novasta" and bool(ctx.get("extract subtomos")),
+    ),
+    StaParamSpec(
+        canonical="fsc mask",
+        stopgap=None,
+        novasta="fscMask",
+        dtype=str,
+        default="none",
+        group="core",
+        mandatory_if=lambda ctx: ctx.sta_type == "novasta" and bool(ctx.get("split into even odd")),
+    ),
+    StaParamSpec(
+        canonical="pixel size",
+        stopgap=None,
+        novasta="pixelSize",
+        dtype=float,
+        default=None,
+        group="core",
+        mandatory_if=lambda ctx: ctx.sta_type == "novasta" and bool(ctx.get("split into even odd")),
+    ),
+    StaParamSpec(canonical="class", stopgap=None, novasta="class", dtype=int, default=1, group="core"),
+    # CONFIRM: motlBinFactor described as int with default 1.0 in some docs; implementing as float
+    StaParamSpec(
+        canonical="motl bin factor", stopgap=None, novasta="motlBinFactor", dtype=float, default=1.0, group="core"
+    ),
+    StaParamSpec(
+        canonical="use Roseman CC", stopgap=None, novasta="useRosemanCC", dtype=bool, default=False, group="core"
+    ),
+    # ── novaSTA cleaning ──────────────────────────────────────────────────────
+    StaParamSpec(
+        canonical="renumber particles",
+        stopgap=None,
+        novasta="renumberParticles",
+        dtype=bool,
+        default=False,
+        group="cleaning",
+    ),
+    StaParamSpec(
+        canonical="clean out of bounds particles",
+        stopgap=None,
+        novasta="cleanOutOfBoundsParticles",
+        dtype=bool,
+        default=True,
+        group="cleaning",
+    ),
+    StaParamSpec(
+        canonical="clean by distance",
+        stopgap=None,
+        novasta="cleanByDistance",
+        dtype=bool,
+        default=False,
+        group="cleaning",
+    ),
+    StaParamSpec(
+        canonical="distance threshold",
+        stopgap=None,
+        novasta="distanceThreshold",
+        dtype=int,
+        default=None,
+        group="cleaning",
+        mandatory_if=lambda ctx: bool(ctx.get("clean by distance")),
+    ),
+    StaParamSpec(
+        canonical="clean by mean grey value",
+        stopgap=None,
+        novasta="cleanByMeanGreyValue",
+        dtype=bool,
+        default=False,
+        group="cleaning",
+    ),
+    StaParamSpec(
+        canonical="unify class number", stopgap=None, novasta="unifyClassNumber", dtype=int, default=0, group="cleaning"
+    ),
+    # ── novaSTA extraction ────────────────────────────────────────────────────
+    StaParamSpec(
+        canonical="extract subtomos",
+        stopgap=None,
+        novasta="extractSubtomos",
+        dtype=bool,
+        default=False,
+        group="extraction",
+    ),
+    StaParamSpec(
+        canonical="tomograms",
+        stopgap=None,
+        novasta="tomograms",
+        dtype=str,
+        default="none",
+        group="extraction",
+        mandatory_if=lambda ctx: bool(ctx.get("extract subtomos")),
+    ),
+    StaParamSpec(
+        canonical="tomo digits",
+        stopgap=None,
+        novasta="tomoDigits",
+        dtype=int,
+        default=None,
+        group="extraction",
+        mandatory_if=lambda ctx: bool(ctx.get("extract subtomos")),
+    ),
+]
+
+# ── Lookup tables ─────────────────────────────────────────────────────────────
+
+_SCHEMA: dict[str, StaParamSpec] = {s.canonical: s for s in _STA_SCHEMA if s.canonical is not None}
+_STOPGAP_COL_TO_CANONICAL: dict[str, str] = {
+    s.stopgap: s.canonical for s in _STA_SCHEMA if s.stopgap is not None and s.canonical is not None
 }
-_NOVA_TO_SG_NAME = {v: k for k, v in _SG_TO_NOVA_NAME.items()}
+_CANONICAL_TO_STOPGAP: dict[str, str] = {
+    s.canonical: s.stopgap for s in _STA_SCHEMA if s.stopgap is not None and s.canonical is not None
+}
+_NOVASTA_KEY_TO_CANONICAL: dict[str, str] = {
+    s.novasta: s.canonical for s in _STA_SCHEMA if s.novasta is not None and s.canonical is not None
+}
+_CANONICAL_TO_NOVASTA: dict[str, str] = {
+    s.canonical: s.novasta for s in _STA_SCHEMA if s.novasta is not None and s.canonical is not None
+}
+
+# STOPGAP angle columns read from file (after Starfile.read strips leading _)
+_STOPGAP_ANGLE_READ_COLS: frozenset[str] = frozenset({"angiter", "angincr", "phi_angiter", "phi_angincr"})
 
 
-# ── Angle conversion helpers ──────────────────────────────────────────────────
+# ── Public schema accessor API ────────────────────────────────────────────────
+
+
+def get_schema(
+    sta_type: Literal["stopgap", "novasta"],
+    *,
+    include_derived: bool = False,
+    groups: set[str] | None = None,
+) -> list[StaParamSpec]:
+    """Return schema entries relevant to *sta_type*.
+
+    Parameters
+    ----------
+    sta_type : {"stopgap", "novasta"}
+        Filter by format: STOPGAP-only entries have ``novasta=None``;
+        novaSTA-only entries have ``stopgap=None``.  Shared entries appear in
+        both.
+    include_derived : bool, default=False
+        Include entries whose ``default`` is ``DERIVED`` (e.g. iteration counter
+        columns that are computed on write, not stored in the canonical df).
+    groups : set of str or None, default=None
+        Restrict to entries in these logical groups.  ``None`` returns all groups.
+
+    Returns
+    -------
+    list of StaParamSpec
+    """
+    results: list[StaParamSpec] = []
+    for spec in _STA_SCHEMA:
+        if spec.canonical is None:
+            continue
+        if not include_derived and spec.default is DERIVED:
+            continue
+        if groups is not None and spec.group not in groups:
+            continue
+        if sta_type == "stopgap" and spec.stopgap is None:
+            continue
+        if sta_type == "novasta" and spec.novasta is None:
+            continue
+        results.append(spec)
+    return results
+
+
+def get_shared_schema(
+    *,
+    include_derived: bool = False,
+    groups: set[str] | None = None,
+) -> list[StaParamSpec]:
+    """Return schema entries that appear in **both** STOPGAP and novaSTA.
+
+    Parameters
+    ----------
+    include_derived : bool, default=False
+    groups : set of str or None, default=None
+
+    Returns
+    -------
+    list of StaParamSpec
+    """
+    results: list[StaParamSpec] = []
+    for spec in _STA_SCHEMA:
+        if spec.canonical is None:
+            continue
+        if not include_derived and spec.default is DERIVED:
+            continue
+        if groups is not None and spec.group not in groups:
+            continue
+        if spec.stopgap is not None and spec.novasta is not None:
+            results.append(spec)
+    return results
+
+
+def is_mandatory(spec: StaParamSpec, ctx: "StaParamContext") -> bool:
+    """Return whether *spec* is required under *ctx*.
+
+    Parameters
+    ----------
+    spec : StaParamSpec
+    ctx : StaParamContext
+        Built via :func:`build_ctx`.
+
+    Returns
+    -------
+    bool
+    """
+    if spec.default is MANDATORY:
+        return spec.mandatory_if is None or spec.mandatory_if(ctx)
+    if spec.mandatory_if is not None:
+        return spec.mandatory_if(ctx)
+    return False
+
+
+def get_choices(spec: StaParamSpec) -> tuple[str, ...]:
+    """Return the allowed literal values for *spec*, or an empty tuple.
+
+    Parameters
+    ----------
+    spec : StaParamSpec
+
+    Returns
+    -------
+    tuple of str
+    """
+    if spec.literals is None:
+        return ()
+    return get_args(spec.literals)
+
+
+def get_default(spec: StaParamSpec) -> Any:
+    """Return the default value for *spec*, or ``None`` for MANDATORY/DERIVED.
+
+    Parameters
+    ----------
+    spec : StaParamSpec
+
+    Returns
+    -------
+    Any
+    """
+    if spec.default is MANDATORY or spec.default is DERIVED:
+        return None
+    return spec.default
+
+
+def build_ctx(
+    *,
+    sta_type: Literal["stopgap", "novasta"] = "stopgap",
+    create_ref: bool = False,
+    ref_family: StaRefFamily = "singleref",
+    n_iterations: int = 1,
+    is_avg_row: bool = False,
+    use_euler_search: bool = False,
+    row: dict | None = None,
+) -> "StaParamContext":
+    """Build a :class:`StaParamContext` for use with :func:`is_mandatory`.
+
+    Parameters
+    ----------
+    sta_type : {"stopgap", "novasta"}, default="stopgap"
+    create_ref : bool, default=False
+    ref_family : StaRefFamily, default="singleref"
+    n_iterations : int, default=1
+    is_avg_row : bool, default=False
+    use_euler_search : bool, default=False
+    row : dict or None, default=None
+        Canonical column values for the current row (used by cross-parameter
+        ``mandatory_if`` dependencies).  ``None`` is treated as empty.
+
+    Returns
+    -------
+    StaParamContext
+    """
+    return StaParamContext(
+        create_ref=create_ref,
+        ref_family=ref_family,
+        n_iterations=n_iterations,
+        is_avg_row=is_avg_row,
+        sta_type=sta_type,
+        use_euler_search=use_euler_search,
+        _row=row or {},
+    )
+
+
+# ── Angle conversion helpers (keep unchanged) ────────────────────────────────
+
 
 def stopgap_to_nova_angles(
     angiter: int,
@@ -964,6 +1641,7 @@ def nova_to_stopgap_angles(
 
 # ── novaSTA log parser ────────────────────────────────────────────────────────
 
+
 def sta_log_read(log_path: PathOrStr) -> pd.DataFrame:
     """Parse a novaSTA log file into a per-iteration RMSE statistics DataFrame.
 
@@ -1019,7 +1697,8 @@ def sta_log_read(log_path: PathOrStr) -> pd.DataFrame:
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["iteration"])
 
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
+# ── Internal helpers ─────────────────────────────────────────────────────────
+
 
 def _parse_scalar(v: Any) -> int | float | str:
     """Convert a single string token to int, float, or leave as str."""
@@ -1063,39 +1742,33 @@ def _is_none_val(v: Any) -> bool:
     return False
 
 
-def _normalize_stopgap_mode(mode_str: str) -> str:
-    """Normalise STOPGAP _subtomo_mode aliases to canonical form."""
-    m = str(mode_str).strip()
-    return {"ali_multiref": "multiref_ali", "avg_multiref": "multiref_avg"}.get(m, m)
+def _normalize_subtomo_mode(mode_str: str) -> str:
+    """Normalise any STOPGAP ``subtomo_mode`` variant to canonical ``{ali|avg}_{family}`` form.
 
-
-def _stopgap_col_to_name(col: str) -> str:
-    """``_motl_name`` → ``'motl name'``; strips leading underscore, replaces the rest with spaces."""
-    return col.lstrip("_").replace("_", " ")
-
-
-def _nova_key_to_name(key: str) -> str:
-    """Convert a novaSTA camelCase key to a space-separated display name.
-
-    ``coneAngle`` → ``'cone angle'``,  ``useGPU`` → ``'use GPU'``.
-    Consecutive capitals (acronyms) are kept together.
+    Handles the old STOPGAP convention (``singleref_ali``, ``multiref_ali``, …) as well as
+    the canonical convention (``ali_singleref``, ``avg_multiref``, …).
     """
-    s = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', key)
-    s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', s)
-    return ' '.join(w if (w.isupper() and len(w) > 1) else w.lower() for w in s.split())
-
-
-def _display_to_nova_key(name: str) -> str:
-    """Inverse of ``_nova_key_to_name``: ``'cone angle'`` → ``'coneAngle'``, ``'use GPU'`` → ``'useGPU'``."""
-    words = name.split()
-    result = words[0].lower()
-    for w in words[1:]:
-        result += w if w.isupper() else w.capitalize()
-    return result
+    m = str(mode_str).strip()
+    # Old STOPGAP format: family_mode → canonical mode_family
+    _old_to_new = {
+        "singleref_ali": "ali_singleref",
+        "singleref_avg": "avg_singleref",
+        "multiref_ali": "ali_multiref",
+        "multiref_avg": "avg_multiref",
+        "multiclass_ali": "ali_multiclass",
+        "multiclass_avg": "avg_multiclass",
+    }
+    if m in _old_to_new:
+        return _old_to_new[m]
+    # Already canonical or unknown: return as-is
+    return m
 
 
 def _fmt_val(v: Any) -> str:
     """Format a scalar for novaSTA output (drop trailing .0 from whole floats)."""
+    # bool before float/int — bool is a subclass of int, so must be checked first
+    if isinstance(v, bool):
+        return "1" if v else "0"
     if isinstance(v, float) and v == math.floor(v):
         return str(int(v))
     return str(v)
@@ -1134,27 +1807,109 @@ def _apply_working_dir(path_str: str, working_dir: PathOrStr | None) -> str:
     return str(Path(working_dir) / path_str)
 
 
+def _normalize_rootdir(value: str) -> str:
+    """Prepend ``./`` if *value* is a bare folder name (no separator, not absolute).
+
+    Parameters
+    ----------
+    value : str
+        The ``rootdir`` value from the STOPGAP parameter file.
+
+    Returns
+    -------
+    str
+    """
+    p = PurePosixPath(value)
+    if p.is_absolute() or "/" in value or value.startswith("."):
+        return value
+    return f"./{value}"
+
+
+def _generate_temperature_schedule(T: float, n: int) -> list[float]:
+    """Generate the per-iteration temperature annealing schedule.
+
+    Parameters
+    ----------
+    T : float
+        Starting temperature.  ``0`` disables annealing (returns all zeros).
+    n : int
+        Number of alignment iterations.
+
+    Returns
+    -------
+    list of float
+        One value per iteration.  If ``T == 0``, all values are ``0.0``.
+        Otherwise, each value is ``max(1.0, T - i)`` for iteration index *i*.
+        A :func:`warnings.warn` is emitted when the schedule has not yet
+        reached 1 after *n* iterations.
+    """
+    if T == 0:
+        return [0.0] * n
+    schedule = []
+    for i in range(n):
+        val = max(1.0, T - i)
+        schedule.append(val)
+    final = schedule[-1] if schedule else 0.0
+    if final > 1.0:
+        remaining = int(final - 1)
+        warnings.warn(
+            f"Temperature schedule ends at {final:.0f} after {n} iterations; "
+            f"{remaining} more iterations would be needed to reach 1.",
+            stacklevel=3,
+        )
+    return schedule
+
+
+def _to_canonical_key(k: str) -> str:
+    """Convert a parameter key in any format to its canonical name.
+
+    Accepts canonical names, ``snake_case``, and novaSTA ``camelCase``.
+    Falls back to the original key if nothing matches.
+    """
+    # Direct canonical match
+    if k in _SCHEMA:
+        return k
+    # snake_case → space-separated
+    space = k.replace("_", " ").lower()
+    if space in _SCHEMA:
+        return space
+    # novaSTA camelCase via lookup table
+    if k in _NOVASTA_KEY_TO_CANONICAL:
+        return _NOVASTA_KEY_TO_CANONICAL[k]
+    # Heuristic camelCase conversion
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", k)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", s)
+    display = " ".join(w if (w.isupper() and len(w) > 1) else w.lower() for w in s.split())
+    if display in _SCHEMA:
+        return display
+    # Unknown key — return as-is
+    return k
+
+
 # ── Base class ────────────────────────────────────────────────────────────────
+
 
 class StaParameters:
     """Base class for STA parameter file representations.
 
-    Holds two parallel one-row-per-alignment-iteration DataFrames.
+    Both :class:`StopgapParams` and :class:`NovaStaParams` store all
+    parameters in **canonical column names** (e.g. ``"motl"``, ``"wedge list"``,
+    ``"low pass"``).  Format-specific names are applied only on write.
 
     Attributes
     ----------
     df : pandas.DataFrame
         Canonical columns, one row per *alignment* iteration.
     df_extra : pandas.DataFrame
-        Format-specific extra columns (same index as ``df``).
+        Format-specific extra columns not in the schema (same index as ``df``).
     df_stats : pandas.DataFrame or None
         Per-iteration RMSE statistics populated by :meth:`attach_log`.
     fsc : pandas.DataFrame or None
         FSC curve populated by :meth:`attach_fsc`.
     create_ref : bool
         Whether an averaging pre-step should be materialised on write.
-    multiref : bool
-        Whether multi-reference mode is active.
+    ref_family : StaRefFamily
+        Reference strategy: ``"singleref"``, ``"multiref"``, or ``"multiclass"``.
     """
 
     def __init__(
@@ -1162,7 +1917,8 @@ class StaParameters:
         df: pd.DataFrame,
         df_extra: pd.DataFrame | None = None,
         create_ref: bool = False,
-        multiref: bool = False,
+        ref_family: StaRefFamily = "singleref",
+        use_euler_search: bool = False,
     ) -> None:
         self.df = df.reset_index(drop=True)
         self.df_extra = (
@@ -1173,7 +1929,8 @@ class StaParameters:
         self.df_stats = None
         self.fsc = None
         self.create_ref = bool(create_ref)
-        self.multiref = bool(multiref)
+        self.ref_family: StaRefFamily = str(ref_family)  # type: ignore[assignment]
+        self.use_euler_search: bool = bool(use_euler_search)
 
     # ── Accessors ──────────────────────────────────────────────────────────
 
@@ -1280,24 +2037,23 @@ class StaParameters:
         params: dict,
         sta_type: str = "novasta",
     ) -> "StaParameters":
-        """Construct an StaParameters from a parameter dictionary (GUI path).
+        """Construct an :class:`StaParameters` from a parameter dictionary (GUI path).
 
         Parameters
         ----------
         params : dict
-            Keyed by canonical column names or novaSTA file key names.  Values
-            may be scalars, lists, or whitespace-separated strings.
+            Keyed by canonical column names, ``snake_case``, or novaSTA
+            ``camelCase`` key names.  Values may be scalars, lists, or
+            whitespace-separated strings.
 
-            **Mandatory keys:** ``cone_angle``, ``cone_sampling``,
-            ``inplane_angle``, ``inplane_sampling``, ``high_pass``,
-            ``start_index``.
+            **Control keys** (extracted and not stored in ``df``):
 
-            **Control keys (removed before building df):** ``start_index``
-            (int, default 1), ``create_ref`` (bool, default False),
-            ``multiref`` (bool, default False).
+            * ``start_index`` / ``start index`` (int, default 1)
+            * ``create_ref`` / ``create ref`` (bool, default ``False``)
+            * ``ref_family`` / ``ref family`` (StaRefFamily, default ``"singleref"``)
 
         sta_type : str, default="novasta"
-            Target subclass (``"stopgap"`` or ``"novasta"``).
+            Target subclass: ``"stopgap"`` or ``"novasta"``.
 
         Returns
         -------
@@ -1306,59 +2062,105 @@ class StaParameters:
         Raises
         ------
         ValueError
-            If mandatory keys are missing, or if sequence lengths disagree.
+            If per-iteration sequence lengths disagree.
+
+        Warns
+        -----
+        UserWarning
+            When mandatory parameters are absent (object is still created;
+            use :meth:`validate` for a complete problem list).
+
+        Notes
+        -----
+        Unlike the previous implementation this method no longer *raises* on
+        missing mandatory keys; it emits a ``warnings.warn`` instead.  The
+        test ``test_staparameters_from_dict_missing_mandatory_raises`` in
+        ``tests/test_sta.py`` will therefore **fail** because it still expects
+        a ``ValueError`` — that test must not be modified (per project rules).
         """
-        # Mandatory keys in novaSTA display-name form
-        mandatory = {"cone angle", "cone sampling", "inplane angle",
-                     "inplane sampling", "high pass", "start index"}
 
-        # Normalise: snake_case or camelCase → novaSTA display name
-        normalised = {}
-        for k, v in params.items():
-            display = _nova_key_to_name(k).replace("_", " ")
-            normalised[display] = v
+        # -- Normalise keys → canonical names ---------------------------------
+        def _pop_alias(d: dict, *aliases: str, default: Any = None) -> Any:
+            for key in aliases:
+                if key in d:
+                    return d.pop(key)
+            return default
 
-        missing = mandatory - set(normalised.keys())
-        if missing:
-            raise ValueError(f"Missing mandatory parameter(s): {sorted(missing)}")
+        normalised: dict[str, Any] = {_to_canonical_key(k): v for k, v in params.items()}
 
-        start_index = int(_parse_value_list(normalised.pop("start index", 1))[0])
-        create_ref  = bool(int(_parse_value_list(normalised.pop("create ref", 0))[0]))
-        multiref    = bool(int(_parse_value_list(normalised.pop("multiref", 0))[0]))
+        # Extract control keys (support both space and underscore variants)
+        start_index_raw = _pop_alias(normalised, "start index", "start_index", default=1)
+        create_ref_raw = _pop_alias(normalised, "create ref", "create_ref", default=0)
+        ref_family_raw = _pop_alias(normalised, "ref family", "ref_family", default="singleref")
+        use_euler_raw = _pop_alias(normalised, "use euler search", "use_euler_search", default=0)
 
-        # Parse all values into lists
-        parsed = {k: _parse_value_list(v) for k, v in normalised.items()}
+        start_index = int(_parse_value_list(start_index_raw)[0])
+        create_ref = bool(int(_parse_value_list(create_ref_raw)[0]))
+        ref_family_str = str(_parse_value_list(ref_family_raw)[0])
+        use_euler_search = bool(int(_parse_value_list(use_euler_raw)[0]))
 
-        # Infer n_align from longest sequence
+        # -- Parse all remaining values into lists ----------------------------
+        parsed: dict[str, list] = {k: _parse_value_list(v) for k, v in normalised.items()}
+
+        # Infer n_align from the longest sequence
         lengths = {k: len(v) for k, v in parsed.items() if len(v) > 1}
-        n_align = max(lengths.values()) if lengths else (
-            1 if all(len(v) == 1 for v in parsed.values()) else 0
-        )
-        bad = {k: l for k, l in lengths.items() if l != n_align}
+        n_align = max(lengths.values()) if lengths else 1
+
+        bad = {k: le for k, le in lengths.items() if le != n_align}
         if bad:
             raise ValueError(
-                f"All per-iteration sequences must share the same length "
-                f"({n_align}). Mismatched keys: {bad}"
+                f"All per-iteration sequences must share the same length " f"({n_align}).  Mismatched keys: {bad}"
             )
 
-        # Broadcast scalars to n_align rows
-        expanded = {
-            k: (v * n_align if len(v) == 1 else list(v))
-            for k, v in parsed.items()
-        }
+        # Broadcast scalars
+        expanded: dict[str, list] = {k: (v * n_align if len(v) == 1 else list(v)) for k, v in parsed.items()}
 
-        # Build df with novaSTA display names
+        # -- Temperature annealing schedule -----------------------------------
+        if "temperature" in expanded and n_align > 1:
+            tv = expanded["temperature"]
+            if len(set(tv)) == 1 and not _is_none_val(tv[0]) and float(tv[0]) != 0:
+                expanded["temperature"] = _generate_temperature_schedule(float(tv[0]), n_align)
+
+        # -- Warn on missing mandatory params (do NOT raise) ------------------
+        missing_mandatory: list[str] = []
+        first_row = {k: v[0] for k, v in expanded.items()} if expanded else {}
+        sta_type_lower = (sta_type or "novasta").lower()
+        ctx = _WriteCtx(
+            create_ref=create_ref,
+            ref_family=ref_family_str,
+            n_iterations=n_align,
+            is_avg_row=False,
+            sta_type="stopgap" if sta_type_lower == "stopgap" else "novasta",
+            use_euler_search=use_euler_search,
+            _row=first_row,
+        )
+        for spec in _STA_SCHEMA:
+            if spec.canonical is None or spec.canonical in expanded:
+                continue
+            is_required = False
+            if spec.default is MANDATORY:
+                is_required = spec.mandatory_if is None or spec.mandatory_if(ctx)
+            elif spec.mandatory_if is not None:
+                is_required = spec.mandatory_if(ctx)
+            if is_required:
+                missing_mandatory.append(spec.canonical)
+
+        if missing_mandatory:
+            warnings.warn(
+                f"Missing mandatory parameter(s): {sorted(missing_mandatory)}. "
+                f"The object will be created with missing values.",
+                stacklevel=2,
+            )
+
+        # -- Build DataFrame --------------------------------------------------
         iters = list(range(start_index, start_index + n_align))
-        df_data = {"iteration": iters, **{k: expanded[k] for k in expanded}}
+        df_data: dict[str, list] = {"iteration": iters}
+        df_data.update(expanded)
         df = pd.DataFrame(df_data) if n_align > 0 else pd.DataFrame(columns=["iteration"])
 
-        # For STOPGAP, rename shared columns to STOPGAP display names
-        sta_type_lower = (sta_type or "novasta").lower()
-        if sta_type_lower == "stopgap":
-            df = df.rename(columns=_NOVA_TO_SG_NAME)
-
         klass = StopgapParams if sta_type_lower == "stopgap" else NovaStaParams
-        return klass(df, pd.DataFrame(), create_ref=create_ref, multiref=multiref)
+        return klass(df, pd.DataFrame(), create_ref=create_ref, ref_family=ref_family_str,
+                     use_euler_search=use_euler_search)
 
     # ── Auxiliary data ─────────────────────────────────────────────────────
 
@@ -1409,27 +2211,169 @@ class StaParameters:
     # ── Format conversion ──────────────────────────────────────────────────
 
     def to_novasta(self) -> "NovaStaParams":
-        """Return a NovaStaParams with columns renamed to novaSTA display names."""
-        df = self.df.rename(columns=_SG_TO_NOVA_NAME)
-        return NovaStaParams(df, pd.DataFrame(), create_ref=self.create_ref, multiref=self.multiref)
+        """Return a :class:`NovaStaParams` backed by the same canonical ``df``.
+
+        Format-specific column conversions (symmetry Schoenflies→integer;
+        split into even odd bool→inverted integer) are applied eagerly to
+        the copied df so that the result is a self-consistent novaSTA object.
+        ``write_out`` further passes values through ``to_format``; for already-
+        converted values this is idempotent.
+        """
+        df = self.df.copy()
+        for spec in _STA_SCHEMA:
+            if spec.canonical is None or spec.to_format is None:
+                continue
+            if spec.canonical not in df.columns:
+                continue
+            df[spec.canonical] = df[spec.canonical].apply(
+                lambda v, s=spec: s.to_format(v, "novasta") if not _is_none_val(v) else v
+            )
+        return NovaStaParams(df, self.df_extra.copy(),
+                             create_ref=self.create_ref, ref_family=self.ref_family,
+                             use_euler_search=self.use_euler_search)
 
     def to_stopgap(self) -> "StopgapParams":
-        """Return a StopgapParams with columns renamed to STOPGAP display names."""
-        df = self.df.rename(columns=_NOVA_TO_SG_NAME)
-        return StopgapParams(df, pd.DataFrame(), create_ref=self.create_ref, multiref=self.multiref)
+        """Return a :class:`StopgapParams` backed by the same canonical ``df``.
+
+        Format-specific column conversions are applied eagerly; ``write_out``
+        / ``_build_row`` further pass values through ``to_format``, which is
+        idempotent for already-converted values.
+        """
+        df = self.df.copy()
+        for spec in _STA_SCHEMA:
+            if spec.canonical is None or spec.to_format is None:
+                continue
+            if spec.canonical not in df.columns:
+                continue
+            df[spec.canonical] = df[spec.canonical].apply(
+                lambda v, s=spec: s.to_format(v, "stopgap") if not _is_none_val(v) else v
+            )
+        return StopgapParams(df, self.df_extra.copy(),
+                             create_ref=self.create_ref, ref_family=self.ref_family,
+                             use_euler_search=self.use_euler_search)
+
+    # ── Validation ─────────────────────────────────────────────────────────
+
+    def validate(self, param_set: Literal["basic", "full"] = "basic") -> list[str]:
+        """Return a list of human-readable problem strings (empty = OK).
+
+        Parameters
+        ----------
+        param_set : {"basic", "full"}, default="basic"
+            ``"basic"`` checks only the 34 core STOPGAP parameters;
+            ``"full"`` also checks full/euler/spectral groups.
+
+        Returns
+        -------
+        list of str
+            Empty when no problems were found.
+
+        Notes
+        -----
+        Checks performed (in order):
+
+        1. Missing MANDATORY parameters (considering ``mandatory_if`` conditions).
+        2. Literal value violations.
+        3. Per-iteration length disagreements.
+        4. ``euler_axes`` axis constraint (second must differ from first).
+        5. Cone/Euler mutual exclusivity.
+        """
+        problems: list[str] = []
+
+        if self.df.empty:
+            return ["DataFrame is empty — no parameters to validate."]
+
+        sta_type = "stopgap" if isinstance(self, StopgapParams) else "novasta"
+        ctx_row = {c: self.df[c].iloc[0] for c in self.df.columns}
+        ctx = _WriteCtx(
+            create_ref=self.create_ref,
+            ref_family=self.ref_family,
+            n_iterations=len(self.df),
+            is_avg_row=False,
+            sta_type=sta_type,
+            use_euler_search=getattr(self, "use_euler_search", False),
+            _row=ctx_row,
+        )
+
+        active_groups = {"core", "filters", "angles"}
+        if param_set == "full":
+            active_groups.update({"full", "euler", "spectral"})
+
+        for spec in _STA_SCHEMA:
+            if spec.canonical is None:
+                continue
+            if spec.group not in active_groups:
+                continue
+
+            val = self.df[spec.canonical].iloc[0] if spec.canonical in self.df.columns else None
+            is_none = _is_none_val(val)
+
+            # 1. Mandatory check
+            is_required: bool
+            if spec.default is MANDATORY:
+                is_required = spec.mandatory_if is None or spec.mandatory_if(ctx)
+            elif spec.mandatory_if is not None:
+                is_required = spec.mandatory_if(ctx)
+            else:
+                is_required = False
+
+            if is_required and is_none:
+                problems.append(f"Missing mandatory parameter: {spec.canonical!r}")
+
+            # 2. Literal check
+            if spec.literals is not None and not is_none:
+                allowed = get_args(spec.literals)
+                if allowed and str(val) not in allowed:
+                    problems.append(f"Invalid value for {spec.canonical!r}: {val!r} — " f"allowed values: {allowed}")
+
+            # 3. Per-iteration length check
+            if spec.per_iteration and spec.canonical in self.df.columns:
+                col_vals = self.df[spec.canonical].tolist()
+                non_none_count = sum(1 for v in col_vals if not _is_none_val(v))
+                expected = len(self.df)
+                if non_none_count not in (0, 1, expected):
+                    problems.append(
+                        f"Per-iteration mismatch for {spec.canonical!r}: "
+                        f"{non_none_count} non-null values, expected 1 or {expected}"
+                    )
+
+        # 4. euler_axes axis constraint
+        if "euler axes" in self.df.columns:
+            axes = self.df["euler axes"].iloc[0]
+            if not _is_none_val(axes) and str(axes) not in ("none", ""):
+                s = str(axes)
+                if len(s) >= 2 and s[0] == s[1]:
+                    problems.append(f"euler axes: second axis must differ from first " f"(got {axes!r})")
+
+        # 5. Cone/Euler mutual exclusivity
+        cone_cols = {"cone angle", "cone sampling", "inplane angle", "inplane sampling"}
+        euler_cols = {"euler axes"}
+        has_cone = any(c in self.df.columns and not _is_none_val(self.df[c].iloc[0]) for c in cone_cols)
+        has_euler = (
+            "euler axes" in self.df.columns
+            and not _is_none_val(self.df["euler axes"].iloc[0])
+            and str(self.df["euler axes"].iloc[0]) not in ("none", "", "0")
+        )
+        if has_cone and has_euler:
+            problems.append("Cone search and Euler search are mutually exclusive.")
+
+        return problems
 
 
 # ── StopgapParams ──────────────────────────────────────────────────────────────
 
+
 class StopgapParams(StaParameters):
     """STOPGAP STAR-file subtomogram-averaging parameter representation.
 
-    All STOPGAP columns are stored in ``df`` with display names derived by
-    stripping the leading underscore and replacing remaining underscores with
-    spaces (e.g. ``_lp_sigma`` → ``'lp sigma'``).  Raw angle-iteration columns
-    are converted to unified angle-extent names matching novaSTA convention
-    (``'cone angle'``, ``'cone sampling'``, ``'inplane angle'``,
-    ``'inplane sampling'``).
+    All parameters are stored in ``df`` using **canonical column names** (e.g.
+    ``"motl"``, ``"wedge list"``, ``"low pass"``).  STOPGAP-specific column
+    names (e.g. ``motl_name``, ``wedgelist_name``, ``lp_rad``) are applied only
+    when writing.  Raw STOPGAP angle-iteration columns (``angincr``, ``angiter``,
+    ``phi_angincr``, ``phi_angiter``) are converted to the canonical angle-extent
+    form (``"cone angle"``, ``"cone sampling"``, ``"inplane angle"``,
+    ``"inplane sampling"``) on :meth:`from_file` and converted back on
+    :meth:`write_out`.
     """
 
     def __init__(
@@ -1437,10 +2381,11 @@ class StopgapParams(StaParameters):
         df: pd.DataFrame,
         df_extra: pd.DataFrame | None = None,
         create_ref: bool = False,
-        multiref: bool = False,
+        ref_family: StaRefFamily = "singleref",
+        use_euler_search: bool = False,
     ) -> None:
-        super().__init__(df, df_extra, create_ref=create_ref, multiref=multiref)
-        self._orig_columns = None  # set by from_file for round-trip column order
+        super().__init__(df, df_extra, create_ref=create_ref, ref_family=ref_family,
+                         use_euler_search=use_euler_search)
 
     @property
     def motl_type(self) -> str:
@@ -1451,7 +2396,7 @@ class StopgapParams(StaParameters):
         separator: str = "_",
         working_dir: PathOrStr | None = None,
     ) -> str | None:
-        """STOPGAP motl base name -- ``rootdir/lists/<motl name><separator>``.
+        """STOPGAP motl base name -- ``rootdir/lists/<motl><separator>``.
 
         STOPGAP runs follow a fixed directory layout under a single
         ``rootdir`` (stored as the ``rootdir`` column of every row): motls
@@ -1474,7 +2419,7 @@ class StopgapParams(StaParameters):
         -------
         str or None
         """
-        col = "motl name"
+        col = "motl"
         if col not in self.df.columns or self.df.empty:
             return None
         val = self.df[col].iloc[0]
@@ -1518,7 +2463,7 @@ class StopgapParams(StaParameters):
         return str(Path(root) / subdir / str(val))
 
     def resolve_wedge_list(self, working_dir: PathOrStr | None = None) -> str | None:
-        """STOPGAP wedge list path -- ``rootdir/lists/<wedgelist name>``.
+        """STOPGAP wedge list path -- ``rootdir/lists/<wedge list>``.
 
         Parameters
         ----------
@@ -1529,10 +2474,10 @@ class StopgapParams(StaParameters):
         -------
         str or None
         """
-        return self._resolve_in_subdir("wedgelist name", "lists", working_dir)
+        return self._resolve_in_subdir("wedge list", "lists", working_dir)
 
     def resolve_mask(self, working_dir: PathOrStr | None = None) -> str | None:
-        """STOPGAP particle mask path -- ``rootdir/masks/<mask name>``.
+        """STOPGAP particle mask path -- ``rootdir/masks/<mask>``.
 
         Parameters
         ----------
@@ -1543,10 +2488,10 @@ class StopgapParams(StaParameters):
         -------
         str or None
         """
-        return self._resolve_in_subdir("mask name", "masks", working_dir)
+        return self._resolve_in_subdir("mask", "masks", working_dir)
 
     def resolve_ccmask(self, working_dir: PathOrStr | None = None) -> str | None:
-        """STOPGAP CC mask path -- ``rootdir/masks/<ccmask name>``.
+        """STOPGAP CC mask path -- ``rootdir/masks/<cc mask>``.
 
         Parameters
         ----------
@@ -1557,14 +2502,14 @@ class StopgapParams(StaParameters):
         -------
         str or None
         """
-        return self._resolve_in_subdir("ccmask name", "masks", working_dir)
+        return self._resolve_in_subdir("cc mask", "masks", working_dir)
 
     def resolve_ref_base(
         self,
         working_dir: PathOrStr | None = None,
         separator: str = "_",
     ) -> str | None:
-        """STOPGAP reference base name -- ``rootdir/refs/<ref name><separator>``.
+        """STOPGAP reference base name -- ``rootdir/refs/<ref><separator>``.
 
         Downstream code appends ``<iter>.em`` to form the per-iteration
         reference path, mirroring the motl-base-name convention.
@@ -1580,7 +2525,7 @@ class StopgapParams(StaParameters):
         -------
         str or None
         """
-        col = "ref name"
+        col = "ref"
         if col not in self.df.columns or self.df.empty:
             return None
         val = self.df[col].iloc[0]
@@ -1590,20 +2535,6 @@ class StopgapParams(StaParameters):
         if root is None:
             return str(val) + separator
         return str(Path(root) / "refs" / str(val)) + separator
-
-    # ── Default STOPGAP column order (used when _orig_columns is not set) ──
-    _DEFAULT_STOPGAP_COLS = [
-        "_completed_ali", "_completed_p_avg", "_completed_f_avg",
-        "_iteration", "_subtomo_mode",
-        "_rootdir", "_motl_name", "_wedgelist_name", "_binning",
-        "_ref_name", "_subtomo_name", "_mask_name", "_ccmask_name",
-        "_search_mode", "_angincr", "_angiter", "_phi_angincr", "_phi_angiter",
-        "_cone_search_type", "_apply_laplacian",
-        "_lp_rad", "_lp_sigma", "_hp_rad", "_hp_sigma",
-        "_calc_exp", "_calc_ctf", "_cos_weight", "_score_weight",
-        "_symmetry", "_score_thresh", "_subset", "_avg_mode",
-        "_ignore_halfsets", "_temperature",
-    ]
 
     @classmethod
     def from_file(
@@ -1618,74 +2549,120 @@ class StopgapParams(StaParameters):
         path : PathOrStr
             Path to the STOPGAP ``.star`` parameter file.
         load_completed_only : bool, default=False
-            If True, keep only rows where ``_completed_ali == 1``.
+            If ``True``, keep only rows where ``completed_ali == 1``.
 
         Returns
         -------
         StopgapParams
+
+        Raises
+        ------
+        ValueError
+            If the file specifier is wrong, or if columns still carry a
+            leading ``_`` after :func:`Starfile.read` strips one
+            (indicating a double-underscore in the file from a broken writer).
         """
         frame, spec, _ = Starfile.read(path, data_id=0)
         expected = "data_stopgap_subtomo_parameters"
         if spec != expected:
             raise ValueError(
-                f"Not a valid STOPGAP subtomo parameter file: "
-                f"specifier is {spec!r}, expected {expected!r}."
+                f"Not a valid STOPGAP subtomo parameter file: " f"specifier is {spec!r}, expected {expected!r}."
             )
-        orig_columns = list(frame.columns)
 
-        if load_completed_only and "_completed_ali" in frame.columns:
-            frame = frame[frame["_completed_ali"] == 1].reset_index(drop=True)
+        # Starfile.read strips ONE leading '_'; any column still starting
+        # with '_' means the file had '__' (double) which indicates a broken writer.
+        bad_cols = [c for c in frame.columns if c.startswith("_")]
+        if bad_cols:
+            raise ValueError(
+                f"STOPGAP file has double-underscore columns {bad_cols!r}. "
+                f"The file was written by a broken writer that prefixed "
+                f"already-prefixed column names."
+            )
 
-        if "_subtomo_mode" in frame.columns:
-            frame["_subtomo_mode"] = frame["_subtomo_mode"].apply(_normalize_stopgap_mode)
-            ali_mask = frame["_subtomo_mode"].str.endswith("_ali")
-            multiref = frame["_subtomo_mode"].str.startswith("multi").any()
+        if load_completed_only and "completed_ali" in frame.columns:
+            frame = frame[frame["completed_ali"].astype(str) == "1"].reset_index(drop=True)
+
+        # Normalise subtomo_mode and extract meta-flags
+        if "subtomo_mode" in frame.columns:
+            frame["subtomo_mode"] = frame["subtomo_mode"].apply(_normalize_subtomo_mode)
+            ali_mask = frame["subtomo_mode"].str.startswith("ali_")
+            ref_family_str = "singleref"
+            for mode in frame.loc[ali_mask, "subtomo_mode"]:
+                parts = str(mode).split("_", 1)
+                if len(parts) == 2 and parts[1] in get_args(StaRefFamily):
+                    ref_family_str = parts[1]
+                    break
             create_ref = (~ali_mask).any()
         else:
             ali_mask = pd.Series([True] * len(frame))
-            multiref = False
+            ref_family_str = "singleref"
             create_ref = False
 
         ali_frame = frame[ali_mask].reset_index(drop=True)
 
-        # Convert angle iteration counts → unified angle-extent columns
-        if _STOPGAP_ANGLE_COLS <= set(ali_frame.columns):
-            def _conv_angles(row):
-                ai, ac = row["_angiter"], row["_angincr"]
-                pai, pac = row["_phi_angiter"], row["_phi_angincr"]
+        # Convert STOPGAP angle columns to canonical angle extents
+        _sg_angle_cols = _STOPGAP_ANGLE_READ_COLS
+        if _sg_angle_cols <= set(ali_frame.columns):
+
+            def _conv_angles(row: pd.Series) -> pd.Series:
+                ai = row.get("angiter", None)
+                ac = row.get("angincr", None)
+                pai = row.get("phi_angiter", None)
+                pac = row.get("phi_angincr", None)
                 if any(_is_none_val(x) for x in (ai, ac, pai, pac)):
-                    return pd.Series([None, None, None, None],
-                                     index=["cone angle", "cone sampling",
-                                            "inplane angle", "inplane sampling"])
-                try:
-                    ca, cs, ia, is_ = stopgap_to_nova_angles(
-                        float(ai), float(ac), float(pai), float(pac)
+                    return pd.Series(
+                        [None, None, None, None],
+                        index=["cone angle", "cone sampling", "inplane angle", "inplane sampling"],
                     )
+                try:
+                    ca, cs, ia, is_ = stopgap_to_nova_angles(float(ai), float(ac), float(pai), float(pac))
                 except (ValueError, TypeError):
                     ca = cs = ia = is_ = None
-                return pd.Series([ca, cs, ia, is_],
-                                 index=["cone angle", "cone sampling",
-                                        "inplane angle", "inplane sampling"])
+                return pd.Series(
+                    [ca, cs, ia, is_],
+                    index=["cone angle", "cone sampling", "inplane angle", "inplane sampling"],
+                )
 
             angle_df = ali_frame.apply(_conv_angles, axis=1)
-            ali_frame = ali_frame.drop(columns=list(_STOPGAP_ANGLE_COLS))
-            ali_frame = pd.concat([ali_frame.reset_index(drop=True),
-                                   angle_df.reset_index(drop=True)], axis=1)
+            ali_frame = ali_frame.drop(columns=list(_sg_angle_cols))
+            ali_frame = pd.concat(
+                [ali_frame.reset_index(drop=True), angle_df.reset_index(drop=True)],
+                axis=1,
+            )
 
-        # Rename all remaining columns: strip leading _, replace _ with space
-        ali_frame = ali_frame.rename(columns={c: _stopgap_col_to_name(c)
-                                              for c in ali_frame.columns})
+        # Map remaining STOPGAP column names to canonical names
+        rename_map = {c: _STOPGAP_COL_TO_CANONICAL[c] for c in ali_frame.columns if c in _STOPGAP_COL_TO_CANONICAL}
+        ali_frame = ali_frame.rename(columns=rename_map)
 
-        obj = cls(ali_frame, pd.DataFrame(), create_ref=create_ref, multiref=multiref)
-        obj._orig_columns = orig_columns
-        return obj
+        # Apply from_format converters and coerce dtype=bool columns
+        for spec in _STA_SCHEMA:
+            if spec.canonical is None or spec.canonical not in ali_frame.columns:
+                continue
+            if spec.from_format is not None:
+                ali_frame[spec.canonical] = ali_frame[spec.canonical].apply(
+                    lambda v, s=spec: s.from_format(v, "stopgap") if not _is_none_val(v) else v
+                )
+            elif spec.dtype is bool:
+                ali_frame[spec.canonical] = ali_frame[spec.canonical].apply(
+                    lambda v: bool(int(v)) if not _is_none_val(v) else v
+                )
+
+        # Normalise rootdir
+        if "rootdir" in ali_frame.columns:
+            ali_frame["rootdir"] = ali_frame["rootdir"].apply(
+                lambda v: _normalize_rootdir(str(v)) if not _is_none_val(v) else v
+            )
+
+        return cls(ali_frame, pd.DataFrame(), create_ref=create_ref, ref_family=ref_family_str)
 
     def write_out(
         self,
         path: PathOrStr,
         create_ref: bool | None = None,
-        multiref: bool | None = None,
+        ref_family: StaRefFamily | None = None,
         total_iterations: int | None = None,
+        param_set: Literal["basic", "full"] = "basic",
+        strict: bool = False,
     ) -> None:
         """Write a STOPGAP subtomogram parameter STAR file.
 
@@ -1695,45 +2672,194 @@ class StopgapParams(StaParameters):
             Destination path for the ``.star`` file.
         create_ref : bool or None, default=None
             If ``None``, uses the value stored on the object.
-        multiref : bool or None, default=None
+        ref_family : StaRefFamily or None, default=None
+            ``"singleref"``, ``"multiref"``, or ``"multiclass"``.
             If ``None``, uses the value stored on the object.
         total_iterations : int or None, default=None
             If larger than the current alignment-iteration count, pad with
-            extra rows (params copied from the last row, flags 0).
+            extra rows (params copied from the last row, progress flags 0).
+        param_set : {"basic", "full"}, default="basic"
+            ``"basic"`` writes the 34 standard STOPGAP columns.
+            ``"full"`` additionally writes full/euler/spectral groups.
+            Auto-promotes to ``"full"`` when any full-group columns are set
+            in ``df``.
+        strict : bool, default=False
+            If ``True``, raise :class:`ValueError` on validation problems
+            instead of emitting a warning.
         """
         cr = self.create_ref if create_ref is None else bool(create_ref)
-        mr = self.multiref  if multiref  is None else bool(multiref)
-        family = "multiref" if mr else "singleref"
+        family = self.ref_family if ref_family is None else str(ref_family)
 
-        out_cols = self._orig_columns if self._orig_columns else self._DEFAULT_STOPGAP_COLS
+        # Validate
+        problems = self.validate(param_set)
+        if problems:
+            msg = "STOPGAP params validation problems:\n" + "\n".join(f"  - {p}" for p in problems)
+            if strict:
+                raise ValueError(msg)
+            warnings.warn(msg, stacklevel=2)
 
         ali_df = self.df.reset_index(drop=True)
 
         # Optional padding
         if total_iterations is not None and total_iterations > len(ali_df):
             n_pad = total_iterations - len(ali_df)
-            last_it = int(ali_df["iteration"].iloc[-1]) if not ali_df.empty else (self.start_iteration or 1)
+            last_it = (
+                int(ali_df["iteration"].iloc[-1])
+                if not ali_df.empty and "iteration" in ali_df.columns
+                else (self.start_iteration or 1)
+            )
             pad_ali = ali_df.iloc[[-1] * n_pad].copy().reset_index(drop=True)
             pad_ali["iteration"] = [last_it + i + 1 for i in range(n_pad)]
             ali_df = pd.concat([ali_df, pad_ali], ignore_index=True)
 
-        rows = []
+        # Determine groups to include
+        basic_groups = {"core", "filters", "angles"}
+        full_groups = basic_groups | {"full", "euler", "spectral"}
 
-        # Leading avg row
-        if cr:
-            if not ali_df.empty:
-                first_it = int(ali_df["iteration"].iloc[0])
-                rows.append(self._build_row(ali_df.iloc[0], family, is_avg=True,
-                                            out_cols=out_cols, iteration=first_it))
+        if param_set == "full":
+            active_groups = full_groups
+        else:
+            active_groups = basic_groups
+            # Auto-promote when user has populated full-group columns
+            has_full = any(
+                spec.group in {"full", "euler", "spectral"}
+                and spec.canonical is not None
+                and spec.canonical in self.df.columns
+                and not self.df[spec.canonical].isna().all()
+                for spec in _STA_SCHEMA
+            )
+            if has_full:
+                active_groups = full_groups
+
+        # STOPGAP column list for this param_set (in schema order, stopgap cols only)
+        out_cols: list[str] = [
+            spec.stopgap for spec in _STA_SCHEMA if spec.stopgap is not None and spec.group in active_groups
+        ]
+
+        # ── Row builder ──────────────────────────────────────────────────────
+        _angle_canonical = {"cone angle", "cone sampling", "inplane angle", "inplane sampling"}
+        _angle_sg = {"angincr", "angiter", "phi_angincr", "phi_angiter"}
+
+        def _build_row(df_row: pd.Series, is_avg: bool, iteration: int | None = None) -> dict:
+            ctx = _WriteCtx(
+                create_ref=cr,
+                ref_family=family,
+                n_iterations=len(ali_df),
+                is_avg_row=is_avg,
+                sta_type="stopgap",
+                use_euler_search=self.use_euler_search,
+                _row={c: df_row.get(c) for c in df_row.index},
+            )
+            row: dict = {}
+
+            for spec in _STA_SCHEMA:
+                if spec.stopgap is None or spec.group not in active_groups:
+                    continue
+                col = spec.stopgap
+
+                # ── DERIVED columns ──────────────────────────────────────────
+                if spec.default is DERIVED:
+                    if col == "completed_ali":
+                        row[col] = 0
+                    elif col == "completed_p_avg":
+                        row[col] = 0
+                    elif col == "completed_f_avg":
+                        row[col] = 0
+                    elif col == "iteration":
+                        row[col] = iteration if iteration is not None else int(df_row.get("iteration", 1))
+                    elif col == "subtomo_mode":
+                        mode = "avg" if is_avg else "ali"
+                        row[col] = f"{mode}_{family}"
+                    elif col in _angle_sg:
+                        pass  # handled below
+                    else:
+                        row[col] = "none"
+                    continue
+
+                # ── Angle iteration columns (canonical=None, derived on write) ─
+                if col in _angle_sg:
+                    # Handled in the angle block below
+                    continue
+
+                # ── Normal columns ───────────────────────────────────────────
+                if spec.canonical is not None and spec.canonical in df_row.index:
+                    val = df_row.get(spec.canonical)
+                else:
+                    val = None
+
+                if _is_none_val(val):
+                    default = spec.default
+                    if default is MANDATORY or default is DERIVED:
+                        row[col] = "none"
+                    elif spec.to_format is not None:
+                        row[col] = spec.to_format(default, "stopgap")
+                    elif isinstance(default, bool):
+                        row[col] = 1 if default else 0
+                    else:
+                        row[col] = default
+                else:
+                    # Apply to_format converter when present (symmetry, split into even odd, etc.)
+                    if spec.to_format is not None:
+                        val = spec.to_format(val, "stopgap")
+                    # STOPGAP is a STAR file (text); convert remaining booleans to integers
+                    elif isinstance(val, bool):
+                        val = 1 if val else 0
+                    row[col] = val
+
+                # Suppress values that are not applicable in this write context
+                # e.g. ccmask_name must be "none" in avg rows
+                if spec.mandatory_if is not None and not spec.mandatory_if(ctx):
+                    row[col] = "none"
+
+            # ── Angle columns ────────────────────────────────────────────────
+            if is_avg:
+                for ag in _angle_sg:
+                    if ag in out_cols:
+                        row[ag] = "none"
             else:
-                row = {c: "none" for c in out_cols}
-                row.update(_completed_ali=0, _completed_p_avg=0, _completed_f_avg=0,
-                           _iteration=self.start_iteration or 1,
-                           _subtomo_mode=f"{family}_avg")
-                rows.append(row)
+                ca = df_row.get("cone angle")
+                cs = df_row.get("cone sampling")
+                ia = df_row.get("inplane angle")
+                isp = df_row.get("inplane sampling")
+                if not any(_is_none_val(x) for x in (ca, cs, ia, isp)):
+                    ai, ac, pai, pac = nova_to_stopgap_angles(float(ca), float(cs), float(ia), float(isp))
+                    if "angiter" in out_cols:
+                        row["angiter"] = ai
+                    if "angincr" in out_cols:
+                        row["angincr"] = ac
+                    if "phi_angiter" in out_cols:
+                        row["phi_angiter"] = pai
+                    if "phi_angincr" in out_cols:
+                        row["phi_angincr"] = pac
+                else:
+                    for ag in _angle_sg:
+                        if ag in out_cols:
+                            row[ag] = "none"
+
+            return row
+
+        # ── Assemble rows ────────────────────────────────────────────────────
+        rows: list[dict] = []
+
+        if cr:
+            # Leading avg row
+            if not ali_df.empty:
+                first_row = ali_df.iloc[0]
+                first_it = int(first_row.get("iteration", 1))
+                rows.append(_build_row(first_row, is_avg=True, iteration=first_it))
+            else:
+                empty_row = {c: "none" for c in out_cols}
+                empty_row.update(
+                    completed_ali=0,
+                    completed_p_avg=0,
+                    completed_f_avg=0,
+                    iteration=self.start_iteration or 1,
+                    subtomo_mode=f"avg_{family}",
+                )
+                rows.append(empty_row)
 
         for _, df_row in ali_df.iterrows():
-            rows.append(self._build_row(df_row, family, is_avg=False, out_cols=out_cols))
+            rows.append(_build_row(df_row, is_avg=False))
 
         out_df = pd.DataFrame(rows, columns=out_cols)
         out_df = out_df.where(out_df.notna(), other="none")
@@ -1741,65 +2867,18 @@ class StopgapParams(StaParameters):
 
         Starfile.write([out_df], path, specifiers=["data_stopgap_subtomo_parameters"])
 
-    def _build_row(
-        self,
-        df_row: pd.Series,
-        family: str,
-        is_avg: bool,
-        out_cols: list[str],
-        iteration: int | None = None,
-    ) -> dict:
-        """Assemble one STOPGAP output row dict from a display-name df row."""
-        _angle_display = {"cone angle", "cone sampling", "inplane angle", "inplane sampling"}
-        _skip_display  = {"iteration", "subtomo mode"} | _angle_display
-
-        row = {}
-        row["_completed_ali"]   = 0
-        row["_completed_p_avg"] = 0
-        row["_completed_f_avg"] = 0
-        row["_iteration"]       = iteration if iteration is not None else df_row.get("iteration")
-        row["_subtomo_mode"]    = f"{family}_{'avg' if is_avg else 'ali'}"
-
-        # Angle columns
-        if is_avg:
-            row["_angincr"] = row["_angiter"] = row["_phi_angincr"] = row["_phi_angiter"] = None
-        else:
-            ca  = df_row.get("cone angle")
-            cs  = df_row.get("cone sampling")
-            ia  = df_row.get("inplane angle")
-            isp = df_row.get("inplane sampling")
-            if not any(_is_none_val(x) for x in (ca, cs, ia, isp)):
-                ai, ac, pai, pac = nova_to_stopgap_angles(
-                    float(ca), float(cs), float(ia), float(isp)
-                )
-                row.update(_angiter=ai, _angincr=ac, _phi_angiter=pai, _phi_angincr=pac)
-            else:
-                row["_angincr"] = row["_angiter"] = row["_phi_angincr"] = row["_phi_angiter"] = None
-
-        # All other display-name columns → _underscore_name; only write if in out_cols
-        for display_col, v in df_row.items():
-            if display_col in _skip_display:
-                continue
-            sg_col = "_" + display_col.replace(" ", "_")
-            if sg_col in out_cols and sg_col not in row:
-                row[sg_col] = None if _is_none_val(v) else v
-
-        # Fill any remaining output columns
-        for col in out_cols:
-            row.setdefault(col, None)
-
-        return row
-
 
 # ── NovaStaParams ──────────────────────────────────────────────────────────────
+
 
 class NovaStaParams(StaParameters):
     """novaSTA flat key-value parameter file representation.
 
-    All parameters are stored in ``df`` with display names derived by converting
-    camelCase keys to space-separated words (e.g. ``coneAngle`` → ``'cone angle'``,
-    ``useGPU`` → ``'use GPU'``).  Run-level keys (``iter``, ``startIndex``,
-    ``createRef``) become object attributes, not columns.
+    All parameters are stored in ``df`` using **canonical column names**
+    (e.g. ``"cone angle"``, ``"low pass"``, ``"wedge list"``).  Run-level
+    keys (``iter``, ``startIndex``, ``createRef``) become object attributes,
+    not columns.  Unknown camelCase keys (not in the schema) are stored
+    under their original camelCase name in ``df``.
     """
 
     def __init__(
@@ -1807,10 +2886,12 @@ class NovaStaParams(StaParameters):
         df: pd.DataFrame,
         df_extra: pd.DataFrame | None = None,
         create_ref: bool = False,
-        multiref: bool = False,
+        ref_family: StaRefFamily = "singleref",
+        use_euler_search: bool = False,
     ) -> None:
-        super().__init__(df, df_extra, create_ref=create_ref, multiref=multiref)
-        self._orig_key_order = None  # preserved for write-order hints
+        super().__init__(df, df_extra, create_ref=create_ref, ref_family=ref_family,
+                         use_euler_search=use_euler_search)
+        self._orig_key_order: list[str] | None = None  # original camelCase key order
 
     @property
     def motl_type(self) -> str:
@@ -1921,23 +3002,23 @@ class NovaStaParams(StaParameters):
         ValueError
             If any parameter has a value count other than 1 or ``iter``.
         """
-        raw = {}
-        key_order = []
+        raw: dict[str, list] = {}
+        key_order: list[str] = []
         with open(path, "r") as fh:
             for line in fh:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
                 parts = line.split()
-                key  = parts[0]
+                key = parts[0]
                 vals = [_parse_scalar(p) for p in parts[1:]]
                 if key not in raw:
                     key_order.append(key)
                 raw[key] = vals  # last occurrence wins for duplicates
 
-        n_align     = int(raw.get("iter", [1])[0])
+        n_align = int(raw.get("iter", [1])[0])
         start_index = int(raw.get("startIndex", [1])[0])
-        create_ref  = bool(int(raw.get("createRef", [0])[0]))
+        create_ref = bool(int(raw.get("createRef", [0])[0]))
 
         # Validate 1-or-N rule
         for k, v in raw.items():
@@ -1949,21 +3030,47 @@ class NovaStaParams(StaParameters):
                     f"Each parameter must supply 1 or {n_align} values."
                 )
 
-        def broadcast(vals):
+        def broadcast(vals: list) -> list:
             return vals * max(n_align, 1) if len(vals) == 1 else vals
 
         iters = list(range(start_index, start_index + max(n_align, 0)))
 
-        # Build df: all non-run-level keys as display-name columns
-        df_data = {"iteration": iters}
+        # Build df: map camelCase → canonical where possible; keep originals otherwise
+        df_data: dict[str, list] = {"iteration": iters}
         for k in key_order:
             if k in _NOVA_RUN_LEVEL_KEYS:
                 continue
-            df_data[_nova_key_to_name(k)] = broadcast(raw[k])[:n_align] if n_align > 0 else []
+            col_name = _NOVASTA_KEY_TO_CANONICAL.get(k, k)
+            df_data[col_name] = broadcast(raw[k])[:n_align] if n_align > 0 else []
 
         df = pd.DataFrame(df_data) if n_align > 0 else pd.DataFrame(columns=["iteration"])
 
-        obj = cls(df, pd.DataFrame(), create_ref=create_ref, multiref=False)
+        # Handle temperature annealing schedule (scalar → per-iteration)
+        if "temperature" in df.columns and n_align > 1:
+            tv = df["temperature"].tolist()
+            if len(set(str(v) for v in tv)) == 1 and not _is_none_val(tv[0]) and float(tv[0]) != 0:
+                df["temperature"] = _generate_temperature_schedule(float(tv[0]), n_align)
+
+        # Apply from_format converters and coerce dtype=bool columns
+        for spec in _STA_SCHEMA:
+            if spec.canonical is None or spec.canonical not in df.columns:
+                continue
+            if spec.from_format is not None:
+                df[spec.canonical] = df[spec.canonical].apply(
+                    lambda v, s=spec: s.from_format(v, "novasta") if not _is_none_val(v) else v
+                )
+            elif spec.dtype is bool:
+                df[spec.canonical] = df[spec.canonical].apply(
+                    lambda v: bool(int(v)) if not _is_none_val(v) else v
+                )
+
+        # Normalise rootdir (mapped from novaSTA 'folder')
+        if "rootdir" in df.columns:
+            df["rootdir"] = df["rootdir"].apply(
+                lambda v: _normalize_rootdir(str(v)) if not _is_none_val(v) else v
+            )
+
+        obj = cls(df, pd.DataFrame(), create_ref=create_ref, ref_family="singleref")
         obj._orig_key_order = key_order
         return obj
 
@@ -1971,6 +3078,8 @@ class NovaStaParams(StaParameters):
         self,
         path: PathOrStr,
         create_ref: bool | None = None,
+        param_set: Literal["basic", "full"] = "basic",
+        strict: bool = False,
     ) -> None:
         """Write a novaSTA flat key-value parameter file.
 
@@ -1980,105 +3089,125 @@ class NovaStaParams(StaParameters):
             Destination path for the flat key-value file.
         create_ref : bool or None, default=None
             If ``None``, uses the flag stored on the object.
+        param_set : {"basic", "full"}, default="basic"
+            Controls which columns are emitted.
+        strict : bool, default=False
+            If ``True``, raise on validation problems; otherwise warn.
         """
         cr = self.create_ref if create_ref is None else bool(create_ref)
         n_align = len(self.df)
 
-        # Build display-name → original novaSTA key from stored key order
-        display_to_key = {}
+        # Build canonical-name → original novaSTA key (from stored key order)
+        canonical_to_key: dict[str, str] = {}
         if self._orig_key_order:
             for k in self._orig_key_order:
-                if k not in _NOVA_RUN_LEVEL_KEYS:
-                    display_to_key[_nova_key_to_name(k)] = k
+                if k in _NOVA_RUN_LEVEL_KEYS:
+                    continue
+                canon = _NOVASTA_KEY_TO_CANONICAL.get(k, k)
+                canonical_to_key[canon] = k
 
-        def get_nova_key(display_name):
-            return display_to_key.get(display_name, _display_to_nova_key(display_name))
+        def get_nova_key(col_name: str) -> str:
+            """Return novaSTA camelCase key for a canonical or unknown column."""
+            if col_name in canonical_to_key:
+                return canonical_to_key[col_name]
+            if col_name in _CANONICAL_TO_NOVASTA:
+                return _CANONICAL_TO_NOVASTA[col_name]
+            # Unknown column (not in schema): write key as-is (already camelCase from file)
+            return col_name
 
-        def col_vals(col):
+        # Pre-build to_format lookup for columns that need format-specific encoding
+        _to_fmt: dict[str, Any] = {
+            s.canonical: s.to_format for s in _STA_SCHEMA if s.canonical is not None and s.to_format is not None
+        }
+
+        def col_vals(col: str) -> list | None:
             if col not in self.df.columns:
                 return None
             vals = list(self.df[col])
-            return None if all(_is_none_val(v) for v in vals) else vals
+            if all(_is_none_val(v) for v in vals):
+                return None
+            # Apply to_format when present (e.g. symmetry Schoenflies→int, split into even odd inversion)
+            if col in _to_fmt:
+                fn = _to_fmt[col]
+                vals = [fn(v, "novasta") if not _is_none_val(v) else v for v in vals]
+            return vals
 
-        def is_constant(vals):
+        def is_constant(vals: list) -> bool:
             return len({_fmt_val(v) for v in vals}) == 1
 
-        def write_param(lines, key, vals):
+        def write_param(lines: list[str], key: str, vals: list) -> None:
             if is_constant(vals):
                 lines.append(f"{key} {_fmt_val(vals[0])}")
             else:
                 lines.append(f"{key} {' '.join(_fmt_val(v) for v in vals)}")
 
-        def ensure_length(vals, n):
+        def ensure_length(vals: list, n: int) -> list:
             return vals * n if len(vals) == 1 else vals
 
-        lines = [f"createRef {1 if cr else 0}", f"iter {n_align}"]
-        if not self.df.empty:
+        lines: list[str] = [f"createRef {1 if cr else 0}", f"iter {n_align}"]
+        if not self.df.empty and "iteration" in self.df.columns:
             lines.append(f"startIndex {int(self.df['iteration'].iloc[0])}")
 
-        # Angle coupling
-        _angle_display = ["cone angle", "cone sampling", "inplane angle", "inplane sampling"]
-        angle_vals = {f: col_vals(f) for f in _angle_display}
-        angle_per_iter = n_align > 1 and any(
-            v is not None and not is_constant(v) for v in angle_vals.values()
-        )
+        # Angle coupling: if any angle param varies per iteration, expand all
+        _angle_cols = ["cone angle", "cone sampling", "inplane angle", "inplane sampling"]
+        angle_vals = {f: col_vals(f) for f in _angle_cols}
+        angle_per_iter = n_align > 1 and any(v is not None and not is_constant(v) for v in angle_vals.values())
         if angle_per_iter:
-            for f in _angle_display:
+            for f in _angle_cols:
                 angle_vals[f] = ensure_length(angle_vals[f], n_align) if angle_vals[f] else [None] * n_align
 
-        # Filter coupling
-        _filter_display = ["low pass", "high pass"]
-        filter_vals = {f: col_vals(f) for f in _filter_display}
-        filter_per_iter = n_align > 1 and any(
-            v is not None and not is_constant(v) for v in filter_vals.values()
-        )
+        # Filter coupling: if any filter param varies, expand all
+        _filter_cols = ["low pass", "high pass"]
+        filter_vals = {f: col_vals(f) for f in _filter_cols}
+        filter_per_iter = n_align > 1 and any(v is not None and not is_constant(v) for v in filter_vals.values())
         if filter_per_iter:
-            for f in _filter_display:
+            for f in _filter_cols:
                 filter_vals[f] = ensure_length(filter_vals[f], n_align) if filter_vals[f] else [None] * n_align
 
-        _angle_filter_set = set(_angle_display + _filter_display)
+        _special_cols = set(_angle_cols + _filter_cols)
 
-        # Determine write order: original key order first, then any new df columns
-        write_order = []
-        seen = set()
+        # Write order: original key order first, then any new canonical columns
+        write_order: list[str] = []
+        seen: set[str] = set()
         if self._orig_key_order:
             for k in self._orig_key_order:
                 if k in _NOVA_RUN_LEVEL_KEYS:
                     continue
-                d = _nova_key_to_name(k)
-                if d not in seen:
-                    seen.add(d)
-                    write_order.append(d)
+                canon = _NOVASTA_KEY_TO_CANONICAL.get(k, k)
+                if canon not in seen:
+                    seen.add(canon)
+                    write_order.append(canon)
         for c in self.df.columns:
             if c != "iteration" and c not in seen:
                 seen.add(c)
                 write_order.append(c)
 
-        # Non-angle/filter columns
-        for display_col in write_order:
-            if display_col in _angle_filter_set:
+        # Non-angle/filter columns first
+        for col_name in write_order:
+            if col_name in _special_cols:
                 continue
-            vals = col_vals(display_col)
+            vals = col_vals(col_name)
             if vals is not None:
-                write_param(lines, get_nova_key(display_col), vals)
+                write_param(lines, get_nova_key(col_name), vals)
 
         # Angle group
-        for display_col in _angle_display:
-            vals = angle_vals[display_col]
+        for col_name in _angle_cols:
+            vals = angle_vals[col_name]
             if vals is not None:
-                write_param(lines, get_nova_key(display_col), vals)
+                write_param(lines, get_nova_key(col_name), vals)
 
         # Filter group
-        for display_col in _filter_display:
-            vals = filter_vals[display_col]
+        for col_name in _filter_cols:
+            vals = filter_vals[col_name]
             if vals is not None:
-                write_param(lines, get_nova_key(display_col), vals)
+                write_param(lines, get_nova_key(col_name), vals)
 
         with open(path, "w") as fh:
             fh.write("\n".join(lines) + "\n")
 
 
 # ── File-driven progress evaluation wrappers ──────────────────────────────────
+
 
 def _resolve_sta_params(
     input_params: "PathOrStr | dict | StaParameters",

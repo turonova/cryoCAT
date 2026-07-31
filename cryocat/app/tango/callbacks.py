@@ -17,6 +17,9 @@ from dash import Input, Output, State, html, dcc, ALL, ctx, no_update
 from dash.dash_table.Format import Format, Scheme
 
 from cryocat.app.apputils import format_columns
+from cryocat.app.logger import invoke_operation
+from cryocat.app import provenance as _prov
+from cryocat.app import session as _session
 from cryocat.core.cryomotl import Motl
 from cryocat.analysis.nnana import get_nn_stats
 from cryocat.analysis.visplot import plot_orientational_distribution
@@ -27,7 +30,7 @@ def register_tango_callbacks(app):
 
     @app.callback(
         Output("tviewer-desc-graph", "figure", allow_duplicate=True),
-        Input("k-means-run-btn", "n_clicks"),
+        Input("cluster-run-btn", "n_clicks"),
         State("k-means-options", "options"),
         State("k-means-n-slider", "value"),
         State("tabv-desc-global-data-store", "data"),
@@ -37,10 +40,16 @@ def register_tango_callbacks(app):
     )
     def compute_k_means(n_clicks, cluster_options, n_clusters, desc_data, motl_data, t_fig):
 
-        dc = CustomDescriptor.load(
-            pd.DataFrame(desc_data),
-        )
-        km_df = dc.k_means_clustering(n_clusters, feature_ids=cluster_options)
+        try:
+            desc_id = _prov.next_desc_id()
+            var = _prov.bind(desc_id)
+            dc = invoke_operation(CustomDescriptor.load, {"desc_df": pd.DataFrame(desc_data)}, assign_to=var)
+            dc._pool_motl_id = desc_id
+            _prov.record(desc_id, _session.last_seq())
+
+            km_df = invoke_operation(dc.k_means_clustering, {"n_clusters": n_clusters, "feature_ids": cluster_options})
+        except Exception:
+            return no_update
 
         motl_df = pd.DataFrame(motl_data)
         # Merge motl_df and cluster_df based on ID

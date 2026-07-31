@@ -101,7 +101,7 @@ def _wedge_mask_modal() -> dbc.Modal:
     form_rows = formgen.build_form(
         generate_wedge_mask,
         id_type=_WEDGE_ID_TYPE,
-        id_extra={"builder": _WEDGE_BUILDER},
+        id_extra={"owner": _WEDGE_BUILDER},
     )
     return dbc.Modal(
         [
@@ -744,8 +744,8 @@ def register_callbacks(app):
     # ── wedge mask builder: collect params ───────────────────────────────────
     @app.callback(
         Output("ppana-wedge-params", "data"),
-        Input({"type": _WEDGE_ID_TYPE, "builder": _WEDGE_BUILDER, "param": ALL, "tag": ALL}, "value"),
-        State({"type": _WEDGE_ID_TYPE, "builder": _WEDGE_BUILDER, "param": ALL, "tag": ALL}, "id"),
+        Input({"type": _WEDGE_ID_TYPE, "owner": _WEDGE_BUILDER, "param": ALL, "tag": ALL}, "value"),
+        State({"type": _WEDGE_ID_TYPE, "owner": _WEDGE_BUILDER, "param": ALL, "tag": ALL}, "id"),
     )
     def _collect_wedge_params(values, ids):
         if not values or not ids:
@@ -1014,8 +1014,8 @@ def register_callbacks(app):
                     gradual_shared["wedge_mask_tmpl"] = sw_tmpl
             final_df, hist_df = run_operation(pana.run_single_gradual_case, gradual_shared)
             p = Path(write_dir)
-            final_df.to_csv(str(p / "gradual_angles_analysis.csv"), index=False)
-            hist_df.to_csv(str(p / "gradual_angles_histograms.csv"), index=False)
+            run_operation(final_df.to_csv, {"path_or_buf": str(p / "gradual_angles_analysis.csv"), "index": False})
+            run_operation(hist_df.to_csv, {"path_or_buf": str(p / "gradual_angles_histograms.csv"), "index": False})
 
         html_content = _load_or_generate_summary_html(write_dir)
 
@@ -1342,7 +1342,7 @@ def register_callbacks(app):
                     cc_radius=cc,
                 )
                 new_record = pana.build_params_record(row_dict, new_results)
-                new_record.to_csv(str(params_path), index=False)
+                run_operation(new_record.to_csv, {"path_or_buf": str(params_path), "index": False})
             except Exception as exc:
                 return f"Peak stats recomputed but params.csv update failed: {exc}", no_update, no_update
 
@@ -1405,8 +1405,8 @@ def register_callbacks(app):
             return f"Error recomputing angular histograms: {exc}", no_update, no_update
 
         p = Path(write_dir)
-        final_df.to_csv(str(p / "gradual_angles_analysis.csv"), index=False)
-        hist_df.to_csv(str(p / "gradual_angles_histograms.csv"), index=False)
+        run_operation(final_df.to_csv, {"path_or_buf": str(p / "gradual_angles_analysis.csv"), "index": False})
+        run_operation(hist_df.to_csv, {"path_or_buf": str(p / "gradual_angles_histograms.csv"), "index": False})
 
         try:
             html_content = _load_or_generate_summary_html(write_dir)

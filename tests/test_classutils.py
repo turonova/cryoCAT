@@ -17,6 +17,9 @@ from cryocat.utils.classutils import (
     resolve_param_type,
     TYPE_HANDLERS,
     as_list,
+    GuiCategory,
+    GuiEntry,
+    GUI_REGISTRY,
 )
 from cryocat._types import MapSource, TripletLike, Symmetry, MotlType
 
@@ -97,39 +100,163 @@ def test_gui_exposed_defaults_standalone_preview():
 def test_gui_exposed_standalone_and_preview_fields():
     """Custom standalone/preview values land on fn._gui."""
     @gui_exposed(category="builder", standalone=True, preview="orientational")
-    def my_builder(x):
+    def my_builder_sp(x):
         pass
 
-    assert my_builder._gui["standalone"] is True
-    assert my_builder._gui["preview"] == "orientational"
-    assert my_builder._gui["category"] == "builder"
+    assert my_builder_sp._gui["standalone"] is True
+    assert my_builder_sp._gui["preview"] == "orientational"
+    assert my_builder_sp._gui["category"] == "builder"
 
 
-def test_gui_exposed_builder_registered():
-    """A builder with standalone=True is added to _GUI_BUILDER_REGISTRY."""
-    from cryocat.utils.classutils import _GUI_BUILDER_REGISTRY
+# ---------------------------------------------------------------------------
+# GUI_REGISTRY / GuiEntry / GuiCategory (R1)
+# ---------------------------------------------------------------------------
 
-    @gui_exposed(category="builder", standalone=True, preview="test")
-    def _test_registry_builder(x):
+def test_gui_category_values():
+    assert GuiCategory.MOTL_OP == "motl-op"
+    assert GuiCategory.BUILDER == "builder"
+
+
+def test_gui_entry_is_frozen():
+    e = GuiEntry(
+        key="test.fn", fn=lambda: None, label="Test", category=GuiCategory.MOTL_OP,
+        owner="test", kind="function",
+    )
+    with pytest.raises((AttributeError, TypeError)):
+        e.label = "changed"  # type: ignore[misc]
+
+
+def test_gui_registry_populated_by_decoration():
+    """@gui_exposed adds an entry to GUI_REGISTRY under the derived key."""
+    before = set(GUI_REGISTRY.keys())
+
+    @gui_exposed(label="Registry test op")
+    def _reg_test_op(self):
         pass
 
-    ids = [e["id"] for e in _GUI_BUILDER_REGISTRY]
-    assert "_test_registry_builder" in ids
-    entry = next(e for e in _GUI_BUILDER_REGISTRY if e["id"] == "_test_registry_builder")
-    assert entry["preview"] == "test"
-    assert entry["fn"] is _test_registry_builder
+    after = set(GUI_REGISTRY.keys())
+    new_keys = after - before
+    assert len(new_keys) == 1
+    key = next(iter(new_keys))
+    entry = GUI_REGISTRY[key]
+    assert entry.label == "Registry test op"
+    assert entry.category == GuiCategory.MOTL_OP
+    assert entry.kind == "method"  # has self
+    assert entry.fn is _reg_test_op
 
 
-def test_gui_exposed_non_standalone_not_registered():
-    """A builder without standalone=True must NOT appear in the registry."""
-    from cryocat.utils.classutils import _GUI_BUILDER_REGISTRY
+def test_gui_registry_builder_tier():
+    """category='builder' → GuiCategory.BUILDER in the registry entry."""
+    before = set(GUI_REGISTRY.keys())
 
-    @gui_exposed(category="builder", standalone=False)
-    def _test_non_standalone(x):
+    @gui_exposed(category="builder", standalone=True, preview="test_p")
+    def _reg_test_builder(x):
         pass
 
-    ids = [e["id"] for e in _GUI_BUILDER_REGISTRY]
-    assert "_test_non_standalone" not in ids
+    after = set(GUI_REGISTRY.keys())
+    new_keys = after - before
+    assert len(new_keys) == 1
+    entry = GUI_REGISTRY[next(iter(new_keys))]
+    assert entry.category == GuiCategory.BUILDER
+    assert entry.standalone is True
+    assert entry.preview == "test_p"
+    assert entry.kind == "function"  # no self/cls
+
+
+def test_gui_registry_motl_op_group():
+    """category='Geometry' → MOTL_OP tier with group='Geometry'."""
+    before = set(GUI_REGISTRY.keys())
+
+    @gui_exposed(category="Geometry", label="My geom op")
+    def _reg_test_geom(self):
+        pass
+
+    after = set(GUI_REGISTRY.keys())
+    new_key = next(iter(after - before))
+    entry = GUI_REGISTRY[new_key]
+    assert entry.category == GuiCategory.MOTL_OP
+    assert entry.group == "Geometry"
+
+
+def test_gui_registry_key_format_function():
+    """Standalone function key is 'module_short.fn_name'."""
+    before = set(GUI_REGISTRY.keys())
+
+    @gui_exposed(label="Key fmt fn")
+    def _key_fmt_fn(x):
+        pass
+
+    new_key = next(iter(set(GUI_REGISTRY.keys()) - before))
+    assert "." in new_key
+    assert new_key.endswith("._key_fmt_fn")
+
+
+def test_gui_registry_idempotent():
+    """Re-decorating the same function (module reimport) is a no-op."""
+    before_size = len(GUI_REGISTRY)
+
+    # Simulate reimport by calling gui_exposed again on an already-registered fn.
+    # We use a unique function to avoid clashing with test_gui_registry_populated.
+    @gui_exposed(label="Idempotent op")
+    def _idem_op(self):
+        pass
+
+    size_after_first = len(GUI_REGISTRY)
+
+    # Second decoration with same label/category → no-op.
+    @gui_exposed(label="Idempotent op")
+    def _idem_op(self):  # noqa: F811 — intentional re-def for idempotency test
+        pass
+
+    assert len(GUI_REGISTRY) == size_after_first
+
+
+def test_gui_registry_conflict_raises():
+    """Re-registering the same key with a different label raises RuntimeError."""
+    @gui_exposed(label="Conflict original")
+    def _conflict_op(self):
+        pass
+
+    with pytest.raises(RuntimeError, match="conflicting registration"):
+        @gui_exposed(label="Conflict different")
+        def _conflict_op(self):  # noqa: F811
+            pass
+
+
+def test_gui_exposed_invalid_motls_missing_arity():
+    with pytest.raises(ValueError, match="missing 'arity'"):
+        @gui_exposed(motls={"ordered": True})
+        def _bad_motls(self):
+            pass
+
+
+def test_gui_exposed_invalid_motls_bad_arity():
+    with pytest.raises(ValueError, match="must be 'pair' or 'list'"):
+        @gui_exposed(motls={"arity": "triple"})
+        def _bad_arity(self):
+            pass
+
+
+def test_gui_exposed_invalid_motls_unknown_key():
+    with pytest.raises(ValueError, match="unknown motls keys"):
+        @gui_exposed(motls={"arity": "pair", "bogus_key": True})
+        def _bad_key(self):
+            pass
+
+
+def test_gui_entry_hide_is_frozenset():
+    before = set(GUI_REGISTRY.keys())
+
+    @gui_exposed(label="Hide test", hide=("x", "y"))
+    def _hide_test(self, x, y, z):
+        pass
+
+    new_key = next(iter(set(GUI_REGISTRY.keys()) - before))
+    entry = GUI_REGISTRY[new_key]
+    assert isinstance(entry.hide, frozenset)
+    assert "x" in entry.hide
+    assert "y" in entry.hide
+    assert "self" not in entry.hide  # GuiEntry.hide does NOT include self/cls
 
 
 # ---------------------------------------------------------------------------

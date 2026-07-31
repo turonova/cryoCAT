@@ -12,6 +12,9 @@ Public API
 * :func:`format_kwargs` — multi-line ``key=value`` block.
 * :func:`render_slurm_wrapper` — wrap a ``.py`` in a SLURM submission script.
 * :func:`parse_sbatch_text`    — parse ``--key=value`` / ``-k v`` SBATCH lines.
+* :func:`code_cell`     — nbformat v4 code cell dict.
+* :func:`markdown_cell` — nbformat v4 markdown cell dict.
+* :func:`notebook`      — nbformat v4 notebook envelope.
 """
 from __future__ import annotations
 
@@ -100,6 +103,46 @@ def render_slurm_wrapper(
         buf.write(f"module load {mod}\n")
     buf.write(f"python {py_filename}\n")
     return buf.getvalue()
+
+
+def code_cell(source: str) -> dict:
+    """Return an nbformat v4 code cell dict."""
+    return {
+        "cell_type": "code",
+        "metadata": {},
+        "execution_count": None,
+        "outputs": [],
+        "source": source.splitlines(keepends=True),
+    }
+
+
+def markdown_cell(source: str) -> dict:
+    """Return an nbformat v4 markdown cell dict."""
+    return {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": source.splitlines(keepends=True),
+    }
+
+
+def notebook(cells: list[dict]) -> dict:
+    """Wrap *cells* in an nbformat v4 notebook envelope.
+
+    Returns a plain dict; call ``json.dumps`` to serialise.
+    """
+    return {
+        "cells": cells,
+        "metadata": {
+            "kernelspec": {
+                "display_name": "Python 3",
+                "language": "python",
+                "name": "python3",
+            },
+            "language_info": {"name": "python"},
+        },
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
 
 
 def parse_sbatch_text(text: str) -> dict:

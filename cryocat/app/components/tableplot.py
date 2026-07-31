@@ -20,8 +20,6 @@ from cryocat.app.apputils import save_output
 from cryocat.app.components.customel import LabeledDropdown, InlineLabeledDropdown, InlineInputForm
 from cryocat.app.components.graphsettings import styled_figure, get_graph_settings_button
 
-# motl_types = [{"label": name, "value": name} for name in get_class_names_by_parent("Motl", "cryocat.cryomotl")]
-
 hist_norms = [
     {"label": "None", "value": ""},
     {"label": "Percent", "value": "percent"},

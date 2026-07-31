@@ -34,10 +34,6 @@ from cryocat.core.cryomotl import Motl, EmMotl, StopgapMotl, RelionMotl, RelionM
 # mport dash_html_components as html
 
 
-# def series_to_dash_list(series):
-#    return html.Ul([html.Li(f"{idx}: {val}") for idx, val in series.items()])
-
-
 def save_motl(
     file_path,
     data_to_save,
@@ -52,27 +48,32 @@ def save_motl(
     rln_version=3.1,
     rln_use_original=False,
 ):
+    """Save a motl through the logging chokepoint so saves appear in the event stream.
 
+    Routes each format through ``run_operation(m.save_to, ...)`` so the call
+    is recorded as a library call (``cryocat.core.cryomotl``, not
+    ``cryocat.app``) in the session script.  The Relion branch stamps
+    ``_ctor_kwargs`` on the instance so the script also renders the
+    constructor parameters (version, pixel_size, binning).
+    """
     if not isinstance(data_to_save, pd.DataFrame):
         df = pd.DataFrame(data_to_save)
     else:
         df = data_to_save
 
-    status = f"File saved to {file_path} as {motl_type}."
-
     if motl_type == "emmotl":
         m = EmMotl(df)
-        m.write_out(file_path)
+        run_operation(m.save_to, {"output_path": file_path})
     elif motl_type == "stopgap":
         m = StopgapMotl(df)
         if extra_df:
             m.stopgap_df = pd.DataFrame(extra_df)
-        m.write_out(file_path)
+        run_operation(m.save_to, {"output_path": file_path})
     elif motl_type == "dynamo":
         m = DynamoMotl(df)
         if extra_df:
             m.dynamo_df = pd.DataFrame(extra_df)
-        m.write_out(file_path)
+        run_operation(m.save_to, {"output_path": file_path})
     elif motl_type == "relion":
         if rln_optics:
             optics_data = pd.DataFrame(rln_optics)
@@ -93,53 +94,53 @@ def save_motl(
                 binning=rln_binning,
                 optics_data=optics_data,
             )
+            m._ctor_kwargs = {"pixel_size": rln_pixel_size, "binning": rln_binning}
         elif rln_version == 5.1:
             m = RelionMotl(
                 df, version=5.1, pixel_size=rln_pixel_size, binning=rln_binning, optics_data=optics_data
             )
+            m._ctor_kwargs = {"version": 5.1, "pixel_size": rln_pixel_size, "binning": rln_binning}
         else:
             m = RelionMotl(
                 df, version=rln_version, pixel_size=rln_pixel_size, binning=rln_binning, optics_data=optics_data
             )
-        m.relion_df = pd.DataFrame(extra_df)
+            m._ctor_kwargs = {"version": rln_version, "pixel_size": rln_pixel_size, "binning": rln_binning}
+        m.relion_df = pd.DataFrame(extra_df) if extra_df else pd.DataFrame()
+        run_operation(m.save_to, {
+            "output_path": file_path,
+            "write_optics": write_optics,
+            "use_original_entries": rln_use_original,
+            "optics_data": optics_data,
+            "tomo_format": rln_tomo_format or "",
+            "subtomo_format": rln_subtomo_format or "",
+        })
 
-        m.write_out(
-            file_path,
-            write_optics=write_optics,
-            use_original_entries=rln_use_original,
-            optics_data=optics_data,
-            tomo_format=rln_tomo_format or "",
-            subtomo_format=rln_subtomo_format or "",
-        )
-
-    return status
+    return f"File saved to {file_path} as {motl_type}."
 
 
 def save_output(file_path, data_to_save, csv_only=True):
-
     if not isinstance(data_to_save, pd.DataFrame):
         df = pd.DataFrame(data_to_save)
     else:
         df = data_to_save
 
-    status = f"File saved to {file_path}"
-
     if file_path.endswith(".csv"):
-        df.to_csv(file_path, index=False)
+        run_operation(df.to_csv, {"path_or_buf": file_path, "index": False})
     elif file_path.endswith(".pkl"):
         with open(file_path, "wb") as f:
             pickle.dump(data_to_save, f)
+        return f"File saved to {file_path}"
     elif csv_only:
         print_dash("The table can be saved only to a csv file.")
-        status = "The table can be saved only to a csv file."
+        return "The table can be saved only to a csv file."
     elif file_path.endswith(".em"):
         m = Motl(df)
-        m.write_out(file_path)
+        run_operation(m.save_to, {"output_path": file_path})
     else:
         print_dash("Currently only csv, pkl, and em formats are supported")
-        status = "Currently only csv, pkl, and em formats are supported"
+        return "Currently only csv, pkl, and em formats are supported"
 
-    return status
+    return f"File saved to {file_path}"
 
 
 def get_class_by_name(class_name: str, module_path="cryocat.analysis.tango"):
@@ -197,18 +198,6 @@ def format_columns(df):
     ]
 
     return columns
-
-
-def get_print_out(to_print):
-
-    return ""
-    # buffer = io.StringIO()
-    # sys.stdout = buffer
-    # print(to_print)
-    # sys.stdout = sys.__stdout__
-    # single_line_output = buffer.getvalue().replace("\n", ";   ").strip()
-
-    # return single_line_output
 
 
 def generate_kwargs(ids, values):
@@ -287,77 +276,6 @@ def get_relevant_features(desc_name, all_features):
     return avail_features
 
 
-def iter_standalone_builders() -> list[dict]:
-    """Return descriptor dicts for every ``@gui_exposed`` builder with ``standalone=True``.
-
-    Each entry is a dict with keys ``id`` (function name), ``label``, ``fn``
-    (the callable), and ``preview`` (plot style string or None).
-
-    The registry is populated at decoration time by :data:`cryocat.utils.classutils
-    ._GUI_BUILDER_REGISTRY`. Importing the builder modules here ensures their
-    decorators fire before the registry is read.
-    """
-    import cryocat.utils.geom  # noqa: ensure @gui_exposed decorators run
-    from cryocat.utils.classutils import _GUI_BUILDER_REGISTRY
-    return list(_GUI_BUILDER_REGISTRY)
-
-
-def _iter_gui_methods():
-    """Yield ``(name, gui_dict)`` for every ``@gui_exposed`` method on ``Motl``.
-
-    Walks instance methods *and* class/static methods. Class/staticmethods are
-    bound to ``Motl`` when accessed via the class, so ``inspect.ismethod``
-    catches them and ``__func__`` exposes the underlying function where
-    ``_gui`` is stored (see :func:`cryocat.utils.classutils.gui_exposed`).
-    """
-    from cryocat.core.cryomotl import Motl
-
-    members = inspect.getmembers(
-        Motl,
-        predicate=lambda o: inspect.isfunction(o) or inspect.ismethod(o),
-    )
-    for name, fn in members:
-        target = getattr(fn, "__func__", fn)
-        gui = getattr(target, "_gui", None)
-        if gui is not None:
-            yield name, gui
-
-
-def get_single_motl_methods():
-    """Dropdown options for the editor's *single-motl* operation menu.
-
-    A method is single-motl iff its ``_gui["motls"]`` is None (the default for
-    ``@gui_exposed``). Multi-motl ops (those carrying a ``motls=...`` spec) are
-    excluded — they live in their own section, see
-    :func:`get_multi_motl_methods`.
-    """
-    return [
-        {"label": g["label"], "value": n}
-        for n, g in _iter_gui_methods()
-        if not g.get("motls")
-    ]
-
-
-def get_multi_motl_methods():
-    """Dropdown options for the editor's *multiple-motl* operation menu.
-
-    Returns the methods marked ``motls={...}``; each option carries the spec
-    so the sidebar can drive the picker layout (arity, ordering, main-first).
-    """
-    return [
-        {"label": g["label"], "value": n, "motls": g["motls"]}
-        for n, g in _iter_gui_methods()
-        if g.get("motls")
-    ]
-
-
-# Backwards-compatible alias: the editor's single-motl dropdown used to call
-# this. Multi-motl ops were not in the registry then, so the old behaviour
-# matches the new single-only filter.
-def get_motl_operation_methods():
-    return get_single_motl_methods()
-
-
 # ── Dispatch helpers ──────────────────────────────────────────────────────────
 
 def run_operation(fn, kwargs: dict):
@@ -372,4 +290,145 @@ def run_operation(fn, kwargs: dict):
     """
     from cryocat.app.logger import invoke_operation
     return invoke_operation(fn, kwargs)
+
+
+def run_operation_to_pool(
+    fn,
+    kwargs: dict,
+    state,
+    *,
+    label: str | None = None,
+    replaces: str | None = None,
+):
+    """Invoke *fn* through the chokepoint and land the result in the pool.
+
+    This is the atomic load/apply chokepoint for operations that produce a
+    Motl which must live in the pool.  Either:
+
+    - success: pool gains (or updates) the entry **and** the event stream
+      gains a ``status="ok"`` call event, **or**
+    - failure: pool is untouched **and** the stream gains a
+      ``status="error"`` call event; the exception is re-raised.
+
+    Parameters
+    ----------
+    fn:
+        The callable to invoke (bound method or free function).
+    kwargs:
+        Keyword arguments forwarded to *fn*.
+    state:
+        Current :class:`~cryocat.app.pool.PoolState`; never mutated.
+    label:
+        Optional human-readable label for the pool entry.
+    replaces:
+        ``motl_id`` of an existing pool entry to overwrite in place.
+        When ``None`` a new entry is appended.
+
+    Returns
+    -------
+    tuple[PoolState, str, Any]
+        ``(new_state, motl_id, result)``
+    """
+    from cryocat.app import provenance as _prov
+    from cryocat.app import session as _session
+    from cryocat.app.logger import invoke_operation
+    from cryocat.app.pool import insert_motl, replace_motl_rows
+
+    # Determine target variable name before the call so the event carries it.
+    if replaces is not None:
+        motl_id = replaces
+        var = _prov.bind(replaces)
+    else:
+        motl_id = f"motl-{state.next_id + 1}"
+        var = _prov.bind(motl_id)
+
+    # Run through the chokepoint.  Re-raises on exception; pool is untouched.
+    result = invoke_operation(fn, kwargs, assign_to=var, pool_id=motl_id, label=label)
+
+    # Derive row list and motl type from the returned object.
+    if hasattr(result, "df"):
+        rows = result.df.to_dict("records")
+        motl_type = type(result).__name__
+    else:
+        rows = []
+        motl_type = "emmotl"
+
+    # Update pool (immutable: original state unchanged if this throws).
+    if replaces is not None:
+        new_state = replace_motl_rows(state, replaces, rows, label=label, motl_type=motl_type)
+    else:
+        new_state, motl_id = insert_motl(state, rows, label=label, motl_type=motl_type)
+
+    # Stamp pool id on result so future invoke_operation can resolve the receiver.
+    try:
+        result._pool_motl_id = motl_id
+    except (AttributeError, TypeError):
+        pass
+
+    # Record provenance: motl_id → seq of the call event just emitted.
+    _prov.record(motl_id, _session.last_seq())
+
+    return new_state, motl_id, result
+
+
+def record_load_to_pool(
+    motl_data: list[dict],
+    motl_type: str,
+    display_name: str,
+    rln_kwargs: dict | None,
+    pool_state,
+    *,
+    label: str | None = None,
+    extra: list[dict] | None = None,
+    meta: dict | None = None,
+) -> tuple:
+    """Insert a file-loaded motl into the pool via the logging chokepoint.
+
+    The motl content is taken from already-deserialized ``motl_data`` (the
+    upload callback already read the file — no I/O here).  A thin callable
+    wrapped with :func:`functools.update_wrapper` against :meth:`Motl.load`
+    makes :func:`~cryocat.app.logger.invoke_operation` render the canonical
+    ``cryomotl.Motl.load(display_name, motl_type, ...)`` script line.
+
+    Returns
+    -------
+    tuple[PoolState, str, Motl]
+        ``(new_pool_state, motl_id, motl)``
+    """
+    import functools
+    from cryocat.core.cryomotl import Motl
+    from cryocat.app import provenance as _prov
+    from cryocat.app import session as _session
+    from cryocat.app.logger import invoke_operation
+    from cryocat.app.pool import insert_motl
+
+    rln_kwargs = rln_kwargs or {}
+    motl = Motl(pd.DataFrame(motl_data))
+
+    def _preloaded(input_motl, motl_type="emmotl", **kwargs):
+        return motl
+
+    functools.update_wrapper(_preloaded, Motl.load)
+
+    motl_id = f"motl-{pool_state.next_id + 1}"
+    var = _prov.bind(motl_id)
+
+    call_kwargs: dict = {"input_motl": display_name, "motl_type": motl_type, **rln_kwargs}
+    invoke_operation(_preloaded, call_kwargs, assign_to=var, pool_id=motl_id, label=label or display_name, source=display_name)
+
+    pool_state, motl_id = insert_motl(
+        pool_state,
+        motl_data,
+        label=label or display_name,
+        motl_type=motl_type,
+        extra=extra,
+        meta=meta,
+    )
+    try:
+        motl._pool_motl_id = motl_id
+    except (AttributeError, TypeError):
+        pass
+
+    _prov.record(motl_id, _session.last_seq())
+    return pool_state, motl_id, motl
 

@@ -55,6 +55,10 @@ tango_app = "cryocat.app.app:tango_app"
 "cryocat" = ["example_files/*.tlt"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
+    "slow: browser-driven end-to-end tests (excluded by default)",
+    "needs_data: requires real tomogram/motl files not in the repo",
     "integration: end-to-end tests that run the full pipeline against real data (slow)",
 ]
+addopts = "-m 'not slow and not needs_data' --strict-markers"

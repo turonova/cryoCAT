@@ -44,3 +44,29 @@ def page_wrap_id(tool_id: str) -> str:
 def suite_log_id(suffix: str) -> str:
     """Return the log-panel component id for the given suffix."""
     return f"{SUITE_LOG_PREFIX}{suffix}"
+
+
+# ── File browser (Phase 10) ──────────────────────────────────────────────────────
+# Owned exclusively by app/components/filebrowser.py.  Exactly one browser modal
+# is mounted at app level in each app; these stores are shared across all path
+# fields (D1 — one modal, not one per field).
+
+BROWSER_REQUEST: str = "browser-request"
+# { "owner": prefix, "mode": open|directory|save, "kind": str, "extensions": [...] }
+
+BROWSER_CWD: str = "browser-cwd"
+# absolute path string of the directory currently shown in the modal
+
+BROWSER_LAST_DIR: str = "browser-last-dir"
+# { kind: last_absolute_dir } — persisted per-kind across opens (D4)
+
+BROWSER_RESULT: str = "browser-result"
+# { "owner": prefix, "value": absolute_path } — written on Confirm for formgen
+# write-back (path-input fields with a different id_type read this store)
+
+# ── Rotation-builder modal (Phase 11) ───────────────────────────────────────────
+# Owned exclusively by app/components/rotationmodal.py.  One modal per app (D1).
+# Build buttons write to this store; write-back callback reads it to route output.
+
+ROTATION_REQUEST: str = "rotation-request"
+# { "target": <rotation-build-btn id dict> } — written when any Build button fires

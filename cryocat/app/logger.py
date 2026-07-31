@@ -1,32 +1,11 @@
 import inspect
-import functools
-import threading
+import time as _time
 import traceback as _tb
 import datetime as _dt
-import os
-
-_reentry = threading.local()
-
-
-_MAX_MOTL_DEPTH = 3  # max nesting depth for inline motl expression rendering
-
 
 class StreamToList:
     def __init__(self):
         self.buffer = []        # list of (msg, source)
-        self.log_path = None    # path to the session script
-        self._imports = set()   # module short-names already written to the file
-        self._log_fh = None     # open append handle for the script file
-        self._motl_sources: dict = {}   # id(motl_obj) -> Python expression string
-        self.last_script_line: str | None = None  # last line written by invoke_operation
-
-    def record_motl_source(self, motl_obj, expr: str) -> None:
-        """Associate a Python expression with a Motl object for script rendering."""
-        self._motl_sources[id(motl_obj)] = expr
-
-    def get_motl_source(self, motl_obj) -> "str | None":
-        """Retrieve the Python expression recorded for a Motl object, or None."""
-        return self._motl_sources.get(id(motl_obj))
 
     def write(self, msg, source="dash"):
         if msg.strip():
@@ -58,38 +37,7 @@ class StreamToList:
 
     def clear(self):
         self.buffer.clear()
-        # Does NOT delete the session script — that's a persistent artifact.
 
-    # ── Session script management ─────────────────────────────────────────────
-
-    def start_session(self, log_dir: str) -> None:
-        """Open a per-session Python script at ``log_dir/cryocat_session_<ts>.py``."""
-        os.makedirs(log_dir, exist_ok=True)
-        ts = _dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.log_path = os.path.join(log_dir, f"cryocat_session_{ts}.py")
-        self._imports = set()
-        self._log_fh = open(self.log_path, "a", encoding="utf-8")
-        self._log_fh.write(f"# cryocat session {ts}\n\n")
-        self._log_fh.flush()
-
-    def append_script_line(self, line: str, imports_needed=()) -> None:
-        """Append *line* to the session script, emitting missing imports first."""
-        if self._log_fh is None:
-            return
-        for short, statement in imports_needed:
-            if short not in self._imports:
-                self._log_fh.write(statement + "\n")
-                self._imports.add(short)
-        self._log_fh.write(line + "\n")
-        self._log_fh.flush()
-
-    def append_script_comment(self, text: str) -> None:
-        """Append a ``# …`` comment block (used for failures)."""
-        if self._log_fh is None:
-            return
-        for ln in (text.splitlines() or [""]):
-            self._log_fh.write(f"# {ln}\n")
-        self._log_fh.flush()
 
 
 def print_dash(*args):
@@ -101,9 +49,10 @@ dash_logger = StreamToList()
 
 
 # ── Compact argument formatter (pane display) ─────────────────────────────────
+# format_arg is for one-line call labels only. Do not call it from other modules.
 
-def _fmt(value):
-    """Compact repr for a single argument — truncates large containers."""
+def format_arg(value):
+    """Compact repr for a single argument — for one-line call labels only."""
     if hasattr(value, "df") and hasattr(value, "get_unique_values"):
         try:
             return f"<Motl({len(value.df)} rows)>"
@@ -119,8 +68,8 @@ def _fmt(value):
 
 
 def _render_call(fn, kwargs: dict) -> str:
-    """Readable pane label — uses ``_fmt``, named kwargs, not truncated."""
-    parts = ", ".join(f"{k}={_fmt(v)}" for k, v in kwargs.items())
+    """Readable pane label — uses ``format_arg``, named kwargs, not truncated."""
+    parts = ", ".join(f"{k}={format_arg(v)}" for k, v in kwargs.items())
     return f"{fn.__qualname__}({parts})"
 
 
@@ -136,47 +85,41 @@ def _module_short(fn) -> tuple[str, str, str]:
     return mod, mod, f"import {mod}"
 
 
-def _render_value(v, depth: int = 0) -> tuple[str, list]:
-    """Render a kwarg value as a Python expression. Returns ``(expr, imports)``."""
+def _render_value(
+    v, *, obj_to_var: dict[int, str] | None = None
+) -> tuple[str | None, list]:
+    """Render a kwarg value as a Python expression.
+
+    Returns ``(expr, imports)`` where *expr* is a Python source string, or
+    ``None`` for an unresolvable Motl argument (caller emits a message event).
+
+    *obj_to_var* is a short-lived ``{id(obj): var_name}`` map built for a
+    single ``invoke_operation`` call from the kwargs it received.  Never a
+    process-lifetime table.
+    """
+    _ovmap = obj_to_var or {}
+    # Any object with an explicit variable mapping takes priority
+    if _ovmap and id(v) in _ovmap:
+        return _ovmap[id(v)], []
     # Primitives
     if isinstance(v, (str, int, float, bool)) or v is None:
         return repr(v), []
-    # Small numeric/string list/tuple — verbatim
+    # Small list/tuple of scalars — verbatim
     if isinstance(v, (list, tuple)) and len(v) <= 32 and all(
         isinstance(x, (str, int, float, bool)) for x in v
     ):
         return repr(list(v)), []
-    # List of Motl objects -> list of inline expressions
-    if isinstance(v, (list, tuple)) and v and all(
-        hasattr(x, "df") and hasattr(x, "get_unique_values") for x in v
-    ):
-        exprs, all_imps = [], []
-        for m in v:
-            e, imps = _render_value(m, depth + 1)
-            exprs.append(e)
-            all_imps.extend(imps)
-        return f"[{', '.join(exprs)}]", all_imps
-    # Motl object — check the side-table first, then fall back to path / placeholder
+    # Motl-like: resolve via the per-call variable map (provenance.bind)
     if hasattr(v, "df") and hasattr(v, "get_unique_values"):
-        imp = ("cryomotl", "from cryocat.core import cryomotl")
-        if depth < _MAX_MOTL_DEPTH:
-            expr = dash_logger.get_motl_source(v)
-            if expr:
-                return expr, [imp]
-        path = getattr(v, "path", None) or getattr(v, "input_path", None)
-        if path:
-            return f"cryomotl.Motl.load({path!r})", [imp]
-        # Source not tracked — emit a WARN comment so the gap is visible in the script
-        dash_logger.append_script_comment(
-            "WARN: Motl source not tracked at this call site. "
-            "A pool insertion is missing a record_motl_source() call."
-        )
-        return "None  # <Motl source not tracked — see WARN above>", [imp]
-    # ndarray / large array -> placeholder
+        var = _ovmap.get(id(v))
+        if var:
+            return var, [("cryomotl", "from cryocat.core import cryomotl")]
+        return None, []  # unresolvable — caller emits message event
+    # ndarray / large array → placeholder
     if hasattr(v, "shape"):
         shape = tuple(getattr(v, "shape", ()))
         return f"None  # <array shape {shape}: supply input>", []
-    # dict / other -> compact repr fallback
+    # dict / other → compact repr fallback
     try:
         r = repr(v)
     except Exception:
@@ -186,107 +129,190 @@ def _render_value(v, depth: int = 0) -> tuple[str, list]:
     return f"None  # {type(v).__name__}: {r[:80]}...", []
 
 
-def _render_python_line(fn, kwargs: dict) -> tuple[str, list]:
-    """Return ``(runnable_line, imports_needed)`` for the given call."""
+def _render_python_line(
+    fn, kwargs: dict, *, obj_to_var: dict[int, str] | None = None
+) -> tuple[str, list, dict[str, str | None]]:
+    """Return ``(runnable_line, imports_needed, kwargs_src)`` for the given call.
+
+    *kwargs_src* maps each kwarg name to its rendered Python source string, or
+    ``None`` for an unresolvable Motl argument.  ``None`` entries render as
+    the Python literal ``None`` in the script line so it remains syntactically
+    valid.
+    """
     imports: list = []
     args: list[str] = []
+    kwargs_src: dict[str, str | None] = {}
 
     for k, v in kwargs.items():
-        expr, more = _render_value(v)
+        expr, more = _render_value(v, obj_to_var=obj_to_var)
         imports.extend(more)
-        args.append(f"{k}={expr}")
+        args.append(f"{k}=None" if expr is None else f"{k}={expr}")
+        kwargs_src[k] = expr
 
     arg_str = ", ".join(args)
 
     if hasattr(fn, "__self__") and fn.__self__ is not None:
-        # Classmethod bound to a class → render as module_short.ClassName.method(...)
         if inspect.isclass(fn.__self__):
             mod, short, stmt = _module_short(fn)
             imports = [(short, stmt)] + imports
-            return f"{short}.{fn.__qualname__}({arg_str})", imports
-        # Bound instance method → render as receiver.method(kwargs)
-        recv_expr, recv_imps = _render_value(fn.__self__)
+            return f"{short}.{fn.__qualname__}({arg_str})", imports, kwargs_src
+        recv_expr, recv_imps = _render_value(fn.__self__, obj_to_var=obj_to_var)
+        recv_src = recv_expr or "None"
         imports = recv_imps + imports
-        return f"{recv_expr}.{fn.__name__}({arg_str})", imports
+        ctor_kwargs = getattr(fn.__self__, "_ctor_kwargs", None)
+        if ctor_kwargs:
+            cls_name = type(fn.__self__).__name__
+            data_src = f"{recv_src}.df" if recv_src != "None" else "None  # supply data"
+            ctor_parts = [data_src] + [f"{k}={v!r}" for k, v in ctor_kwargs.items()]
+            cryomotl_imp = ("cryomotl", "from cryocat.core import cryomotl")
+            if cryomotl_imp not in imports:
+                imports = [cryomotl_imp] + imports
+            return (
+                f"cryomotl.{cls_name}({', '.join(ctor_parts)}).{fn.__name__}({arg_str})",
+                imports,
+                kwargs_src,
+            )
+        return f"{recv_src}.{fn.__name__}({arg_str})", imports, kwargs_src
 
-    # Regular function or unbound class method
     mod, short, stmt = _module_short(fn)
     imports = [(short, stmt)] + imports
     line = f"{short}.{fn.__qualname__}({arg_str})"
-    return line, imports
+    return line, imports, kwargs_src
 
 
 # ── Dispatch wrapper ──────────────────────────────────────────────────────────
 
-def invoke_operation(fn, kwargs: dict):
-    """Invoke a ``@gui_exposed`` function, logging to the pane and session script.
+def invoke_operation(
+    fn,
+    kwargs: dict,
+    *,
+    assign_to: str | None = None,
+    pool_id: str | None = None,
+    label: str | None = None,
+    source: str | None = None,
+):
+    """Invoke a ``@gui_exposed`` function, logging to the pane, script, and stream.
 
-    * Success → pane gets ``▶``/``✓``; session script gets a runnable line.
+    Parameters
+    ----------
+    fn:
+        The callable to invoke (bound method or free function).
+    kwargs:
+        The keyword arguments to pass to *fn*.
+    assign_to:
+        Script variable the result will be bound to (e.g. ``"motl_1"``).
+        When ``None``, the call event carries no ``assign_to``.  Set by
+        :func:`~cryocat.app.apputils.run_operation_to_pool`.
+    pool_id:
+        Pool id of the entry this result will occupy (e.g. ``"motl-1"``).
+        Folded into the result summary so the record shows pool identity.
+    label:
+        Human-readable label of the pool entry (folded into result summary).
+    source:
+        Input file path for load operations (folded into result summary).
+
+    * Success → pane gets ``▶``/``✓``; script gets a runnable line;
+      stream gets a ``call`` event with ``status="ok"``.
     * Failure → pane gets ``✗`` + traceback (``source="error"``); script gets a
-      comment; exception is re-raised so the callback can surface a message.
+      comment; stream gets a ``call`` event with ``status="error"``;
+      exception is re-raised so the callback can surface a message.
     """
+    from cryocat.app import session as _session
+    from cryocat.app import provenance as _prov
+    from cryocat.app.event import call_event, describe, message_event, validate_result
+
     pane_name = _render_call(fn, kwargs)
     dash_logger.write(f"▶ {pane_name}", source="cryocat")
+
+    # Build a short-lived {id(obj): var_name} map so that Motl arguments and
+    # the bound receiver can be rendered as their pool variable names.
+    obj_to_var: dict[int, str] = {}
+
+    # Check the receiver (fn.__self__ for bound instance methods).
+    self_obj = getattr(fn, "__self__", None)
+    if self_obj is not None and not inspect.isclass(self_obj):
+        mid = getattr(self_obj, "_pool_motl_id", None)
+        if mid is not None:
+            var = _prov.var_for(mid)
+            if var:
+                obj_to_var[id(self_obj)] = var
+
+    # Check kwargs for Motl arguments stamped with _pool_motl_id.
+    for v in kwargs.values():
+        mid = getattr(v, "_pool_motl_id", None)
+        if mid is not None:
+            var = _prov.var_for(mid)
+            if var:
+                obj_to_var[id(v)] = var
+
+    # Derive the receiver variable name for the call event.
+    derived_receiver: str | None = (
+        obj_to_var.get(id(self_obj))
+        if self_obj is not None and not inspect.isclass(self_obj)
+        else None
+    )
+
+    # Pre-compute script rendering (used in both success and error paths).
+    fn_name = f"{fn.__module__}.{fn.__qualname__}"
+    line, imports_needed, kwargs_src = _render_python_line(fn, kwargs, obj_to_var=obj_to_var)
+    imports_json = [[s, stmt] for s, stmt in imports_needed]
+
+    # Warn once per unresolvable Motl argument.
+    for k, expr in kwargs_src.items():
+        if expr is None:
+            _session.emit(message_event(
+                f"Argument {k!r} of {fn_name} could not be resolved to a variable "
+                "— pool provenance missing. Load the motl through the pool first.",
+                level="error",
+            ))
+
+    # Capture receiver's row count before the call for delta computation.
+    before: dict | None = None
+    if self_obj is not None and not inspect.isclass(self_obj) and hasattr(self_obj, "df"):
+        try:
+            before = {"n_rows": int(len(self_obj.df))}
+        except Exception:
+            pass
+
+    t0 = _time.monotonic()
     try:
         result = fn(**kwargs)
     except Exception as exc:
-        ts = _dt.datetime.now().strftime("%H:%M:%S")
+        duration = _time.monotonic() - t0
+        tb_str = _tb.format_exc()
         dash_logger.write(f"✗ {pane_name} — {type(exc).__name__}: {exc}", source="error")
-        dash_logger.write(_tb.format_exc(), source="error")
-        dash_logger.append_script_comment(
-            f"✗ {ts}  {pane_name} — {type(exc).__name__}: {exc}"
-        )
+        dash_logger.write(tb_str, source="error")
+        _session.emit(call_event(
+            fn_name, kwargs_src,
+            status="error",
+            imports=imports_json,
+            receiver=derived_receiver,
+            assign_to=assign_to,
+            duration_s=duration,
+            error={
+                "type": type(exc).__name__,
+                "msg": str(exc),
+                "traceback": tb_str,
+            },
+        ))
         raise
-    line, imports_needed = _render_python_line(fn, kwargs)
-    dash_logger.append_script_line(line, imports_needed=imports_needed)
-    dash_logger.last_script_line = line
-    # Register result Motl so nested callers can inline-expand it
-    if hasattr(result, "df") and hasattr(result, "get_unique_values"):
-        dash_logger.record_motl_source(result, line)
+
+    duration = _time.monotonic() - t0
     dash_logger.write(f"✓ {pane_name}", source="cryocat")
+
+    result_summary = describe(result, pool_id=pool_id, label=label, source=source, before=before)
+    try:
+        validate_result(result_summary)
+    except ValueError:
+        result_summary = {"type": type(result).__name__}
+    _session.emit(call_event(
+        fn_name, kwargs_src,
+        status="ok",
+        imports=imports_json,
+        receiver=derived_receiver,
+        assign_to=assign_to,
+        duration_s=duration,
+        result=result_summary,
+    ))
     return result
 
-
-# ── Automatic cryoCAT call logging (pane-only, legacy) ───────────────────────
-
-def _make_logged(func, display_name, skip_first=False):
-    """Return a wrapper that logs the call once (reentrancy-safe)."""
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        if getattr(_reentry, "active", False):
-            return func(*args, **kwargs)
-        try:
-            call_args = args[1:] if skip_first else args
-            parts = [_fmt(a) for a in call_args]
-            parts += [f"{k}={_fmt(v)}" for k, v in kwargs.items()]
-            dash_logger.write(f"{display_name}({', '.join(parts)})", source="cryocat")
-        except Exception:
-            pass
-        _reentry.active = True
-        try:
-            return func(*args, **kwargs)
-        finally:
-            _reentry.active = False
-    return wrapper
-
-
-def patch_class(cls, exclude=()):
-    """Wrap every public method on *cls* with pane-only call logging."""
-    exclude = set(exclude)
-    for name, raw in list(vars(cls).items()):
-        if name.startswith("_") or name in exclude:
-            continue
-        if isinstance(raw, staticmethod):
-            setattr(cls, name, staticmethod(
-                _make_logged(raw.__func__, f"{cls.__name__}.{name}")))
-        elif isinstance(raw, classmethod):
-            setattr(cls, name, classmethod(
-                _make_logged(raw.__func__, f"{cls.__name__}.{name}", skip_first=True)))
-        elif inspect.isfunction(raw):
-            setattr(cls, name, _make_logged(raw, f"{cls.__name__}.{name}", skip_first=True))
-
-
-def patch_function(module_or_obj, func_name):
-    """Replace a public function on a module with a logged version."""
-    func = getattr(module_or_obj, func_name)
-    setattr(module_or_obj, func_name, _make_logged(func, func_name))

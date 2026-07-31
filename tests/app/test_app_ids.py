@@ -68,10 +68,22 @@ _PERMITTED_EXACT: frozenset[str] = frozenset(
         _ids.SUITE_URL,
         _ids.SUITE_TOOL_SELECTOR,
         _ids.SUITE_PAGE_CONTENT,
+        # Phase 10 — single app-level file browser (D1, Z2)
+        _ids.BROWSER_REQUEST,
+        _ids.BROWSER_CWD,
+        _ids.BROWSER_LAST_DIR,
+        _ids.BROWSER_RESULT,
+        # Phase 11 — single app-level rotation-builder modal (D1)
+        _ids.ROTATION_REQUEST,
     }
 )
 
-_PERMITTED_PREFIXES: tuple[str, ...] = (_ids.PAGE_WRAP_PREFIX, _ids.SUITE_LOG_PREFIX)
+_PERMITTED_PREFIXES: tuple[str, ...] = (
+    _ids.PAGE_WRAP_PREFIX,
+    _ids.SUITE_LOG_PREFIX,
+    "browser-",    # Phase 10: single app-level file-browser modal (D1)
+    "rotation-modal-",  # Phase 11: single app-level rotation-builder modal (D1)
+)
 
 
 def _is_permitted_global(component_id: object) -> bool:
@@ -149,13 +161,7 @@ def _all_dep_ids(app):
 
 APPS = [
     pytest.param("suite", id="suite"),
-    pytest.param(
-        "tango",
-        id="tango",
-        marks=pytest.mark.xfail(
-            reason="tango global store migration pending — doc 7", strict=False
-        ),
-    ),
+    pytest.param("tango", id="tango"),
 ]
 
 
@@ -182,6 +188,53 @@ def test_no_duplicate_ids(app_name, request):
 
 
 # ---------------------------------------------------------------------------
+# §11.3 — DYNAMIC_IDS registry
+#
+# Modules that render controls into placeholder divs declare:
+#   DYNAMIC_IDS: list[tuple[str, str]] = [(container_id, component_id), ...]
+#
+# The coupling check accepts an unresolved component_id only if it is declared
+# here.  The container_id MUST be present in the static layout — a declaration
+# without a mounted container is itself a defect and is caught below.
+# ---------------------------------------------------------------------------
+
+_DYNAMIC_ID_MODULES: tuple = ()
+
+
+def _load_dynamic_modules(app_name: str = "suite"):
+    """Lazy import to avoid circular deps at module level.
+
+    Dynamic-ID modules are suite-specific.  Returning an empty tuple for non-suite
+    apps prevents the container-presence assertion from firing against a layout that
+    is not expected to mount those containers.
+    """
+    if app_name != "suite":
+        return ()
+    from cryocat.app.suite.pages import pstructure
+    return (pstructure,)
+
+
+def _collect_dynamic_ids(layout_ids: set, app_name: str = "suite") -> frozenset:
+    """Return the set of accepted dynamic component ids (normalised).
+
+    Also asserts that every declared container_id is in the layout, so a stale
+    declaration cannot silently paper over a broken id.
+    """
+    modules = _load_dynamic_modules(app_name)
+    accepted: set = set()
+    for mod in modules:
+        for container_id, component_id in getattr(mod, "DYNAMIC_IDS", []):
+            container_norm = _norm_id(container_id)
+            assert container_norm in layout_ids, (
+                f"DYNAMIC_IDS in {mod.__name__!r} declares container "
+                f"{container_id!r} which is not present in the layout. "
+                "Either mount the container or remove the declaration."
+            )
+            accepted.add(_norm_id(component_id))
+    return frozenset(accepted)
+
+
+# ---------------------------------------------------------------------------
 # Check 2 — Every callback id resolves to a layout id or a permitted global
 # ---------------------------------------------------------------------------
 
@@ -189,19 +242,24 @@ def test_no_duplicate_ids(app_name, request):
 def test_callback_ids_resolve(app_name, request):
     app = _app(app_name, request)
     layout_ids = collect_ids(app.layout)
+    dynamic_ids = _collect_dynamic_ids(layout_ids, app_name)
 
     missing: dict[str, list] = {}
     for dep_id in _all_dep_ids(app):
         if _is_wildcard(dep_id):
             continue
         normed = _norm_id(dep_id)
-        if normed not in layout_ids and not _is_permitted_global(dep_id):
+        if (
+            normed not in layout_ids
+            and normed not in dynamic_ids
+            and not _is_permitted_global(dep_id)
+        ):
             key = repr(dep_id)
             missing.setdefault(key, [])
 
     assert not missing, (
-        f"{len(missing)} callback id(s) not found in the layout "
-        f"or the §2.4 permitted set:\n"
+        f"{len(missing)} callback id(s) not found in the layout, "
+        f"the §2.4 permitted set, or DYNAMIC_IDS:\n"
         + "\n".join(f"  {k}" for k in sorted(missing))
     )
 

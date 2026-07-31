@@ -5,17 +5,23 @@ via a ``formgen``-generated form, renders a live orientational-distribution
 preview, and writes the result to a file on demand.
 
 The panel has no knowledge of where it lives (modal or page).  After a
-successful write the ``{prefix}-created-path`` store is updated; the host wires
+successful write the ``{prefix}-value`` store is updated; the host wires
 its own callback to react to that event.
 
 Public API
 ----------
+inplane_figure(angles, gs)
+    Pure function — polar scatter of inplane (phi) angles.
+angles_preview_figures(angles, gs, *, uirevision_prefix)
+    Pure function — returns (sphere_fig, inplane_fig) from a computed angles array.
 get_angles_builder_sidebar_content(prefix)
     Controls-only layout (form, path, create button, stores). Graph lives separately.
 get_angles_builder_panel(prefix)
     Self-contained layout including the preview graph.  Used in modal contexts.
-register_angles_builder_callbacks(app, prefix)
+register_angles_builder_callbacks(app, prefix, *, with_graphs)
     Register all callbacks for the panel (works with both layout variants).
+    Pass ``with_graphs=True`` for the full-panel layout; ``with_graphs=False``
+    when the host page owns the preview graphs.
 """
 
 import numpy as np
@@ -34,7 +40,7 @@ from cryocat.app.components.graphsettings import styled_figure, error_figure
 _ID_TYPE = "angles-param"
 
 
-def _inplane_figure(angles: np.ndarray, gs) -> go.Figure:
+def inplane_figure(angles: np.ndarray, gs) -> go.Figure:
     """Polar scatter of inplane (phi) angles + optional graph settings."""
     phi = np.unique(np.round(angles[:, 0], 8))
     fig = go.Figure(
@@ -61,6 +67,53 @@ def _inplane_figure(angles: np.ndarray, gs) -> go.Figure:
     return styled_figure(fig, gs or {}, uirevision="inplane-preview")
 
 
+def angles_preview_figures(
+    angles: np.ndarray,
+    gs,
+    *,
+    uirevision_prefix: str = "angles",
+) -> tuple:
+    """Pure function: sphere + inplane preview figures from a computed angles array.
+
+    Parameters
+    ----------
+    angles : np.ndarray
+        Output of :func:`~cryocat.utils.geom.generate_angles`.
+    gs : dict | None
+        Graph settings store data (forwarded to :func:`styled_figure`).
+    uirevision_prefix : str
+        Prefix used in the ``uirevision`` key so Plotly preserves the camera
+        across updates (should match the panel prefix).
+
+    Returns
+    -------
+    tuple[go.Figure, go.Figure]
+        ``(sphere_fig, inplane_fig)``; either may be an error figure on failure.
+    """
+    from cryocat.analysis import visplot
+
+    n_phi = len(np.unique(np.round(angles[:, 0], 8)))
+    n_cone = len(angles) // n_phi if n_phi > 0 else len(angles)
+
+    try:
+        fig1 = visplot.plot_rotation_normals(angles)
+        sphere_fig = styled_figure(
+            fig1, gs or {},
+            uirevision=f"{uirevision_prefix}-preview",
+            title={"text": f"Cone sampling — {n_cone} angles", "font": {"size": 12}},
+            margin={"l": 0, "r": 0, "t": 40, "b": 0},
+        )
+    except Exception as exc:
+        sphere_fig = error_figure(f"Sphere plot error: {exc}")
+
+    try:
+        inplane_fig = inplane_figure(angles, gs)
+    except Exception as exc:
+        inplane_fig = error_figure(f"Inplane plot error: {exc}")
+
+    return sphere_fig, inplane_fig
+
+
 def get_angles_builder_sidebar_content(prefix: str, preview_btn: bool = False) -> html.Div:
     """Form controls, output path, create button and stores — no graph.
 
@@ -81,7 +134,7 @@ def get_angles_builder_sidebar_content(prefix: str, preview_btn: bool = False) -
     form_rows = formgen.build_form(
         generate_angles,
         id_type=_ID_TYPE,
-        id_extra={"builder": prefix},
+        id_extra={"owner": prefix},
     )
     preview_button = (
         [
@@ -124,7 +177,7 @@ def get_angles_builder_sidebar_content(prefix: str, preview_btn: bool = False) -
             ),
             dcc.Store(id=f"{prefix}-params"),
             dcc.Store(id=f"{prefix}-angles"),
-            dcc.Store(id=f"{prefix}-created-path"),
+            dcc.Store(id=f"{prefix}-value"),
         ],
     )
 
@@ -151,7 +204,7 @@ def get_angles_builder_panel(prefix: str) -> html.Div:
     form_rows = formgen.build_form(
         generate_angles,
         id_type=_ID_TYPE,
-        id_extra={"builder": prefix},
+        id_extra={"owner": prefix},
     )
     return html.Div(
         [
@@ -194,13 +247,13 @@ def get_angles_builder_panel(prefix: str) -> html.Div:
             ),
             dcc.Store(id=f"{prefix}-params"),
             dcc.Store(id=f"{prefix}-angles"),
-            dcc.Store(id=f"{prefix}-created-path"),
+            dcc.Store(id=f"{prefix}-value"),
         ],
         id=f"{prefix}-panel",
     )
 
 
-def register_angles_builder_callbacks(app: dash.Dash, prefix: str, skip_preview: bool = False) -> None:
+def register_angles_builder_callbacks(app: dash.Dash, prefix: str, *, with_graphs: bool) -> None:
     """Register all callbacks for the angles-builder panel identified by ``prefix``.
 
     Parameters
@@ -209,23 +262,23 @@ def register_angles_builder_callbacks(app: dash.Dash, prefix: str, skip_preview:
         The Dash application instance.
     prefix : str
         Must match the ``prefix`` passed to :func:`get_angles_builder_panel`.
-    skip_preview : bool, default=False
-        When True the ``_preview`` callback (which writes to ``{prefix}-preview``
-        and ``{prefix}-angles``) is not registered.  Use this when the host page
-        registers its own preview callback (e.g. a two-graph layout).
+    with_graphs : bool
+        When True the ``_preview`` callback (which writes to ``{prefix}-angles``,
+        the sphere graph, and the inplane graph) is registered.  Pass False when
+        the host page registers its own preview callback that owns those outputs.
     """
 
     @app.callback(
         Output(f"{prefix}-params", "data"),
-        Input({"type": _ID_TYPE, "builder": prefix, "param": ALL, "tag": ALL}, "value"),
-        State({"type": _ID_TYPE, "builder": prefix, "param": ALL, "tag": ALL}, "id"),
+        Input({"type": _ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "value"),
+        State({"type": _ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "id"),
     )
     def _collect_params(values, ids):
         if not values or not ids:
             raise PreventUpdate
         return generate_kwargs(ids, values)
 
-    if not skip_preview:
+    if with_graphs:
         @app.callback(
             Output(f"{prefix}-angles", "data"),
             Output({"type": "styled-graph", "owner": prefix, "name": "preview"}, "figure"),
@@ -247,31 +300,12 @@ def register_angles_builder_callbacks(app: dash.Dash, prefix: str, skip_preview:
                 err = error_figure(f"Error: {exc}")
                 return dash.no_update, err, err
 
-            from cryocat.analysis import visplot
-            n_phi = len(np.unique(np.round(angles[:, 0], 8)))
-            n_cone = len(angles) // n_phi if n_phi > 0 else len(angles)
-
-            try:
-                fig1 = visplot.plot_rotation_normals(angles)
-                sphere_fig = styled_figure(
-                    fig1, gs or {},
-                    uirevision=f"{prefix}-preview",
-                    title={"text": f"Cone sampling — {n_cone} angles", "font": {"size": 12}},
-                    margin={"l": 0, "r": 0, "t": 40, "b": 0},
-                )
-            except Exception as exc:
-                sphere_fig = error_figure(f"Sphere plot error: {exc}")
-
-            try:
-                inplane_fig = _inplane_figure(angles, gs)
-            except Exception as exc:
-                inplane_fig = error_figure(f"Inplane plot error: {exc}")
-
+            sphere_fig, inplane_fig = angles_preview_figures(angles, gs, uirevision_prefix=prefix)
             return angles.tolist(), sphere_fig, inplane_fig
 
     @app.callback(
         Output(f"{prefix}-status", "children"),
-        Output(f"{prefix}-created-path", "data"),
+        Output(f"{prefix}-value", "data"),
         Input(f"{prefix}-create", "n_clicks"),
         State(f"{prefix}-params", "data"),
         State(f"{prefix}-output-path", "value"),

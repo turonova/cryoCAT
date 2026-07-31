@@ -703,9 +703,11 @@ def test_generate_angles_gui_exposed():
 def test_generate_angles_registered_as_builder():
     """generate_angles must appear in the standalone builder registry."""
     import cryocat.utils.geom  # noqa: ensure decorator fires
-    from cryocat.utils.classutils import _GUI_BUILDER_REGISTRY
-    ids = [e["id"] for e in _GUI_BUILDER_REGISTRY]
-    assert "generate_angles" in ids
+    from cryocat.utils.classutils import GUI_REGISTRY, GuiCategory
+    assert "geom.generate_angles" in GUI_REGISTRY
+    entry = GUI_REGISTRY["geom.generate_angles"]
+    assert entry.category == GuiCategory.BUILDER
+    assert entry.standalone is True
 
 
 def test_generate_angles_shape():

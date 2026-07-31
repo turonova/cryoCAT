@@ -43,6 +43,7 @@ from plotly.subplots import make_subplots
 from cryocat.analysis import sta as sta_mod
 from cryocat.analysis import visplot
 from cryocat.app import formgen, ids
+from cryocat.app.apputils import run_operation
 from cryocat.app.components.anglesbuilder import register_angles_builder_callbacks
 from cryocat.app.components.graphsettings import styled_figure, error_figure
 from cryocat.utils.geom import generate_angles
@@ -110,6 +111,23 @@ def _field_num(label: str, id_: str, value=None, **kwargs) -> html.Div:
 def _field_check(label: str, id_: str, value: bool = False) -> dbc.Checkbox:
     return dbc.Checkbox(id=id_, label=label, value=value,
                         style={"marginBottom": "0.4rem"})
+
+
+def _field_dropdown(label: str, id_: str, options: list, value=None) -> html.Div:
+    return html.Div(
+        [
+            html.Label(label, style=_FIELD_LABEL),
+            dcc.Dropdown(
+                id=id_,
+                options=options,
+                value=value,
+                clearable=False,
+                searchable=False,
+                style={**_FIELD_INPUT, "fontSize": "0.82rem"},
+            ),
+        ],
+        style=_FIELD_ROW,
+    )
 
 
 # ── Evaluation accordion panel ───────────────────────────────────────────────
@@ -366,29 +384,76 @@ def _slim_angles_builder(prefix: str) -> html.Div:
             ),
             dcc.Store(id=f"{prefix}-params"),
             dcc.Store(id=f"{prefix}-angles"),
-            dcc.Store(id=f"{prefix}-created-path"),
+            dcc.Store(id=f"{prefix}-value"),
         ],
     )
+
+
+_REF_FAMILY_OPTIONS = [
+    {"label": "Single reference", "value": "singleref"},
+    {"label": "Multi-reference",  "value": "multiref"},
+    {"label": "Multi-class",      "value": "multiclass"},
+]
+
+
+_STA_TYPE_OPTIONS = [
+    {"label": "novaSTA (.txt)", "value": "novasta"},
+    {"label": "STOPGAP (.star)", "value": "stopgap"},
+]
+
+_SHOW = {"display": "block"}
+_HIDE = {"display": "none"}
 
 
 def _sta_setup_panel() -> html.Div:
     return html.Div(
         [
+            # ── Format ───────────────────────────────────────────────────────
+            html.Div("Format", style=_SECTION_HEADER),
+            _field_dropdown("STA format", "sta-setup-sta-type",
+                            options=_STA_TYPE_OPTIONS, value="novasta"),
+            html.Hr(style={"margin": "0.4rem 0"}),
+
+            # ── Iterations ────────────────────────────────────────────────────
             html.Div("Iterations", style=_SECTION_HEADER),
             _field_num("Number of iterations", "sta-setup-iter",
                        value=1, min=1, step=1),
             _field_num("Starting iteration", "sta-setup-start-index",
                        value=1, min=0, step=1),
-            _field_check("Create reference (averaging pre-step)",
-                         "sta-setup-create-ref", value=False),
-            _field_check("Multi-reference mode",
-                         "sta-setup-multiref", value=False),
             html.Hr(style={"margin": "0.4rem 0"}),
 
-            html.Div("Angles (novaSTA convention)", style=_SECTION_HEADER),
+            # ── Common — both formats ─────────────────────────────────────────
+            html.Div("Common — both formats", style=_SECTION_HEADER),
+            _field_check("Create reference (averaging pre-step)",
+                         "sta-setup-create-ref", value=False),
+            _field_check("Split into even / odd halfsets",
+                         "sta-setup-split-even-odd", value=True),
+            html.Hr(style={"margin": "0.2rem 0"}),
+            _field_text("Motl name / path", "sta-setup-motl"),
+            _field_text("Reference", "sta-setup-ref"),
+            _field_text("Mask", "sta-setup-mask"),
+            _field_text("CC mask", "sta-setup-cc-mask"),
+            _field_text("Wedge list", "sta-setup-wedge-list"),
+            _field_text("Subtomogram path", "sta-setup-subtomo-path",
+                        placeholder="path to subtomograms (name / pattern)"),
+            html.Hr(style={"margin": "0.2rem 0"}),
+            html.Div(
+                [
+                    html.Span("Angles", style={**_HINT, "fontWeight": 600}),
+                    dbc.Button(
+                        "Build angles…",
+                        id="sta-setup-angles-open-btn",
+                        color="secondary",
+                        size="sm",
+                        style={"marginLeft": "auto"},
+                    ),
+                ],
+                style={"display": "flex", "alignItems": "center",
+                       "marginBottom": "0.25rem"},
+            ),
             _field_text(
                 "Cone angle", "sta-setup-cone-angle",
-                placeholder="single value or space-separated per-iter, e.g. 30 20 10",
+                placeholder="single value or space-separated, e.g. 30 20 10",
             ),
             _field_text("Cone sampling", "sta-setup-cone-sampling",
                         placeholder="e.g. 5"),
@@ -396,14 +461,6 @@ def _sta_setup_panel() -> html.Div:
                         placeholder="e.g. 360"),
             _field_text("Inplane sampling", "sta-setup-inplane-sampling",
                         placeholder="e.g. 5"),
-            dbc.Button(
-                "Build angles…",
-                id="sta-setup-angles-open-btn",
-                color="secondary",
-                size="sm",
-                style={"width": "100%", "marginTop": "0.2rem",
-                       "marginBottom": "0.4rem"},
-            ),
             html.Div(
                 id="sta-setup-use-angles-status",
                 style={**_HINT, "marginBottom": "0.3rem"},
@@ -445,32 +502,131 @@ def _sta_setup_panel() -> html.Div:
                 centered=True,
                 scrollable=True,
             ),
-            html.Hr(style={"margin": "0.4rem 0"}),
-
-            html.Div("Filters", style=_SECTION_HEADER),
-            _field_text("High pass (required)", "sta-setup-high-pass",
+            html.Hr(style={"margin": "0.2rem 0"}),
+            _field_text("High pass (px)", "sta-setup-high-pass",
                         placeholder="e.g. 25 20 15"),
-            _field_text("Low pass", "sta-setup-low-pass",
+            _field_num("High pass sigma", "sta-setup-high-pass-sigma",
+                       value=2.0, step=0.5),
+            _field_text("Low pass (px)", "sta-setup-low-pass",
                         placeholder="e.g. 30"),
+            _field_num("Low pass sigma", "sta-setup-low-pass-sigma",
+                       value=3.0, step=0.5),
             _field_text("Score threshold", "sta-setup-threshold",
                         placeholder="e.g. 0.0"),
-            html.Hr(style={"margin": "0.4rem 0"}),
-
-            html.Div("Paths", style=_SECTION_HEADER),
-            _field_text("Motl name / path", "sta-setup-motl"),
-            _field_text("Reference", "sta-setup-ref"),
-            _field_text("Mask", "sta-setup-mask"),
-            _field_text("CC mask", "sta-setup-cc-mask"),
-            _field_text("Wedge list", "sta-setup-wedge-list"),
-            _field_text("Subtomograms", "sta-setup-subtomograms"),
-            _field_text("Tomograms", "sta-setup-tomograms"),
-            html.Hr(style={"margin": "0.4rem 0"}),
-
-            html.Div("Other", style=_SECTION_HEADER),
             _field_num("Symmetry (Cn order)", "sta-setup-symmetry",
                        value=1, min=1, step=1),
-            _field_num("Class", "sta-setup-class", value=1, min=0, step=1),
             html.Hr(style={"margin": "0.4rem 0"}),
+
+            # ── novaSTA only ──────────────────────────────────────────────────
+            html.Div(
+                id="sta-setup-novasta-section",
+                children=[
+                    html.Div("novaSTA only", style=_SECTION_HEADER),
+                    _field_num("Class", "sta-setup-class", value=1, min=0, step=1),
+                    _field_text("FSC mask", "sta-setup-fsc-mask",
+                                placeholder="path or 'none'"),
+                    _field_num("Pixel size (Å)", "sta-setup-pixel-size",
+                               value=None, step=0.001),
+                    _field_check("Extract subtomograms from tomograms",
+                                 "sta-setup-extract-subtomos", value=False),
+                    dbc.Collapse(
+                        [
+                            _field_num("Subtomo size (px)", "sta-setup-subtomo-size",
+                                       value=None, min=1, step=1),
+                            _field_text("Tomograms", "sta-setup-tomograms",
+                                        placeholder="path to tomograms"),
+                            _field_num("Tomo digits", "sta-setup-tomo-digits",
+                                       value=None, min=1, step=1),
+                        ],
+                        id="sta-setup-extract-fields",
+                        is_open=False,
+                    ),
+                    html.Hr(style={"margin": "0.4rem 0"}),
+                ],
+                style=_SHOW,
+            ),
+
+            # ── STOPGAP only ──────────────────────────────────────────────────
+            html.Div(
+                id="sta-setup-stopgap-section",
+                children=[
+                    html.Div("STOPGAP only", style=_SECTION_HEADER),
+                    _field_text("Root directory", "sta-setup-rootdir",
+                                placeholder="e.g. ./run42"),
+                    _field_num("Binning", "sta-setup-binning",
+                               value=None, min=1, step=1),
+                    html.Hr(style={"margin": "0.2rem 0"}),
+                    _field_dropdown("Reference family", "sta-setup-ref-family",
+                                    options=_REF_FAMILY_OPTIONS, value="singleref"),
+                    html.Hr(style={"margin": "0.2rem 0"}),
+                    html.Div("Preprocessing", style={**_HINT, "fontWeight": 600,
+                                                     "marginBottom": "0.25rem"}),
+                    _field_check("Apply Laplacian filter",
+                                 "sta-setup-apply-laplacian", value=False),
+                    _field_check("Calculate exposure weights (calc_exp)",
+                                 "sta-setup-calc-exp", value=True),
+                    _field_check("Calculate CTF weights (calc_ctf)",
+                                 "sta-setup-calc-ctf", value=True),
+                    _field_num("Cosine weighting exponent", "sta-setup-cos-weight",
+                               value=0.0, step=0.1),
+                    _field_num("Score weight (Nyquist pass-through)",
+                               "sta-setup-score-weight", value=0.01, step=0.005),
+                    html.Hr(style={"margin": "0.2rem 0"}),
+                    html.Div("Search / averaging", style={**_HINT, "fontWeight": 600,
+                                                          "marginBottom": "0.25rem"}),
+                    _field_dropdown("Search mode", "sta-setup-search-mode",
+                                    options=[{"label": v, "value": v}
+                                             for v in ("hc", "shc")],
+                                    value="hc"),
+                    _field_dropdown("Cone search type", "sta-setup-cone-search-type",
+                                    options=[{"label": v, "value": v}
+                                             for v in ("coarse", "complete")],
+                                    value="coarse"),
+                    _field_dropdown("Scoring function", "sta-setup-scoring-fcn",
+                                    options=[{"label": v, "value": v}
+                                             for v in ("flcf", "pearson")],
+                                    value="flcf"),
+                    _field_dropdown("Rotation mode", "sta-setup-rot-mode",
+                                    options=[{"label": v, "value": v}
+                                             for v in ("linear", "cubic")],
+                                    value="linear"),
+                    _field_dropdown("Averaging mode", "sta-setup-avg-mode",
+                                    options=[{"label": v, "value": v}
+                                             for v in ("full", "partial")],
+                                    value="full"),
+                    _field_num("Subset (%)", "sta-setup-subset",
+                               value=100, min=1, max=100, step=1),
+                    _field_num("F-threshold (fthresh)", "sta-setup-fthresh",
+                               value=800, min=1, step=1),
+                    _field_text("Temperature (annealing, 0=off)",
+                                "sta-setup-temperature", placeholder="e.g. 0"),
+                    html.Hr(style={"margin": "0.2rem 0"}),
+                    _field_check("Use Euler search (replaces cone search)",
+                                 "sta-setup-use-euler-search", value=False),
+                    dbc.Collapse(
+                        [
+                            _field_text("Euler axes (e.g. ZYZ)", "sta-setup-euler-axes",
+                                        placeholder="e.g. ZYZ"),
+                            _field_num("Euler 1 incr (°)", "sta-setup-euler-1-incr",
+                                       value=None, step=0.1),
+                            _field_num("Euler 1 iter", "sta-setup-euler-1-iter",
+                                       value=None, min=1, step=1),
+                            _field_num("Euler 2 incr (°)", "sta-setup-euler-2-incr",
+                                       value=None, step=0.1),
+                            _field_num("Euler 2 iter", "sta-setup-euler-2-iter",
+                                       value=None, min=1, step=1),
+                            _field_num("Euler 3 incr (°)", "sta-setup-euler-3-incr",
+                                       value=None, step=0.1),
+                            _field_num("Euler 3 iter", "sta-setup-euler-3-iter",
+                                       value=None, min=1, step=1),
+                        ],
+                        id="sta-setup-euler-fields",
+                        is_open=False,
+                    ),
+                    html.Hr(style={"margin": "0.4rem 0"}),
+                ],
+                style=_HIDE,
+            ),
 
             dbc.Button(
                 "Create parameter dataframe",
@@ -760,44 +916,107 @@ def _expand_for_n(text: str | None, n_align: int) -> str | None:
 def _setup_form_to_params_dict(
     *,
     iter_n: int, start_index: int,
-    create_ref: bool, multiref: bool,
     cone_angle: str, cone_sampling: str,
     inplane_angle: str, inplane_sampling: str,
-    high_pass: str, low_pass: str, threshold: str,
+    high_pass: str, high_pass_sigma, low_pass: str, low_pass_sigma,
+    threshold: str,
     motl: str, ref: str, mask: str, cc_mask: str,
-    wedge_list: str, subtomograms: str, tomograms: str,
+    wedge_list: str, subtomo_path: str,
     symmetry, class_id,
+    split_even_odd: bool = True,
+    fsc_mask: str = None, pixel_size=None,
+    extract_subtomos: bool = False,
+    subtomo_size=None, tomograms: str = None, tomo_digits=None,
+    # STOPGAP-only
+    rootdir: str = None, binning=None,
+    create_ref: bool = False, ref_family: str = "singleref",
+    apply_laplacian: bool = False,
+    calc_exp: bool = True, calc_ctf: bool = True,
+    cos_weight=None, score_weight=None,
+    search_mode: str = "hc", cone_search_type: str = "coarse",
+    scoring_fcn: str = "flcf", rot_mode: str = "linear",
+    avg_mode: str = "full", subset=None, fthresh=None,
+    temperature: str = None,
+    use_euler_search: bool = False,
+    euler_axes: str = None,
+    euler_1_incr=None, euler_1_iter=None,
+    euler_2_incr=None, euler_2_iter=None,
+    euler_3_incr=None, euler_3_iter=None,
 ) -> dict:
-    """Pack the form values into the snake_case dict that
+    """Pack the form values into the canonical dict that
     :meth:`sta.StaParameters.from_dict` accepts.  All per-iter values are
     broadcast to ``iter_n`` repeats; empty fields are dropped.
+    Keys use canonical names (or snake_case, which from_dict normalises).
     """
     iter_n = max(int(iter_n or 1), 1)
-    # Mandatory keys -- always emitted.
+    # Control keys (always emitted so from_dict can set create_ref / ref_family).
     out: dict = {
-        "cone_angle": _expand_for_n(cone_angle, iter_n),
-        "cone_sampling": _expand_for_n(cone_sampling, iter_n),
-        "inplane_angle": _expand_for_n(inplane_angle, iter_n),
-        "inplane_sampling": _expand_for_n(inplane_sampling, iter_n),
-        "high_pass": _expand_for_n(high_pass, iter_n),
-        "start_index": int(start_index or 1),
-        "create_ref": 1 if create_ref else 0,
-        "multiref": 1 if multiref else 0,
+        "start_index":          int(start_index or 1),
+        "create_ref":           1 if create_ref else 0,
+        "ref_family":           ref_family or "singleref",
+        "use_euler_search":     1 if use_euler_search else 0,
+        "split_into_even_odd":  1 if split_even_odd else 0,
     }
-    # Optional, only if filled.
-    optional = {
-        "low_pass": _expand_for_n(low_pass, iter_n),
-        "threshold": _expand_for_n(threshold, iter_n),
-        "motl": (motl or "").strip() or None,
-        "ref": (ref or "").strip() or None,
-        "mask": (mask or "").strip() or None,
-        "cc_mask": (cc_mask or "").strip() or None,
-        "wedge_list": (wedge_list or "").strip() or None,
-        "subtomograms": (subtomograms or "").strip() or None,
-        "tomograms": (tomograms or "").strip() or None,
-        "symmetry": int(symmetry) if symmetry not in (None, "") else None,
-        "class": int(class_id) if class_id not in (None, "") else None,
+    # Per-iteration: only if filled.
+    per_iter = {
+        "cone_angle":        _expand_for_n(cone_angle, iter_n),
+        "cone_sampling":     _expand_for_n(cone_sampling, iter_n),
+        "inplane_angle":     _expand_for_n(inplane_angle, iter_n),
+        "inplane_sampling":  _expand_for_n(inplane_sampling, iter_n),
+        "high_pass":         _expand_for_n(high_pass, iter_n),
+        "low_pass":          _expand_for_n(low_pass, iter_n),
+        "threshold":         _expand_for_n(threshold, iter_n),
+        "temperature":       _expand_for_n(temperature, iter_n),
     }
+    for k, v in per_iter.items():
+        if v is not None:
+            out[k] = v
+    # Scalar paths / other — only if filled.
+    optional: dict = {
+        "motl":             (motl or "").strip() or None,
+        "ref":              (ref or "").strip() or None,
+        "mask":             (mask or "").strip() or None,
+        "cc_mask":          (cc_mask or "").strip() or None,
+        "wedge_list":       (wedge_list or "").strip() or None,
+        # Merged subtomogram path — maps to canonical "subtomo name".
+        "subtomo_name":     (subtomo_path or "").strip() or None,
+        "symmetry":         int(symmetry) if symmetry not in (None, "") else None,
+        "class":            int(class_id) if class_id not in (None, "") else None,
+        "high_pass_sigma":  float(high_pass_sigma) if high_pass_sigma not in (None, "") else None,
+        "low_pass_sigma":   float(low_pass_sigma) if low_pass_sigma not in (None, "") else None,
+        # novaSTA-only
+        "fsc_mask":         (fsc_mask or "").strip() or None,
+        "pixel_size":       float(pixel_size) if pixel_size not in (None, "") else None,
+        # STOPGAP-only scalars
+        "rootdir":          (rootdir or "").strip() or None,
+        "binning":          int(binning) if binning not in (None, "") else None,
+        "apply_laplacian":  1 if apply_laplacian else 0,
+        "calc_exp":         1 if calc_exp else 0,
+        "calc_ctf":         1 if calc_ctf else 0,
+        "cos_weight":       float(cos_weight) if cos_weight not in (None, "") else None,
+        "score_weight":     float(score_weight) if score_weight not in (None, "") else None,
+        "search_mode":      search_mode or None,
+        "cone_search_type": cone_search_type or None,
+        "scoring_fcn":      scoring_fcn or None,
+        "rot_mode":         rot_mode or None,
+        "avg_mode":         avg_mode or None,
+        "subset":           int(subset) if subset not in (None, "") else None,
+        "fthresh":          int(fthresh) if fthresh not in (None, "") else None,
+        # Euler (STOPGAP with euler search)
+        "euler_axes":       (euler_axes or "").strip() or None,
+        "euler_1_incr":     float(euler_1_incr) if euler_1_incr not in (None, "") else None,
+        "euler_1_iter":     int(euler_1_iter) if euler_1_iter not in (None, "") else None,
+        "euler_2_incr":     float(euler_2_incr) if euler_2_incr not in (None, "") else None,
+        "euler_2_iter":     int(euler_2_iter) if euler_2_iter not in (None, "") else None,
+        "euler_3_incr":     float(euler_3_incr) if euler_3_incr not in (None, "") else None,
+        "euler_3_iter":     int(euler_3_iter) if euler_3_iter not in (None, "") else None,
+    }
+    # Extraction fields (novaSTA only, only when extract_subtomos=True).
+    if extract_subtomos:
+        optional["extract_subtomos"] = 1
+        optional["subtomo_size"] = int(subtomo_size) if subtomo_size not in (None, "") else None
+        optional["tomograms"] = (tomograms or "").strip() or None
+        optional["tomo_digits"] = int(tomo_digits) if tomo_digits not in (None, "") else None
     for k, v in optional.items():
         if v is not None:
             out[k] = v
@@ -813,7 +1032,7 @@ def register_callbacks(app):
     # auto-preview with a manual "Visualize" button so the user controls
     # when the preview re-renders.  The hidden create-file button never
     # fires because it's invisible.
-    register_angles_builder_callbacks(app, _ANGLES_PREFIX, skip_preview=True)
+    register_angles_builder_callbacks(app, _ANGLES_PREFIX, with_graphs=False)
 
     # ── Toggle which loader form is visible ──────────────────────────────────
     @app.callback(
@@ -1200,64 +1419,119 @@ def register_callbacks(app):
         Output("sta-setup-create-status", "children"),
         Output("sta-main-tabs", "value", allow_duplicate=True),
         Input("sta-setup-create-btn", "n_clicks"),
+        State("sta-setup-sta-type", "value"),
         State("sta-setup-iter", "value"),
         State("sta-setup-start-index", "value"),
-        State("sta-setup-create-ref", "value"),
-        State("sta-setup-multiref", "value"),
         State("sta-setup-cone-angle", "value"),
         State("sta-setup-cone-sampling", "value"),
         State("sta-setup-inplane-angle", "value"),
         State("sta-setup-inplane-sampling", "value"),
         State("sta-setup-high-pass", "value"),
+        State("sta-setup-high-pass-sigma", "value"),
         State("sta-setup-low-pass", "value"),
+        State("sta-setup-low-pass-sigma", "value"),
         State("sta-setup-threshold", "value"),
         State("sta-setup-motl", "value"),
         State("sta-setup-ref", "value"),
         State("sta-setup-mask", "value"),
         State("sta-setup-cc-mask", "value"),
         State("sta-setup-wedge-list", "value"),
-        State("sta-setup-subtomograms", "value"),
-        State("sta-setup-tomograms", "value"),
+        State("sta-setup-subtomo-path", "value"),
         State("sta-setup-symmetry", "value"),
         State("sta-setup-class", "value"),
+        State("sta-setup-split-even-odd", "value"),
+        State("sta-setup-fsc-mask", "value"),
+        State("sta-setup-pixel-size", "value"),
+        State("sta-setup-extract-subtomos", "value"),
+        State("sta-setup-subtomo-size", "value"),
+        State("sta-setup-tomograms", "value"),
+        State("sta-setup-tomo-digits", "value"),
+        State("sta-setup-rootdir", "value"),
+        State("sta-setup-binning", "value"),
+        State("sta-setup-create-ref", "value"),
+        State("sta-setup-ref-family", "value"),
+        State("sta-setup-apply-laplacian", "value"),
+        State("sta-setup-calc-exp", "value"),
+        State("sta-setup-calc-ctf", "value"),
+        State("sta-setup-cos-weight", "value"),
+        State("sta-setup-score-weight", "value"),
+        State("sta-setup-search-mode", "value"),
+        State("sta-setup-cone-search-type", "value"),
+        State("sta-setup-scoring-fcn", "value"),
+        State("sta-setup-rot-mode", "value"),
+        State("sta-setup-avg-mode", "value"),
+        State("sta-setup-subset", "value"),
+        State("sta-setup-fthresh", "value"),
+        State("sta-setup-temperature", "value"),
+        State("sta-setup-use-euler-search", "value"),
+        State("sta-setup-euler-axes", "value"),
+        State("sta-setup-euler-1-incr", "value"),
+        State("sta-setup-euler-1-iter", "value"),
+        State("sta-setup-euler-2-incr", "value"),
+        State("sta-setup-euler-2-iter", "value"),
+        State("sta-setup-euler-3-incr", "value"),
+        State("sta-setup-euler-3-iter", "value"),
         prevent_initial_call=True,
     )
     def create_setup_df(
         n_clicks,
-        iter_n, start_index, create_ref, multiref,
+        sta_type,
+        iter_n, start_index,
         cone_angle, cone_sampling, inplane_angle, inplane_sampling,
-        high_pass, low_pass, threshold,
-        motl, ref, mask, cc_mask, wedge_list, subtomograms, tomograms,
+        high_pass, high_pass_sigma, low_pass, low_pass_sigma, threshold,
+        motl, ref, mask, cc_mask, wedge_list, subtomo_path,
         symmetry, class_id,
+        split_even_odd, fsc_mask, pixel_size,
+        extract_subtomos, subtomo_size, tomograms, tomo_digits,
+        rootdir, binning,
+        create_ref, ref_family,
+        apply_laplacian, calc_exp, calc_ctf,
+        cos_weight, score_weight,
+        search_mode, cone_search_type, scoring_fcn, rot_mode,
+        avg_mode, subset, fthresh, temperature,
+        use_euler_search,
+        euler_axes,
+        euler_1_incr, euler_1_iter,
+        euler_2_incr, euler_2_iter,
+        euler_3_incr, euler_3_iter,
     ):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
 
-        # Validate mandatory fields.
-        required = {
-            "cone angle": cone_angle, "cone sampling": cone_sampling,
-            "inplane angle": inplane_angle, "inplane sampling": inplane_sampling,
-            "high pass": high_pass,
-        }
-        missing = [name for name, v in required.items() if not (v and str(v).strip())]
-        if missing:
-            return (no_update,
-                    "Missing required field(s): " + ", ".join(missing),
-                    no_update)
-
         try:
+            resolved_sta_type = (sta_type or "novasta").lower()
             params_dict = _setup_form_to_params_dict(
                 iter_n=iter_n, start_index=start_index,
-                create_ref=bool(create_ref), multiref=bool(multiref),
                 cone_angle=cone_angle, cone_sampling=cone_sampling,
                 inplane_angle=inplane_angle, inplane_sampling=inplane_sampling,
-                high_pass=high_pass, low_pass=low_pass, threshold=threshold,
+                high_pass=high_pass, high_pass_sigma=high_pass_sigma,
+                low_pass=low_pass, low_pass_sigma=low_pass_sigma,
+                threshold=threshold,
                 motl=motl, ref=ref, mask=mask, cc_mask=cc_mask,
-                wedge_list=wedge_list, subtomograms=subtomograms,
-                tomograms=tomograms,
+                wedge_list=wedge_list, subtomo_path=subtomo_path,
                 symmetry=symmetry, class_id=class_id,
+                split_even_odd=bool(split_even_odd) if split_even_odd is not None else True,
+                fsc_mask=fsc_mask, pixel_size=pixel_size,
+                extract_subtomos=bool(extract_subtomos),
+                subtomo_size=subtomo_size,
+                tomograms=tomograms, tomo_digits=tomo_digits,
+                rootdir=rootdir, binning=binning,
+                create_ref=bool(create_ref), ref_family=ref_family or "singleref",
+                apply_laplacian=bool(apply_laplacian),
+                calc_exp=bool(calc_exp) if calc_exp is not None else True,
+                calc_ctf=bool(calc_ctf) if calc_ctf is not None else True,
+                cos_weight=cos_weight, score_weight=score_weight,
+                search_mode=search_mode, cone_search_type=cone_search_type,
+                scoring_fcn=scoring_fcn, rot_mode=rot_mode,
+                avg_mode=avg_mode, subset=subset, fthresh=fthresh,
+                temperature=temperature,
+                use_euler_search=bool(use_euler_search),
+                euler_axes=euler_axes,
+                euler_1_incr=euler_1_incr, euler_1_iter=euler_1_iter,
+                euler_2_incr=euler_2_incr, euler_2_iter=euler_2_iter,
+                euler_3_incr=euler_3_incr, euler_3_iter=euler_3_iter,
             )
-            params = sta_mod.StaParameters.from_dict(params_dict, sta_type="novasta")
+            params = sta_mod.StaParameters.from_dict(params_dict, sta_type=resolved_sta_type)
         except Exception as exc:
             return no_update, f"Create failed: {exc}", no_update
 
@@ -1277,6 +1551,33 @@ def register_callbacks(app):
             f"\"STA setup output\" tab, then save.",
             "tab-setup",
         )
+
+    # ── Show/hide format-specific sections based on STA type ─────────────────
+    @app.callback(
+        Output("sta-setup-novasta-section", "style"),
+        Output("sta-setup-stopgap-section", "style"),
+        Input("sta-setup-sta-type", "value"),
+    )
+    def _toggle_sta_type_sections(sta_type):
+        if sta_type == "stopgap":
+            return _HIDE, _SHOW
+        return _SHOW, _HIDE
+
+    # ── Show/hide Euler fields when Euler search checkbox is toggled ──────────
+    @app.callback(
+        Output("sta-setup-euler-fields", "is_open"),
+        Input("sta-setup-use-euler-search", "value"),
+    )
+    def _toggle_euler_fields(use_euler):
+        return bool(use_euler)
+
+    # ── Show/hide tomogram extraction fields ─────────────────────────────────
+    @app.callback(
+        Output("sta-setup-extract-fields", "is_open"),
+        Input("sta-setup-extract-subtomos", "value"),
+    )
+    def _toggle_extract_fields(extract):
+        return bool(extract)
 
     # ── Populate setup grid from store ───────────────────────────────────────
     @app.callback(
@@ -1322,7 +1623,7 @@ def register_callbacks(app):
             params = sta_mod.NovaStaParams(df)
             if target == "stopgap":
                 params = params.to_stopgap()
-            params.write_out(str(path).strip())
+            run_operation(params.write_out, {"path": str(path).strip()})
         except Exception as exc:
             return f"Save as {target} failed: {exc}"
         return f"Saved as {target} → {str(path).strip()}"

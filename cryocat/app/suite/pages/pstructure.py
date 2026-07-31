@@ -67,6 +67,25 @@ from cryocat.app.suite.pages._pstructure_intersect import (
 from cryocat.app.pageshell import page_shell, sidebar_accordion
 
 
+# ── Dynamically-rendered component IDs (§11.3) ───────────────────────────────
+# These IDs are rendered into placeholder divs by callbacks, so they are absent
+# from the static layout.  The test harness reads this list to accept them.
+# Format: (container_id, component_id).  A container_id not in the layout is
+# itself a defect — the test harness checks both sides.
+
+DYNAMIC_IDS: list[tuple[str, str]] = [
+    ("surfaces-send-area",         "surfaces-send-tomo-id"),
+    ("surfaces-send-area",         "surfaces-build-motl-btn"),
+    ("surfaces-send-area",         "surfaces-send-send-label"),
+    ("surfaces-send-area",         "surfaces-send-send-to-editor"),
+    ("surfaces-send-area",         "surfaces-send-send-status"),
+    ("surfaces-isect-results-area", "surfaces-isect-filter-btn"),
+    ("surfaces-isect-results-area", "surfaces-isect-send-send-label"),
+    ("surfaces-isect-results-area", "surfaces-isect-send-send-to-editor"),
+    ("surfaces-isect-results-area", "surfaces-isect-send-send-status"),
+]
+
+
 # ── Module-level styles ──────────────────────────────────────────────────────
 
 
@@ -791,8 +810,8 @@ def register_callbacks(app):
         Output("surfaces-load-status", "children"),
         Input("surfaces-load-run-btn", "n_clicks"),
         State("surfaces-load-select", "value"),
-        State({"type": _LOAD_ID_TYPE, "op": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": _LOAD_ID_TYPE, "op": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": _LOAD_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": _LOAD_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "id"),
         State("surfaces-load-motl-motl-select", "value"),
         State(ids.POOL_MOTLS, "data"),
         State("surfaces-pool", "data"),
@@ -907,8 +926,8 @@ def register_callbacks(app):
         Output("surfaces-op-status", "children"),
         Input("surfaces-op-run-btn", "n_clicks"),
         State("surfaces-op-select", "value"),
-        State({"type": _OP_ID_TYPE, "op": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": _OP_ID_TYPE, "op": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": _OP_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": _OP_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "id"),
         State("surfaces-pool", "data"),
         State("surfaces-selected", "data"),
         State(ids.POOL_MOTLS, "data"),

@@ -5859,3 +5859,82 @@ class TestMotlConverterKwargs:
             sample_motl_data1, output_motl_type=output_motl_type, relion_version=relion_version
         )
         assert isinstance(output_motl, expected_output_motl_type)
+
+
+class TestRandomizeAngles:
+    """Tests for Motl.randomize_angles."""
+
+    @pytest.fixture
+    def motl6(self, sample_motl_data1):
+        return Motl(copy.deepcopy(sample_motl_data1))
+
+    # ── default / "all" ───────────────────────────────────────────────────────
+
+    def test_default_is_all(self, motl6):
+        m1 = copy.deepcopy(motl6)
+        m2 = copy.deepcopy(motl6)
+        np.random.seed(99)
+        m1.randomize_angles()
+        np.random.seed(99)
+        m2.randomize_angles("all")
+        pd.testing.assert_frame_equal(m1.df, m2.df)
+
+    def test_all_within_default_ranges(self, motl6):
+        motl6.randomize_angles("all")
+        assert (motl6.df["phi"] >= 0).all() and (motl6.df["phi"] < 360).all()
+        assert (motl6.df["psi"] >= 0).all() and (motl6.df["psi"] < 360).all()
+        assert (motl6.df["theta"] >= 0).all() and (motl6.df["theta"] <= 180).all()
+
+    def test_all_values_actually_change(self, motl6):
+        orig = motl6.df[["phi", "psi", "theta"]].copy()
+        motl6.randomize_angles("all")
+        assert not motl6.df[["phi", "psi", "theta"]].equals(orig)
+
+    # ── single-angle selections ───────────────────────────────────────────────
+
+    def test_only_phi_changes(self, motl6):
+        orig_psi   = motl6.df["psi"].copy()
+        orig_theta = motl6.df["theta"].copy()
+        motl6.randomize_angles("phi")
+        pd.testing.assert_series_equal(motl6.df["psi"],   orig_psi)
+        pd.testing.assert_series_equal(motl6.df["theta"], orig_theta)
+
+    def test_only_psi_changes(self, motl6):
+        orig_phi   = motl6.df["phi"].copy()
+        orig_theta = motl6.df["theta"].copy()
+        motl6.randomize_angles("psi")
+        pd.testing.assert_series_equal(motl6.df["phi"],   orig_phi)
+        pd.testing.assert_series_equal(motl6.df["theta"], orig_theta)
+
+    def test_only_theta_changes(self, motl6):
+        orig_phi = motl6.df["phi"].copy()
+        orig_psi = motl6.df["psi"].copy()
+        motl6.randomize_angles("theta")
+        pd.testing.assert_series_equal(motl6.df["phi"], orig_phi)
+        pd.testing.assert_series_equal(motl6.df["psi"], orig_psi)
+
+    # ── custom range ──────────────────────────────────────────────────────────
+
+    def test_custom_range_single_angle(self, motl6):
+        motl6.randomize_angles("phi", range=(10.0, 50.0))
+        assert (motl6.df["phi"] >= 10.0).all() and (motl6.df["phi"] < 50.0).all()
+
+    def test_custom_range_all_angles(self, motl6):
+        motl6.randomize_angles("all", range=(10.0, 50.0))
+        assert (motl6.df["phi"]   >= 10.0).all() and (motl6.df["phi"]   < 50.0).all()
+        assert (motl6.df["psi"]   >= 10.0).all() and (motl6.df["psi"]   < 50.0).all()
+        assert (motl6.df["theta"] >= 10.0).all() and (motl6.df["theta"] < 50.0).all()
+
+    # ── non-angle columns preserved ───────────────────────────────────────────
+
+    def test_non_angle_columns_unchanged(self, motl6):
+        other = [c for c in Motl.motl_columns if c not in ("phi", "psi", "theta")]
+        orig_other = motl6.df[other].copy()
+        motl6.randomize_angles("all")
+        pd.testing.assert_frame_equal(motl6.df[other], orig_other)
+
+    # ── error handling ────────────────────────────────────────────────────────
+
+    def test_invalid_selection_raises_value_error(self, motl6):
+        with pytest.raises(ValueError, match="Invalid angle selection"):
+            motl6.randomize_angles("invalid")
