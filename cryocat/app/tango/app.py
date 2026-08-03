@@ -26,3 +26,6 @@ register_tango_table_callbacks(app)
 register_tango_callbacks(app)
 register_tango_log_callbacks(app)
 register_graph_settings_callbacks(app)
+
+if __name__ == "__main__":
+    app.run(debug=True)
