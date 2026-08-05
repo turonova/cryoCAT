@@ -313,6 +313,7 @@ def get_symmetry_angles(
     *,
     euler_convention: str = "zxz",
     degrees: bool = True,
+    conjugation_matrix: np.ndarray | None = None,
     return_df: bool = False,
     out_path: str | None = None,
 ) -> EulerAngles | pd.DataFrame:
@@ -328,6 +329,9 @@ def get_symmetry_angles(
         Default is ``"zxz"``.
     degrees : bool, optional
         If ``True`` (default), angles are in degrees; otherwise radians.
+    conjugation_matrix : ndarray, optional
+        Pre-computed ``(3, 3)`` conjugation matrix.  When given, *axis*
+        is ignored.
     return_df : bool, optional
         If ``True``, return a :class:`pandas.DataFrame` with one column
         per Euler angle; otherwise return a NumPy array.
@@ -340,7 +344,7 @@ def get_symmetry_angles(
         ``(M, 3)`` array of Euler angles, or a DataFrame when
         *return_df* is ``True``.
     """
-    matrices = get_symmetry_rotations(symmetry)
+    matrices = get_symmetry_rotations(symmetry, conjugation_matrix= conjugation_matrix)
     angles = rot.from_matrix(matrices).as_euler(euler_convention, degrees=degrees)
 
     if return_df or out_path is not None:
