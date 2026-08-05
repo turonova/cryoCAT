@@ -81,7 +81,6 @@ def register_tablefilter_callbacks(app, prefix: str) -> None:
         divFlex = {"display": "flex", "flexDirection": "row", "alignItems": "center"}
         labelFlex = {
             "flexShrink": 0,
-            "fontSize": "10px",
             "fontWeight": "600",
             "color": "var(--color10)",
             "whiteSpace": "nowrap",

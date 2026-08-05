@@ -63,7 +63,10 @@ def list_dir(
         if not show_hidden and name.startswith("."):
             continue
 
-        is_dir = child.is_dir()
+        try:
+            is_dir = child.is_dir()
+        except OSError:
+            continue  # skip entries the OS cannot inspect (e.g. Windows junctions without access)
 
         if not is_dir and exts and child.suffix.lower() not in exts:
             continue

@@ -32,6 +32,7 @@ from dash.exceptions import PreventUpdate
 from cryocat.analysis import visplot
 from cryocat.app import ids, styles
 from cryocat.app.components.graphsettings import styled_figure, error_figure
+from cryocat.app.formgen import make_dropdown
 
 _ROT_TYPES = [
     {"label": "Euler angles (degrees)", "value": "euler"},
@@ -49,7 +50,7 @@ def _num_row(label: str, id_: str, default: float) -> html.Div:
         [
             html.Label(
                 label,
-                style={"width": "70px", "fontSize": "0.82rem", "flexShrink": 0},
+                style={"width": "70px", "flexShrink": 0},
             ),
             dcc.Input(
                 id=id_,
@@ -59,7 +60,7 @@ def _num_row(label: str, id_: str, default: float) -> html.Div:
                 style={"width": "110px"},
             ),
         ],
-        style={"display": "flex", "alignItems": "center", "marginBottom": "4px"},
+        style={**{"display": "flex", "alignItems": "center"}, "marginBottom": "4px"},
     )
 
 
@@ -99,39 +100,37 @@ def _matrix_block(prefix: str) -> html.Div:
                     type="number",
                     value=1.0 if i == j else 0.0,
                     debounce=True,
-                    style={"width": "70px", "marginRight": "4px", "fontSize": "0.82rem"},
+                    style={"width": "70px", "marginRight": "4px"},
                 )
             )
-        rows.append(html.Div(cells, style={"display": "flex", "marginBottom": "4px"}))
+        rows.append(html.Div(cells, style={**{"display": "flex"}, "marginBottom": "4px"}))
     return html.Div(rows, id=f"{prefix}-matrix-block", style={"display": "none"})
 
 
 def _controls(prefix: str) -> list:
-    lbl = {"fontWeight": "bold", "marginBottom": "0.3rem", "fontSize": "0.85rem"}
+    lbl = {"fontWeight": "bold", "marginBottom": "0.3rem"}
     return [
         html.Label("Input format:", style=lbl),
-        dcc.Dropdown(
-            id=f"{prefix}-rot-type",
-            options=_ROT_TYPES,
-            value="euler",
+        make_dropdown(
+            f"{prefix}-rot-type",
+            _ROT_TYPES,
+            "euler",
             clearable=False,
-            searchable=False,
             style={"marginBottom": "0.5rem"},
         ),
         html.Div(
             [
                 html.Label("Euler convention:", style={**lbl, "marginRight": "8px", "marginBottom": 0}),
-                dcc.Dropdown(
-                    id=f"{prefix}-euler-order",
-                    options=_EULER_ORDERS,
-                    value="zxz",
+                make_dropdown(
+                    f"{prefix}-euler-order",
+                    _EULER_ORDERS,
+                    "zxz",
                     clearable=False,
-                    searchable=False,
                     style={"width": "100px"},
                 ),
             ],
             id=f"{prefix}-euler-order-row",
-            style={"display": "flex", "alignItems": "center", "marginBottom": "0.5rem"},
+            style={**{"display": "flex", "alignItems": "center"}, "marginBottom": "0.5rem"},
         ),
         _euler_block(prefix),
         _quat_block(prefix),
@@ -214,7 +213,7 @@ def register_rotation_builder_callbacks(app: dash.Dash, prefix: str) -> None:
     def _toggle_blocks(rot_type):
         show = {"display": "block"}
         hide = {"display": "none"}
-        euler_row_show = {"display": "flex", "alignItems": "center", "marginBottom": "0.5rem"}
+        euler_row_show = {**{"display": "flex", "alignItems": "center"}, "marginBottom": "0.5rem"}
         return (
             show if rot_type == "euler" else hide,
             show if rot_type == "quaternion" else hide,

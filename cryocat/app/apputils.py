@@ -200,7 +200,79 @@ def format_columns(df):
     return columns
 
 
-def generate_kwargs(ids, values):
+def _bound_session_vars(pool_state) -> dict:
+    """Return all variables currently bound in the session script.
+
+    Includes pool motls that have provenance recorded (``provenance.var_for``
+    is not ``None``) and console locals assigned by the user.  Both sets are
+    genuinely bound in the session script — any other name in the eval
+    namespace (registry callables, builtins) is excluded because referencing it
+    would produce an unrunnable script line.
+    """
+    from cryocat.app.console.execute import build_namespace, _CONSOLE_LOCALS
+    from cryocat.app import provenance as _prov
+
+    ns = build_namespace(pool_state)
+    bound: dict = {}
+
+    # Pool motls: only those with recorded provenance (motl has a script name).
+    for mid in pool_state.registry:
+        if _prov.var_for(mid) is not None:
+            var = _prov.bind(mid)
+            if var in ns:
+                bound[var] = ns[var]
+
+    # Console locals (user-assigned names — always script-bound).
+    for k, v in _CONSOLE_LOCALS.items():
+        if not k.startswith("_"):
+            bound[k] = v
+
+    return bound
+
+
+def _resolve_at_var(name: str, expected_tag: str, pool_state) -> object:
+    """Resolve ``@name`` to a live Python object from the session namespace.
+
+    Raises :class:`ValueError` with a plain-language message when the name is
+    not bound, or when the resolved type is incompatible with *expected_tag*.
+    Never raises a library traceback — all errors are user-facing strings.
+    """
+    bound = _bound_session_vars(pool_state)
+
+    if name not in bound:
+        available = sorted(bound.keys())
+        # Show closest-matching names first (simple substring heuristic).
+        near = [n for n in available if name and (name[:2] in n or n[:2] in name)]
+        hint_names = near[:5] or available[:5]
+        hint = ", ".join(hint_names) if hint_names else "(none bound yet)"
+        raise ValueError(
+            f"@{name} is not a bound session variable. "
+            f"Available: {hint}."
+        )
+
+    value = bound[name]
+    actual = type(value).__name__
+
+    # Narrow type checks — only reject clear mismatches; let the library
+    # catch deeper type errors so we don't replicate its validation.
+    # These are handler tags (from TYPE_HANDLERS keys), not widget names.
+    _PATH_TAGS = {"MapSource", "DataSource", "TiltStack", "PathOrStr"}
+    _NUM_TAGS  = {"int", "float"}
+
+    if expected_tag in _PATH_TAGS and not isinstance(value, (str, bytes)):
+        raise ValueError(
+            f"@{name} is a {actual}; this parameter expects a file path. "
+            f"Assign a path string to a console variable instead."
+        )
+    if expected_tag in _NUM_TAGS and not isinstance(value, (int, float)):
+        raise ValueError(
+            f"@{name} is a {actual}; this parameter expects a number."
+        )
+
+    return value
+
+
+def generate_kwargs(ids, values, pool_state=None):
     """Round-trip GUI form values to a kwargs dict via the central type table.
 
     Each control id carries the resolved handler ``tag`` (set by
@@ -212,6 +284,15 @@ def generate_kwargs(ids, values):
     sharing the same ``param`` and carrying a ``slot`` index in the id. They
     are collected here into a single list (sorted by slot) and handed to the
     Tuple parser, which converts it to the requested Python tuple type.
+
+    Parameters
+    ----------
+    pool_state:
+        Optional :class:`~cryocat.app.pool.PoolState`.  When provided, any
+        field value that begins with ``@`` is resolved as a session-script
+        variable reference (Part F sigil) instead of being parsed as a literal.
+        Unknown names, unbound names, and type mismatches raise
+        :class:`ValueError` with a plain-language message.
     """
     # Pass 1: bucket composite-widget slots by param; collect everything else
     # into a flat list to parse normally.
@@ -230,6 +311,12 @@ def generate_kwargs(ids, values):
     out = {}
     for id_, value in flat:
         tag = id_["tag"]
+        # @-variable reference: bypass normal parsing, resolve from session.
+        if pool_state is not None and isinstance(value, str) and value.startswith("@"):
+            ref = value[1:].strip()
+            if ref:
+                out[id_["param"]] = _resolve_at_var(ref, tag, pool_state)
+                continue
         parse = TYPE_HANDLERS[tag]["parse"]
         out[id_["param"]] = parse(value, id_.get("choices")) if tag == "Literal" else parse(value)
 
@@ -345,19 +432,19 @@ def run_operation_to_pool(
     # Run through the chokepoint.  Re-raises on exception; pool is untouched.
     result = invoke_operation(fn, kwargs, assign_to=var, pool_id=motl_id, label=label)
 
-    # Derive row list and motl type from the returned object.
+    # Derive DataFrame and motl type from the returned object.
     if hasattr(result, "df"):
-        rows = result.df.to_dict("records")
+        df = result.df          # pass DataFrame directly; insert_motl stores it server-side
         motl_type = type(result).__name__
     else:
-        rows = []
+        df = pd.DataFrame()
         motl_type = "emmotl"
 
     # Update pool (immutable: original state unchanged if this throws).
     if replaces is not None:
-        new_state = replace_motl_rows(state, replaces, rows, label=label, motl_type=motl_type)
+        new_state = replace_motl_rows(state, replaces, df, label=label, motl_type=motl_type)
     else:
-        new_state, motl_id = insert_motl(state, rows, label=label, motl_type=motl_type)
+        new_state, motl_id = insert_motl(state, df, label=label, motl_type=motl_type)
 
     # Stamp pool id on result so future invoke_operation can resolve the receiver.
     try:
@@ -418,11 +505,12 @@ def record_load_to_pool(
 
     pool_state, motl_id = insert_motl(
         pool_state,
-        motl_data,
+        motl_data,   # list[dict] → converted to DataFrame inside insert_motl
         label=label or display_name,
         motl_type=motl_type,
         extra=extra,
         meta=meta,
+        source_path=display_name,
     )
     try:
         motl._pool_motl_id = motl_id
@@ -431,4 +519,62 @@ def record_load_to_pool(
 
     _prov.record(motl_id, _session.last_seq())
     return pool_state, motl_id, motl
+
+
+def run_operation_batch(
+    fn,
+    kwargs_per_member: list[dict],
+    member_ids: list[str],
+    state,
+    group_state,
+    *,
+    group_label: str | None = None,
+    op_label: str | None = None,
+) -> tuple:
+    """Apply *fn* to each member in order and collect results into a new group.
+
+    This is the G5 "apply to each" chokepoint.  Each member is processed
+    through :func:`run_operation_to_pool` so every call is logged and
+    provenance is recorded.  The resulting motls (one per member, same order)
+    are gathered into a new pool group.
+
+    Parameters
+    ----------
+    fn:
+        Callable applied to each member (bound method or free function).
+    kwargs_per_member:
+        List of keyword-argument dicts — one entry per member.  If you want
+        the same kwargs for every member, pass ``[kwargs] * len(member_ids)``.
+    member_ids:
+        Ordered motl_ids from the source group.
+    state:
+        Current :class:`~cryocat.app.pool.PoolState`.
+    group_state:
+        Current :class:`~cryocat.app.pool.GroupState`.
+    group_label:
+        Label for the derived group.  Defaults to ``f"{op_label} results"``.
+    op_label:
+        Human-readable operation name for the derived group label.
+
+    Returns
+    -------
+    tuple[PoolState, GroupState, str, list]
+        ``(new_pool_state, new_group_state, group_id, results)``
+    """
+    from cryocat.app.pool import GroupState, create_group
+
+    new_state = state
+    derived_ids: list[str] = []
+    results: list = []
+
+    for mid, kw in zip(member_ids, kwargs_per_member):
+        src_label = (new_state.registry.get(mid) or {}).get("label", mid)
+        label = f"{op_label} of {src_label}" if op_label else src_label
+        new_state, new_mid, result = run_operation_to_pool(fn, kw, new_state, label=label)
+        derived_ids.append(new_mid)
+        results.append(result)
+
+    glabel = group_label or f"{op_label} results" if op_label else "Batch results"
+    new_gstate, gid = create_group(group_state, derived_ids, label=glabel)
+    return new_state, new_gstate, gid, results
 

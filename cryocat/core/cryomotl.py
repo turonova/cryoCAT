@@ -556,6 +556,7 @@ class Motl:
             return 0
         raise UserInputError(f"Unknown type of boundaries: {boundary_type}")
 
+    @gui_exposed(category="Cleaning", label="Clean by tomo mask", hide=("inplace", "output_path"))
     def clean_by_tomo_mask(
         self,
         tomo_list: TomoDimensions,
@@ -852,6 +853,7 @@ class Motl:
         else:
             self.convert_to_motl(input_motl)
 
+    @gui_exposed(category="Utility", label="Fill columns")
     def fill(self, input_dict: dict) -> None:
         """The fill function is used to fill in the values of a column or columns
         in the starfile. The input_dict argument should be a dictionary with keys
@@ -1265,6 +1267,7 @@ class Motl:
 
         return cls(s1.reset_index(drop=True))
 
+    @gui_exposed(category="Subsets", label="Renumber objects sequentially")
     def renumber_objects_sequentially(self, starting_number: int = 1) -> None:
         """Renumber objects sequentially, starting with 1 or provided number.
 
@@ -1468,6 +1471,7 @@ class Motl:
         cols = ["x", "y", "z", "shift_x", "shift_y", "shift_z"]
         self.df[cols] = self.df[cols] * scaling_factor
 
+    @gui_exposed(category="Subsets", output="motl_group", label="Split by feature", hide=("write_out", "output_prefix"))
     def split_by_feature(self, column_name: MotlColumn, write_out: bool = False, output_prefix: str = "") -> list["Motl"]:
         """Splits motl by the column_name and writes them out.
 
@@ -1510,7 +1514,7 @@ class Motl:
 
         return motls
 
-    def write_out(self, output_path: PathOrStr, motl_type: MotlType = "emmotl") -> None:
+    def write_out(self, output_path: PathOrStr, motl_type: MotlType = "emmotl", **kwargs) -> None:
         """Writes out a motl file to the specified output path.
 
         Parameters
@@ -1521,6 +1525,22 @@ class Motl:
             The type of motl file to write: one of ``"emmotl"``, ``"relion"``,
             ``"relion5"``, ``"relion5_1"``, ``"stopgap"``, ``"dynamo"``, ``"mod"``.
             Defaults to "emmotl".
+        **kwargs
+            Format-specific options forwarded to the target subclass writer.
+            Accepted keys per ``motl_type``:
+
+            * ``"emmotl"`` — no format-specific options.
+            * ``"relion"`` — see :meth:`RelionMotl.write_out` (e.g.
+              ``write_optics``, ``tomo_format``, ``subtomo_format``,
+              ``pixel_size``, ``binning``, ``optics_data``).
+            * ``"relion5"`` — see :meth:`RelionMotlv5.write_out`.
+              Requires ``input_tomograms`` in ``**kwargs``; raises
+              :exc:`UserInputError` if missing.
+            * ``"relion5_1"`` — like ``"relion"`` with ``version=5.1``
+              (``pixel_size``, ``binning``, ``optics_data`` forwarded to ctor).
+            * ``"stopgap"`` — see :meth:`StopgapMotl.write_out`
+              (e.g. ``update_coord``, ``reset_index``).
+            * ``"dynamo"`` / ``"mod"`` — no format-specific options.
 
         Returns
         -------
@@ -1529,25 +1549,40 @@ class Motl:
         Raises
         ------
         UserInputError
-            If the provided motl format is not supported.
-
+            If the provided motl format is not supported, or if ``motl_type``
+            is ``"relion5"`` and ``input_tomograms`` is not provided in ``kwargs``.
         """
-
-        if motl_type.lower() == "emmotl":
+        _R5_CTOR = frozenset({"input_tomograms", "pixel_size", "binning", "optics_data"})
+        _R51_CTOR = frozenset({"pixel_size", "binning", "optics_data"})
+        t = motl_type.lower()
+        if t == "emmotl":
             EmMotl(self.df).write_out(output_path)
-        elif motl_type.lower() == "relion":
-            RelionMotl(self.df).write_out(output_path)
-        elif motl_type.lower() == "relionv5":
-            RelionMotlv5(self.df).write_out(output_path)
-        elif motl_type.lower() == "stopgap":
-            StopgapMotl(self.df).write_out(output_path)
-        elif motl_type.lower() == "dynamo":
+        elif t == "relion":
+            _ver = float(kwargs.pop("version", 3.1))
+            RelionMotl(self.df, version=_ver).write_out(output_path, **kwargs)
+        elif t in ("relion5", "relionv5"):
+            if "input_tomograms" not in kwargs:
+                raise UserInputError(
+                    "Writing to Relion 5.0 format requires tomogram data. "
+                    "Pass input_tomograms=<DataFrame or path> as a keyword argument."
+                )
+            ctor_kw = {k: v for k, v in kwargs.items() if k in _R5_CTOR}
+            write_kw = {k: v for k, v in kwargs.items() if k not in _R5_CTOR}
+            RelionMotlv5(self.df, **ctor_kw).write_out(output_path, **write_kw)
+        elif t == "relion5_1":
+            ctor_kw = {k: v for k, v in kwargs.items() if k in _R51_CTOR}
+            write_kw = {k: v for k, v in kwargs.items() if k not in _R51_CTOR}
+            RelionMotl(self.df, version=5.1, **ctor_kw).write_out(output_path, **write_kw)
+        elif t == "stopgap":
+            StopgapMotl(self.df).write_out(output_path, **kwargs)
+        elif t == "dynamo":
             DynamoMotl(self.df).write_out(output_path)
-        elif motl_type.lower() == "mod":
+        elif t == "mod":
             ModMotl(self.df).write_out(output_path)
         else:
             raise UserInputError(f"Provided motl file {output_path} has format that is currently not supported.")
 
+    @gui_exposed(category="Utility", label="Save to file")
     def save_to(self, output_path: "PathOrStr", **kwargs) -> str:
         """Save via :meth:`write_out` and return the written path as a string.
 
@@ -1559,6 +1594,7 @@ class Motl:
         self.write_out(output_path, **kwargs)
         return str(output_path)
 
+    @gui_exposed(category="Utility", label="Write to IMOD model")
     def write_to_model_file(self, column_name: MotlColumn, output_base: str, point_size: int, binning: float = 1.0, zero_padding: int | None = None) -> None:
         """It splits the dataframe based on column_name and writes them out as mod files (from IMOD). The values in "class"
         column are used to created different objects, the countour is always the same. This function requires IMOD's
@@ -1862,6 +1898,7 @@ class Motl:
         self.df = self.df.drop_duplicates(subset=column_name)
         self.df.reset_index(inplace=True, drop=True)
 
+    @gui_exposed(category="Geometry", output="motl", label="Recenter to subparticle")
     @staticmethod
     def recenter_to_subparticle(input_motl: "MotlSource", input_map: MapSource, input_rotation: RotationLike | None = None, motl_type: MotlType = "emmotl", **kwargs) -> "Motl":
         """Computes the center of mass of the provided binary mask and computes the necessary shift between the mask box
@@ -2001,6 +2038,7 @@ class Motl:
 
         return None if inplace else target
 
+    @gui_exposed(category="Geometry", output="motl", label="Split in asymmetric subunits")
     def split_in_asymmetric_subunits(self, symmetry: Symmetry, xyz_shift: ArrayLike) -> "Motl":
         """Split the motive list into asymmetric subunits.
 

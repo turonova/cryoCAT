@@ -28,6 +28,7 @@ from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.utils.geom import Matrix
 from cryocat.utils.classutils import get_classes_from_names, get_class_names_by_parent
+from typing import Literal
 from cryocat.analysis import visplot
 
 
@@ -2026,8 +2027,16 @@ class Support:
 
                 if axis is None:
                     axis = np.array([0, 0, 1])
-                elif not isinstance(axis, np.ndarray) or axis.size != 3:
-                    raise ValueError("'axis' needs to be numpy.ndarray of size 3.")
+                else:
+                    if isinstance(axis, str):
+                        try:
+                            axis = np.array([float(x.strip()) for x in axis.split(",")])
+                        except ValueError:
+                            raise ValueError("'axis' must be a comma-separated list of 3 numbers, e.g. '0,0,1'.")
+                    else:
+                        axis = np.asarray(axis, dtype=float)
+                    if axis.size != 3:
+                        raise ValueError("'axis' needs to be an array of size 3.")
 
                 if mode == "position":
                     columns = TwistDescriptor.get_pos_feature_ids()
@@ -2040,8 +2049,16 @@ class Support:
 
                 if axis is None:
                     axis = np.array([0, 0, 0, 0, 0, 1])
-                elif not isinstance(axis, np.ndarray) or axis.size != 6:
-                    raise ValueError("'axis' needs to be numpy.ndarray of size 6.")
+                else:
+                    if isinstance(axis, str):
+                        try:
+                            axis = np.array([float(x.strip()) for x in axis.split(",")])
+                        except ValueError:
+                            raise ValueError("'axis' must be a comma-separated list of 6 numbers.")
+                    else:
+                        axis = np.asarray(axis, dtype=float)
+                    if axis.size != 6:
+                        raise ValueError("'axis' needs to be an array of size 6.")
 
         else:
             raise ValueError(
@@ -2144,7 +2161,7 @@ class Shell(Support):
 
 class Cone(Support):
 
-    def __init__(self, twist_desc: TwistDescriptor, cone_height: float, cone_radius: float, axis=None, mode="position"):
+    def __init__(self, twist_desc: TwistDescriptor, cone_height: float, cone_radius: float, axis: list | None = None, mode: Literal["position", "orientation", "mixed"] = "position"):
         """Crop the initial twist descriptor support to a cone of a given height and radius.
         The cone is defined by its height and radius, and the axis of revolution.
 
@@ -2204,8 +2221,8 @@ class Torus(Support):
         twist_desc: TwistDescriptor,
         inner_radius: float,
         outer_radius: float,
-        axis=None,
-        mode="position",
+        axis: list | None = None,
+        mode: Literal["position", "orientation", "mixed"] = "position",
     ):
         """Crop the initial twist descriptor support to a torus defined by inner and outer radius.
         The torus is defined by its inner and outer radius, and the axis of revolution.
@@ -2262,7 +2279,7 @@ class Torus(Support):
 
 class Cylinder(Support):
     def __init__(
-        self, twist_desc: TwistDescriptor, radius: float, height: float, axis=None, mode="position", symmetric=True
+        self, twist_desc: TwistDescriptor, radius: float, height: float, axis: list | None = None, mode: Literal["position", "orientation", "mixed"] = "position", symmetric=True
     ):
         """Crop the initial twist descriptor support to a cylinder defined by radius and height.
         The cylinder is defined by its radius and height, and the axis of revolution.

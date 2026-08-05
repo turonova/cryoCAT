@@ -17,12 +17,14 @@ GRAPH_SETTINGS_STORE: str = "graph-settings-store"
 # ── Motl pool ───────────────────────────────────────────────────────────────────
 # Managed exclusively through app/pool.py (§5).  No other module may mutate
 # these stores directly.
+#
+# Row data lives server-side in pool._payloads (POOL_SERVER_SIDE_STORAGE.md).
+# POOL_MOTLS and POOL_EXTRA were removed — they are no longer dcc.Stores.
 
-POOL_REGISTRY: str = "pool-registry"   # { motl_id: {label, type, n_rows, active, …} }
-POOL_MOTLS:    str = "pool-motls"       # { motl_id: <serialised motl rows> }
-POOL_EXTRA:    str = "pool-extra"       # { motl_id: <stopgap/relion/dynamo extra df> }
+POOL_REGISTRY: str = "pool-registry"   # { motl_id: {label, type, n_rows, columns, revision, …} }
 POOL_META:     str = "pool-meta"        # { motl_id: <relion params, data_type, …> }
 POOL_NEXT_ID:  str = "pool-next-id"    # incrementing counter for stable motl_id
+POOL_GROUPS:   str = "pool-groups"     # { groups: { group_id: {label, members} }, next_id: int }
 
 # ── Suite navigation / chrome ────────────────────────────────────────────────────
 # Owned by app/suite/app.py.  Navigation components and the page-content container.
@@ -70,3 +72,15 @@ BROWSER_RESULT: str = "browser-result"
 
 ROTATION_REQUEST: str = "rotation-request"
 # { "target": <rotation-build-btn id dict> } — written when any Build button fires
+
+# ── Variable picker (Part F) ─────────────────────────────────────────────────────
+# Owned exclusively by app/components/varpicker.py.  One modal per app (D1).
+# @ buttons write to REQUEST; selecting a variable writes to RESULT; write-back
+# callbacks (registered per id_type in formgen.register_var_picker_writeback) route
+# the result to the correct text input field.
+
+VAR_PICKER_REQUEST: str = "var-picker-request"
+# { "owner": <json-cid of the target text input> } — written when any @ button fires
+
+VAR_PICKER_RESULT: str = "var-picker-result"
+# { "owner": <json-cid>, "value": "@name" } — written when user selects a variable

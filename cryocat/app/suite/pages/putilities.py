@@ -21,6 +21,7 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
 from cryocat.app import formgen, ids, styles, discovery
+from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components.anglesbuilder import (
     get_angles_builder_sidebar_content,
@@ -62,13 +63,10 @@ def _wedge_mask_sidebar_content(prefix: str) -> html.Div:
     return html.Div(
         [
             html.Div(form_rows, style={"marginBottom": "0.75rem"}),
-            dbc.Input(
-                id=f"{prefix}-output-path",
-                type="text",
-                placeholder="Output path (e.g. /path/to/wedge_mask.em)",
-                size="sm",
-                style={"marginBottom": "0.4rem"},
-            ),
+            html.Div(get_path_field(f"{prefix}-output-path", mode="save",
+                                    extensions=(".em",),
+                                    placeholder="Output path (e.g. /path/to/wedge_mask.em)"),
+                     style={"marginBottom": "0.4rem"}),
             dbc.Button(
                 "Preview (middle XZ slice)",
                 id=f"{prefix}-preview-btn",
@@ -279,7 +277,7 @@ def _register_wedge_mask_callbacks(app, prefix: str) -> None:
         Output(f"{prefix}-status", "children"),
         Input(f"{prefix}-generate", "n_clicks"),
         State(f"{prefix}-params", "data"),
-        State(f"{prefix}-output-path", "value"),
+        State({"type": "path-input", "owner": f"{prefix}-output-path"}, "value"),
         prevent_initial_call=True,
     )
     def _generate(n_clicks, params, out_path):

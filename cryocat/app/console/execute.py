@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from cryocat.app.console.parse import Command, ConsoleRejected
-from cryocat.app.pool import PoolState
+from cryocat.app.pool import PoolState, get_rows as _pool_get_rows, PoolPayloadMissing as _PoolPayloadMissing
 
 # ---------------------------------------------------------------------------
 # Module-level mutable state
@@ -150,9 +150,11 @@ def build_namespace(state: PoolState) -> dict:
     for motl_id, meta in state.registry.items():
         if not meta.get("active", True):
             continue
-        rows = state.motls.get(motl_id) or []
         var_name = provenance.bind(motl_id)   # "motl-3" → "motl_3"
-        df = pd.DataFrame(rows) if rows else pd.DataFrame()
+        try:
+            df = _pool_get_rows(motl_id)
+        except _PoolPayloadMissing:
+            df = pd.DataFrame()
         try:
             motl = Motl(df)
             motl._pool_motl_id = motl_id

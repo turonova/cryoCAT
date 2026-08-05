@@ -1935,6 +1935,59 @@ def sample_cone(
     return np.stack(sampled_points, axis=0)
 
 
+def sample_sphere(
+    n_points: int,
+    center: TripletLike | None = None,
+    radius: float = 1.0,
+) -> np.ndarray:
+    """Golden-angle ("Fibonacci") sampling of a full sphere.
+
+    Returns ``(n_points, 3)`` near-uniformly distributed points on a sphere of
+    the given ``radius``. Uses the same golden-angle formula as
+    :func:`sample_cone` at ``cone_angle=360``.
+
+    Parameters
+    ----------
+    n_points : int
+        Number of points to sample. Must be at least 1.
+    center : TripletLike, optional
+        Center of the sphere. Normalised via :func:`as_triplet`.
+        Defaults to the origin.
+    radius : float, optional
+        Radius of the sphere. Defaults to 1.0.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape ``(n_points, 3)``. Near-uniformly distributed points on the
+        sphere surface.
+
+    Raises
+    ------
+    UserInputError
+        When ``n_points < 1``.
+
+    See Also
+    --------
+    sample_cone : Cone-parameterised sibling using angular-sampling step size.
+    """
+    if n_points < 1:
+        raise UserInputError(f"n_points must be >= 1, got {n_points}.")
+    if n_points == 1:
+        z = np.array([1.0])
+    else:
+        i = np.arange(n_points, dtype=float)
+        z = 1.0 - 2.0 * i / (n_points - 1)
+    r_xy = np.sqrt(np.clip(1.0 - z * z, 0.0, None))
+    theta = np.pi * (3.0 - np.sqrt(5.0)) * np.arange(n_points)
+    x = np.cos(theta) * r_xy
+    y = np.sin(theta) * r_xy
+    pts = np.column_stack((x, y, z)) * radius
+    if center is not None:
+        pts = pts + as_triplet(center)
+    return pts
+
+
 def apply_starting_and_offset(
     angles: EulerAngles,
     starting_angle: EulerAngles | None = None,

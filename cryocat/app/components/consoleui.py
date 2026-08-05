@@ -36,7 +36,6 @@ def _entry_div(entry: dict) -> html.Div:
                 f">>> {cmd}",
                 style={
                     "fontFamily": "monospace",
-                    "fontSize": "0.82rem",
                     "color": cmd_color,
                     "display": "block",
                 },
@@ -45,7 +44,6 @@ def _entry_div(entry: dict) -> html.Div:
                 summary,
                 style={
                     "fontFamily": "monospace",
-                    "fontSize": "0.78rem",
                     "color": "var(--bs-secondary-color)",
                     "display": "block",
                     "paddingLeft": "1.5rem",
@@ -85,7 +83,6 @@ def get_console_offcanvas(prefix: str) -> list:
                     html.Div(
                         id=f"{prefix}-suggestions",
                         style={
-                            "fontSize": "0.78rem",
                             "color": "var(--bs-secondary-color)",
                             "minHeight": "1.2rem",
                             "marginBottom": "0.3rem",
@@ -98,7 +95,6 @@ def get_console_offcanvas(prefix: str) -> list:
                                 ">>>",
                                 style={
                                     "fontFamily": "monospace",
-                                    "fontSize": "0.85rem",
                                     "padding": "0.2rem 0.5rem",
                                 },
                             ),
@@ -108,7 +104,7 @@ def get_console_offcanvas(prefix: str) -> list:
                                 placeholder="type a command or 'help'",
                                 debounce=False,
                                 n_submit=0,
-                                style={"fontFamily": "monospace", "fontSize": "0.85rem"},
+                                style={"fontFamily": "monospace"},
                                 autoComplete="off",
                                 autoFocus=True,
                             ),
@@ -186,7 +182,7 @@ def register_console_callbacks(app, prefix: str) -> None:
         try:
             from cryocat.app.console.help import suggest
             from cryocat.app.pool import PoolState
-            state = PoolState.from_stores(registry or {}, {}, {}, {}, 0)
+            state = PoolState.from_stores(registry or {})
             suggs = suggest(text, state)
             if not suggs:
                 return []
@@ -212,8 +208,6 @@ def register_console_callbacks(app, prefix: str) -> None:
     # -- Submit command ---------------------------------------------------------
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
-        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output(f"{prefix}-history", "data"),
@@ -221,18 +215,12 @@ def register_console_callbacks(app, prefix: str) -> None:
         Input(f"{prefix}-input", "n_submit"),
         State(f"{prefix}-input", "value"),
         State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_MOTLS, "data"),
-        State(ids.POOL_EXTRA, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         State(f"{prefix}-history", "data"),
         prevent_initial_call=True,
     )
-    def _on_submit(
-        n_submit, text,
-        registry, motls, extra, meta, next_id,
-        history,
-    ):
+    def _on_submit(n_submit, text, registry, meta, next_id, history):
         if not text or not text.strip():
             raise PreventUpdate
 
@@ -242,17 +230,14 @@ def register_console_callbacks(app, prefix: str) -> None:
         from cryocat.app.console import parse as _parse, execute as _exec
         from cryocat.app.pool import PoolState
 
-        state = PoolState.from_stores(registry, motls, extra, meta, next_id)
+        state = PoolState.from_stores(registry, meta, next_id)
 
         # -- Parse -------------------------------------------------------------
         try:
             cmd = _parse.parse(raw)
         except (_parse.ConsoleSyntaxError, _parse.ConsoleRejected) as exc:
             history.append({"cmd": raw, "summary": str(exc), "ok": False})
-            return (
-                no_update, no_update, no_update, no_update, no_update,
-                history, "",
-            )
+            return no_update, no_update, no_update, history, ""
 
         # -- Execute -----------------------------------------------------------
         result = _exec.execute(cmd, state)
@@ -260,8 +245,8 @@ def register_console_callbacks(app, prefix: str) -> None:
 
         # -- Pool updates ------------------------------------------------------
         if result.new_state is not state:
-            reg, motls_d, extra_d, meta_d, nid = result.new_state.to_stores()
+            reg, meta_d, nid = result.new_state.to_stores()
         else:
-            reg = motls_d = extra_d = meta_d = nid = no_update
+            reg = meta_d = nid = no_update
 
-        return reg, motls_d, extra_d, meta_d, nid, history, ""
+        return reg, meta_d, nid, history, ""

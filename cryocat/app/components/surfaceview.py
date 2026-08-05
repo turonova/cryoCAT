@@ -37,6 +37,7 @@ from cryocat.app import ids
 from cryocat.app.components.surface_registry import registry as _surface_registry
 from cryocat.app.components.graphsettings import styled_figure
 from cryocat.analysis.visplot import resolve_palette as _resolve_palette
+from cryocat.app.formgen import make_dropdown
 
 
 # Curvature color-by options. Values match
@@ -304,18 +305,17 @@ def get_surface_view(prefix: str):
                 [
                     html.Label(
                         "Color by",
-                        style={"fontSize": "0.85rem", "marginRight": "0.5rem"},
+                        style={"marginRight": "0.5rem"},
                     ),
-                    dcc.Dropdown(
-                        id=f"{prefix}-color-by",
-                        options=COLOR_BY_OPTIONS,
-                        value="none",
+                    make_dropdown(
+                        f"{prefix}-color-by",
+                        COLOR_BY_OPTIONS,
+                        "none",
                         clearable=False,
-                        style={"width": "260px", "fontSize": "0.85rem"},
+                        style={"width": "260px"},
                     ),
                 ],
-                style={"display": "flex", "alignItems": "center",
-                       "gap": "0.5rem", "marginBottom": "0.4rem"},
+                style={**{"display": "flex", "alignItems": "center", "gap": "0.5rem"}, "marginBottom": "0.4rem"},
             ),
             dcc.Graph(
                 id={"type": "styled-graph", "owner": prefix, "name": "graph"},

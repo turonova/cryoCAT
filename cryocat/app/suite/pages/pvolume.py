@@ -18,10 +18,13 @@ from dash import html, dcc, Input, Output, State, no_update, ALL, MATCH
 import dash_bootstrap_components as dbc
 
 from cryocat.core import cryomap, cryomask
+from cryocat.app.formgen import make_dropdown
+from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.components.volumeview import (
     get_volume_view, register_volume_view_callbacks, mesh_at,
 )
 from cryocat.app.pageshell import page_shell, sidebar_accordion
+from cryocat.app.apputils import run_operation
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -156,10 +159,13 @@ def _scale_params(mask_type, params, bin_factor):
 
 # ── Layout helpers ─────────────────────────────────────────────────────────────
 
+_LP_ROW = {"display": "flex", "alignItems": "center"}
+
+
 def _slider_row(label, slider_id, input_id, min_=0, max_=100, step=1, value=0):
     return html.Div(
         [
-            html.Label(label, style={"fontSize": "0.85rem", "width": "40%",
+            html.Label(label, style={"width": "40%",
                                      "flexShrink": 0, "paddingRight": "0.4rem"}),
             html.Div(
                 dcc.Slider(id=slider_id, min=min_, max=max_, step=step, value=value,
@@ -167,10 +173,9 @@ def _slider_row(label, slider_id, input_id, min_=0, max_=100, step=1, value=0):
                 style={"flex": 1, "minWidth": 0},
             ),
             dbc.Input(id=input_id, type="number", value=value, min=min_, max=max_, step=step,
-                      style={"width": "64px", "flexShrink": 0, "fontSize": "0.8rem",
-                             "padding": "2px 4px", "marginLeft": "0.4rem"}),
+                      style={"width": "64px", "flexShrink": 0,                             "padding": "2px 4px", "marginLeft": "0.4rem"}),
         ],
-        style={"display": "flex", "alignItems": "center", "marginBottom": "0.15rem"},
+        style={**_LP_ROW, "marginBottom": "0.15rem"},
     )
 
 
@@ -180,7 +185,7 @@ def _lp_slider_row(label, param, value=0, min_=0, max_=100, step=1):
     iid = {"type": "vol-lp-input",  "param": param}
     return html.Div(
         [
-            html.Label(label, style={"fontSize": "0.85rem", "width": "40%",
+            html.Label(label, style={"width": "40%",
                                      "flexShrink": 0, "paddingRight": "0.4rem"}),
             html.Div(
                 dcc.Slider(id=sid, min=min_, max=max_, step=step, value=value,
@@ -188,10 +193,9 @@ def _lp_slider_row(label, param, value=0, min_=0, max_=100, step=1):
                 style={"flex": 1, "minWidth": 0},
             ),
             dbc.Input(id=iid, type="number", value=value, min=min_, max=max_, step=step,
-                      style={"width": "64px", "flexShrink": 0, "fontSize": "0.8rem",
-                             "padding": "2px 4px", "marginLeft": "0.4rem"}),
+                      style={"width": "64px", "flexShrink": 0,                             "padding": "2px 4px", "marginLeft": "0.4rem"}),
         ],
-        style={"display": "flex", "alignItems": "center", "marginBottom": "0.15rem"},
+        style={**_LP_ROW, "marginBottom": "0.15rem"},
     )
 
 
@@ -199,18 +203,18 @@ def _lp_number_row(label, param, value=0, min_=None, max_=None, step=1):
     """Layer-param plain number input row (for angles, n_regions)."""
     iid = {"type": "vol-lp-number", "param": param}
     kw = {"type": "number", "id": iid, "value": value, "step": step,
-          "style": {"flex": 1, "fontSize": "0.8rem", "padding": "2px 4px"}}
+          "style": {"flex": 1, "padding": "2px 4px"}}
     if min_ is not None:
         kw["min"] = min_
     if max_ is not None:
         kw["max"] = max_
     return html.Div(
         [
-            html.Label(label, style={"fontSize": "0.85rem", "width": "40%",
+            html.Label(label, style={"width": "40%",
                                      "flexShrink": 0, "paddingRight": "0.4rem"}),
             dbc.Input(**kw),
         ],
-        style={"display": "flex", "alignItems": "center", "marginBottom": "0.15rem"},
+        style={**_LP_ROW, "marginBottom": "0.15rem"},
     )
 
 
@@ -225,7 +229,7 @@ def _build_layer_params_form(mask_type, params, shape):
     if mask_type == "tight":
         rows.append(html.Div(
             "Uses loaded map as template; threshold = current isosurface level.",
-            style={"fontSize": "0.8rem", "color": "var(--color9)", "marginBottom": "0.4rem",
+            style={"color": "var(--color9)", "marginBottom": "0.4rem",
                    "fontStyle": "italic"},
         ))
 
@@ -246,7 +250,7 @@ def _build_layer_params_form(mask_type, params, shape):
 
     if "radii" in show:
         rv = params.get("radii", [hmin // 2, hmin // 2, hmin // 2])
-        rows.append(html.Label("Radii (x, y, z)", style={"fontSize": "0.85rem"}))
+        rows.append(html.Label("Radii (x, y, z)"))
         for i, ax in enumerate(("x", "y", "z")):
             rows.append(_lp_slider_row(f"  {ax}", f"radii_{i}",
                                        value=rv[i] if rv and rv[i] is not None else hmin // 2,
@@ -274,18 +278,17 @@ def _build_layer_params_form(mask_type, params, shape):
         gv = params.get("gaussian_outwards", True)
         rows.append(html.Div(
             [
-                html.Label("Gaussian outwards", style={"fontSize": "0.85rem", "width": "40%",
+                html.Label("Gaussian outwards", style={"width": "40%",
                                                         "flexShrink": 0}),
-                dcc.Dropdown(
-                    id={"type": "vol-lp-dropdown", "param": "gaussian_outwards"},
-                    options=["True", "False"],
-                    value="True" if gv else "False",
-                    style={"flex": 1, "fontSize": "0.8rem"},
+                make_dropdown(
+                    {"type": "vol-lp-dropdown", "param": "gaussian_outwards"},
+                    ["True", "False"],
+                    "True" if gv else "False",
                     clearable=False,
-                    searchable=False,
+                    style={"flex": 1},
                 ),
             ],
-            style={"display": "flex", "alignItems": "center", "marginBottom": "0.15rem"},
+            style={**_LP_ROW, "marginBottom": "0.15rem"},
         ))
 
     if "dilation_size" in show:
@@ -310,16 +313,15 @@ def _layer_row(layer, idx, n_total, is_selected):
         label,
         id={"type": "vol-layer-btn", "action": action, "lid": lid},
         size="sm", color="link", n_clicks=0,
-        style={"padding": "0 2px", "fontSize": "0.75rem", "lineHeight": "1"},
+        style={"padding": "0 2px", "lineHeight": "1"},
         **kw,
     )
     return html.Div(
         [
-            html.Span(f"{idx + 1}.", style={"width": "16px", "fontSize": "0.75rem", "flexShrink": 0}),
+            html.Span(f"{idx + 1}.", style={"width": "16px", "flexShrink": 0}),
             html.Div(style={"width": "10px", "height": "10px", "borderRadius": "2px",
                             "backgroundColor": color, "flexShrink": 0, "marginRight": "3px"}),
-            html.Span(name, style={"flex": 1, "fontSize": "0.8rem",
-                                   "overflow": "hidden", "textOverflow": "ellipsis",
+            html.Span(name, style={"flex": 1,                                   "overflow": "hidden", "textOverflow": "ellipsis",
                                    "whiteSpace": "nowrap",
                                    "color": "var(--color11)" if is_selected else "var(--color12)"}),
             btn("select", "✎"),
@@ -329,7 +331,8 @@ def _layer_row(layer, idx, n_total, is_selected):
             btn("remove", "✕"),
         ],
         style={
-            "display": "flex", "alignItems": "center", "gap": "1px",
+            **_LP_ROW,
+            "gap": "1px",
             "padding": "2px 4px", "marginBottom": "2px", "borderRadius": "4px",
             "backgroundColor": "var(--color10)" if is_selected else "var(--color6)",
             "cursor": "pointer",
@@ -347,32 +350,29 @@ def _sidebar() -> list:
                     [
                         html.Div(
                             [
-                                html.Label("Map file", style={"fontSize": "0.85rem",
-                                                               "width": "40%", "flexShrink": 0,
+                                html.Label("Map file", style={"width": "40%", "flexShrink": 0,
                                                                "paddingRight": "0.4rem"}),
-                                dbc.Input(id="vol-path-input", type="text",
-                                          placeholder="Path to .em / .mrc file",
-                                          style={"flex": 1}),
+                                html.Div(get_path_field("vol-path-input",
+                                                        extensions=(".em", ".mrc"),
+                                                        placeholder="Path to .em / .mrc file"),
+                                         style={"flex": 1, "minWidth": 0}),
                             ],
-                            style={"display": "flex", "alignItems": "center",
-                                   "marginBottom": "0.3rem"},
+                            style={**_LP_ROW, "marginBottom": "0.3rem"},
                         ),
                         html.Div(
                             [
-                                html.Label("Bin factor", style={"fontSize": "0.85rem",
-                                                                 "width": "40%", "flexShrink": 0,
+                                html.Label("Bin factor", style={                                                                 "width": "40%", "flexShrink": 0,
                                                                  "paddingRight": "0.4rem"}),
                                 dbc.Input(id="vol-bin-input", type="number",
                                           value=1, min=1, max=16, step=1,
                                           style={"flex": 1}),
                             ],
-                            style={"display": "flex", "alignItems": "center",
-                                   "marginBottom": "0.3rem"},
+                            style={**_LP_ROW, "marginBottom": "0.3rem"},
                         ),
                         dbc.Button("Load map", id="vol-load-btn", color="primary",
                                    size="sm", style={"width": "100%"}),
                         html.Div(id="vol-load-status",
-                                 style={"fontSize": "0.8rem", "color": "var(--color9)",
+                                 style={"color": "var(--color9)",
                                         "marginTop": "0.4rem", "wordBreak": "break-word"}),
                     ],
                     title="Map", item_id="vol-acc-map",
@@ -393,59 +393,42 @@ def _sidebar() -> list:
                         # Add-layer row
                         html.Div(
                             [
-                                dcc.Dropdown(
-                                    id="vol-add-type-dropdown",
-                                    options=type_options,
-                                    value="sphere",
-                                    clearable=False,
-                                    searchable=False,
-                                    style={"flex": 1, "fontSize": "0.8rem"},
-                                ),
+                                make_dropdown("vol-add-type-dropdown", type_options, "sphere",
+                                              clearable=False, style={"flex": 1}),
                                 dbc.Button("Add", id="vol-add-layer-btn",
                                            color="primary", size="sm",
                                            style={"marginLeft": "0.4rem"}),
                             ],
-                            style={"display": "flex", "alignItems": "center",
-                                   "marginBottom": "0.5rem"},
+                            style={**_LP_ROW, "marginBottom": "0.5rem"},
                         ),
                         # Layer list
                         html.Div(id="vol-layer-list",
                                  children=[html.Div("No layers yet.",
-                                                    style={"fontSize": "0.8rem",
-                                                           "color": "var(--color9)"})],
+                                                    style={                                                           "color": "var(--color9)"})],
                                  style={"marginBottom": "0.5rem"}),
                         html.Hr(style={"margin": "0.4rem 0"}),
                         # Combine controls
                         html.Div(
                             [
-                                html.Label("Combine", style={"fontSize": "0.85rem",
-                                                              "width": "40%", "flexShrink": 0}),
-                                dcc.Dropdown(
-                                    id="vol-bool-op",
-                                    options=[
-                                        {"label": "Union",        "value": "union"},
-                                        {"label": "Intersection", "value": "intersection"},
-                                        {"label": "Subtraction",  "value": "subtraction"},
-                                        {"label": "Difference",   "value": "difference"},
-                                    ],
-                                    value="union", clearable=False,
-                                    searchable=False,
-                                    style={"flex": 1, "fontSize": "0.8rem"},
-                                ),
+                                html.Label("Combine", style={                                                              "width": "40%", "flexShrink": 0}),
+                                make_dropdown("vol-bool-op", [
+                                    {"label": "Union",        "value": "union"},
+                                    {"label": "Intersection", "value": "intersection"},
+                                    {"label": "Subtraction",  "value": "subtraction"},
+                                    {"label": "Difference",   "value": "difference"},
+                                ], "union", clearable=False, style={"flex": 1}),
                             ],
-                            style={"display": "flex", "alignItems": "center",
-                                   "marginBottom": "0.3rem"},
+                            style={**_LP_ROW, "marginBottom": "0.3rem"},
                         ),
                         html.Div(
                             [
-                                html.Label("View", style={"fontSize": "0.85rem",
-                                                           "width": "40%", "flexShrink": 0}),
+                                html.Label("View", style={                                                           "width": "40%", "flexShrink": 0}),
                                 dcc.RadioItems(
                                     id="vol-view-mode",
                                     options=[{"label": " Layers", "value": "layers"},
                                              {"label": " Result", "value": "result"}],
                                     value="layers", inline=True,
-                                    style={"fontSize": "0.8rem", "display": "flex",
+                                    style={"display": "flex",
                                            "alignItems": "center"},
                                 ),
                             ],
@@ -459,8 +442,7 @@ def _sidebar() -> list:
                     [
                         html.Div(id="vol-layer-params-form",
                                  children=[html.Div("Select a layer to edit.",
-                                                    style={"fontSize": "0.8rem",
-                                                           "color": "var(--color9)"})]),
+                                                    style={                                                           "color": "var(--color9)"})]),
                     ],
                     title="Layer parameters", item_id="vol-acc-lparams",
                 ),
@@ -469,33 +451,30 @@ def _sidebar() -> list:
                     [
                         html.Div(
                             [
-                                html.Label("Output path", style={"fontSize": "0.85rem",
-                                                                  "width": "40%", "flexShrink": 0,
+                                html.Label("Output path", style={"width": "40%", "flexShrink": 0,
                                                                   "paddingRight": "0.4rem"}),
-                                dbc.Input(id="vol-output-path-input", type="text",
-                                          placeholder="output_mask.em",
-                                          style={"flex": 1}),
+                                html.Div(get_path_field("vol-output-path-input", mode="save",
+                                                        extensions=(".em",),
+                                                        placeholder="output_mask.em"),
+                                         style={"flex": 1, "minWidth": 0}),
                             ],
-                            style={"display": "flex", "alignItems": "center",
-                                   "marginBottom": "0.3rem"},
+                            style={**_LP_ROW, "marginBottom": "0.3rem"},
                         ),
                         html.Div(
                             [
-                                html.Label("Pixel size (Å)", style={"fontSize": "0.85rem",
-                                                                      "width": "40%", "flexShrink": 0,
+                                html.Label("Pixel size (Å)", style={                                                                      "width": "40%", "flexShrink": 0,
                                                                       "paddingRight": "0.4rem"}),
                                 dbc.Input(id="vol-pixel-size-input", type="number",
                                           value=1.0, min=0.001, step=0.001,
                                           style={"flex": 1}),
                             ],
-                            style={"display": "flex", "alignItems": "center",
-                                   "marginBottom": "0.3rem"},
+                            style={**_LP_ROW, "marginBottom": "0.3rem"},
                         ),
                         dbc.Button("Create mask", id="vol-create-btn",
                                    size="sm",
                                    style={"width": "100%", "backgroundColor": "var(--color12)", "borderColor": "var(--color12)"}),
                         html.Div(id="vol-create-status",
-                                 style={"fontSize": "0.8rem", "color": "var(--color9)",
+                                 style={"color": "var(--color9)",
                                         "marginTop": "0.4rem", "wordBreak": "break-word"}),
                     ],
                     title="Create mask", item_id="vol-acc-create",
@@ -537,7 +516,7 @@ def register_callbacks(app):
         Output("vol-iso-slider",      "step"),
         Output("vol-load-status",     "children"),
         Input("vol-load-btn",  "n_clicks"),
-        State("vol-path-input", "value"),
+        State({"type": "path-input", "owner": "vol-path-input"}, "value"),
         State("vol-bin-input",  "value"),
         prevent_initial_call=True,
     )
@@ -681,7 +660,7 @@ def register_callbacks(app):
     def _build_layer_list(layers, selected):
         if not layers:
             return [html.Div("No layers yet.",
-                             style={"fontSize": "0.8rem", "color": "var(--color9)"})]
+                             style={"color": "var(--color9)"})]
         return [_layer_row(l, i, len(layers), l["id"] == selected)
                 for i, l in enumerate(layers)]
 
@@ -696,7 +675,7 @@ def register_callbacks(app):
     def _build_layer_params_form_cb(selected_id, layers, meta):
         if not selected_id or not layers:
             return [html.Div("Select a layer to edit its parameters.",
-                             style={"fontSize": "0.8rem", "color": "var(--color9)"})]
+                             style={"color": "var(--color9)"})]
         layer = next((l for l in layers if l["id"] == selected_id), None)
         if not layer:
             return []
@@ -831,7 +810,7 @@ def register_callbacks(app):
     @app.callback(
         Output("vol-create-status", "children"),
         Input("vol-create-btn",     "n_clicks"),
-        State("vol-output-path-input", "value"),
+        State({"type": "path-input", "owner": "vol-output-path-input"}, "value"),
         State("vol-pixel-size-input",  "value"),
         State("vol-mask-layers",       "data"),
         State("vol-meta-store",        "data"),
@@ -911,7 +890,11 @@ def register_callbacks(app):
             else:
                 op_fn = BOOL_OPS.get(bool_op or "union", cryomask.union)
                 final = op_fn(mask_arrays)
-            cryomap.write(final.astype(np.float32), output_path, pixel_size=float(pixel_size or 1.0))
+            run_operation(cryomap.write, {
+                "data_to_write": final.astype(np.float32),
+                "output_path": output_path,
+                "pixel_size": float(pixel_size or 1.0),
+            })
         except Exception as exc:
             return f"Error saving: {exc}"
 

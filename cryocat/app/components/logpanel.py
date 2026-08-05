@@ -36,7 +36,6 @@ _STATUS_STYLE = {
 }
 _ROW_STYLE = {
     "fontFamily": "monospace",
-    "fontSize": "0.82rem",
     "marginBottom": "4px",
     "borderLeft": "3px solid #ccc",
     "paddingLeft": "6px",
@@ -44,7 +43,6 @@ _ROW_STYLE = {
 _ERR_ROW_STYLE = {**_ROW_STYLE, "borderLeftColor": "#e05252"}
 _SUMMARY_STYLE = {"cursor": "pointer", "listStyle": "none", "padding": "2px 0"}
 _PRE_STYLE = {
-    "fontSize": "0.75rem",
     "marginTop": "4px",
     "padding": "4px",
     "background": "#1e1e1e",
@@ -56,7 +54,6 @@ _PRE_STYLE = {
 _MSG_STYLE_INFO = {
     "color": "#888888",
     "fontFamily": "monospace",
-    "fontSize": "0.82rem",
     "whiteSpace": "pre-wrap",
     "marginBottom": "2px",
 }
@@ -160,7 +157,7 @@ def _render_session_row(ev: dict):
     ver = ev.get("cryocat_version", "?")
     return html.Div(
         [html.Hr(style={"margin": "4px 0"}),
-         html.Span(f"Session {sid} — v{ver}", style={"color": "#888", "fontSize": "0.75rem"})],
+         html.Span(f"Session {sid} — v{ver}", style={"color": "#888"})],
     )
 
 
@@ -215,11 +212,11 @@ def get_log_panel(prefix: str):
                     [
                         dbc.Button("Save",    id=f"{prefix}-save-btn",    color="secondary", size="sm", className="me-1"),
                         dbc.Button("Save As", id=f"{prefix}-save-as-btn", color="primary",   size="sm", className="me-1"),
-                        dbc.Button("Export",  id=f"{prefix}-export-btn",  color="success",   size="sm"),
+                        dbc.Button("Export",  id=f"{prefix}-export-btn",  color="primary",   size="sm"),
                         html.Span(id=f"{prefix}-save-status",
-                                  style={"marginLeft": "0.75rem", "fontSize": "0.8rem", "color": "grey"}),
+                                  style={"marginLeft": "0.75rem", "color": "grey"}),
                     ],
-                    style={"display": "flex", "alignItems": "center", "marginBottom": "0.5rem"},
+                    style={**{"display": "flex", "alignItems": "center"}, "marginBottom": "0.5rem"},
                 ),
                 html.Hr(style={"margin": "0.5rem 0"}),
                 # ── Event display ─────────────────────────────────────────────
@@ -235,7 +232,7 @@ def get_log_panel(prefix: str):
                         ),
                         dbc.ModalFooter([
                             html.Span(id=f"{prefix}-saveas-status",
-                                      style={"marginRight": "auto", "fontSize": "0.8rem", "color": "grey"}),
+                                      style={"marginRight": "auto", "color": "grey"}),
                             dbc.Button("Save", id=f"{prefix}-saveas-confirm-btn", color="primary"),
                         ]),
                     ],
@@ -279,10 +276,10 @@ def get_log_panel(prefix: str):
                         ]),
                         dbc.ModalFooter([
                             html.Span(id=f"{prefix}-export-status",
-                                      style={"marginRight": "auto", "fontSize": "0.8rem", "color": "grey"}),
+                                      style={"marginRight": "auto", "color": "grey"}),
                             dbc.Button("Cancel", id=f"{prefix}-export-cancel-btn",
                                        color="secondary", className="me-1"),
-                            dbc.Button("Export", id=f"{prefix}-export-confirm-btn", color="success"),
+                            dbc.Button("Export", id=f"{prefix}-export-confirm-btn", color="primary"),
                         ]),
                     ],
                     id=f"{prefix}-export-modal",

@@ -33,6 +33,7 @@ import dash_bootstrap_components as dbc
 
 from cryocat.analysis.memthick import IntensityProfileAnalyzer
 from cryocat.app import formgen
+from cryocat.app.formgen import make_dropdown
 from cryocat.app.apputils import generate_kwargs
 
 
@@ -96,7 +97,7 @@ def register_label_dict_callbacks(app, prefix: str) -> None:
                         value=row.get("name", ""),
                         placeholder="membrane name",
                         style={"flex": "2 1 0", "minWidth": "0",
-                               "height": "22px", "fontSize": "11px"},
+                               "height": "22px"},
                     ),
                     dcc.Input(
                         id={"type": f"{prefix}-row", "field": "id", "row": i},
@@ -104,7 +105,7 @@ def register_label_dict_callbacks(app, prefix: str) -> None:
                         value=row.get("id"),
                         placeholder="label id",
                         style={"flex": "1 1 0", "minWidth": "0",
-                               "height": "22px", "fontSize": "11px"},
+                               "height": "22px"},
                     ),
                     dbc.Button(
                         "×",
@@ -113,8 +114,7 @@ def register_label_dict_callbacks(app, prefix: str) -> None:
                         style={"padding": "0 6px", "lineHeight": "1"},
                     ),
                 ],
-                style={"display": "flex", "alignItems": "center",
-                       "gap": "0.3rem", "marginBottom": "0.2rem"},
+                style={**{"display": "flex", "alignItems": "center", "gap": "0.3rem"}, "marginBottom": "0.2rem"},
             ))
         return children
 
@@ -231,12 +231,12 @@ def get_per_membrane_mode_field(prefix: str, default_mode: str = "planar") -> ht
                         label="Per-membrane override",
                         style={"marginRight": "0.5rem"},
                     ),
-                    dcc.Dropdown(
-                        id=f"{prefix}-single-mode",
-                        options=_MODE_CHOICES,
-                        value=default_mode,
+                    make_dropdown(
+                        f"{prefix}-single-mode",
+                        _MODE_CHOICES,
+                        default_mode,
                         clearable=False,
-                        style={"width": "160px", "fontSize": "0.85rem"},
+                        style={"width": "160px"},
                     ),
                 ],
                 style={"display": "flex", "alignItems": "center", "gap": "0.4rem"},
@@ -266,18 +266,17 @@ def register_per_membrane_mode_callbacks(app, prefix: str) -> None:
                 [
                     html.Label(
                         name,
-                        style={"flex": "1 1 0", "fontSize": "0.85rem"},
+                        style={"flex": "1 1 0"},
                     ),
-                    dcc.Dropdown(
-                        id={"type": f"{prefix}-per-label-mode", "label": name},
-                        options=_MODE_CHOICES,
-                        value=default_mode or "planar",
+                    make_dropdown(
+                        {"type": f"{prefix}-per-label-mode", "label": name},
+                        _MODE_CHOICES,
+                        default_mode or "planar",
                         clearable=False,
-                        style={"flex": "1 1 0", "fontSize": "0.85rem"},
+                        style={"flex": "1 1 0"},
                     ),
                 ],
-                style={"display": "flex", "alignItems": "center",
-                       "gap": "0.4rem", "marginBottom": "0.2rem"},
+                style={**{"display": "flex", "alignItems": "center", "gap": "0.4rem"}, "marginBottom": "0.2rem"},
             ))
         return rows
 

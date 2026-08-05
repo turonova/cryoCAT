@@ -39,6 +39,8 @@ import dash_bootstrap_components as dbc
 
 from cryocat.analysis import memthick
 from cryocat.app import formgen, ids
+from cryocat.app.formgen import make_dropdown
+from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components import memthick_widgets as mw
 from cryocat.app.components import memthick_registry as mreg
@@ -138,8 +140,8 @@ _ALL_STAGE_PARAMS = _STAGE_GENERAL + _STAGE_SURFACE + _STAGE_MATCH + _STAGE_PROF
 # ── Layout helpers ───────────────────────────────────────────────────────────
 
 
-_HINT = {"fontSize": "0.8rem", "color": "var(--color9)", "margin": "0.3rem 0"}
-_SECTION_HEADER = {"fontSize": "0.95rem", "fontWeight": 600, "margin": "0.4rem 0 0.2rem"}
+_HINT = {"color": "var(--color9)", "margin": "0.3rem 0"}
+_SECTION_HEADER = {"fontWeight": 600, "margin": "0.4rem 0 0.2rem"}
 
 
 def _section(title: str, body) -> html.Div:
@@ -248,17 +250,11 @@ def _generate_section() -> html.Div:
                         width=6,
                     ),
                     dbc.Col(
-                        dcc.Dropdown(
-                            id="memthick-format",
-                            options=[
-                                {"label": ".py", "value": "py"},
-                                {"label": ".ipynb", "value": "ipynb"},
-                                {"label": ".py + SLURM wrapper", "value": "slurm"},
-                            ],
-                            value="py",
-                            clearable=False,
-                            style={"fontSize": "0.85rem"},
-                        ),
+                        make_dropdown("memthick-format", [
+                            {"label": ".py", "value": "py"},
+                            {"label": ".ipynb", "value": "ipynb"},
+                            {"label": ".py + SLURM wrapper", "value": "slurm"},
+                        ], "py", clearable=False),
                         width=6,
                     ),
                 ],
@@ -292,12 +288,9 @@ def _generate_section() -> html.Div:
             dbc.Row(
                 [
                     dbc.Col(
-                        dcc.Input(
-                            id="memthick-save-path",
-                            type="text",
-                            placeholder="/path/to/run_memthick.py",
-                            style={"width": "100%", "fontSize": "0.85rem"},
-                        ),
+                        get_path_field("memthick-save-path", mode="save",
+                                       extensions=(".py",),
+                                       placeholder="/path/to/run_memthick.py"),
                         width=8,
                     ),
                     dbc.Col(
@@ -361,10 +354,10 @@ def _filter_panel() -> html.Div:
                 [
                     dbc.Col(dcc.Input(id="memthick-filter-thick-min", type="number",
                                       placeholder="min", step="any",
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                     dbc.Col(dcc.Input(id="memthick-filter-thick-max", type="number",
                                       placeholder="max", step="any",
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                 ],
                 className="g-1",
             ),
@@ -373,35 +366,31 @@ def _filter_panel() -> html.Div:
                 [
                     dbc.Col(dcc.Input(id="memthick-filter-msep-min", type="number",
                                       placeholder="min", step="any",
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                     dbc.Col(dcc.Input(id="memthick-filter-msep-max", type="number",
                                       placeholder="max", step="any",
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                 ],
                 className="g-1",
             ),
             html.Small("Detection-mode regime", style=_HINT),
-            dcc.Dropdown(id="memthick-filter-regime", options=_THICKNESS_REGIMES,
-                         value="", clearable=False,
-                         style={"fontSize": "0.85rem"}),
+            make_dropdown("memthick-filter-regime", _THICKNESS_REGIMES, "", clearable=False),
             html.Small("Outlier removal", style=_HINT),
-            dcc.Dropdown(id="memthick-filter-outlier", options=_OUTLIER_METHODS,
-                         value="", clearable=False,
-                         style={"fontSize": "0.85rem"}),
+            make_dropdown("memthick-filter-outlier", _OUTLIER_METHODS, "", clearable=False),
             dbc.Row(
                 [
                     dbc.Col(dcc.Input(id="memthick-filter-iqr", type="number",
                                       value=1.5, step=0.1,
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=4),
+                                      style={"width": "100%"}), width=4),
                     dbc.Col(dcc.Input(id="memthick-filter-std", type="number",
                                       value=2.0, step=0.1,
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=4),
+                                      style={"width": "100%"}), width=4),
                     dbc.Col(dcc.Input(id="memthick-filter-pmin", type="number",
                                       value=5, step=1,
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=2),
+                                      style={"width": "100%"}), width=2),
                     dbc.Col(dcc.Input(id="memthick-filter-pmax", type="number",
                                       value=95, step=1,
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=2),
+                                      style={"width": "100%"}), width=2),
                 ],
                 className="g-1",
             ),
@@ -418,14 +407,8 @@ def _membrane_selector() -> html.Div:
     return html.Div(
         [
             html.Small("Membranes to overlay", style=_HINT),
-            dcc.Dropdown(
-                id="memthick-membrane-select",
-                options=[],
-                value=[],
-                multi=True,
-                placeholder="Load some membranes first",
-                style={"fontSize": "0.85rem"},
-            ),
+            make_dropdown("memthick-membrane-select", [], [], multi=True,
+                          placeholder="Load some membranes first"),
         ]
     )
 
@@ -434,22 +417,20 @@ def _load_panel() -> html.Div:
     return html.Div(
         [
             html.Small("Pipeline output folder", style=_HINT),
-            dcc.Input(id="memthick-load-output", type="text",
-                      placeholder="path/to/outputs",
-                      style={"width": "100%", "fontSize": "0.85rem"}),
+            get_path_field("memthick-load-output", mode="directory",
+                           placeholder="path/to/outputs"),
             html.Small("Segmentation base name (matches the M1 segmentation stem)", style=_HINT),
             dcc.Input(id="memthick-load-seg-base", type="text",
                       placeholder="e.g. 2140_z150to400_segmented",
-                      style={"width": "100%", "fontSize": "0.85rem"}),
+                      style={"width": "100%"}),
             html.Small("Membrane names (comma / newline separated)", style=_HINT),
             dcc.Textarea(id="memthick-load-membranes",
                          placeholder="ER, IMM, OMM",
-                         style={"width": "100%", "minHeight": "50px", "fontSize": "0.85rem",
-                                "fontFamily": "monospace"}),
+                         style={"width": "100%", "minHeight": "50px",                                "fontFamily": "monospace"}),
             html.Small("Pixel size [nm] (blank = auto from pickle)", style=_HINT),
             dcc.Input(id="memthick-load-pixel-size", type="number", step="any",
                       placeholder="auto",
-                      style={"width": "100%", "fontSize": "0.85rem"}),
+                      style={"width": "100%"}),
             html.Hr(style={"margin": "0.4rem 0"}),
             dbc.Button("Load", id="memthick-load-btn", color="primary", size="sm",
                        style={"width": "100%"}),
@@ -465,20 +446,20 @@ def _plot_controls() -> html.Div:
         [
             html.Small("Histogram bins", style=_HINT),
             dcc.Input(id="memthick-plot-bins", type="number", value=60, step=1,
-                      style={"width": "100%", "fontSize": "0.85rem"}),
+                      style={"width": "100%"}),
             dbc.Checkbox(id="memthick-plot-density", value=True,
                          label="Density-normalised histograms"),
             html.Small("3D color scale", style=_HINT),
             dcc.Input(id="memthick-plot-color-scale", type="text", value="OrRd",
-                      style={"width": "100%", "fontSize": "0.85rem"}),
+                      style={"width": "100%"}),
             dbc.Row(
                 [
                     dbc.Col(dcc.Input(id="memthick-plot-color-min", type="number",
                                       placeholder="cmin", step="any",
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                     dbc.Col(dcc.Input(id="memthick-plot-color-max", type="number",
                                       placeholder="cmax", step="any",
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                 ],
                 className="g-1",
             ),
@@ -487,10 +468,10 @@ def _plot_controls() -> html.Div:
                 [
                     dbc.Col(dcc.Input(id="memthick-plot-marker-size", type="number",
                                       value=2, step=1,
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                     dbc.Col(dcc.Input(id="memthick-plot-sample-frac", type="number",
                                       value=0.2, step=0.05, min=0, max=1,
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                 ],
                 className="g-1",
             ),
@@ -501,10 +482,10 @@ def _plot_controls() -> html.Div:
                 [
                     dbc.Col(dcc.Input(id="memthick-plot-ext-min", type="number",
                                       placeholder="min", step="any",
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                     dbc.Col(dcc.Input(id="memthick-plot-ext-max", type="number",
                                       placeholder="max", step="any",
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                 ],
                 className="g-1",
             ),
@@ -530,31 +511,29 @@ def _plot_controls() -> html.Div:
                     "show_inflection_point_markers",
                     "show_minima_midpoint",
                 ],
-                style={"fontSize": "0.85rem"},
-            ),
+                ),
             html.Small("Binned: bins + method", style=_HINT),
             dbc.Row(
                 [
                     dbc.Col(dcc.Input(id="memthick-plot-thick-bins", type="number",
                                       value=4, step=1,
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
-                    dbc.Col(dcc.Dropdown(id="memthick-plot-bin-method",
-                                         options=[{"label": "quantile", "value": "quantile"},
-                                                  {"label": "equal-width", "value": "equal_width"}],
-                                         value="quantile", clearable=False,
-                                         style={"fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
+                    dbc.Col(make_dropdown("memthick-plot-bin-method", [
+                        {"label": "quantile", "value": "quantile"},
+                        {"label": "equal-width", "value": "equal_width"},
+                    ], "quantile", clearable=False), width=6),
                 ],
                 className="g-1",
             ),
             html.Small("Surfaces: .ply base path + opacity", style=_HINT),
             dcc.Input(id="memthick-plot-ply-base", type="text",
                       placeholder="blank → scatter only",
-                      style={"width": "100%", "fontSize": "0.85rem"}),
+                      style={"width": "100%"}),
             dbc.Row(
                 [
                     dbc.Col(dcc.Input(id="memthick-plot-mesh-opacity", type="number",
                                       value=0.5, step=0.05, min=0, max=1,
-                                      style={"width": "100%", "fontSize": "0.85rem"}), width=6),
+                                      style={"width": "100%"}), width=6),
                     dbc.Col(dbc.Checkbox(id="memthick-plot-show-scatter", value=True,
                                          label="Show scatter overlay"), width=6),
                 ],
@@ -568,22 +547,19 @@ def _export_panel() -> html.Div:
     return html.Div(
         [
             html.Small("Membrane to export", style=_HINT),
-            dcc.Dropdown(id="memthick-export-membrane", options=[], value=None,
-                         clearable=False, style={"fontSize": "0.85rem"}),
+            make_dropdown("memthick-export-membrane", [], None, clearable=False),
             html.Small("Surface", style=_HINT),
-            dcc.Dropdown(
-                id="memthick-export-surface",
-                options=[{"label": "Surface 1", "value": "surface1"},
-                         {"label": "Surface 2", "value": "surface2"}],
-                value="surface1", clearable=False, style={"fontSize": "0.85rem"},
-            ),
+            make_dropdown("memthick-export-surface", [
+                {"label": "Surface 1", "value": "surface1"},
+                {"label": "Surface 2", "value": "surface2"},
+            ], "surface1", clearable=False),
             html.Small("Score column", style=_HINT),
             dcc.Input(id="memthick-export-score-col", type="text", value="thickness_nm",
-                      style={"width": "100%", "fontSize": "0.85rem"}),
+                      style={"width": "100%"}),
             html.Small("Sample fraction (blank = all)", style=_HINT),
             dcc.Input(id="memthick-export-sample-frac", type="number", step=0.05,
                       min=0, max=1, placeholder="all",
-                      style={"width": "100%", "fontSize": "0.85rem"}),
+                      style={"width": "100%"}),
             html.Hr(style={"margin": "0.4rem 0"}),
             dbc.Button("Create motls", id="memthick-export-build-btn", color="secondary",
                        size="sm", style={"width": "100%", "marginBottom": "0.3rem"}),
@@ -594,12 +570,10 @@ def _export_panel() -> html.Div:
             html.Hr(style={"margin": "0.4rem 0"}),
             html.Small("Save to disk", style=_HINT),
             html.Small("Output directory", style=_HINT),
-            dcc.Input(id="memthick-export-save-dir", type="text",
-                      placeholder="defaults to CSV directory",
-                      style={"width": "100%", "fontSize": "0.85rem"}),
+            get_path_field("memthick-export-save-dir", mode="directory",
+                           placeholder="defaults to CSV directory"),
             html.Small("Thickness mode (filename tag)", style=_HINT),
-            dcc.Dropdown(id="memthick-export-mode", options=_THICKNESS_MODES,
-                         value="auto", clearable=False, style={"fontSize": "0.85rem"}),
+            make_dropdown("memthick-export-mode", _THICKNESS_MODES, "auto", clearable=False),
             dbc.Button("Save motls", id="memthick-export-save-btn", color="secondary",
                        size="sm", style={"width": "100%", "marginTop": "0.3rem"}),
             html.Div(id="memthick-export-save-status",
@@ -655,7 +629,6 @@ def _plot_tab(tab_id: str, label: str) -> dcc.Tab:
             id="memthick-code-preview",
             style={
                 "fontFamily": "monospace",
-                "fontSize": "0.85rem",
                 "background": "var(--bs-light)",
                 "padding": "0.75rem",
                 "borderRadius": "4px",
@@ -815,7 +788,7 @@ def register_callbacks(app):
         State("memthick-format", "value"),
         State("memthick-sbatch", "value"),
         State("memthick-modules", "value"),
-        State("memthick-save-path", "value"),
+        State({"type": "path-input", "owner": "memthick-save-path"}, "value"),
         prevent_initial_call=True,
     )
     def _build(
@@ -880,7 +853,7 @@ def register_callbacks(app):
         Output("memthick-download", "data"),
         Input("memthick-save-btn", "n_clicks"),
         State("memthick-built-store", "data"),
-        State("memthick-save-path", "value"),
+        State({"type": "path-input", "owner": "memthick-save-path"}, "value"),
         State("memthick-format", "value"),
         prevent_initial_call=True,
     )
@@ -929,7 +902,7 @@ def register_callbacks(app):
         Output("memthick-export-membrane", "options"),
         Output("memthick-export-membrane", "value"),
         Input("memthick-load-btn", "n_clicks"),
-        State("memthick-load-output", "value"),
+        State({"type": "path-input", "owner": "memthick-load-output"}, "value"),
         State("memthick-load-seg-base", "value"),
         State("memthick-load-membranes", "value"),
         State("memthick-load-pixel-size", "value"),
@@ -1041,8 +1014,7 @@ def register_callbacks(app):
             rows.append(html.Tr(cells))
         return dbc.Table(
             rows, bordered=True, striped=True, hover=True, size="sm",
-            style={"fontSize": "0.85rem"},
-        )
+            )
 
     # ── M2: Render plots ─────────────────────────────────────────────────────
     @app.callback(
@@ -1206,7 +1178,7 @@ def register_callbacks(app):
         Output("memthick-export-save-status", "children"),
         Input("memthick-export-save-btn", "n_clicks"),
         State("memthick-export-membrane", "value"),
-        State("memthick-export-save-dir", "value"),
+        State({"type": "path-input", "owner": "memthick-export-save-dir"}, "value"),
         State("memthick-export-mode", "value"),
         State("memthick-export-sample-frac", "value"),
         prevent_initial_call=True,

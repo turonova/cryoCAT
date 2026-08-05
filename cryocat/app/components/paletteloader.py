@@ -26,14 +26,18 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
 from cryocat.app import styles
+from cryocat.app.formgen import make_dropdown
 
 _DISCRETE_PRESETS = [
-    "Monet", "MonetWhite",
+    "StarryNight", "StarryNightBlues",
+    "Monet", "MonetWhite", "Klimt", "Hokusai",
     "Plotly", "D3", "G10", "Vivid", "Bold", "Pastel", "Safe",
     "Alphabet", "Dark2", "Set1", "Set2", "Set3",
 ]
 
 _CONTINUOUS_PRESETS = [
+    "StarryNight", "StarryNightBlues", "StarryNightDiverging",
+    "Monet", "MonetWhite", "Hokusai",
     "Viridis", "Plasma", "Inferno", "Magma", "Cividis",
     "Jet", "Hot", "Blues", "RdBu", "Spectral",
     "Turbo", "Rainbow", "Portland", "Picnic",
@@ -60,9 +64,11 @@ def _discrete_swatch(colors: list) -> html.Div:
 
 
 def _continuous_swatch(palette_val: str) -> html.Div:
+    from cryocat.analysis.visplot import resolve_colorscale
     import plotly.express as px
+    scale = [[p, c] for p, c in resolve_colorscale(palette_val)]
     n = 24
-    sampled = px.colors.sample_colorscale(palette_val, [i / (n - 1) for i in range(n)])
+    sampled = px.colors.sample_colorscale(scale, [i / (n - 1) for i in range(n)])
     gradient = f"linear-gradient(to right, {', '.join(sampled)})"
     return html.Div(style={
         "background": gradient,
@@ -96,9 +102,8 @@ def _validate(palette_val: str, mode: str) -> None:
         from cryocat.analysis.visplot import resolve_palette
         resolve_palette(palette_val)
     else:
-        # For continuous, try sample_colorscale which accepts any valid name
-        import plotly.express as px
-        px.colors.sample_colorscale(palette_val, [0.0, 0.5, 1.0])
+        from cryocat.analysis.visplot import resolve_colorscale
+        resolve_colorscale(palette_val)
 
 
 # ── Layout ─────────────────────────────────────────────────────────────────────
@@ -123,12 +128,11 @@ def get_palette_loader(prefix: str, mode: str = "discrete", default: str | None 
 
     return html.Div(
         [
-            dcc.Dropdown(
-                id=f"{prefix}-preset",
-                options=[{"label": p, "value": p} for p in presets],
-                value=preset_val,
+            make_dropdown(
+                f"{prefix}-preset",
+                [{"label": p, "value": p} for p in presets],
+                preset_val,
                 clearable=True,
-                searchable=True,
                 placeholder="Choose a preset…",
             ),
             dbc.Input(

@@ -81,7 +81,7 @@ def get_table_component(prefix: str, connected_motl_prefix=None, show_create_fro
             dbc.Col(
                 html.Div(
                     id=f"{connected_motl_prefix}-relion-params-inline",
-                    style={"fontSize": "0.7rem", "color": "var(--color9)", "whiteSpace": "nowrap"},
+                    style={"color": "var(--color9)", "whiteSpace": "nowrap"},
                 ),
                 width="auto",
                 className="d-flex align-items-center",

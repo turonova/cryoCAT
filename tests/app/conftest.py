@@ -135,6 +135,11 @@ def _clean_server_state():
     _prov.clear()
     dash_logger.clear()
     try:
+        from cryocat.app.pool import clear_payloads
+        clear_payloads()
+    except ImportError:
+        pass
+    try:
         from cryocat.app.console.execute import _CONSOLE_LOCALS, _add_pending
         _CONSOLE_LOCALS.clear()
         _add_pending.clear()

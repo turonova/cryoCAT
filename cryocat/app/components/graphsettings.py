@@ -6,6 +6,7 @@ import dash_bootstrap_components as dbc
 
 from cryocat.app import ids
 from cryocat.app.components.paletteloader import get_palette_loader, register_palette_loader_callbacks
+from cryocat.app.formgen import make_dropdown
 
 GRAPH_SETTINGS_DEFAULTS = {
     "font_family": "Arial",
@@ -13,8 +14,8 @@ GRAPH_SETTINGS_DEFAULTS = {
     "marker_size": 6,
     "line_width": 2,
     "line_dash": "solid",
-    "discrete_palette": "Monet",
-    "continuous_palette": "Viridis",
+    "discrete_palette": "StarryNight",
+    "continuous_palette": "StarryNight",
     "bg_color": "white",
 }
 
@@ -36,7 +37,7 @@ _BG_COLORS = [
 def _setting_row(label, control):
     return dbc.Row(
         [
-            dbc.Col(html.Label(label, style={"fontSize": "0.85rem"}), width=5,
+            dbc.Col(html.Label(label), width=5,
                     className="d-flex align-items-center"),
             dbc.Col(control, width=7),
         ],
@@ -60,12 +61,12 @@ def get_graph_settings_components():
                     html.P(
                         "Font, background, marker and line settings apply immediately to all existing graphs. "
                         "Color palette is used for new graphs.",
-                        style={"fontSize": "0.8rem", "color": "grey", "marginBottom": "1rem"},
+                        style={"color": "grey", "marginBottom": "1rem"},
                     ),
-                    _setting_row("Font family", dcc.Dropdown(
-                        id="gs-font-family",
-                        options=_FONT_FAMILIES,
-                        value=GRAPH_SETTINGS_DEFAULTS["font_family"],
+                    _setting_row("Font family", make_dropdown(
+                        "gs-font-family",
+                        _FONT_FAMILIES,
+                        GRAPH_SETTINGS_DEFAULTS["font_family"],
                         clearable=False,
                     )),
                     _setting_row("Font size", dbc.Input(
@@ -86,36 +87,36 @@ def get_graph_settings_components():
                         value=GRAPH_SETTINGS_DEFAULTS["line_width"],
                         min=0.5, max=10, step=0.5,
                     )),
-                    _setting_row("Line style", dcc.Dropdown(
-                        id="gs-line-dash",
-                        options=_LINE_DASHES,
-                        value=GRAPH_SETTINGS_DEFAULTS["line_dash"],
+                    _setting_row("Line style", make_dropdown(
+                        "gs-line-dash",
+                        _LINE_DASHES,
+                        GRAPH_SETTINGS_DEFAULTS["line_dash"],
                         clearable=False,
                     )),
                     html.Div([
-                        html.Label("Discrete palette", style={"fontSize": "0.85rem", "marginBottom": "0.2rem"}),
+                        html.Label("Discrete palette", style={"marginBottom": "0.2rem"}),
                         get_palette_loader(
                             "gs-discrete-pal", mode="discrete",
                             default=GRAPH_SETTINGS_DEFAULTS["discrete_palette"],
                         ),
                     ], style={"marginBottom": "0.75rem"}),
                     html.Div([
-                        html.Label("Continuous palette", style={"fontSize": "0.85rem", "marginBottom": "0.2rem"}),
+                        html.Label("Continuous palette", style={"marginBottom": "0.2rem"}),
                         get_palette_loader(
                             "gs-continuous-pal", mode="continuous",
                             default=GRAPH_SETTINGS_DEFAULTS["continuous_palette"],
                         ),
                     ], style={"marginBottom": "0.75rem"}),
-                    _setting_row("Background", dcc.Dropdown(
-                        id="gs-bg-color",
-                        options=_BG_COLORS,
-                        value=GRAPH_SETTINGS_DEFAULTS["bg_color"],
+                    _setting_row("Background", make_dropdown(
+                        "gs-bg-color",
+                        _BG_COLORS,
+                        GRAPH_SETTINGS_DEFAULTS["bg_color"],
                         clearable=False,
                     )),
                 ]),
                 dbc.ModalFooter([
                     html.Span(id="gs-status",
-                              style={"fontSize": "0.8rem", "color": "grey", "marginRight": "auto"}),
+                              style={"color": "grey", "marginRight": "auto"}),
                     dbc.Button("Apply Changes", id="gs-apply-btn", color="primary",
                                className="me-2", n_clicks=0),
                     dbc.Button("Close", id="gs-close-btn", color="secondary", n_clicks=0),
@@ -226,7 +227,7 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
     if not settings or not isinstance(fig_dict, dict):
         return fig_dict
 
-    from cryocat.analysis.visplot import resolve_palette
+    from cryocat.analysis.visplot import resolve_palette, resolve_colorscale
 
     layout = fig_dict.setdefault("layout", {})
 
@@ -259,8 +260,8 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
             marker = trace.get("marker", {})
             if not isinstance(marker.get("color"), list):
                 trace.setdefault("marker", {})["color"] = color
-            if trace.get("type") in ("histogram", "violin", "box"):
-                # these trace types carry line styling inside marker.line, not top-level
+            if trace.get("type") in ("histogram", "violin", "box", "bar"):
+                # bar/histogram/violin/box carry line styling inside marker.line, not top-level
                 mline = trace.setdefault("marker", {}).setdefault("line", {})
                 if not isinstance(mline.get("color"), list):
                     mline["color"] = color
@@ -270,7 +271,7 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
                     trace.setdefault("line", {})["color"] = color
 
     if settings.get("continuous_palette"):
-        scale = settings["continuous_palette"]
+        scale = resolve_colorscale(settings["continuous_palette"])
         layout.setdefault("coloraxis", {})["colorscale"] = scale
         for trace in fig_dict.get("data", []):
             if trace.get("type") in _CONTINUOUS_TRACE_TYPES:

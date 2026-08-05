@@ -20,7 +20,7 @@ from dash import html, dcc, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 
 from cryocat.app import ids
-from cryocat.app.pool import PoolState, insert_motl
+from cryocat.app.pool import PoolState, insert_motl, replace_motl_rows, get_rows, get_extra, PoolPayloadMissing
 from cryocat.app.suite.motlsidebar import (
     get_motl_editor_sidebar,
     register_motl_editor_sidebar_callbacks,
@@ -43,6 +43,8 @@ from cryocat.app.apputils import _format_relion_params
 def _make_stores():
     stores = [
         dcc.Store(id="me-slot-map", data=[None] * N_SLOTS),
+        dcc.Store(id="me-group-expand", data={}),  # { group_id: bool } — collapsed by default
+        dcc.Store(id="me-active-target", data=None),  # { type: "motl"|"group", id: str } | None
         dcc.Store(id="me-results-store"),
         dcc.Store(id="me-results-label-store"),
         dcc.Store(id="me-load-motl-data-store"),
@@ -247,24 +249,27 @@ def _register_pool_sync(app):
         *[Output(f"me-{i}-relion-params-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-undo-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         Input("me-slot-map", "data"),
-        State(ids.POOL_MOTLS, "data"),
-        State(ids.POOL_EXTRA, "data"),
         State(ids.POOL_META, "data"),
         prevent_initial_call=True,
     )
-    def sync_pool_to_slots(slot_map, pool_motls, pool_extra, pool_meta):
+    def sync_pool_to_slots(slot_map, pool_meta):
         slot_map = slot_map or [None] * N_SLOTS
-        pool_motls = pool_motls or {}
-        pool_extra = pool_extra or {}
         pool_meta = pool_meta or {}
 
         data, extra, dtype, optics, r5t, r5tn, rparams, undo = ([] for _ in range(8))
         for i in range(N_SLOTS):
             mid = slot_map[i] if i < len(slot_map) else None
-            if mid and mid in pool_motls:
+            rows_data = None
+            if mid:
+                try:
+                    rows_data = get_rows(mid).to_dict("records")
+                except PoolPayloadMissing:
+                    rows_data = None
+            if rows_data is not None:
                 meta = pool_meta.get(mid) or {}
-                data.append(pool_motls.get(mid))
-                extra.append(pool_extra.get(mid))
+                extra_df = get_extra(mid)
+                data.append(rows_data)
+                extra.append(extra_df.to_dict("records") if extra_df is not None else None)
                 dtype.append(meta.get("data_type"))
                 optics.append(meta.get("relion_optics"))
                 r5t.append(meta.get("relion5_tomos"))
@@ -279,38 +284,34 @@ def _register_pool_sync(app):
 
     # slots -> pool: fires when any slot's table data changes (edits/operations).
     @app.callback(
-        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
         *[Input(f"me-{i}-tabv-global-data-store", "data") for i in range(N_SLOTS)],
         State("me-slot-map", "data"),
-        State(ids.POOL_MOTLS, "data"),
         State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
     def sync_slots_to_pool(*args):
         slot_globals = args[:N_SLOTS]
-        slot_map, pool_motls, registry = args[N_SLOTS:]
+        slot_map, registry, pool_meta, next_id = args[N_SLOTS:]
         slot_map = slot_map or [None] * N_SLOTS
-        pool_motls = dict(pool_motls or {})
-        registry = dict(registry or {})
 
+        state = PoolState.from_stores(registry, pool_meta, next_id)
         changed = False
         for i in range(N_SLOTS):
             mid = slot_map[i] if i < len(slot_map) else None
-            if not mid:
+            if not mid or mid not in state.registry:
                 continue
             rows = slot_globals[i]
             if rows is None:
                 continue
-            if pool_motls.get(mid) != rows:
-                pool_motls[mid] = rows
-                if mid in registry:
-                    registry[mid] = {**registry[mid], "n_rows": len(rows)}
-                changed = True
+            state = replace_motl_rows(state, mid, rows)
+            changed = True
 
         if not changed:
             raise dash.exceptions.PreventUpdate
-        return pool_motls, registry
+        return state.registry
 
 
 # ── "Create new from selected" → new pool motl ───────────────────────────────────
@@ -321,8 +322,6 @@ def _register_create_from_selected(app):
 
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
-        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("me-slot-map", "data", allow_duplicate=True),
@@ -331,8 +330,6 @@ def _register_create_from_selected(app):
         *[State(f"me-{i}-tabv-grid", "selectedRows") for i in range(N_SLOTS)],
         State("me-slot-map", "data"),
         State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_MOTLS, "data"),
-        State(ids.POOL_EXTRA, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
@@ -340,7 +337,7 @@ def _register_create_from_selected(app):
     def create_from_selected(*args):
         n_clicks = args[:N_SLOTS]
         selected_all = args[N_SLOTS : 2 * N_SLOTS]
-        slot_map, registry, pool_motls, pool_extra, pool_meta, next_id = args[2 * N_SLOTS :]
+        slot_map, registry, pool_meta, next_id = args[2 * N_SLOTS :]
 
         if not any(n_clicks):
             raise dash.exceptions.PreventUpdate
@@ -356,7 +353,7 @@ def _register_create_from_selected(app):
         if not selected_rows:
             raise dash.exceptions.PreventUpdate
 
-        state = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
+        state = PoolState.from_stores(registry, pool_meta, next_id)
         slot_map = list(slot_map or [None] * N_SLOTS)
         while len(slot_map) < N_SLOTS:
             slot_map.append(None)

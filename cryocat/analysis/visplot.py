@@ -14,6 +14,7 @@ from typing import Any
 from collections.abc import Iterator
 import plotly.io as pio
 from scipy.stats import gaussian_kde
+from scipy.spatial import cKDTree
 from cryocat.utils import geom
 from cryocat.utils import ioutils
 from cryocat._types import ArrayLike, ColumnNames, DataSource, PathOrStr, ProjectionType, RotationLike
@@ -2921,6 +2922,174 @@ def plot_rotation_normals(
         xaxis=axis_kw, yaxis=axis_kw, zaxis=axis_kw,
         aspectmode="cube",
     )
+    if graph_title is not None:
+        fig.update_layout(title=graph_title)
+
+    fig = apply_defaults(fig)
+    _save_plotly(fig, output_path)
+    return fig
+
+
+def plot_rotation_normals_binned(
+    input_angles: ArrayLike,
+    n_bins: int | None = None,
+    cone_sampling: float | None = None,
+    radius: float = 1.0,
+    height_scale: float = 0.3,
+    colors: str | Colorscale | list[Color] = "StarryNight",
+    show_sphere: bool = True,
+    graph_title: str | None = None,
+    output_path: PathOrStr | None = None,
+) -> go.Figure:
+    """Binned orientation distribution: radial bars on a sphere.
+
+    Particle orientations (zxz Euler angles) are converted to z-normal
+    directions, assigned to the nearest golden-angle bin, and rendered as
+    outward-pointing radial bars.  Bar length and colour both encode the
+    particle count in each bin, producing a "sea-urchin" appearance:
+    long bright spikes where orientations cluster and short stubble for a
+    uniform distribution.
+
+    Parameters
+    ----------
+    input_angles : array_like
+        Shape ``(N, 3)``. zxz Euler angles in degrees, exactly as returned
+        by :meth:`cryocat.core.cryomotl.Motl.get_angles`.
+    n_bins : int, optional
+        Explicit number of direction bins.  Mutually exclusive with
+        *cone_sampling*.
+    cone_sampling : float, optional
+        Angular bin size in degrees; the number of bins is computed via
+        :func:`cryocat.utils.geom.number_of_cone_rotations`.  Mutually
+        exclusive with *n_bins*.  Defaults to ``5.0`` when neither
+        parameter is supplied.
+    radius : float, default=1.0
+        Radius of the reference sphere.  All geometry is scaled by this
+        value; binning always uses unit vectors.
+    height_scale : float, default=0.3
+        Maximum bar height as a fraction of *radius*.  The tallest bar
+        reaches ``radius * (1 + height_scale)`` from the origin.
+    colors : str or colorscale or list of colors, default="StarryNight"
+        Colorscale for the bar line colour.  Accepts any name known to
+        :func:`resolve_colorscale` or an explicit ``[(pos, color), …]``
+        list.
+    show_sphere : bool, default=True
+        When True, adds a translucent reference sphere of radius *radius*
+        behind the bars.
+    graph_title : str, optional
+        Figure title.
+    output_path : path or str, optional
+        When supplied, the figure is saved to disk via
+        :func:`_save_plotly`.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        3-D figure with one bar-lines trace (plus an optional sphere
+        surface).
+
+    Raises
+    ------
+    UserInputError
+        When *input_angles* is not ``(N, 3)`` with ``N >= 1``, or when
+        both *n_bins* and *cone_sampling* are supplied.
+
+    See Also
+    --------
+    plot_rotation_normals : Raw (unbinned) scatter of the same normals.
+    cryocat.utils.geom.sample_sphere : Golden-angle bin-direction source.
+    """
+    from cryocat.utils.exceptions import UserInputError
+
+    if n_bins is not None and cone_sampling is not None:
+        raise UserInputError(
+            "Specify at most one of 'n_bins' and 'cone_sampling', not both."
+        )
+
+    angles = np.asarray(input_angles, dtype=float)
+    if angles.ndim != 2 or angles.shape[1] != 3 or angles.shape[0] < 1:
+        raise UserInputError(
+            f"input_angles must be shape (N, 3) with N >= 1; got {angles.shape}."
+        )
+
+    if n_bins is not None:
+        n = int(n_bins)
+    elif cone_sampling is not None:
+        n = int(geom.number_of_cone_rotations(360.0, cone_sampling))
+    else:
+        n = int(geom.number_of_cone_rotations(360.0, 5.0))
+
+    normals = geom.rotations_to_z_normals(angles, radius=1.0)
+    bin_dirs = geom.sample_sphere(n)
+
+    _, idx = cKDTree(bin_dirs).query(normals)
+    counts = np.bincount(idx, minlength=n)
+
+    keep = counts > 0
+    kept_bin_indices = np.where(keep)[0]
+    dirs = bin_dirs[keep]
+    c = counts[keep]
+    frac = c / c.max()
+
+    base = radius * dirs
+    tip = radius * (1.0 + frac[:, None] * height_scale) * dirs
+
+    n_bars = len(dirs)
+    xyz = np.full((n_bars * 3, 3), np.nan)
+    xyz[0::3] = base
+    xyz[1::3] = tip
+    line_color = np.repeat(c, 3).tolist()
+    # Each bar is 3 points (base, tip, NaN); carry the original bin index so
+    # click callbacks can map pointNumber // 3 back to a particle set via KDTree.
+    customdata = np.repeat(kept_bin_indices, 3).tolist()
+
+    colorscale = [[float(p), col] for p, col in resolve_colorscale(colors)]
+
+    traces = [
+        go.Scatter3d(
+            x=xyz[:, 0].tolist(), y=xyz[:, 1].tolist(), z=xyz[:, 2].tolist(),
+            mode="lines",
+            line=dict(
+                color=line_color,
+                colorscale=colorscale,
+                width=4,
+                colorbar=dict(title="Particles"),
+            ),
+            text=np.repeat([f"{v} particles" for v in c], 3).tolist(),
+            hoverinfo="text",
+            name="orientation bins",
+            customdata=customdata,
+        )
+    ]
+
+    if show_sphere:
+        th = np.linspace(0, np.pi, 40)
+        ph = np.linspace(0, 2 * np.pi, 40)
+        th2d, ph2d = np.meshgrid(th, ph)
+        xs = radius * np.sin(th2d) * np.cos(ph2d)
+        ys = radius * np.sin(th2d) * np.sin(ph2d)
+        zs = radius * np.cos(th2d)
+        traces.append(
+            go.Surface(
+                x=xs, y=ys, z=zs,
+                surfacecolor=np.zeros_like(xs),
+                colorscale=[[0, "#b0b0b0"], [1, "#b0b0b0"]],
+                opacity=0.15,
+                showscale=False,
+                hoverinfo="skip",
+                name="sphere",
+                showlegend=False,
+            )
+        )
+
+    fig = go.Figure(data=traces)
+    fig.update_scenes(
+        xaxis=dict(showticklabels=False, title=""),
+        yaxis=dict(showticklabels=False, title=""),
+        zaxis=dict(showticklabels=False, title=""),
+        aspectmode="data",
+    )
+    fig.update_layout(uirevision="rotation-normals-binned")
     if graph_title is not None:
         fig.update_layout(title=graph_title)
 

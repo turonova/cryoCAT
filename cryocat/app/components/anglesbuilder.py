@@ -229,13 +229,12 @@ def get_angles_builder_panel(prefix: str) -> html.Div:
                         id=f"{prefix}-status",
                         style={
                             "marginLeft": "0.75rem",
-                            "fontSize": "0.85rem",
                             "color": "grey",
                             "alignSelf": "flex-end",
                         },
                     ),
                 ],
-                style={"display": "flex", "alignItems": "center", "marginBottom": "0.5rem"},
+                style={**{"display": "flex", "alignItems": "center"}, "marginBottom": "0.5rem"},
             ),
             # Two graphs side-by-side (same as Utilities page)
             dbc.Row(

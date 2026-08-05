@@ -44,7 +44,7 @@ def get_send_to_editor_button(prefix):
             ),
             html.Div(
                 id=f"{prefix}-send-status",
-                style={"fontSize": "0.8rem", "color": "var(--color9)", "marginTop": "0.4rem"},
+                style={"color": "var(--color9)", "marginTop": "0.4rem"},
             ),
         ],
         id=f"{prefix}-motl-sink",
@@ -70,8 +70,6 @@ def register_send_to_editor_callbacks(app, prefix, result_store_id):
 
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
-        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output(f"{prefix}-send-status", "children"),
@@ -79,19 +77,17 @@ def register_send_to_editor_callbacks(app, prefix, result_store_id):
         State(result_store_id, "data"),
         State(f"{prefix}-send-label", "value"),
         State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_MOTLS, "data"),
-        State(ids.POOL_EXTRA, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def _send(n_clicks, result_data, label, registry, pool_motls, pool_extra, pool_meta, next_id):
+    def _send(n_clicks, result_data, label, registry, pool_meta, next_id):
         if not n_clicks:
-            return no_update, no_update, no_update, no_update, no_update, no_update
+            return no_update, no_update, no_update, no_update
         if not result_data:
-            return no_update, no_update, no_update, no_update, no_update, "No result motl to send."
+            return no_update, no_update, no_update, "No result motl to send."
 
-        state = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
+        state = PoolState.from_stores(registry, pool_meta, next_id)
         # TODO(P9): route through run_operation_to_pool once load is tracked.
         state, motl_id = insert_motl(state, result_data, label=label)
         display_label = state.registry[motl_id]["label"]

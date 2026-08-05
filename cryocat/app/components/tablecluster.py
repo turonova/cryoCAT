@@ -23,23 +23,23 @@ import dash_bootstrap_components as dbc
 
 from cryocat.analysis import clustering as clustering_mod
 from cryocat.analysis import visplot
+from cryocat.app.formgen import make_dropdown
 
 
 def get_table_cluster_component(prefix: str, is_motl=False, motl_cols=None):
-    lbl = {"fontWeight": "bold", "marginBottom": "0.3rem", "fontSize": "0.85rem"}
+    lbl = {"fontWeight": "bold", "marginBottom": "0.3rem"}
     return html.Div(
         children=[
             dcc.Store(id=f"{prefix}-cluster-data-store"),
             html.Div(
                 [
                     html.Label("Clustering type:", style=lbl),
-                    dcc.Dropdown(
-                        id=f"{prefix}-cluster-type-dropdown",
-                        options=["K-means", "Proximity"],
-                        value=None,
-                        placeholder="Choose type…",
+                    make_dropdown(
+                        f"{prefix}-cluster-type-dropdown",
+                        ["K-means", "Proximity"],
+                        None,
                         clearable=True,
-                        searchable=False,
+                        placeholder="Choose type…",
                         style={"marginBottom": "0.75rem"},
                     ),
                 ]
@@ -85,31 +85,37 @@ def get_table_cluster_component(prefix: str, is_motl=False, motl_cols=None):
                 children=[
                     html.Div(
                         [
-                            dcc.Dropdown(
-                                id=f"{prefix}-cluster-xaxis",
+                            make_dropdown(
+                                f"{prefix}-cluster-xaxis",
+                                [],
+                                None,
                                 placeholder="X axis",
                                 style={"flex": "1"},
                             ),
-                            dcc.Dropdown(
-                                id=f"{prefix}-cluster-yaxis",
+                            make_dropdown(
+                                f"{prefix}-cluster-yaxis",
+                                [],
+                                None,
                                 placeholder="Y axis",
                                 style={"flex": "1"},
                             ),
                         ],
-                        style={"display": "flex", "gap": "0.5rem", "marginBottom": "0.25rem"},
+                        style={**{"display": "flex", "gap": "0.5rem"}, "marginBottom": "0.25rem"},
                     ),
                     dcc.Graph(id=f"{prefix}-cluster-scatter", figure={}),
-                    dbc.RadioItems(
-                        id=f"{prefix}-cluster-selection-mode",
-                        options=[
-                            {"label": "Replace selection", "value": "replace"},
-                            {"label": "Add to selection", "value": "add"},
-                            {"label": "Subtract from selection", "value": "subtract"},
-                        ],
-                        value="replace",
-                        inline=True,
-                        className="sidebar-checklist",
-                        labelStyle={"color": "var(--color9)", "marginRight": "1rem"},
+                    html.Div(
+                        dbc.RadioItems(
+                            id=f"{prefix}-cluster-selection-mode",
+                            options=[
+                                {"label": "Replace selection", "value": "replace"},
+                                {"label": "Add to selection", "value": "add"},
+                                {"label": "Subtract from selection", "value": "subtract"},
+                            ],
+                            value="replace",
+                            inline=True,
+                            className="sidebar-checklist",
+                            labelStyle={"color": "var(--color9)", "marginRight": "1rem"},
+                        ),
                         style={"marginTop": "0.5rem"},
                     ),
                 ],
@@ -120,14 +126,18 @@ def get_table_cluster_component(prefix: str, is_motl=False, motl_cols=None):
                 style={"display": "none"},
                 children=[
                     html.Label("Query ID column:", style=lbl),
-                    dcc.Dropdown(
-                        id=f"{prefix}-cluster-prox-qp-col",
+                    make_dropdown(
+                        f"{prefix}-cluster-prox-qp-col",
+                        [],
+                        None,
                         placeholder="Query ID column…",
                         style={"marginBottom": "0.4rem"},
                     ),
                     html.Label("Neighbor ID column:", style=lbl),
-                    dcc.Dropdown(
-                        id=f"{prefix}-cluster-prox-nn-col",
+                    make_dropdown(
+                        f"{prefix}-cluster-prox-nn-col",
+                        [],
+                        None,
                         placeholder="Neighbor ID column…",
                         style={"marginBottom": "0.4rem"},
                     ),
@@ -163,7 +173,6 @@ def get_table_cluster_component(prefix: str, is_motl=False, motl_cols=None):
             html.Div(
                 id=f"{prefix}-cluster-status",
                 style={
-                    "fontSize": "0.85rem",
                     "color": "var(--color9)",
                     "marginTop": "0.5rem",
                     "wordBreak": "break-word",
@@ -185,15 +194,11 @@ def get_table_cluster_component(prefix: str, is_motl=False, motl_cols=None):
                     style={"display": "none" if is_motl else "block"},
                 ),
                 html.Div(
-                    dcc.Dropdown(
-                        id=f"{prefix}-cluster-save-motlcol",
-                        options=[{"label": c, "value": c} for c in (motl_cols or [])],
-                        value=(
-                            "class" if (motl_cols and "class" in motl_cols)
-                            else (motl_cols[0] if motl_cols else None)
-                        ),
+                    make_dropdown(
+                        f"{prefix}-cluster-save-motlcol",
+                        [{"label": c, "value": c} for c in (motl_cols or [])],
+                        "class" if (motl_cols and "class" in motl_cols) else (motl_cols[0] if motl_cols else None),
                         clearable=False,
-                        searchable=len(motl_cols or []) > 10,
                         style={"marginBottom": "0.3rem"},
                     ),
                     style={"display": "block" if is_motl else "none"},
@@ -269,7 +274,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
                 except Exception as exc:
                     pca_children = html.Div(
                         f"PCA failed: {exc}",
-                        style={"fontSize": "0.8rem", "color": "var(--color9)"},
+                        style={"color": "var(--color9)"},
                     )
 
         return (

@@ -51,11 +51,14 @@ def _mk_id(id_type, name, tag, id_extra):
 
 def make_dropdown(cid, options, value, clearable=False, **kwargs):
     """Create a dcc.Dropdown; search is enabled automatically when > 10 options."""
+    style = {"width": "100%"}
+    if "style" in kwargs:
+        style.update(kwargs.pop("style"))
     return dcc.Dropdown(
         id=cid, options=options, value=value,
         clearable=clearable,
         searchable=len(options) > 10,
-        style={"width": "100%"},
+        style=style,
         **kwargs,
     )
 
@@ -67,13 +70,40 @@ def _truly_optional(required, default):
     return not required and _empty(default)
 
 
+def _with_var_picker(widget, cid):
+    """Wrap *widget* with an @ button that opens the global variable picker.
+
+    Follows the same flex-row pattern as ``_path_field``'s Browse button so
+    the two affordances are visually consistent.  The button's ``owner`` encodes
+    the target input's id as JSON so the write-back callback can route the
+    selected ``@name`` to the correct field.
+    """
+    import json as _json
+    owner = _json.dumps(dict(sorted(cid.items()))) if isinstance(cid, dict) else str(cid)
+    return html.Div(
+        [
+            html.Div(widget, style={"flex": "1 1 0", "minWidth": "0"}),
+            dbc.Button(
+                "@",
+                id={"type": "var-picker-btn", "owner": owner},
+                color="secondary",
+                size="sm",
+                title="Insert a session-variable reference (@name)",
+                style={"flexShrink": "0"},
+            ),
+        ],
+        style={"display": "flex", "gap": "0.35rem", "width": "100%", "alignItems": "center"},
+    )
+
+
 def _text_field(cid, default, required, choices=None, extra=None):
-    return dcc.Input(
+    inp = dcc.Input(
         type="text", id=cid,
         value="" if _empty(default) else str(default),
         placeholder="Optional" if _truly_optional(required, default) else "",
         style=styles.FORM_COMPACT_INPUT,
     )
+    return _with_var_picker(inp, cid)
 
 
 def _number_field(cid, default, required, choices=None, extra=None):
@@ -229,6 +259,19 @@ def _tuple_field(cid, default, required, choices=None, extra=None):
     )
 
 
+_PATH_ELEM_TAGS: frozenset[str] = frozenset({
+    "MapSource", "DataSource", "TiltStack", "PathOrStr",
+})
+
+
+def _listlike_field(cid, default, required, choices=None, extra=None):
+    """ListLike field: path widget for path-type elements, text otherwise."""
+    elem_tag = (extra or {}).get("elem_tag", "")
+    if elem_tag in _PATH_ELEM_TAGS:
+        return _path_field(cid, default, required, choices, extra)
+    return _text_field(cid, default, required, choices, extra)
+
+
 WIDGET_FACTORIES: dict[str, WidgetFactory] = {
     "path":     _path_field,
     "triplet":  _triplet_field,
@@ -239,6 +282,7 @@ WIDGET_FACTORIES: dict[str, WidgetFactory] = {
     "dropdown": _choice_dropdown,
     "rotation": _rotation_field,
     "tuple":    _tuple_field,
+    "listlike": _listlike_field,
 }
 
 
@@ -248,7 +292,7 @@ def form_row(name, widget, description, truly_optional=False, label_id=None):
     label_text = name.replace("_", " ").capitalize() + (" (opt.)" if truly_optional else "")
     label = html.Div(
         [
-            html.Label(label_text, id=label_id, style={"fontSize": "0.85rem", "margin": 0}),
+            html.Label(label_text, id=label_id, style={"margin": 0}),
             dbc.Tooltip(description, target=label_id, placement="right") if description else None,
         ],
         style=styles.FORM_LABEL,
@@ -340,6 +384,46 @@ def build_form(fn_or_entry, id_type="op-param", id_extra=None, exclude=()):
     if not rows:
         return [html.Div("No parameters required.", style=styles.FORM_HINT)]
     return rows
+
+
+def register_var_picker_writeback(app, id_type: str, id_extra: dict | None = None) -> None:
+    """Register a callback that writes variable-picker results to form text inputs.
+
+    Call once per unique ``(id_type, id_extra)`` combination used in
+    :func:`build_form` calls that may have text-field parameters.  The
+    variable picker modal writes to :data:`~cryocat.app.ids.VAR_PICKER_RESULT`;
+    this callback routes that result to the matching ``dcc.Input``.
+
+    Parameters
+    ----------
+    app:
+        The Dash app instance.
+    id_type:
+        The ``"type"`` field used in the :func:`build_form` call.
+    id_extra:
+        The ``id_extra`` dict used in the :func:`build_form` call.
+    """
+    import json as _json
+    from dash import Input, Output, no_update, ctx
+    from cryocat.app import ids as _ids
+
+    id_extra = id_extra or {}
+    pattern = {"type": id_type, "param": ALL, "tag": ALL, **id_extra}
+
+    @app.callback(
+        Output(pattern, "value", allow_duplicate=True),
+        Input(_ids.VAR_PICKER_RESULT, "data"),
+        prevent_initial_call=True,
+    )
+    def _writeback_var_picker(result):
+        if not result:
+            raise __import__("dash").exceptions.PreventUpdate
+        target_owner = result.get("owner", "")
+        final_value = result.get("value", "")
+        return [
+            final_value if _json.dumps(dict(sorted(e["id"].items()))) == target_owner else no_update
+            for e in ctx.outputs_list
+        ]
 
 
 def register_path_writeback(app, id_type: str, id_extra: dict | None = None) -> None:

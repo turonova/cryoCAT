@@ -778,3 +778,139 @@ def test_BaseBuilder_process_second_axis_data_promotes_x_to_y():
     assert isinstance(expanded, bool)
     assert b.y_axis is not None
     assert b.x_axis is not None
+
+
+# ---------------------------------------------------------------------------
+# plot_rotation_normals_binned
+# ---------------------------------------------------------------------------
+
+class TestPlotRotationNormalsBinned:
+    """Tests for visplot.plot_rotation_normals_binned."""
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _north_pole_angles(n: int = 50) -> np.ndarray:
+        """Return n angle triples whose normal points to the north pole (0,0,1)."""
+        return np.zeros((n, 3))
+
+    @staticmethod
+    def _random_angles(n: int = 500, seed: int = 42) -> np.ndarray:
+        rng = np.random.default_rng(seed)
+        return rng.uniform([0, 0, 0], [360, 180, 360], size=(n, 3))
+
+    # ------------------------------------------------------------------
+    # Input validation
+    # ------------------------------------------------------------------
+
+    def test_wrong_shape_raises(self):
+        with pytest.raises(vp.UserInputError if hasattr(vp, "UserInputError") else Exception):
+            vp.plot_rotation_normals_binned(np.zeros((10, 2)))
+
+    def test_both_binning_params_raises(self):
+        angles = self._north_pole_angles()
+        with pytest.raises(Exception):
+            vp.plot_rotation_normals_binned(angles, n_bins=100, cone_sampling=5.0)
+
+    # ------------------------------------------------------------------
+    # Binning logic
+    # ------------------------------------------------------------------
+
+    def test_all_normals_to_one_bin(self):
+        """All zero angles → single populated bin, near the north pole."""
+        angles = self._north_pole_angles(50)
+        fig = vp.plot_rotation_normals_binned(angles, n_bins=200, show_sphere=False)
+        bar_trace = fig.data[0]
+        # NaN-separated triplets: n_bars * 3 points total; n_bars == 1 means 3 points
+        # (base, tip, NaN). Non-NaN x values = 2.
+        x = np.array(bar_trace.x)
+        assert np.sum(~np.isnan(x)) == 2
+
+    def test_count_sum_equals_n(self):
+        """Total particles assigned to bins must equal N."""
+        angles = self._random_angles(300)
+        fig = vp.plot_rotation_normals_binned(angles, n_bins=100, show_sphere=False)
+        bar_trace = fig.data[0]
+        hover = list(bar_trace.text)
+        # Every NaN slot still has a hover text; extract counts from non-NaN positions.
+        x = np.array(bar_trace.x)
+        non_nan_idx = np.where(~np.isnan(x))[0]
+        counts = [int(bar_trace.text[i].split()[0]) for i in non_nan_idx[::2]]
+        assert sum(counts) == 300
+
+    def test_bar_count_equals_populated_bins(self):
+        angles = self._random_angles(200)
+        fig = vp.plot_rotation_normals_binned(angles, n_bins=50, show_sphere=False)
+        x = np.array(fig.data[0].x)
+        n_bars = int(np.sum(~np.isnan(x)) / 2)
+        assert n_bars > 0
+        assert n_bars <= 50
+
+    def test_radius_scales_geometry_not_counts(self):
+        """Doubling radius doubles bar positions but doesn't change counts."""
+        angles = self._random_angles(100)
+        fig1 = vp.plot_rotation_normals_binned(angles, n_bins=50, radius=1.0, show_sphere=False)
+        fig2 = vp.plot_rotation_normals_binned(angles, n_bins=50, radius=2.0, show_sphere=False)
+        x1 = np.array(fig1.data[0].x)
+        x2 = np.array(fig2.data[0].x)
+        # Same number of non-NaN entries
+        assert np.sum(~np.isnan(x1)) == np.sum(~np.isnan(x2))
+        # Non-NaN positions of fig2 are ~2x those of fig1
+        idx = ~np.isnan(x1)
+        np.testing.assert_allclose(x2[idx], x1[idx] * 2.0, rtol=1e-10)
+
+    def test_n_bins_and_cone_sampling_give_same_result(self):
+        """n_bins=N and cone_sampling that yields N bins produce identical figures."""
+        angles = self._random_angles(200, seed=7)
+        cs = 10.0
+        n = geom.number_of_cone_rotations(360.0, cs)
+        fig_n = vp.plot_rotation_normals_binned(angles, n_bins=n, show_sphere=False)
+        fig_cs = vp.plot_rotation_normals_binned(angles, cone_sampling=cs, show_sphere=False)
+        np.testing.assert_array_equal(fig_n.data[0].x, fig_cs.data[0].x)
+        np.testing.assert_array_equal(fig_n.data[0].y, fig_cs.data[0].y)
+
+    def test_default_binning_uses_5deg(self):
+        """Calling with no binning params uses cone_sampling=5.0 default."""
+        angles = self._random_angles(100)
+        n_default = geom.number_of_cone_rotations(360.0, 5.0)
+        fig_default = vp.plot_rotation_normals_binned(angles, show_sphere=False)
+        fig_explicit = vp.plot_rotation_normals_binned(angles, cone_sampling=5.0, show_sphere=False)
+        np.testing.assert_array_equal(fig_default.data[0].x, fig_explicit.data[0].x)
+
+    def test_n_bins_larger_than_particle_count_ok(self):
+        """n_bins > N should not raise."""
+        angles = self._random_angles(10)
+        fig = vp.plot_rotation_normals_binned(angles, n_bins=5000, show_sphere=False)
+        assert fig is not None
+
+    # ------------------------------------------------------------------
+    # Render structure
+    # ------------------------------------------------------------------
+
+    def test_show_sphere_adds_trace(self):
+        angles = self._random_angles(50)
+        fig_with = vp.plot_rotation_normals_binned(angles, n_bins=50, show_sphere=True)
+        fig_without = vp.plot_rotation_normals_binned(angles, n_bins=50, show_sphere=False)
+        assert len(fig_with.data) == len(fig_without.data) + 1
+
+    def test_bar_trace_is_lines_mode(self):
+        angles = self._random_angles(50)
+        fig = vp.plot_rotation_normals_binned(angles, n_bins=50, show_sphere=False)
+        assert fig.data[0].mode == "lines"
+
+    def test_sphere_trace_type(self):
+        angles = self._random_angles(50)
+        fig = vp.plot_rotation_normals_binned(angles, n_bins=50, show_sphere=True)
+        sphere_trace = fig.data[-1]
+        assert sphere_trace.type == "surface"
+
+    def test_uniform_rotation_populates_most_bins(self):
+        """Uniformly distributed rotations should populate the majority of bins."""
+        from scipy.spatial.transform import Rotation
+        angles = Rotation.random(800, random_state=0).as_euler("zxz", degrees=True)
+        fig = vp.plot_rotation_normals_binned(angles, n_bins=50, show_sphere=False)
+        x = np.array(fig.data[0].x)
+        n_bars = int(np.sum(~np.isnan(x)) / 2)
+        assert n_bars >= 40, f"Only {n_bars}/50 bins populated for uniform rotations"

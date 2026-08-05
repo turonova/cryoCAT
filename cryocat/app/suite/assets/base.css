@@ -123,6 +123,11 @@ input[type="number"] { -moz-appearance: textfield; }
     margin: 0 !important;
 }
 
+/* Center header text in "Set separately" modals */
+.sta-sep-grid .ag-header-cell-label {
+    justify-content: center;
+}
+
 .sidebar-checklist input[type="checkbox"]:checked {
   accent-color: var(--color10);
 }

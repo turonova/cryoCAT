@@ -27,8 +27,10 @@ from cryocat.analysis.nnana import NearestNeighbors
 from cryocat.analysis import visplot
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app import ids, formgen
-from cryocat.app.pool import PoolState, insert_motl as _insert_motl
-from cryocat.app.components.motlsource import get_motl_source, register_motl_source_callbacks
+from cryocat.app.formgen import make_dropdown
+from cryocat.app.components.pathfield import get_path_field
+from cryocat.app.pool import PoolState, insert_motl as _insert_motl, get_rows as _get_rows, PoolPayloadMissing as _PoolPayloadMissing
+from cryocat.app.components.poolpicker import get_pool_picker, register_pool_picker_callbacks
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
@@ -55,8 +57,8 @@ def _nn_csv_save(path, grid_data, used_motls):
 
 def _create_motl_sidebar_content():
     """Sidebar content for the 'Create motl from NN table' accordion item."""
-    hint = {"fontSize": "0.8rem", "color": "var(--color9)", "marginBottom": "0.4rem"}
-    lbl = {"fontWeight": "bold", "fontSize": "0.85rem", "marginBottom": "0.2rem"}
+    hint = {"color": "var(--color9)", "marginBottom": "0.4rem"}
+    lbl = {"fontWeight": "bold", "marginBottom": "0.2rem"}
     return html.Div(
         [
             html.Div(id="nn-sel-motl-info", style=hint),
@@ -69,7 +71,7 @@ def _create_motl_sidebar_content():
                 id="nn-sel-motl-checklist",
                 options=[],
                 value=[],
-                labelStyle={"display": "block", "marginBottom": "0.2rem", "fontSize": "0.85rem"},
+                labelStyle={"display": "block", "marginBottom": "0.2rem"},
             ),
             html.Hr(style={"margin": "0.4rem 0"}),
             html.Label("Rows to include:", style=lbl),
@@ -82,7 +84,7 @@ def _create_motl_sidebar_content():
                 value="all",
                 inline=False,
                 className="sidebar-checklist",
-                labelStyle={"fontSize": "0.85rem"},
+                labelStyle={},
             ),
             html.Div(
                 [
@@ -97,7 +99,7 @@ def _create_motl_sidebar_content():
                         value="qp",
                         inline=False,
                         className="sidebar-checklist",
-                        labelStyle={"fontSize": "0.85rem"},
+                        labelStyle={},
                     ),
                 ],
                 id="nn-sel-motl-id-type-wrap",
@@ -107,12 +109,8 @@ def _create_motl_sidebar_content():
                 [
                     html.Hr(style={"margin": "0.4rem 0"}),
                     html.Label("Source-motl index column:", style=lbl),
-                    dcc.Dropdown(
-                        id="nn-sel-motl-id-col",
-                        options=_MOTL_COL_OPTIONS,
-                        placeholder="Select column…",
-                        style={"marginBottom": "0.4rem"},
-                    ),
+                    make_dropdown("nn-sel-motl-id-col", _MOTL_COL_OPTIONS, None,
+                                  placeholder="Select column…", style={"marginBottom": "0.4rem"}),
                 ],
                 id="nn-sel-motl-id-col-wrap",
                 style={"display": "none"},
@@ -126,14 +124,9 @@ def _create_motl_sidebar_content():
                         "Map each to a target motl column.",
                         style=hint,
                     ),
-                    dcc.Dropdown(
-                        id="nn-sel-nn-cols",
-                        options=[],
-                        value=[],
-                        multi=True,
-                        placeholder="Select NN columns to transfer…",
-                        style={"marginBottom": "0.4rem"},
-                    ),
+                    make_dropdown("nn-sel-nn-cols", [], [], multi=True,
+                                  placeholder="Select NN columns to transfer…",
+                                  style={"marginBottom": "0.4rem"}),
                     html.Div(id="nn-sel-nn-col-target-rows"),
                 ],
                 id="nn-cluster-transfer-wrap",
@@ -141,12 +134,9 @@ def _create_motl_sidebar_content():
             ),
             html.Hr(style={"margin": "0.4rem 0"}),
             html.Label("Save to file:", style=lbl),
-            dbc.Input(
-                id="nn-sel-motl-save-path",
-                placeholder="Output file path (.em, .csv, …)",
-                size="sm",
-                style={"marginBottom": "0.3rem"},
-            ),
+            html.Div(get_path_field("nn-sel-motl-save-path", mode="save",
+                                    placeholder="Output file path (.em, .csv, …)"),
+                     style={"marginBottom": "0.3rem"}),
             dbc.Button(
                 "Save",
                 id="nn-sel-motl-save-btn",
@@ -170,7 +160,7 @@ def _create_motl_sidebar_content():
             ),
             html.Div(
                 id="nn-sel-motl-status",
-                style={"fontSize": "0.85rem", "color": "var(--color9)",
+                style={"color": "var(--color9)",
                        "marginTop": "0.4rem", "wordBreak": "break-word"},
             ),
         ]
@@ -179,8 +169,8 @@ def _create_motl_sidebar_content():
 
 def _postprocess_sidebar_content():
     """Sidebar content for the 'Post-processing' accordion item."""
-    hint = {"fontSize": "0.8rem", "color": "var(--color9)", "marginBottom": "0.4rem"}
-    lbl = {"fontWeight": "bold", "fontSize": "0.85rem", "marginBottom": "0.2rem"}
+    hint = {"color": "var(--color9)", "marginBottom": "0.4rem"}
+    lbl = {"fontWeight": "bold", "marginBottom": "0.2rem"}
     return html.Div(
         [
             html.Label("Add columns from source motls:", style=lbl),
@@ -189,14 +179,10 @@ def _postprocess_sidebar_content():
                 "Columns are added as qp_<col> and/or nn_<col>.",
                 style=hint,
             ),
-            dcc.Dropdown(
-                id="nn-pp-add-cols",
-                options=_MOTL_COL_OPTIONS,
-                multi=True,
-                placeholder="Select motl columns to add…",
-                style={"marginBottom": "0.3rem"},
-            ),
-            html.Label("Add for sides:", style={"fontSize": "0.85rem", "marginBottom": "0.2rem"}),
+            make_dropdown("nn-pp-add-cols", _MOTL_COL_OPTIONS, None, multi=True,
+                          placeholder="Select motl columns to add…",
+                          style={"marginBottom": "0.3rem"}),
+            html.Label("Add for sides:", style={"marginBottom": "0.2rem"}),
             dbc.Checklist(
                 id="nn-pp-sides",
                 options=[
@@ -205,14 +191,15 @@ def _postprocess_sidebar_content():
                 ],
                 value=["qp", "nn"],
                 inline=True,
-                labelStyle={"fontSize": "0.85rem"},
+                labelStyle={},
                 style={"marginBottom": "0.5rem"},
             ),
             html.Hr(style={"margin": "0.4rem 0"}),
-            dbc.Checkbox(
+            dbc.Checklist(
                 id="nn-pp-angular-toggle",
-                label="Add angular distances",
-                value=False,
+                options=[{"label": "Add angular distances", "value": "on"}],
+                value=[],
+                inline=True,
                 style={"marginBottom": "0.3rem"},
             ),
             html.Div(
@@ -225,10 +212,11 @@ def _postprocess_sidebar_content():
                 style={"display": "none"},
             ),
             html.Hr(style={"margin": "0.4rem 0"}),
-            dbc.Checkbox(
+            dbc.Checklist(
                 id="nn-pp-dist-toggle",
-                label="Add NN distances",
-                value=False,
+                options=[{"label": "Add NN distances", "value": "on"}],
+                value=[],
+                inline=True,
                 style={"marginBottom": "0.5rem"},
             ),
             dbc.Button(
@@ -241,7 +229,6 @@ def _postprocess_sidebar_content():
             html.Div(
                 id="nn-pp-status",
                 style={
-                    "fontSize": "0.85rem",
                     "color": "var(--color9)",
                     "marginTop": "0.4rem",
                     "wordBreak": "break-word",
@@ -253,8 +240,8 @@ def _postprocess_sidebar_content():
 
 def _load_csv_sidebar_content():
     """Sidebar content for the 'Load from CSV' accordion item."""
-    hint = {"fontSize": "0.8rem", "color": "var(--color9)", "marginBottom": "0.4rem"}
-    lbl = {"fontWeight": "bold", "fontSize": "0.85rem", "marginBottom": "0.2rem"}
+    hint = {"color": "var(--color9)", "marginBottom": "0.4rem"}
+    lbl = {"fontWeight": "bold", "marginBottom": "0.2rem"}
     return html.Div(
         [
             html.P(
@@ -265,12 +252,9 @@ def _load_csv_sidebar_content():
                 style=hint,
             ),
             html.Label("CSV file path:", style=lbl),
-            dbc.Input(
-                id="nn-load-csv-path",
-                placeholder="Path to .csv file…",
-                size="sm",
-                style={"marginBottom": "0.5rem"},
-            ),
+            html.Div(get_path_field("nn-load-csv-path", extensions=(".csv",),
+                                    placeholder="Path to .csv file…"),
+                     style={"marginBottom": "0.5rem"}),
             dbc.Button(
                 "Load",
                 id="nn-load-csv-btn",
@@ -281,7 +265,6 @@ def _load_csv_sidebar_content():
             html.Div(
                 id="nn-load-csv-status",
                 style={
-                    "fontSize": "0.85rem",
                     "color": "var(--color9)",
                     "marginTop": "0.4rem",
                     "wordBreak": "break-word",
@@ -296,7 +279,7 @@ def _sidebar() -> list:
         sidebar_accordion(
             [
                 dbc.AccordionItem(
-                    get_motl_source("nn", multi=True),
+                    get_pool_picker("nn"),
                     title="Input motls",
                     item_id="nn-acc-input",
                 ),
@@ -314,7 +297,7 @@ def _sidebar() -> list:
                                 "closest_dist",
                                 clearable=False,
                             ),
-                            "",
+                            "How nearest-neighbor candidates are selected: by closest k distances, or all within a radius.",
                         ),
                         html.Div(
                             formgen.build_form(
@@ -332,7 +315,7 @@ def _sidebar() -> list:
                                         html.Label(
                                             "Exclude column name (opt.)",
                                             id="nn-excl-col-lbl",
-                                            style={"fontSize": "0.85rem", "margin": 0},
+                                            style={"margin": 0},
                                         ),
                                         dbc.Tooltip(
                                             "When set, NN candidates sharing the query "
@@ -354,44 +337,39 @@ def _sidebar() -> list:
                                     },
                                 ),
                                 html.Div(
-                                    dcc.Dropdown(
-                                        id={
+                                    make_dropdown(
+                                        {
                                             "type": "nn-forms-params",
                                             "owner": "",
                                             "param": "exclude_column_name",
                                             "tag": "Literal",
                                             "cls_name": "nn-params",
                                         },
-                                        options=_MOTL_COL_OPTIONS,
-                                        value=None,
+                                        _MOTL_COL_OPTIONS, None,
                                         clearable=True,
-                                        searchable=True,
                                         placeholder="None (optional)",
-                                        style={"width": "100%"},
                                     ),
                                     style={"width": "55%"},
                                 ),
                             ],
-                            style={
-                                "display": "flex", "flexDirection": "row",
-                                "marginBottom": "0.25rem", "width": "100%",
-                                "alignItems": "center",
-                            },
+                            style={**{"display": "flex", "flexDirection": "row", "width": "100%", "alignItems": "center"}, "marginBottom": "0.25rem"},
                         ),
                         html.Div(
-                            dbc.Checkbox(
+                            dbc.Checklist(
                                 id="nn-dist-toggle",
-                                label="Compute euclidean distances",
-                                value=False,
+                                options=[{"label": "Compute euclidean distances", "value": "on"}],
+                                value=[],
+                                inline=True,
                             ),
                             id="nn-dist-toggle-wrap",
                             style={"display": "none", "marginTop": "0.3rem"},
                         ),
-                        dbc.Checkbox(
+                        dbc.Checklist(
                             id="nn-angular-toggle",
-                            label="Compute angular distances",
-                            value=False,
-                            style={"marginTop": "0.5rem", "marginBottom": "0.4rem"},
+                            options=[{"label": "Compute angular distances", "value": "on"}],
+                            value=[],
+                            inline=True,
+                            style={"marginBottom": "0.4rem"},
                         ),
                         html.Div(
                             formgen.build_form(
@@ -412,7 +390,6 @@ def _sidebar() -> list:
                         html.Div(
                             id="nn-stats-text",
                             style={
-                                "fontSize": "0.85rem",
                                 "color": "var(--color9)",
                                 "marginTop": "0.5rem",
                                 "wordBreak": "break-word",
@@ -479,7 +456,7 @@ def _kwargs_by_cls(param_ids, param_values, target_cls):
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
 def register_callbacks(app):
-    register_motl_source_callbacks(app, "nn", multi=True)
+    register_pool_picker_callbacks(app, "nn")
     register_table_callbacks(
         app, "nn-out-tabv",
         extra_csv_states=[State("nn-used-motls-store", "data")],
@@ -536,27 +513,20 @@ def register_callbacks(app):
                         html.Span(
                             f"{col} →",
                             style={
-                                "fontSize": "0.8rem",
                                 "whiteSpace": "nowrap",
                                 "marginRight": "6px",
                                 "color": "var(--color9)",
                             },
                         ),
-                        dcc.Dropdown(
-                            id={"type": "nn-sel-nn-col-target", "col": col},
-                            options=_MOTL_COL_OPTIONS,
-                            placeholder="Motl column…",
-                            searchable=True,
+                        make_dropdown(
+                            {"type": "nn-sel-nn-col-target", "col": col},
+                            _MOTL_COL_OPTIONS, None,
                             clearable=True,
-                            style={"flex": 1, "fontSize": "0.8rem"},
+                            placeholder="Motl column…",
+                            style={"flex": 1},
                         ),
                     ],
-                    style={
-                        "display": "flex",
-                        "alignItems": "center",
-                        "marginBottom": "0.3rem",
-                        "width": "100%",
-                    },
+                    style={**{"display": "flex", "alignItems": "center", "width": "100%"}, "marginBottom": "0.3rem"},
                 )
             )
         return rows
@@ -583,26 +553,31 @@ def register_callbacks(app):
         Output("nn-result", "data"),
         Output("nn-used-motls-store", "data"),
         Input("nn-compute-btn", "n_clicks"),
-        State("nn-motl-select", "value"),
-        State(ids.POOL_MOTLS, "data"),
+        State("nn-value", "data"),
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State("nn-angular-toggle", "value"),
         State("nn-dist-toggle", "value"),
         prevent_initial_call=True,
     )
-    def compute_nn(n_clicks, selected, pool_motls, param_values, param_ids, angular_on, compute_dist):
+    def compute_nn(n_clicks, selected, param_values, param_ids, angular_on, compute_dist):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
 
-        pool_motls = pool_motls or {}
         if not selected:
             return (no_update, no_update, "Select at least one motl from the pool.",
                     no_update, no_update)
         if isinstance(selected, str):
             selected = [selected]
 
-        motls = [Motl(pd.DataFrame(pool_motls[m])) for m in selected if pool_motls.get(m)]
+        motls = []
+        for m in selected:
+            try:
+                motl_obj = Motl(_get_rows(m))
+                motl_obj._pool_motl_id = m
+                motls.append(motl_obj)
+            except _PoolPayloadMissing:
+                pass
         if not motls:
             return (no_update, no_update, "The selected motls have no data.",
                     no_update, no_update)
@@ -612,7 +587,7 @@ def register_callbacks(app):
 
         try:
             nn_input = motls[0] if len(motls) == 1 else motls
-            nn_stats = NearestNeighbors(nn_input, **nn_kwargs)
+            nn_stats = run_operation(NearestNeighbors, {"input_data": nn_input, **nn_kwargs})
             normalized = nn_stats.get_normalized_coord(add_to_df=True)
             nn_stats.get_rotated_coord(add_to_df=True)
         except Exception as exc:
@@ -644,7 +619,7 @@ def register_callbacks(app):
         if angular_on:
             try:
                 rot_type = angular_kwargs.get("rotation_type", "angular_distance")
-                ang = nn_stats.get_angular_distances(rotation_type=rot_type)
+                ang = run_operation(nn_stats.get_angular_distances, {"rotation_type": rot_type})
                 if rot_type == "all":
                     nn_stats.df["angular_distance"] = ang[0]
                     nn_stats.df["cone_distance"] = ang[1]
@@ -687,7 +662,6 @@ def register_callbacks(app):
         Input("nn-pp-apply-btn", "n_clicks"),
         State("nn-result", "data"),
         State("nn-used-motls-store", "data"),
-        State(ids.POOL_MOTLS, "data"),
         State("nn-pp-add-cols", "value"),
         State("nn-pp-sides", "value"),
         State("nn-pp-angular-toggle", "value"),
@@ -697,7 +671,7 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def _apply_postprocessing(
-        n_clicks, nn_result, used_motls, pool_motls,
+        n_clicks, nn_result, used_motls,
         add_cols, sides, angular_on, param_values, param_ids, dist_on,
     ):
         if not n_clicks:
@@ -715,12 +689,12 @@ def register_callbacks(app):
             else:
                 all_names = used_motls.get("names", [])
                 is_multi = used_motls.get("is_multi", False)
-                pool_motls = pool_motls or {}
-                motl_list = [
-                    Motl(pd.DataFrame(pool_motls[name]))
-                    for name in all_names
-                    if pool_motls.get(name)
-                ]
+                motl_list = []
+                for name in all_names:
+                    try:
+                        motl_list.append(Motl(_get_rows(name)))
+                    except _PoolPayloadMissing:
+                        pass
                 # Single-motl NearestNeighbors stores motls=[motl, motl] so that
                 # motls[motl_id=1] is valid; mirror that here.
                 if not is_multi and len(motl_list) == 1:
@@ -733,7 +707,11 @@ def register_callbacks(app):
                         nn_obj.df = df
                         nn_obj.motls = motl_list
                         active_sides = sides or ["qp", "nn"]
-                        nn_obj.add_motl_columns(add_cols, sides=active_sides, add_to_df=True)
+                        run_operation(nn_obj.add_motl_columns, {
+                            "column_names": add_cols,
+                            "sides": active_sides,
+                            "add_to_df": True,
+                        })
                         df = nn_obj.df
                         status_bits.append(f"Added {len(add_cols)} column(s) from source motls.")
                     except Exception as exc:
@@ -746,7 +724,7 @@ def register_callbacks(app):
                 rot_type = angular_kwargs.get("rotation_type", "angular_distance")
                 nn_obj = NearestNeighbors(input_data=None)
                 nn_obj.df = df
-                ang = nn_obj.get_angular_distances(rotation_type=rot_type)
+                ang = run_operation(nn_obj.get_angular_distances, {"rotation_type": rot_type})
                 if rot_type == "all":
                     df["angular_distance"] = ang[0]
                     df["cone_distance"] = ang[1]
@@ -823,8 +801,6 @@ def register_callbacks(app):
     @app.callback(
         Output("nn-sel-motl-status", "children"),
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
-        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("nn-sel-motl-save-btn", "n_clicks"),
@@ -836,11 +812,9 @@ def register_callbacks(app):
         State("nn-used-motls-store", "data"),
         State("nn-sel-motl-id-type", "value"),
         State("nn-sel-motl-id-col", "value"),
-        State("nn-sel-motl-save-path", "value"),
+        State({"type": "path-input", "owner": "nn-sel-motl-save-path"}, "value"),
         State("nn-sel-motl-editor-label", "value"),
-        State(ids.POOL_MOTLS, "data"),
         State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_EXTRA, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         State("nn-sel-nn-cols", "value"),
@@ -852,7 +826,7 @@ def register_callbacks(app):
         _save_click, _send_click,
         selected_rows, all_rows, rows_mode,
         checked_motls, used_motls, id_type, id_col,
-        save_path, editor_label, pool_motls, registry, pool_extra, pool_meta, next_id,
+        save_path, editor_label, registry, pool_meta, next_id,
         nn_cols, nn_col_target_vals, nn_col_target_ids,
     ):
         trigger = ctx.triggered_id
@@ -861,18 +835,17 @@ def register_callbacks(app):
             active_rows = all_rows or []
         else:
             active_rows = selected_rows or []
-        _nu5 = (no_update,) * 5
+        _nu3 = (no_update,) * 3
         if not active_rows:
             msg = "No rows in the table." if rows_mode == "all" else "No rows selected in the table."
-            return msg, *_nu5
+            return msg, *_nu3
         if not checked_motls:
-            return "No motls checked.", *_nu5
+            return "No motls checked.", *_nu3
         if not used_motls:
-            return "Run NN analysis first.", *_nu5
+            return "Run NN analysis first.", *_nu3
 
         all_names = used_motls.get("names", [])
         is_multi = used_motls.get("is_multi", False)
-        pool_motls = pool_motls or {}
 
         # Build NN-column → motl-column mapping
         col_mapping = {}
@@ -883,21 +856,17 @@ def register_callbacks(app):
                     col_mapping[src] = tval
             used_targets = list(col_mapping.values())
             if len(used_targets) != len(set(used_targets)):
-                return (
-                    "Two NN columns cannot map to the same motl column.",
-                    no_update, no_update, no_update,
-                )
+                return "Two NN columns cannot map to the same motl column.", *_nu3
 
         sel_df = pd.DataFrame(active_rows)
         parts = []
         for i, motl_name in enumerate(all_names):
             if motl_name not in checked_motls:
                 continue
-            pool_data = pool_motls.get(motl_name)
-            if not pool_data:
+            try:
+                motl_df = _get_rows(motl_name).copy()
+            except _PoolPayloadMissing:
                 continue
-
-            motl_df = pd.DataFrame(pool_data)
 
             if is_multi:
                 if i == 0:
@@ -940,7 +909,7 @@ def register_callbacks(app):
             return (
                 "No particles matched the selection. "
                 "Make sure rows are selected and the motl IDs align.",
-                *_nu5,
+                *_nu3,
             )
 
         merged_df = pd.concat(parts, ignore_index=True)
@@ -952,11 +921,11 @@ def register_callbacks(app):
                 m = Motl(merged_df)
                 run_operation(m.save_to, {"output_path": save_path})
             except Exception as exc:
-                return f"Save failed: {exc}", *_nu5
-            return f"Saved {len(merged_df)} particles to {save_path}.", *_nu5
+                return f"Save failed: {exc}", *_nu3
+            return f"Saved {len(merged_df)} particles to {save_path}.", *_nu3
 
         if trigger == "nn-sel-motl-send-btn":
-            pool_state = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
+            pool_state = PoolState.from_stores(registry, pool_meta, next_id)
             # TODO(P9): route through run_operation_to_pool once NN merge is tracked.
             pool_state, new_id = _insert_motl(
                 pool_state, merged_df.to_dict("records"), label=editor_label,
@@ -967,7 +936,7 @@ def register_callbacks(app):
                 *pool_state.to_stores(),
             )
 
-        return no_update, *_nu5
+        return no_update, *_nu3
 
     # ── Load NN table from CSV ────────────────────────────────────────────────
     @app.callback(
@@ -977,18 +946,16 @@ def register_callbacks(app):
         Output("nn-used-motls-store", "data", allow_duplicate=True),
         Output("nn-load-csv-status", "children"),
         Input("nn-load-csv-btn", "n_clicks"),
-        State("nn-load-csv-path", "value"),
-        State("nn-motl-select", "value"),
-        State(ids.POOL_MOTLS, "data"),
+        State({"type": "path-input", "owner": "nn-load-csv-path"}, "value"),
+        State("nn-value", "data"),
         prevent_initial_call=True,
     )
-    def _load_nn_from_csv(n_clicks, csv_path, selected, pool_motls):
+    def _load_nn_from_csv(n_clicks, csv_path, selected):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not csv_path:
             return no_update, no_update, no_update, no_update, "Specify a CSV file path."
 
-        pool_motls = pool_motls or {}
         motl_list = None
         selected_names = []
         is_multi = False
@@ -996,9 +963,14 @@ def register_callbacks(app):
         if selected:
             if isinstance(selected, str):
                 selected = [selected]
-            motl_objs = [Motl(pd.DataFrame(pool_motls[m])) for m in selected if pool_motls.get(m)]
+            motl_objs = []
+            for m in selected:
+                try:
+                    motl_objs.append(Motl(_get_rows(m)))
+                    selected_names.append(m)
+                except _PoolPayloadMissing:
+                    pass
             if motl_objs:
-                selected_names = [m for m in selected if pool_motls.get(m)]
                 is_multi = len(selected_names) > 1
                 # Single-motl NearestNeighbors stores motls=[motl, motl]
                 if not is_multi:
@@ -1007,7 +979,7 @@ def register_callbacks(app):
                     motl_list = motl_objs
 
         try:
-            nn_stats = NearestNeighbors.load(csv_path, motls=motl_list)
+            nn_stats = run_operation(NearestNeighbors.load, {"file_path": csv_path, "motls": motl_list})
         except Exception as exc:
             return no_update, no_update, no_update, no_update, f"Load failed: {exc}"
 

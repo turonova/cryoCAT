@@ -576,7 +576,12 @@ def register_tango_table_callbacks(app):
     def compute_twist_vector(trigger, motl_df, symm_type, symm_value, param_values, param_ids):
         if not trigger or "show" not in trigger:
             raise dash.exceptions.PreventUpdate
+        hide_style = {"display": "none"}
+        if not motl_df:
+            return no_update, no_update, no_update, hide_style, "Error: no particle list loaded — please load a motl first."
         twist_kwargs = generate_kwargs(param_ids, param_values)
+        if not twist_kwargs.get("nn_radius"):
+            return no_update, no_update, no_update, hide_style, "Error: nn_radius is required — please fill in a radius."
         if symm_type == "C":
             symm = symm_value
         elif symm_type == "None":
@@ -586,7 +591,6 @@ def register_tango_table_callbacks(app):
         radius = twist_kwargs["nn_radius"]
         from cryocat.app.tango import global_twist
         global_twist["obj"] = TwistDescriptor(input_motl=pd.DataFrame(motl_df), symm=symm, **twist_kwargs)
-        hide_style = {"display": "none"}
         return "twist-tab", global_twist["obj"].df.to_dict("records"), radius, hide_style, "Computation complete!"
 
     @app.callback(

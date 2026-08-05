@@ -23,6 +23,7 @@ from cryocat.analysis.structure import (
     TetrahedralComplex, OctahedralComplex, IcosahedralComplex,
 )
 from cryocat.app import ids, formgen, discovery
+from cryocat.app.formgen import make_dropdown
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components import complex_registry as cr
 from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
@@ -33,6 +34,7 @@ from cryocat.app.components.motlsink import (
     get_send_to_editor_button, register_send_to_editor_callbacks,
 )
 from cryocat.app.pageshell import page_shell
+import cryocat.app.pool as _pool
 
 
 # ── Registry of supported complex classes ────────────────────────────────────
@@ -73,18 +75,20 @@ _CPX_RES_FEAT = "cpx-result-feat"       # list[dict] | None — feature vectors
 _INIT = "cpx-init-param"
 _METH = "cpx-meth-param"
 
-_HINT = {"fontSize": "0.8rem", "color": "var(--color9)", "margin": "0.3rem 0"}
-_HDR  = {"fontSize": "0.95rem", "fontWeight": 600, "margin": "0.4rem 0 0.2rem"}
+_HINT = {"color": "var(--color9)", "margin": "0.3rem 0"}
+_HDR  = {"fontWeight": 600, "margin": "0.4rem 0 0.2rem"}
 
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
 
-def motl_from_pool_rows(pool_motls: dict | None, motl_id: str | None) -> Motl | None:
-    """Rebuild a :class:`~cryocat.core.cryomotl.Motl` from pool-store rows."""
-    rows = (pool_motls or {}).get(motl_id) if motl_id else None
-    if not rows:
+def motl_from_pool_rows(motl_id: str | None) -> Motl | None:
+    """Rebuild a :class:`~cryocat.core.cryomotl.Motl` from the server-side pool."""
+    if not motl_id:
         return None
-    return EmMotl(pd.DataFrame(rows))
+    try:
+        return EmMotl(_pool.get_rows(motl_id))
+    except _pool.PoolPayloadMissing:
+        return None
 
 
 def motl_to_pool_rows(motl: Motl | None) -> list[dict]:
@@ -92,16 +96,16 @@ def motl_to_pool_rows(motl: Motl | None) -> list[dict]:
     return motl.df.to_dict("records") if motl is not None else []
 
 
-def _motl_from_pool(pool_motls: dict | None, motl_id: str | None) -> Motl | None:
-    return motl_from_pool_rows(pool_motls, motl_id)
+def _motl_from_pool(motl_id: str | None) -> Motl | None:
+    return motl_from_pool_rows(motl_id)
 
 
-def _get_live_complex(complex_id: str, handle: dict, pool_motls: dict | None):
+def _get_live_complex(complex_id: str, handle: dict):
     """Return the live complex: from server registry first, else reconstruct."""
     live = cr.registry.get(complex_id)
     if live is not None:
         return live
-    motl = _motl_from_pool(pool_motls, handle.get("source_motl_id"))
+    motl = _motl_from_pool(handle.get("source_motl_id"))
     if motl is None:
         return None
     try:
@@ -160,7 +164,7 @@ def _render_table(records: list | None, empty_msg: str = "No results.") -> Any:
     if df.empty:
         return html.Small("No results.", style=_HINT)
     header = html.Thead([html.Tr([
-        html.Th(c, style={"fontSize": "0.85rem"}) for c in df.columns
+        html.Th(c) for c in df.columns
     ])])
     body = []
     for row in records:
@@ -181,7 +185,7 @@ def _render_table(records: list | None, empty_msg: str = "No results.") -> Any:
     return dbc.Table(
         [header, html.Tbody(body)],
         bordered=True, striped=True, hover=True, size="sm",
-        style={"fontSize": "0.85rem", "overflowX": "auto"},
+        style={"overflowX": "auto"},
     )
 
 
@@ -191,14 +195,8 @@ def _build_section() -> dbc.AccordionItem:
     return dbc.AccordionItem(
         [
             html.Div("Complex type", style=_HDR),
-            dcc.Dropdown(
-                id="cpx-class-dd",
-                options=_CLASS_OPTIONS,
-                value=None,
-                placeholder="Select complex type…",
-                clearable=False,
-                style={"fontSize": "0.85rem"},
-            ),
+            make_dropdown("cpx-class-dd", _CLASS_OPTIONS, None, clearable=False,
+                          placeholder="Select complex type…"),
             html.Hr(style={"margin": "0.4rem 0"}),
             get_motl_source("cpx-build"),
             html.Hr(style={"margin": "0.4rem 0"}),
@@ -228,15 +226,8 @@ def _ops_section() -> dbc.AccordionItem:
     return dbc.AccordionItem(
         [
             html.Div(id="cpx-sel-info", style={**_HINT, "marginBottom": "0.3rem"}),
-            dcc.Dropdown(
-                id="cpx-method-dd",
-                options=[],
-                value=None,
-                placeholder="Select operation…",
-                clearable=True,
-                searchable=True,
-                style={"fontSize": "0.85rem"},
-            ),
+            make_dropdown("cpx-method-dd", [], None, clearable=True,
+                          placeholder="Select operation…"),
             html.Div(id="cpx-meth-form", style={"marginTop": "0.4rem"}),
             dbc.Button(
                 "Run", id="cpx-run-btn", color="primary", size="sm",
@@ -319,17 +310,16 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         State({"type": _INIT, "owner": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": _INIT, "owner": ALL, "param": ALL, "tag": ALL}, "id"),
         State(_CPX_POOL, "data"),
-        State(ids.POOL_MOTLS, "data"),
         prevent_initial_call=True,
     )
-    def _create_complex(_, cls_name, motl_id, init_vals, init_ids, pool_data, pool_motls):
+    def _create_complex(_, cls_name, motl_id, init_vals, init_ids, pool_data):
         if not cls_name or not motl_id:
             raise PreventUpdate
         cls = COMPLEX_CLASSES.get(cls_name)
         if cls is None:
             raise PreventUpdate
 
-        motl = _motl_from_pool(pool_motls, motl_id)
+        motl = _motl_from_pool(motl_id)
         if motl is None:
             return no_update, no_update, "No motl data found for the selected motl."
 
@@ -457,10 +447,9 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         State(_CPX_POOL, "data"),
         State({"type": _METH, "owner": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": _METH, "owner": ALL, "param": ALL, "tag": ALL}, "id"),
-        State(ids.POOL_MOTLS, "data"),
         prevent_initial_call=True,
     )
-    def _run_method(_, entry_key, selected_id, pool_data, meth_vals, meth_ids, pool_motls):
+    def _run_method(_, entry_key, selected_id, pool_data, meth_vals, meth_ids):
         if not entry_key or not selected_id:
             raise PreventUpdate
 
@@ -487,7 +476,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
                 result = run_operation(fn, meth_kwargs)
                 cpx    = None
             else:
-                cpx = _get_live_complex(handle["complex_id"], handle, pool_motls)
+                cpx = _get_live_complex(handle["complex_id"], handle)
                 if cpx is None:
                     return (no_update, no_update, no_update,
                             "Complex not available — reload or recreate it.", no_update)

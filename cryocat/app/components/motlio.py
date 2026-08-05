@@ -16,6 +16,7 @@ from cryocat.app.components._motlio_ops import (
     filter_by_class,
 )
 from cryocat.app.components.pathfield import get_path_field
+from cryocat.app.formgen import make_dropdown
 import pandas as pd
 
 
@@ -167,17 +168,16 @@ def get_motl_load_component(prefix: str, display_option="block") -> html.Div:
         children=[
             dbc.Row([
                 dbc.Col(
-                    html.Div("Motl type: ", style={"fontStyle": "bold", "fontSize": "1.3rem"}),
+                    html.Div("Motl type: ", style={"fontStyle": "bold"}),
                     width=4,
                     className="d-flex align-items-center",
                 ),
                 dbc.Col(
-                    dcc.Dropdown(
-                        id=f"{prefix}-motl-dropdown",
-                        options=motl_types,
-                        multi=False,
-                        value="emmotl",
-                        style={"width": "100%", "padding": "0"},
+                    make_dropdown(
+                        f"{prefix}-motl-dropdown",
+                        motl_types,
+                        "emmotl",
+                        style={"padding": "0"},
                     ),
                     width=8,
                 ),

@@ -19,6 +19,9 @@ from cryocat.app import ids
 from cryocat.app.apputils import save_output
 from cryocat.app.components.customel import LabeledDropdown, InlineLabeledDropdown, InlineInputForm
 from cryocat.app.components.graphsettings import styled_figure, get_graph_settings_button
+from cryocat.app.formgen import make_dropdown, form_row
+from cryocat.app import styles
+from cryocat.app.components.paletteloader import _DISCRETE_PRESETS, _CONTINUOUS_PRESETS
 
 hist_norms = [
     {"label": "None", "value": ""},
@@ -28,6 +31,15 @@ hist_norms = [
     {"label": "Probability density", "value": "probability density"},
 ]
 hist_types = ["Count", "Sum", "Avg", "Min", "Max"]
+
+_PALETTE_PRESETS = sorted({*_DISCRETE_PRESETS, *_CONTINUOUS_PRESETS})
+_PALETTE_HINT = {
+    "label": "─ or type any Plotly palette name ─",
+    "value": "__hint__",
+    "disabled": True,
+}
+# Plot types that aggregate data; clickData gives a bin position, not row indices.
+_AGGREGATED_CLICK_IGNORE = {"Histogram 2D", "Kernel density estimation", "Spherical histogram"}
 
 
 def get_table_plot_component(prefix: str):
@@ -40,13 +52,14 @@ def get_table_plot_component(prefix: str):
                 children=[
                     dbc.Row(
                         dbc.Col(
-                            dcc.Dropdown(
-                                id=f"{prefix}-graph-options-dropdown",
-                                multi=False,
+                            make_dropdown(
+                                f"{prefix}-graph-options-dropdown",
+                                [],
+                                None,
                                 placeholder="Select plot type",
                                 style={
                                     "width": "99%",
-                                    "padding": "0",  # reduce padding
+                                    "padding": "0",
                                     "marginBottom": "0.5rem",
                                 },
                             ),
@@ -60,30 +73,38 @@ def get_table_plot_component(prefix: str):
                             dbc.Row(
                                 [
                                     dbc.Col(
-                                        dcc.Dropdown(
-                                            id=f"{prefix}-plot-column-options-x-dropdown",
+                                        make_dropdown(
+                                            f"{prefix}-plot-column-options-x-dropdown",
+                                            [],
+                                            None,
                                             multi=True,
                                             placeholder="Data to plot on x axis",
                                             style={
                                                 "width": "100%",
-                                                "padding": "0",  # reduce padding
+                                                "padding": "0",
                                                 "marginBottom": "0.5rem",
                                             },
                                         ),
                                         width=3,
                                     ),
                                     dbc.Col(
-                                        InlineLabeledDropdown(
-                                            id_=f"{prefix}-plot-color-palette-dropdown",
-                                            label="Color scheme",
-                                            multi=False,
-                                            placeholder="Color palette",
-                                            options=[
-                                                {"label": s, "value": s}
-                                                for s in ["Monet", "Viridis", "Cividis", "Plasma", "Jet", "Hot"]
-                                            ],
-                                            value="Monet",
-                                        ),
+                                        html.Div([
+                                            InlineLabeledDropdown(
+                                                id_=f"{prefix}-plot-color-palette-dropdown",
+                                                label="Color scheme",
+                                                multi=False,
+                                                placeholder="Color palette",
+                                                options=[
+                                                    {"label": p, "value": p}
+                                                    for p in _PALETTE_PRESETS
+                                                ] + [_PALETTE_HINT],
+                                                value="StarryNight",
+                                            ),
+                                            html.Div(
+                                                id=f"{prefix}-palette-error",
+                                                style=styles.HINT_SM,
+                                            ),
+                                        ]),
                                         width=2,
                                     ),
                                     dbc.Col(
@@ -144,13 +165,15 @@ def get_table_plot_component(prefix: str):
                                 style={"display": "none"},
                                 children=[
                                     dbc.Col(
-                                        dcc.Dropdown(
-                                            id=f"{prefix}-plot-column-options-y-dropdown",
+                                        make_dropdown(
+                                            f"{prefix}-plot-column-options-y-dropdown",
+                                            [],
+                                            None,
                                             multi=True,
                                             placeholder="Data to plot on y axis",
                                             style={
                                                 "width": "100%",
-                                                "padding": "0",  # reduce padding
+                                                "padding": "0",
                                                 "marginBottom": "0.5rem",
                                             },
                                         ),
@@ -202,13 +225,15 @@ def get_table_plot_component(prefix: str):
                                 align="center",
                                 children=[
                                     dbc.Col(
-                                        dcc.Dropdown(
-                                            id=f"{prefix}-histogram2D-column-options-y-dropdown",
+                                        make_dropdown(
+                                            f"{prefix}-histogram2D-column-options-y-dropdown",
+                                            [],
+                                            None,
                                             multi=True,
                                             placeholder="Data to plot on y axis",
                                             style={
                                                 "width": "100%",
-                                                "padding": "0",  # reduce padding
+                                                "padding": "0",
                                                 "marginBottom": "0.5rem",
                                             },
                                         ),
@@ -259,6 +284,63 @@ def get_table_plot_component(prefix: str):
                                 ],
                             ),
                             dbc.Row(
+                                id=f"{prefix}-orbd-row-options",
+                                style={"display": "none"},
+                                align="center",
+                                children=[
+                                    dbc.Col(
+                                        form_row(
+                                            "Binning mode",
+                                            make_dropdown(
+                                                f"{prefix}-orbd-binmode-dropdown",
+                                                [
+                                                    {"label": "Angular sampling (°)", "value": "cone_sampling"},
+                                                    {"label": "Number of bins", "value": "n_bins"},
+                                                ],
+                                                "cone_sampling",
+                                                clearable=False,
+                                            ),
+                                            "How to specify bin resolution: by angular sampling size in degrees "
+                                            "or by an explicit bin count.",
+                                            label_id=f"{prefix}-lbl-binning-mode",
+                                        ),
+                                        width=4,
+                                    ),
+                                    dbc.Col(
+                                        form_row(
+                                            "Value",
+                                            dbc.Input(
+                                                id=f"{prefix}-orbd-value-input",
+                                                type="number",
+                                                value=5.0,
+                                                min=0.0,
+                                                max=20000,
+                                                step=0.5,
+                                            ),
+                                            "Angular sampling in degrees (1–30) or number of bins (100–20 000).",
+                                            label_id=f"{prefix}-lbl-orbd-value",
+                                        ),
+                                        width=4,
+                                    ),
+                                    dbc.Col(
+                                        form_row(
+                                            "Height scale",
+                                            dbc.Input(
+                                                id=f"{prefix}-orbd-height-scale-input",
+                                                type="number",
+                                                value=0.3,
+                                                min=0.0,
+                                                max=1.0,
+                                                step=0.05,
+                                            ),
+                                            "Maximum bar height as a fraction of the sphere radius (0–1).",
+                                            label_id=f"{prefix}-lbl-height-scale",
+                                        ),
+                                        width=4,
+                                    ),
+                                ],
+                            ),
+                            dbc.Row(
                                 [
                                     dbc.Col(
                                         dbc.Button(
@@ -305,12 +387,71 @@ def get_table_plot_component(prefix: str):
                                 ),
                                 style={"marginTop": "0.5rem"},
                             ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        InlineLabeledDropdown(
+                                            id_=f"{prefix}-export-format-dropdown",
+                                            label="Format",
+                                            options=[
+                                                {"label": "PNG", "value": "png"},
+                                                {"label": "SVG", "value": "svg"},
+                                                {"label": "JPEG", "value": "jpeg"},
+                                                {"label": "WebP", "value": "webp"},
+                                            ],
+                                            value="png",
+                                            multi=False,
+                                        ),
+                                        width=3,
+                                    ),
+                                    dbc.Col(
+                                        InlineLabeledDropdown(
+                                            id_=f"{prefix}-export-scale-dropdown",
+                                            label="Scale",
+                                            options=[
+                                                {"label": "1×", "value": 1},
+                                                {"label": "2×", "value": 2},
+                                                {"label": "4×", "value": 4},
+                                            ],
+                                            value=2,
+                                            multi=False,
+                                        ),
+                                        width=2,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Checklist(
+                                            id=f"{prefix}-export-transparent",
+                                            options=[{"label": "Transparent background", "value": "on"}],
+                                            value=[],
+                                            inline=True,
+                                        ),
+                                        width=3,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            "Download (transparent)",
+                                            id=f"{prefix}-transparent-download-btn",
+                                            color="light",
+                                            size="sm",
+                                        ),
+                                        width=3,
+                                    ),
+                                ],
+                                style={"marginTop": "0.5rem"},
+                                align="center",
+                            ),
+                            html.Div(
+                                id=f"{prefix}-export-hint",
+                                style=styles.HINT_SM,
+                            ),
                         ],
                         style={"display": "none"},
                     ),
+                    html.Div(id=f"{prefix}-selection-count", style=styles.HINT_SM),
                     html.Div(id=f"{prefix}-graph-area", children=[]),
                     dcc.Store(id=f"{prefix}-graph-meta-store", data={}),
                     dcc.Store(id=f"{prefix}-graph-counter", data=0),
+                    dcc.Download(id=f"{prefix}-transparent-download"),
                     dbc.Modal(
                         [
                             dbc.ModalHeader(dbc.ModalTitle("Wrong inputs")),
@@ -338,6 +479,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         "Histogram",
         "Histogram 2D",
         "Kernel density estimation",
+        "Orientation distribution (3D)",
     ]
 
     if special_graphs is not None:
@@ -358,6 +500,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         Output(f"{prefix}-histogram2D-row-options", "style"),
         Output(f"{prefix}-plot-column-options-y-dropdown", "options"),
         Output(f"{prefix}-histogram2D-column-options-y-dropdown", "options"),
+        Output(f"{prefix}-orbd-row-options", "style"),
         Input(f"{prefix}-graph-options-dropdown", "value"),
         State(connected_store_id, "data"),
         prevent_initial_call=True,
@@ -369,15 +512,19 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
 
         x_axis_options = pd.DataFrame(data).columns
         y_axis_options = []
+        orbd_options = {"display": "none"}
 
-        def get_spherical_columns(prefix):
-            cols = [prefix + "_x", prefix + "_y", prefix + "_z"]
-
-            # check if all are present
+        def get_spherical_columns(pfx):
+            cols = [pfx + "_x", pfx + "_y", pfx + "_z"]
             if all(col in x_axis_options for col in cols):
-                return {"label": f"{prefix}_x, {prefix}_y, {prefix}_z", "value": json.dumps(cols)}
-            else:
-                return None
+                return {"label": f"{pfx}_x, {pfx}_y, {pfx}_z", "value": json.dumps(cols)}
+            return None
+
+        def get_angle_columns(pfx):
+            cols = [pfx + "phi", pfx + "theta", pfx + "psi"]
+            if all(col in x_axis_options for col in cols):
+                return {"label": f"{pfx}phi, {pfx}theta, {pfx}psi", "value": json.dumps(cols)}
+            return None
 
         if graph_type == "Histogram":
             histogram_options = {"display": "flex"}
@@ -390,8 +537,8 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             y_axis_options = pd.DataFrame(data).columns
             if graph_type == "Spherical histogram":
                 dropdown_options = []
-                for prefix in ["twist_so", "twist", "norm_nn"]:
-                    opt = get_spherical_columns(prefix)
+                for pfx in ["twist_so", "twist", "norm_nn"]:
+                    opt = get_spherical_columns(pfx)
                     if opt:
                         dropdown_options.append(opt)
                 x_axis_options = dropdown_options
@@ -419,6 +566,23 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             x_axis_options = triplet_options
             if graph_type == "Polar NN distances":
                 y_axis_options = all_data_cols
+        elif graph_type == "Orientation distribution (3D)":
+            histogram_options = {"display": "none"}
+            histogram2D_options = {"display": "none"}
+            scatter_2D_options = {"display": "none"}
+            orbd_options = {"display": "flex"}
+            all_data_cols = list(x_axis_options)
+            angle_options = []
+            seen_pfx = set()
+            for col in all_data_cols:
+                if col.endswith("phi"):
+                    pfx = col[:-3]
+                    if pfx not in seen_pfx:
+                        seen_pfx.add(pfx)
+                        opt = get_angle_columns(pfx)
+                        if opt:
+                            angle_options.append(opt)
+            x_axis_options = angle_options
         else:
             histogram_options = {"display": "none"}
             histogram2D_options = {"display": "none"}
@@ -432,6 +596,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             histogram2D_options,
             y_axis_options,
             y_axis_options,
+            orbd_options,
         )
 
     @app.callback(
@@ -500,6 +665,9 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         State(f"{prefix}-graph-meta-store", "data"),
         State(f"{prefix}-graph-counter", "data"),
         State(ids.GRAPH_SETTINGS_STORE, "data"),
+        State(f"{prefix}-orbd-binmode-dropdown", "value"),
+        State(f"{prefix}-orbd-value-input", "value"),
+        State(f"{prefix}-orbd-height-scale-input", "value"),
         prevent_initial_call=True,
     )
     def plot_graphs(
@@ -526,6 +694,9 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         graph_meta,
         graph_counter,
         settings,
+        orbd_mode,
+        orbd_value,
+        orbd_height_scale,
     ):
 
         trigger_id = ctx.triggered_id
@@ -545,9 +716,13 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                     no_update,
                 )
 
-            effective_colorscale = colorscale or (settings.get("discrete_palette") if settings else None)
+            effective_colorscale = (
+                colorscale
+                or (settings.get("discrete_palette") if settings else None)
+            )
 
             fig = None
+            _orbd_meta: dict = {}
             if graph_type == "Histogram":
 
                 fig = visplot.plot_histogram(
@@ -634,6 +809,36 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                 dist_col = y_values[0] if isinstance(y_values, list) else y_values
                 nn_dist = input_data[dist_col].to_numpy()
                 fig = visplot.plot_polar_nn_distances(coords, nn_dist, colormap="viridis_r", marker_size=7)
+            elif graph_type == "Orientation distribution (3D)":
+                all_ids = []
+                for s in x_values:
+                    all_ids.extend(json.loads(s))
+                if len(all_ids) < 3:
+                    return (
+                        graph_area,
+                        "Select Euler angle columns (phi, theta, psi) for the orientation distribution.",
+                        no_update,
+                        no_update,
+                    )
+                angles = input_data[all_ids[:3]].to_numpy()
+                continuous_pal = (settings or {}).get("continuous_palette", "StarryNight")
+                n_bins_val = None
+                cone_s_val = None
+                if orbd_mode == "n_bins":
+                    n_bins_val = int(orbd_value) if orbd_value is not None else None
+                else:
+                    cone_s_val = float(orbd_value) if orbd_value is not None else None
+                fig = visplot.plot_rotation_normals_binned(
+                    angles,
+                    n_bins=n_bins_val,
+                    cone_sampling=cone_s_val,
+                    height_scale=float(orbd_height_scale) if orbd_height_scale is not None else 0.3,
+                    colors=continuous_pal,
+                )
+                _orbd_meta = {
+                    "x_cols": all_ids[:3],
+                    "orbd_params": {"n_bins": n_bins_val, "cone_sampling": cone_s_val},
+                }
             elif graph_type == "Line plot":  # , "Scatter plot 1D", "Scatter plot 2D""
                 fig = visplot.plot_line(
                     input_data=input_data,
@@ -702,7 +907,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                 # Apply global graph settings to the new figure
                 fig = styled_figure(fig, settings or {}, uirevision=f"{prefix}-graph-{graph_counter}")
                 graph_meta = graph_meta or {}
-                graph_meta[str(graph_counter)] = {"type": graph_type, "x_cols": x_values}
+                graph_meta[str(graph_counter)] = {"type": graph_type, "x_cols": x_values, **_orbd_meta}
                 new_graph = dcc.Graph(
                     id={"type": "styled-graph", "owner": prefix, "name": graph_counter},
                     figure=fig,
@@ -730,10 +935,119 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
 
         return False
 
+    # ── Section 1: palette dropdown — dynamic options + search + validation ──
+
+    @app.callback(
+        Output(f"{prefix}-plot-color-palette-dropdown", "options"),
+        Input(f"{prefix}-plot-color-palette-dropdown", "search_value"),
+        State(f"{prefix}-plot-color-palette-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def _palette_options(typed, current):
+        opts = [{"label": p, "value": p} for p in _PALETTE_PRESETS]
+        if current and current not in _PALETTE_PRESETS and current != "__hint__":
+            opts.append({"label": current, "value": current})
+        if typed and len(typed) >= 2 and typed not in _PALETTE_PRESETS:
+            opts.insert(0, {"label": f'Use "{typed}"', "value": typed})
+        opts.append(_PALETTE_HINT)
+        return opts
+
+    @app.callback(
+        Output(f"{prefix}-palette-error", "children"),
+        Input(f"{prefix}-plot-color-palette-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def _palette_guard(value):
+        if not value or value == "__hint__" or value in _PALETTE_PRESETS:
+            return ""
+        try:
+            visplot.resolve_palette(value)
+            return ""
+        except Exception:
+            pass
+        try:
+            visplot.resolve_colorscale(value)
+            return ""
+        except Exception:
+            return f"Unknown palette: {value!r}"
+
+    # ── Section 3: export controls ────────────────────────────────────────────
+
+    @app.callback(
+        Output(f"{prefix}-export-scale-dropdown", "disabled"),
+        Input(f"{prefix}-export-format-dropdown", "value"),
+    )
+    def _export_scale_enable(fmt):
+        return fmt == "svg"
+
+    @app.callback(
+        Output(f"{prefix}-export-hint", "children"),
+        Output(f"{prefix}-export-format-dropdown", "options"),
+        Input(f"{prefix}-export-transparent", "value"),
+        Input(f"{prefix}-export-format-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def _export_jpeg_hint(transparent, fmt):
+        is_transparent = bool(transparent)
+        opts = [
+            {"label": "PNG", "value": "png"},
+            {"label": "SVG", "value": "svg"},
+            {"label": "JPEG", "value": "jpeg", "disabled": is_transparent},
+            {"label": "WebP", "value": "webp"},
+        ]
+        hint = (
+            "JPEG has no alpha channel — use PNG, SVG, or WebP for transparency."
+            if is_transparent and fmt == "jpeg"
+            else ""
+        )
+        return hint, opts
+
+    @app.callback(
+        Output({"type": "styled-graph", "owner": prefix, "name": ALL}, "config"),
+        Input(f"{prefix}-export-format-dropdown", "value"),
+        Input(f"{prefix}-export-scale-dropdown", "value"),
+        State({"type": "styled-graph", "owner": prefix, "name": ALL}, "id"),
+    )
+    def _update_graph_config(fmt, scale, graph_ids):
+        n = len(graph_ids)
+        if n == 0:
+            return []
+        cfg = {
+            "toImageButtonOptions": {
+                "format": fmt or "png",
+                "scale": scale or 2,
+                "filename": "graph",
+            },
+        }
+        return [cfg] * n
+
+    @app.callback(
+        Output(f"{prefix}-transparent-download", "data"),
+        Input(f"{prefix}-transparent-download-btn", "n_clicks"),
+        State({"type": "styled-graph", "owner": prefix, "name": ALL}, "figure"),
+        State(f"{prefix}-export-format-dropdown", "value"),
+        State(f"{prefix}-export-scale-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def _transparent_download(n_clicks, figures, fmt, scale):
+        if not n_clicks or not figures:
+            raise dash.exceptions.PreventUpdate
+        fmt = (fmt or "png").lower()
+        if fmt == "jpeg":
+            fmt = "png"
+        fig = go.Figure(figures[-1])
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        try:
+            img_bytes = fig.to_image(format=fmt, scale=scale or 2)
+        except Exception:
+            raise dash.exceptions.PreventUpdate
+        return dcc.send_bytes(img_bytes, f"graph.{fmt}")
+
     if table_grid_id is not None:
 
         @app.callback(
             Output(table_grid_id, "selectedRows"),
+            Output(f"{prefix}-selection-count", "children"),
             Input({"type": "styled-graph", "owner": prefix, "name": ALL}, "clickData"),
             Input({"type": "styled-graph", "owner": prefix, "name": ALL}, "selectedData"),
             State(f"{prefix}-graph-meta-store", "data"),
@@ -747,6 +1061,9 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             if not isinstance(triggered, dict) or not row_data or not graph_meta:
                 raise dash.exceptions.PreventUpdate
 
+            prop_id = ctx.triggered[0]["prop_id"] if ctx.triggered else ""
+            is_click = "clickData" in prop_id
+
             data_value = ctx.triggered[0]["value"] if ctx.triggered else None
             if not data_value or not data_value.get("points"):
                 raise dash.exceptions.PreventUpdate
@@ -756,35 +1073,81 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             if meta_entry is None:
                 raise dash.exceptions.PreventUpdate
 
+            graph_type = meta_entry["type"]
             n = len(row_data)
             points = data_value["points"]
 
-            if meta_entry["type"] == "Histogram":
+            if graph_type == "Orientation distribution (3D)" and is_click:
+                from scipy.spatial import cKDTree as _cKDTree
+                from cryocat.utils import geom as _geom
+
+                raw_cd = points[0].get("customdata")
+                if raw_cd is None:
+                    raise dash.exceptions.PreventUpdate
+                orig_bin_idx = int(raw_cd[0]) if isinstance(raw_cd, list) else int(raw_cd)
+
+                x_cols = meta_entry.get("x_cols", [])
+                if len(x_cols) < 3:
+                    raise dash.exceptions.PreventUpdate
+
+                orbd_params = meta_entry.get("orbd_params", {})
+                n_bins = orbd_params.get("n_bins")
+                cone_s = orbd_params.get("cone_sampling")
+                if n_bins is not None:
+                    n_dirs = int(n_bins)
+                elif cone_s is not None:
+                    n_dirs = int(_geom.number_of_cone_rotations(360.0, cone_s))
+                else:
+                    n_dirs = int(_geom.number_of_cone_rotations(360.0, 5.0))
+
+                bin_dirs = _geom.sample_sphere(n_dirs)
+                try:
+                    angles = np.array([[row[c] for c in x_cols] for row in row_data], dtype=float)
+                except (KeyError, ValueError):
+                    raise dash.exceptions.PreventUpdate
+
+                normals = _geom.rotations_to_z_normals(angles, radius=1.0)
+                _, assignment = _cKDTree(bin_dirs).query(normals)
+                indices = [i for i, b in enumerate(assignment) if b == orig_bin_idx]
+
+            elif graph_type == "Histogram":
                 indices = []
                 for p in points:
                     indices.extend(p.get("pointNumbers", []))
+
             else:
+                if is_click and graph_type in _AGGREGATED_CLICK_IGNORE:
+                    raise dash.exceptions.PreventUpdate
                 indices = [p["pointIndex"] for p in points if "pointIndex" in p]
 
             new_rows = [row_data[i] for i in indices if 0 <= i < n]
             if not new_rows and sel_mode != "subtract":
                 raise dash.exceptions.PreventUpdate
 
+            def _count(rows: list) -> str:
+                k = len(rows)
+                return f"{k} row{'s' if k != 1 else ''} selected"
+
             if sel_mode == "replace":
-                return new_rows
+                return new_rows, _count(new_rows)
 
             current = current_selected or []
 
             if sel_mode == "add":
+                new_keys = {json.dumps(r, sort_keys=True) for r in new_rows}
                 existing_keys = {json.dumps(r, sort_keys=True) for r in current}
+                if new_keys and new_keys.issubset(existing_keys):
+                    result = [r for r in current if json.dumps(r, sort_keys=True) not in new_keys]
+                    return result, _count(result)
                 merged = list(current)
                 for r in new_rows:
                     if json.dumps(r, sort_keys=True) not in existing_keys:
                         merged.append(r)
-                return merged
+                return merged, _count(merged)
 
             if sel_mode == "subtract":
                 remove_keys = {json.dumps(r, sort_keys=True) for r in new_rows}
-                return [r for r in current if json.dumps(r, sort_keys=True) not in remove_keys]
+                result = [r for r in current if json.dumps(r, sort_keys=True) not in remove_keys]
+                return result, _count(result)
 
-            return new_rows
+            return new_rows, _count(new_rows)

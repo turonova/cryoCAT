@@ -52,14 +52,13 @@ def _breadcrumb_bar(crumbs: list[tuple[str, str]]) -> html.Div:
                 disabled=is_last,
                 style={
                     "padding": "0 0.2rem",
-                    "fontSize": "0.8rem",
                     "textDecoration": "none" if is_last else "underline",
                     "color": "var(--bs-secondary)" if is_last else "var(--bs-primary)",
                 },
             )
         )
         if not is_last:
-            items.append(html.Span("/", style={"fontSize": "0.8rem", "color": "var(--bs-secondary)"}))
+            items.append(html.Span("/", style={"color": "var(--bs-secondary)"}))
     return html.Div(items, style={"display": "flex", "flexWrap": "wrap", "alignItems": "center", "gap": "0"})
 
 
@@ -74,14 +73,14 @@ def _render_listing(
     """Render directory listing as clickable list items."""
     if error:
         return [
-            dbc.Alert(error, color="warning", className="mb-0 py-2", style={"fontSize": "0.85rem"})
+            dbc.Alert(error, color="warning", className="mb-0 py-2")
         ]
 
     if not entries:
         return [
             html.Div(
                 "Empty directory",
-                style={"color": "var(--bs-secondary)", "fontSize": "0.85rem", "padding": "0.5rem"},
+                style={"color": "var(--bs-secondary)", "padding": "0.5rem"},
             )
         ]
 
@@ -107,7 +106,7 @@ def _render_listing(
                     ),
                     html.Span(
                         size_str,
-                        style={"marginLeft": "auto", "fontSize": "0.75rem", "color": "var(--bs-secondary)"},
+                        style={"marginLeft": "auto", "color": "var(--bs-secondary)"},
                     ),
                 ],
                 id=id_,
@@ -115,7 +114,6 @@ def _render_listing(
                 action=True,
                 style={
                     "cursor": "pointer",
-                    "fontSize": "0.85rem",
                     "padding": "0.3rem 0.6rem",
                     "display": "flex",
                     "alignItems": "center",
@@ -193,14 +191,13 @@ def get_file_browser() -> html.Div:
                             # Path text input (type-in / shows current selection)
                             dbc.InputGroup(
                                 [
-                                    dbc.InputGroupText("Path", style={"fontSize": "0.8rem"}),
+                                    dbc.InputGroupText("Path"),
                                     dbc.Input(
                                         id="browser-nav-input",
                                         type="text",
                                         debounce=True,
                                         placeholder="Type or paste a path…",
-                                        style={"fontSize": "0.85rem"},
-                                    ),
+                                        ),
                                 ],
                                 size="sm",
                                 style={"marginBottom": "0.5rem"},
@@ -215,15 +212,13 @@ def get_file_browser() -> html.Div:
                                             value=[],
                                             id="browser-show-hidden",
                                             inline=True,
-                                            style={"fontSize": "0.8rem"},
-                                        ),
+                                            ),
                                         width="auto",
                                     ),
                                     dbc.Col(
                                         html.Span(
                                             id="browser-ext-hint",
                                             style={
-                                                "fontSize": "0.75rem",
                                                 "color": "var(--bs-secondary)",
                                             },
                                         ),
@@ -253,13 +248,12 @@ def get_file_browser() -> html.Div:
                             html.Div(
                                 dbc.InputGroup(
                                     [
-                                        dbc.InputGroupText("Filename", style={"fontSize": "0.8rem"}),
+                                        dbc.InputGroupText("Filename"),
                                         dbc.Input(
                                             id="browser-filename-input",
                                             type="text",
                                             placeholder="filename.ext",
-                                            style={"fontSize": "0.85rem"},
-                                        ),
+                                            ),
                                     ],
                                     size="sm",
                                 ),
@@ -272,7 +266,7 @@ def get_file_browser() -> html.Div:
                         [
                             html.Span(
                                 id="browser-validation-msg",
-                                style={"fontSize": "0.8rem", "color": "var(--bs-danger)", "marginRight": "auto"},
+                                style={"color": "var(--bs-danger)", "marginRight": "auto"},
                             ),
                             dbc.Button(
                                 "Confirm",

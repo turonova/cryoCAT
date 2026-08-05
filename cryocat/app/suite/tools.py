@@ -20,7 +20,7 @@ TOOLS = [
     {"id": "utilities", "label": "Utilities",         "path": "/utilities", "module": "cryocat.app.suite.pages.putilities"},
     {"id": "surfaces",  "label": "Surfaces",          "path": "/surfaces",  "module": "cryocat.app.suite.pages.pstructure"},
     {"id": "memthick",  "label": "Membrane thickness", "path": "/memthick",  "module": "cryocat.app.suite.pages.pmemthick"},
-    {"id": "complexes", "label": "Complexes",          "path": "/complexes", "module": "cryocat.app.suite.pages.pcomplexes"},
+    {"id": "complexes",   "label": "Complexes",           "path": "/complexes",   "module": "cryocat.app.suite.pages.pcomplexes"},
 ]
 
 # Route used when the URL is empty / root / unknown.

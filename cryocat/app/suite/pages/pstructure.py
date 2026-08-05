@@ -43,6 +43,7 @@ from cryocat.analysis.structure import ParametricSurface, PleomorphicSurface
 from cryocat.core.cryomotl import Motl
 from cryocat.core.surface import Mesh, OrientedPointCloud, DiscreteSurface
 from cryocat.app import ids, formgen
+from cryocat.app.formgen import make_dropdown
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components import parametric_registry as pr
 from cryocat.app.components import surface_registry as sr
@@ -65,6 +66,7 @@ from cryocat.app.suite.pages._pstructure_intersect import (
     subset_motl_rows,
 )
 from cryocat.app.pageshell import page_shell, sidebar_accordion
+import cryocat.app.pool as _pool
 
 
 # ── Dynamically-rendered component IDs (§11.3) ───────────────────────────────
@@ -89,14 +91,13 @@ DYNAMIC_IDS: list[tuple[str, str]] = [
 # ── Module-level styles ──────────────────────────────────────────────────────
 
 
-_HINT = {"fontSize": "0.85rem", "color": "var(--color9)"}
-_LBL = {"fontSize": "0.85rem", "marginBottom": "2px"}
-_SECTION_HEADER = {"fontSize": "0.9rem", "fontWeight": 600,
+_HINT = {"color": "var(--color9)"}
+_LBL = {"marginBottom": "2px"}
+_SECTION_HEADER = {"fontWeight": 600,
                    "margin": "0.5rem 0 0.3rem"}
 # Horizontal label/input row (label on left, control fills the right).
 _FIELD_ROW = {
     "display": "flex", "alignItems": "center", "gap": "0.5rem",
-    "marginBottom": "0.4rem",
 }
 _FIELD_LABEL = {**_LBL, "flex": "0 0 45%", "margin": 0, "alignSelf": "center"}
 _FIELD_INPUT = {"flex": "1 1 0", "minWidth": "0"}
@@ -107,7 +108,7 @@ def _hrow(label: str, control) -> html.Div:
     return html.Div(
         [html.Label(label, style=_FIELD_LABEL),
          html.Div(control, style=_FIELD_INPUT)],
-        style=_FIELD_ROW,
+        style={**_FIELD_ROW, "marginBottom": "0.4rem"},
     )
 
 
@@ -424,17 +425,11 @@ def _load_panel() -> html.Div:
     return html.Div(
         [
             html.Label("Loader", style=_LBL),
-            dcc.Dropdown(
-                id="surfaces-load-select",
-                options=[
-                    {"label": v["label"], "value": k}
-                    for k, v in LOAD_OPS.items()
-                ],
-                value=None,
-                placeholder="Pick a loader",
-                clearable=False,
-                style={"fontSize": "0.85rem", "marginBottom": "0.4rem"},
-            ),
+            make_dropdown("surfaces-load-select", [
+                {"label": v["label"], "value": k}
+                for k, v in LOAD_OPS.items()
+            ], None, clearable=False, placeholder="Pick a loader",
+                style={"marginBottom": "0.4rem"}),
             # The form for the selected loader (formgen rows OR the small
             # column-name input when "motl_pool" is selected).
             html.Div(id="surfaces-load-form", style={"marginBottom": "0.4rem"}),
@@ -493,17 +488,11 @@ def _op_panel() -> html.Div:
     return html.Div(
         [
             html.Label("Operation", style=_LBL),
-            dcc.Dropdown(
-                id="surfaces-op-select",
-                options=[
-                    {"label": v["label"], "value": k}
-                    for k, v in OPERATIONS.items()
-                ],
-                value=None,
-                placeholder="Pick an operation",
-                clearable=False,
-                style={"fontSize": "0.85rem", "marginBottom": "0.4rem"},
-            ),
+            make_dropdown("surfaces-op-select", [
+                {"label": v["label"], "value": k}
+                for k, v in OPERATIONS.items()
+            ], None, clearable=False, placeholder="Pick an operation",
+                style={"marginBottom": "0.4rem"}),
             html.Div(
                 id="surfaces-op-form-wrapper",
                 children=html.Div(
@@ -700,15 +689,14 @@ def _adopt_result(result: Any, parent_id: str | None, label_root: str) -> list[t
     return out
 
 
-def _motl_from_pool_rows(pool_motls: dict | None, motl_id: str | None) -> Motl | None:
-    """Reconstruct a :class:`Motl` from the suite-pool row list, or None."""
-    pool_motls = pool_motls or {}
+def _motl_from_pool_rows(motl_id: str | None) -> Motl | None:
+    """Reconstruct a :class:`Motl` from the server-side pool, or None."""
     if not motl_id:
         return None
-    rows = pool_motls.get(motl_id) or []
-    if not rows:
+    try:
+        return Motl(_pool.get_rows(motl_id))
+    except _pool.PoolPayloadMissing:
         return None
-    return Motl(pd.DataFrame(rows))
 
 
 def _result_to_store(data: dict, particle_ids_seen: list[int]) -> dict:
@@ -745,13 +733,13 @@ def _records_table(records: list[dict]) -> html.Table:
         return html.Table()
     cols = list(records[0].keys())
     header = html.Thead(html.Tr([
-        html.Th(c, style={"padding": "2px 6px", "fontSize": "0.8rem"})
+        html.Th(c, style={"padding": "2px 6px"})
         for c in cols
     ]))
     body = html.Tbody([
         html.Tr([
             html.Td(_fmt_cell(r.get(c)),
-                    style={"padding": "2px 6px", "fontSize": "0.8rem"})
+                    style={"padding": "2px 6px"})
             for c in cols
         ])
         for r in records
@@ -813,11 +801,10 @@ def register_callbacks(app):
         State({"type": _LOAD_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": _LOAD_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "id"),
         State("surfaces-load-motl-motl-select", "value"),
-        State(ids.POOL_MOTLS, "data"),
         State("surfaces-pool", "data"),
         prevent_initial_call=True,
     )
-    def _run_loader(n_clicks, load_id, values, ids, motl_id, pool_motls, pool):
+    def _run_loader(n_clicks, load_id, values, ids, motl_id, pool):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not load_id:
@@ -833,7 +820,7 @@ def register_callbacks(app):
 
         # Pool-motl-driven loader: inject the Motl under the right kwarg.
         if op["kind"] == "motl_pool":
-            motl = _motl_from_pool_rows(pool_motls, motl_id)
+            motl = _motl_from_pool_rows(motl_id)
             if motl is None:
                 return no_update, no_update, "Pick a non-empty motl from the pool."
             kwargs[op["motl_kwarg"]] = motl
@@ -930,7 +917,6 @@ def register_callbacks(app):
         State({"type": _OP_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "id"),
         State("surfaces-pool", "data"),
         State("surfaces-selected", "data"),
-        State(ids.POOL_MOTLS, "data"),
         State("surfaces-scalar-result", "data"),
         # Parametric pickers.
         State(f"{_PARAM_INPUT_PICKER}-motl-select", "value"),
@@ -946,7 +932,7 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def _run_operation(
-        n_clicks, op_id, values, ids, pool, selected_id, pool_motls,
+        n_clicks, op_id, values, ids, pool, selected_id,
         scalar_state,
         in_motl_id, obj_motl_id,
         isect_motl_id, isect_px, isect_rev, isect_oh,
@@ -1027,13 +1013,13 @@ def register_callbacks(app):
 
         # ── Parametric op ───────────────────────────────────────────────
         if op["category"] == "parametric":
-            in_motl = _motl_from_pool_rows(pool_motls, in_motl_id)
+            in_motl = _motl_from_pool_rows(in_motl_id)
             if in_motl is None:
                 return (no_update,) * 6 + (
                     "Pick a non-empty input motl from the pool.",)
             kwargs: dict = {"input_motl": in_motl}
             if "object_motl" in op.get("extra_pickers", []):
-                obj = _motl_from_pool_rows(pool_motls, obj_motl_id)
+                obj = _motl_from_pool_rows(obj_motl_id)
                 if obj is None:
                     return (no_update,) * 6 + (
                         "Pick a non-empty motl for 'object_motl'.",)
@@ -1083,7 +1069,10 @@ def register_callbacks(app):
                 return (no_update,) * 6 + ("Selected surface must be a mesh.",)
             if not isect_motl_id:
                 return (no_update,) * 6 + ("Pick a motl from the pool.",)
-            rows = (pool_motls or {}).get(isect_motl_id) or []
+            try:
+                rows = _pool.get_rows(isect_motl_id).to_dict("records")
+            except _pool.PoolPayloadMissing:
+                rows = []
             if not rows:
                 return (no_update,) * 6 + (
                     f"Motl '{isect_motl_id}' has no data.",)
@@ -1377,8 +1366,7 @@ def register_callbacks(app):
                     id={"type": "surfaces-row-select", "sid": sid},
                     action=True, n_clicks=0, active=is_sel,
                     style={"display": "flex", "alignItems": "center",
-                           "padding": "4px 6px", "cursor": "pointer",
-                           "fontSize": "0.85rem"},
+                           "padding": "4px 6px", "cursor": "pointer"},
                 )
             )
         return dbc.ListGroup(rows, flush=True)

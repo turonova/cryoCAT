@@ -23,21 +23,27 @@ from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 
 from cryocat.core.cryomotl import Motl
-from cryocat.app.components.motlio import get_motl_load_component, register_motl_load_callbacks
+from cryocat.app.components.motlio import motl_types, register_motl_load_callbacks
+from cryocat.app.components.relionopts import get_relion_options
+from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.components.motlsource import (
     get_multi_motl_picker, register_multi_motl_picker_callbacks,
 )
 from cryocat.app.apputils import (
-    generate_kwargs, run_operation_to_pool, record_load_to_pool,
+    generate_kwargs, run_operation, run_operation_to_pool, record_load_to_pool,
 )
 from cryocat.app import ids
 from cryocat.app import discovery as _discovery
-from cryocat.app.formgen import build_form
+from cryocat.app.formgen import build_form, make_dropdown
 from cryocat.app.logger import invoke_operation
 from cryocat.app import session as _session
 from cryocat.app.event import message_event
 from cryocat.app.pageshell import _SIDEBAR_STYLE, _SIDEBAR_COL_STYLE
-from cryocat.app.pool import PoolState
+from cryocat.app.pool import (
+    PoolState, remove_motl, get_rows, PoolPayloadMissing,
+    GroupState, create_group, delete_group, reorder_group, remove_from_group,
+    purge_motl_from_groups, set_has_tab, natural_sort_key, insert_motl,
+)
 
 # Number of editor *view slots* (rendered table/viewer surfaces). The motl pool
 # itself is unbounded — this only caps how many motls are open as tabs at once.
@@ -64,20 +70,16 @@ def _slot_assignment_rows():
             dbc.Row(
                 [
                     dbc.Col(
-                        html.Label(
-                            f"Slot {i + 1}:",
-                            style={"fontSize": "0.85rem"},
-                        ),
+                        html.Label(f"Slot {i + 1}:"),
                         width=3,
                         className="d-flex align-items-center",
                     ),
                     dbc.Col(
-                        dcc.Dropdown(
-                            id={"type": "me-slot-assign", "slot": i},
-                            options=[{"label": "(empty)", "value": _NONE_OPT}],
-                            value=_NONE_OPT,
+                        make_dropdown(
+                            {"type": "me-slot-assign", "slot": i},
+                            [{"label": "(empty)", "value": _NONE_OPT}],
+                            _NONE_OPT,
                             clearable=False,
-                            style={"fontSize": "0.85rem"},
                         ),
                         width=9,
                     ),
@@ -96,12 +98,101 @@ def get_motl_editor_sidebar():
                     [
                         dbc.AccordionItem(
                             [
-                                get_motl_load_component("me-load"),
+                                dbc.RadioItems(
+                                    id="me-load-mode",
+                                    options=[
+                                        {"label": "Single file", "value": "single"},
+                                        {"label": "Multiple (glob)", "value": "multi"},
+                                    ],
+                                    value="single",
+                                    inline=True,
+                                    style={"display": "flex", "gap": "1.5rem", "marginBottom": "0.5rem"},
+                                ),
+                                # Shared: type + Relion options — identical for single and glob
+                                dbc.Row(
+                                    [
+                                        dbc.Col(
+                                            html.Div("Motl type: ", style={"fontStyle": "bold"}),
+                                            width=4,
+                                            className="d-flex align-items-center",
+                                        ),
+                                        dbc.Col(
+                                            make_dropdown(
+                                                "me-load-motl-dropdown",
+                                                motl_types,
+                                                "emmotl",
+                                                style={"padding": "0"},
+                                            ),
+                                            width=8,
+                                        ),
+                                    ],
+                                    style={"marginTop": "1rem", "marginBottom": "0.4rem"},
+                                ),
+                                get_relion_options("me-load", for_load=True),
+                                # Single-file section
+                                html.Div(
+                                    id="me-load-single-section",
+                                    children=[
+                                        html.Div(
+                                            get_path_field(
+                                                "me-load-motl-path",
+                                                mode="open",
+                                                kind="motl",
+                                                extensions=(".em", ".star", ".csv", ".tbl"),
+                                                placeholder="Path to motl file",
+                                            ),
+                                            style={"marginTop": "0.5rem"},
+                                        ),
+                                        dbc.Button(
+                                            "Load",
+                                            id="me-load-motl-load-btn",
+                                            color="primary",
+                                            style={"width": "100%", "marginTop": "0.4rem"},
+                                        ),
+                                    ],
+                                ),
+                                # Multi/glob section
+                                html.Div(
+                                    id="me-load-multi-section",
+                                    style={"display": "none"},
+                                    children=[
+                                        dbc.Input(
+                                            id="me-mload-pattern",
+                                            placeholder="e.g. /data/**/*.em or /data/runs/ (glob syntax supported)",
+                                            size="sm",
+                                            style={"marginBottom": "0.3rem", "marginTop": "0.5rem"},
+                                        ),
+                                        html.Div(
+                                            id="me-mload-count",
+                                            style={
+                                                "color": "var(--color9)",
+                                                "marginBottom": "0.3rem",
+                                                "fontSize": "0.85rem",
+                                            },
+                                        ),
+                                        dbc.Input(
+                                            id="me-mload-group-name",
+                                            placeholder="Group name (optional)",
+                                            size="sm",
+                                            style={"marginBottom": "0.4rem"},
+                                        ),
+                                        dbc.Button(
+                                            "Load All",
+                                            id="me-mload-btn",
+                                            color="primary",
+                                            size="sm",
+                                            style={"width": "100%", "marginBottom": "0.3rem"},
+                                        ),
+                                        html.Div(
+                                            id="me-mload-status",
+                                            style={"color": "var(--color9)", "fontSize": "0.85rem"},
+                                        ),
+                                    ],
+                                ),
                                 html.Div(
                                     id="me-load-status",
                                     style={
                                         "marginTop": "0.5rem",
-                                        "fontSize": "0.9rem",
                                         "color": "var(--color9)",
                                         "wordBreak": "break-word",
                                     },
@@ -116,7 +207,7 @@ def get_motl_editor_sidebar():
                                     id="me-motl-list",
                                     children=html.Div(
                                         "No motls loaded.",
-                                        style={"color": "var(--color9)", "fontSize": "0.9rem", "padding": "4px"},
+                                        style={"color": "var(--color9)", "padding": "4px"},
                                     ),
                                 ),
                             ],
@@ -126,10 +217,164 @@ def get_motl_editor_sidebar():
                         dbc.AccordionItem(
                             [
                                 html.Div(
+                                    "Create a named group from pool motls. "
+                                    "Groups appear collapsed in the list; "
+                                    "order is preserved for multi-motl operations.",
+                                    style={"color": "var(--color9)", "marginBottom": "0.5rem"},
+                                ),
+                                dbc.Input(
+                                    id="me-create-group-name",
+                                    placeholder="Group name (optional)",
+                                    size="sm",
+                                    style={"marginBottom": "0.4rem"},
+                                ),
+                                make_dropdown(
+                                    "me-create-group-select",
+                                    [],
+                                    [],
+                                    multi=True,
+                                    placeholder="Select motls to group",
+                                    style={"marginBottom": "0.4rem"},
+                                ),
+                                dbc.Button(
+                                    "Create Group",
+                                    id="me-create-group-btn",
+                                    color="primary",
+                                    size="sm",
+                                    style={"width": "100%"},
+                                ),
+                                html.Div(
+                                    id="me-create-group-status",
+                                    style={"color": "var(--color9)", "marginTop": "0.4rem"},
+                                ),
+                            ],
+                            title="Groups",
+                            item_id="me-sidebar-groups",
+                        ),
+                        dbc.AccordionItem(
+                            [
+                                html.Div(
+                                    "Convert all members of the active group to a single format. "
+                                    "Click a group label in the pool list to select the target group.",
+                                    style={"color": "var(--color9)", "marginBottom": "0.5rem"},
+                                ),
+                                html.Div(
+                                    id="me-batch-convert-target",
+                                    style={
+                                        "color": "var(--color9)",
+                                        "marginBottom": "0.4rem",
+                                    },
+                                ),
+                                dbc.Row(
+                                    [
+                                        dbc.Col(
+                                            html.Label("Output type:"),
+                                            width=4,
+                                            className="d-flex align-items-center",
+                                        ),
+                                        dbc.Col(
+                                            make_dropdown(
+                                                "me-batch-convert-format",
+                                                motl_types,
+                                                "emmotl",
+                                                style={"padding": "0"},
+                                            ),
+                                            width=8,
+                                        ),
+                                    ],
+                                    style={"marginBottom": "0.4rem"},
+                                ),
+                                html.Div(
+                                    get_path_field(
+                                        "me-batch-convert-dir",
+                                        mode="directory",
+                                        kind="output",
+                                        placeholder="Output directory",
+                                    ),
+                                    style={"marginBottom": "0.4rem"},
+                                ),
+                                dbc.Row(
+                                    [
+                                        dbc.Col(
+                                            html.Label("Filename:"),
+                                            width=4,
+                                            className="d-flex align-items-center",
+                                        ),
+                                        dbc.Col(
+                                            make_dropdown(
+                                                "me-batch-convert-filename-policy",
+                                                [
+                                                    {"label": "Keep stem + new extension", "value": "stem"},
+                                                    {"label": "Add suffix", "value": "suffix"},
+                                                ],
+                                                "stem",
+                                                style={"padding": "0"},
+                                            ),
+                                            width=8,
+                                        ),
+                                    ],
+                                    style={"marginBottom": "0.3rem"},
+                                ),
+                                html.Div(
+                                    id="me-batch-convert-suffix-row",
+                                    style={"display": "none"},
+                                    children=[
+                                        dbc.Input(
+                                            id="me-batch-convert-suffix",
+                                            placeholder="Suffix to append before extension (e.g. _v2)",
+                                            size="sm",
+                                            style={"marginBottom": "0.3rem"},
+                                        ),
+                                    ],
+                                ),
+                                dbc.Row(
+                                    [
+                                        dbc.Col(
+                                            html.Label("On conflict:"),
+                                            width=4,
+                                            className="d-flex align-items-center",
+                                        ),
+                                        dbc.Col(
+                                            make_dropdown(
+                                                "me-batch-convert-overwrite",
+                                                [
+                                                    {"label": "Refuse (list conflicts)", "value": "refuse"},
+                                                    {"label": "Overwrite", "value": "overwrite"},
+                                                ],
+                                                "refuse",
+                                                style={"padding": "0"},
+                                            ),
+                                            width=8,
+                                        ),
+                                    ],
+                                    style={"marginBottom": "0.4rem"},
+                                ),
+                                dbc.Button(
+                                    "Convert All",
+                                    id="me-batch-convert-btn",
+                                    color="primary",
+                                    size="sm",
+                                    style={"width": "100%"},
+                                ),
+                                html.Div(
+                                    id="me-batch-convert-status",
+                                    style={
+                                        "color": "var(--color9)",
+                                        "marginTop": "0.4rem",
+                                        "wordBreak": "break-word",
+                                    },
+                                ),
+                            ],
+                            title="Batch Convert",
+                            item_id="me-sidebar-batch-convert",
+                        ),
+                        dbc.AccordionItem(
+                            [
+                                html.Div(
                                     "Assign which pool motl is rendered in each editor slot. "
                                     "Loading auto-fills free slots; use these when the pool exceeds "
                                     f"{N_SLOTS} motls.",
-                                    style={"fontSize": "0.8rem", "color": "var(--color9)", "marginBottom": "0.5rem"},
+                                    style={"color": "var(--color9)", "marginBottom": "0.5rem"},
                                 ),
                                 *_slot_assignment_rows(),
                             ],
@@ -138,13 +383,67 @@ def get_motl_editor_sidebar():
                         ),
                         dbc.AccordionItem(
                             [
-                                dcc.Dropdown(
-                                    id="me-op-func-select",
-                                    options=_MOTL_METHODS,
+                                html.Div(
+                                    id="me-single-op-target-label",
+                                    style={
+                                        "color": "var(--color9)",
+                                        "marginBottom": "0.4rem",
+                                        "fontSize": "0.85rem",
+                                    },
+                                ),
+                                make_dropdown(
+                                    "me-op-func-select",
+                                    _MOTL_METHODS,
+                                    None,
                                     placeholder="Select operation",
                                     style={"marginBottom": "0.5rem"},
                                 ),
                                 html.Div(id="me-op-func-form", style={"marginBottom": "0.5rem"}),
+                                html.Div(
+                                    id="me-op-group-options",
+                                    style={"display": "none"},
+                                    children=[
+                                        dbc.Checklist(
+                                            id="me-op-create-group",
+                                            options=[{"label": "Create a group", "value": "create"}],
+                                            value=["create"],
+                                            style={"marginBottom": "0.3rem"},
+                                        ),
+                                        dbc.Checklist(
+                                            id="me-op-save-to-disk",
+                                            options=[{"label": "Save to disk", "value": "save"}],
+                                            value=[],
+                                            style={"marginBottom": "0.3rem"},
+                                        ),
+                                        html.Div(
+                                            id="me-op-save-options",
+                                            style={"display": "none"},
+                                            children=[
+                                                html.Div(
+                                                    get_path_field(
+                                                        "me-op-save-dir",
+                                                        mode="directory",
+                                                        kind="output",
+                                                        placeholder="Output directory",
+                                                    ),
+                                                    style={"marginBottom": "0.3rem"},
+                                                ),
+                                                make_dropdown(
+                                                    "me-op-save-format",
+                                                    motl_types,
+                                                    "emmotl",
+                                                ),
+                                            ],
+                                        ),
+                                        html.Div(
+                                            id="me-op-group-validation",
+                                            style={
+                                                "color": "var(--color9)",
+                                                "marginTop": "0.2rem",
+                                            },
+                                        ),
+                                    ],
+                                ),
                                 html.Div(
                                     [
                                         dbc.Button(
@@ -163,11 +462,11 @@ def get_motl_editor_sidebar():
                                             style={"width": "48%"},
                                         ),
                                     ],
-                                    style={"display": "flex", "marginBottom": "0.5rem"},
+                                    style={**{"display": "flex"}, "marginBottom": "0.5rem"},
                                 ),
                                 html.Div(
                                     id="me-op-status",
-                                    style={"fontSize": "0.85rem", "color": "var(--color9)", "wordBreak": "break-word"},
+                                    style={"color": "var(--color9)", "wordBreak": "break-word"},
                                 ),
                             ],
                             title="Single Motl Operations",
@@ -175,9 +474,18 @@ def get_motl_editor_sidebar():
                         ),
                         dbc.AccordionItem(
                             [
-                                dcc.Dropdown(
-                                    id="me-multi-op-select",
-                                    options=_MULTI_MOTL_METHODS,
+                                html.Div(
+                                    id="me-multi-op-target-label",
+                                    style={
+                                        "color": "var(--color9)",
+                                        "marginBottom": "0.4rem",
+                                        "fontSize": "0.85rem",
+                                    },
+                                ),
+                                make_dropdown(
+                                    "me-multi-op-select",
+                                    _MULTI_MOTL_METHODS,
+                                    None,
                                     placeholder="Select operation",
                                     style={"marginBottom": "0.5rem"},
                                 ),
@@ -193,8 +501,7 @@ def get_motl_editor_sidebar():
                                 html.Div(
                                     id="me-multi-op-status",
                                     style={
-                                        "marginTop": "0.5rem", "fontSize": "0.9rem",
-                                        "color": "var(--color9)", "wordBreak": "break-word",
+                                        "marginTop": "0.5rem",                                        "color": "var(--color9)", "wordBreak": "break-word",
                                     },
                                 ),
                             ],
@@ -260,8 +567,6 @@ def register_motl_editor_sidebar_callbacks(app):
     # auto-assigned to the first free view slot (if any).
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
-        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("me-slot-map", "data", allow_duplicate=True),
@@ -276,8 +581,6 @@ def register_motl_editor_sidebar_callbacks(app):
         State({"type": "path-input", "owner": "me-load-motl-path"}, "value"),
         State("me-load-relion-params-store", "data"),
         State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_MOTLS, "data"),
-        State(ids.POOL_EXTRA, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         State("me-slot-map", "data"),
@@ -285,7 +588,7 @@ def register_motl_editor_sidebar_callbacks(app):
     )
     def route_motl(
         motl_data, extra, dtype, optics, r5t, r5tn, motl_path, relion_params,
-        registry, pool_motls, pool_extra, pool_meta, next_id, slot_map,
+        registry, pool_meta, next_id, slot_map,
     ):
         import os as _os
         from cryocat.app.components.filesystem import resolve_input as _resolve
@@ -331,7 +634,7 @@ def register_motl_editor_sidebar_callbacks(app):
             if sf:
                 rln_kwargs["subtomo_format"] = sf
 
-        current_pool = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
+        current_pool = PoolState.from_stores(registry, pool_meta, next_id)
         try:
             pool_state, mid, _ = record_load_to_pool(
                 motl_data, effective_type, resolved_path or label, rln_kwargs,
@@ -347,8 +650,7 @@ def register_motl_editor_sidebar_callbacks(app):
                 },
             )
         except Exception as exc:
-            return (no_update, no_update, no_update, no_update, no_update,
-                    slot_map, no_update, f"Load failed: {exc}")
+            return (no_update, no_update, no_update, slot_map, no_update, f"Load failed: {exc}")
 
         free = _first_free_slot(slot_map)
         if free is not None:
@@ -369,16 +671,136 @@ def register_motl_editor_sidebar_callbacks(app):
     @app.callback(
         Output("me-motl-list", "children"),
         Input(ids.POOL_REGISTRY, "data"),
+        Input(ids.POOL_GROUPS, "data"),
         Input("me-slot-map", "data"),
+        Input("me-group-expand", "data"),
+        Input("me-active-target", "data"),
         prevent_initial_call=True,
     )
-    def update_motl_list(registry, _slot_map):
+    def update_motl_list(registry, groups_data, _slot_map, expand_data, active_target):
         registry = registry or {}
+        gstate = GroupState.from_store(groups_data)
+        expand_data = expand_data or {}
+        active_target = active_target or {}
+        at_type = active_target.get("type")
+        at_id = active_target.get("id")
         items = []
+
+        # ── Groups first ──────────────────────────────────────────────────────
+        for gid, g in gstate.groups.items():
+            members = list(g.get("members", []))
+            glabel = g.get("label", gid)
+            expanded = expand_data.get(gid, False)
+            toggle_icon = "▾" if expanded else "▶"
+            is_active_group = (at_type == "group" and at_id == gid)
+            group_row_style = {"display": "flex", "alignItems": "center", "padding": "4px 8px"}
+            if is_active_group:
+                group_row_style["backgroundColor"] = "var(--bs-primary-bg-subtle)"
+            items.append(
+                dbc.ListGroupItem(
+                    [
+                        dbc.Button(
+                            toggle_icon,
+                            id={"type": "me-group-toggle", "gid": gid},
+                            color="link",
+                            size="sm",
+                            style={"padding": "0 4px", "fontFamily": "monospace", "color": "inherit"},
+                        ),
+                        html.Span(
+                            f"{glabel} ({len(members)})",
+                            id={"type": "me-group-label-click", "gid": gid},
+                            n_clicks=0,
+                            style={
+                                "flex": "1",
+                                "fontWeight": "500",
+                                "overflow": "hidden",
+                                "textOverflow": "ellipsis",
+                                "whiteSpace": "nowrap",
+                                "cursor": "pointer",
+                            },
+                        ),
+                        dbc.Button(
+                            "×",
+                            id={"type": "me-group-delete", "gid": gid},
+                            color="link",
+                            size="sm",
+                            style={"padding": "0 6px", "color": "var(--color9)"},
+                        ),
+                    ],
+                    style=group_row_style,
+                )
+            )
+            if expanded:
+                for idx, mid in enumerate(members):
+                    mmeta = registry.get(mid) or {}
+                    mlabel = mmeta.get("label", mid)
+                    is_first = idx == 0
+                    is_last = idx == len(members) - 1
+                    items.append(
+                        dbc.ListGroupItem(
+                            [
+                                html.Span(
+                                    f"{mlabel} ({mid.replace('-', '_')})",
+                                    style={
+                                        "flex": "1",
+                                        "paddingLeft": "1.5rem",
+                                        "overflow": "hidden",
+                                        "textOverflow": "ellipsis",
+                                        "whiteSpace": "nowrap",
+                                        "color": "var(--color9)" if not mmeta else "inherit",
+                                    },
+                                ),
+                                dbc.Button(
+                                    "↑",
+                                    id={"type": "me-member-up", "gid": gid, "mid": mid},
+                                    color="link",
+                                    size="sm",
+                                    disabled=is_first,
+                                    style={"padding": "0 3px", "color": "inherit"},
+                                ),
+                                dbc.Button(
+                                    "↓",
+                                    id={"type": "me-member-down", "gid": gid, "mid": mid},
+                                    color="link",
+                                    size="sm",
+                                    disabled=is_last,
+                                    style={"padding": "0 3px", "color": "inherit"},
+                                ),
+                                dbc.Button(
+                                    "Open",
+                                    id={"type": "me-member-open", "gid": gid, "mid": mid},
+                                    color="link",
+                                    size="sm",
+                                    style={"padding": "0 4px", "color": "inherit"},
+                                ),
+                                dbc.Button(
+                                    "−",
+                                    id={"type": "me-member-remove", "gid": gid, "mid": mid},
+                                    color="link",
+                                    size="sm",
+                                    style={"padding": "0 4px", "color": "var(--color9)"},
+                                ),
+                            ],
+                            style={"display": "flex", "alignItems": "center", "padding": "2px 8px"},
+                        )
+                    )
+
+        # ── Ungrouped motls (R2: grouped motls never appear here) ────────────
+        all_grouped = {
+            mid
+            for g in gstate.groups.values()
+            for mid in g.get("members", [])
+        }
         for mid, meta in registry.items():
             if not meta.get("active", True):
                 continue
+            if mid in all_grouped:
+                continue  # R2: grouped motls appear only under their group
             label = meta.get("label", mid)
+            is_active_motl = (at_type == "motl" and at_id == mid)
+            motl_row_style = {"display": "flex", "alignItems": "center", "padding": "4px 8px", "cursor": "pointer"}
+            if is_active_motl:
+                motl_row_style["backgroundColor"] = "var(--bs-primary-bg-subtle)"
             items.append(
                 dbc.ListGroupItem(
                     [
@@ -389,7 +811,6 @@ def register_motl_editor_sidebar_callbacks(app):
                                 "overflow": "hidden",
                                 "textOverflow": "ellipsis",
                                 "whiteSpace": "nowrap",
-                                "fontSize": "0.9rem",
                             },
                         ),
                         dbc.Button(
@@ -403,20 +824,12 @@ def register_motl_editor_sidebar_callbacks(app):
                     id={"type": "me-motl-list-item", "mid": mid},
                     action=True,
                     n_clicks=0,
-                    style={
-                        "display": "flex",
-                        "alignItems": "center",
-                        "padding": "4px 8px",
-                        "cursor": "pointer",
-                    },
+                    style=motl_row_style,
                 )
             )
 
         if not items:
-            return html.Div(
-                "No motls loaded.",
-                style={"color": "var(--color9)", "fontSize": "0.9rem", "padding": "4px"},
-            )
+            return html.Div("No motls loaded.", style={"color": "var(--color9)", "padding": "4px"})
         return dbc.ListGroup(items, flush=True)
 
     # ── Slot-assignment dropdowns: render from slot_map + registry ─────────────
@@ -433,7 +846,7 @@ def register_motl_editor_sidebar_callbacks(app):
         motl_opts = [
             {"label": m.get("label", mid), "value": mid}
             for mid, m in registry.items()
-            if m.get("active", True)
+            if m.get("active", True) and m.get("has_tab", True)
         ]
         options = [[{"label": "(empty)", "value": _NONE_OPT}] + motl_opts for _ in range(N_SLOTS)]
         values = [
@@ -487,9 +900,10 @@ def register_motl_editor_sidebar_callbacks(app):
             raise dash.exceptions.PreventUpdate
         return new_map
 
-    # ── Clicking a pool motl activates its slot tab (if assigned) ──────────────
+    # ── Clicking a pool motl activates its slot tab and sets the active target ──
     @app.callback(
         Output("me-tabs", "active_tab", allow_duplicate=True),
+        Output("me-active-target", "data", allow_duplicate=True),
         Input({"type": "me-motl-list-item", "mid": ALL}, "n_clicks"),
         State("me-slot-map", "data"),
         prevent_initial_call=True,
@@ -501,30 +915,31 @@ def register_motl_editor_sidebar_callbacks(app):
         if not (isinstance(triggered, dict) and "mid" in triggered):
             raise dash.exceptions.PreventUpdate
         mid = triggered["mid"]
+        active_target = {"type": "motl", "id": mid}
         slot_map = slot_map or [None] * N_SLOTS
         for i, m in enumerate(slot_map):
             if m == mid:
-                return f"me-tab-{i}"
-        raise dash.exceptions.PreventUpdate
+                return f"me-tab-{i}", active_target
+        return no_update, active_target  # not in any slot but still becomes active target
 
-    # ── Close a pool motl: drop it from the pool and free its slot ─────────────
+    # ── Close a pool motl: drop it from the pool, free its slot, purge from groups
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
-        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        Output(ids.POOL_GROUPS, "data", allow_duplicate=True),  # remove from any group
         Output("me-slot-map", "data", allow_duplicate=True),
         Output("me-tabs", "active_tab", allow_duplicate=True),
         Input({"type": "me-close-motl", "mid": ALL}, "n_clicks"),
         State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_MOTLS, "data"),
-        State(ids.POOL_EXTRA, "data"),
         State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
+        State(ids.POOL_GROUPS, "data"),
         State("me-slot-map", "data"),
         State("me-tabs", "active_tab"),
         prevent_initial_call=True,
     )
-    def close_motl(n_clicks_list, registry, pool_motls, pool_extra, pool_meta, slot_map, active_tab):
+    def close_motl(n_clicks_list, registry, pool_meta, next_id, groups_data, slot_map, active_tab):
         if not any(n_clicks_list):
             raise dash.exceptions.PreventUpdate
         triggered = ctx.triggered_id
@@ -532,22 +947,186 @@ def register_motl_editor_sidebar_callbacks(app):
             raise dash.exceptions.PreventUpdate
 
         mid = triggered["mid"]
-        registry = {k: v for k, v in (registry or {}).items() if k != mid}
-        pool_motls = {k: v for k, v in (pool_motls or {}).items() if k != mid}
-        pool_extra = {k: v for k, v in (pool_extra or {}).items() if k != mid}
-        pool_meta = {k: v for k, v in (pool_meta or {}).items() if k != mid}
+        pool_state = remove_motl(PoolState.from_stores(registry, pool_meta, next_id), mid)
+        gstate = purge_motl_from_groups(GroupState.from_store(groups_data), mid)
 
         old_map = list(slot_map or [None] * N_SLOTS)
         closed_slot = next((i for i, m in enumerate(old_map) if m == mid), None)
         new_map = [None if m == mid else m for m in old_map]
 
-        # If the closed motl's tab was active, move focus off the destroyed tab.
         new_active = no_update
         if closed_slot is not None and active_tab == f"me-tab-{closed_slot}":
             nxt = next((i for i, m in enumerate(new_map) if m), None)
             new_active = f"me-tab-{nxt}" if nxt is not None else "me-tab-0"
 
-        return registry, pool_motls, pool_extra, pool_meta, new_map, new_active
+        return (*pool_state.to_stores(), gstate.to_store(), new_map, new_active)
+
+    # ── Group: toggle expand/collapse ─────────────────────────────────────────
+    @app.callback(
+        Output("me-group-expand", "data", allow_duplicate=True),
+        Input({"type": "me-group-toggle", "gid": ALL}, "n_clicks"),
+        State("me-group-expand", "data"),
+        prevent_initial_call=True,
+    )
+    def toggle_group(n_clicks_list, expand_data):
+        if not any(n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        triggered = ctx.triggered_id
+        if not (isinstance(triggered, dict) and "gid" in triggered):
+            raise dash.exceptions.PreventUpdate
+        gid = triggered["gid"]
+        expand_data = dict(expand_data or {})
+        expand_data[gid] = not expand_data.get(gid, False)
+        return expand_data
+
+    # ── Group: delete group (motls remain in pool) ─────────────────────────────
+    @app.callback(
+        Output(ids.POOL_GROUPS, "data", allow_duplicate=True),
+        Output("me-group-expand", "data", allow_duplicate=True),
+        Input({"type": "me-group-delete", "gid": ALL}, "n_clicks"),
+        State(ids.POOL_GROUPS, "data"),
+        State("me-group-expand", "data"),
+        prevent_initial_call=True,
+    )
+    def delete_group_cb(n_clicks_list, groups_data, expand_data):
+        if not any(n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        triggered = ctx.triggered_id
+        if not (isinstance(triggered, dict) and "gid" in triggered):
+            raise dash.exceptions.PreventUpdate
+        gid = triggered["gid"]
+        gstate = delete_group(GroupState.from_store(groups_data), gid)
+        expand_data = {k: v for k, v in (expand_data or {}).items() if k != gid}
+        return gstate.to_store(), expand_data
+
+    # ── Group member: move up in order ─────────────────────────────────────────
+    @app.callback(
+        Output(ids.POOL_GROUPS, "data", allow_duplicate=True),
+        Input({"type": "me-member-up", "gid": ALL, "mid": ALL}, "n_clicks"),
+        State(ids.POOL_GROUPS, "data"),
+        prevent_initial_call=True,
+    )
+    def move_member_up(n_clicks_list, groups_data):
+        if not any(n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        triggered = ctx.triggered_id
+        if not (isinstance(triggered, dict) and "gid" in triggered):
+            raise dash.exceptions.PreventUpdate
+        gid, mid = triggered["gid"], triggered["mid"]
+        gstate = GroupState.from_store(groups_data)
+        members = list((gstate.groups.get(gid) or {}).get("members", []))
+        idx = next((i for i, m in enumerate(members) if m == mid), None)
+        if idx is None or idx == 0:
+            raise dash.exceptions.PreventUpdate
+        members[idx - 1], members[idx] = members[idx], members[idx - 1]
+        return reorder_group(gstate, gid, members).to_store()
+
+    # ── Group member: move down in order ───────────────────────────────────────
+    @app.callback(
+        Output(ids.POOL_GROUPS, "data", allow_duplicate=True),
+        Input({"type": "me-member-down", "gid": ALL, "mid": ALL}, "n_clicks"),
+        State(ids.POOL_GROUPS, "data"),
+        prevent_initial_call=True,
+    )
+    def move_member_down(n_clicks_list, groups_data):
+        if not any(n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        triggered = ctx.triggered_id
+        if not (isinstance(triggered, dict) and "gid" in triggered):
+            raise dash.exceptions.PreventUpdate
+        gid, mid = triggered["gid"], triggered["mid"]
+        gstate = GroupState.from_store(groups_data)
+        members = list((gstate.groups.get(gid) or {}).get("members", []))
+        idx = next((i for i, m in enumerate(members) if m == mid), None)
+        if idx is None or idx == len(members) - 1:
+            raise dash.exceptions.PreventUpdate
+        members[idx], members[idx + 1] = members[idx + 1], members[idx]
+        return reorder_group(gstate, gid, members).to_store()
+
+    # ── Group member: remove from group (motl stays in pool) ───────────────────
+    @app.callback(
+        Output(ids.POOL_GROUPS, "data", allow_duplicate=True),
+        Input({"type": "me-member-remove", "gid": ALL, "mid": ALL}, "n_clicks"),
+        State(ids.POOL_GROUPS, "data"),
+        prevent_initial_call=True,
+    )
+    def remove_member_cb(n_clicks_list, groups_data):
+        if not any(n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        triggered = ctx.triggered_id
+        if not (isinstance(triggered, dict) and "gid" in triggered):
+            raise dash.exceptions.PreventUpdate
+        gid, mid = triggered["gid"], triggered["mid"]
+        return remove_from_group(GroupState.from_store(groups_data), gid, mid).to_store()
+
+    # ── Group member: open in editor (sets has_tab=True, assigns to free slot) ──
+    @app.callback(
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        Output("me-slot-map", "data", allow_duplicate=True),
+        Output("me-tabs", "active_tab", allow_duplicate=True),
+        Input({"type": "me-member-open", "gid": ALL, "mid": ALL}, "n_clicks"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
+        State("me-slot-map", "data"),
+        prevent_initial_call=True,
+    )
+    def open_member_in_editor(n_clicks_list, registry, pool_meta, next_id, slot_map):
+        if not any(n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        triggered = ctx.triggered_id
+        if not (isinstance(triggered, dict) and "mid" in triggered):
+            raise dash.exceptions.PreventUpdate
+        mid = triggered["mid"]
+        pool_state = set_has_tab(PoolState.from_stores(registry, pool_meta, next_id), mid, True)
+        slot_map = list(slot_map or [None] * N_SLOTS)
+        while len(slot_map) < N_SLOTS:
+            slot_map.append(None)
+        free = _first_free_slot(slot_map)
+        if free is not None:
+            slot_map[free] = mid
+            active = f"me-tab-{free}"
+        else:
+            active = no_update
+        return (*pool_state.to_stores(), slot_map, active)
+
+    # ── Group: create from selected pool motls ─────────────────────────────────
+    @app.callback(
+        Output(ids.POOL_GROUPS, "data", allow_duplicate=True),
+        Output("me-create-group-status", "children"),
+        Input("me-create-group-btn", "n_clicks"),
+        State("me-create-group-select", "value"),
+        State("me-create-group-name", "value"),
+        State(ids.POOL_GROUPS, "data"),
+        prevent_initial_call=True,
+    )
+    def create_group_cb(n_clicks, selected_motls, group_name, groups_data):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        if not selected_motls:
+            return no_update, "Select at least one motl to form a group."
+        gstate, gid = create_group(
+            GroupState.from_store(groups_data),
+            selected_motls,
+            label=group_name.strip() if group_name and group_name.strip() else None,
+        )
+        g = gstate.groups[gid]
+        return gstate.to_store(), f"Group '{g['label']}' created with {len(g['members'])} motl(s)."
+
+    # ── Group: populate create-group dropdown from pool ────────────────────────
+    @app.callback(
+        Output("me-create-group-select", "options"),
+        Input(ids.POOL_REGISTRY, "data"),
+    )
+    def populate_create_group_select(registry):
+        registry = registry or {}
+        return [
+            {"label": f"{m.get('label', mid)} ({mid.replace('-', '_')})", "value": mid}
+            for mid, m in registry.items()
+            if m.get("active", True)
+        ]
 
     # ── Multiple-motl operations: collector-driven (pair / list) ───────────────
     register_multi_motl_picker_callbacks(app, "me-multi")
@@ -595,8 +1174,6 @@ def register_motl_editor_sidebar_callbacks(app):
 
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
-        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("me-slot-map", "data", allow_duplicate=True),
@@ -610,8 +1187,6 @@ def register_motl_editor_sidebar_callbacks(app):
         State({"type": "me-multi-param", "owner": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "me-multi-param", "owner": ALL, "param": ALL, "tag": ALL}, "id"),
         State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_MOTLS, "data"),
-        State(ids.POOL_EXTRA, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         State("me-slot-map", "data"),
@@ -620,9 +1195,9 @@ def register_motl_editor_sidebar_callbacks(app):
     def run_multi_op(
         n_clicks, method_name, main_id, second_id, list_ids,
         param_values, param_ids,
-        registry, pool_motls, pool_extra, pool_meta, next_id, slot_map,
+        registry, pool_meta, next_id, slot_map,
     ):
-        pool_noup = (no_update,) * 7
+        pool_noup = (no_update,) * 5
 
         def _err(msg):
             return (*pool_noup, msg)
@@ -633,8 +1208,6 @@ def register_motl_editor_sidebar_callbacks(app):
         spec = _MULTI_MOTL_SPECS.get(method_name)
         if spec is None:
             return _err(f"Operation '{method_name}' is not registered as multi-motl.")
-
-        pool_motls = pool_motls or {}
 
         # 1) Resolve selected motl_ids -> Motl instances, preserving order.
         try:
@@ -651,10 +1224,11 @@ def register_motl_editor_sidebar_callbacks(app):
 
             motls = []
             for mid in ordered_ids:
-                rows = pool_motls.get(mid)
-                if not rows:
-                    return _err(f"Pool entry '{mid}' has no data.")
-                motl_obj = Motl(pd.DataFrame(rows))
+                try:
+                    rows_df = get_rows(mid)
+                except PoolPayloadMissing as exc:
+                    return _err(str(exc))
+                motl_obj = Motl(rows_df)
                 motl_obj._pool_motl_id = mid
                 motls.append(motl_obj)
         except Exception as exc:
@@ -662,7 +1236,8 @@ def register_motl_editor_sidebar_callbacks(app):
             return _err(f"Error preparing motls: {exc}")
 
         # 2) Scalar kwargs from the auto-form.
-        kwargs = generate_kwargs(param_ids, param_values) if param_ids else {}
+        current_pool = PoolState.from_stores(registry, pool_meta, next_id)
+        kwargs = generate_kwargs(param_ids, param_values, pool_state=current_pool) if param_ids else {}
 
         # 3) Pre-compute label (does not depend on result).
         gui = getattr(getattr(Motl, method_name).__func__, "_gui", {})
@@ -671,7 +1246,6 @@ def register_motl_editor_sidebar_callbacks(app):
         slot_map = list(slot_map or [None] * N_SLOTS)
         while len(slot_map) < N_SLOTS:
             slot_map.append(None)
-        current_pool = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
 
         # 4) Build kwargs and run through the atomic chokepoint.
         try:
@@ -729,12 +1303,11 @@ def register_motl_editor_sidebar_callbacks(app):
         *[Output(f"me-{i}-undo-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         Output("me-op-status", "children", allow_duplicate=True),
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_MOTLS, "data", allow_duplicate=True),
-        Output(ids.POOL_EXTRA, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("me-slot-map", "data", allow_duplicate=True),
         Output("me-tabs", "active_tab", allow_duplicate=True),
+        Output(ids.POOL_GROUPS, "data", allow_duplicate=True),
         Input("me-op-apply-btn", "n_clicks"),
         State("me-op-func-select", "value"),
         State("me-tabs", "active_tab"),
@@ -742,23 +1315,27 @@ def register_motl_editor_sidebar_callbacks(app):
         State({"type": "me-op-param", "owner": ALL, "param": ALL, "tag": ALL}, "id"),
         *[State(f"me-{i}-motl-data-store", "data") for i in range(N_SLOTS)],
         State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_MOTLS, "data"),
-        State(ids.POOL_EXTRA, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         State("me-slot-map", "data"),
+        State("me-op-create-group", "value"),
+        State("me-op-save-to-disk", "value"),
+        State({"type": "path-input", "owner": "me-op-save-dir"}, "value"),
+        State("me-op-save-format", "value"),
+        State(ids.POOL_GROUPS, "data"),
         prevent_initial_call=True,
     )
     def apply_operation(n_clicks, method_name, active_tab, param_values, param_ids, *rest):
         all_slot_data = rest[:N_SLOTS]
-        registry, pool_motls, pool_extra, pool_meta, next_id, slot_map = rest[N_SLOTS:]
+        (registry, pool_meta, next_id, slot_map,
+         create_group_val, save_to_disk_val, save_dir_val, save_fmt_val, groups_data) = rest[N_SLOTS:]
 
-        # 7 pool-related outputs: registry, motls, extra, meta, next_id, slot_map, active_tab
-        pool_noup = (no_update,) * 7
+        # 5 pool-related outputs: registry, meta, next_id, slot_map, active_tab
+        pool_noup = (no_update,) * 5
         nochange = [no_update] * N_SLOTS
 
-        def _ret(data_out, undo_out, status, pool=pool_noup):
-            return (*data_out, *undo_out, status, *pool)
+        def _ret(data_out, undo_out, status, pool=pool_noup, groups=no_update):
+            return (*data_out, *undo_out, status, *pool, groups)
 
         if not n_clicks or not method_name or not active_tab:
             raise dash.exceptions.PreventUpdate
@@ -773,8 +1350,68 @@ def register_motl_editor_sidebar_callbacks(app):
         if not current_data:
             return _ret(nochange, nochange, "No data in the active slot.")
 
-        kwargs = generate_kwargs(param_ids, param_values) if param_ids else {}
+        current_pool = PoolState.from_stores(registry, pool_meta, next_id)
+        kwargs = generate_kwargs(param_ids, param_values, pool_state=current_pool) if param_ids else {}
         gui = getattr(getattr(Motl, method_name), "_gui", {})
+
+        # Operation produces a list of Motls — route through the group output path.
+        if gui.get("output") == "motl_group":
+            import os as _os
+            want_group = bool(create_group_val)
+            want_save = bool(save_to_disk_val)
+            slot_map = list(slot_map or [None] * N_SLOTS)
+            while len(slot_map) < N_SLOTS:
+                slot_map.append(None)
+            src_mid = slot_map[slot_idx]
+            src_label = (registry.get(src_mid) or {}).get("label", f"Slot {slot_idx + 1}")
+            motl = Motl(pd.DataFrame(current_data))
+            motl._pool_motl_id = src_mid
+            op_label = gui.get("label", method_name)
+            try:
+                result_list = invoke_operation(getattr(motl, method_name), kwargs)
+            except Exception as exc:
+                return _ret(nochange, nochange, f"Error running '{method_name}': {exc}")
+            if not isinstance(result_list, list):
+                return _ret(nochange, nochange,
+                            f"'{method_name}' did not return a list (got {type(result_list).__name__}).")
+            col_name = kwargs.get("column_name", "")
+            new_ids = []
+            for i, m in enumerate(result_list):
+                df = m.df if hasattr(m, "df") else pd.DataFrame()
+                stem = (
+                    f"{src_label}_{col_name}_{i + 1}"
+                    if col_name else
+                    f"{src_label}_{op_label}_{i + 1}"
+                )
+                current_pool, new_mid = insert_motl(current_pool, df, label=stem, has_tab=False)
+                new_ids.append(new_mid)
+            new_gstate = GroupState.from_store(groups_data)
+            if want_group and new_ids:
+                glabel = (
+                    f"{src_label}_by_{col_name}" if col_name
+                    else f"{op_label} of {src_label}"
+                )
+                new_gstate, _ = create_group(new_gstate, new_ids, label=glabel)
+            if want_save and new_ids and save_dir_val:
+                _ext_map = {"emmotl": ".em", "stopgap": ".csv", "dynamo": ".tbl",
+                            "relion": ".star", "relion5": ".star", "relion5_1": ".star"}
+                _fmt = save_fmt_val or "emmotl"
+                _ext = _ext_map.get(_fmt, ".em")
+                for new_mid, m in zip(new_ids, result_list):
+                    _lbl = (current_pool.registry.get(new_mid) or {}).get("label", new_mid)
+                    _path = _os.path.join(save_dir_val.strip(), _lbl + _ext)
+                    try:
+                        run_operation(m.write_out, {"output_path": _path, "motl_type": _fmt})
+                    except Exception as exc:
+                        pass
+            status = f"'{op_label}' → {len(result_list)} motl(s)"
+            if want_group:
+                status += ", grouped in pool"
+            if want_save:
+                status += ", saved to disk"
+            return _ret(nochange, nochange, status,
+                        pool=(*current_pool.to_stores(), slot_map, no_update),
+                        groups=new_gstate.to_store())
 
         # Operation produces a NEW motl — route through the atomic chokepoint.
         if gui.get("output") == "motl":
@@ -784,7 +1421,6 @@ def register_motl_editor_sidebar_callbacks(app):
             src_label = (registry.get(slot_map[slot_idx]) or {}).get("label", f"Slot {slot_idx + 1}")
             motl = Motl(pd.DataFrame(current_data))
             motl._pool_motl_id = slot_map[slot_idx]
-            current_pool = PoolState.from_stores(registry, pool_motls, pool_extra, pool_meta, next_id)
             try:
                 pool_state, mid, result = run_operation_to_pool(
                     getattr(motl, method_name), kwargs, current_pool,
@@ -860,3 +1496,305 @@ def register_motl_editor_sidebar_callbacks(app):
         undo_out[slot_idx] = None  # one level of undo
 
         return (*data_out, *undo_out, "Undo successful.")
+
+    # ── R1: toggle single / multiple load mode ─────────────────────────────────
+    @app.callback(
+        Output("me-load-single-section", "style"),
+        Output("me-load-multi-section", "style"),
+        Input("me-load-mode", "value"),
+    )
+    def _toggle_load_mode(mode):
+        if mode == "multi":
+            return {"display": "none"}, {"display": "block"}
+        return {"display": "block"}, {"display": "none"}
+
+    # ── R1: live match count ────────────────────────────────────────────────────
+    @app.callback(
+        Output("me-mload-count", "children"),
+        Input("me-mload-pattern", "value"),
+        prevent_initial_call=True,
+    )
+    def _count_matches(pattern):
+        import glob as _glob
+        import os as _os
+        from pathlib import Path as _Path
+        if not pattern:
+            return ""
+        pattern = pattern.strip()
+        if _os.path.isdir(pattern):
+            matches = [
+                str(p) for p in _Path(pattern).iterdir()
+                if p.is_file() and p.suffix.lower() in (".em", ".star", ".csv", ".tbl")
+            ]
+        else:
+            matches = [m for m in _glob.glob(pattern, recursive=True) if _os.path.isfile(m)]
+        n = len(matches)
+        return f"{n} file(s) matched" if n else "No files matched"
+
+    # ── R1: Load All — expand glob, load each, insert into pool, create group ──
+    @app.callback(
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        Output(ids.POOL_GROUPS, "data", allow_duplicate=True),
+        Output("me-mload-status", "children"),
+        Input("me-mload-btn", "n_clicks"),
+        State("me-load-motl-dropdown", "value"),
+        State("me-load-rln-value", "data"),
+        State("me-load-rln-tomos-store", "data"),
+        State("me-mload-pattern", "value"),
+        State("me-mload-group-name", "value"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
+        State(ids.POOL_GROUPS, "data"),
+        prevent_initial_call=True,
+    )
+    def _load_multi(n_clicks, motl_type, rln_value, rln_tomos, pattern, group_name, registry, pool_meta, next_id, groups_data):
+        import glob as _glob
+        import os as _os
+        from pathlib import Path as _Path
+        from cryocat.app.components._motlio_ops import load_motl_from_path as _load, load_kwargs_from_store as _lkfs
+
+        _noup4 = (no_update,) * 4
+
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        if not pattern:
+            return (*_noup4, "Enter a glob pattern or folder path.")
+
+        motl_type = motl_type or "emmotl"
+        pattern = pattern.strip()
+
+        if _os.path.isdir(pattern):
+            ext_map = {"emmotl": ".em", "stopgap": ".csv", "dynamo": ".tbl", "relion": ".star"}
+            ext = ext_map.get(motl_type, ".em")
+            raw = [str(p) for p in _Path(pattern).iterdir() if p.is_file() and p.suffix.lower() == ext]
+        else:
+            raw = [m for m in _glob.glob(pattern, recursive=True) if _os.path.isfile(m)]
+
+        if not raw:
+            return (*_noup4, "No files matched.")
+
+        matches = sorted(raw, key=lambda p: natural_sort_key(_Path(p).stem))
+
+        pool_state = PoolState.from_stores(registry, pool_meta, next_id)
+        gstate = GroupState.from_store(groups_data)
+        new_mids = []
+        failed = []
+        _rln_kws = _lkfs(rln_value)
+
+        for path in matches:
+            label = _Path(path).stem
+            try:
+                table_data, extra_data, _optics, _rln_t, _dtype, _rln_params = _load(
+                    path, motl_type, rln_tomos=rln_tomos, **_rln_kws,
+                )
+            except Exception as exc:
+                failed.append(f"{label}: {exc}")
+                continue
+            try:
+                pool_state, mid, _ = record_load_to_pool(
+                    table_data, motl_type, path, {},
+                    pool_state, label=label, extra=extra_data,
+                )
+                new_mids.append(mid)
+            except Exception as exc:
+                failed.append(f"{label}: {exc}")
+
+        if not new_mids:
+            return (*_noup4, f"All loads failed: {'; '.join(failed[:3])}")
+
+        gname = group_name.strip() if group_name and group_name.strip() else None
+        gstate, gid = create_group(gstate, new_mids, label=gname)
+        status = f"Loaded {len(new_mids)} motl(s) → group '{gstate.groups[gid]['label']}'."
+        if failed:
+            status += f"  {len(failed)} failed: {failed[0]}{'…' if len(failed) > 1 else ''}."
+
+        return (*pool_state.to_stores(), gstate.to_store(), status)
+
+    # ── R3: clicking a group label sets it as the active target ────────────────
+    @app.callback(
+        Output("me-active-target", "data", allow_duplicate=True),
+        Input({"type": "me-group-label-click", "gid": ALL}, "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _set_active_from_group(n_clicks_list):
+        if not any(n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        triggered = ctx.triggered_id
+        if not (isinstance(triggered, dict) and "gid" in triggered):
+            raise dash.exceptions.PreventUpdate
+        return {"type": "group", "id": triggered["gid"]}
+
+    # ── R3: active target label for both operation panels ─────────────────────
+    @app.callback(
+        Output("me-single-op-target-label", "children"),
+        Output("me-multi-op-target-label", "children"),
+        Input("me-active-target", "data"),
+        Input(ids.POOL_REGISTRY, "data"),
+        Input(ids.POOL_GROUPS, "data"),
+    )
+    def _update_op_target_labels(active_target, registry, groups_data):
+        if not active_target:
+            return "", ""
+        registry = registry or {}
+        at_type = active_target.get("type")
+        at_id = active_target.get("id")
+        if at_type == "motl":
+            meta = registry.get(at_id) or {}
+            label = meta.get("label", at_id)
+            n = meta.get("n_rows", "?")
+            base = f"Target: {label} ({n} particles)"
+            return base, base
+        if at_type == "group":
+            gstate = GroupState.from_store(groups_data)
+            g = gstate.groups.get(at_id) or {}
+            glabel = g.get("label", at_id)
+            n = len(g.get("members", []))
+            return (
+                f"Target: {glabel} ({n} motls — apply to each)",
+                f"Target: {glabel} ({n} motls — apply together)",
+            )
+        return "", ""
+
+    # ── Show/hide group-options panel when a motl_group op is selected ─────────
+    @app.callback(
+        Output("me-op-group-options", "style"),
+        Input("me-op-func-select", "value"),
+    )
+    def _toggle_group_options(method_name):
+        if not method_name:
+            return {"display": "none"}
+        gui = getattr(getattr(Motl, method_name, None), "_gui", {})
+        if gui.get("output") == "motl_group":
+            return {"display": "block"}
+        return {"display": "none"}
+
+    @app.callback(
+        Output("me-op-save-options", "style"),
+        Input("me-op-save-to-disk", "value"),
+    )
+    def _toggle_save_options(val):
+        return {"display": "block"} if val else {"display": "none"}
+
+    @app.callback(
+        Output("me-op-apply-btn", "disabled"),
+        Output("me-op-group-validation", "children"),
+        Input("me-op-create-group", "value"),
+        Input("me-op-save-to-disk", "value"),
+        Input("me-op-func-select", "value"),
+    )
+    def _validate_group_options(create_val, save_val, method_name):
+        if not method_name:
+            return False, ""
+        gui = getattr(getattr(Motl, method_name, None), "_gui", {})
+        if gui.get("output") != "motl_group":
+            return False, ""
+        if not create_val and not save_val:
+            return True, "Select at least one output option (group or save)."
+        return False, ""
+
+    # ── Batch Convert callbacks ────────────────────────────────────────────────
+    @app.callback(
+        Output("me-batch-convert-target", "children"),
+        Input("me-active-target", "data"),
+        Input(ids.POOL_GROUPS, "data"),
+    )
+    def _update_batch_target(active_target, groups_data):
+        if not active_target or active_target.get("type") != "group":
+            return "No group selected. Click a group label in the pool list to select it."
+        gid = active_target["id"]
+        gstate = GroupState.from_store(groups_data)
+        g = gstate.groups.get(gid) or {}
+        glabel = g.get("label", gid)
+        n = len(g.get("members", []))
+        return f"Group: {glabel} ({n} motl(s))"
+
+    @app.callback(
+        Output("me-batch-convert-suffix-row", "style"),
+        Input("me-batch-convert-filename-policy", "value"),
+    )
+    def _toggle_suffix_row(policy):
+        return {"display": "block"} if policy == "suffix" else {"display": "none"}
+
+    @app.callback(
+        Output("me-batch-convert-status", "children"),
+        Input("me-batch-convert-btn", "n_clicks"),
+        State("me-active-target", "data"),
+        State("me-batch-convert-format", "value"),
+        State({"type": "path-input", "owner": "me-batch-convert-dir"}, "value"),
+        State("me-batch-convert-filename-policy", "value"),
+        State("me-batch-convert-suffix", "value"),
+        State("me-batch-convert-overwrite", "value"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_GROUPS, "data"),
+        prevent_initial_call=True,
+    )
+    def _batch_convert(n_clicks, active_target, motl_type, out_dir,
+                       filename_policy, suffix, overwrite, registry, groups_data):
+        import os as _os
+        import pathlib as _pathlib
+
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        if not active_target or active_target.get("type") != "group":
+            return "Select a group first (click its label in the pool list)."
+        gid = active_target["id"]
+        gstate = GroupState.from_store(groups_data)
+        g = gstate.groups.get(gid) or {}
+        members = list(g.get("members", []))
+        if not members:
+            return "The selected group has no members."
+        if not out_dir:
+            return "Specify an output directory."
+        out_dir = out_dir.strip()
+        motl_type = motl_type or "emmotl"
+        _ext_map = {
+            "emmotl": ".em", "stopgap": ".csv", "dynamo": ".tbl",
+            "relion": ".star", "relion5": ".star", "relion5_1": ".star",
+        }
+        _ext = _ext_map.get(motl_type, ".em")
+
+        # Build output paths
+        registry = registry or {}
+        paths = {}
+        for mid in members:
+            meta = registry.get(mid) or {}
+            src_path = meta.get("source_path") or meta.get("label", mid)
+            stem = _pathlib.Path(src_path).stem if src_path else mid
+            if filename_policy == "suffix" and suffix:
+                stem = stem + suffix
+            paths[mid] = _os.path.join(out_dir, stem + _ext)
+
+        # Overwrite check
+        if overwrite == "refuse":
+            conflicts = [p for p in paths.values() if _os.path.exists(p)]
+            if conflicts:
+                lines = "\n".join(conflicts[:10])
+                tail = f"\n… and {len(conflicts) - 10} more." if len(conflicts) > 10 else ""
+                return f"Refused — {len(conflicts)} file(s) already exist:\n{lines}{tail}"
+
+        done, errs = 0, []
+        for mid, out_path in paths.items():
+            try:
+                df = get_rows(mid)
+                m = Motl(df)
+                run_operation(m.write_out, {"output_path": out_path, "motl_type": motl_type})
+                done += 1
+            except PoolPayloadMissing as exc:
+                errs.append(f"{mid}: {exc}")
+            except Exception as exc:
+                errs.append(f"{mid}: {exc}")
+
+        status = f"Converted {done}/{len(members)} motl(s) to {motl_type}."
+        if errs:
+            status += "  Errors: " + "; ".join(errs[:3])
+            if len(errs) > 3:
+                status += f" … (+{len(errs) - 3} more)"
+        return status
+
+    # ── Part F: write-back @-variable results to the form text inputs ──────────
+    from cryocat.app.formgen import register_var_picker_writeback
+    register_var_picker_writeback(app, "me-op-param")
+    register_var_picker_writeback(app, "me-multi-param")

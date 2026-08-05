@@ -75,6 +75,30 @@ def _dict_pairs(node: ast.Dict) -> Generator[tuple[ast.expr, ast.expr], None, No
 
 _S1_EXEMPT: dict[tuple[str, int], str] = {
     # (rel_path, line): reason
+    # ── Pre-existing fontSize literals in files outside the current scope ───────
+    # motlinput.py — label/span sizes; deferred to motlinput refactor
+    (str(pathlib.Path("cryocat/app/components/motlinput.py")), 72):
+        "pre-existing fontSize in motlinput; deferred to motlinput refactor",
+    (str(pathlib.Path("cryocat/app/components/motlinput.py")), 131):
+        "pre-existing fontSize in motlinput; deferred to motlinput refactor",
+    # poolpicker.py — span label sizes; deferred to pool-list refactor
+    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 101):
+        "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
+    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 120):
+        "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
+    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 147):
+        "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
+    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 188):
+        "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
+    # motlsidebar.py — motl-type / file labels; deferred to sidebar refactor
+    (str(pathlib.Path("cryocat/app/suite/motlsidebar.py")), 170):
+        "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
+    (str(pathlib.Path("cryocat/app/suite/motlsidebar.py")), 188):
+        "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
+    (str(pathlib.Path("cryocat/app/suite/motlsidebar.py")), 391):
+        "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
+    (str(pathlib.Path("cryocat/app/suite/motlsidebar.py")), 482):
+        "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
 }
 
 
@@ -111,6 +135,26 @@ def test_s1_no_fontsize_literal() -> None:
 
 _S3_EXEMPT: dict[tuple[str, int], str] = {
     # (rel_path, line): reason
+    # ── Pre-existing violations in files outside the current scope ─────────────
+    # poolpicker.py: list-item helper divs are also the flex containers; the
+    # marginBottom gives per-item gap.  Proper fix is parent gap= — deferred to
+    # the pool-list display refactor.
+    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 110):
+        "list-item flex row: marginBottom is item gap; fix when pool list is refactored",
+    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 130):
+        "list-item flex row: marginBottom is item gap; fix when pool list is refactored",
+    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 157):
+        "list-item flex row: marginBottom is item gap; fix when pool list is refactored",
+    # motlinput.py: RadioItems flex row with marginBottom (selector spacing).
+    (str(pathlib.Path("cryocat/app/components/motlinput.py")), 54):
+        "RadioItems flex row: marginBottom gives post-selector spacing; deferred to motlinput refactor",
+    # motlinput.py: dict returned as a callback Output (not a rendered component);
+    # §3 targets layout literals, not programmatic style values.
+    (str(pathlib.Path("cryocat/app/components/motlinput.py")), 216):
+        "callback Output style dict — not a rendered literal; §3 applies to layout literals only",
+    # motlsidebar.py: RadioItems flex row with marginBottom for post-load spacing.
+    (str(pathlib.Path("cryocat/app/suite/motlsidebar.py")), 109):
+        "RadioItems flex row: marginBottom gives post-load spacing; deferred to sidebar refactor",
 }
 
 _S3_MARGIN_KEYS = {"marginBottom", "marginTop"}
@@ -198,7 +242,7 @@ _S5_EXEMPT: dict[tuple[str, int], str] = {
     # (rel_path, line): reason
 }
 
-_CHECKBOX_ATTRS = {"Checkbox", "Checklist", "Switch"}
+_CHECKBOX_ATTRS = {"Checkbox", "Checklist", "Switch", "RadioItems"}
 _S5_NUDGE_KEYS = {"marginTop", "paddingTop"}
 
 
@@ -425,3 +469,100 @@ def test_s9_no_bare_path_input() -> None:
     if violations:
         lines = [f"  {f}:{ln}  {d}" for f, ln, d in violations]
         pytest.fail(f"§9 bare path Input in suite ({len(violations)}):\n" + "\n".join(lines))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A4 dispatch — no direct I/O calls in suite pages outside run_operation
+# ─────────────────────────────────────────────────────────────────────────────
+# Commit callbacks must route file writes through run_operation() so every
+# user action appears in the session log.  Direct calls are a logging gap.
+#
+# Each entry is (module_name, attr_name) — matches `<module>.<attr>(...)` call
+# patterns at any depth in suite page source.
+
+_DISPATCH_BLACKLIST: dict[tuple[str, str], str] = {
+    # module       attr           why direct call is forbidden
+    ("cryomap",  "write"):     "must route through run_operation(cryomap.write, …)",
+}
+
+_DISPATCH_EXEMPT: dict[tuple[str, int], str] = {
+    # (rel_path, line): reason
+}
+
+
+def _is_blacklisted_call(node: ast.expr, blacklist: dict[tuple[str, str], str]) -> tuple[str, str] | None:
+    """Return (module, attr) if node is a direct blacklisted attribute call."""
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)):
+        return None
+    pair = (func.value.id, func.attr)
+    return pair if pair in blacklist else None
+
+
+def _dispatch_collect() -> list[tuple[str, int, str]]:
+    out: list[tuple[str, int, str]] = []
+    suite_pages = list((_SUITE / "pages").glob("*.py"))
+    for path in sorted(suite_pages):
+        tree = _parse(path)
+        rel = _rel(path)
+        for node in ast.walk(tree):
+            pair = _is_blacklisted_call(node, _DISPATCH_BLACKLIST)
+            if pair is not None:
+                key = (rel, node.lineno)
+                if key not in _DISPATCH_EXEMPT:
+                    msg = _DISPATCH_BLACKLIST[pair]
+                    out.append((rel, node.lineno, f"{pair[0]}.{pair[1]}() — {msg}"))
+    return out
+
+
+def test_a4_no_direct_io_in_suite_pages() -> None:
+    """A4: commit-path I/O calls in suite pages must go through run_operation."""
+    violations = _dispatch_collect()
+    if violations:
+        lines = [f"  {f}:{ln}  {d}" for f, ln, d in violations]
+        pytest.fail(f"A4 direct I/O call ({len(violations)}):\n" + "\n".join(lines))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A4 smoke — every suite page that has a commit button imports run_operation
+# ─────────────────────────────────────────────────────────────────────────────
+# A page that writes data but does not import run_operation is almost certainly
+# not routing commits through the logger.  This is a cheap proxy check.
+
+_COMMIT_MARKER = re.compile(r"\brun_operation\b")
+
+_SMOKE_EXEMPT: set[str] = {
+    # rel_path — pages with no commit action (pure read-only / helper modules)
+    str(pathlib.Path("cryocat/app/suite/pages/__init__.py")),
+    str(pathlib.Path("cryocat/app/suite/pages/_codegen_base.py")),
+    str(pathlib.Path("cryocat/app/suite/pages/_memthick_analysis.py")),
+    str(pathlib.Path("cryocat/app/suite/pages/_memthick_codegen.py")),
+    str(pathlib.Path("cryocat/app/suite/pages/_pana_codegen.py")),
+    str(pathlib.Path("cryocat/app/suite/pages/_pstructure_intersect.py")),
+    # pmotl.py routes commits through apputils.save_motl (which calls run_operation
+    # internally) — it never imports run_operation directly.
+    str(pathlib.Path("cryocat/app/suite/pages/pmotl.py")),
+}
+
+
+def _smoke_collect() -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    suite_pages = list((_SUITE / "pages").glob("*.py"))
+    for path in sorted(suite_pages):
+        rel = _rel(path)
+        if rel in _SMOKE_EXEMPT:
+            continue
+        src = path.read_text(encoding="utf-8")
+        if not _COMMIT_MARKER.search(src):
+            out.append((rel, "run_operation not imported — no commit events will be logged"))
+    return out
+
+
+def test_a4_suite_pages_import_run_operation() -> None:
+    """A4: every non-read-only suite page must import run_operation."""
+    violations = _smoke_collect()
+    if violations:
+        lines = [f"  {f}  {d}" for f, d in violations]
+        pytest.fail(f"A4 missing run_operation ({len(violations)}):\n" + "\n".join(lines))

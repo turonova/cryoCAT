@@ -1,9 +1,14 @@
+import copy
 import math
 import re
 import warnings
 from dataclasses import dataclass as _dataclass, field as _field
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal, get_args
+
+from scipy.sparse import csr_matrix
+
+from cryocat.utils.exceptions import UserInputError
 
 import numpy as np
 import pandas as pd
@@ -428,6 +433,21 @@ def write_out_motl(
         raise ValueError(f"The output motl type {output_motl_type} is not supported.")
 
 
+_MOTL_EXT_MAP: dict[str, str] = {
+    "stopgap": ".star",
+    "relion": ".star",
+    "relion5": ".star",
+    "relion5_1": ".star",
+    "emmotl": ".em",
+    "emfile": ".em",
+}
+
+
+def _motl_file_ext(output_motl_type: str) -> str:
+    """Return the file extension written by write_out_motl for *output_motl_type*."""
+    return _MOTL_EXT_MAP.get(output_motl_type, ".star")
+
+
 def create_multiref_run(
     input_motl: MotlSource,
     number_of_classes: int,
@@ -436,7 +456,7 @@ def create_multiref_run(
     iteration_number: int = 1,
     number_of_runs: int = 1,
     output_motl_type: str = "stopgap",
-) -> None:
+) -> list[Path]:
     """Creates motls for multiple runs of a multi-reference alignment. In essence, it will randomly assign specified number
     of classes to each motl that will be created. New motls will be written out into files
     output_motl_base_mr#runID_iterationNumber either in stopgap, emmotl or relion format.
@@ -462,7 +482,8 @@ def create_multiref_run(
 
     Returns
     -------
-    None
+    list[Path]
+        Paths of every motl file written (one per run).
 
     Examples
     --------
@@ -475,14 +496,23 @@ def create_multiref_run(
     """
 
     motl = cryomotl.Motl.load(input_motl, motl_type=input_motl_type)
-    motl.df.fillna(0.0)
+    motl.df = motl.df.fillna(0.0)
 
+    ext = _motl_file_ext(output_motl_type)
+    created_files: list[Path] = []
     for i in range(1, number_of_runs + 1):
         # create motl with randomly assigned classes
         motl.assign_random_classes(number_of_classes)
 
         output_path = output_motl_base + "_mr" + str(i) + "_" + str(iteration_number)
         write_out_motl(motl, output_path, output_motl_type=output_motl_type)
+        created_files.append(Path(output_path + ext))
+
+    print(
+        f"create_multiref_run: wrote {number_of_runs} motl(s) with {number_of_classes} classes:\n"
+        + "\n".join(f"  {p}" for p in created_files)
+    )
+    return created_files
 
 
 def create_denovo_multiref_run(
@@ -494,7 +524,7 @@ def create_denovo_multiref_run(
     iteration_number: int = 1,
     number_of_runs: int = 1,
     output_motl_type: str = "stopgap",
-) -> None:
+) -> list[Path]:
     """Creates number_of_runs motls for reference averaging and one motl for alignment. The motls for reference averaging
     are created by random selection of N particles for each class from the input_motl, where N equals to class_occupancy.
     The particles within the classes of each motl can overlap, i.e. each class will have a unique set of particles, but
@@ -527,7 +557,9 @@ def create_denovo_multiref_run(
 
     Returns
     -------
-    None
+    list[Path]
+        Paths of every motl file written: ``number_of_runs`` reference motls followed by
+        the single shared alignment motl.
 
     Examples
     --------
@@ -543,14 +575,16 @@ def create_denovo_multiref_run(
     """
 
     motl = cryomotl.Motl.load(input_motl, motl_type=input_motl_type)
-    motl.df.fillna(0.0)
+    motl.df = motl.df.fillna(0.0)
 
     n_particles = motl.df.shape[0]
 
     # create motl for reference creation
     if class_occupancy is None:
-        class_occupancy = np.ceil(n_particles / 10)
+        class_occupancy = int(np.ceil(n_particles / 10))
 
+    ext = _motl_file_ext(output_motl_type)
+    created_files: list[Path] = []
     for i in range(1, number_of_runs + 1):
         ref_df = pd.DataFrame()
         for c in range(1, number_of_classes + 1):
@@ -562,14 +596,19 @@ def create_denovo_multiref_run(
         new_motl = cryomotl.Motl(ref_df)
         output_path = output_motl_base + "_ref_mr" + str(i) + "_" + str(iteration_number)
         write_out_motl(new_motl, output_file_base=output_path, output_motl_type=output_motl_type)
+        created_files.append(Path(output_path + ext))
 
     # create motl with randomly assigned classes
+    ali_path = output_motl_base + "_" + str(iteration_number)
     motl.assign_random_classes(number_of_classes)
-    write_out_motl(
-        motl, output_file_base=output_motl_base + "_" + str(iteration_number), output_motl_type=output_motl_type
-    )
+    write_out_motl(motl, output_file_base=ali_path, output_motl_type=output_motl_type)
+    created_files.append(Path(ali_path + ext))
 
-    # instead of calling conversion functions kind of the same is happening
+    print(
+        f"create_denovo_multiref_run: wrote {number_of_runs} reference motl(s) + 1 alignment motl:\n"
+        + "\n".join(f"  {p}" for p in created_files)
+    )
+    return created_files
 
 
 def evaluate_multirun_stability(
@@ -3303,3 +3342,1273 @@ def compute_alignment_statistics_from_params(
         raise ValueError("No motl path found in the parameter file.")
     kwargs.setdefault("motl_type", params.motl_type)
     return compute_alignment_statistics(base, params.start_iteration, params.end_iteration, **kwargs)
+
+
+# ── Block schedule ─────────────────────────────────────────────────────────────
+
+
+@_dataclass
+class Block:
+    """One block in a STOPGAP / novaSTA run schedule.
+
+    Parameters
+    ----------
+    n_iterations : int
+        Number of iterations this block contributes.
+    job : {"avg", "ali"}
+        Whether this block is an averaging or alignment step.
+    motl_name : str
+        Motl name pattern.  Supports ``{base}``, ``{run}``, and ``{iter}``
+        placeholders, which are expanded by :func:`expand_motl_name`.
+    search_mode : {"hc", "shc"} or None, default=None
+        Search mode.  ``None`` is valid for averaging blocks.
+    temperature : float, default=0.0
+        Simulated annealing temperature.  0 = disabled.
+    overrides : dict, default={}
+        Per-block overrides for any ``base_params`` field.
+    """
+
+    n_iterations: int
+    job: Literal["avg", "ali"]
+    motl_name: str
+    search_mode: Literal["hc", "shc"] | None = None
+    temperature: float = 0.0
+    overrides: dict = _field(default_factory=dict)
+
+
+@_dataclass
+class StaRun:
+    """Serialisable descriptor for one STOPGAP / novaSTA STA run.
+
+    Parameters
+    ----------
+    input_motl_id : str
+        Pool ID of the input motl.
+    run_mode : {"singleref", "multiref", "multiclass"}
+        Run mode (property of the run, not the block).
+    output_base : Path
+        Parent directory inside which run folder(s) are created.
+    folder_name : str
+        Base name for the run folder.  When ``n_runs > 1`` the per-run
+        suffix ``_mr{i}`` is appended automatically.
+    subtomo_path : Path
+        Path to the subtomogram directory; symlinked into each run folder.
+    base_params : dict
+        Run-wide parameters (masks, wedgelist, binning, filters, angular
+        search, …).
+    schedule : list[Block]
+        Per-block parameters.  At least one :class:`Block` required.
+    n_runs : int, default=1
+        Number of parallel runs (mr1..mrN).  Single run when 1.
+    references : list[Path], default=[]
+        Existing reference files (when applicable; copied to ``ref/``).
+    """
+
+    input_motl_id: str
+    run_mode: Literal["singleref", "multiref", "multiclass"]
+    output_base: Path
+    folder_name: str
+    subtomo_path: Path
+    base_params: dict
+    schedule: list[Block]
+    n_runs: int = 1
+    references: list[Path] = _field(default_factory=list)
+
+
+# ── Schedule helper functions ──────────────────────────────────────────────────
+
+
+def compute_startidx_sequence(
+    schedule: list[Block],
+    starting_iter: int = 1,
+) -> list[int]:
+    """Return the ``startidx`` for every block in *schedule*.
+
+    The first block starts at *starting_iter*; each subsequent block
+    starts immediately after the previous one finishes.
+
+    Parameters
+    ----------
+    schedule : list[Block]
+        Ordered list of blocks.
+    starting_iter : int, default=1
+        Absolute iteration index of the very first iteration.
+
+    Returns
+    -------
+    list[int]
+        One entry per block in the same order as *schedule*.
+
+    Examples
+    --------
+    >>> blks = [Block(1, "avg", "{base}"), Block(10, "ali", "{base}"), Block(20, "ali", "{base}")]
+    >>> compute_startidx_sequence(blks, starting_iter=1)
+    [1, 2, 12]
+    """
+    result: list[int] = []
+    cur = starting_iter
+    for blk in schedule:
+        result.append(cur)
+        cur += blk.n_iterations
+    return result
+
+
+def compose_subtomo_mode(
+    job: Literal["avg", "ali"],
+    run_mode: Literal["singleref", "multiref", "multiclass"],
+) -> str:
+    """Compose a STOPGAP ``subtomo_mode`` string.
+
+    Parameters
+    ----------
+    job : {"avg", "ali"}
+    run_mode : {"singleref", "multiref", "multiclass"}
+
+    Returns
+    -------
+    str
+        One of the six ``StaSubtomoMode`` literals.
+
+    Examples
+    --------
+    >>> compose_subtomo_mode("ali", "multiref")
+    'ali_multiref'
+    """
+    return f"{job}_{run_mode}"
+
+
+def expand_motl_name(
+    pattern: str,
+    *,
+    base: str,
+    run: int,
+    iter_: int,
+) -> str:
+    """Expand a motl name *pattern* with ``{base}``, ``{run}``, ``{iter}`` placeholders.
+
+    Parameters
+    ----------
+    pattern : str
+        Template string, e.g. ``"{base}_ref_mr{run}"`` or ``"{base}"``.
+    base : str
+        Value to substitute for ``{base}``.
+    run : int
+        Value to substitute for ``{run}``.
+    iter_ : int
+        Value to substitute for ``{iter}``.
+
+    Returns
+    -------
+    str
+
+    Examples
+    --------
+    >>> expand_motl_name("{base}_ref_mr{run}", base="motl", run=2, iter_=1)
+    'motl_ref_mr2'
+    """
+    return pattern.format(base=base, run=run, iter=iter_)
+
+
+def denovo_template_blocks() -> list[Block]:
+    """Return the 3-block de-novo reference creation template.
+
+    Consists of 1 averaging block (``{base}_ref_mr{run}``) followed by
+    10 SHC-annealing alignment iterations and 20 SHC zero-temperature
+    alignment iterations (30 total).
+
+    Returns
+    -------
+    list[Block]
+    """
+    return [
+        Block(n_iterations=1, job="avg", motl_name="{base}_ref_mr{run}"),
+        Block(n_iterations=10, job="ali", motl_name="{base}", search_mode="shc", temperature=10.0),
+        Block(n_iterations=20, job="ali", motl_name="{base}", search_mode="shc", temperature=0.0),
+    ]
+
+
+def existing_refs_template_blocks() -> list[Block]:
+    """Return the 2-block classification-with-existing-references template.
+
+    Consists of 1 HC alignment iteration followed by 29 SHC iterations
+    (30 total), temperature 0 throughout.
+
+    Returns
+    -------
+    list[Block]
+    """
+    return [
+        Block(n_iterations=1, job="ali", motl_name="{base}", search_mode="hc", temperature=0.0),
+        Block(n_iterations=29, job="ali", motl_name="{base}", search_mode="shc", temperature=0.0),
+    ]
+
+
+def continue_run_prefill(last_row: dict) -> dict:
+    """Extract the starting-iteration and base-params for a continue run.
+
+    Parameters
+    ----------
+    last_row : dict
+        Canonical column values from the last row of an existing parameter
+        file (i.e. ``params.df.iloc[-1].to_dict()``).
+
+    Returns
+    -------
+    dict
+        ``{"starting_iter": int, "base_params": dict}``
+
+    Notes
+    -----
+    The ``temperature`` field is forced to ``0`` in the returned
+    ``base_params`` because simulated annealing is only meaningful at the
+    start of a de-novo run — see spec §A5.
+    """
+    iteration = int(last_row.get("iteration", 1))
+    n_iters = 1  # default; not stored per-row in STA format
+    starting_iter = iteration + n_iters
+
+    # Strip derived / meta columns; keep parameter columns
+    _skip = {"iteration", "completed ali", "completed p avg", "completed f avg",
+              "subtomo mode", "startidx"}
+    base_params = {k: v for k, v in last_row.items() if k not in _skip and v is not None}
+    base_params["temperature"] = 0.0
+    return {"starting_iter": starting_iter, "base_params": base_params}
+
+
+# ── Reference renaming helper (Part C.4) ────────────────────────────────────────
+
+
+def validate_ref_mapping(
+    mapping: list[dict],
+) -> list[str]:
+    """Validate a reference-renaming mapping table before applying it.
+
+    Each entry in *mapping* is ``{"src_run": int, "src_class": int,
+    "src_iter": int, "dst_class": int, "src_ref_dir": str}``.
+
+    Checks performed:
+
+    * Target classes are contiguous starting from 1.
+    * For every source entry, the main map plus ``A`` and ``B`` half maps exist.
+
+    Parameters
+    ----------
+    mapping : list[dict]
+        Rows from the reference-renaming table in the GUI.
+
+    Returns
+    -------
+    list[str]
+        Validation errors; empty list means the mapping is valid.
+    """
+    errors: list[str] = []
+    dst_classes = sorted({int(row["dst_class"]) for row in mapping})
+    expected = list(range(1, len(dst_classes) + 1))
+    if dst_classes != expected:
+        errors.append(
+            f"Target classes must be contiguous from 1; got {dst_classes} (expected {expected})."
+        )
+
+    for row in mapping:
+        ref_dir = Path(row["src_ref_dir"])
+        r, c, it = int(row["src_run"]), int(row["src_class"]), int(row["src_iter"])
+        stem = f"ref_{it}_{c}"
+        for suffix in ("", "_A", "_B"):
+            candidate = ref_dir / f"ref{suffix}_{it}_{c}.em"
+            alt = ref_dir / f"{stem}{suffix}.em"
+            if not candidate.is_file() and not alt.is_file():
+                errors.append(
+                    f"Run {r} class {c} iter {it}: half-map '{suffix or 'main'}' not found "
+                    f"(tried {candidate} and {alt})."
+                )
+    return errors
+
+
+# ── Run-folder creation (Part C) ─────────────────────────────────────────────
+
+
+_RUN_FOLDER_SUBDIRS: tuple[str, ...] = (
+    "ref", "comm", "fsc", "raw", "meta", "lists", "masks", "temp", "blank"
+)
+_SUBTOMO_SETTINGS_CONTENT = "vol_ext=.em\n"
+
+
+def _run_rootdir(sta_run: StaRun, run_idx: int | None) -> Path:
+    """Return the rootdir Path for *run_idx* (1-based), or for a single run."""
+    base = Path(sta_run.output_base) / sta_run.folder_name
+    if sta_run.n_runs > 1 and run_idx is not None:
+        return base.parent / f"{base.name}_mr{run_idx}"
+    return base
+
+
+def preflight_run_folder(
+    sta_run: StaRun,
+    motl_paths: list[Path],
+    starting_iter: int = 1,
+) -> list[str]:
+    """Validate all inputs for a run-folder creation without touching the filesystem.
+
+    All problems are collected before returning (not stop-at-first).
+
+    Parameters
+    ----------
+    sta_run : StaRun
+        Run descriptor.
+    motl_paths : list[Path]
+        Paths returned by :func:`create_multiref_run` or
+        :func:`create_denovo_multiref_run`.
+    starting_iter : int, default=1
+
+    Returns
+    -------
+    list[str]
+        Human-readable problem descriptions; empty list means OK to proceed.
+    """
+    errors: list[str] = []
+    bp = sta_run.base_params
+
+    for key in ("mask_name", "ccmask_name", "wedgelist_name"):
+        val = bp.get(key)
+        if val:
+            if not Path(val).is_file():
+                errors.append(f"{key} not found or not a file: {val}")
+
+    for mp in motl_paths:
+        if not Path(mp).is_file():
+            errors.append(f"Motl file not found: {mp}")
+
+    for ref in sta_run.references:
+        if not Path(ref).is_file():
+            errors.append(f"Reference not found: {ref}")
+
+    if not Path(sta_run.subtomo_path).is_dir():
+        errors.append(f"subtomo_path is not a directory: {sta_run.subtomo_path}")
+
+    run_indices = list(range(1, sta_run.n_runs + 1)) if sta_run.n_runs > 1 else [None]
+    for ri in run_indices:
+        rd = _run_rootdir(sta_run, ri)
+        if rd.exists():
+            errors.append(f"Target run folder already exists: {rd}")
+
+    return errors
+
+
+def create_run_folder(
+    sta_run: StaRun,
+    motl_paths: list[Path],
+    starting_iter: int = 1,
+    overwrite: bool = False,
+) -> dict:
+    """Create STOPGAP run folders according to the C1 layout spec.
+
+    Validates first (via :func:`preflight_run_folder`), then creates
+    everything atomically (all or nothing per run).
+
+    Parameters
+    ----------
+    sta_run : StaRun
+        Run descriptor.
+    motl_paths : list[Path]
+        Paths of motl files to copy into ``lists/``.
+    starting_iter : int, default=1
+        First iteration index for the ``startidx`` sequence.
+    overwrite : bool, default=False
+        When ``True``, remove existing run folders before creating.
+        Never merges — partial overwrites are not permitted.
+
+    Returns
+    -------
+    dict
+        Manifest with keys ``"dirs_created"``, ``"files_copied"``,
+        ``"symlinks_created"`` — each a list of str paths.
+
+    Raises
+    ------
+    FileExistsError
+        When a target folder already exists and *overwrite* is False.
+    ValueError
+        When *overwrite* is True but the folder cannot be removed.
+    """
+    import shutil
+    import os
+
+    manifest: dict[str, list[str]] = {
+        "dirs_created": [],
+        "files_copied": [],
+        "symlinks_created": [],
+    }
+    run_indices = list(range(1, sta_run.n_runs + 1)) if sta_run.n_runs > 1 else [None]
+
+    for run_idx in run_indices:
+        rd = _run_rootdir(sta_run, run_idx)
+
+        if rd.exists():
+            if overwrite:
+                shutil.rmtree(rd)
+            else:
+                raise FileExistsError(
+                    f"Run folder {rd} already exists. "
+                    "Pass overwrite=True or choose a different folder_name."
+                )
+
+        for subdir in _RUN_FOLDER_SUBDIRS:
+            d = rd / subdir
+            d.mkdir(parents=True, exist_ok=True)
+            manifest["dirs_created"].append(str(d))
+
+        subtomo_link = rd / "subtomograms"
+        os.symlink(Path(sta_run.subtomo_path).resolve(), subtomo_link)
+        manifest["symlinks_created"].append(str(subtomo_link))
+
+        settings_file = rd / "subtomo_settings.txt"
+        settings_file.write_text(_SUBTOMO_SETTINGS_CONTENT)
+        manifest["files_copied"].append(str(settings_file))
+
+        bp = sta_run.base_params
+        for key in ("mask_name", "ccmask_name"):
+            val = bp.get(key)
+            if val:
+                src = Path(val)
+                dst = rd / "masks" / src.name
+                shutil.copy2(src, dst)
+                manifest["files_copied"].append(str(dst))
+
+        wl = bp.get("wedgelist_name")
+        if wl:
+            src = Path(wl)
+            dst = rd / "lists" / src.name
+            shutil.copy2(src, dst)
+            manifest["files_copied"].append(str(dst))
+
+        for mp in motl_paths:
+            src = Path(mp)
+            dst = rd / "lists" / src.name
+            shutil.copy2(src, dst)
+            manifest["files_copied"].append(str(dst))
+
+        for ref in sta_run.references:
+            src = Path(ref)
+            dst = rd / "ref" / src.name
+            shutil.copy2(src, dst)
+            manifest["files_copied"].append(str(dst))
+
+        _write_subtomo_param(sta_run, run_idx, starting_iter, rd)
+        manifest["files_copied"].append(str(rd / "subtomo_param.star"))
+
+    return manifest
+
+
+def _write_subtomo_param(
+    sta_run: StaRun,
+    run_idx: int | None,
+    starting_iter: int,
+    run_dir: Path,
+) -> None:
+    """Write ``subtomo_param.star`` into *run_dir* from *sta_run*'s schedule."""
+    startidx_seq = compute_startidx_sequence(sta_run.schedule, starting_iter)
+    actual_run = run_idx if run_idx is not None else 1
+    rootdir_str = str(run_dir).rstrip("/").rstrip("\\") + "/"
+
+    base_motl = sta_run.base_params.get("motl", "allmotl")
+
+    rows: list[dict] = []
+    for block_idx, blk in enumerate(sta_run.schedule):
+        startidx = startidx_seq[block_idx]
+        merged = {**sta_run.base_params, **blk.overrides}
+        for it_offset in range(blk.n_iterations):
+            iter_num = startidx + it_offset
+            row: dict = {k: v for k, v in merged.items()}
+            row["iteration"] = iter_num
+            row["subtomo mode"] = compose_subtomo_mode(blk.job, sta_run.run_mode)
+            row["motl"] = expand_motl_name(
+                blk.motl_name, base=base_motl, run=actual_run, iter_=iter_num
+            )
+            row["rootdir"] = rootdir_str
+            if blk.search_mode is not None:
+                row["search mode"] = blk.search_mode
+            row["temperature"] = blk.temperature
+            rows.append(row)
+
+    df = pd.DataFrame(rows)
+    params = StopgapParams(df, create_ref=False, ref_family=sta_run.run_mode)
+    params.write_out(str(run_dir / "subtomo_param.star"))
+
+
+# ── Co-assignment factor and consensus functions ───────────────────────────────
+# Spec: MULTI_CLASSIFICATION_CONSENSUS_1.md
+# M = (1/R) B B^T  where  B = [P_1 | ... | P_R]  is the (N, sum K_r) indicator.
+# The factored form avoids ever materialising the N × N matrix.
+
+_ABSENT: int = -1
+_MATRIX_GUARD: int = 5000
+
+
+@_dataclass(frozen=True)
+class CoassignmentFactor:
+    """Factored representation of a co-assignment matrix over several runs.
+
+    Attributes
+    ----------
+    labels : numpy.ndarray
+        ``(N, R)`` int32 array of *global* class indices; class blocks of
+        different runs never overlap. ``-1`` marks a particle absent from that
+        run.
+    particle_ids : numpy.ndarray
+        ``(N,)`` sorted particle identifiers; row ``i`` of everything refers to
+        ``particle_ids[i]``.
+    run_labels : list of str
+        Human-readable name per run, in column order of ``labels``.
+    n_classes : numpy.ndarray
+        ``(R,)`` number of classes observed in each run.
+    """
+
+    labels: np.ndarray
+    particle_ids: np.ndarray
+    run_labels: list[str]
+    n_classes: np.ndarray
+
+    @property
+    def n_particles(self) -> int:
+        """Number of distinct particles across all runs."""
+        return self.labels.shape[0]
+
+    @property
+    def n_runs(self) -> int:
+        """Number of classification runs."""
+        return self.labels.shape[1]
+
+    @property
+    def full_participation(self) -> bool:
+        """True when every particle is classified in every run."""
+        return bool((self.labels != _ABSENT).all())
+
+    def indicator(self) -> csr_matrix:
+        """Return the sparse indicator ``B`` with ``M = (1/R) B B^T``.
+
+        Returns
+        -------
+        scipy.sparse.csr_matrix
+            Shape ``(n_particles, sum(n_classes))``, one non-zero per particle
+            per run in which that particle appears.
+        """
+        rows, cols = np.nonzero(self.labels != _ABSENT)
+        vals = self.labels[rows, cols]
+        return csr_matrix(
+            (np.ones(rows.size, dtype=np.float32), (rows, vals)),
+            shape=(self.n_particles, int(self.n_classes.sum())),
+        )
+
+    def presence(self) -> csr_matrix:
+        """Return the sparse presence indicator ``C``; co-occurrence is ``C C^T``."""
+        rows, cols = np.nonzero(self.labels != _ABSENT)
+        return csr_matrix(
+            (np.ones(rows.size, dtype=np.float32), (rows, cols)),
+            shape=(self.n_particles, self.n_runs),
+        )
+
+    def matrix(self, max_particles: int = 5000, dtype: str = "float32") -> np.ndarray:
+        """Materialise the dense ``(N, N)`` co-assignment matrix.
+
+        Only for visualisation of modest particle counts -- everything else in
+        this class avoids it. Memory is ``N**2 * itemsize`` bytes.
+
+        Parameters
+        ----------
+        max_particles : int, default=5000
+            Refuse above this, rather than attempting a multi-gigabyte
+            allocation. Raise it deliberately if you mean it.
+        dtype : str, default='float32'
+            Accumulator dtype.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(N, N)`` matrix; ``M[i, j]`` is the fraction of runs containing
+            both particles in which they shared a class. Diagonal is 1.
+
+        Raises
+        ------
+        UserInputError
+            If ``n_particles`` exceeds ``max_particles``.
+        """
+        n = self.n_particles
+        if n > max_particles:
+            gib = n * n * np.dtype(dtype).itemsize / 2**30
+            raise UserInputError(
+                f"Refusing to build a {n} x {n} co-assignment matrix "
+                f"({gib:.1f} GiB). Use pca(), consistency_groups() or "
+                f"agreement_histogram(), or raise max_particles deliberately."
+            )
+        b = self.indicator()
+        same = np.asarray((b @ b.T).todense(), dtype=dtype)
+        if self.full_participation:
+            m = same / self.n_runs
+        else:
+            c = self.presence()
+            cooc = np.asarray((c @ c.T).todense(), dtype=dtype)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                m = np.where(cooc > 0, same / cooc, 0.0).astype(dtype)
+        np.fill_diagonal(m, 1.0)
+        return m
+
+    def pca(self, n_components: int = 10) -> tuple[np.ndarray, np.ndarray]:
+        """Principal coordinates of the co-assignment matrix.
+
+        Exact, not approximate: the eigenvectors of ``M = (1/R) B B^T`` are the
+        left singular vectors of ``B``, obtained here from the small
+        ``(P, P)`` Gram matrix ``B^T B`` where ``P = sum(n_classes)`` is a few
+        dozen. Cost is ``O(N P^2)``; no ``N x N`` array is formed.
+
+        Parameters
+        ----------
+        n_components : int, default=10
+            Number of components; silently capped at ``rank(M)``.
+
+        Returns
+        -------
+        scores : numpy.ndarray
+            ``(N, n_components)`` particle coordinates, components ordered by
+            decreasing eigenvalue.
+        eigenvalues : numpy.ndarray
+            ``(n_components,)`` eigenvalues of ``M``.
+        """
+        b = self.indicator()
+        gram = np.asarray((b.T @ b).todense(), dtype=np.float64)
+        w, v = np.linalg.eigh(gram)
+        order = np.argsort(w)[::-1]
+        w, v = w[order], v[:, order]
+        keep = min(n_components, int((w > 1e-12).sum()))
+        scores = np.asarray(b @ v[:, :keep], dtype=np.float64)
+        return scores, w[:keep] / self.n_runs
+
+    def consistency_groups(self) -> pd.DataFrame:
+        """Group particles by their full label tuple across runs.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per particle: ``particle_id``, ``group`` (tuple id), and
+            ``group_size``.
+        """
+        _, group, counts = np.unique(
+            self.labels, axis=0, return_inverse=True, return_counts=True
+        )
+        return pd.DataFrame(
+            {
+                "particle_id": self.particle_ids,
+                "group": group.astype(np.int32),
+                "group_size": counts[group].astype(np.int32),
+            }
+        )
+
+    def agreement_histogram(
+        self,
+        method: str = "auto",
+        n_samples: int = 1_000_000,
+        max_exact_tuples: int = 5_000,
+        seed: int | None = 0,
+        max_runs: int | None = None,
+    ) -> pd.DataFrame:
+        """Distribution of pairwise agreement counts.
+
+        Exact by tuple-based O(T² R) enumeration when the number of distinct
+        label tuples T is at most ``max_exact_tuples``; otherwise estimated
+        from ``n_samples`` uniformly drawn particle pairs.
+
+        Parameters
+        ----------
+        method : {'auto', 'exact', 'sampled'}, default 'auto'
+            ``'auto'`` picks exact when ``T <= max_exact_tuples``.
+        n_samples : int, default 1_000_000
+            Pairs drawn when method is ``'sampled'`` or auto chooses sampled.
+        max_exact_tuples : int, default 5_000
+            T threshold for ``'auto'``.
+        seed : int or None, default 0
+            RNG seed for the sampled path.
+        max_runs : int or None, default None
+            Legacy parameter.  When given, raises ``UserInputError`` if
+            ``n_runs > max_runs`` (preserves pre-existing test contracts) and
+            requires ``full_participation``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns: ``n_runs_agreeing``, ``n_pairs``, ``fraction_of_pairs``,
+            ``fraction_at_least_k``, ``exact``.
+
+        Raises
+        ------
+        UserInputError
+            If ``max_runs`` is given and ``n_runs > max_runs``, or if
+            participation is incomplete.
+        """
+        r = self.n_runs
+
+        if max_runs is not None:
+            if r > max_runs:
+                raise UserInputError(
+                    f"agreement_histogram supports up to {max_runs} runs, got {r}."
+                )
+            if not self.full_participation:
+                raise UserInputError(
+                    "agreement_histogram requires every particle in every run; "
+                    "restrict to the common subset first."
+                )
+        elif not self.full_participation:
+            raise UserInputError(
+                "agreement_histogram requires every particle in every run; "
+                "restrict to the common subset first."
+            )
+
+        tuples, _, counts = np.unique(
+            self.labels, axis=0, return_inverse=True, return_counts=True
+        )
+        T = len(tuples)
+
+        use_exact = method == "exact" or (method == "auto" and T <= max_exact_tuples)
+
+        if use_exact:
+            return self._agreement_exact(tuples, counts, r)
+        return self._agreement_sampled(n_samples, seed, r)
+
+    def _agreement_exact(self, tuples: np.ndarray, counts: np.ndarray, r: int) -> pd.DataFrame:
+        """O(T² R) exact histogram via tuple comparison, chunked to bound memory."""
+        T = len(tuples)
+        n_pairs_total = self.n_particles * (self.n_particles - 1) // 2
+        exact = np.zeros(r + 1, dtype=np.int64)
+
+        # Within-tuple pairs agree in all r runs
+        exact[r] += int((counts * (counts - 1) // 2).sum())
+
+        # Across-tuple pairs: process in blocks so peak memory stays bounded
+        CHUNK = 256
+        for a0 in range(0, T, CHUNK):
+            a1 = min(a0 + CHUNK, T)
+            a_block = tuples[a0:a1]       # (ca, R)
+            a_cnt = counts[a0:a1]         # (ca,)
+
+            # Upper triangle within this block
+            ca = a1 - a0
+            if ca > 1:
+                m = (a_block[:, None, :] == a_block[None, :, :]).sum(axis=2)  # (ca, ca)
+                ia, ib = np.triu_indices(ca, k=1)
+                w = (a_cnt[ia] * a_cnt[ib]).astype(np.float64)
+                bc = np.bincount(m[ia, ib], weights=w, minlength=r + 1)
+                exact += bc.astype(np.int64)
+
+            # Cross with all later blocks
+            for b0 in range(a1, T, CHUNK):
+                b1 = min(b0 + CHUNK, T)
+                b_block = tuples[b0:b1]   # (cb, R)
+                b_cnt = counts[b0:b1]
+
+                m = (a_block[:, None, :] == b_block[None, :, :]).sum(axis=2)  # (ca, cb)
+                w = (a_cnt[:, None] * b_cnt[None, :]).astype(np.float64).ravel()
+                bc = np.bincount(m.ravel(), weights=w, minlength=r + 1)
+                exact += bc.astype(np.int64)
+
+        return self._histogram_frame(exact, n_pairs_total, r, is_exact=True)
+
+    def _agreement_sampled(self, n_samples: int, seed: int | None, r: int) -> pd.DataFrame:
+        """O(n_samples R) sampled histogram."""
+        rng = np.random.default_rng(seed)
+        n = self.n_particles
+        idx_i = rng.integers(0, n, n_samples)
+        idx_j = rng.integers(0, n, n_samples)
+        keep = idx_i != idx_j
+        idx_i, idx_j = idx_i[keep], idx_j[keep]
+        li, lj = self.labels[idx_i], self.labels[idx_j]
+        agree = ((li == lj) & (li != _ABSENT) & (lj != _ABSENT)).sum(axis=1)
+        sample_counts = np.bincount(agree, minlength=r + 1)
+        n_pairs_true = n * (n - 1) // 2
+        n_sample_pairs = int(keep.sum())
+        scale = n_pairs_true / n_sample_pairs if n_sample_pairs > 0 else 1.0
+        est = np.round(sample_counts * scale).astype(np.int64)
+        return self._histogram_frame(est, n_pairs_true, r, is_exact=False)
+
+    @staticmethod
+    def _histogram_frame(counts: np.ndarray, n_pairs: int, r: int, *, is_exact: bool) -> pd.DataFrame:
+        frac = counts / n_pairs if n_pairs else np.zeros(r + 1)
+        cum = np.array([float(frac[k:].sum()) for k in range(r + 1)])
+        return pd.DataFrame(
+            {
+                "n_runs_agreeing": np.arange(r + 1),
+                "n_pairs": counts,
+                "fraction_of_pairs": frac,
+                "fraction_at_least_k": cum,
+                "exact": is_exact,
+            }
+        )
+
+    def run_agreement(self) -> dict:
+        """Pairwise adjusted Rand index between every pair of runs.
+
+        Returns
+        -------
+        dict with keys:
+
+        - ``"summary"`` : DataFrame[run, n_classes, mean_ari, min_ari, max_ari]
+        - ``"matrix"``  : R×R DataFrame of pairwise ARI indexed by run label
+        """
+        from sklearn.metrics import adjusted_rand_score
+
+        R = self.n_runs
+        labels = self.run_labels or [str(i) for i in range(R)]
+        ari = np.zeros((R, R), dtype=np.float64)
+        for a in range(R):
+            for b in range(a + 1, R):
+                v = adjusted_rand_score(self.labels[:, a], self.labels[:, b])
+                ari[a, b] = ari[b, a] = v
+        np.fill_diagonal(ari, 1.0)
+
+        off_diag = ari.copy()
+        np.fill_diagonal(off_diag, np.nan)
+
+        rows = []
+        for r in range(R):
+            others = off_diag[r][~np.isnan(off_diag[r])]
+            rows.append({
+                "run": labels[r],
+                "n_classes": int(self.n_classes[r]),
+                "mean_ari": float(others.mean()) if len(others) else 0.0,
+                "min_ari": float(others.min()) if len(others) else 0.0,
+                "max_ari": float(others.max()) if len(others) else 0.0,
+            })
+
+        return {
+            "summary": pd.DataFrame(rows),
+            "matrix": pd.DataFrame(ari, index=labels, columns=labels),
+        }
+
+
+def build_coassignment_factor(
+    dataframes: list[pd.DataFrame],
+    particle_column: str = "subtomo_id",
+    class_column: str = "class",
+    run_labels: list[str] | None = None,
+) -> CoassignmentFactor:
+    """Build the factored co-assignment representation from several runs.
+
+    Particles are matched across runs by ``particle_column``, never by row
+    order.  Class labels need not be consistent between runs; co-assignment is
+    permutation invariant.
+
+    Parameters
+    ----------
+    dataframes : list of pandas.DataFrame
+        One per classification run; each must contain both columns.
+    particle_column : str, default='subtomo_id'
+        Column holding particle identifiers, unique within each run.
+    class_column : str, default='class'
+        Column holding the within-run class assignment.
+    run_labels : list of str, optional
+        Names for the runs, in order.  Defaults to ``run_1 ... run_R``.
+
+    Returns
+    -------
+    CoassignmentFactor
+
+    Raises
+    ------
+    UserInputError
+        If fewer than two runs are given, a required column is missing, a run
+        is empty, or a run repeats a particle identifier.
+    """
+    if len(dataframes) < 2:
+        raise UserInputError("At least two classification runs are required.")
+    if run_labels is None:
+        run_labels = [f"run_{i + 1}" for i in range(len(dataframes))]
+    if len(run_labels) != len(dataframes):
+        raise UserInputError("run_labels must have one entry per dataframe.")
+
+    for label, df in zip(run_labels, dataframes):
+        missing = {particle_column, class_column} - set(df.columns)
+        if missing:
+            raise UserInputError(f"Run {label!r} is missing column(s): {sorted(missing)}.")
+        if df.empty:
+            raise UserInputError(f"Run {label!r} is empty.")
+        if df[particle_column].duplicated().any():
+            raise UserInputError(
+                f"Run {label!r} repeats particle identifiers in {particle_column!r}; "
+                "renumber the motl first."
+            )
+
+    particle_ids = np.unique(
+        np.concatenate([df[particle_column].to_numpy() for df in dataframes])
+    )
+    n = particle_ids.size
+
+    labels = np.full((n, len(dataframes)), _ABSENT, dtype=np.int32)
+    n_classes = np.zeros(len(dataframes), dtype=np.int32)
+    offset = 0
+    for r, df in enumerate(dataframes):
+        idx = np.searchsorted(particle_ids, df[particle_column].to_numpy())
+        _, class_idx = np.unique(df[class_column].to_numpy(), return_inverse=True)
+        k = int(class_idx.max()) + 1
+        labels[idx, r] = class_idx + offset
+        n_classes[r] = k
+        offset += k
+
+    return CoassignmentFactor(
+        labels=labels,
+        particle_ids=particle_ids,
+        run_labels=list(run_labels),
+        n_classes=n_classes,
+    )
+
+
+@_dataclass(frozen=True)
+class ConsensusResult:
+    """Output of :func:`consensus_groups`.
+
+    Attributes
+    ----------
+    labels : numpy.ndarray
+        ``(N,)`` int32 consensus class per particle; ``junk_class`` where
+        unassigned.
+    particle_ids : numpy.ndarray
+        ``(N,)`` particle identifiers matching the input factor.
+    group_sizes : pandas.Series
+        Mapping class → particle count (including junk class if non-empty).
+    min_agreement : float
+        The threshold actually used, after snapping to the nearest achievable
+        ``k/R``.
+    linkage : str
+        Linkage rule used.
+    method : str
+        Which computation ladder row ran.
+    n_assigned : int
+        Particles assigned to a non-junk class.
+    n_junk : int
+        Particles collapsed to the junk class.
+    reliable : bool
+        Whether the ensemble supports a stable grouping.
+    verdict : str
+        One human-readable sentence summarising the result.
+    junk_class : int
+        The class value used for unassigned / small-group particles.
+    """
+
+    labels: np.ndarray
+    particle_ids: np.ndarray
+    group_sizes: pd.Series
+    min_agreement: float
+    linkage: str
+    method: str
+    n_assigned: int
+    n_junk: int
+    reliable: bool
+    verdict: str
+    junk_class: int
+
+
+def _snap_agreement(min_agreement: float, n_runs: int) -> tuple[float, int]:
+    """Round min_agreement up to the nearest achievable k/R; return (t, k)."""
+    k = int(np.ceil(min_agreement * n_runs))
+    k = max(0, min(k, n_runs))
+    return k / n_runs, k
+
+
+def _spectral_apply_threshold(
+    all_labels: np.ndarray, raw_labels: np.ndarray, k: int, r: int
+) -> None:
+    """In-place: set ``raw_labels[i] = -1`` when particle *i* agrees with its
+    cluster's modal label in fewer than *k* of *r* runs."""
+    for cid in np.unique(raw_labels):
+        if cid < 0:
+            continue
+        mask = raw_labels == cid
+        ml = all_labels[mask]
+        consensus = np.full(r, _ABSENT, dtype=np.int32)
+        for ri in range(r):
+            col = ml[:, ri]
+            valid = col[col != _ABSENT]
+            if len(valid):
+                min_v = int(valid.min())
+                bc = np.bincount((valid - min_v).astype(np.intp))
+                consensus[ri] = min_v + int(bc.argmax())
+        agree = (
+            (ml == consensus[None, :])
+            & (ml != _ABSENT)
+            & (consensus[None, :] != _ABSENT)
+        ).sum(axis=1)
+        member_idx = np.where(mask)[0]
+        raw_labels[member_idx[agree < k]] = -1
+
+
+def _spectral_n_clusters(eigenvalues: np.ndarray) -> int:
+    """Estimate number of clusters from the eigenvalue elbow."""
+    if eigenvalues.size <= 1 or eigenvalues[0] <= 0:
+        return 1
+    gaps = eigenvalues[:-1] - eigenvalues[1:]
+    return int(np.argmax(gaps)) + 1
+
+
+def _histogram_shape(fracs: np.ndarray) -> str:
+    """Classify an agreement histogram as 'flat', 'decaying', or 'structured'."""
+    f_top = float(fracs[-1])
+    f_max = float(fracs.max())
+    f_min = float(fracs.min())
+    if f_max - f_min < 0.05:
+        return "flat"
+    if f_top < 0.01:
+        return "decaying"
+    return "structured"
+
+
+def _verdict_from_shape(shape: str, n_runs: int) -> tuple[bool, str]:
+    if shape == "flat":
+        return (
+            False,
+            f"Co-assignment fractions are approximately uniform across all {n_runs} agreement "
+            "levels; the classifications appear mutually uninformative and do not support a consensus.",
+        )
+    if shape == "decaying":
+        return (
+            True,
+            f"No particle pair is co-assigned in all {n_runs} runs; "
+            "a partial-agreement threshold is required and the consensus will be approximate.",
+        )
+    return (
+        True,
+        f"Agreement is concentrated at k={n_runs} (always together) and k=0 (never); "
+        "strict co-assignment grouping should work well.",
+    )
+
+
+def _compute_reliability(
+    factor: CoassignmentFactor,
+) -> tuple[bool, pd.DataFrame | None, np.ndarray, str]:
+    """Return (reliable, histogram, eigenvalues, verdict)."""
+    R = factor.n_runs
+    histogram = None
+    reliable = True
+    verdict = ""
+
+    if R <= 12 and factor.full_participation:
+        try:
+            histogram = factor.agreement_histogram()
+            fracs = histogram["fraction_of_pairs"].to_numpy()
+            shape = _histogram_shape(fracs)
+            reliable, verdict = _verdict_from_shape(shape, R)
+        except UserInputError:
+            pass
+
+    n_comp = min(20, int(factor.n_classes.sum()))
+    _, eigenvalues = factor.pca(n_components=n_comp)
+
+    if histogram is None:
+        gap = float(eigenvalues[0] / (eigenvalues.sum() + 1e-12)) if eigenvalues.size > 0 else 0.0
+        if gap > 0.5:
+            reliable = True
+            verdict = (
+                f"Spectral gap {gap:.2f} suggests stable structure "
+                f"(agreement histogram skipped: R={R} > 12)."
+            )
+        elif gap > 0.2:
+            reliable = True
+            verdict = (
+                f"Moderate spectral gap {gap:.2f}; structure present but "
+                f"some runs may be inconsistent (R={R} > 12, histogram skipped)."
+            )
+        else:
+            reliable = False
+            verdict = (
+                f"Low spectral gap {gap:.2f}; classifications appear mutually "
+                f"uninformative (R={R} > 12, histogram skipped)."
+            )
+
+    return reliable, histogram, eigenvalues, verdict
+
+
+def consensus_groups(
+    factor: CoassignmentFactor,
+    min_agreement: float = 1.0,
+    linkage: str = "complete",
+    min_group_size: int = 10,
+    junk_class: int = 0,
+) -> ConsensusResult:
+    """Group particles that co-occur in at least ``min_agreement`` of the runs.
+
+    Parameters
+    ----------
+    factor : CoassignmentFactor
+        Built by :func:`build_coassignment_factor`.
+    min_agreement : float, default=1.0
+        Fraction of runs in which a pair must share a class to be grouped
+        together.  Snapped up to the nearest achievable ``k/R`` value.
+    linkage : {'complete', 'average', 'single'}, default='complete'
+        Agglomerative linkage rule.  Ignored at ``min_agreement=1.0``.
+        ``'single'`` is warned against: a single weak link can chain two
+        genuine classes.
+    min_group_size : int, default=10
+        Groups smaller than this collapse to ``junk_class``.
+    junk_class : int, default=0
+        Class label written for unassigned / small-group particles.
+
+    Returns
+    -------
+    ConsensusResult
+    """
+    if linkage not in ("complete", "average", "single"):
+        raise UserInputError(
+            f"linkage must be 'complete', 'average', or 'single'; got {linkage!r}."
+        )
+    if linkage == "single":
+        warnings.warn(
+            "single linkage can chain distant classes via a single weak link; "
+            "consider 'complete' or 'average'.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    R = factor.n_runs
+    N = factor.n_particles
+    t_actual, k = _snap_agreement(min_agreement, R)
+
+    reliable = True
+    if k == R:
+        cg = factor.consistency_groups()
+        raw_labels = cg["group"].to_numpy().astype(np.int32)
+        method = "exact-tuple"
+
+    elif N <= _MATRIX_GUARD:
+        import scipy.cluster.hierarchy as sch
+        from scipy.spatial.distance import squareform
+
+        m = factor.matrix(max_particles=_MATRIX_GUARD)
+        dist_condensed = squareform(1.0 - m, checks=False)
+        z = sch.linkage(dist_condensed, method=linkage)
+        raw_labels = (sch.fcluster(z, t=1.0 - t_actual, criterion="distance") - 1).astype(
+            np.int32
+        )
+        method = f"scipy-{linkage}"
+        n_comp_r = min(20, int(factor.n_classes.sum()))
+        _, evals_r = factor.pca(n_components=n_comp_r)
+        gap = float(evals_r[0] / (evals_r.sum() + 1e-12)) if evals_r.size > 0 else 0.0
+        reliable = gap > 0.2
+
+    else:
+        from sklearn.cluster import KMeans
+
+        n_comp = min(50, int(factor.n_classes.sum()))
+        scores, evals = factor.pca(n_components=n_comp)
+        n_clusters = max(2, _spectral_n_clusters(evals))
+        km = KMeans(n_clusters=n_clusters, random_state=0, n_init="auto")
+        raw_labels = km.fit_predict(scores).astype(np.int32)
+        method = f"spectral-kmeans(seed=0,k={n_clusters})"
+        gap = float(evals[0] / (evals.sum() + 1e-12)) if evals.size > 0 else 0.0
+        reliable = gap > 0.2
+        if k < R:
+            _spectral_apply_threshold(factor.labels, raw_labels, k, R)
+
+    unique_raw, raw_counts = np.unique(raw_labels, return_counts=True)
+    small = set(unique_raw[raw_counts < min_group_size].tolist())
+    collapsed = np.where(np.isin(raw_labels, list(small) if small else []), -1, raw_labels)
+
+    valid_mask = collapsed != -1
+    final_labels = np.full(N, junk_class, dtype=np.int32)
+    if valid_mask.any():
+        valid_unique, valid_counts = np.unique(collapsed[valid_mask], return_counts=True)
+        order = np.argsort(valid_counts)[::-1]
+        sorted_raw = valid_unique[order]
+        raw_to_final = {int(r): junk_class + 1 + i for i, r in enumerate(sorted_raw)}
+        for i, raw in enumerate(collapsed):
+            if raw != -1:
+                final_labels[i] = raw_to_final[int(raw)]
+
+    all_unique, all_counts = np.unique(final_labels, return_counts=True)
+    group_sizes = pd.Series(all_counts, index=all_unique, name="n_particles")
+    n_junk = int((final_labels == junk_class).sum())
+    n_assigned = N - n_junk
+    n_groups = int((all_unique != junk_class).sum())
+
+    verdict = (
+        f"{n_assigned}/{N} particles assigned to {n_groups} group(s) "
+        f"at t={t_actual:.3f} ({method}); {n_junk} junk. "
+        + ("Stable ensemble." if reliable else "Ensemble reliability: uncertain.")
+    )
+
+    return ConsensusResult(
+        labels=final_labels,
+        particle_ids=factor.particle_ids,
+        group_sizes=group_sizes,
+        min_agreement=t_actual,
+        linkage=linkage,
+        method=method,
+        n_assigned=n_assigned,
+        n_junk=n_junk,
+        reliable=reliable,
+        verdict=verdict,
+        junk_class=junk_class,
+    )
+
+
+def reliability_summary(factor: CoassignmentFactor) -> dict:
+    """Agreement histogram plus a verdict on whether the ensemble supports a
+    stable grouping.
+
+    Returns
+    -------
+    dict with keys:
+        ``histogram``   — ``pd.DataFrame | None``
+        ``eigenvalues`` — ``np.ndarray``
+        ``reliable``    — ``bool``
+        ``verdict``     — ``str``
+        ``n_runs``      — ``int``
+        ``n_particles`` — ``int``
+    """
+    reliable, histogram, eigenvalues, verdict = _compute_reliability(factor)
+    if histogram is None:
+        try:
+            histogram = factor.agreement_histogram()
+        except Exception:
+            pass
+    return {
+        "histogram": histogram,
+        "eigenvalues": eigenvalues,
+        "reliable": reliable,
+        "verdict": verdict,
+        "n_runs": factor.n_runs,
+        "n_particles": factor.n_particles,
+    }
+
+
+def consensus_motl(
+    result: ConsensusResult,
+    source_motl,
+    class_column: str = "class",
+    keep_junk: bool = True,
+):
+    """Geometry from ``source_motl``, consensus classes written to ``class_column``.
+
+    Parameters
+    ----------
+    result : ConsensusResult
+        Output of :func:`consensus_groups`.
+    source_motl : Motl
+        Provides the particle geometry; matched by ``subtomo_id``.
+    class_column : str, default='class'
+        Column in the motl DataFrame to overwrite with consensus labels.
+    keep_junk : bool, default=True
+        If False, drop particles absent from the factor or in the junk class.
+
+    Returns
+    -------
+    Motl
+        A copy of ``source_motl`` with ``class_column`` updated.
+    """
+    motl = copy.copy(source_motl)
+    motl.df = source_motl.df.copy()
+
+    all_pids = motl.df["subtomo_id"].to_numpy()
+    idx = np.searchsorted(result.particle_ids, all_pids)
+    idx_clipped = np.clip(idx, 0, len(result.particle_ids) - 1)
+    in_factor = result.particle_ids[idx_clipped] == all_pids
+    labels = np.where(in_factor, result.labels[idx_clipped], result.junk_class).astype(np.int32)
+    motl.df[class_column] = labels
+
+    if not keep_junk:
+        motl.df = motl.df[motl.df[class_column] != result.junk_class].reset_index(drop=True)
+
+    return motl

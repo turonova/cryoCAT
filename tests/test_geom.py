@@ -1501,3 +1501,55 @@ class TestAsSymmetryPlatonicGroups:
     def test_no_digits_raises(self):
         with pytest.raises(ValueError):
             as_symmetry("C")
+
+
+# ---------------------------------------------------------------------------
+# sample_sphere
+# ---------------------------------------------------------------------------
+
+class TestSampleSphere:
+    def test_point_count(self):
+        pts = sample_sphere(100)
+        assert pts.shape == (100, 3)
+
+    def test_single_point_north_pole(self):
+        pts = sample_sphere(1)
+        assert pts.shape == (1, 3)
+        np.testing.assert_allclose(pts[0], [0.0, 0.0, 1.0], atol=1e-12)
+
+    def test_two_points_poles(self):
+        pts = sample_sphere(2)
+        assert pts.shape == (2, 3)
+        np.testing.assert_allclose(pts[0], [0.0, 0.0, 1.0], atol=1e-12)
+        np.testing.assert_allclose(pts[1], [0.0, 0.0, -1.0], atol=1e-12)
+
+    def test_all_on_unit_sphere(self):
+        pts = sample_sphere(200)
+        radii = np.linalg.norm(pts, axis=1)
+        np.testing.assert_allclose(radii, 1.0, atol=1e-12)
+
+    def test_radius_scaling(self):
+        pts = sample_sphere(50, radius=3.0)
+        radii = np.linalg.norm(pts, axis=1)
+        np.testing.assert_allclose(radii, 3.0, atol=1e-12)
+
+    def test_center_offset(self):
+        center = [10, 20, 30]
+        pts = sample_sphere(50, center=center, radius=1.0)
+        radii = np.linalg.norm(pts - np.array(center), axis=1)
+        np.testing.assert_allclose(radii, 1.0, atol=1e-12)
+
+    def test_near_uniform_hemispheres(self):
+        # For a large sample, each hemisphere should contain between 30% and 70%
+        # of the points (true uniform distribution gives exactly 50%).
+        pts = sample_sphere(2000)
+        n_north = np.sum(pts[:, 2] >= 0)
+        assert 600 <= n_north <= 1400
+
+    def test_zero_raises(self):
+        with pytest.raises(UserInputError):
+            sample_sphere(0)
+
+    def test_negative_raises(self):
+        with pytest.raises(UserInputError):
+            sample_sphere(-5)

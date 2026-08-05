@@ -261,6 +261,15 @@ def _infer_returns(fn: Callable) -> str | None:
         if "DataFrame" in ret:
             return "dataframe"
         return None
+    # list[Motl] or list["Motl"] -> "motl_group"
+    import types as _types
+    origin = typing.get_origin(ret)
+    if origin is list:
+        args = typing.get_args(ret)
+        if args:
+            arg_str = str(args[0])
+            if "Motl" in arg_str:
+                return "motl_group"
     # Actual type object
     name = getattr(ret, "__name__", "")
     if name in ("Motl", "EmMotl", "RelionMotl", "RelionMotlv5",
@@ -270,7 +279,7 @@ def _infer_returns(fn: Callable) -> str | None:
         return "dataframe"
     # Fallback: string representation for e.g. union types
     ret_str = str(ret)
-    if "Motl" in ret_str and "tuple" not in ret_str:
+    if "Motl" in ret_str and "tuple" not in ret_str and "list" not in ret_str:
         return "motl"
     return None
 
@@ -454,7 +463,7 @@ def gui_exposed(
 _ALIAS_TAGS = {
     "MapSource", "DataSource", "TiltStack", "TomoList", "TomoDimensions",
     "TripletLike", "EulerAngles", "ListLike", "Symmetry", "ArrayLike",
-    "RotationLike",
+    "RotationLike", "PathOrStr",
 }
 # PEP-695 aliases whose value is a Literal[...] — resolved to ("Literal", choices).
 _LITERAL_ALIASES = {
@@ -525,7 +534,16 @@ def resolve_param_type(annotation: Any) -> tuple[str, dict]:
 
     # Subscripted PEP-695 alias, e.g. ListLike[int] — origin is the alias itself.
     if isinstance(origin, typing.TypeAliasType) and origin.__name__ in _ALIAS_TAGS:
-        return (origin.__name__, {})
+        alias_name = origin.__name__
+        if alias_name == "ListLike":
+            # Carry the element type tag so the widget factory can branch.
+            args = typing.get_args(annotation)
+            if args:
+                elem_tag, _ = resolve_param_type(args[0])
+            else:
+                elem_tag = "str"
+            return ("ListLike", {"elem_tag": elem_tag})
+        return (alias_name, {})
 
     # Bare PEP-695 alias, e.g. MapSource / Symmetry / MotlType.
     if isinstance(annotation, typing.TypeAliasType):
@@ -692,7 +710,8 @@ TYPE_HANDLERS = {
     "ArrayLike":      {"widget": "csv_text", "parse": _parse_listlike, "argparse": {"type": _arg_listlike}},
     "TripletLike":    {"widget": "triplet",  "parse": _parse_triplet,  "argparse": {"type": _arg_triplet}},
     "EulerAngles":    {"widget": "triplet",  "parse": _parse_triplet,  "argparse": {"type": _arg_triplet}},
-    "ListLike":       {"widget": "csv_text", "parse": _parse_listlike, "argparse": {"type": _arg_listlike}},
+    "ListLike":       {"widget": "listlike", "parse": _parse_listlike, "argparse": {"type": _arg_listlike}},
+    "PathOrStr":      {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
     "Symmetry":       {"widget": "text",     "parse": _parse_str,      "argparse": {"type": str}},
     "RotationLike":   {"widget": "rotation", "parse": _parse_str,      "argparse": {"type": str}},
     "Literal":        {"widget": "dropdown", "parse": _parse_literal,  "argparse": {"type": str}},

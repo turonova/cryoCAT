@@ -9,6 +9,7 @@ import dash_bootstrap_components as dbc
 from cryocat.core import cryomotl
 from cryocat.app.apputils import make_axis_trace
 from cryocat.analysis import visplot
+from cryocat.app.formgen import make_dropdown
 
 
 def hover_template(columns, hover_info) -> str:
@@ -122,22 +123,23 @@ def get_viewer_component(prefix: str):
                                 style={"flex": "0 0 auto"},
                             ),
                             html.Div(
-                                dcc.Dropdown(
-                                    id=f"{prefix}-color-dropdown",
+                                make_dropdown(
+                                    f"{prefix}-color-dropdown",
+                                    [],
+                                    None,
                                     placeholder="Color by",
                                     style={"width": "150px"},
                                 ),
                                 style={"flex": "0 0 auto"},
                             ),
                             html.Div(
-                                dcc.Dropdown(
-                                    id=f"{prefix}-colorscale-dropdown",
-                                    placeholder="Color scale",
-                                    options=[
+                                make_dropdown(
+                                    f"{prefix}-colorscale-dropdown",
+                                    [
                                         {"label": s, "value": s}
-                                        for s in ["Monet", "Viridis", "Cividis", "Plasma", "Jet", "Hot"]
+                                        for s in ["StarryNight", "Monet", "Viridis", "Cividis", "Plasma", "Jet", "Hot"]
                                     ],
-                                    value="Monet",
+                                    "StarryNight",
                                     style={"width": "150px"},
                                 ),
                                 style={"flex": "0 0 auto"},
@@ -173,11 +175,7 @@ def get_viewer_component(prefix: str):
                         ],
                     )
                 ],
-                style={
-                    "marginBottom": "0.5rem",
-                    "display": "flex",
-                    "alignItems": "center",
-                },
+                style={**{"display": "flex", "alignItems": "center"}, "marginBottom": "0.5rem"},
             ),
             dbc.Row(
                 [

@@ -42,6 +42,10 @@ from cryocat.app.components.rotationmodal import (
     get_rotation_modal,
     register_rotation_modal_callbacks,
 )
+from cryocat.app.components.varpicker import (
+    get_var_picker_modal,
+    register_var_picker_callbacks,
+)
 
 app = dash.Dash(
     __name__,
@@ -58,11 +62,11 @@ app = dash.Dash(
 # changes and every tool can read/write it. ``motl_id`` is a stable string key
 # (``motl-<n>`` using the ``pool-next-id`` counter) — there is no fixed slot cap.
 POOL_STORES = [
-    dcc.Store(id=ids.POOL_REGISTRY, data={}),  # { motl_id: {label, type, n_rows, active} }
-    dcc.Store(id=ids.POOL_MOTLS, data={}),     # { motl_id: <serialized motl rows> }
-    dcc.Store(id=ids.POOL_EXTRA, data={}),     # { motl_id: <stopgap/relion/dynamo extra df> }
-    dcc.Store(id=ids.POOL_META, data={}),      # { motl_id: <relion params, data_type, ...> }
-    dcc.Store(id=ids.POOL_NEXT_ID, data=0),    # incrementing counter for stable motl_id
+    dcc.Store(id=ids.POOL_REGISTRY, data={}),                              # { motl_id: {label, …} }
+    dcc.Store(id=ids.POOL_META, data={}),                                  # { motl_id: <relion …> }
+    dcc.Store(id=ids.POOL_NEXT_ID, data=0),                               # incrementing counter
+    dcc.Store(id=ids.POOL_GROUPS, data={"groups": {}, "next_id": 0}),    # group handles
+    # pool-motls and pool-extra removed — row data lives in pool._payloads (server-side)
 ]
 
 
@@ -113,6 +117,7 @@ app.layout = dbc.Container(
         *POOL_STORES,
         get_file_browser(),
         get_rotation_modal(),
+        *get_var_picker_modal(),
         *get_graph_settings_components(),
         *get_log_panel("suite-log"),
         *get_console_offcanvas("suite-console"),
@@ -162,6 +167,7 @@ def _route(pathname):
 # safety net but is no longer strictly required.
 register_file_browser_callbacks(app)
 register_rotation_modal_callbacks(app)
+register_var_picker_callbacks(app)
 register_graph_settings_callbacks(app)
 register_log_panel_callbacks(app, "suite-log", open_btn_id="suite-open-log-btn")
 register_console_callbacks(app, "suite-console")

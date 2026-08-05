@@ -284,6 +284,79 @@ namespace. Two rules bind earlier work:
   `tomoview`'s six-name colourscale dropdown) are migrated to
   `paletteloader` / `visplot.resolve_palette`.
 
+### 8.1 Checkbox and radio-button vertical alignment
+
+Browser defaults place the checkbox or radio input element at the text
+**baseline**, which puts it 2–3 px above the label text.  Always set:
+
+```python
+# dbc.Checklist
+inputStyle={"verticalAlign": "middle", "marginTop": "-2px"}
+labelStyle={"verticalAlign": "middle"}
+
+# dcc.RadioItems (stacked — one option per line)
+inputStyle={"verticalAlign": "middle", "marginTop": "-2px", "marginRight": "0.4rem"}
+labelStyle={"display": "block", "marginBottom": "0.3rem", "verticalAlign": "middle"}
+
+# dcc.RadioItems (inline — options side-by-side)
+# labelStyle alone is not enough; the container must also be flex because
+# Dash wraps each option in a block-level element.
+inputStyle={"verticalAlign": "middle", "marginTop": "-2px", "marginRight": "0.4rem"}
+labelStyle={"verticalAlign": "middle", "marginRight": "1.4rem"}
+style={"display": "flex", "flexWrap": "wrap", "alignItems": "center"}
+```
+
+The `marginTop: -2px` corrects a systematic upward bias present in most
+browsers.  Never omit it and never rely on `marginBottom` alone.
+
+**Use `dbc.Checklist` (via `_field_check`) instead of `dbc.Checkbox`.**
+`dbc.Checkbox` exposes no `inputStyle`/`labelStyle` and cannot be aligned
+without global CSS overrides.  `_field_check` already has the correct styles
+baked in; use it everywhere a single checkbox is needed.
+
+### 8.2 Two-option radio groups must be side by side
+
+### 8.3 Status-text colours
+
+| State | Colour |
+|---|---|
+| Positive / success | `#EAAE47` (amber) |
+| Uncertain / warn | `var(--bs-warning)` |
+| Error | `var(--bs-danger)` |
+| Muted / hint | `var(--color9)` |
+
+**Never use `var(--bs-success)` (Bootstrap green).** The amber `#EAAE47` reads well
+in both light and dark themes, avoids red–green colour-blindness conflict, and
+matches the application palette. Apply to all status spans, verdict text, and
+any inline indicator of successful completion.
+
+When a `RadioItems` (dbc or dcc) has **exactly two options**, always render
+them in a single row — never stacked.
+
+```python
+# dbc.RadioItems — two options
+dbc.RadioItems(
+    id="...",
+    options=[{"label": "A", "value": "a"}, {"label": "B", "value": "b"}],
+    value="a",
+    inline=True,
+    style={"display": "flex", "gap": "1.5rem"},
+)
+
+# dcc.RadioItems — two options (follow §8.1 inline style)
+dcc.RadioItems(
+    id="...",
+    options=[{"label": "A", "value": "a"}, {"label": "B", "value": "b"}],
+    value="a",
+    inputStyle={"verticalAlign": "middle", "marginTop": "-2px", "marginRight": "0.4rem"},
+    labelStyle={"verticalAlign": "middle", "marginRight": "1.4rem"},
+    style={"display": "flex", "flexWrap": "wrap", "alignItems": "center"},
+)
+```
+
+`inline=True` alone can be overridden by Bootstrap grid CSS; the explicit
+`"display": "flex"` on the container is the authoritative override.
+
 ## 9. Errors
 
 - Raise from the `exceptions.py` hierarchy (`UserInputError`, `ProcessError`,
@@ -497,3 +570,49 @@ Each of these is present in the codebase today and is a defect on sight:
   `_Verbatim`, defined below it).
 - The same helper defined twice in two modules (`_Verbatim`, `_format_value`,
   `_format_kwargs`, `render_slurm_wrapper` in both codegen modules).
+
+
+## Standing note — tests outside `cryocat/app/`
+
+This applies to **every** phase, without exception, and it is deliberately stricter
+than `REFACTOR_GUIDELINES.md` §2.
+
+**Tests that are not under `tests/app/` — `cryomotl`, `geom`, `classutils`, every
+library test — must not be modified during GUI work.** Not the assertions, not the
+fixtures, not the parametrisation, not the tolerances. Do not add `skip`, `xfail`, or
+a marker to make one pass.
+
+§2 of `REFACTOR_GUIDELINES.md` permits editing an existing test to track a changed
+call signature. **That permission does not extend to GUI tasks**, because a GUI task
+should not be changing a library signature in the first place. If one appears to need
+changing, that is itself the thing to report.
+
+### Protocol when a library test fails
+
+1. **Stop.** Do not edit the test, the assertion, or the fixture.
+2. **Report**, with:
+   - the test's full node id;
+   - the failing assertion, expected vs actual;
+   - the GUI-side change that caused it;
+   - the smallest reproduction that does not involve the app.
+3. **Wait for explicit consent** before touching anything outside `tests/app/`.
+4. If the failure looks like a genuine library bug that the GUI has exposed, **still
+   report it**. Do not fix the library from a GUI task, and do not work around it in
+   the app without saying so.
+
+### Baseline
+
+**Run the full test suite before starting each phase and record the pass/fail counts
+in the first commit message.** Without a baseline, a pre-existing failure is
+indistinguishable from a new one — which is exactly when someone "fixes" a test that
+was already red.
+
+### How to read a library test failure
+
+GUI work should change **no library behaviour at all**. A failing library test is
+therefore not a problem to be resolved; it is evidence that either an unintended
+library edit crept in, or GUI code was relying on library behaviour it should not
+have been. Both are reasons to stop and report rather than to proceed.
+
+New tests for GUI behaviour go in `tests/app/`, always — never as an extension to a
+library test module.

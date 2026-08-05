@@ -61,10 +61,9 @@ _PERMITTED_EXACT: frozenset[str] = frozenset(
     {
         _ids.GRAPH_SETTINGS_STORE,
         _ids.POOL_REGISTRY,
-        _ids.POOL_MOTLS,
-        _ids.POOL_EXTRA,
         _ids.POOL_META,
         _ids.POOL_NEXT_ID,
+        _ids.POOL_GROUPS,
         _ids.SUITE_URL,
         _ids.SUITE_TOOL_SELECTOR,
         _ids.SUITE_PAGE_CONTENT,
@@ -182,7 +181,7 @@ def test_no_duplicate_ids(app_name, request):
         "Duplicate component ids found in layout:\n"
         + "\n".join(
             f"  {k!r}:\n" + "\n".join(f"    {p}" for p in v)
-            for k, v in sorted(str(k) for k in duplicates)
+            for k, v in sorted(duplicates.items(), key=lambda kv: str(kv[0]))
         )
     )
 

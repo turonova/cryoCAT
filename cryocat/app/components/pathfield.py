@@ -66,7 +66,7 @@ def get_path_field(
                 value=value,
                 placeholder=placeholder or "Path…",
                 type="text",
-                style={"flex": "1 1 0", "minWidth": "0", "fontSize": "0.85rem"},
+                style={"flex": "1 1 0", "minWidth": "0"},
             ),
             dbc.Button(
                 "Browse…",

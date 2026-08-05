@@ -73,7 +73,7 @@ def load_motl_from_path(
     if motl_type != "relion":
         motl = Motl.load(resolved, motl_type)
         if motl_type == "stopgap":
-            extra_data = motl.stopgap_df.to_dict("records")
+            extra_data = motl.sg_df.to_dict("records")
         elif motl_type == "dynamo":
             extra_data = motl.dynamo_df.to_dict("records")
     else:

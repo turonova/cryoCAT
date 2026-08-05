@@ -31,24 +31,60 @@ from cryocat.app import ids
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
+from cryocat.app.formgen import make_dropdown
 
 
-def picker_options(registry: dict | None, current, multi: bool) -> tuple:
-    """Compute picker options, preserving the current selection when still valid."""
+def picker_options(registry: dict | None, current, multi: bool, groups: dict | None = None) -> tuple:
+    """Compute picker options, preserving the current selection when still valid.
+
+    When *groups* is provided, group entries appear above individual motls.  Groups
+    are rendered as disabled headers followed by their member motls listed inline.
+    The selection value is always a ``motl_id`` — no group-ID values are returned.
+    """
     registry = registry or {}
-    options = [
-        {"label": f"{meta.get('label', mid)} ({mid.replace('-', '_')})", "value": mid}
-        for mid, meta in registry.items()
-        if meta.get("active", True)
-    ]
-    if not options:
-        return [], ([] if multi else None), "Pool is empty — load a motl in the editor."
-    active_values = [o["value"] for o in options]
-    status = f"{len(options)} motl(s) in the pool."
+    groups = groups or {}
+
+    # Build the ordered option list: group section (members), then ungrouped motls.
+    all_grouped = {
+        mid
+        for g in groups.values()
+        for mid in g.get("members", [])
+    }
+    options = []
+    for gid, g in groups.items():
+        members = g.get("members", [])
+        if not members:
+            continue
+        glabel = g.get("label", gid)
+        options.append({"label": f"── {glabel} ({len(members)}) ──", "value": f"__group__{gid}", "disabled": True})
+        for mid in members:
+            if mid in registry:
+                mlabel = registry[mid].get("label", mid)
+                options.append({"label": f"  {mlabel} ({mid.replace('-', '_')})", "value": mid})
+
+    for mid, meta in registry.items():
+        if not meta.get("active", True):
+            continue
+        if mid in all_grouped:
+            continue  # already shown under its group
+        options.append({"label": f"{meta.get('label', mid)} ({mid.replace('-', '_')})", "value": mid})
+
+    selectable = [o["value"] for o in options if not o.get("disabled")]
+    if not selectable:
+        return options or [], ([] if multi else None), "Pool is empty — load a motl in the editor."
+
+    n_motls = sum(1 for mid in registry if registry[mid].get("active", True))
+    n_groups = len(groups)
+    status = f"{n_motls} motl(s)"
+    if n_groups:
+        status += f", {n_groups} group(s) in the pool."
+    else:
+        status += " in the pool."
+
     if multi:
-        kept = [v for v in (current or []) if v in active_values]
-        return options, kept or active_values, status
-    value = current if current in active_values else active_values[0]
+        kept = [v for v in (current or []) if v in selectable]
+        return options, kept or selectable, status
+    value = current if current in selectable else selectable[0]
     return options, value, status
 
 
@@ -76,17 +112,19 @@ def get_motl_source(prefix, show_table=False, multi=False):
     children = [
         html.Label(
             "Motl source",
-            style={"fontSize": "0.85rem", "marginBottom": "2px", "color": "var(--color11)"},
+            style={"marginBottom": "2px", "color": "var(--color11)"},
         ),
-        dcc.Dropdown(
-            id=f"{prefix}-motl-select",
+        make_dropdown(
+            f"{prefix}-motl-select",
+            [],
+            [] if multi else None,
             multi=multi,
             placeholder="Select motl(s) from the pool" if multi else "Select a motl from the pool",
             style={"marginBottom": "0.5rem"},
         ),
         html.Div(
             id=f"{prefix}-motl-source-status",
-            style={"fontSize": "0.8rem", "color": "var(--color9)", "marginBottom": "0.5rem"},
+            style={"color": "var(--color9)", "marginBottom": "0.5rem"},
         ),
     ]
 
@@ -115,27 +153,33 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
         Output(f"{prefix}-motl-select", "value"),
         Output(f"{prefix}-motl-source-status", "children"),
         Input(ids.POOL_REGISTRY, "data"),
+        Input(ids.POOL_GROUPS, "data"),
         State(f"{prefix}-motl-select", "value"),
     )
-    def _populate(registry, current):
-        return picker_options(registry, current, multi)
+    def _populate(registry, groups_data, current):
+        from cryocat.app.pool import GroupState
+        groups = GroupState.from_store(groups_data).groups
+        return picker_options(registry, current, multi, groups=groups)
 
     if show_table:
 
         @app.callback(
             Output(f"{prefix}-src-tabv-global-data-store", "data"),
             Input(f"{prefix}-motl-select", "value"),
-            Input(ids.POOL_MOTLS, "data"),
+            Input(ids.POOL_REGISTRY, "data"),
             prevent_initial_call=True,
         )
-        def _to_table(selected, pool_motls):
-            pool_motls = pool_motls or {}
+        def _to_table(selected, _registry):
             if not selected:
                 return no_update
             mid = selected[0] if isinstance(selected, list) else selected
             if not mid:
                 return no_update
-            return pool_motls.get(mid)
+            from cryocat.app.pool import get_rows, PoolPayloadMissing
+            try:
+                return get_rows(mid).to_dict("records")
+            except PoolPayloadMissing:
+                return no_update
 
         register_table_callbacks(app, f"{prefix}-src-tabv")
         register_table_plot_callbacks(
@@ -172,20 +216,24 @@ def get_multi_motl_picker(prefix):
       * ``f"{prefix}-list-select"``    — ordered multi-select; ``value`` is a
         list of ``motl_id`` in the order the user picked them.
     """
-    label_style = {"fontSize": "0.85rem", "marginBottom": "2px", "color": "var(--color11)"}
+    label_style = {"marginBottom": "2px", "color": "var(--color11)"}
     return html.Div(
         [
             html.Div(
                 [
                     html.Label("Main motl", style=label_style),
-                    dcc.Dropdown(
-                        id=f"{prefix}-main-select",
+                    make_dropdown(
+                        f"{prefix}-main-select",
+                        [],
+                        None,
                         placeholder="Main motl (motl1)",
                         style={"marginBottom": "0.4rem"},
                     ),
                     html.Label("Second motl", style=label_style),
-                    dcc.Dropdown(
-                        id=f"{prefix}-second-select",
+                    make_dropdown(
+                        f"{prefix}-second-select",
+                        [],
+                        None,
                         placeholder="Second motl (motl2)",
                         style={"marginBottom": "0.5rem"},
                     ),
@@ -200,8 +248,10 @@ def get_multi_motl_picker(prefix):
                         id=f"{prefix}-list-label",
                         style=label_style,
                     ),
-                    dcc.Dropdown(
-                        id=f"{prefix}-list-select",
+                    make_dropdown(
+                        f"{prefix}-list-select",
+                        [],
+                        [],
                         multi=True,
                         placeholder="Pick pool motls — selection order is preserved",
                         style={"marginBottom": "0.5rem"},
@@ -229,12 +279,12 @@ def register_multi_motl_picker_callbacks(app, prefix):
         Output(f"{prefix}-second-select", "options"),
         Output(f"{prefix}-list-select", "options"),
         Input(ids.POOL_REGISTRY, "data"),
+        Input(ids.POOL_GROUPS, "data"),
     )
-    def _populate(registry):
-        registry = registry or {}
-        options = [
-            {"label": f"{meta.get('label', mid)} ({mid.replace('-', '_')})", "value": mid}
-            for mid, meta in registry.items()
-            if meta.get("active", True)
-        ]
-        return options, options, options
+    def _populate(registry, groups_data):
+        from cryocat.app.pool import GroupState
+        groups = GroupState.from_store(groups_data).groups
+        # list-select shows group headers + members; pair selects show only selectable motls
+        all_opts, _, _ = picker_options(registry, None, multi=True, groups=groups)
+        selectable = [o for o in all_opts if not o.get("disabled")]
+        return selectable, selectable, all_opts

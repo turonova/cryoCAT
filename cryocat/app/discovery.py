@@ -223,7 +223,7 @@ def gui_ready(entry: GuiEntry) -> tuple[bool, str]:
 # A mismatch here surfaces via gui_ready() / test_gui_exposed.py.
 _KNOWN_WIDGETS: frozenset[str] = frozenset({
     "path", "triplet", "csv_text", "text",
-    "number", "bool", "dropdown", "rotation", "tuple",
+    "number", "bool", "dropdown", "rotation", "tuple", "listlike",
 })
 
 

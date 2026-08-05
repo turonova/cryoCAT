@@ -35,6 +35,8 @@ import pandas as pd
 
 from cryocat.analysis import pana
 from cryocat.app import formgen
+from cryocat.app.formgen import make_dropdown
+from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.styles import (
     HINT as _HINT,
     CTRL_ROW as _ROW_STYLE,
@@ -109,13 +111,10 @@ def _wedge_mask_modal() -> dbc.Modal:
             dbc.ModalBody(
                 [
                     html.Div(form_rows, style={"marginBottom": "0.75rem"}),
-                    dbc.Input(
-                        id="ppana-wedge-output-path",
-                        type="text",
-                        placeholder="Output path (e.g. /path/to/wedge_mask.em)",
-                        size="sm",
-                        style={"marginBottom": "0.4rem"},
-                    ),
+                    html.Div(get_path_field("ppana-wedge-output-path", mode="save",
+                                            extensions=(".em",),
+                                            placeholder="Output path (e.g. /path/to/wedge_mask.em)"),
+                             style={"marginBottom": "0.4rem"}),
                     dbc.Row(
                         [
                             dbc.Col(
@@ -142,7 +141,7 @@ def _wedge_mask_modal() -> dbc.Modal:
                 [
                     dbc.Button("Use as target", id="ppana-wedge-use-target-btn", color="primary", size="sm", className="me-1"),
                     dbc.Button("Use as template", id="ppana-wedge-use-tmpl-btn", color="primary", size="sm", className="me-1"),
-                    dbc.Button("Use as both", id="ppana-wedge-use-both-btn", color="success", size="sm", className="me-2"),
+                    dbc.Button("Use as both", id="ppana-wedge-use-both-btn", color="primary", size="sm", className="me-2"),
                     dbc.Button("Close", id="ppana-wedge-close-btn", color="secondary", size="sm"),
                 ]
             ),
@@ -329,8 +328,7 @@ def _visualize_form():
                     ],
                     value="replace",
                     inline=True,
-                    style={"fontSize": "0.82rem"},
-                ),
+                    ),
             ),
             dbc.Button("Load to table", id="ppana-v-load-csv-btn", color="secondary", size="sm",
                        style={"width": "100%"}),
@@ -356,16 +354,10 @@ def _generate_script_form():
             dbc.Row(
                 [
                     dbc.Col(
-                        dcc.Dropdown(
-                            id="ppana-g-format",
-                            options=[
-                                {"label": ".py script", "value": "py"},
-                                {"label": ".py + SLURM wrapper", "value": "slurm"},
-                            ],
-                            value="py",
-                            clearable=False,
-                            style={"fontSize": "0.85rem"},
-                        ),
+                        make_dropdown("ppana-g-format", [
+                            {"label": ".py script", "value": "py"},
+                            {"label": ".py + SLURM wrapper", "value": "slurm"},
+                        ], "py", clearable=False),
                         width=12,
                     ),
                 ],
@@ -379,15 +371,13 @@ def _generate_script_form():
                         dcc.Textarea(
                             id="ppana-g-sbatch",
                             placeholder="--mem=32G\n--time=24:00:00\n-N 1",
-                            style={"width": "100%", "minHeight": "60px", "fontFamily": "monospace",
-                                   "fontSize": "0.82rem"},
+                            style={"width": "100%", "minHeight": "60px", "fontFamily": "monospace"},
                         ),
                         html.Small("Module loads (one per line)", style=_HINT),
                         dcc.Textarea(
                             id="ppana-g-modules",
                             placeholder="cryocat/1.0",
-                            style={"width": "100%", "minHeight": "40px", "fontFamily": "monospace",
-                                   "fontSize": "0.82rem"},
+                            style={"width": "100%", "minHeight": "40px", "fontFamily": "monospace"},
                         ),
                     ],
                     style={"marginTop": "0.4rem"},
@@ -399,8 +389,9 @@ def _generate_script_form():
             dbc.Row(
                 [
                     dbc.Col(
-                        dbc.Input(id="ppana-g-save-path", type="text",
-                                  placeholder="/path/to/run_pana.py", size="sm"),
+                        get_path_field("ppana-g-save-path", mode="save",
+                                       extensions=(".py",),
+                                       placeholder="/path/to/run_pana.py"),
                         width=8,
                     ),
                     dbc.Col(
@@ -456,7 +447,6 @@ def _csv_tab_content():
                 selected_rows=[],
                 style_table={"overflowX": "auto", "overflowY": "auto", "maxHeight": "calc(100vh - 160px)"},
                 style_cell={
-                    "fontSize": "0.82rem",
                     "padding": "4px 8px",
                     "maxWidth": "220px",
                     "overflow": "hidden",
@@ -492,7 +482,7 @@ def _csv_tab_content():
 def _slot_placeholder(i: int):
     return html.Div(
         f"Result slot {i} — run a single case or visualize an existing result to populate this slot.",
-        style={"color": "#aaa", "padding": "2rem", "fontSize": "0.9rem"},
+        style={"color": "#aaa", "padding": "2rem"},
     )
 
 
@@ -505,7 +495,6 @@ def _main() -> list:
         html.Div(
             id="ppana-status",
             style={
-                "fontSize": "0.9rem",
                 "color": "var(--color9)",
                 "padding": "0.3rem 0.5rem 0",
                 "whiteSpace": "pre-wrap",
@@ -758,7 +747,7 @@ def register_callbacks(app):
         Output("ppana-wedge-created-path", "data"),
         Input("ppana-wedge-generate-btn", "n_clicks"),
         State("ppana-wedge-params", "data"),
-        State("ppana-wedge-output-path", "value"),
+        State({"type": "path-input", "owner": "ppana-wedge-output-path"}, "value"),
         prevent_initial_call=True,
     )
     def _generate_wedge_mask_cb(n_clicks, params, out_path):
@@ -1053,24 +1042,24 @@ def register_callbacks(app):
             return str(p / fname) if (p / fname).exists() else None
 
         if compute_dist and _exists("angles.em") and _exists("angles.csv"):
-            pana.compute_distance_map(
-                angles_map=str(p / "angles.em"),
-                angles_list=str(p / "angles.csv"),
-                output_dir=str(p),
-            )
+            run_operation(pana.compute_distance_map, {
+                "angles_map": str(p / "angles.em"),
+                "angles_list": str(p / "angles.csv"),
+                "output_dir": str(p),
+            })
         if compute_peak and _exists("scores.em"):
             da = _exists("distance_map_all.em")
             dn = _exists("distance_map_normals.em")
             di = _exists("distance_map_inplane.em")
             if da and dn and di and deg is not None:
-                pana.compute_peak_stats(
-                    scores_map=str(p / "scores.em"),
-                    dist_all_map=da,
-                    dist_normals_map=dn,
-                    dist_inplane_map=di,
-                    degrees=deg,
-                    output_dir=str(p),
-                )
+                run_operation(pana.compute_peak_stats, {
+                    "scores_map": str(p / "scores.em"),
+                    "dist_all_map": da,
+                    "dist_normals_map": dn,
+                    "dist_inplane_map": di,
+                    "degrees": deg,
+                    "output_dir": str(p),
+                })
 
         figs = pana.visualize_results(
             scores=_exists("scores.em"),
@@ -1315,15 +1304,15 @@ def register_callbacks(app):
             return "Distance maps not found — run with Compute distance map enabled first.", no_update, no_update
 
         try:
-            pana.compute_peak_stats(
-                scores_map=scores,
-                dist_all_map=da,
-                dist_normals_map=dn,
-                dist_inplane_map=di,
-                degrees=deg,
-                cc_radius=cc,
-                output_dir=write_dir,
-            )
+            run_operation(pana.compute_peak_stats, {
+                "scores_map": scores,
+                "dist_all_map": da,
+                "dist_normals_map": dn,
+                "dist_inplane_map": di,
+                "degrees": deg,
+                "cc_radius": cc,
+                "output_dir": write_dir,
+            })
         except Exception as exc:
             return f"Error recomputing peak stats: {exc}", no_update, no_update
 
@@ -1430,7 +1419,7 @@ def register_callbacks(app):
         State("ppana-g-format", "value"),
         State("ppana-g-sbatch", "value"),
         State("ppana-g-modules", "value"),
-        State("ppana-g-save-path", "value"),
+        State({"type": "path-input", "owner": "ppana-g-save-path"}, "value"),
         prevent_initial_call=True,
     )
     def _generate_script(n_clicks, csv_path, parent, angle_path, wedge_path, cc,
@@ -1458,16 +1447,14 @@ def register_callbacks(app):
 
         try:
             py_script = codegen.render_analysis_py(kwargs)
-            with open(save_path, "w", encoding="utf-8") as fh:
-                fh.write(py_script)
+            run_operation(Path(save_path).write_text, {"data": py_script, "encoding": "utf-8"})
 
             if fmt == "slurm":
                 slurm_path = save_path.replace(".py", ".sh")
                 cluster_params = _parse_sbatch_text(sbatch_text or "")
                 module_loads = [m.strip() for m in (modules_text or "").splitlines() if m.strip()]
                 slurm_script = codegen.render_slurm_wrapper(save_path, cluster_params, module_loads)
-                with open(slurm_path, "w", encoding="utf-8") as fh:
-                    fh.write(slurm_script)
+                run_operation(Path(slurm_path).write_text, {"data": slurm_script, "encoding": "utf-8"})
                 return f"Saved: {save_path} + {slurm_path}"
 
             return f"Saved: {save_path}"

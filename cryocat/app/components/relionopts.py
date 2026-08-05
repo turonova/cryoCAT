@@ -109,7 +109,7 @@ def get_relion_options(prefix: str, *, for_load: bool) -> html.Div:
                 html.Div(
                     "No tomogram file loaded",
                     id=f"{prefix}-rln-tomos-status",
-                    style={"fontSize": "0.8rem", "color": "var(--color9)"},
+                    style={"color": "var(--color9)"},
                 ),
                 get_path_field(
                     f"{prefix}-rln-tomos-path",
