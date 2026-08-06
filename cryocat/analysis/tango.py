@@ -1170,11 +1170,11 @@ class TwistDescriptor(Descriptor):
         self,
         input_twist=None,
         input_motl=None,
-        nn_radius=None,
-        column_name="tomo_id",
+        nn_radius: float | None = None,
+        column_name: Literal["tomo_id", "object_id", "class", "geom1", "geom2", "geom3", "geom4", "geom5"] = "tomo_id",
         symm=None,
-        remove_qp=False,
-        remove_duplicates=False,
+        remove_qp: bool = False,
+        remove_duplicates: bool = False,
         build_unique_desc=True,
     ):
         """

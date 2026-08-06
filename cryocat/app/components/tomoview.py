@@ -55,10 +55,20 @@ def tomo_figure(data, index, color_col, colorscale, marker_size, hover_info, sho
     return fig, graph_width, {"display": "block", "marginTop": "1rem"}, f"Tomo ID: {tomo}"
 
 
-def detail_figure(clickData, data, twist_data, radius) -> go.Figure | None:
-    clicked_row = clickData["points"][0]["customdata"]
-    clicked_df = pd.DataFrame([clicked_row], columns=pd.DataFrame(data).columns)
-    subtomo_id = clicked_row[clicked_df.columns.get_loc("subtomo_id")]
+def detail_figure(clickData, data, twist_data, radius, tomo_index=0) -> go.Figure | None:
+    point = clickData["points"][0]
+    point_number = point.get("pointNumber")
+    if point_number is None:
+        return None
+    motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
+    tomo_ids = sorted(motl.df["tomo_id"].unique())
+    tomo_index = tomo_index or 0
+    if tomo_index >= len(tomo_ids):
+        tomo_index = 0
+    tm = motl.get_motl_subset(tomo_ids[tomo_index])
+    if point_number >= len(tm.df):
+        return None
+    subtomo_id = tm.df.iloc[point_number]["subtomo_id"]
     qp_df = pd.DataFrame(twist_data)
     qp_df = qp_df[qp_df["qp_id"] == subtomo_id]
     if qp_df.empty:
@@ -310,12 +320,13 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
             State(f"{prefix}-data", "data"),
             State(f"{detailed_table}", "data"),
             State("twist-global-radius", "data"),
+            State(f"{prefix}-index", "data"),
             prevent_initial_call=True,
         )
-        def show_detail_on_click(clickData, data, twist_data, radius):
+        def show_detail_on_click(clickData, data, twist_data, radius, tomo_index):
             if not clickData or not data:
                 raise dash.exceptions.PreventUpdate
-            fig = detail_figure(clickData, data, twist_data, radius)
+            fig = detail_figure(clickData, data, twist_data, radius, tomo_index)
             if fig is None:
                 raise exceptions.PreventUpdate
             return dcc.Graph(id=f"{prefix}-detail-graph", figure=fig)

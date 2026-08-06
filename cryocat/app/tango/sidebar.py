@@ -246,8 +246,8 @@ def get_sidebar():
                                             html.Div(
                                                 id="custom-spinner",
                                                 children=[
-                                                    html.Img(src="../assets/twist_1.png", className="spinner-frame frame1"),
-                                                    html.Img(src="../assets/twist_2.png", className="spinner-frame frame2"),
+                                                    html.Img(src="assets/twist_1.png", className="spinner-frame frame1"),
+                                                    html.Img(src="assets/twist_2.png", className="spinner-frame frame2"),
                                                 ],
                                                 style={
                                                     "position": "fixed",

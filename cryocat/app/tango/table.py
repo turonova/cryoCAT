@@ -580,7 +580,7 @@ def register_tango_table_callbacks(app):
         if not motl_df:
             return no_update, no_update, no_update, hide_style, "Error: no particle list loaded — please load a motl first."
         twist_kwargs = generate_kwargs(param_ids, param_values)
-        if not twist_kwargs.get("nn_radius"):
+        if twist_kwargs.get("nn_radius") is None:
             return no_update, no_update, no_update, hide_style, "Error: nn_radius is required — please fill in a radius."
         if symm_type == "C":
             symm = symm_value
