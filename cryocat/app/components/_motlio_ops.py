@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 
 from cryocat.core.cryomotl import Motl
 
