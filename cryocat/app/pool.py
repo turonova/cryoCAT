@@ -38,11 +38,13 @@ class PoolPayload:
 
 
 _payloads: dict[str, PoolPayload] = {}
+_snapshots: dict[str, "pd.DataFrame"] = {}
 
 
 def clear_payloads() -> None:
     """Drop all server-side payloads.  For tests and hot-reload only."""
     _payloads.clear()
+    _snapshots.clear()
 
 
 # ── Exception ───────────────────────────────────────────────────────────────────
@@ -291,6 +293,17 @@ def get_extra(motl_id: str) -> pd.DataFrame | None:
     """Return the extra :class:`~pandas.DataFrame` for *motl_id*, or ``None``."""
     payload = _payloads.get(motl_id)
     return payload.extra if payload is not None else None
+
+
+def save_snapshot(motl_id: str, df: "pd.DataFrame") -> None:
+    """Save a pre-operation snapshot for pool-aware undo.  Server-side only."""
+    import pandas as _pd
+    _snapshots[motl_id] = df.copy()
+
+
+def restore_snapshot(motl_id: str) -> "pd.DataFrame | None":
+    """Return and remove the undo snapshot for *motl_id*, or None if absent."""
+    return _snapshots.pop(motl_id, None)
 
 
 def active_ids(state: PoolState) -> list[str]:

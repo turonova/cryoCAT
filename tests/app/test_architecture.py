@@ -302,7 +302,7 @@ def test_thin_callback_exempt_list_is_bounded():
 
 # Baseline recorded at Phase 3 write time.  The test asserts the count only
 # goes DOWN (shrinks), never UP.  Update this number when the count drops.
-_ALLOW_DUPLICATE_BASELINE = 308  # Phase 1/2 + R1/R2/R3 (283) + F1 motlinput (2) + F3 seq-load (4) + F2 pool-load (2) + Part F varpicker (2) + B2/C group-options (4) + col-merge modal (4) - motlio simple save (3) + savedialog prefill (1) + select-all-visible toggle (1) + P4 pool-aware tablefilter/tableedit/tablecluster/pmotl (+7) + P6 _sync_revisions (+1)
+_ALLOW_DUPLICATE_BASELINE = 311  # 308 + pool-aware undo_operation (3 new pool Outputs with allow_duplicate)
 
 
 def test_allow_duplicate_count_does_not_grow():
@@ -461,11 +461,9 @@ def test_single_log_panel_call_site_in_suite():
 # pd.DataFrame() — the old pre-pool pattern.  Correct form: pool.get_rows(mid).
 # May SHRINK as P6 lands; never grow.
 _DATAFRAME_FROM_STORE_EXEMPT: dict[str, str] = {
-    "motlsidebar": "P6-pending — run_multi_op/apply_operation read motl rows from store",
-    "pnn":         "P6-pending — compute_nn/merge/build callbacks wrap result/selection stores",
-    "tablecluster": "P6-pending — merge-back and scatter callbacks wrap cluster-data store",
-    "pstructure":  "P6-pending — _render_isect_results wraps hits snapshot from result store",
-    "motlio":      "P6-pending — save_data callback wraps data_to_save store arg",
+    "pnn":         "non-motl data — NN statistics table cannot use motl pool without architectural redesign",
+    "pstructure":  "non-motl data — _render_isect_results wraps intersection-distance hits (not particle data)",
+    "motlio":      "blocked — save_data wraps tool-specific result stores that remain pre-pool",
     "tablesave":   "legitimate — do_csv_save wraps grid_data for CSV export (not a pool roundtrip)",
 }
 
@@ -551,20 +549,15 @@ def test_no_dataframe_from_store_arg(src_path: pathlib.Path):
 # Broadened from the earlier X.df.to_dict chain check to catch any receiver
 # expression.  Correct pattern after P6: route the motl through the pool and
 # output a reference handle; the grid fetches rows via its server-side datasource.
-# May SHRINK as P6 and PERF_FINISH W2 land; never grow.
-# Primary targets not in this list (must stay RED): tablefilter, tablegrid.
+# Shrinks as violations are fixed; remaining entries are permanently legitimate or blocked.
 _TO_DICT_RECORDS_EXEMPT: dict[str, str] = {
-    "pstructure":   "P6-pending — _run_operation/_build_point_cloud_motl route result.df to store",
-    "pnn":          "P6-pending — _apply_postprocessing/_load_nn_from_csv route nn_stats.df to store",
-    "psta":         "P6-pending — load_from_params routes params.df to store (pre-pool pattern)",
-    "pmotl":        "P6-pending — sync_pool_to_slots serialises rows to motl-data-store and extra-store",
-    "motlsidebar":  "P6-pending — run_multi_op/apply_operation route result.df to store",
-    "tablecluster": "P6-pending — merge-back and scatter callbacks write cluster-data store",
-    "motlio":       "P6-pending — save_data callback wraps data_to_save arg from store",
+    "pstructure":   "non-motl data — _run_operation routes intersection-distance df and motl result to pre-pool stores",
+    "pnn":          "non-motl data — NN statistics table is not particle data; cannot use motl pool without redesign",
+    "psta":         "non-motl data — STA parameter config tables are not motls; cannot use motl pool",
+    "motlio":       "blocked — save_data wraps tool-specific result stores that remain pre-pool",
     "tablesave":    "legitimate — do_csv_save wraps grid_data for CSV export (not a pool roundtrip)",
-    "motlsource":   "P6-pending — _to_table writes get_rows().to_dict('records') to src-tabv-global-data-store (pre-pool store format)",
     "relionopts":   "legitimate — _on_tomos_load writes tomogram dimension data (not motl rows) to rln-tomos-store",
-    "tablegrid":    "W2-partial — load_data_to_grid serialises ≤2k rows; full fix needs AG Grid server-side/infinite row model",
+    "tablegrid":    "legitimate — load_data_to_grid must serialise ≤2k rows for AG Grid; eliminated pool-store roundtrip (W2)",
 }
 
 

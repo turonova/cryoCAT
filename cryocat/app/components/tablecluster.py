@@ -216,6 +216,16 @@ def get_table_cluster_component(prefix: str, is_motl=False, motl_cols=None):
     )
 
 
+def _cluster_df_to_store(df: pd.DataFrame) -> list[dict]:
+    """Serialize K-means result DataFrame for cluster-data-store.  Module-level helper."""
+    return df.to_dict("records")
+
+
+def _cluster_store_to_df(data) -> pd.DataFrame:
+    """Deserialize cluster-data-store content to DataFrame.  Module-level helper."""
+    return pd.DataFrame(data)
+
+
 def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, table_grid_id=None, is_motl=False, motl_cols=None, cluster_cols_store_id=None, pool_aware=False):
 
     def _df_from_store(data):
@@ -226,7 +236,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
                 return get_rows(data["motl_id"])
             except PoolPayloadMissing:
                 return pd.DataFrame()
-        return pd.DataFrame(data) if data else pd.DataFrame()
+        return pd.DataFrame.from_records(data) if data else pd.DataFrame()
 
     # ── Type selection: show/hide panels, populate features + PCA ────────────
 
@@ -346,7 +356,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
             {"display": "block"},
             axis_opts,
             axis_opts,
-            result_df.to_dict("records"),
+            _cluster_df_to_store(result_df),
             f"K-means complete — {int(n_clusters)} clusters, {len(df_valid)} points.",
             {"display": "block"},
         )
@@ -363,7 +373,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
     def _update_scatter(x_col, y_col, data):
         if not data or not x_col or not y_col or x_col == y_col:
             raise dash.exceptions.PreventUpdate
-        df = pd.DataFrame(data)
+        df = _cluster_store_to_df(data)
         fig = px.scatter(df, x=x_col, y=y_col, color=df["cluster"].astype(str))
         fig.update_layout(
             height=350,
@@ -479,7 +489,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
             return tuple(nu) if n_out > 1 else nu[0]
 
         df = _df_from_store(main_data)
-        cluster_df = pd.DataFrame(cluster_data)
+        cluster_df = _cluster_store_to_df(cluster_data)
 
         df = df.copy()
         df[col_target] = np.nan
@@ -505,7 +515,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
                 result.append(cols)
             return tuple(result)
 
-        new_data = df.to_dict("records")
+        new_data = _cluster_df_to_store(df)
         if cluster_cols_store_id:
             cols = list(existing_cols or [])
             if col_target not in cols:

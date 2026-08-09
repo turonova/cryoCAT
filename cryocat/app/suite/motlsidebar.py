@@ -48,7 +48,7 @@ from cryocat.app.pool import (
     PoolState, remove_motl, get_rows, PoolPayloadMissing,
     GroupState, create_group, delete_group, reorder_group, remove_from_group,
     purge_motl_from_groups, set_has_tab, natural_sort_key, insert_motl,
-    replace_motl_rows,
+    replace_motl_rows, save_snapshot, restore_snapshot,
 )
 
 # Number of editor *view slots* (rendered table/viewer surfaces). The motl pool
@@ -1485,8 +1485,10 @@ def register_motl_editor_sidebar_callbacks(app):
         if slot_idx >= N_SLOTS:
             raise dash.exceptions.PreventUpdate
 
-        current_data = all_slot_data[slot_idx]
-        if not current_data:
+        current_data = all_slot_data[slot_idx]  # kept for legacy undo fallback only
+        slot_map_list_pre = list(slot_map or [])
+        active_mid = slot_map_list_pre[slot_idx] if slot_idx < len(slot_map_list_pre) else None
+        if not active_mid or not (registry or {}).get(active_mid):
             return _ret(nochange, nochange, "No data in the active slot.")
 
         current_pool = PoolState.from_stores(registry, pool_meta, next_id)
@@ -1503,7 +1505,10 @@ def register_motl_editor_sidebar_callbacks(app):
                 slot_map.append(None)
             src_mid = slot_map[slot_idx]
             src_label = (registry.get(src_mid) or {}).get("label", f"Slot {slot_idx + 1}")
-            motl = Motl(pd.DataFrame(current_data))
+            try:
+                motl = Motl(get_rows(src_mid))
+            except PoolPayloadMissing:
+                return _ret(nochange, nochange, "Pool entry missing for active slot.")
             motl._pool_motl_id = src_mid
             op_label = gui.get("label", method_name)
             try:
@@ -1564,7 +1569,10 @@ def register_motl_editor_sidebar_callbacks(app):
             while len(slot_map) < N_SLOTS:
                 slot_map.append(None)
             src_label = (registry.get(slot_map[slot_idx]) or {}).get("label", f"Slot {slot_idx + 1}")
-            motl = Motl(pd.DataFrame(current_data))
+            try:
+                motl = Motl(get_rows(slot_map[slot_idx]))
+            except PoolPayloadMissing:
+                return _ret(nochange, nochange, "Pool entry missing for active slot.")
             motl._pool_motl_id = slot_map[slot_idx]
             try:
                 pool_state, mid, result = run_operation_to_pool(
@@ -1601,12 +1609,14 @@ def register_motl_editor_sidebar_callbacks(app):
                     si = slot_map_list.index(mid)
                 except ValueError:
                     continue
-                member_data = all_slot_data[si]
-                if not member_data:
-                    continue
                 try:
-                    m = Motl(pd.DataFrame(member_data))
-                    m._pool_motl_id = mid
+                    m = Motl(get_rows(mid))
+                except PoolPayloadMissing:
+                    errs.append(f"{(registry or {}).get(mid, {}).get('label', mid)}: pool entry missing")
+                    continue
+                m._pool_motl_id = mid
+                pre_op_df = m.df.copy()
+                try:
                     res = invoke_operation(getattr(m, method_name), kwargs)
                 except Exception as exc:
                     errs.append(f"{(registry or {}).get(mid, {}).get('label', mid)}: {exc}")
@@ -1617,9 +1627,10 @@ def register_motl_editor_sidebar_callbacks(app):
                     result_df = m.df
                 else:
                     continue
+                save_snapshot(mid, pre_op_df)
                 state = replace_motl_rows(state, mid, result_df)
-                data_out[si] = result_df.to_dict("records")
-                undo_out[si] = member_data
+                data_out[si] = no_update  # pool updated; _sync_revisions refreshes the view
+                undo_out[si] = mid        # pool-aware undo: restore from snapshot
                 n_ok += 1
             status = f"'{method_name}' applied to {n_ok}/{len(members)} motl(s)."
             if errs:
@@ -1628,10 +1639,14 @@ def register_motl_editor_sidebar_callbacks(app):
 
         # In-place operation — single motl: update the active slot.
         slot_map_list = list(slot_map or [])
-        mid = slot_map_list[slot_idx] if slot_idx < len(slot_map_list) else None
+        mid = active_mid  # already resolved above
         try:
-            motl = Motl(pd.DataFrame(current_data))
+            motl = Motl(get_rows(mid))
             motl._pool_motl_id = mid
+        except PoolPayloadMissing:
+            return _ret(nochange, nochange, "Pool entry missing for active slot.")
+        pre_op_df = motl.df.copy()
+        try:
             result = invoke_operation(getattr(motl, method_name), kwargs)
         except Exception as exc:
             return _ret(nochange, nochange, f"Error running '{method_name}': {exc}")
@@ -1643,13 +1658,12 @@ def register_motl_editor_sidebar_callbacks(app):
         else:
             return _ret(nochange, nochange, f"Ran '{method_name}' — result: {result!r} (table unchanged).")
 
+        save_snapshot(mid, pre_op_df)
         state = replace_motl_rows(current_pool, mid, result_df) if mid else current_pool
-        new_data = result_df.to_dict("records")
-        data_out = [no_update] * N_SLOTS
-        data_out[slot_idx] = new_data
+        data_out = [no_update] * N_SLOTS  # pool updated; _sync_revisions refreshes the view
         undo_out = [no_update] * N_SLOTS
-        undo_out[slot_idx] = current_data
-        status = f"'{method_name}' applied. Particles: {len(current_data)} → {len(new_data)}."
+        undo_out[slot_idx] = mid  # pool-aware undo: restore from snapshot
+        status = f"'{method_name}' applied. Particles: {len(pre_op_df)} → {len(result_df)}."
         return _ret(data_out, undo_out, status, pool=(*state.to_stores(), slot_map, no_update))
 
     # ── Undo the last operation on the active slot ─────────────────────────────
@@ -1657,12 +1671,21 @@ def register_motl_editor_sidebar_callbacks(app):
         *[Output(f"me-{i}-motl-data-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-undo-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         Output("me-op-status", "children", allow_duplicate=True),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("me-op-undo-btn", "n_clicks"),
         State("me-tabs", "active_tab"),
         *[State(f"me-{i}-undo-store", "data") for i in range(N_SLOTS)],
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def undo_operation(n_clicks, active_tab, *all_undo_data):
+    def undo_operation(n_clicks, active_tab, *args):
+        all_undo_data = args[:N_SLOTS]
+        registry, pool_meta, next_id = args[N_SLOTS:]
+
         if not n_clicks or not active_tab:
             raise dash.exceptions.PreventUpdate
 
@@ -1673,17 +1696,32 @@ def register_motl_editor_sidebar_callbacks(app):
         if slot_idx >= N_SLOTS:
             raise dash.exceptions.PreventUpdate
 
+        pool_noup = (no_update, no_update, no_update)
         undo_data = all_undo_data[slot_idx]
         if not undo_data:
             empty = [no_update] * N_SLOTS
-            return (*empty, *empty, "Nothing to undo for this slot.")
+            return (*empty, *empty, "Nothing to undo for this slot.", *pool_noup)
 
-        data_out = [no_update] * N_SLOTS
-        data_out[slot_idx] = undo_data
-        undo_out = [no_update] * N_SLOTS
-        undo_out[slot_idx] = None  # one level of undo
+        empty = [no_update] * N_SLOTS
+        data_out = list(empty)
+        undo_out = list(empty)
+        undo_out[slot_idx] = None
 
-        return (*data_out, *undo_out, "Undo successful.")
+        # Pool-aware undo: undo_data is a motl_id string; restore from server-side snapshot.
+        if isinstance(undo_data, str):
+            old_df = restore_snapshot(undo_data)
+            if old_df is not None and registry is not None:
+                state = PoolState.from_stores(registry, pool_meta, next_id)
+                state = replace_motl_rows(state, undo_data, old_df)
+                return (*data_out, *undo_out, "Undo successful.", *state.to_stores())
+            return (*empty, *empty, "Nothing to undo (snapshot expired).", *pool_noup)
+
+        # Legacy undo: undo_data is list[dict] — write rows back to motl-data-store.
+        if isinstance(undo_data, list):
+            data_out[slot_idx] = undo_data
+            return (*data_out, *undo_out, "Undo successful.", *pool_noup)
+
+        return (*empty, *empty, "Nothing to undo.", *pool_noup)
 
     # ── R1: toggle single / multiple load mode ─────────────────────────────────
     @app.callback(

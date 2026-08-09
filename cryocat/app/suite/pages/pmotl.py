@@ -265,18 +265,19 @@ def _register_pool_sync(app):
         data, extra, dtype, optics, r5t, r5tn, rparams, undo, table_refs = ([] for _ in range(9))
         for i in range(N_SLOTS):
             mid = slot_map[i] if i < len(slot_map) else None
-            rows_data = None
+            has_payload = False
             if mid:
                 try:
-                    rows_data = get_rows(mid).to_dict("records")
+                    get_rows(mid)  # existence check only; rows stay server-side
+                    has_payload = True
                 except PoolPayloadMissing:
-                    rows_data = None
-            if rows_data is not None:
+                    pass
+            if has_payload:
                 meta = pool_meta.get(mid) or {}
                 extra_df = get_extra(mid)
                 rev = registry.get(mid, {}).get("revision", 0)
-                data.append(rows_data)
-                extra.append(extra_df.to_dict("records") if extra_df is not None else None)
+                data.append(None)  # motl-data-store: no rows serialized; use pool ref via tabv-global-data-store
+                extra.append(mid if extra_df is not None else None)  # mid string — callers use get_extra(mid)
                 dtype.append(meta.get("data_type"))
                 optics.append(meta.get("relion_optics"))
                 r5t.append(meta.get("relion5_tomos"))

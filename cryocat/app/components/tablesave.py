@@ -268,6 +268,9 @@ def register_table_save_callbacks(
                 base = (no_update, "Specify output type and filename.", no_update)
                 return (*base, no_update) if _update_registry else base
 
+            if isinstance(extra_df, str):
+                from cryocat.app.pool import get_extra as _get_extra
+                extra_df = _get_extra(extra_df)
             kwargs = save_kwargs_from_store(rln_state, rln_tomos_orig)
             status = save_motl(
                 file_path=path, data_to_save=data, motl_type=motl_type,
@@ -311,6 +314,9 @@ def register_table_save_callbacks(
                 return False
             if not params or not data:
                 return False
+            if isinstance(extra_df, str):
+                from cryocat.app.pool import get_extra as _get_extra
+                extra_df = _get_extra(extra_df)
             kwargs = save_kwargs_from_store(params.get("rln_state"), params.get("rln_tomos_orig"))
             save_motl(
                 file_path=params["path"], data_to_save=data, motl_type=params["motl_type"],

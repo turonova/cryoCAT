@@ -169,17 +169,14 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
             Input(ids.POOL_REGISTRY, "data"),
             prevent_initial_call=True,
         )
-        def _to_table(selected, _registry):
+        def _to_table(selected, registry):
             if not selected:
                 return no_update
             mid = selected[0] if isinstance(selected, list) else selected
             if not mid:
                 return no_update
-            from cryocat.app.pool import get_rows, PoolPayloadMissing
-            try:
-                return get_rows(mid).to_dict("records")
-            except PoolPayloadMissing:
-                return no_update
+            rev = (registry or {}).get(mid, {}).get("revision", 0)
+            return {"motl_id": mid, "rev": rev}
 
         register_table_callbacks(app, f"{prefix}-src-tabv")
         register_table_plot_callbacks(

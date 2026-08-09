@@ -262,6 +262,9 @@ def register_motl_save_callbacks(
         n_clicks, data_type_value, path, column_id, class_filter, checklist_options,
         data_to_save, motl_type, rln_state, rln_tomos_orig, extra_df, rln_optics, *s_states,
     ):
+        if isinstance(extra_df, str):
+            from cryocat.app.pool import get_extra as _get_extra
+            extra_df = _get_extra(extra_df)
         idx = list(stored_outputs.keys()).index(data_type_value)
         results_df = pd.DataFrame(s_states[idx])
         motl_df = filter_by_class(
