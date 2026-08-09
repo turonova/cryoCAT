@@ -16,6 +16,7 @@ import importlib
 # Start the session stream now so events are captured when running standalone
 # (server.py calls this before importing us; start_session() is idempotent).
 from cryocat.app import session as _session
+
 _session.start_session()
 
 import dash
@@ -55,6 +56,9 @@ app = dash.Dash(
     suppress_callback_exceptions=True,
 )
 
+from cryocat.app.instrument import instrument
+
+instrument(app)
 
 # ── Suite-global motl pool ──────────────────────────────────────────────────────
 # The pool is the shared spine across all tools: a small, soft-sized set of
@@ -62,10 +66,10 @@ app = dash.Dash(
 # changes and every tool can read/write it. ``motl_id`` is a stable string key
 # (``motl-<n>`` using the ``pool-next-id`` counter) — there is no fixed slot cap.
 POOL_STORES = [
-    dcc.Store(id=ids.POOL_REGISTRY, data={}),                              # { motl_id: {label, …} }
-    dcc.Store(id=ids.POOL_META, data={}),                                  # { motl_id: <relion …> }
-    dcc.Store(id=ids.POOL_NEXT_ID, data=0),                               # incrementing counter
-    dcc.Store(id=ids.POOL_GROUPS, data={"groups": {}, "next_id": 0}),    # group handles
+    dcc.Store(id=ids.POOL_REGISTRY, data={}),  # { motl_id: {label, …} }
+    dcc.Store(id=ids.POOL_META, data={}),  # { motl_id: <relion …> }
+    dcc.Store(id=ids.POOL_NEXT_ID, data=0),  # incrementing counter
+    dcc.Store(id=ids.POOL_GROUPS, data={"groups": {}, "next_id": 0}),  # group handles
     # pool-motls and pool-extra removed — row data lives in pool._payloads (server-side)
 ]
 
@@ -89,10 +93,7 @@ def _resolve_active_tool(pathname: str) -> str:
 def _tool_selector(active_id: str):
     """Top-nav pills, rendered from the TOOLS registry."""
     return dbc.Nav(
-        [
-            dbc.NavLink(t["label"], href=t["path"], active=(t["id"] == active_id))
-            for t in TOOLS
-        ],
+        [dbc.NavLink(t["label"], href=t["path"], active=(t["id"] == active_id)) for t in TOOLS],
         pills=True,
         className="suite-nav",
     )
@@ -154,10 +155,7 @@ _route_outputs = [Output(ids.page_wrap_id(t["id"]), "style") for t in TOOLS] + [
 @app.callback(*_route_outputs, Input(ids.SUITE_URL, "pathname"))
 def _route(pathname):
     active_id = _resolve_active_tool(pathname)
-    styles = [
-        {"display": "block"} if t["id"] == active_id else {"display": "none"}
-        for t in TOOLS
-    ]
+    styles = [{"display": "block"} if t["id"] == active_id else {"display": "none"} for t in TOOLS]
     return *styles, _tool_selector(active_id)
 
 
@@ -176,4 +174,4 @@ for _t in TOOLS:
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False)

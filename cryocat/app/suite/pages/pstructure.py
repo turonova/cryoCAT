@@ -1070,15 +1070,15 @@ def register_callbacks(app):
             if not isect_motl_id:
                 return (no_update,) * 6 + ("Pick a motl from the pool.",)
             try:
-                rows = _pool.get_rows(isect_motl_id).to_dict("records")
+                isect_df = _pool.get_rows(isect_motl_id)
             except _pool.PoolPayloadMissing:
-                rows = []
-            if not rows:
+                isect_df = None
+            if isect_df is None or isect_df.empty:
                 return (no_update,) * 6 + (
                     f"Motl '{isect_motl_id}' has no data.",)
             try:
                 rays = motl_rows_to_rays(
-                    rows, pixel_size=float(isect_px or 1.0),
+                    isect_df, pixel_size=float(isect_px or 1.0),
                     reverse_direction=bool(isect_rev),
                 )
             except Exception as exc:

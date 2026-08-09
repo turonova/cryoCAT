@@ -20,7 +20,7 @@ hand-build store contents or reference id strings (use :mod:`cryocat.app.ids`).
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import pandas as pd
 
@@ -71,6 +71,9 @@ class PoolEntry:
     source_path: str | None  # original file path; shown in PoolPayloadMissing message
     revision: int            # bumped on every mutation so store-watchers re-fire
     has_tab: bool = True     # False for batch-loaded group members (hidden from individual rows)
+    numeric_columns: list[str] = field(default_factory=list)       # numeric cols; for dropdowns
+    column_ranges: dict[str, list[float]] = field(default_factory=dict)  # {col: [min, max]}
+    tomo_ids: list[int] = field(default_factory=list)              # sorted unique tomo IDs
 
 
 # ── Pool state ───────────────────────────────────────────────────────────────────
@@ -118,6 +121,32 @@ def default_label(next_id: int) -> str:
     return f"Motl {next_id + 1}"
 
 
+# ── Metadata helper ──────────────────────────────────────────────────────────────
+
+def _compute_entry_metadata(df: pd.DataFrame) -> tuple[list[str], dict[str, list[float]], list[int]]:
+    """Compute lightweight metadata from a DataFrame. Pure.
+
+    Returns ``(numeric_columns, column_ranges, tomo_ids)``.  All values are
+    JSON-serializable Python types so they survive a dcc.Store round-trip.
+    """
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    ranges: dict[str, list[float]] = {}
+    for col in num_cols:
+        col_min = df[col].min()
+        col_max = df[col].max()
+        if pd.isna(col_min) or pd.isna(col_max) or col_min == col_max:
+            continue
+        mn, mx = float(col_min), float(col_max)
+        step = 1.0 if pd.api.types.is_integer_dtype(df[col]) else ((mx - mn) / 100 or 1.0)
+        ranges[col] = [mn, mx, step]  # [min, max, step]
+
+    tomo_ids: list[int] = []
+    if "tomo_id" in df.columns:
+        tomo_ids = sorted(int(t) for t in df["tomo_id"].dropna().unique())
+
+    return num_cols, ranges, tomo_ids
+
+
 # ── Pure reducers ────────────────────────────────────────────────────────────────
 
 def insert_motl(
@@ -140,6 +169,7 @@ def insert_motl(
     _payloads[motl_id] = PoolPayload(rows=df, extra=extra_df)
 
     cols = list(df.columns)[:_MAX_COLUMNS]
+    num_cols, ranges, tids = _compute_entry_metadata(df)
     entry = PoolEntry(
         label=label or default_label(state.next_id),
         type=motl_type,
@@ -150,6 +180,9 @@ def insert_motl(
         source_path=source_path,
         revision=0,
         has_tab=has_tab,
+        numeric_columns=num_cols,
+        column_ranges=ranges,
+        tomo_ids=tids,
     )
     return PoolState(
         registry={**state.registry, motl_id: asdict(entry)},
@@ -206,10 +239,14 @@ def replace_motl_rows(
     existing = _payloads.get(motl_id)
     _payloads[motl_id] = PoolPayload(rows=df, extra=existing.extra if existing else None)
 
+    num_cols, ranges, tids = _compute_entry_metadata(df)
     entry = dict(state.registry[motl_id])
     entry["n_rows"] = len(df)
     entry["n_columns"] = len(df.columns)
     entry["columns"] = list(df.columns)[:_MAX_COLUMNS]
+    entry["numeric_columns"] = num_cols
+    entry["column_ranges"] = ranges
+    entry["tomo_ids"] = tids
     entry["revision"] = entry.get("revision", 0) + 1
     if label is not None:
         entry["label"] = label

@@ -10,6 +10,7 @@ from cryocat.app.pool import (
     PoolPayload,
     PoolPayloadMissing,
     PoolState,
+    _compute_entry_metadata,
     active_ids,
     clear_payloads,
     default_label,
@@ -19,6 +20,7 @@ from cryocat.app.pool import (
     remove_motl,
     replace_motl_rows,
     set_active,
+    set_has_tab,
 )
 
 
@@ -335,3 +337,185 @@ class TestDefaultLabel:
         assert default_label(0) == "Motl 1"
         assert default_label(1) == "Motl 2"
         assert default_label(9) == "Motl 10"
+
+
+# ── _compute_entry_metadata ───────────────────────────────────────────────────────
+
+_META_DF = pd.DataFrame({
+    "tomo_id": [1, 1, 2, 2, 3],
+    "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+    "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+    "label": ["a", "b", "c", "d", "e"],  # non-numeric
+    "const": [7.0, 7.0, 7.0, 7.0, 7.0],  # constant — excluded from ranges
+})
+
+
+class TestComputeEntryMetadata:
+    def test_numeric_columns_detected(self):
+        num_cols, _, _ = _compute_entry_metadata(_META_DF)
+        assert set(num_cols) == {"tomo_id", "x", "y", "const"}
+        assert "label" not in num_cols
+
+    def test_ranges_computed(self):
+        _, ranges, _ = _compute_entry_metadata(_META_DF)
+        assert "x" in ranges
+        assert ranges["x"][0] == 1.0 and ranges["x"][1] == 5.0   # [min, max, step]
+        assert "y" in ranges
+        assert ranges["y"][0] == 10.0 and ranges["y"][1] == 50.0
+
+    def test_constant_column_excluded_from_ranges(self):
+        _, ranges, _ = _compute_entry_metadata(_META_DF)
+        assert "const" not in ranges
+
+    def test_tomo_ids_sorted(self):
+        _, _, tids = _compute_entry_metadata(_META_DF)
+        assert tids == [1, 2, 3]
+
+    def test_no_tomo_id_column_gives_empty(self):
+        df = pd.DataFrame({"x": [1.0, 2.0]})
+        _, _, tids = _compute_entry_metadata(df)
+        assert tids == []
+
+    def test_empty_df_gives_empty(self):
+        num_cols, ranges, tids = _compute_entry_metadata(pd.DataFrame())
+        assert num_cols == []
+        assert ranges == {}
+        assert tids == []
+
+    def test_all_values_json_serialisable(self):
+        num_cols, ranges, tids = _compute_entry_metadata(_META_DF)
+        json.dumps({"num_cols": num_cols, "ranges": ranges, "tids": tids})
+
+
+# ── PoolEntry metadata fields ─────────────────────────────────────────────────────
+
+class TestPoolEntryMetadata:
+    def test_insert_populates_numeric_columns(self):
+        s, mid = insert_motl(_empty(), _META_DF)
+        assert "x" in s.registry[mid]["numeric_columns"]
+        assert "label" not in s.registry[mid]["numeric_columns"]
+
+    def test_insert_populates_column_ranges(self):
+        s, mid = insert_motl(_empty(), _META_DF)
+        ranges = s.registry[mid]["column_ranges"]
+        assert ranges["x"][0] == 1.0 and ranges["x"][1] == 5.0  # [min, max, step]
+
+    def test_insert_populates_tomo_ids(self):
+        s, mid = insert_motl(_empty(), _META_DF)
+        assert s.registry[mid]["tomo_ids"] == [1, 2, 3]
+
+    def test_replace_updates_metadata(self):
+        s, mid = insert_motl(_empty(), _META_DF)
+        new_df = pd.DataFrame({"tomo_id": [5, 5], "x": [100.0, 200.0]})
+        s2 = replace_motl_rows(s, mid, new_df)
+        assert s2.registry[mid]["tomo_ids"] == [5]
+        r = s2.registry[mid]["column_ranges"]["x"]
+        assert r[0] == 100.0 and r[1] == 200.0  # [min, max, step]
+
+    def test_metadata_survives_json_roundtrip(self):
+        s, mid = insert_motl(_empty(), _META_DF)
+        registry, meta, nid = json.loads(json.dumps(s.to_stores()))
+        s2 = PoolState.from_stores(registry, meta, nid)
+        assert s2.registry[mid]["tomo_ids"] == [1, 2, 3]
+        r = s2.registry[mid]["column_ranges"]["x"]
+        assert r[0] == 1.0 and r[1] == 5.0  # [min, max, step]
+
+    def test_old_entry_without_fields_defaults_to_empty(self):
+        # Simulate a registry dict from before P2 (no new fields)
+        old_entry = {
+            "label": "Motl 1", "type": "emmotl", "n_rows": 2, "n_columns": 1,
+            "columns": ["x"], "active": True, "source_path": None, "revision": 0,
+            "has_tab": True,
+        }
+        # These must not raise — consumers fall back to empty containers
+        assert old_entry.get("numeric_columns", []) == []
+        assert old_entry.get("column_ranges", {}) == {}
+        assert old_entry.get("tomo_ids", []) == []
+
+
+# ── set_has_tab ───────────────────────────────────────────────────────────────────
+
+class TestSetHasTab:
+    def test_set_false(self):
+        s, mid = insert_motl(_empty(), _ROWS)
+        s2 = set_has_tab(s, mid, False)
+        assert s2.registry[mid]["has_tab"] is False
+
+    def test_set_true_after_false(self):
+        s, mid = insert_motl(_empty(), _ROWS)
+        s = set_has_tab(s, mid, False)
+        s = set_has_tab(s, mid, True)
+        assert s.registry[mid]["has_tab"] is True
+
+    def test_bumps_revision(self):
+        s, mid = insert_motl(_empty(), _ROWS)
+        rev0 = s.registry[mid]["revision"]
+        s2 = set_has_tab(s, mid, False)
+        assert s2.registry[mid]["revision"] == rev0 + 1
+
+    def test_unknown_id_is_noop(self):
+        s = _empty()
+        assert set_has_tab(s, "motl-99", False) == s
+
+    def test_other_fields_unchanged(self):
+        s, mid = insert_motl(_empty(), _ROWS, label="keep-me")
+        s2 = set_has_tab(s, mid, False)
+        assert s2.registry[mid]["label"] == "keep-me"
+        assert s2.registry[mid]["n_rows"] == s.registry[mid]["n_rows"]
+
+
+# ── Revision policy: every mutation bumps revision ────────────────────────────────
+#
+# These are the ONLY functions that mutate an existing PoolEntry in the registry.
+# Each must bump `revision` so pool-registry watchers re-fire.  If a new mutation
+# function is added to pool.py, add it here.
+
+_MUTATION_CASES = [
+    (
+        "replace_motl_rows",
+        lambda s, mid: replace_motl_rows(s, mid, pd.DataFrame({"x": [99]})),
+    ),
+    (
+        "set_active/false",
+        lambda s, mid: set_active(s, mid, False),
+    ),
+    (
+        "set_active/true",
+        lambda s, mid: set_active(s, mid, True),
+    ),
+    (
+        "set_has_tab/false",
+        lambda s, mid: set_has_tab(s, mid, False),
+    ),
+    (
+        "set_has_tab/true",
+        lambda s, mid: set_has_tab(s, mid, True),
+    ),
+]
+
+
+class TestRevisionPolicy:
+    @pytest.mark.parametrize("name,mutate", _MUTATION_CASES, ids=[c[0] for c in _MUTATION_CASES])
+    def test_revision_bumps(self, name, mutate):
+        s, mid = insert_motl(_empty(), _ROWS)
+        rev_before = s.registry[mid]["revision"]
+        s2 = mutate(s, mid)
+        assert s2.registry[mid]["revision"] == rev_before + 1, (
+            f"{name}: expected revision {rev_before + 1}, got {s2.registry[mid]['revision']}"
+        )
+
+    @pytest.mark.parametrize("name,mutate", _MUTATION_CASES, ids=[c[0] for c in _MUTATION_CASES])
+    def test_revision_monotone_across_chained_mutations(self, name, mutate):
+        s, mid = insert_motl(_empty(), _ROWS)
+        for _ in range(5):
+            rev_before = s.registry[mid]["revision"]
+            s = mutate(s, mid)
+            assert s.registry[mid]["revision"] == rev_before + 1
+
+    @pytest.mark.parametrize("name,mutate", _MUTATION_CASES, ids=[c[0] for c in _MUTATION_CASES])
+    def test_other_entries_revision_unchanged(self, name, mutate):
+        s, mid1 = insert_motl(_empty(), _ROWS)
+        s, mid2 = insert_motl(s, _ROWS)
+        rev2_before = s.registry[mid2]["revision"]
+        s2 = mutate(s, mid1)
+        assert s2.registry[mid2]["revision"] == rev2_before

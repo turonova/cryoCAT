@@ -145,19 +145,6 @@ def get_motl_save_component(prefix: str) -> html.Div:
     ])
 
 
-def get_motl_simple_save_component(prefix: str) -> html.Div:
-    """Simplified save: type + Relion opts + filename only (no class filtering)."""
-    return html.Div([
-        dbc.Button(
-            "Save motl",
-            id=f"{prefix}-save-output-btn",
-            color="light",
-            style={"width": "100%"},
-        ),
-        get_save_modal(prefix, title="Save motl"),
-    ])
-
-
 # ── Load component ────────────────────────────────────────────────────────────
 
 
@@ -201,51 +188,6 @@ def get_motl_load_component(prefix: str, display_option="block") -> html.Div:
             ),
         ],
     )
-
-
-# ── Save callbacks — simplified save ─────────────────────────────────────────
-
-
-def register_motl_simple_save_callbacks(
-    app, prefix: str, data_store_id: str, connected_input_motl_prefix: str
-):
-    """Callbacks for the simplified save dialog (no class/column selection)."""
-    register_relion_options_callbacks(
-        app,
-        prefix,
-        for_load=False,
-        type_input_id=f"{prefix}-data-save-type-dropdown",
-        connected_motl_prefix=connected_input_motl_prefix,
-    )
-
-    @app.callback(
-        Output(f"{prefix}-save-output-modal", "is_open", allow_duplicate=True),
-        Input(f"{prefix}-save-output-btn", "n_clicks"),
-        prevent_initial_call=True,
-    )
-    def open_modal(_):
-        return True
-
-    @app.callback(
-        Output(f"{prefix}-status-label", "children", allow_duplicate=True),
-        Output(f"{prefix}-save-output-modal", "is_open", allow_duplicate=True),
-        Input(f"{prefix}-save-output-file", "n_clicks"),
-        State(f"{prefix}-save-path-input", "value"),
-        State(f"{prefix}-data-save-type-dropdown", "value"),
-        State(f"{prefix}-rln-value", "data"),
-        State(f"{connected_input_motl_prefix}-rln-tomos-store", "data"),
-        State(f"{connected_input_motl_prefix}-motl-extra-data-store", "data"),
-        State(f"{connected_input_motl_prefix}-relion-optics-store", "data"),
-        State(data_store_id, "data"),
-        prevent_initial_call=True,
-    )
-    def save_data(n_clicks, path, motl_type, rln_state, rln_tomos_orig, extra_df, rln_optics, data):
-        if not n_clicks or not path or not motl_type or not data:
-            return no_update, no_update
-        kwargs = save_kwargs_from_store(rln_state, rln_tomos_orig)
-        status = save_motl(file_path=path, data_to_save=data, motl_type=motl_type,
-                           extra_df=extra_df, rln_optics=rln_optics, **kwargs)
-        return status, False
 
 
 # ── Save callbacks — full save (with class filtering) ─────────────────────────

@@ -48,6 +48,27 @@ def get_relion_options(prefix: str, *, for_load: bool) -> html.Div:
             disabled=True,
             style={"width": "30%"},
         ),
+        html.Div(
+            id=f"{prefix}-rln-v5-opts",
+            className="hidden",
+            style={"flexDirection": "column", "width": "100%", "gap": "0.3rem", "marginTop": "0.3rem"},
+            children=[
+                InlineInputForm(
+                    id_=f"{prefix}-rln-subtomo-size",
+                    type="number",
+                    placeholder="Optional",
+                    label="Subtomo size:",
+                ),
+                dbc.Checkbox(
+                    id=f"{prefix}-rln-convert",
+                    label="Convert to Relion STAR format",
+                    value=False,
+                    inputStyle={"marginRight": "5px"},
+                    className="sidebar-checklist",
+                    labelStyle={"color": "var(--color9)"},
+                ),
+            ],
+        ),
     ]
 
     return html.Div([
@@ -235,6 +256,15 @@ def register_relion_options_callbacks(
         def _on_version_save_simple(version, tomos):
             return _save_version_outputs(version, tomos, None, None, None, None)
 
+    if not for_load:
+        @app.callback(
+            Output(f"{prefix}-rln-v5-opts", "className"),
+            Input(f"{prefix}-rln-version", "value"),
+            prevent_initial_call=True,
+        )
+        def _on_v5_opts(version):
+            return "flex" if version in (5.0, 5.1) else "hidden"
+
     value_inputs = [
         Input(f"{prefix}-rln-version", "value"),
         Input(f"{prefix}-rln-pixelsize", "value"),
@@ -244,7 +274,11 @@ def register_relion_options_callbacks(
         Input(f"{prefix}-rln-tomos-store", "data"),
     ]
     if not for_load:
-        value_inputs.append(Input(f"{prefix}-rln-use-original", "value"))
+        value_inputs += [
+            Input(f"{prefix}-rln-use-original", "value"),
+            Input(f"{prefix}-rln-subtomo-size", "value"),
+            Input(f"{prefix}-rln-convert", "value"),
+        ]
 
     @app.callback(
         Output(f"{prefix}-rln-value", "data"),
@@ -254,7 +288,7 @@ def register_relion_options_callbacks(
     def _publish(*args):
         keys = ["version", "pixel_size", "binning", "tomo_format", "subtomo_format", "tomos"]
         if not for_load:
-            keys.append("use_original")
+            keys += ["use_original", "subtomo_size", "convert"]
         return dict(zip(keys, args))
 
 
@@ -271,10 +305,15 @@ def read_relion_kwargs(state: dict) -> dict:
         ("binning", "binning"),
         ("tomo_format", "tomo_format"),
         ("subtomo_format", "subtomo_format"),
+        ("subtomo_size", "subtomo_size"),
     ):
         val = state.get(key)
         if val:
             result[kw] = val
+    if state.get("convert"):
+        result["convert"] = True
+    if state.get("use_original"):
+        result["use_original_entries"] = True
     return result
 
 

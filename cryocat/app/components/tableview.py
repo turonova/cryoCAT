@@ -6,7 +6,7 @@ import dash_bootstrap_components as dbc
 
 from cryocat.app.components.tableplot import get_table_plot_component
 from cryocat.app.components.tablecluster import get_table_cluster_component
-from cryocat.app.components.tablegrid import get_grid, register_tablegrid_callbacks
+from cryocat.app.components.tablegrid import get_grid, get_grid_row_count_notice, register_tablegrid_callbacks
 from cryocat.app.components.tablefilter import register_tablefilter_callbacks
 from cryocat.app.components.tableedit import register_tableedit_callbacks
 from cryocat.app.components.tablesave import (
@@ -18,18 +18,27 @@ from cryocat.app.components.tablesave import (
 )
 
 
-def get_table_component(prefix: str, connected_motl_prefix=None, show_create_from_selected=True):
+def get_table_component(
+    prefix: str,
+    connected_motl_prefix=None,
+    show_create_from_selected=True,
+    save_dialog_prefix: str | None = None,
+):
     motl_mode = connected_motl_prefix is not None
+    use_save_dialog = motl_mode and save_dialog_prefix is not None
 
     button_children = [
         dbc.Button("Apply Changes", id=f"{prefix}-apply-btn", color="primary", className="me-1"),
     ]
 
     if motl_mode:
-        button_children += [
+        button_children.append(
             dbc.Button("Save As", id=f"{prefix}-save-btn", color="primary", className="me-1"),
-            dbc.Button("Save", id=f"{prefix}-save-overwrite-btn", color="secondary", className="me-1"),
-        ]
+        )
+        if not use_save_dialog:
+            button_children.append(
+                dbc.Button("Save", id=f"{prefix}-save-overwrite-btn", color="secondary", className="me-1"),
+            )
         if show_create_from_selected:
             button_children.append(
                 dbc.Button(
@@ -43,6 +52,7 @@ def get_table_component(prefix: str, connected_motl_prefix=None, show_create_fro
     button_children += [
         dbc.Button("Save as CSV", id=f"{prefix}-save-csv-btn", color="primary", className="me-1"),
         dbc.Button("Remove Selected Rows", id=f"{prefix}-remove-rows-btn", color="primary", className="me-1"),
+        dbc.Button("Select All Visible", id=f"{prefix}-select-all-btn", color="secondary", className="me-1"),
         dbc.Button("Select Inverse", id=f"{prefix}-select-inverse-btn", color="secondary", className="me-1"),
         dbc.Button("Plot", id=f"{prefix}-plot-graphs-btn", color="primary", className="me-1", n_clicks=0),
         dbc.Offcanvas(
@@ -68,7 +78,20 @@ def get_table_component(prefix: str, connected_motl_prefix=None, show_create_fro
 
     extra_children = [get_csv_save_modal(prefix)]
 
-    if motl_mode:
+    if use_save_dialog:
+        from cryocat.app.components.savedialog import get_save_dialog
+        extra_children.append(
+            dbc.Offcanvas(
+                [get_save_dialog(save_dialog_prefix, mode="single")],
+                id=f"{save_dialog_prefix}-offcanvas",
+                title="Save Motl",
+                placement="end",
+                scrollable=True,
+                style={"width": "500px"},
+                is_open=False,
+            )
+        )
+    elif motl_mode:
         extra_children += [
             get_motl_save_modal(prefix),
             get_overwrite_confirm_modal(prefix),
@@ -96,6 +119,7 @@ def get_table_component(prefix: str, connected_motl_prefix=None, show_create_fro
         children=[
             dbc.Row(button_row_children, className="mb-2"),
             get_grid(prefix),
+            get_grid_row_count_notice(prefix),
             html.H5("Filters", style={"marginBottom": "1rem", "marginTop": "1rem"}),
             html.Div(id=f"{prefix}-filters-container", style={"marginBottom": "2rem"}),
             *extra_children,

@@ -44,22 +44,24 @@ def motl_from_rows(rows: list[dict]) -> Motl:
 
 
 def motl_rows_to_rays(
-    rows: list[dict],
+    rows: list[dict] | pd.DataFrame,
     pixel_size: float,
     reverse_direction: bool = False,
     ray_length: float | None = None,
 ) -> np.ndarray:
-    """Build an ``(N, 6)`` ray array from pool-store motl rows.
+    """Build an ``(N, 6)`` ray array from motl data.
 
-    Coordinates are scaled by ``pixel_size`` (pool rows are stored in voxel
-    units; the surface is typically in nm). Per-particle z-normals come from
-    applying the stored rotations to ``[0, 0, 1]`` -- the same convention as
-    the ``mesh_points_intersections`` tutorial.
+    Accepts either a :class:`~pandas.DataFrame` (from :func:`pool.get_rows`)
+    or a ``list[dict]`` (legacy / test path).  Coordinates are scaled by
+    ``pixel_size`` (pool rows are stored in voxel units; the surface is
+    typically in nm).  Per-particle z-normals come from applying the stored
+    rotations to ``[0, 0, 1]`` -- the same convention as the
+    ``mesh_points_intersections`` tutorial.
 
     Parameters
     ----------
-    rows : list of dict
-        Motl rows from the suite pool.
+    rows : pd.DataFrame or list of dict
+        Motl data from the suite pool.
     pixel_size : float
         Voxel-to-physical-units scale factor (e.g. nm/voxel).
     reverse_direction : bool, default=False
@@ -75,7 +77,10 @@ def motl_rows_to_rays(
     numpy.ndarray
         Shape ``(N, 6)``; columns ``[ox, oy, oz, dx, dy, dz]``.
     """
-    motl = motl_from_rows(rows)
+    if isinstance(rows, pd.DataFrame):
+        motl = Motl(rows)
+    else:
+        motl = motl_from_rows(rows)
     coords = motl.get_coordinates() * float(pixel_size)
     normals = motl.get_rotations().apply([0.0, 0.0, 1.0])
     return geom.construct_rays(

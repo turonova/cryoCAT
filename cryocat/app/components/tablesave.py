@@ -202,102 +202,121 @@ def register_table_save_callbacks(
     connected_motl_prefix: str,
     slot_idx: int | None = None,
     max_motls: int | None = None,
+    save_dialog_prefix: str | None = None,
 ) -> None:
-    """Register motl Save-As, overwrite, and (optionally) create-from-selected."""
-    register_relion_options_callbacks(
-        app,
-        prefix,
-        for_load=False,
-        type_input_id=f"{prefix}-save-type-dropdown",
-        connected_motl_prefix=connected_motl_prefix,
-    )
+    """Register motl Save-As, overwrite, and (optionally) create-from-selected.
 
-    @app.callback(
-        Output(f"{prefix}-save-modal", "is_open", allow_duplicate=True),
-        Input(f"{prefix}-save-btn", "n_clicks"),
-        prevent_initial_call=True,
-    )
-    def open_save_as_modal(_):
-        return True
+    When *save_dialog_prefix* is given, wires the Save As button to open a
+    savedialog offcanvas instead of the legacy modal.
+    """
+    if save_dialog_prefix is not None:
+        from cryocat.app.components.savedialog import register_save_dialog_callbacks
 
-    _update_registry = slot_idx is not None
+        register_save_dialog_callbacks(app, save_dialog_prefix, mode="single")
 
-    @app.callback(
-        Output(f"{prefix}-save-modal", "is_open", allow_duplicate=True),
-        Output(f"{prefix}-save-status-label", "children", allow_duplicate=True),
-        Output(f"{prefix}-last-save-params-store", "data"),
-        *([Output("motls-registry", "data", allow_duplicate=True)] if _update_registry else []),
-        Input(f"{prefix}-save-file", "n_clicks"),
-        State(f"{prefix}-save-path", "value"),
-        State(f"{prefix}-save-type-dropdown", "value"),
-        State(f"{prefix}-rln-value", "data"),
-        State(f"{connected_motl_prefix}-rln-tomos-store", "data"),
-        State(f"{connected_motl_prefix}-motl-extra-data-store", "data"),
-        State(f"{connected_motl_prefix}-relion-optics-store", "data"),
-        State(f"{prefix}-global-data-store", "data"),
-        *([State("motls-registry", "data")] if _update_registry else []),
-        prevent_initial_call=True,
-    )
-    def save_as(*args):
-        if _update_registry:
-            n_clicks, path, motl_type, rln_state, rln_tomos_orig, extra_df, rln_optics, data, registry = args
-        else:
-            n_clicks, path, motl_type, rln_state, rln_tomos_orig, extra_df, rln_optics, data = args
-            registry = None
-
-        if not path or not motl_type or not data:
-            base = (no_update, "Specify output type and filename.", no_update)
-            return (*base, no_update) if _update_registry else base
-
-        kwargs = save_kwargs_from_store(rln_state, rln_tomos_orig)
-        status = save_motl(
-            file_path=path, data_to_save=data, motl_type=motl_type,
-            extra_df=extra_df, rln_optics=rln_optics, **kwargs,
+        @app.callback(
+            Output(f"{save_dialog_prefix}-offcanvas", "is_open"),
+            Input(f"{prefix}-save-btn", "n_clicks"),
+            prevent_initial_call=True,
         )
-        params = {"path": path, "motl_type": motl_type, "rln_state": rln_state, "rln_tomos_orig": rln_tomos_orig}
+        def _open_save_offcanvas(_):
+            return True
 
-        if _update_registry:
-            new_registry = dict(registry or {})
-            entry = new_registry.get(str(slot_idx), {})
-            new_registry[str(slot_idx)] = {"label": os.path.basename(path), "active": entry.get("active", True)}
-            return False, status, params, new_registry
-
-        return False, status, params
-
-    @app.callback(
-        Output(f"{prefix}-overwrite-modal", "is_open"),
-        Output(f"{prefix}-overwrite-body-text", "children"),
-        Output(f"{prefix}-overwrite-yes-btn", "disabled"),
-        Input(f"{prefix}-save-overwrite-btn", "n_clicks"),
-        State(f"{prefix}-last-save-params-store", "data"),
-        prevent_initial_call=True,
-    )
-    def open_overwrite_confirm(_, params):
-        if not params or not params.get("path"):
-            return True, "No output path set. Please use 'Save As' first to specify the file.", True
-        return True, f"Overwrite '{params['path']}'?", False
-
-    @app.callback(
-        Output(f"{prefix}-overwrite-modal", "is_open", allow_duplicate=True),
-        Input(f"{prefix}-overwrite-yes-btn", "n_clicks"),
-        Input(f"{prefix}-overwrite-no-btn", "n_clicks"),
-        State(f"{prefix}-last-save-params-store", "data"),
-        State(f"{connected_motl_prefix}-motl-extra-data-store", "data"),
-        State(f"{connected_motl_prefix}-relion-optics-store", "data"),
-        State(f"{prefix}-global-data-store", "data"),
-        prevent_initial_call=True,
-    )
-    def do_overwrite_save(_yes, _no, params, extra_df, rln_optics, data):
-        if ctx.triggered_id == f"{prefix}-overwrite-no-btn":
-            return False
-        if not params or not data:
-            return False
-        kwargs = save_kwargs_from_store(params.get("rln_state"), params.get("rln_tomos_orig"))
-        save_motl(
-            file_path=params["path"], data_to_save=data, motl_type=params["motl_type"],
-            extra_df=extra_df, rln_optics=rln_optics, **kwargs,
+    else:
+        register_relion_options_callbacks(
+            app,
+            prefix,
+            for_load=False,
+            type_input_id=f"{prefix}-save-type-dropdown",
+            connected_motl_prefix=connected_motl_prefix,
         )
-        return False
+
+        @app.callback(
+            Output(f"{prefix}-save-modal", "is_open", allow_duplicate=True),
+            Input(f"{prefix}-save-btn", "n_clicks"),
+            prevent_initial_call=True,
+        )
+        def open_save_as_modal(_):
+            return True
+
+        _update_registry = slot_idx is not None
+
+        @app.callback(
+            Output(f"{prefix}-save-modal", "is_open", allow_duplicate=True),
+            Output(f"{prefix}-save-status-label", "children", allow_duplicate=True),
+            Output(f"{prefix}-last-save-params-store", "data"),
+            *([Output("motls-registry", "data", allow_duplicate=True)] if _update_registry else []),
+            Input(f"{prefix}-save-file", "n_clicks"),
+            State(f"{prefix}-save-path", "value"),
+            State(f"{prefix}-save-type-dropdown", "value"),
+            State(f"{prefix}-rln-value", "data"),
+            State(f"{connected_motl_prefix}-rln-tomos-store", "data"),
+            State(f"{connected_motl_prefix}-motl-extra-data-store", "data"),
+            State(f"{connected_motl_prefix}-relion-optics-store", "data"),
+            State(f"{prefix}-global-data-store", "data"),
+            *([State("motls-registry", "data")] if _update_registry else []),
+            prevent_initial_call=True,
+        )
+        def save_as(*args):
+            if _update_registry:
+                n_clicks, path, motl_type, rln_state, rln_tomos_orig, extra_df, rln_optics, data, registry = args
+            else:
+                n_clicks, path, motl_type, rln_state, rln_tomos_orig, extra_df, rln_optics, data = args
+                registry = None
+
+            if not path or not motl_type or not data:
+                base = (no_update, "Specify output type and filename.", no_update)
+                return (*base, no_update) if _update_registry else base
+
+            kwargs = save_kwargs_from_store(rln_state, rln_tomos_orig)
+            status = save_motl(
+                file_path=path, data_to_save=data, motl_type=motl_type,
+                extra_df=extra_df, rln_optics=rln_optics, **kwargs,
+            )
+            params = {"path": path, "motl_type": motl_type, "rln_state": rln_state, "rln_tomos_orig": rln_tomos_orig}
+
+            if _update_registry:
+                new_registry = dict(registry or {})
+                entry = new_registry.get(str(slot_idx), {})
+                new_registry[str(slot_idx)] = {"label": os.path.basename(path), "active": entry.get("active", True)}
+                return False, status, params, new_registry
+
+            return False, status, params
+
+        @app.callback(
+            Output(f"{prefix}-overwrite-modal", "is_open"),
+            Output(f"{prefix}-overwrite-body-text", "children"),
+            Output(f"{prefix}-overwrite-yes-btn", "disabled"),
+            Input(f"{prefix}-save-overwrite-btn", "n_clicks"),
+            State(f"{prefix}-last-save-params-store", "data"),
+            prevent_initial_call=True,
+        )
+        def open_overwrite_confirm(_, params):
+            if not params or not params.get("path"):
+                return True, "No output path set. Please use 'Save As' first to specify the file.", True
+            return True, f"Overwrite '{params['path']}'?", False
+
+        @app.callback(
+            Output(f"{prefix}-overwrite-modal", "is_open", allow_duplicate=True),
+            Input(f"{prefix}-overwrite-yes-btn", "n_clicks"),
+            Input(f"{prefix}-overwrite-no-btn", "n_clicks"),
+            State(f"{prefix}-last-save-params-store", "data"),
+            State(f"{connected_motl_prefix}-motl-extra-data-store", "data"),
+            State(f"{connected_motl_prefix}-relion-optics-store", "data"),
+            State(f"{prefix}-global-data-store", "data"),
+            prevent_initial_call=True,
+        )
+        def do_overwrite_save(_yes, _no, params, extra_df, rln_optics, data):
+            if ctx.triggered_id == f"{prefix}-overwrite-no-btn":
+                return False
+            if not params or not data:
+                return False
+            kwargs = save_kwargs_from_store(params.get("rln_state"), params.get("rln_tomos_orig"))
+            save_motl(
+                file_path=params["path"], data_to_save=data, motl_type=params["motl_type"],
+                extra_df=extra_df, rln_optics=rln_optics, **kwargs,
+            )
+            return False
 
     if slot_idx is not None and max_motls is not None:
         _si, _mm = slot_idx, max_motls

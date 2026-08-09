@@ -15,6 +15,7 @@ SECTION_GAP = "0.5rem"          # gap above a section header inside a panel
 CONTROL_HEIGHT = "22px"         # mirrors .dash-dropdown-trigger height in CSS
 
 # Font-size tokens — always reference these; never write "0.85rem" inline (§1).
+FONT_MED   = "0.9rem"           # medium-reduced text (table headers, compact buttons)
 FONT_SM    = "0.85rem"          # reduced text (hint lines, heatmap skip notice …)
 FONT_TIGHT = "0.8rem"           # tighter hint text (range/modal display overrides)
 FONT_XS    = "0.75rem"          # very small captions (HINT_SM)

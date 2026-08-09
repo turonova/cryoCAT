@@ -233,8 +233,9 @@ def get_multi_motl_picker(prefix):
                     make_dropdown(
                         f"{prefix}-second-select",
                         [],
-                        None,
-                        placeholder="Second motl (motl2)",
+                        [],
+                        multi=True,
+                        placeholder="Second motl(s) (motl2, ...)",
                         style={"marginBottom": "0.5rem"},
                     ),
                 ],

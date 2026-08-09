@@ -45,7 +45,6 @@ from cryocat.app.styles import (
     SECTION_HEADER as _SECTION_HEADER,
 )
 from cryocat.app.apputils import run_operation, generate_kwargs
-from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
 from cryocat.app.components.anglesfield import get_angles_field, register_angles_field_callbacks
 from cryocat.utils.wedgeutils import generate_wedge_mask
 from cryocat.app.components.wedgepreview import wedge_xz_figure
@@ -527,7 +526,6 @@ layout = html.Div(
     [
         page_shell(_sidebar(), _main()),
         _wedge_mask_modal(),
-        *get_log_panel("ppana-log"),
     ],
     style={"margin": "0", "padding": "0"},
 )
@@ -669,7 +667,6 @@ def _table_columns() -> list[dict]:
 # ── Callbacks ─────────────────────────────────────────────────────────────────
 
 def register_callbacks(app):
-    register_log_panel_callbacks(app, "ppana-log")
     register_angles_field_callbacks(app, "ppana-angles")
 
     # ── toggle subtomogram sub-form ──────────────────────────────────────────

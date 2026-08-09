@@ -45,7 +45,6 @@ from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components import memthick_widgets as mw
 from cryocat.app.components import memthick_registry as mreg
 from cryocat.app.components.graphsettings import apply_settings_to_figure, error_figure
-from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
 from cryocat.app.components.motlsink import (
     get_send_to_editor_button, register_send_to_editor_callbacks,
 )
@@ -668,7 +667,6 @@ def _main() -> list:
 layout = html.Div(
     [
         page_shell(_sidebar(), _main(), sidebar_width=4),
-        *get_log_panel("memthick-log"),
     ],
     style={"margin": 0, "padding": 0},
 )
@@ -736,7 +734,6 @@ def _build_kwargs(
 
 
 def register_callbacks(app):
-    register_log_panel_callbacks(app, "memthick-log")
     mw.register_label_dict_callbacks(app, "memthick-labels")
     mw.register_per_membrane_mode_callbacks(app, "memthick-mode")
     mw.register_analyzer_subform_callbacks(app, _ANALYZER_PREFIX)

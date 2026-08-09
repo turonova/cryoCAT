@@ -4,15 +4,12 @@ The suite-global motl **pool** (``pool-*`` stores in
 :mod:`cryocat.app.suite.app`) is the source of truth for motl data. The editor
 renders into ``N_SLOTS`` fixed *view slots* whose table/viewer/save callbacks
 are registered once up front with literal ``me-{i}`` prefixes. ``me-slot-map``
-maps each slot to a pool ``motl_id``; two sync callbacks keep slot stores and
-the pool in agreement:
+maps each slot to a pool ``motl_id``.
 
-* **pool -> slots** — fires when ``me-slot-map`` changes (a slot is (re)assigned
-  or a load happens); pushes ``pool-motls[mid]`` (+ extra/meta) into the slot
-  stores.
-* **slots -> pool** — fires when any slot's table data changes (edits,
-  operations); writes the slot data back into ``pool-motls`` so it persists and
-  is visible to other tools.
+**pool -> slots** — fires when ``me-slot-map`` changes; pushes row data into
+slot stores and writes a ``{"motl_id": …, "rev": …}`` reference into each
+slot's ``tabv-global-data-store`` so pool-aware table components read rows
+directly from the pool server side.
 """
 
 import dash
@@ -20,7 +17,7 @@ from dash import html, dcc, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 
 from cryocat.app import ids
-from cryocat.app.pool import PoolState, insert_motl, replace_motl_rows, get_rows, get_extra, PoolPayloadMissing
+from cryocat.app.pool import PoolState, insert_motl, get_rows, get_extra, PoolPayloadMissing
 from cryocat.app.suite.motlsidebar import (
     get_motl_editor_sidebar,
     register_motl_editor_sidebar_callbacks,
@@ -31,7 +28,6 @@ from cryocat.app.components.tableview import get_table_component, register_table
 from cryocat.app.components.tablesave import register_table_save_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
-from cryocat.app.components.motlio import get_motl_simple_save_component, register_motl_simple_save_callbacks
 from cryocat.app.apputils import _format_relion_params
 
 
@@ -47,6 +43,9 @@ def _make_stores():
         dcc.Store(id="me-active-target", data=None),  # { type: "motl"|"group", id: str } | None
         dcc.Store(id="me-results-store"),
         dcc.Store(id="me-results-label-store"),
+        dcc.Store(id="me-col-merge-draft", data={}),
+        dcc.Store(id="me-col-merge-config", data={}),
+        dcc.Store(id="me-col-merge-motls", data=[]),
         dcc.Store(id="me-load-motl-data-store"),
         dcc.Store(id="me-load-motl-extra-data-store"),
         dcc.Store(id="me-load-motl-data-type"),
@@ -92,11 +91,10 @@ def _slot_tab_content(i):
                     f"me-{i}-tabv",
                     connected_motl_prefix=f"me-{i}",
                     show_create_from_selected=True,
+                    save_dialog_prefix=f"me-{i}-save",
                 ),
                 html.Hr(style={"margin": "0.5rem 0"}),
                 get_viewer_component(f"me-{i}-tv"),
-                html.Hr(style={"margin": "0.5rem 0"}),
-                get_motl_simple_save_component(f"me-{i}-save"),
             ],
             style={"padding": "0.5rem"},
         ),
@@ -164,32 +162,38 @@ def register_callbacks(app):
     for _i in range(N_SLOTS):
         register_viewer_callbacks(app, f"me-{_i}-tv", tabs_id=None)
         register_table_callbacks(app, f"me-{_i}-tabv")
-        register_table_save_callbacks(app, f"me-{_i}-tabv", connected_motl_prefix=f"me-{_i}")
+        register_table_save_callbacks(
+            app, f"me-{_i}-tabv",
+            connected_motl_prefix=f"me-{_i}",
+            save_dialog_prefix=f"me-{_i}-save",
+        )
         register_table_plot_callbacks(
             app,
             f"me-{_i}-tabv-table-plot",
             f"me-{_i}-tabv-global-data-store",
             table_grid_id=f"me-{_i}-tabv-grid",
+            pool_aware=True,
         )
         register_table_cluster_callbacks(
             app,
             f"me-{_i}-tabv-table-cluster",
             f"me-{_i}-tabv-global-data-store",
             table_grid_id=f"me-{_i}-tabv-grid",
+            pool_aware=True,
         )
-        register_motl_simple_save_callbacks(app, f"me-{_i}-save", f"me-{_i}-tabv-global-data-store", f"me-{_i}")
 
     # Results tab
     register_viewer_callbacks(app, "me-res-tv", tabs_id=None)
     register_table_callbacks(app, "me-res-tabv")
     register_table_save_callbacks(app, "me-res-tabv", connected_motl_prefix="me-res")
-    register_table_plot_callbacks(app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store")
-    register_table_cluster_callbacks(app, "me-res-tabv-table-cluster", "me-res-tabv-global-data-store")
+    register_table_plot_callbacks(app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store", pool_aware=True)
+    register_table_cluster_callbacks(app, "me-res-tabv-table-cluster", "me-res-tabv-global-data-store", pool_aware=True)
 
     _register_pool_sync(app)
     _register_create_from_selected(app)
     _register_slot_connectors_all(app)
     _register_relion_params_connectors_all(app)
+    _register_save_connectors(app)
 
     # Tab labels / enabled state, driven by the slot map + pool registry.
     @app.callback(
@@ -236,9 +240,8 @@ def register_callbacks(app):
 # ── Pool <-> slot synchronisation ────────────────────────────────────────────────
 
 def _register_pool_sync(app):
-    """Two callbacks keep the view-slot stores and the pool in agreement."""
+    """pool -> slots: fires when the slot map changes (load / reassignment)."""
 
-    # pool -> slots: fires when the slot map changes (load / reassignment).
     @app.callback(
         *[Output(f"me-{i}-motl-data-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-motl-extra-data-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
@@ -248,15 +251,18 @@ def _register_pool_sync(app):
         *[Output(f"me-{i}-rln-tomos-filename", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-relion-params-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         *[Output(f"me-{i}-undo-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
+        *[Output(f"me-{i}-tabv-global-data-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
         Input("me-slot-map", "data"),
         State(ids.POOL_META, "data"),
+        State(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
-    def sync_pool_to_slots(slot_map, pool_meta):
+    def sync_pool_to_slots(slot_map, pool_meta, registry):
         slot_map = slot_map or [None] * N_SLOTS
         pool_meta = pool_meta or {}
+        registry = registry or {}
 
-        data, extra, dtype, optics, r5t, r5tn, rparams, undo = ([] for _ in range(8))
+        data, extra, dtype, optics, r5t, r5tn, rparams, undo, table_refs = ([] for _ in range(9))
         for i in range(N_SLOTS):
             mid = slot_map[i] if i < len(slot_map) else None
             rows_data = None
@@ -268,6 +274,7 @@ def _register_pool_sync(app):
             if rows_data is not None:
                 meta = pool_meta.get(mid) or {}
                 extra_df = get_extra(mid)
+                rev = registry.get(mid, {}).get("revision", 0)
                 data.append(rows_data)
                 extra.append(extra_df.to_dict("records") if extra_df is not None else None)
                 dtype.append(meta.get("data_type"))
@@ -276,42 +283,40 @@ def _register_pool_sync(app):
                 r5tn.append(meta.get("relion5_tomos_filename"))
                 rparams.append(meta.get("relion_params"))
                 undo.append(None)
+                table_refs.append({"motl_id": mid, "rev": rev})
             else:
-                for lst in (data, extra, dtype, optics, r5t, r5tn, rparams, undo):
+                for lst in (data, extra, dtype, optics, r5t, r5tn, rparams, undo, table_refs):
                     lst.append(None)
 
-        return (*data, *extra, *dtype, *optics, *r5t, *r5tn, *rparams, *undo)
+        return (*data, *extra, *dtype, *optics, *r5t, *r5tn, *rparams, *undo, *table_refs)
 
-    # slots -> pool: fires when any slot's table data changes (edits/operations).
     @app.callback(
-        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        *[Input(f"me-{i}-tabv-global-data-store", "data") for i in range(N_SLOTS)],
+        *[Output(f"me-{i}-tabv-global-data-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
+        Input(ids.POOL_REGISTRY, "data"),
         State("me-slot-map", "data"),
-        State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_META, "data"),
-        State(ids.POOL_NEXT_ID, "data"),
+        *[State(f"me-{i}-tabv-global-data-store", "data") for i in range(N_SLOTS)],
         prevent_initial_call=True,
     )
-    def sync_slots_to_pool(*args):
-        slot_globals = args[:N_SLOTS]
-        slot_map, registry, pool_meta, next_id = args[N_SLOTS:]
+    def _sync_revisions(registry, slot_map, *current_refs):
+        registry = registry or {}
         slot_map = slot_map or [None] * N_SLOTS
-
-        state = PoolState.from_stores(registry, pool_meta, next_id)
+        outs = []
         changed = False
         for i in range(N_SLOTS):
             mid = slot_map[i] if i < len(slot_map) else None
-            if not mid or mid not in state.registry:
-                continue
-            rows = slot_globals[i]
-            if rows is None:
-                continue
-            state = replace_motl_rows(state, mid, rows)
-            changed = True
-
+            ref = current_refs[i]
+            if mid and mid in registry:
+                new_rev = registry[mid].get("revision", 0)
+                if isinstance(ref, dict) and ref.get("rev") == new_rev:
+                    outs.append(no_update)
+                else:
+                    outs.append({"motl_id": mid, "rev": new_rev})
+                    changed = True
+            else:
+                outs.append(no_update)
         if not changed:
             raise dash.exceptions.PreventUpdate
-        return state.registry
+        return tuple(outs)
 
 
 # ── "Create new from selected" → new pool motl ───────────────────────────────────
@@ -387,6 +392,28 @@ def _register_create_from_selected(app):
         return (*state.to_stores(), slot_map, active_tab)
 
 
+# ── Save dialog connectors — keep save dialog motl-id and prefill in sync ────────
+
+def _register_save_connectors(app):
+    """Update each slot's save dialog stores when the slot map or pool meta changes."""
+    @app.callback(
+        *[Output(f"me-{i}-save-motl-id", "data") for i in range(N_SLOTS)],
+        *[Output(f"me-{i}-save-prefill", "data") for i in range(N_SLOTS)],
+        Input("me-slot-map", "data"),
+        State(ids.POOL_META, "data"),
+        prevent_initial_call=True,
+    )
+    def _sync_save_stores(slot_map, pool_meta):
+        slot_map = slot_map or [None] * N_SLOTS
+        pool_meta = pool_meta or {}
+        motl_ids, prefills = [], []
+        for i in range(N_SLOTS):
+            mid = slot_map[i] if i < len(slot_map) else None
+            motl_ids.append(mid)
+            prefills.append(pool_meta.get(mid) if mid else None)
+        return (*motl_ids, *prefills)
+
+
 # ── Per-slot connecting callbacks ────────────────────────────────────────────────
 
 def _register_slot_connectors_all(app):
@@ -395,26 +422,19 @@ def _register_slot_connectors_all(app):
 
 
 def _register_slot_connectors(app, slot_idx):
-    """Wire the raw slot motl store -> viewer data + table global store."""
-
-    @app.callback(
-        Output(f"me-{slot_idx}-tv-data", "data", allow_duplicate=True),
-        Output(f"me-{slot_idx}-tabv-global-data-store", "data", allow_duplicate=True),
-        Input(f"me-{slot_idx}-motl-data-store", "data"),
-        prevent_initial_call=True,
-    )
-    def _connect_motl(data, _s=slot_idx):
-        return data, data
+    """Wire the slot table store -> viewer data."""
 
     @app.callback(
         Output(f"me-{slot_idx}-tv-data", "data", allow_duplicate=True),
         Input(f"me-{slot_idx}-tabv-global-data-store", "data"),
-        Input(f"me-{slot_idx}-tabv-grid", "rowData"),
         prevent_initial_call=True,
     )
-    def _connect_table_to_viewer(global_data, table_rows, _s=slot_idx):
-        if ctx.triggered_id == f"me-{_s}-tabv-grid":
-            return table_rows
+    def _connect_table_to_viewer(global_data, _s=slot_idx):
+        # Only fires on pool-reference changes (not on grid rowData changes).
+        # This collapses the 2× viewer-callback firing that occurred because
+        # load_data_to_grid also wrote rowData which re-triggered the chain. (W3)
+        if not global_data or not isinstance(global_data, dict) or "motl_id" not in global_data:
+            raise dash.exceptions.PreventUpdate
         return global_data
 
 

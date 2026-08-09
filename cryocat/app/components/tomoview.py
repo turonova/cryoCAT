@@ -10,6 +10,7 @@ from cryocat.core import cryomotl
 from cryocat.app.apputils import make_axis_trace
 from cryocat.analysis import visplot
 from cryocat.app.formgen import make_dropdown
+from cryocat.app import ids
 
 
 def hover_template(columns, hover_info) -> str:
@@ -31,8 +32,8 @@ def aspect_ratio_dict(coords) -> dict:
     return {"x": ranges[0] / max_r, "y": ranges[1] / max_r, "z": ranges[2] / max_r}
 
 
-def tomo_figure(data, index, color_col, colorscale, marker_size, hover_info, show_dual_graph) -> tuple:
-    motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
+def tomo_figure(df: pd.DataFrame, index, color_col, colorscale, marker_size, hover_info, show_dual_graph) -> tuple:
+    motl = cryomotl.Motl(df[cryomotl.Motl.motl_columns])
     tomo_ids = sorted(motl.df["tomo_id"].unique())
     tomo = tomo_ids[index]
     tm = motl.get_motl_subset(tomo)
@@ -55,12 +56,12 @@ def tomo_figure(data, index, color_col, colorscale, marker_size, hover_info, sho
     return fig, graph_width, {"display": "block", "marginTop": "1rem"}, f"Tomo ID: {tomo}"
 
 
-def detail_figure(clickData, data, twist_data, radius, tomo_index=0) -> go.Figure | None:
+def detail_figure(clickData, df: pd.DataFrame, twist_data, radius, tomo_index=0) -> go.Figure | None:
     point = clickData["points"][0]
     point_number = point.get("pointNumber")
     if point_number is None:
         return None
-    motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
+    motl = cryomotl.Motl(df[cryomotl.Motl.motl_columns])
     tomo_ids = sorted(motl.df["tomo_id"].unique())
     tomo_index = tomo_index or 0
     if tomo_index >= len(tomo_ids):
@@ -95,6 +96,54 @@ def detail_figure(clickData, data, twist_data, radius, tomo_index=0) -> go.Figur
         showlegend=False,
     )
     return fig
+
+
+def color_options_from_handle(handle: dict) -> list[dict]:
+    """Return color-dropdown options from a PoolEntry registry dict.
+
+    Raises TypeError when passed anything other than a PoolEntry handle
+    (e.g. list[dict] store data from the old pre-pool pattern).
+    """
+    if not isinstance(handle, dict):
+        raise TypeError(
+            f"color_options_from_handle expects a pool registry entry (dict), "
+            f"got {type(handle).__name__}"
+        )
+    if "numeric_columns" not in handle:
+        raise TypeError(
+            "color_options_from_handle expects a pool registry entry with "
+            "'numeric_columns' key — pass a PoolEntry dict, not row data"
+        )
+    return [
+        {"label": col, "value": col}
+        for col in handle["numeric_columns"]
+        if col != "tomo_id"
+    ]
+
+
+def tomo_items_from_handle(handle: dict, prefix: str) -> list:
+    """Return tomo DropdownMenuItem list from a PoolEntry registry dict.
+
+    Raises TypeError when passed anything other than a PoolEntry handle.
+    """
+    if not isinstance(handle, dict):
+        raise TypeError(
+            f"tomo_items_from_handle expects a pool registry entry (dict), "
+            f"got {type(handle).__name__}"
+        )
+    if "tomo_ids" not in handle:
+        raise TypeError(
+            "tomo_items_from_handle expects a pool registry entry with "
+            "'tomo_ids' key — pass a PoolEntry dict, not row data"
+        )
+    return [
+        dbc.DropdownMenuItem(
+            f"Tomo {tid}",
+            id={"type": "tomo-menu-item", "owner": prefix, "index": f"{tid}"},
+            n_clicks=0,
+        )
+        for tid in handle["tomo_ids"]
+    ]
 
 
 def get_viewer_component(prefix: str):
@@ -200,6 +249,18 @@ def get_viewer_component(prefix: str):
 
 def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_info="full", detailed_table=None, tabs_id="table-tabs", visible_on_tabs=("motl-tab", "twist-tab", "nn-motl-tab", "cluster-tab")):
 
+    def _motl_df(data):
+        """Return a DataFrame from a pool reference dict or a legacy list[dict]."""
+        if isinstance(data, dict) and "motl_id" in data:
+            from cryocat.app.pool import get_rows, PoolPayloadMissing
+            try:
+                return get_rows(data["motl_id"])
+            except PoolPayloadMissing:
+                return pd.DataFrame()
+        if isinstance(data, list) and data:
+            return pd.DataFrame.from_records(data)
+        return pd.DataFrame()
+
     if detailed_table == None:
         detailed_table = f"{prefix}-data"
 
@@ -228,15 +289,22 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         Input(f"{prefix}-next", "n_clicks"),
         Input(f"{prefix}-data", "data"),
         State(f"{prefix}-index", "data"),
+        State(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
-    def update_index(prev, next_, data, current_index):
+    def update_index(prev, next_, data, current_index, registry):
         if not data:
             raise exceptions.PreventUpdate
-
-        tomo_ids = sorted({row["tomo_id"] for row in data})
+        if isinstance(data, dict) and "motl_id" in data:
+            entry = (registry or {}).get(data["motl_id"], {})
+            tomo_ids = entry.get("tomo_ids", [])
+        elif isinstance(data, list) and data:
+            tomo_ids = sorted({row["tomo_id"] for row in data})
+        else:
+            raise exceptions.PreventUpdate
         n = len(tomo_ids)
-
+        if not n:
+            raise exceptions.PreventUpdate
         ctx_id = callback_context.triggered_id
         if ctx_id == f"{prefix}-prev":
             return (current_index - 1) % n
@@ -247,13 +315,16 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
     @app.callback(
         Output(f"{prefix}-color-dropdown", "options"),
         Input(f"{prefix}-data", "data"),
+        State(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
-    def update_color_options(data):
+    def update_color_options(data, registry):
         if not data:
             raise exceptions.PreventUpdate
-        df = pd.DataFrame(data)
-        # Limit to numeric columns only
+        if isinstance(data, dict) and "motl_id" in data:
+            entry = (registry or {}).get(data["motl_id"], {})
+            return color_options_from_handle(entry)
+        df = _motl_df(data)
         numeric_cols = df.select_dtypes(include="number").columns.tolist()
         return [{"label": col, "value": col} for col in numeric_cols if col not in ["tomo_id"]]
 
@@ -272,20 +343,28 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
     def update_plot(index, color_col, colorscale, marker_size, data):
         if not data:
             raise exceptions.PreventUpdate
-        return tomo_figure(data, index, color_col, colorscale, marker_size, hover_info, show_dual_graph)
+        return tomo_figure(_motl_df(data), index, color_col, colorscale, marker_size, hover_info, show_dual_graph)
 
     @app.callback(
         Output(f"{prefix}-tomo-selector", "children"),
         Input(f"{prefix}-data", "data"),
+        State(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
-    def populate_tomo_dropdown(data):
+    def populate_tomo_dropdown(data, registry):
         if not data:
             raise exceptions.PreventUpdate
-        df = pd.DataFrame(data)
+        if isinstance(data, dict) and "motl_id" in data:
+            entry = (registry or {}).get(data["motl_id"], {})
+            return tomo_items_from_handle(entry, prefix)
+        df = _motl_df(data)
         tomo_ids = sorted(df["tomo_id"].unique())
         return [
-            dbc.DropdownMenuItem(f"Tomo {tid}", id={"type": "tomo-menu-item", "owner": prefix, "index": f"{tid}"}, n_clicks=0)
+            dbc.DropdownMenuItem(
+                f"Tomo {tid}",
+                id={"type": "tomo-menu-item", "owner": prefix, "index": f"{tid}"},
+                n_clicks=0,
+            )
             for tid in tomo_ids
         ]
 
@@ -303,7 +382,7 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         triggered = ctx.triggered_id
         if triggered and isinstance(triggered, dict) and "index" in triggered:
             selected_tomo = int(triggered["index"])
-            df = pd.DataFrame(data)
+            df = _motl_df(data)
             tomo_ids = sorted(df["tomo_id"].unique())
             try:
                 return tomo_ids.index(selected_tomo)
@@ -326,7 +405,7 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         def show_detail_on_click(clickData, data, twist_data, radius, tomo_index):
             if not clickData or not data:
                 raise dash.exceptions.PreventUpdate
-            fig = detail_figure(clickData, data, twist_data, radius, tomo_index)
+            fig = detail_figure(clickData, _motl_df(data), twist_data, radius, tomo_index)
             if fig is None:
                 raise exceptions.PreventUpdate
             return dcc.Graph(id=f"{prefix}-detail-graph", figure=fig)

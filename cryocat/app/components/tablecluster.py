@@ -216,7 +216,17 @@ def get_table_cluster_component(prefix: str, is_motl=False, motl_cols=None):
     )
 
 
-def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, table_grid_id=None, is_motl=False, motl_cols=None, cluster_cols_store_id=None):
+def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, table_grid_id=None, is_motl=False, motl_cols=None, cluster_cols_store_id=None, pool_aware=False):
+
+    def _df_from_store(data):
+        """Return a DataFrame from a pool reference or a list[dict]."""
+        if pool_aware and isinstance(data, dict) and "motl_id" in data:
+            from cryocat.app.pool import get_rows, PoolPayloadMissing
+            try:
+                return get_rows(data["motl_id"])
+            except PoolPayloadMissing:
+                return pd.DataFrame()
+        return pd.DataFrame(data) if data else pd.DataFrame()
 
     # ── Type selection: show/hide panels, populate features + PCA ────────────
 
@@ -248,7 +258,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
                 no_update, no_update, no_update, no_update, no_update,
             )
 
-        df = pd.DataFrame(data)
+        df = _df_from_store(data)
         numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
         all_cols = list(df.columns)
 
@@ -308,7 +318,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         if not features:
             return no_update, no_update, no_update, no_update, "Select at least one feature.", no_update
 
-        df = pd.DataFrame(data)
+        df = _df_from_store(data)
 
         # Keep only rows where all selected features are non-NaN
         valid_mask = df[features].notna().all(axis=1)
@@ -381,7 +391,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         if not qp_col or not nn_col:
             return "Select query ID and neighbor ID columns."
 
-        df = pd.DataFrame(data)
+        df = _df_from_store(data)
         if qp_col not in df.columns or nn_col not in df.columns:
             return f"Columns '{qp_col}' / '{nn_col}' not found in data."
 
@@ -403,7 +413,15 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
 
     # ── Save K-means cluster assignments to the data table ────────────────────
 
-    _save_out = [
+    _save_out = []
+    if pool_aware:
+        from cryocat.app import ids as _ids
+        _save_out += [
+            Output(_ids.POOL_REGISTRY, "data", allow_duplicate=True),
+            Output(_ids.POOL_META, "data", allow_duplicate=True),
+            Output(_ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        ]
+    _save_out += [
         Output(connected_store_id, "data", allow_duplicate=True),
         Output(f"{prefix}-cluster-status", "children", allow_duplicate=True),
     ]
@@ -418,6 +436,13 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
     ]
     if cluster_cols_store_id:
         _save_states.append(State(cluster_cols_store_id, "data"))
+    if pool_aware:
+        from cryocat.app import ids as _ids
+        _save_states += [
+            State(_ids.POOL_REGISTRY, "data"),
+            State(_ids.POOL_META, "data"),
+            State(_ids.POOL_NEXT_ID, "data"),
+        ]
 
     @app.callback(
         *_save_out,
@@ -426,7 +451,18 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         prevent_initial_call=True,
     )
     def _save_cluster(n_clicks, cluster_data, main_data, col_name, motl_col, *extra):
-        existing_cols = extra[0] if extra else None
+        # unpack extra positional args based on mode
+        if pool_aware:
+            if cluster_cols_store_id:
+                existing_cols, registry, pool_meta, next_id = extra
+            else:
+                registry, pool_meta, next_id = extra
+                existing_cols = None
+        else:
+            existing_cols = extra[0] if extra else None
+            registry = pool_meta = next_id = None
+
+        n_pool_out = 3 if pool_aware else 0
         n_out = len(_save_out)
 
         def _ret(*vals):
@@ -437,20 +473,39 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
 
         col_target = motl_col if is_motl else col_name
         if not col_target:
-            return _ret(no_update, "Enter a column name first.", *([no_update] if cluster_cols_store_id else []))
+            nu = [no_update] * n_pool_out + [no_update, "Enter a column name first."]
+            if cluster_cols_store_id:
+                nu.append(no_update)
+            return tuple(nu) if n_out > 1 else nu[0]
 
-        df = pd.DataFrame(main_data)
+        df = _df_from_store(main_data)
         cluster_df = pd.DataFrame(cluster_data)
 
+        df = df.copy()
         df[col_target] = np.nan
         for _, row in cluster_df.iterrows():
             idx = int(row["__row_idx__"])
             if 0 <= idx < len(df):
                 df.loc[idx, col_target] = int(row["cluster"])
 
-        new_data = df.to_dict("records")
         status = f"Saved cluster assignments to column '{col_target}'."
 
+        if pool_aware:
+            from cryocat.app.pool import replace_motl_rows, PoolState
+            motl_id = main_data["motl_id"]
+            state = PoolState.from_stores(registry, pool_meta, next_id)
+            state = replace_motl_rows(state, motl_id, df)
+            new_rev = state.registry[motl_id]["revision"]
+            new_ref = {"motl_id": motl_id, "rev": new_rev}
+            result = [*state.to_stores(), new_ref, status]
+            if cluster_cols_store_id:
+                cols = list(existing_cols or [])
+                if col_target not in cols:
+                    cols.append(col_target)
+                result.append(cols)
+            return tuple(result)
+
+        new_data = df.to_dict("records")
         if cluster_cols_store_id:
             cols = list(existing_cols or [])
             if col_target not in cols:

@@ -470,7 +470,17 @@ def get_table_plot_component(prefix: str):
     )
 
 
-def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_graphs=None, table_grid_id=None):
+def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_graphs=None, table_grid_id=None, pool_aware=False):
+
+    def _df_from_store(data):
+        """Return a DataFrame from a pool reference or a list[dict]."""
+        if pool_aware and isinstance(data, dict) and "motl_id" in data:
+            from cryocat.app.pool import get_rows, PoolPayloadMissing
+            try:
+                return get_rows(data["motl_id"])
+            except PoolPayloadMissing:
+                return pd.DataFrame()
+        return pd.DataFrame.from_records(data) if data else pd.DataFrame()
 
     graph_options = [
         "Line plot",
@@ -510,7 +520,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         if graph_type is None:
             return no_update
 
-        x_axis_options = pd.DataFrame(data).columns
+        x_axis_options = _df_from_store(data).columns
         y_axis_options = []
         orbd_options = {"display": "none"}
 
@@ -534,7 +544,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             histogram_options = {"display": "none"}
             histogram2D_options = {"display": "flex"}
             scatter_2D_options = {"display": "none"}
-            y_axis_options = pd.DataFrame(data).columns
+            y_axis_options = _df_from_store(data).columns
             if graph_type == "Spherical histogram":
                 dropdown_options = []
                 for pfx in ["twist_so", "twist", "norm_nn"]:
@@ -547,7 +557,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             histogram_options = {"display": "none"}
             histogram2D_options = {"display": "none"}
             scatter_2D_options = {"display": "flex"}
-            y_axis_options = pd.DataFrame(data).columns
+            y_axis_options = _df_from_store(data).columns
         elif graph_type in ("Orientational distribution", "Polar NN distances"):
             histogram_options = {"display": "none"}
             histogram2D_options = {"display": "none"}
@@ -700,7 +710,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
     ):
 
         trigger_id = ctx.triggered_id
-        input_data = pd.DataFrame(data) if data else pd.DataFrame()
+        input_data = _df_from_store(data)
 
         if trigger_id == f"{prefix}-clear-graph-btn":
             return [], [], {}, 0

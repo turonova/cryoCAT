@@ -16,6 +16,7 @@ Model
 """
 
 import inspect
+import os
 import pandas as pd
 
 import dash
@@ -25,6 +26,10 @@ import dash_bootstrap_components as dbc
 from cryocat.core.cryomotl import Motl
 from cryocat.app.components.motlio import motl_types, register_motl_load_callbacks
 from cryocat.app.components.relionopts import get_relion_options
+from cryocat.app.components.savedialog import (
+    get_save_dialog, register_save_dialog_callbacks,
+    build_batch_paths, execute_batch_save, validate_save,
+)
 from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.components.motlsource import (
     get_multi_motl_picker, register_multi_motl_picker_callbacks,
@@ -32,7 +37,7 @@ from cryocat.app.components.motlsource import (
 from cryocat.app.apputils import (
     generate_kwargs, run_operation, run_operation_to_pool, record_load_to_pool,
 )
-from cryocat.app import ids
+from cryocat.app import ids, styles
 from cryocat.app import discovery as _discovery
 from cryocat.app.formgen import build_form, make_dropdown
 from cryocat.app.logger import invoke_operation
@@ -43,6 +48,7 @@ from cryocat.app.pool import (
     PoolState, remove_motl, get_rows, PoolPayloadMissing,
     GroupState, create_group, delete_group, reorder_group, remove_from_group,
     purge_motl_from_groups, set_has_tab, natural_sort_key, insert_motl,
+    replace_motl_rows,
 )
 
 # Number of editor *view slots* (rendered table/viewer surfaces). The motl pool
@@ -58,6 +64,117 @@ _MULTI_MOTL_METHODS = [{"label": e.label, "value": e.fn.__name__, "motls": e.mot
                        for e in _discovery.multi_motl_ops()]
 # Lookup of `method_name -> motls spec` for the run callback.
 _MULTI_MOTL_SPECS = {m["value"]: m["motls"] for m in _MULTI_MOTL_METHODS}
+
+# ── Column-merge helpers (used by layout and callbacks) ────────────────────────
+_MOTL_COLS = Motl.motl_columns  # 20 column names
+
+
+def _resolve_merge_motl_ids(method_name, main_id, second_ids, list_ids):
+    spec = _MULTI_MOTL_SPECS.get(method_name) if method_name else None
+    if spec is not None and spec["arity"] == "list":
+        return list(list_ids) if list_ids else []
+    seen, ids_out = set(), []
+    for m in [main_id] + list(second_ids or []):
+        if m and m not in seen:
+            seen.add(m)
+            ids_out.append(m)
+    return ids_out
+
+
+def _init_merge_draft(n_motls, saved_config):
+    saved = saved_config or {}
+    return {col: min(int(saved.get(col, 0)), max(n_motls - 1, 0)) for col in _MOTL_COLS}
+
+
+def _build_col_merge_table(labels, draft):
+    header = html.Tr(
+        [html.Th("Motl", style={"minWidth": "110px", "fontSize": styles.FONT_TIGHT, "padding": "4px 6px"})]
+        + [
+            html.Th(
+                col,
+                style={
+                    "writingMode": "vertical-rl",
+                    "fontSize": styles.FONT_MED,
+                    "textAlign": "center",
+                    "minWidth": "44px",
+                    "maxWidth": "44px",
+                    "padding": "4px 2px",
+                },
+            )
+            for col in _MOTL_COLS
+        ],
+    )
+    body_rows = [
+        html.Tr(
+            [html.Td(html.Small(label, style={"whiteSpace": "nowrap"}), style={"padding": "3px 6px"})]
+            + [
+                html.Td(
+                    dbc.Button(
+                        "●" if draft.get(col, 0) == row_i else "○",
+                        id={"type": "me-col-cell", "col": col, "row": row_i},
+                        color="primary" if draft.get(col, 0) == row_i else "link",
+                        size="sm",
+                        style={"padding": "0 3px", "minWidth": "28px", "fontSize": styles.FONT_MED, "lineHeight": "1.2"},
+                        n_clicks=0,
+                    ),
+                    style={"textAlign": "center", "padding": "2px"},
+                )
+                for col in _MOTL_COLS
+            ],
+        )
+        for row_i, label in enumerate(labels)
+    ]
+    return html.Div(
+        html.Table(
+            [html.Thead(header), html.Tbody(body_rows)],
+            style={"borderCollapse": "collapse", "width": "100%"},
+        ),
+        style={"overflowX": "auto"},
+    )
+
+
+def _apply_col_merge(result_df, source_motls, col_config):
+    if not col_config or all(int(v) == 0 for v in col_config.values()):
+        return result_df
+    df = result_df.copy()
+    for col, src_idx in col_config.items():
+        src_idx = int(src_idx)
+        if src_idx == 0 or src_idx >= len(source_motls) or col not in df.columns:
+            continue
+        src_df = source_motls[src_idx].df
+        if col not in src_df.columns:
+            continue
+        if "subtomo_id" in df.columns and "subtomo_id" in src_df.columns:
+            src_series = src_df.set_index("subtomo_id")[col]
+            mapped = df["subtomo_id"].map(src_series)
+            df[col] = mapped.where(mapped.notna(), df[col])
+        else:
+            n = min(len(df), len(src_df))
+            df.iloc[:n, df.columns.get_loc(col)] = src_df.iloc[:n, src_df.columns.get_loc(col)].values
+    return df
+
+
+def _run_pair_operations(fn, main_motl, sec_motls, kwargs, pool_state, op_label, src_labels, col_merge_config, has_col_config):
+    sig_params = list(inspect.signature(fn).parameters.keys())
+    last_result, last_mid = None, None
+    for i, sec_motl in enumerate(sec_motls):
+        sec_label = src_labels[i + 1] if i + 1 < len(src_labels) else str(getattr(sec_motl, "_pool_motl_id", i))
+        full_kwargs = {sig_params[0]: main_motl, sig_params[1]: sec_motl, **kwargs}
+        pool_state, pair_mid, pair_result = run_operation_to_pool(
+            fn, full_kwargs, pool_state,
+            label=f"{op_label} of {src_labels[0]} + {sec_label}",
+        )
+        if not isinstance(pair_result, Motl):
+            raise TypeError(f"'{fn.__name__}' did not return a Motl (got {type(pair_result).__name__}).")
+        if has_col_config:
+            merged_df = _apply_col_merge(pair_result.df, [main_motl, sec_motl], col_merge_config)
+            if merged_df is not pair_result.df:
+                pool_state = replace_motl_rows(pool_state, pair_mid, merged_df)
+        last_result, last_mid = pair_result, pair_mid
+    return pool_state, last_mid, last_result
+
+
+# ───────────────────────────────────────────────────────────────────────────────
 
 _NONE_OPT = "__none__"  # dropdown sentinel for an empty slot
 
@@ -98,15 +215,18 @@ def get_motl_editor_sidebar():
                     [
                         dbc.AccordionItem(
                             [
-                                dbc.RadioItems(
-                                    id="me-load-mode",
-                                    options=[
-                                        {"label": "Single file", "value": "single"},
-                                        {"label": "Multiple (glob)", "value": "multi"},
-                                    ],
-                                    value="single",
-                                    inline=True,
-                                    style={"display": "flex", "gap": "1.5rem", "marginBottom": "0.5rem"},
+                                html.Div(
+                                    dbc.RadioItems(
+                                        id="me-load-mode",
+                                        options=[
+                                            {"label": "Single file", "value": "single"},
+                                            {"label": "Multiple (glob)", "value": "multi"},
+                                        ],
+                                        value="single",
+                                        inline=True,
+                                        style={"display": "flex", "gap": "1.5rem"},
+                                    ),
+                                    style={"marginBottom": "0.5rem"},
                                 ),
                                 # Shared: type + Relion options — identical for single and glob
                                 dbc.Row(
@@ -165,9 +285,9 @@ def get_motl_editor_sidebar():
                                         html.Div(
                                             id="me-mload-count",
                                             style={
-                                                "color": "var(--color9)",
+                                                "color": styles.COLOR_MUTED,
                                                 "marginBottom": "0.3rem",
-                                                "fontSize": "0.85rem",
+                                                "fontSize": styles.FONT_SM,
                                             },
                                         ),
                                         dbc.Input(
@@ -185,7 +305,7 @@ def get_motl_editor_sidebar():
                                         ),
                                         html.Div(
                                             id="me-mload-status",
-                                            style={"color": "var(--color9)", "fontSize": "0.85rem"},
+                                            style={"color": styles.COLOR_MUTED, "fontSize": styles.FONT_SM},
                                         ),
                                     ],
                                 ),
@@ -258,112 +378,8 @@ def get_motl_editor_sidebar():
                                     "Click a group label in the pool list to select the target group.",
                                     style={"color": "var(--color9)", "marginBottom": "0.5rem"},
                                 ),
-                                html.Div(
-                                    id="me-batch-convert-target",
-                                    style={
-                                        "color": "var(--color9)",
-                                        "marginBottom": "0.4rem",
-                                    },
-                                ),
-                                dbc.Row(
-                                    [
-                                        dbc.Col(
-                                            html.Label("Output type:"),
-                                            width=4,
-                                            className="d-flex align-items-center",
-                                        ),
-                                        dbc.Col(
-                                            make_dropdown(
-                                                "me-batch-convert-format",
-                                                motl_types,
-                                                "emmotl",
-                                                style={"padding": "0"},
-                                            ),
-                                            width=8,
-                                        ),
-                                    ],
-                                    style={"marginBottom": "0.4rem"},
-                                ),
-                                html.Div(
-                                    get_path_field(
-                                        "me-batch-convert-dir",
-                                        mode="directory",
-                                        kind="output",
-                                        placeholder="Output directory",
-                                    ),
-                                    style={"marginBottom": "0.4rem"},
-                                ),
-                                dbc.Row(
-                                    [
-                                        dbc.Col(
-                                            html.Label("Filename:"),
-                                            width=4,
-                                            className="d-flex align-items-center",
-                                        ),
-                                        dbc.Col(
-                                            make_dropdown(
-                                                "me-batch-convert-filename-policy",
-                                                [
-                                                    {"label": "Keep stem + new extension", "value": "stem"},
-                                                    {"label": "Add suffix", "value": "suffix"},
-                                                ],
-                                                "stem",
-                                                style={"padding": "0"},
-                                            ),
-                                            width=8,
-                                        ),
-                                    ],
-                                    style={"marginBottom": "0.3rem"},
-                                ),
-                                html.Div(
-                                    id="me-batch-convert-suffix-row",
-                                    style={"display": "none"},
-                                    children=[
-                                        dbc.Input(
-                                            id="me-batch-convert-suffix",
-                                            placeholder="Suffix to append before extension (e.g. _v2)",
-                                            size="sm",
-                                            style={"marginBottom": "0.3rem"},
-                                        ),
-                                    ],
-                                ),
-                                dbc.Row(
-                                    [
-                                        dbc.Col(
-                                            html.Label("On conflict:"),
-                                            width=4,
-                                            className="d-flex align-items-center",
-                                        ),
-                                        dbc.Col(
-                                            make_dropdown(
-                                                "me-batch-convert-overwrite",
-                                                [
-                                                    {"label": "Refuse (list conflicts)", "value": "refuse"},
-                                                    {"label": "Overwrite", "value": "overwrite"},
-                                                ],
-                                                "refuse",
-                                                style={"padding": "0"},
-                                            ),
-                                            width=8,
-                                        ),
-                                    ],
-                                    style={"marginBottom": "0.4rem"},
-                                ),
-                                dbc.Button(
-                                    "Convert All",
-                                    id="me-batch-convert-btn",
-                                    color="primary",
-                                    size="sm",
-                                    style={"width": "100%"},
-                                ),
-                                html.Div(
-                                    id="me-batch-convert-status",
-                                    style={
-                                        "color": "var(--color9)",
-                                        "marginTop": "0.4rem",
-                                        "wordBreak": "break-word",
-                                    },
-                                ),
+                                html.Div(id="me-batch-convert-target", style={"color": "var(--color9)", "marginBottom": "0.4rem"}),
+                                get_save_dialog("me-batch-save", mode="batch"),
                             ],
                             title="Batch Convert",
                             item_id="me-sidebar-batch-convert",
@@ -386,9 +402,9 @@ def get_motl_editor_sidebar():
                                 html.Div(
                                     id="me-single-op-target-label",
                                     style={
-                                        "color": "var(--color9)",
+                                        "color": styles.COLOR_MUTED,
                                         "marginBottom": "0.4rem",
-                                        "fontSize": "0.85rem",
+                                        "fontSize": styles.FONT_SM,
                                     },
                                 ),
                                 make_dropdown(
@@ -477,9 +493,9 @@ def get_motl_editor_sidebar():
                                 html.Div(
                                     id="me-multi-op-target-label",
                                     style={
-                                        "color": "var(--color9)",
+                                        "color": styles.COLOR_MUTED,
                                         "marginBottom": "0.4rem",
-                                        "fontSize": "0.85rem",
+                                        "fontSize": styles.FONT_SM,
                                     },
                                 ),
                                 make_dropdown(
@@ -491,6 +507,14 @@ def get_motl_editor_sidebar():
                                 ),
                                 get_multi_motl_picker("me-multi"),
                                 html.Div(id="me-multi-form", style={"marginBottom": "0.5rem"}),
+                                dbc.Button(
+                                    "Column assignment",
+                                    id="me-col-merge-open-btn",
+                                    color="secondary",
+                                    outline=True,
+                                    size="sm",
+                                    style={"width": "100%", "marginBottom": "0.3rem"},
+                                ),
                                 dbc.Button(
                                     "Run",
                                     id="me-multi-run-btn",
@@ -511,6 +535,23 @@ def get_motl_editor_sidebar():
                     ],
                     always_open=True,
                     active_item=["me-sidebar-load", "me-sidebar-list"],
+                ),
+                dbc.Modal(
+                    [
+                        dbc.ModalHeader(dbc.ModalTitle("Column assignment")),
+                        dbc.ModalBody(
+                            html.Div(id="me-col-merge-body"),
+                            style={"overflowY": "auto"},
+                        ),
+                        dbc.ModalFooter([
+                            dbc.Button("Cancel", id="me-col-merge-cancel", color="secondary", className="me-2"),
+                            dbc.Button("Confirm", id="me-col-merge-confirm", color="primary"),
+                        ]),
+                    ],
+                    id="me-col-merge-modal",
+                    is_open=False,
+                    size="xl",
+                    scrollable=True,
                 ),
             ],
             className="sidebar",
@@ -561,6 +602,7 @@ def _relion_params_summary(relion_params):
 def register_motl_editor_sidebar_callbacks(app):
 
     register_motl_load_callbacks(app, "me-load")
+    register_save_dialog_callbacks(app, "me-batch-save", mode="batch")
 
     # ── Load → pool ────────────────────────────────────────────────────────────
     # A freshly loaded motl is appended to the pool with a new motl_id and
@@ -1172,6 +1214,74 @@ def register_motl_editor_sidebar_callbacks(app):
         fn = getattr(Motl, method_name)
         return build_form(fn, id_type="me-multi-param", exclude=exclude)
 
+    # ── Column-assignment modal callbacks ─────────────────────────────────────
+    @app.callback(
+        Output("me-col-merge-modal", "is_open"),
+        Output("me-col-merge-body", "children"),
+        Output("me-col-merge-draft", "data"),
+        Output("me-col-merge-motls", "data"),
+        Input("me-col-merge-open-btn", "n_clicks"),
+        State("me-multi-op-select", "value"),
+        State("me-multi-main-select", "value"),
+        State("me-multi-second-select", "value"),
+        State("me-multi-list-select", "value"),
+        State(ids.POOL_REGISTRY, "data"),
+        State("me-col-merge-config", "data"),
+        prevent_initial_call=True,
+    )
+    def _open_col_merge(n_clicks, method_name, main_id, second_ids, list_ids, registry, saved_config):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        motl_ids = _resolve_merge_motl_ids(method_name, main_id, second_ids, list_ids)
+        if not motl_ids:
+            raise dash.exceptions.PreventUpdate
+        registry = registry or {}
+        labels = [(registry.get(mid) or {}).get("label", mid) for mid in motl_ids]
+        draft = _init_merge_draft(len(motl_ids), saved_config)
+        return True, _build_col_merge_table(labels, draft), draft, motl_ids
+
+    @app.callback(
+        Output("me-col-merge-body", "children", allow_duplicate=True),
+        Output("me-col-merge-draft", "data", allow_duplicate=True),
+        Input({"type": "me-col-cell", "col": ALL, "row": ALL}, "n_clicks"),
+        State("me-col-merge-draft", "data"),
+        State("me-col-merge-motls", "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        prevent_initial_call=True,
+    )
+    def _on_col_cell_click(n_clicks_list, draft, motl_ids, registry):
+        trigger = ctx.triggered_id
+        if not trigger or not isinstance(trigger, dict) or not any(n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        new_draft = dict(draft or {})
+        new_draft[trigger["col"]] = trigger["row"]
+        registry = registry or {}
+        labels = [(registry.get(mid) or {}).get("label", mid) for mid in (motl_ids or [])]
+        return _build_col_merge_table(labels, new_draft), new_draft
+
+    @app.callback(
+        Output("me-col-merge-config", "data"),
+        Output("me-col-merge-modal", "is_open", allow_duplicate=True),
+        Input("me-col-merge-confirm", "n_clicks"),
+        State("me-col-merge-draft", "data"),
+        prevent_initial_call=True,
+    )
+    def _confirm_col_merge(n_clicks, draft):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        return draft, False
+
+    @app.callback(
+        Output("me-col-merge-modal", "is_open", allow_duplicate=True),
+        Input("me-col-merge-cancel", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _cancel_col_merge(n_clicks):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        return False
+
+    # ── Multi-motl run ─────────────────────────────────────────────────────────
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
@@ -1190,37 +1300,42 @@ def register_motl_editor_sidebar_callbacks(app):
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         State("me-slot-map", "data"),
+        State("me-col-merge-config", "data"),
         prevent_initial_call=True,
     )
     def run_multi_op(
-        n_clicks, method_name, main_id, second_id, list_ids,
+        n_clicks, method_name, main_id, second_ids, list_ids,
         param_values, param_ids,
-        registry, pool_meta, next_id, slot_map,
+        registry, pool_meta, next_id, slot_map, col_merge_config,
     ):
         pool_noup = (no_update,) * 5
 
         def _err(msg):
             return (*pool_noup, msg)
 
-        if not n_clicks or not method_name:
+        has_col_config = bool(col_merge_config) and any(int(v) != 0 for v in col_merge_config.values())
+        if not n_clicks or (not method_name and not has_col_config):
             raise dash.exceptions.PreventUpdate
 
-        spec = _MULTI_MOTL_SPECS.get(method_name)
-        if spec is None:
+        spec = _MULTI_MOTL_SPECS.get(method_name) if method_name else None
+        if method_name and spec is None:
             return _err(f"Operation '{method_name}' is not registered as multi-motl.")
 
         # 1) Resolve selected motl_ids -> Motl instances, preserving order.
         try:
-            if spec["arity"] == "pair":
-                if not main_id or not second_id:
-                    return _err("Select both Main and Second motls.")
-                if main_id == second_id:
-                    return _err("Main and Second motl must differ.")
-                ordered_ids = [main_id, second_id]
-            else:  # list
+            if spec is not None and spec["arity"] == "list":
                 if not list_ids or len(list_ids) < 2:
                     return _err("Select at least two motls for this operation.")
                 ordered_ids = list(list_ids)
+            else:  # pair op or column-merge-only
+                if not main_id:
+                    return _err("Select the Main motl.")
+                valid_seconds = [s for s in (second_ids or []) if s != main_id]
+                if spec is not None and not valid_seconds:
+                    return _err("Select at least one Second motl (must differ from Main).")
+                ordered_ids = _resolve_merge_motl_ids(method_name, main_id, second_ids, list_ids)
+                if not ordered_ids:
+                    return _err("Select at least one motl.")
 
             motls = []
             for mid in ordered_ids:
@@ -1239,45 +1354,67 @@ def register_motl_editor_sidebar_callbacks(app):
         current_pool = PoolState.from_stores(registry, pool_meta, next_id)
         kwargs = generate_kwargs(param_ids, param_values, pool_state=current_pool) if param_ids else {}
 
-        # 3) Pre-compute label (does not depend on result).
-        gui = getattr(getattr(Motl, method_name).__func__, "_gui", {})
-        op_label = gui.get("label", method_name)
+        # 3) Pre-compute labels.
+        gui = getattr(getattr(Motl, method_name).__func__, "_gui", {}) if method_name else {}
+        op_label = gui.get("label", method_name) if method_name else "col-merge"
         src_labels = [(registry.get(oid) or {}).get("label", oid) for oid in ordered_ids]
         slot_map = list(slot_map or [None] * N_SLOTS)
         while len(slot_map) < N_SLOTS:
             slot_map.append(None)
 
-        # 4) Build kwargs and run through the atomic chokepoint.
-        try:
+        # 4) Run operation, or use main motl as base for column-merge-only.
+        if method_name:
             fn = getattr(Motl, method_name)
             if spec["arity"] == "pair":
-                sig_params = list(inspect.signature(fn).parameters.keys())
-                full_kwargs = {sig_params[0]: motls[0], sig_params[1]: motls[1], **kwargs}
+                try:
+                    pool_state, mid, result = _run_pair_operations(
+                        fn, motls[0], motls[1:], kwargs, current_pool,
+                        op_label, src_labels, col_merge_config, has_col_config,
+                    )
+                except Exception as exc:
+                    return _err(f"Error running '{method_name}': {exc}")
             else:
-                list_param = spec.get("param", "motl_list")
-                full_kwargs = {list_param: motls, **kwargs}
-            pool_state, mid, result = run_operation_to_pool(
-                fn, full_kwargs, current_pool,
-                label=f"{op_label} of {' + '.join(src_labels)}",
+                try:
+                    list_param = spec.get("param", "motl_list")
+                    full_kwargs = {list_param: motls, **kwargs}
+                    pool_state, mid, result = run_operation_to_pool(
+                        fn, full_kwargs, current_pool,
+                        label=f"{op_label} of {' + '.join(src_labels)}",
+                    )
+                except Exception as exc:
+                    return _err(f"Error running '{method_name}': {exc}")
+                if not isinstance(result, Motl):
+                    return _err(f"'{method_name}' did not return a Motl (got {type(result).__name__}).")
+                if has_col_config:
+                    merged_df = _apply_col_merge(result.df, motls, col_merge_config)
+                    if merged_df is not result.df:
+                        pool_state = replace_motl_rows(pool_state, mid, merged_df)
+        else:
+            result = motls[0]
+            pool_state, mid = insert_motl(
+                current_pool, motls[0].df,
+                label=f"col-merge of {' + '.join(src_labels)}",
+                has_tab=False,
             )
-        except Exception as exc:
-            return _err(f"Error running '{method_name}': {exc}")
+            if has_col_config:
+                merged_df = _apply_col_merge(result.df, motls, col_merge_config)
+                if merged_df is not result.df:
+                    pool_state = replace_motl_rows(pool_state, mid, merged_df)
 
-        if not isinstance(result, Motl):
-            return _err(f"'{method_name}' did not return a Motl (got {type(result).__name__}).")
-
+        # 6) Assign to the first free view slot.
+        col_note = " + col-assign" if has_col_config else ""
         free = _first_free_slot(slot_map)
         if free is not None:
             slot_map[free] = mid
             active = f"me-tab-{free}"
             status = (
-                f"'{op_label}' -> new motl in slot {free + 1} "
-                f"({len(result.df)} particles, from {len(motls)} input motl(s))."
+                f"'{op_label}{col_note}' -> new motl in slot {free + 1} "
+                f"({len(result.df)} particles, from {len(motls)} motl(s))."
             )
         else:
             active = no_update
             status = (
-                f"'{op_label}' -> new motl in the pool "
+                f"'{op_label}{col_note}' -> new motl in the pool "
                 f"({len(result.df)} particles; no free slot, use 'Slot assignment')."
             )
 
@@ -1323,12 +1460,14 @@ def register_motl_editor_sidebar_callbacks(app):
         State({"type": "path-input", "owner": "me-op-save-dir"}, "value"),
         State("me-op-save-format", "value"),
         State(ids.POOL_GROUPS, "data"),
+        State("me-active-target", "data"),
         prevent_initial_call=True,
     )
     def apply_operation(n_clicks, method_name, active_tab, param_values, param_ids, *rest):
         all_slot_data = rest[:N_SLOTS]
         (registry, pool_meta, next_id, slot_map,
-         create_group_val, save_to_disk_val, save_dir_val, save_fmt_val, groups_data) = rest[N_SLOTS:]
+         create_group_val, save_to_disk_val, save_dir_val, save_fmt_val, groups_data,
+         active_target) = rest[N_SLOTS:]
 
         # 5 pool-related outputs: registry, meta, next_id, slot_map, active_tab
         pool_noup = (no_update,) * 5
@@ -1392,23 +1531,29 @@ def register_motl_editor_sidebar_callbacks(app):
                     else f"{op_label} of {src_label}"
                 )
                 new_gstate, _ = create_group(new_gstate, new_ids, label=glabel)
+            _save_errs = []
             if want_save and new_ids and save_dir_val:
-                _ext_map = {"emmotl": ".em", "stopgap": ".csv", "dynamo": ".tbl",
+                _ext_map = {"emmotl": ".em", "stopgap": ".star", "dynamo": ".tbl",
                             "relion": ".star", "relion5": ".star", "relion5_1": ".star"}
                 _fmt = save_fmt_val or "emmotl"
                 _ext = _ext_map.get(_fmt, ".em")
+                _sdir = save_dir_val.strip()
+                _os.makedirs(_sdir, exist_ok=True)
                 for new_mid, m in zip(new_ids, result_list):
                     _lbl = (current_pool.registry.get(new_mid) or {}).get("label", new_mid)
-                    _path = _os.path.join(save_dir_val.strip(), _lbl + _ext)
+                    _path = _os.path.join(_sdir, _lbl + _ext)
                     try:
                         run_operation(m.write_out, {"output_path": _path, "motl_type": _fmt})
                     except Exception as exc:
-                        pass
+                        _save_errs.append(f"{_lbl}: {exc}")
             status = f"'{op_label}' → {len(result_list)} motl(s)"
             if want_group:
                 status += ", grouped in pool"
-            if want_save:
-                status += ", saved to disk"
+            if want_save and new_ids and save_dir_val:
+                n_saved = len(new_ids) - len(_save_errs)
+                status += f", saved {n_saved}/{len(new_ids)} to disk"
+                if _save_errs:
+                    status += ". Errors: " + "; ".join(_save_errs[:3])
             return _ret(nochange, nochange, status,
                         pool=(*current_pool.to_stores(), slot_map, no_update),
                         groups=new_gstate.to_store())
@@ -1441,28 +1586,71 @@ def register_motl_editor_sidebar_callbacks(app):
                 pool=(*pool_state.to_stores(), slot_map, active),
             )
 
-        # In-place operation — update the active slot.
+        # In-place operation — group target: apply to every slot that holds a group member.
+        if (active_target or {}).get("type") == "group":
+            gid = active_target["id"]
+            gstate = GroupState.from_store(groups_data)
+            members = list((gstate.groups.get(gid) or {}).get("members", []))
+            slot_map_list = list(slot_map or [])
+            data_out = [no_update] * N_SLOTS
+            undo_out = [no_update] * N_SLOTS
+            n_ok, errs = 0, []
+            state = current_pool
+            for mid in members:
+                try:
+                    si = slot_map_list.index(mid)
+                except ValueError:
+                    continue
+                member_data = all_slot_data[si]
+                if not member_data:
+                    continue
+                try:
+                    m = Motl(pd.DataFrame(member_data))
+                    m._pool_motl_id = mid
+                    res = invoke_operation(getattr(m, method_name), kwargs)
+                except Exception as exc:
+                    errs.append(f"{(registry or {}).get(mid, {}).get('label', mid)}: {exc}")
+                    continue
+                if isinstance(res, Motl):
+                    result_df = res.df
+                elif res is None:
+                    result_df = m.df
+                else:
+                    continue
+                state = replace_motl_rows(state, mid, result_df)
+                data_out[si] = result_df.to_dict("records")
+                undo_out[si] = member_data
+                n_ok += 1
+            status = f"'{method_name}' applied to {n_ok}/{len(members)} motl(s)."
+            if errs:
+                status += " Errors: " + "; ".join(errs[:3])
+            return _ret(data_out, undo_out, status, pool=(*state.to_stores(), slot_map, no_update))
+
+        # In-place operation — single motl: update the active slot.
+        slot_map_list = list(slot_map or [])
+        mid = slot_map_list[slot_idx] if slot_idx < len(slot_map_list) else None
         try:
             motl = Motl(pd.DataFrame(current_data))
-            slot_map_list = list(slot_map or [])
-            motl._pool_motl_id = slot_map_list[slot_idx] if slot_idx < len(slot_map_list) else None
+            motl._pool_motl_id = mid
             result = invoke_operation(getattr(motl, method_name), kwargs)
         except Exception as exc:
             return _ret(nochange, nochange, f"Error running '{method_name}': {exc}")
 
         if isinstance(result, Motl):
-            new_data = result.df.to_dict("records")
+            result_df = result.df
         elif result is None:
-            new_data = motl.df.to_dict("records")
+            result_df = motl.df
         else:
             return _ret(nochange, nochange, f"Ran '{method_name}' — result: {result!r} (table unchanged).")
 
+        state = replace_motl_rows(current_pool, mid, result_df) if mid else current_pool
+        new_data = result_df.to_dict("records")
         data_out = [no_update] * N_SLOTS
         data_out[slot_idx] = new_data
         undo_out = [no_update] * N_SLOTS
         undo_out[slot_idx] = current_data
         status = f"'{method_name}' applied. Particles: {len(current_data)} → {len(new_data)}."
-        return _ret(data_out, undo_out, status)
+        return _ret(data_out, undo_out, status, pool=(*state.to_stores(), slot_map, no_update))
 
     # ── Undo the last operation on the active slot ─────────────────────────────
     @app.callback(
@@ -1712,87 +1900,41 @@ def register_motl_editor_sidebar_callbacks(app):
         return f"Group: {glabel} ({n} motl(s))"
 
     @app.callback(
-        Output("me-batch-convert-suffix-row", "style"),
-        Input("me-batch-convert-filename-policy", "value"),
-    )
-    def _toggle_suffix_row(policy):
-        return {"display": "block"} if policy == "suffix" else {"display": "none"}
-
-    @app.callback(
-        Output("me-batch-convert-status", "children"),
-        Input("me-batch-convert-btn", "n_clicks"),
+        Output("me-batch-save-status", "children"),
+        Output("me-batch-save-validation", "children"),
+        Input("me-batch-save-save-btn", "n_clicks"),
         State("me-active-target", "data"),
-        State("me-batch-convert-format", "value"),
-        State({"type": "path-input", "owner": "me-batch-convert-dir"}, "value"),
-        State("me-batch-convert-filename-policy", "value"),
-        State("me-batch-convert-suffix", "value"),
-        State("me-batch-convert-overwrite", "value"),
+        State("me-batch-save-format", "value"),
+        State({"type": "path-input", "owner": "me-batch-save-dest-dir"}, "value"),
+        State("me-batch-save-filename-policy", "value"),
+        State("me-batch-save-filename-suffix", "value"),
+        State("me-batch-save-overwrite", "value"),
+        State("me-batch-save-rln-value", "data"),
+        State({"type": "me-batch-save-sg-param", "owner": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "me-batch-save-sg-param", "owner": ALL, "param": ALL, "tag": ALL}, "id"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_GROUPS, "data"),
         prevent_initial_call=True,
     )
-    def _batch_convert(n_clicks, active_target, motl_type, out_dir,
-                       filename_policy, suffix, overwrite, registry, groups_data):
-        import os as _os
-        import pathlib as _pathlib
-
+    def _batch_save(n_clicks, active_target, fmt, out_dir, policy, suffix,
+                    overwrite, rln_value, sg_vals, sg_ids, registry, groups_data):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not active_target or active_target.get("type") != "group":
-            return "Select a group first (click its label in the pool list)."
+            return no_update, "Select a group first (click its label in the pool list)."
         gid = active_target["id"]
         gstate = GroupState.from_store(groups_data)
         g = gstate.groups.get(gid) or {}
         members = list(g.get("members", []))
-        if not members:
-            return "The selected group has no members."
-        if not out_dir:
-            return "Specify an output directory."
-        out_dir = out_dir.strip()
-        motl_type = motl_type or "emmotl"
-        _ext_map = {
-            "emmotl": ".em", "stopgap": ".csv", "dynamo": ".tbl",
-            "relion": ".star", "relion5": ".star", "relion5_1": ".star",
-        }
-        _ext = _ext_map.get(motl_type, ".em")
-
-        # Build output paths
         registry = registry or {}
-        paths = {}
-        for mid in members:
-            meta = registry.get(mid) or {}
-            src_path = meta.get("source_path") or meta.get("label", mid)
-            stem = _pathlib.Path(src_path).stem if src_path else mid
-            if filename_policy == "suffix" and suffix:
-                stem = stem + suffix
-            paths[mid] = _os.path.join(out_dir, stem + _ext)
-
-        # Overwrite check
-        if overwrite == "refuse":
-            conflicts = [p for p in paths.values() if _os.path.exists(p)]
-            if conflicts:
-                lines = "\n".join(conflicts[:10])
-                tail = f"\n… and {len(conflicts) - 10} more." if len(conflicts) > 10 else ""
-                return f"Refused — {len(conflicts)} file(s) already exist:\n{lines}{tail}"
-
-        done, errs = 0, []
-        for mid, out_path in paths.items():
-            try:
-                df = get_rows(mid)
-                m = Motl(df)
-                run_operation(m.write_out, {"output_path": out_path, "motl_type": motl_type})
-                done += 1
-            except PoolPayloadMissing as exc:
-                errs.append(f"{mid}: {exc}")
-            except Exception as exc:
-                errs.append(f"{mid}: {exc}")
-
-        status = f"Converted {done}/{len(members)} motl(s) to {motl_type}."
-        if errs:
-            status += "  Errors: " + "; ".join(errs[:3])
-            if len(errs) > 3:
-                status += f" … (+{len(errs) - 3} more)"
-        return status
+        paths = build_batch_paths(members, out_dir or "", fmt or "emmotl", policy or "stem", suffix, registry)
+        probs = validate_save(out_dir, fmt, rln_value, mode="batch", members=members, paths=paths, overwrite=overwrite or "refuse")
+        if probs:
+            return no_update, "\n".join(probs)
+        sg_kwargs = generate_kwargs(sg_ids, sg_vals) if sg_ids else {}
+        os.makedirs(out_dir, exist_ok=True)
+        status, val = execute_batch_save(members, paths, fmt, rln_value, sg_kwargs, registry)
+        return status, val
 
     # ── Part F: write-back @-variable results to the form text inputs ──────────
     from cryocat.app.formgen import register_var_picker_writeback

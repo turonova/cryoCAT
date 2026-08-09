@@ -17,10 +17,12 @@ from werkzeug.middleware.dispatcher import DispatcherMiddleware
 from werkzeug.serving import run_simple
 
 from cryocat.app import session as _session
+
 _session.start_session()
 
 # Populate GUI_REGISTRY before importing apps that read it at module level.
 from cryocat.app import discovery as _discovery
+
 _discovery.load_registry()
 
 from cryocat.app.tango.app import app as tango_app
@@ -40,6 +42,7 @@ def main():
         application,
         use_reloader=False,
         use_debugger=False,
+        threaded=True,
     )
 
 

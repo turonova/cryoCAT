@@ -26,7 +26,6 @@ from cryocat.app import ids, formgen, discovery
 from cryocat.app.formgen import make_dropdown
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components import complex_registry as cr
-from cryocat.app.components.logpanel import get_log_panel, register_log_panel_callbacks
 from cryocat.app.components.motlsource import (
     get_motl_source, register_motl_source_callbacks,
 )
@@ -271,7 +270,6 @@ def _main() -> list:
 layout: Any = html.Div(
     [
         page_shell(_sidebar(), _main(), sidebar_width=4),
-        *get_log_panel("complexes-log"),
     ],
     style={"margin": 0, "padding": 0},
 )
@@ -280,7 +278,6 @@ layout: Any = html.Div(
 # ── Callbacks ─────────────────────────────────────────────────────────────────
 
 def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
-    register_log_panel_callbacks(app, "complexes-log")
     register_motl_source_callbacks(app, "cpx-build")
     register_send_to_editor_callbacks(app, "cpx-export", _CPX_RES_MOTL)
 
