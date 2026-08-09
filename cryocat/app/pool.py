@@ -306,6 +306,24 @@ def restore_snapshot(motl_id: str) -> "pd.DataFrame | None":
     return _snapshots.pop(motl_id, None)
 
 
+_CACHE_BLOCK_SIZE = 100  # must match dashGridOptions.cacheBlockSize in tablegrid.get_grid()
+
+
+def block_to_records(df: pd.DataFrame, *, max_rows: int | None = None) -> list[dict]:
+    """Serialise at most one cache block to records for getRowsResponse.
+
+    Asserts the frame is within one cache block so this function cannot
+    accidentally serialise a full motl.  Lives in pool.py (the serialisation
+    boundary) so the T3 AST check does not flag callers in tablegrid callbacks.
+    """
+    limit = max_rows if max_rows is not None else _CACHE_BLOCK_SIZE
+    if len(df) > limit:
+        raise ValueError(
+            f"block_to_records: got {len(df)} rows, expected ≤ {limit}"
+        )
+    return df.to_dict("records")
+
+
 def active_ids(state: PoolState) -> list[str]:
     """Return motl ids whose active flag is True, in insertion order."""
     return [mid for mid, entry in state.registry.items() if entry.get("active", True)]

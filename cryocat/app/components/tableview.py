@@ -6,7 +6,7 @@ import dash_bootstrap_components as dbc
 
 from cryocat.app.components.tableplot import get_table_plot_component
 from cryocat.app.components.tablecluster import get_table_cluster_component
-from cryocat.app.components.tablegrid import get_grid, get_grid_row_count_notice, register_tablegrid_callbacks
+from cryocat.app.components.tablegrid import get_grid, register_tablegrid_callbacks
 from cryocat.app.components.tablefilter import register_tablefilter_callbacks
 from cryocat.app.components.tableedit import register_tableedit_callbacks
 from cryocat.app.components.tablesave import (
@@ -52,7 +52,7 @@ def get_table_component(
     button_children += [
         dbc.Button("Save as CSV", id=f"{prefix}-save-csv-btn", color="primary", className="me-1"),
         dbc.Button("Remove Selected Rows", id=f"{prefix}-remove-rows-btn", color="primary", className="me-1"),
-        dbc.Button("Select All Visible", id=f"{prefix}-select-all-btn", color="secondary", className="me-1"),
+        dbc.Button("Select All Filtered", id=f"{prefix}-select-all-btn", color="secondary", className="me-1"),
         dbc.Button("Select Inverse", id=f"{prefix}-select-inverse-btn", color="secondary", className="me-1"),
         dbc.Button("Plot", id=f"{prefix}-plot-graphs-btn", color="primary", className="me-1", n_clicks=0),
         dbc.Offcanvas(
@@ -111,6 +111,16 @@ def get_table_component(
             )
         )
     button_row_children.append(
+        dbc.Col(
+            html.Div(
+                id=f"{prefix}-selection-count",
+                style={"color": "var(--color9)", "whiteSpace": "nowrap", "fontSize": "0.85rem"},
+            ),
+            width="auto",
+            className="d-flex align-items-center",
+        )
+    )
+    button_row_children.append(
         dbc.Col(button_children, className="d-flex justify-content-end flex-wrap gap-1")
     )
 
@@ -119,11 +129,15 @@ def get_table_component(
         children=[
             dbc.Row(button_row_children, className="mb-2"),
             get_grid(prefix),
-            get_grid_row_count_notice(prefix),
+            html.Div(
+                id=f"{prefix}-active-filter-count",
+                style={"fontSize": "0.85rem", "color": "var(--color9)", "marginTop": "4px", "marginBottom": "4px"},
+            ),
             html.H5("Filters", style={"marginBottom": "1rem", "marginTop": "1rem"}),
             html.Div(id=f"{prefix}-filters-container", style={"marginBottom": "2rem"}),
             *extra_children,
             dcc.Store(id=f"{prefix}-snapshot-store"),
+            dcc.Store(id=f"{prefix}-selection-ids-store", data=[]),
         ],
     )
 

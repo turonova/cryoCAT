@@ -140,22 +140,29 @@ def register_tablesave_csv_callbacks(
         Output(f"{prefix}-csv-status-label", "children"),
         Input(f"{prefix}-csv-save-btn", "n_clicks"),
         State(f"{prefix}-csv-path", "value"),
-        State(f"{prefix}-grid", "rowData"),
+        State(f"{prefix}-global-data-store", "data"),
+        State(f"{prefix}-grid", "filterModel"),
         *(extra_csv_states or []),
         prevent_initial_call=True,
     )
-    def do_csv_save(_, path, grid_data, *extra):
-        if not path or not grid_data:
+    def do_csv_save(_, path, global_ref, filter_model, *extra):
+        if not path:
             return no_update, "Specify a filename."
         try:
-            if custom_csv_save_fn is not None:
-                result = custom_csv_save_fn(path, grid_data, *extra)
-                if result is not None:
-                    return result
-            pd.DataFrame(grid_data).to_csv(path, index=False)
-            return False, f"Saved to {path}"
+            from cryocat.app.pool import get_rows as _get_rows, PoolPayloadMissing as _PPM
+            from cryocat.app.components.tablegrid import apply_filter_model as _afm
+            if global_ref and isinstance(global_ref, dict) and global_ref.get("motl_id"):
+                df = _get_rows(global_ref["motl_id"])
+                df = _afm(df, filter_model or {}, {})
+                if custom_csv_save_fn is not None:
+                    result = custom_csv_save_fn(path, df.to_dict("records"), *extra)
+                    if result is not None:
+                        return result
+                df.to_csv(path, index=False)
+                return False, f"Saved {len(df):,} rows to {path}"
         except Exception as e:
             return no_update, str(e)
+        return no_update, "No data to save."
 
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -333,13 +340,30 @@ def register_table_save_callbacks(
             Output("motls-registry", "data", allow_duplicate=True),
             Output("me-tabs", "active_tab", allow_duplicate=True),
             Input(f"{prefix}-create-from-selected-btn", "n_clicks"),
-            State(f"{prefix}-grid", "selectedRows"),
+            State(f"{prefix}-selection-ids-store", "data"),
+            State(f"{prefix}-global-data-store", "data"),
             State(f"{connected_motl_prefix}-motl-data-type", "data"),
             State("motls-registry", "data"),
             prevent_initial_call=True,
         )
-        def create_from_selected(n_clicks, selected_rows, motl_type, registry):
-            if not n_clicks or not selected_rows:
+        def create_from_selected(n_clicks, selection_ids, global_ref, motl_type, registry):
+            if not n_clicks or not selection_ids:
+                raise exceptions.PreventUpdate
+            from cryocat.app.pool import get_rows as _get_rows, PoolPayloadMissing as _PPM
+            motl_id = (global_ref or {}).get("motl_id")
+            if not motl_id:
+                raise exceptions.PreventUpdate
+            try:
+                df = _get_rows(motl_id)
+            except _PPM:
+                raise exceptions.PreventUpdate
+            id_set = set(selection_ids)
+            if "subtomo_id" in df.columns:
+                sel_df = df[df["subtomo_id"].isin(id_set)]
+            else:
+                raise exceptions.PreventUpdate
+            selected_rows = sel_df.to_dict("records")
+            if not selected_rows:
                 raise exceptions.PreventUpdate
             data_out, type_out, new_registry, active_tab = _create_from_selected_data(
                 selected_rows, motl_type, registry, _si, _mm

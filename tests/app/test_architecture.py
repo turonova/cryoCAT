@@ -236,6 +236,11 @@ THIN_CALLBACK_EXEMPT: dict[str, str] = {
     # tango page modules — not addressed by thin-callback lint in this phase
     "sidebar":       "doc 8 — tango sidebar with inline 100vh and compound callbacks",
     "table":         "doc 8 — tango table with column-iteration callbacks",
+    # GRID_SERVER_SIDE_ROWS W1–W3 — infinite-model callbacks (doc 8 extraction pass)
+    "tablegrid":     "doc 8 — _rows (13 stmts: filter+sort+slice chain), _toggle_select_all (11 stmts)",
+    "tablefilter":   "doc 8 — _on_slider_change has for-loop (W2 zip merge), apply_filters_btn (9 stmts)",
+    "tableedit":     "doc 8 — remove_selected_rows (11 stmts: pool-aware bulk remove)",
+    "tablesave":     "doc 8 — create_from_selected (12 stmts: pool-fetch + slot-allocate + registry)",
 }
 
 _THIN_THRESHOLD_STMTS = 8
@@ -302,7 +307,7 @@ def test_thin_callback_exempt_list_is_bounded():
 
 # Baseline recorded at Phase 3 write time.  The test asserts the count only
 # goes DOWN (shrinks), never UP.  Update this number when the count drops.
-_ALLOW_DUPLICATE_BASELINE = 311  # 308 + pool-aware undo_operation (3 new pool Outputs with allow_duplicate)
+_ALLOW_DUPLICATE_BASELINE = 312  # 311 + 1 net new: selection-ids-store (new store) needs allow_duplicate writers from tableedit/tablegrid
 
 
 def test_allow_duplicate_count_does_not_grow():
@@ -555,9 +560,8 @@ _TO_DICT_RECORDS_EXEMPT: dict[str, str] = {
     "pnn":          "non-motl data — NN statistics table is not particle data; cannot use motl pool without redesign",
     "psta":         "non-motl data — STA parameter config tables are not motls; cannot use motl pool",
     "motlio":       "blocked — save_data wraps tool-specific result stores that remain pre-pool",
-    "tablesave":    "legitimate — do_csv_save wraps grid_data for CSV export (not a pool roundtrip)",
+    "tablesave":    "legitimate — create_from_selected serialises a user-selected subset into a new motl slot (not grid-bound)",
     "relionopts":   "legitimate — _on_tomos_load writes tomogram dimension data (not motl rows) to rln-tomos-store",
-    "tablegrid":    "legitimate — load_data_to_grid must serialise ≤2k rows for AG Grid; eliminated pool-store roundtrip (W2)",
 }
 
 

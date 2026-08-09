@@ -1,13 +1,21 @@
 """Range-slider filtering for tableview — pure functions + callbacks.
 
-The global-data-store for pool-aware tables holds a reference dict
-``{"motl_id": str, "rev": int}`` instead of row data.  All callbacks here
-read rows directly from the server-side pool and write results back there.
+Sliders are live view filters: moving a slider encodes the active range into
+the grid's filterModel (as AG Grid inRange conditions), which causes the grid
+to purge its infinite-model cache and re-request rows from the server with the
+updated filter.  The "Apply Changes" button commits the currently filtered
+subset back to the pool permanently.
+
+W2 invariants:
+- Sliders at their full column range contribute nothing to filterModel — no
+  no-op filtering and no refresh on initial slider build (prevent_initial_call).
+- Slider filters and AG Grid column header filters live in one filterModel;
+  apply_filter_model (tablegrid) handles both with logical AND.
+- Active filter count is shown in the grid area.
 """
 
 from __future__ import annotations
 
-import pandas as pd
 from dash import html, dcc, Input, Output, State, ALL, MATCH, exceptions, no_update, ctx
 import dash_bootstrap_components as dbc
 
@@ -19,6 +27,7 @@ from cryocat.app.pool import (
     PoolPayloadMissing,
     PoolState,
 )
+from cryocat.app.components.tablegrid import apply_filter_model
 
 
 # ── Pure functions ─────────────────────────────────────────────────────────────
@@ -55,16 +64,6 @@ def slider_specs(column_ranges: dict[str, list[float]]) -> list[dict]:
         {"column": col, "min": rng[0], "max": rng[1], "step": rng[2]}
         for col, rng in column_ranges.items()
     ]
-
-
-def apply_filters(df: pd.DataFrame, filters: dict[str, tuple[float, float]]) -> list[dict]:
-    """Filter *df* to rows within (lo, hi) per column.  Returns ``list[dict]`` for the grid."""
-    if df.empty or not filters:
-        return df.to_dict("records")
-    for col, (lo, hi) in filters.items():
-        if col in df.columns:
-            df = df[df[col].between(lo, hi)]
-    return df.to_dict("records")
 
 
 def sync_bounds(
@@ -138,26 +137,6 @@ def _slider_col(s: dict, prefix: str) -> dbc.Col:
     )
 
 
-def _commit_filter(
-    ref: dict,
-    slider_ids: list,
-    slider_values: list,
-    registry,
-    pool_meta,
-    next_id,
-) -> tuple:
-    """Pure: apply slider filters to pool rows, commit to pool, return (state, motl_id, filtered_df)."""
-    motl_id = ref.get("motl_id")
-    df = get_rows(motl_id)  # raises PoolPayloadMissing if absent
-    filters = {sid.get("column"): (lo, hi) for sid, (lo, hi) in zip(slider_ids, slider_values)}
-    filtered_df = df.copy()
-    for col, (lo, hi) in filters.items():
-        if col in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df[col].between(lo, hi)]
-    state = PoolState.from_stores(registry, pool_meta, next_id)
-    return replace_motl_rows(state, motl_id, filtered_df), motl_id, filtered_df
-
-
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
 
@@ -205,45 +184,65 @@ def register_tablefilter_callbacks(app, prefix: str) -> None:
         return result
 
     @app.callback(
-        Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
-        Input(f"{prefix}-global-data-store", "data"),
+        Output(f"{prefix}-grid", "filterModel", allow_duplicate=True),
         Input({"type": f"{prefix}-filter-slider", "column": ALL}, "value"),
         State({"type": f"{prefix}-filter-slider", "column": ALL}, "id"),
+        State({"type": f"{prefix}-filter-slider", "column": ALL}, "min"),
+        State({"type": f"{prefix}-filter-slider", "column": ALL}, "max"),
+        State(f"{prefix}-grid", "filterModel"),
         prevent_initial_call=True,
     )
-    def filter_data_by_sliders(ref, slider_values, slider_ids):
-        if not ref or not isinstance(ref, dict) or not ref.get("motl_id"):
-            raise exceptions.PreventUpdate
-        try:
-            df = get_rows(ref["motl_id"])
-        except PoolPayloadMissing:
-            raise exceptions.PreventUpdate
-        filters = {sid.get("column"): (lo, hi) for sid, (lo, hi) in zip(slider_ids, slider_values)}
-        return apply_filters(df, filters)
+    def _on_slider_change(slider_values, slider_ids, slider_mins, slider_maxs, current_filter_model):
+        """Encode active slider ranges into filterModel to trigger infinite-cache purge.
+
+        Full-range sliders contribute nothing (W2 — no no-op filtering).
+        Non-slider column filters from the grid header are preserved.
+        """
+        slider_cols = {sid["column"] for sid in slider_ids}
+        # Keep non-slider column filters; rebuild slider portion from current values
+        merged = {k: v for k, v in (current_filter_model or {}).items()
+                  if k not in slider_cols}
+        for val, sid, mn, mx in zip(slider_values, slider_ids, slider_mins, slider_maxs):
+            lo, hi = val[0], val[1]
+            if lo != mn or hi != mx:  # non-trivial — add to filterModel
+                merged[sid["column"]] = {
+                    "filterType": "number",
+                    "type": "inRange",
+                    "filter": lo,
+                    "filterTo": hi,
+                }
+        return merged
 
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output(f"{prefix}-global-data-store", "data", allow_duplicate=True),
-        Output(f"{prefix}-grid", "rowData", allow_duplicate=True),
+        Output(f"{prefix}-grid", "filterModel", allow_duplicate=True),
         Input(f"{prefix}-apply-btn", "n_clicks"),
         State(f"{prefix}-global-data-store", "data"),
-        State({"type": f"{prefix}-filter-slider", "column": ALL}, "value"),
-        State({"type": f"{prefix}-filter-slider", "column": ALL}, "id"),
+        State(f"{prefix}-grid", "filterModel"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def apply_filters_btn(_, ref, slider_values, slider_ids, registry, pool_meta, next_id):
+    def apply_filters_btn(_, ref, filter_model, registry, pool_meta, next_id):
+        """Commit the currently filtered subset back to the pool (permanent filter).
+
+        Reads both slider-encoded and column-header filters from filterModel,
+        applies them to the pool entry, and commits the result.  Clears
+        filterModel afterward so the grid reflects the new baseline.
+        """
         if not ref or not isinstance(ref, dict) or not ref.get("motl_id"):
             raise exceptions.PreventUpdate
+        motl_id = ref["motl_id"]
         try:
-            state, motl_id, _ = _commit_filter(ref, slider_ids, slider_values, registry, pool_meta, next_id)
+            df = get_rows(motl_id)
         except PoolPayloadMissing:
             raise exceptions.PreventUpdate
+        filtered_df = apply_filter_model(df, filter_model or {}, {})
+        state = PoolState.from_stores(registry, pool_meta, next_id)
+        state = replace_motl_rows(state, motl_id, filtered_df)
         new_rev = state.registry[motl_id]["revision"]
-        # Grid rowData is left to filter_data_by_sliders (triggered by global-data-store change).
-        # Returning no_update here avoids serialising the full filtered DataFrame. (W2/T3)
-        return *state.to_stores(), {"motl_id": motl_id, "rev": new_rev}, no_update
+        return *state.to_stores(), {"motl_id": motl_id, "rev": new_rev}, {}

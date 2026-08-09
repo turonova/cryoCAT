@@ -34,7 +34,7 @@ def sample_df() -> pd.DataFrame:
     return pd.DataFrame({
         "subtomo_id": np.arange(1, n + 1, dtype=float),
         "score":      rng.random(n).astype("float32"),
-        "tomo_id":    rng.integers(1, 6, n, dtype=float),
+        "tomo_id":    rng.integers(1, 6, n).astype(float),
         "x":          rng.uniform(-50, 50, n).astype("float32"),
         "label":      [f"item_{i % 5}" for i in range(n)],
     })
