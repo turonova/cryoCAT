@@ -148,12 +148,17 @@ def register_table_callbacks(
     *,
     extra_csv_states=None,
     custom_csv_save_fn=None,
+    tabs_id: str | None = None,
+    tab_value: str | None = None,
 ):
     """Register grid, filter, edit and CSV-save callbacks for *prefix*.
 
+    Pass *tabs_id* and *tab_value* when the grid lives inside a ``dbc.Tabs``
+    panel so that mounting only happens when the tab is active.
+
     To add motl-mode saves, also call ``register_table_save_callbacks``.
     """
-    register_tablegrid_callbacks(app, prefix)
+    register_tablegrid_callbacks(app, prefix, tabs_id=tabs_id, tab_value=tab_value)
     register_tablefilter_callbacks(app, prefix)
     register_tableedit_callbacks(app, prefix)
     register_tablesave_csv_callbacks(

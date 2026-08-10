@@ -181,6 +181,11 @@ def col_defs_from_df(df: pd.DataFrame) -> list[dict]:
     return col_defs
 
 
+def _tab_active(active_tab: str | None, tab_value: str | None) -> bool:
+    """Return True when this grid's tab is active (or no tab tracking is configured)."""
+    return tab_value is None or active_tab == tab_value
+
+
 def _build_grid(prefix: str, df: pd.DataFrame) -> dag.AgGrid:
     """Build a fresh AgGrid configured for df.  Pure; no Dash calls.
 
@@ -188,6 +193,9 @@ def _build_grid(prefix: str, df: pd.DataFrame) -> dag.AgGrid:
     with correct columnDefs and infiniteInitialRowCount before its first
     getRowsRequest fires.  The first request therefore always finds pool data
     present and is answered with real rows.
+
+    columnSize="sizeToFit" is set at construction time so columns fit the page
+    width immediately when the grid is mounted into a visible container.
     """
     return dag.AgGrid(
         id=f"{prefix}-grid",
@@ -198,6 +206,7 @@ def _build_grid(prefix: str, df: pd.DataFrame) -> dag.AgGrid:
         style=_GRID_STYLE,
         className="ag-theme-balham",
         columnSizeOptions={"skipHeader": False},
+        columnSize="sizeToFit",
     )
 
 
@@ -237,20 +246,52 @@ def get_grid(prefix: str) -> html.Div:
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
 
-def register_tablegrid_callbacks(app, prefix: str) -> None:
+def register_tablegrid_callbacks(
+    app,
+    prefix: str,
+    *,
+    tabs_id: str | None = None,
+    tab_value: str | None = None,
+) -> None:
+    """Register all AG Grid callbacks for *prefix*.
+
+    When *tabs_id* and *tab_value* are supplied, ``_mount_grid`` is also
+    triggered by tab-activation events and skips mounting when the grid's tab
+    is not the active one.  This prevents AG Grid from being constructed into
+    a ``display: none`` container (inactive ``dbc.Tab`` pane), which would
+    suppress the first ``getRowsRequest`` and break column fitting.
+    """
+    _mount_inputs = [Input(f"{prefix}-global-data-store", "data")]
+    if tabs_id:
+        _mount_inputs.append(Input(tabs_id, "active_tab"))
+
     @app.callback(
         Output(f"{prefix}-grid-container", "children"),
-        Input(f"{prefix}-global-data-store", "data"),
+        *_mount_inputs,
         State(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
-    def _mount_grid(ref, registry):
-        """W1: remount the grid whenever a motl loads, pre-configured with n_rows and cols.
+    def _mount_grid(*args):
+        """W1: mount the grid only when its tab is active; skip for invisible tabs.
 
-        Remounting is cheap (grid holds no rows client-side) and eliminates the
-        entire class of 'grid cached stale state before data arrived' bugs.  The
-        new grid's first getRowsRequest arrives after the pool payload is ready.
+        Without tab awareness _mount_grid fires for all slots on every pool
+        change, including slots whose dbc.Tab is hidden (display: none).
+        AG Grid in a zero-size viewport never fires getRowsRequest and cannot
+        run sizeColumnsToFit, explaining both the missing rows and the wide
+        column regression.
+
+        With tabs_id/tab_value: the callback also fires when the user switches
+        to this grid's tab (Input on active_tab), and raises PreventUpdate when
+        a different tab is active so the container stays empty.  When the tab
+        becomes active with pool data already loaded, _mount_grid builds the
+        grid into a now-visible container → getRowsRequest fires immediately.
         """
+        if tabs_id:
+            ref, active_tab, registry = args
+            if not _tab_active(active_tab, tab_value):
+                raise exceptions.PreventUpdate
+        else:
+            ref, registry = args
         if not ref or not isinstance(ref, dict) or not ref.get("motl_id"):
             raise exceptions.PreventUpdate
         motl_id = ref["motl_id"]
@@ -258,9 +299,6 @@ def register_tablegrid_callbacks(app, prefix: str) -> None:
             df = get_rows(motl_id)
         except PoolPayloadMissing:
             raise exceptions.PreventUpdate
-        # D1 diagnostic — remove after measurement
-        n_rows = len(df) if df is not None else None
-        print(f"_mount_grid  container={prefix}-grid-container  n_rows={n_rows}")
         return _build_grid(prefix, df)
 
     @app.callback(
@@ -276,8 +314,6 @@ def register_tablegrid_callbacks(app, prefix: str) -> None:
         W2: rowCount comes from the handle when df is absent (hot-reload edge
         case) so the grid never sees rowCount=0 for a non-empty motl.
         """
-        # D1 diagnostic — remove after measurement
-        print(f"_rows        request={request}")
         motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
         df = None
         n_rows_hint = 0

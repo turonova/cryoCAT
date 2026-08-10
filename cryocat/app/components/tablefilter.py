@@ -21,7 +21,6 @@ import dash_bootstrap_components as dbc
 
 from cryocat.app import ids
 from cryocat.app.pool import (
-    _compute_entry_metadata,
     get_rows,
     replace_motl_rows,
     PoolPayloadMissing,
@@ -154,11 +153,7 @@ def register_tablefilter_callbacks(app, prefix: str) -> None:
         entry = (registry or {}).get(motl_id, {})
         col_ranges = entry.get("column_ranges", {})
         if not col_ranges:
-            try:
-                df = get_rows(motl_id)
-            except PoolPayloadMissing:
-                raise exceptions.PreventUpdate
-            _, col_ranges, _ = _compute_entry_metadata(df)
+            raise exceptions.PreventUpdate
         cols = [_slider_col(s, prefix) for s in slider_specs(col_ranges)]
         return [dbc.Row(cols, className="gx-1 gy-0")]
 

@@ -161,7 +161,11 @@ def register_callbacks(app):
     # with literal prefixes (shared components are untouched).
     for _i in range(N_SLOTS):
         register_viewer_callbacks(app, f"me-{_i}-tv", tabs_id=None)
-        register_table_callbacks(app, f"me-{_i}-tabv")
+        register_table_callbacks(
+            app, f"me-{_i}-tabv",
+            tabs_id="me-tabs",
+            tab_value=f"me-tab-{_i}",
+        )
         register_table_save_callbacks(
             app, f"me-{_i}-tabv",
             connected_motl_prefix=f"me-{_i}",
