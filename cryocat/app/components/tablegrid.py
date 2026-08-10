@@ -11,7 +11,7 @@ through pool.block_to_records so the T3 AST guard is not triggered.
 from __future__ import annotations
 
 import pandas as pd
-from dash import Input, Output, State, exceptions, no_update
+from dash import html, Input, Output, State, exceptions, no_update
 import dash_ag_grid as dag
 
 from cryocat.app import ids
@@ -83,18 +83,23 @@ def slice_block(df: pd.DataFrame, start_row: int, end_row: int) -> pd.DataFrame:
     return df.iloc[start_row:end_row]
 
 
-def rows_response(request: dict | None, df: pd.DataFrame | None) -> dict:
-    """Pure getRowsResponse handler.  Never raises; returns empty block when data absent.
+def rows_response(request: dict | None, df: pd.DataFrame | None, n_rows_hint: int = 0) -> dict:
+    """Pure getRowsResponse handler.  Never raises.
 
-    W1 fix: the first ``getRowsRequest`` fires before the pool payload is ready.
-    Raising PreventUpdate here leaves the grid holding a permanently empty block
-    (the grid does not retry after a no-response).  Returning
-    ``{"rowData": [], "rowCount": 0}`` lets the grid proceed; when ``_on_load``
-    later sets ``infiniteInitialRowCount`` to the real row count the grid issues
-    a fresh block request and the table populates without any user interaction.
+    W2: when df is absent but the handle says n_rows > 0, return that count
+    instead of 0.  rowCount=0 is permanent poison — AG Grid concludes the
+    dataset is empty and never requests again.  n_rows_hint comes from the
+    pool registry entry; it is 0 only when no motl is loaded (correct) or
+    when the entry itself has n_rows=0 (also correct: motl is genuinely empty).
+
+    The normal W1 path (grid remounted with data already present) means
+    n_rows_hint is only exercised on hot-reload, when the payload was evicted
+    but the handle survives in the browser store.
     """
-    if request is None or df is None:
-        return {"rowData": [], "rowCount": 0}
+    if request is None:
+        return {"rowData": [], "rowCount": n_rows_hint}
+    if df is None:
+        return {"rowData": [], "rowCount": n_rows_hint}
     filter_model = request.get("filterModel") or {}
     sort_model = request.get("sortModel") or []
     start_row = request.get("startRow", 0)
@@ -145,6 +150,16 @@ def resolve_select_all_ids(
 # ── Layout helpers ─────────────────────────────────────────────────────────────
 
 
+_DEFAULT_COL_DEF = {
+    "sortable": True,
+    "filter": True,
+    "editable": False,
+    "resizable": True,
+}
+
+_GRID_STYLE = {"height": "300px", "width": "100%"}
+
+
 def col_defs_from_df(df: pd.DataFrame) -> list[dict]:
     """Build AG Grid columnDefs from a DataFrame.  Pure."""
     col_defs = []
@@ -166,29 +181,56 @@ def col_defs_from_df(df: pd.DataFrame) -> list[dict]:
     return col_defs
 
 
-def get_grid(prefix: str) -> dag.AgGrid:
-    """Return an AG Grid component configured for the infinite row model."""
+def _build_grid(prefix: str, df: pd.DataFrame) -> dag.AgGrid:
+    """Build a fresh AgGrid configured for df.  Pure; no Dash calls.
+
+    W1: returned by _mount_grid as the container's children so AG Grid mounts
+    with correct columnDefs and infiniteInitialRowCount before its first
+    getRowsRequest fires.  The first request therefore always finds pool data
+    present and is answered with real rows.
+    """
     return dag.AgGrid(
         id=f"{prefix}-grid",
-        columnDefs=[],
+        columnDefs=col_defs_from_df(df),
         rowModelType="infinite",
-        dashGridOptions={
-            "cacheBlockSize": CACHE_BLOCK_SIZE,
-            "maxBlocksInCache": 4,
-            "rowBuffer": 0,
-            "infiniteInitialRowCount": 0,
-            "rowSelection": "multiple",
-            "suppressRowClickSelection": True,
-        },
-        defaultColDef={
-            "sortable": True,
-            "filter": True,
-            "editable": False,
-            "resizable": True,
-        },
-        style={"height": "300px", "width": "100%"},
+        dashGridOptions=initial_grid_options(len(df)),
+        defaultColDef=_DEFAULT_COL_DEF,
+        style=_GRID_STYLE,
         className="ag-theme-balham",
         columnSizeOptions={"skipHeader": False},
+    )
+
+
+def get_grid(prefix: str) -> html.Div:
+    """Return a container Div with an empty placeholder AgGrid.
+
+    W1: the placeholder has columnDefs=[] and infiniteInitialRowCount=0 so the
+    grid makes no initial getRowsRequest (zero rows, nothing to ask for).
+    _mount_grid replaces it with a fully-configured grid when a motl loads;
+    the new grid's first request arrives after the pool payload is present.
+    The grid id must be in the static layout so callbacks registered against it
+    are accepted (suppress_callback_exceptions=True still requires the id at
+    callback-registration time to avoid the ID-resolution test failures).
+    """
+    return html.Div(
+        dag.AgGrid(
+            id=f"{prefix}-grid",
+            columnDefs=[],
+            rowModelType="infinite",
+            dashGridOptions={
+                "cacheBlockSize": CACHE_BLOCK_SIZE,
+                "maxBlocksInCache": 4,
+                "rowBuffer": 0,
+                "infiniteInitialRowCount": 0,
+                "rowSelection": "multiple",
+                "suppressRowClickSelection": True,
+            },
+            defaultColDef=_DEFAULT_COL_DEF,
+            style=_GRID_STYLE,
+            className="ag-theme-balham",
+            columnSizeOptions={"skipHeader": False},
+        ),
+        id=f"{prefix}-grid-container",
     )
 
 
@@ -197,59 +239,50 @@ def get_grid(prefix: str) -> dag.AgGrid:
 
 def register_tablegrid_callbacks(app, prefix: str) -> None:
     @app.callback(
-        Output(f"{prefix}-grid", "columnDefs", allow_duplicate=True),
-        Output(f"{prefix}-grid", "dashGridOptions", allow_duplicate=True),
-        Output(f"{prefix}-grid", "filterModel", allow_duplicate=True),
+        Output(f"{prefix}-grid-container", "children"),
         Input(f"{prefix}-global-data-store", "data"),
         State(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
-    def _on_load(ref, registry):
-        """Set column defs + row count when a new motl ref lands; clear filters.
+    def _mount_grid(ref, registry):
+        """W1: remount the grid whenever a motl loads, pre-configured with n_rows and cols.
 
-        Diagnosis (W1 — cause (a)): the first getRowsRequest fires at grid
-        mount, before this callback has run.  The old _rows raised PreventUpdate,
-        so the grid cached an empty block and never retried.  Fix: _rows now
-        returns {"rowData": [], "rowCount": 0} instead of raising; this callback
-        then updates dashGridOptions.infiniteInitialRowCount to the real count,
-        which causes AG Grid to issue a fresh block request immediately.
+        Remounting is cheap (grid holds no rows client-side) and eliminates the
+        entire class of 'grid cached stale state before data arrived' bugs.  The
+        new grid's first getRowsRequest arrives after the pool payload is ready.
         """
         if not ref or not isinstance(ref, dict) or not ref.get("motl_id"):
             raise exceptions.PreventUpdate
         motl_id = ref["motl_id"]
-        entry = (registry or {}).get(motl_id, {})
-        n_rows = entry.get("n_rows", 0)
         try:
             df = get_rows(motl_id)
-            n_rows = len(df)
         except PoolPayloadMissing:
             raise exceptions.PreventUpdate
-        return (
-            col_defs_from_df(df),
-            initial_grid_options(n_rows),
-            {},  # clear stale filters; filter change also acts as cache-purge signal
-        )
+        return _build_grid(prefix, df)
 
     @app.callback(
         Output(f"{prefix}-grid", "getRowsResponse"),
         Input(f"{prefix}-grid", "getRowsRequest"),
         State(f"{prefix}-global-data-store", "data"),
+        State(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
-    def _rows(request, ref):
+    def _rows(request, ref, registry):
         """Respond to AG Grid's infinite-model row request with one sorted+filtered block.
 
-        W1 fix: never raises PreventUpdate — returns empty response when data is
-        not yet available.  See rows_response() for the contract.
+        W2: rowCount comes from the handle when df is absent (hot-reload edge
+        case) so the grid never sees rowCount=0 for a non-empty motl.
         """
         motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
         df = None
+        n_rows_hint = 0
         if motl_id:
+            n_rows_hint = (registry or {}).get(motl_id, {}).get("n_rows", 0)
             try:
                 df = get_rows(motl_id)
             except PoolPayloadMissing:
                 pass
-        return rows_response(request, df)
+        return rows_response(request, df, n_rows_hint)
 
     @app.callback(
         Output(f"{prefix}-grid", "columnSize"),

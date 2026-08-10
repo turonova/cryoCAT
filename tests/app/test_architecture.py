@@ -237,7 +237,7 @@ THIN_CALLBACK_EXEMPT: dict[str, str] = {
     "sidebar":       "doc 8 — tango sidebar with inline 100vh and compound callbacks",
     "table":         "doc 8 — tango table with column-iteration callbacks",
     # GRID_SERVER_SIDE_ROWS W1–W3 — infinite-model callbacks (doc 8 extraction pass)
-    "tablegrid":     "doc 8 — _rows (13 stmts: filter+sort+slice chain), _toggle_select_all (11 stmts)",
+    "tablegrid":     "doc 8 — _toggle_select_all (11 stmts: pool-aware select-all with deselect branch)",
     "tablefilter":   "doc 8 — _on_slider_change has for-loop (W2 zip merge), apply_filters_btn (9 stmts)",
     "tableedit":     "doc 8 — remove_selected_rows (11 stmts: pool-aware bulk remove)",
     "tablesave":     "doc 8 — create_from_selected (12 stmts: pool-fetch + slot-allocate + registry)",
@@ -307,7 +307,7 @@ def test_thin_callback_exempt_list_is_bounded():
 
 # Baseline recorded at Phase 3 write time.  The test asserts the count only
 # goes DOWN (shrinks), never UP.  Update this number when the count drops.
-_ALLOW_DUPLICATE_BASELINE = 312  # 311 + 1 net new: selection-ids-store (new store) needs allow_duplicate writers from tableedit/tablegrid
+_ALLOW_DUPLICATE_BASELINE = 309  # 312 - 3: _on_load deleted (columnDefs, dashGridOptions, filterModel allow_duplicate removed)
 
 
 def test_allow_duplicate_count_does_not_grow():
