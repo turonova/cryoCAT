@@ -519,3 +519,64 @@ class TestRevisionPolicy:
         rev2_before = s.registry[mid2]["revision"]
         s2 = mutate(s, mid1)
         assert s2.registry[mid2]["revision"] == rev2_before
+
+
+# ── GRID_INITIAL_LOAD_AND_LEFTOVERS T2 ────────────────────────────────────────
+# Tests for _compute_entry_metadata efficiency on large frames.
+# test_compute_entry_metadata_single_agg_pass and test_compute_entry_metadata_single_unique_pass
+# are RED with current code (per-column loop; no agg/pd.unique calls).
+
+import numpy as _np
+
+
+def _large_metadata_df(n: int = 200_000, n_cols: int = 20) -> pd.DataFrame:
+    rng = _np.random.default_rng(7)
+    cols = {f"col{i}": rng.random(n).astype("float32") for i in range(n_cols)}
+    cols["tomo_id"] = rng.integers(1, 50, n).astype(float)
+    return pd.DataFrame(cols)
+
+
+def test_compute_entry_metadata_timing_200k():
+    """T2 — _compute_entry_metadata on 200k×20 rows completes in < 150 ms."""
+    import time
+    df = _large_metadata_df()
+    t0 = time.perf_counter()
+    _compute_entry_metadata(df)
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    assert elapsed_ms < 150, f"_compute_entry_metadata took {elapsed_ms:.1f} ms (budget 150 ms)"
+
+
+def test_compute_entry_metadata_single_agg_pass(monkeypatch):
+    """T2 — all numeric min/max computed in exactly one df.agg() call, not a per-column loop."""
+    df = _large_metadata_df()
+    agg_calls = []
+    _orig_agg = pd.DataFrame.agg
+
+    def _counting_agg(self, *args, **kwargs):
+        agg_calls.append(1)
+        return _orig_agg(self, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "agg", _counting_agg)
+    _compute_entry_metadata(df)
+    assert len(agg_calls) == 1, (
+        f"Expected 1 agg() call, got {len(agg_calls)}. "
+        "Use df[numeric_cols].agg(['min','max']), not a per-column .min()/.max() loop."
+    )
+
+
+def test_compute_entry_metadata_single_unique_pass(monkeypatch):
+    """T2 — tomo_ids uses pd.unique() once (no sort on the full column)."""
+    df = _large_metadata_df()
+    unique_calls = []
+    _orig_unique = pd.unique
+
+    def _counting_unique(arr):
+        unique_calls.append(len(arr))
+        return _orig_unique(arr)
+
+    monkeypatch.setattr(pd, "unique", _counting_unique)
+    _compute_entry_metadata(df)
+    assert len(unique_calls) == 1, (
+        f"Expected 1 pd.unique() call, got {len(unique_calls)}. "
+        "Use pd.unique(df['tomo_id']) then sort the small result."
+    )

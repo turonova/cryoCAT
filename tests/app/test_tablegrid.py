@@ -287,3 +287,55 @@ def test_select_all_uses_subtomo_id_not_index(sample_df):
     shuffled = sample_df.sample(frac=1, random_state=7).reset_index(drop=True)
     ids = resolve_select_all_ids(shuffled, {}, {})
     assert set(ids) == set(sample_df["subtomo_id"].tolist())
+
+
+# ── GRID_INITIAL_LOAD_AND_LEFTOVERS T1 ───────────────────────────────────────
+# rows_response and initial_grid_options are new pure helpers added in W1.
+# All tests below are RED until W1 lands (ImportError → test fails).
+
+def test_rows_response_no_request_returns_empty():
+    """Handler with None request returns empty response — never raises PreventUpdate."""
+    from cryocat.app.components.tablegrid import rows_response
+    result = rows_response(None, None)
+    assert result == {"rowData": [], "rowCount": 0}
+
+
+def test_rows_response_missing_df_returns_empty():
+    """Handler with None df (payload missing) returns empty — never raises PreventUpdate."""
+    from cryocat.app.components.tablegrid import rows_response
+    request = {"startRow": 0, "endRow": 100, "sortModel": [], "filterModel": {}}
+    result = rows_response(request, None)
+    assert result == {"rowData": [], "rowCount": 0}
+
+
+def test_rows_response_first_block_natural_order(sample_df):
+    """startRow=0, endRow=100, empty sort+filter → first 100 rows in natural (unmodified) order."""
+    from cryocat.app.components.tablegrid import rows_response
+    request = {"startRow": 0, "endRow": 100, "sortModel": [], "filterModel": {}}
+    result = rows_response(request, sample_df)
+    assert len(result["rowData"]) == 100
+    assert result["rowCount"] == len(sample_df)
+    # Natural order: rowData must match the first 100 rows of the frame as-is
+    expected = sample_df.iloc[:100].to_dict("records")
+    assert result["rowData"] == expected
+
+
+def test_rows_response_row_count_is_filtered_total(large_df):
+    """rowCount equals the full filtered set size, not the cache block size."""
+    from cryocat.app.components.tablegrid import rows_response
+    threshold = float(large_df["score"].quantile(0.5))
+    filter_model = {
+        "score": {"filterType": "number", "type": "greaterThan", "filter": threshold}
+    }
+    request = {"startRow": 0, "endRow": 100, "sortModel": [], "filterModel": filter_model}
+    result = rows_response(request, large_df)
+    expected_total = int((large_df["score"] > threshold).sum())
+    assert result["rowCount"] == expected_total
+    assert len(result["rowData"]) <= 100
+
+
+def test_initial_grid_options_sets_row_count(large_df):
+    """Cache-refresh signal: initial_grid_options(n) sets infiniteInitialRowCount == n (W1 wiring)."""
+    from cryocat.app.components.tablegrid import initial_grid_options
+    opts = initial_grid_options(len(large_df))
+    assert opts["infiniteInitialRowCount"] == len(large_df)
