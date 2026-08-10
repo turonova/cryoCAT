@@ -83,6 +83,49 @@ def slice_block(df: pd.DataFrame, start_row: int, end_row: int) -> pd.DataFrame:
     return df.iloc[start_row:end_row]
 
 
+def rows_response(request: dict | None, df: pd.DataFrame | None) -> dict:
+    """Pure getRowsResponse handler.  Never raises; returns empty block when data absent.
+
+    W1 fix: the first ``getRowsRequest`` fires before the pool payload is ready.
+    Raising PreventUpdate here leaves the grid holding a permanently empty block
+    (the grid does not retry after a no-response).  Returning
+    ``{"rowData": [], "rowCount": 0}`` lets the grid proceed; when ``_on_load``
+    later sets ``infiniteInitialRowCount`` to the real row count the grid issues
+    a fresh block request and the table populates without any user interaction.
+    """
+    if request is None or df is None:
+        return {"rowData": [], "rowCount": 0}
+    filter_model = request.get("filterModel") or {}
+    sort_model = request.get("sortModel") or []
+    start_row = request.get("startRow", 0)
+    end_row = request.get("endRow", CACHE_BLOCK_SIZE)
+    filtered = apply_filter_model(df, filter_model, {})
+    sorted_df = apply_sort_model(filtered, sort_model)
+    block = slice_block(sorted_df, start_row, end_row)
+    return {
+        "rowData": block_to_records(block, max_rows=CACHE_BLOCK_SIZE),
+        "rowCount": len(filtered),
+    }
+
+
+def initial_grid_options(n_rows: int) -> dict:
+    """Return the ``dashGridOptions`` dict to emit when a motl loads.
+
+    Setting ``infiniteInitialRowCount`` to the real row count signals AG Grid
+    that rows exist and triggers an immediate block request (cache-refresh
+    signal, W1 wiring).  Must be a full options dict because Dash replaces the
+    entire ``dashGridOptions`` property on each write.
+    """
+    return {
+        "cacheBlockSize": CACHE_BLOCK_SIZE,
+        "maxBlocksInCache": 4,
+        "rowBuffer": 0,
+        "infiniteInitialRowCount": n_rows,
+        "rowSelection": "multiple",
+        "suppressRowClickSelection": True,
+    }
+
+
 def resolve_select_all_ids(
     df: pd.DataFrame,
     filter_model: dict,
@@ -162,7 +205,15 @@ def register_tablegrid_callbacks(app, prefix: str) -> None:
         prevent_initial_call=True,
     )
     def _on_load(ref, registry):
-        """Set column defs + row count when a new motl ref lands; clear filters."""
+        """Set column defs + row count when a new motl ref lands; clear filters.
+
+        Diagnosis (W1 — cause (a)): the first getRowsRequest fires at grid
+        mount, before this callback has run.  The old _rows raised PreventUpdate,
+        so the grid cached an empty block and never retried.  Fix: _rows now
+        returns {"rowData": [], "rowCount": 0} instead of raising; this callback
+        then updates dashGridOptions.infiniteInitialRowCount to the real count,
+        which causes AG Grid to issue a fresh block request immediately.
+        """
         if not ref or not isinstance(ref, dict) or not ref.get("motl_id"):
             raise exceptions.PreventUpdate
         motl_id = ref["motl_id"]
@@ -175,15 +226,8 @@ def register_tablegrid_callbacks(app, prefix: str) -> None:
             raise exceptions.PreventUpdate
         return (
             col_defs_from_df(df),
-            {
-                "cacheBlockSize": CACHE_BLOCK_SIZE,
-                "maxBlocksInCache": 4,
-                "rowBuffer": 0,
-                "infiniteInitialRowCount": n_rows,
-                "rowSelection": "multiple",
-                "suppressRowClickSelection": True,
-            },
-            {},  # clear any stale filter from previous motl
+            initial_grid_options(n_rows),
+            {},  # clear stale filters; filter change also acts as cache-purge signal
         )
 
     @app.callback(
@@ -193,29 +237,19 @@ def register_tablegrid_callbacks(app, prefix: str) -> None:
         prevent_initial_call=True,
     )
     def _rows(request, ref):
-        """Respond to AG Grid's infinite-model row request with one sorted+filtered block."""
-        if request is None or not ref or not isinstance(ref, dict):
-            raise exceptions.PreventUpdate
-        motl_id = ref.get("motl_id")
-        if not motl_id:
-            raise exceptions.PreventUpdate
-        try:
-            df = get_rows(motl_id)
-        except PoolPayloadMissing:
-            raise exceptions.PreventUpdate
+        """Respond to AG Grid's infinite-model row request with one sorted+filtered block.
 
-        filter_model = request.get("filterModel") or {}
-        sort_model = request.get("sortModel") or []
-        start_row = request.get("startRow", 0)
-        end_row = request.get("endRow", CACHE_BLOCK_SIZE)
-
-        df = apply_filter_model(df, filter_model, {})
-        df = apply_sort_model(df, sort_model)
-        block = slice_block(df, start_row, end_row)
-        return {
-            "rowData": block_to_records(block, max_rows=CACHE_BLOCK_SIZE),
-            "rowCount": len(df),
-        }
+        W1 fix: never raises PreventUpdate — returns empty response when data is
+        not yet available.  See rows_response() for the contract.
+        """
+        motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
+        df = None
+        if motl_id:
+            try:
+                df = get_rows(motl_id)
+            except PoolPayloadMissing:
+                pass
+        return rows_response(request, df)
 
     @app.callback(
         Output(f"{prefix}-grid", "columnSize"),

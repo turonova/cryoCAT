@@ -244,7 +244,15 @@ def _build_figure(
         is a mesh with curvatures populated. Other surfaces continue to use
         flat palette colors.
     """
+    # W3: early-return an empty figure when nothing is visible.
+    # Trigger: pool_store_id fires at page mount (prevent_initial_call=False) with
+    # surfaces-pool={} — the structure page has no surfaces during a motl load.
+    # Without this guard, styled_figure + palette resolution runs for 125 ms on
+    # every load even though there is nothing to draw.
     handles = handles or {}
+    if not any(h.get("visible", True) for h in handles.values()):
+        return go.Figure()
+
     palette = _resolve_palette((gs or {}).get("discrete_palette"))
     traces: list = []
     for i, (sid, h) in enumerate(handles.items()):
