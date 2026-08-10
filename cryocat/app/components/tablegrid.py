@@ -258,6 +258,9 @@ def register_tablegrid_callbacks(app, prefix: str) -> None:
             df = get_rows(motl_id)
         except PoolPayloadMissing:
             raise exceptions.PreventUpdate
+        # D1 diagnostic — remove after measurement
+        n_rows = len(df) if df is not None else None
+        print(f"_mount_grid  container={prefix}-grid-container  n_rows={n_rows}")
         return _build_grid(prefix, df)
 
     @app.callback(
@@ -273,6 +276,8 @@ def register_tablegrid_callbacks(app, prefix: str) -> None:
         W2: rowCount comes from the handle when df is absent (hot-reload edge
         case) so the grid never sees rowCount=0 for a non-empty motl.
         """
+        # D1 diagnostic — remove after measurement
+        print(f"_rows        request={request}")
         motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
         df = None
         n_rows_hint = 0

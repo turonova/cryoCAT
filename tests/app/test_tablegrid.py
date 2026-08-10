@@ -380,3 +380,56 @@ def test_build_grid_sets_column_defs(sample_df):
     grid = _build_grid("test-pfx", sample_df)
     col_fields = [c["field"] for c in grid.columnDefs]
     assert col_fields == list(sample_df.columns)
+
+
+# ── GRID_VISIBILITY_AND_METADATA T1 ──────────────────────────────────────────
+
+def test_tab_active_guard_rejects_inactive():
+    """T1 (visibility signal) — _tab_active returns False when active_tab != tab_value."""
+    from cryocat.app.components.tablegrid import _tab_active  # RED until W1
+    assert _tab_active("me-tab-1", "me-tab-0") is False
+    assert _tab_active(None, "me-tab-0") is False
+
+
+def test_tab_active_guard_passes_for_matching_tab():
+    """T1 (visibility signal) — _tab_active returns True when active_tab == tab_value."""
+    from cryocat.app.components.tablegrid import _tab_active  # RED until W1
+    assert _tab_active("me-tab-0", "me-tab-0") is True
+
+
+def test_tab_active_guard_passes_without_tab_configuration():
+    """T1 (visibility signal) — _tab_active returns True when tab_value is None (no tab tracking)."""
+    from cryocat.app.components.tablegrid import _tab_active  # RED until W1
+    assert _tab_active("anything", None) is True
+    assert _tab_active(None, None) is True
+
+
+def test_rows_response_returns_real_rows_with_no_sort_or_filter(sample_df):
+    """T1 — _rows still returns real rows for startRow=0, endRow=100 with no sort/filter."""
+    from cryocat.app.components.tablegrid import rows_response
+    request = {"startRow": 0, "endRow": 100, "sortModel": [], "filterModel": {}}
+    result = rows_response(request, sample_df)
+    assert len(result["rowData"]) == 100
+    assert result["rowCount"] == len(sample_df)
+    assert result["rowData"][0]["subtomo_id"] == sample_df.iloc[0]["subtomo_id"]
+
+
+# ── GRID_VISIBILITY_AND_METADATA T2 ──────────────────────────────────────────
+
+def test_build_grid_has_column_size_to_fit(large_df):
+    """T2 (column sizing) — _build_grid constructs grid with columnSize='sizeToFit' (RED until W1)."""
+    from cryocat.app.components.tablegrid import _build_grid
+    grid = _build_grid("test-pfx", large_df)
+    assert grid.columnSize == "sizeToFit", (
+        f"Expected columnSize='sizeToFit', got {grid.columnSize!r}"
+    )
+
+
+def test_col_defs_no_fixed_width(sample_df):
+    """T2 (column sizing) — col_defs_from_df produces no fixed 'width' that defeats fitting."""
+    from cryocat.app.components.tablegrid import col_defs_from_df
+    defs = col_defs_from_df(sample_df)
+    for col_def in defs:
+        assert "width" not in col_def, (
+            f"Column '{col_def['field']}' has fixed width {col_def['width']!r} — remove it"
+        )
