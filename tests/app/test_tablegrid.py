@@ -339,3 +339,44 @@ def test_initial_grid_options_sets_row_count(large_df):
     from cryocat.app.components.tablegrid import initial_grid_options
     opts = initial_grid_options(len(large_df))
     assert opts["infiniteInitialRowCount"] == len(large_df)
+
+
+# ── GRID_EMPTY_TABLE_FIX T1 ───────────────────────────────────────────────────
+# T1: rows_response must not poison the grid when data is temporarily absent.
+# Tests below are RED until W2 adds the n_rows_hint parameter.
+
+def test_rows_response_no_data_does_not_poison_grid():
+    """GRID_EMPTY_TABLE_FIX T1a: absent payload + non-zero hint -> rowCount != 0."""
+    from cryocat.app.components.tablegrid import rows_response
+    request = {"startRow": 0, "endRow": 100, "sortModel": [], "filterModel": {}}
+    result = rows_response(request, None, n_rows_hint=60_000)
+    assert result["rowData"] == []
+    assert result["rowCount"] == 60_000  # must NOT be 0 — 0 poisons the grid
+
+
+def test_rows_response_with_data_ignores_hint(large_df):
+    """GRID_EMPTY_TABLE_FIX T1b: when df present, rowCount is filtered total, not the hint."""
+    from cryocat.app.components.tablegrid import rows_response
+    request = {"startRow": 0, "endRow": 100, "sortModel": [], "filterModel": {}}
+    result = rows_response(request, large_df, n_rows_hint=999)
+    assert len(result["rowData"]) == 100
+    assert result["rowCount"] == len(large_df)  # real total, not hint
+
+
+# ── GRID_EMPTY_TABLE_FIX T2 ───────────────────────────────────────────────────
+# T2: after W1 remount, the grid is built with correct initial state before
+# its first getRowsRequest fires.  Tests are RED until W1 adds _build_grid.
+
+def test_build_grid_sets_initial_row_count(large_df):
+    """GRID_EMPTY_TABLE_FIX T2a: _build_grid sets infiniteInitialRowCount from df length."""
+    from cryocat.app.components.tablegrid import _build_grid
+    grid = _build_grid("test-pfx", large_df)
+    assert grid.dashGridOptions["infiniteInitialRowCount"] == len(large_df)
+
+
+def test_build_grid_sets_column_defs(sample_df):
+    """GRID_EMPTY_TABLE_FIX T2b: _build_grid sets columnDefs matching df columns."""
+    from cryocat.app.components.tablegrid import _build_grid
+    grid = _build_grid("test-pfx", sample_df)
+    col_fields = [c["field"] for c in grid.columnDefs]
+    assert col_fields == list(sample_df.columns)
