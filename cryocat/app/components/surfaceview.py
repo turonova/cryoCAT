@@ -34,7 +34,7 @@ import plotly.graph_objects as go
 from dash import dcc, html, Input, Output, State
 
 from cryocat.app import ids
-from cryocat.app.components.surface_registry import registry as _surface_registry
+from cryocat.app.components.surface_registry import registry as _surface_registry, _mesh_has_curvatures
 from cryocat.app.components.graphsettings import styled_figure
 from cryocat.analysis.visplot import resolve_palette as _resolve_palette
 from cryocat.app.formgen import make_dropdown
@@ -76,7 +76,7 @@ def _vertex_field(psurf, color_by: str) -> np.ndarray | None:
     """
     if color_by in (None, "none") or not psurf.is_mesh:
         return None
-    if not _registry._mesh_has_curvatures(psurf.surface):
+    if not _mesh_has_curvatures(psurf.surface):
         return None
     if color_by == "mean_curvature":
         return psurf.get_mean_curvature()

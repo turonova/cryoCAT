@@ -193,6 +193,7 @@ class GuiCategory(StrEnum):
     """Closed set of GUI tiers.  Extend only when a third tier is genuinely needed."""
     MOTL_OP = "motl-op"
     BUILDER  = "builder"
+    READER   = "reader"   # file-reading callables surfaced in the data pool
 
 
 @dataclass(frozen=True)
@@ -219,6 +220,8 @@ class GuiEntry:
     standalone: bool          = False
     preview:  str | None      = None
     returns:  str | None      = None
+    path_arg:   str             = ""           # name of the path parameter (hidden from form)
+    extensions: tuple[str, ...] = ()           # accepted file extensions for the path field
 
 
 GUI_REGISTRY: dict[str, GuiEntry] = {}
@@ -297,6 +300,8 @@ def gui_exposed(
     standalone: bool = False,
     preview: str | None = None,
     returns: str | None = None,
+    path_arg: str = "",
+    extensions: tuple[str, ...] = (),
 ):
     """Mark a callable as GUI-exposable and register it in :data:`GUI_REGISTRY`.
 
@@ -386,6 +391,9 @@ def gui_exposed(
         if category == "builder":
             gui_category = GuiCategory.BUILDER
             gui_group: str = group  # explicit group name, or "" for ungrouped
+        elif category == "reader":
+            gui_category = GuiCategory.READER
+            gui_group = group
         else:
             gui_category = GuiCategory.MOTL_OP
             gui_group = group or (category or "")
@@ -427,6 +435,8 @@ def gui_exposed(
             standalone=standalone,
             preview=preview,
             returns=returns_val,
+            path_arg=path_arg,
+            extensions=tuple(extensions),
         )
 
         existing = GUI_REGISTRY.get(reg_key)
@@ -675,8 +685,8 @@ def _parse_tuple(v: Any, elem: str = "float") -> tuple | None:
 
 # argparse ``type=`` helpers (CLI string -> python value).
 def _parse_str(v: Any) -> str | None:
-    """GUI text field -> str. None stays None (not converted to the string 'None')."""
-    if v is None:
+    """GUI text field -> str. None or empty string stays None."""
+    if v is None or v == "":
         return None
     return str(v)
 

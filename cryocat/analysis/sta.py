@@ -2109,13 +2109,6 @@ class StaParameters:
             When mandatory parameters are absent (object is still created;
             use :meth:`validate` for a complete problem list).
 
-        Notes
-        -----
-        Unlike the previous implementation this method no longer *raises* on
-        missing mandatory keys; it emits a ``warnings.warn`` instead.  The
-        test ``test_staparameters_from_dict_missing_mandatory_raises`` in
-        ``tests/test_sta.py`` will therefore **fail** because it still expects
-        a ``ValueError`` — that test must not be modified (per project rules).
         """
 
         # -- Normalise keys → canonical names ---------------------------------

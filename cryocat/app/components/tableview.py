@@ -6,7 +6,7 @@ import dash_bootstrap_components as dbc
 
 from cryocat.app.components.tableplot import get_table_plot_component
 from cryocat.app.components.tablecluster import get_table_cluster_component
-from cryocat.app.components.tablegrid import get_grid, register_tablegrid_callbacks
+from cryocat.app.components.tablegrid import get_grid_container, register_tablegrid_callbacks
 from cryocat.app.components.tablefilter import register_tablefilter_callbacks
 from cryocat.app.components.tableedit import register_tableedit_callbacks
 from cryocat.app.components.tablesave import (
@@ -53,6 +53,22 @@ def get_table_component(
         dbc.Button("Save as CSV", id=f"{prefix}-save-csv-btn", color="primary", className="me-1"),
         dbc.Button("Remove Selected Rows", id=f"{prefix}-remove-rows-btn", color="primary", className="me-1"),
         dbc.Button("Select All Filtered", id=f"{prefix}-select-all-btn", color="secondary", className="me-1"),
+        dbc.Button(
+            "Create from filtered",
+            id=f"{prefix}-pool-from-filtered-btn",
+            color="secondary",
+            className="me-1",
+            disabled=True,
+            style={"display": "none"},
+        ),
+        dbc.Button(
+            "Create from selected",
+            id=f"{prefix}-pool-from-selected-btn",
+            color="secondary",
+            className="me-1",
+            disabled=True,
+            style={"display": "none"},
+        ),
         dbc.Button("Select Inverse", id=f"{prefix}-select-inverse-btn", color="secondary", className="me-1"),
         dbc.Button("Plot", id=f"{prefix}-plot-graphs-btn", color="primary", className="me-1", n_clicks=0),
         dbc.Offcanvas(
@@ -114,7 +130,7 @@ def get_table_component(
         dbc.Col(
             html.Div(
                 id=f"{prefix}-selection-count",
-                style={"color": "var(--color9)", "whiteSpace": "nowrap", "fontSize": "0.85rem"},
+                style={"color": "var(--color9)", "whiteSpace": "nowrap"},
             ),
             width="auto",
             className="d-flex align-items-center",
@@ -128,10 +144,10 @@ def get_table_component(
         id=f"{prefix}-table-container",
         children=[
             dbc.Row(button_row_children, className="mb-2"),
-            get_grid(prefix),
+            get_grid_container(prefix),
             html.Div(
                 id=f"{prefix}-active-filter-count",
-                style={"fontSize": "0.85rem", "color": "var(--color9)", "marginTop": "4px", "marginBottom": "4px"},
+                style={"color": "var(--color9)", "marginTop": "4px", "marginBottom": "4px"},
             ),
             html.H5("Filters", style={"marginBottom": "1rem", "marginTop": "1rem"}),
             html.Div(id=f"{prefix}-filters-container", style={"marginBottom": "2rem"}),
@@ -146,20 +162,26 @@ def register_table_callbacks(
     app,
     prefix: str,
     *,
-    extra_csv_states=None,
-    custom_csv_save_fn=None,
+    resolve_df,
+    resolve_n_rows,
     tabs_id: str | None = None,
     tab_value: str | None = None,
+    extra_csv_states=None,
+    custom_csv_save_fn=None,
 ):
     """Register grid, filter, edit and CSV-save callbacks for *prefix*.
 
-    Pass *tabs_id* and *tab_value* when the grid lives inside a ``dbc.Tabs``
-    panel so that mounting only happens when the tab is active.
-
     To add motl-mode saves, also call ``register_table_save_callbacks``.
+    resolve_df and resolve_n_rows are forwarded to register_tablegrid_callbacks;
+    pass :func:`cryocat.app.pool.resolve_df` / :func:`~resolve_n_rows` for
+    pool-backed grids.  tabs_id / tab_value gate _mount_grid on the active tab.
     """
-    register_tablegrid_callbacks(app, prefix, tabs_id=tabs_id, tab_value=tab_value)
-    register_tablefilter_callbacks(app, prefix)
+    register_tablegrid_callbacks(
+        app, prefix,
+        resolve_df=resolve_df, resolve_n_rows=resolve_n_rows,
+        tabs_id=tabs_id, tab_value=tab_value,
+    )
+    register_tablefilter_callbacks(app, prefix, resolve_df=resolve_df)
     register_tableedit_callbacks(app, prefix)
     register_tablesave_csv_callbacks(
         app, prefix,

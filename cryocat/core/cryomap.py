@@ -11,6 +11,7 @@ from typing import Any, TYPE_CHECKING
 from cryocat.utils import ioutils
 from cryocat.utils import geom
 from cryocat.utils import imageutils
+from cryocat.utils.classutils import gui_exposed
 from skimage import transform
 from cryocat._types import MapSource, PathOrStr, TripletLike, EulerAngles, Symmetry, ArrayLike
 
@@ -397,6 +398,14 @@ def highpass(
     return filtered_map
 
 
+@gui_exposed(
+    label="Volume / map",
+    category="reader",
+    returns="volume",
+    path_arg="input_map",
+    extensions=(".em", ".mrc", ".rec", ".map", ".hdf"),
+    hide=("input_map", "data_type"),
+)
 def read(
     input_map: MapSource,
     transpose: bool = True,

@@ -17,7 +17,10 @@ from dash import html, dcc, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 
 from cryocat.app import ids
-from cryocat.app.pool import PoolState, insert_motl, get_rows, get_extra, PoolPayloadMissing
+from cryocat.app.pool import (
+    PoolState, insert_motl, get_rows, get_extra, PoolPayloadMissing,
+    resolve_df as pool_resolve_df, resolve_n_rows as pool_resolve_n_rows,
+)
 from cryocat.app.suite.motlsidebar import (
     get_motl_editor_sidebar,
     register_motl_editor_sidebar_callbacks,
@@ -29,6 +32,11 @@ from cryocat.app.components.tablesave import register_table_save_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
 from cryocat.app.apputils import _format_relion_params
+
+DYNAMIC_IDS: list[tuple[str, str]] = [
+    (f"me-{i}-tabv-grid-container", f"me-{i}-tabv-grid")
+    for i in range(N_SLOTS)
+] + [("me-res-tabv-grid-container", "me-res-tabv-grid")]
 
 
 # ── Stores ──────────────────────────────────────────────────────────────────────
@@ -163,8 +171,8 @@ def register_callbacks(app):
         register_viewer_callbacks(app, f"me-{_i}-tv", tabs_id=None)
         register_table_callbacks(
             app, f"me-{_i}-tabv",
-            tabs_id="me-tabs",
-            tab_value=f"me-tab-{_i}",
+            resolve_df=pool_resolve_df, resolve_n_rows=pool_resolve_n_rows,
+            tabs_id="me-tabs", tab_value=f"me-tab-{_i}",
         )
         register_table_save_callbacks(
             app, f"me-{_i}-tabv",
@@ -188,7 +196,10 @@ def register_callbacks(app):
 
     # Results tab
     register_viewer_callbacks(app, "me-res-tv", tabs_id=None)
-    register_table_callbacks(app, "me-res-tabv")
+    register_table_callbacks(
+        app, "me-res-tabv",
+        resolve_df=pool_resolve_df, resolve_n_rows=pool_resolve_n_rows,
+    )
     register_table_save_callbacks(app, "me-res-tabv", connected_motl_prefix="me-res")
     register_table_plot_callbacks(app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store", pool_aware=True)
     register_table_cluster_callbacks(app, "me-res-tabv-table-cluster", "me-res-tabv-global-data-store", pool_aware=True)

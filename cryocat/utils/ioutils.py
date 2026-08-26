@@ -22,6 +22,7 @@ from cryocat._types import (
     TomoList,
     TripletLike,
 )
+from cryocat.utils.classutils import gui_exposed
 from cryocat.core import mdoc
 from cryocat.utils import starfileio as sf, starfileio
 from cryocat.utils.exceptions import UserInputError
@@ -547,6 +548,14 @@ def extract_defocus_data(
         "defocus_mean": defocus_mean
     })
 
+@gui_exposed(
+    label="Defocus / CTF",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_data",
+    extensions=(".defocus", ".txt", ".star", ".log"),
+    hide=("input_data",),
+)
 def defocus_load(
     input_data: pd.DataFrame | PathOrStr | np.ndarray,
     file_type: str = "gctf",
@@ -711,6 +720,14 @@ def one_value_per_line_read(
     return data_df.iloc[:, 0].values
 
 
+@gui_exposed(
+    label="Total dose",
+    category="reader",
+    returns="array",
+    path_arg="input_dose",
+    extensions=(".txt", ".mdoc"),
+    hide=("input_dose",),
+)
 def total_dose_load(
     input_dose: PathOrStr | np.ndarray | list,
     sort_mdoc: bool = True,
@@ -793,6 +810,14 @@ def total_dose_load(
         raise ValueError("Error: the dose has to be either ndarray or str with valid path!")
 
 
+@gui_exposed(
+    label="Euler angles",
+    category="reader",
+    returns="array",
+    path_arg="input_angles",
+    extensions=(".txt", ".em"),
+    hide=("input_angles",),
+)
 def euler_angles_load(
     input_angles: EulerAngles,
     angles_order: str = "zxz",
@@ -932,6 +957,14 @@ def angles_save(
     pd.DataFrame(arr).to_csv(output_path, header=False, index=False, **output_kwargs)
 
 
+@gui_exposed(
+    label="Tilt angles",
+    category="reader",
+    returns="array",
+    path_arg="input_tlt",
+    extensions=(".tlt", ".txt"),
+    hide=("input_tlt",),
+)
 def tlt_load(
     input_tlt: PathOrStr | np.ndarray | list,
     sort_angles: bool = True,
@@ -989,6 +1022,14 @@ def tlt_load(
         raise ValueError("Error: the dose has to be either ndarray or path to csv, mdoc, or tlt file!")
 
 
+@gui_exposed(
+    label="Tomogram dimensions",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_dims",
+    extensions=(".txt",),
+    hide=("input_dims", "tomo_idx"),
+)
 def dimensions_load(
     input_dims: TomoDimensions,
     tomo_idx: TomoList | None = None,
@@ -1082,6 +1123,14 @@ def dimensions_load(
     return dimensions
 
 
+@gui_exposed(
+    label="Z shifts",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_shift",
+    extensions=(".txt", ".csv"),
+    hide=("input_shift",),
+)
 def z_shift_load(
     input_shift: PathOrStr | pd.DataFrame | float | int | list | np.ndarray,
 ) -> pd.DataFrame:
@@ -1284,6 +1333,14 @@ def dict_write(dict_data: dict, output_path: PathOrStr) -> None:
         json.dump(dict_data, json_file, indent=4)
 
 
+@gui_exposed(
+    label="Dictionary / JSON",
+    category="reader",
+    returns="dict",
+    path_arg="input_data",
+    extensions=(".json", ".txt"),
+    hide=("input_data",),
+)
 def dict_load(input_data: DictSource) -> dict:
     """Load a dictionary from a JSON string or copy an existing dictionary.
 
@@ -1332,6 +1389,14 @@ def dict_load(input_data: DictSource) -> dict:
     return dict_data
 
 
+@gui_exposed(
+    label="Generic table",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_data",
+    extensions=(".csv", ".txt", ".pkl", ".star"),
+    hide=("input_data", "header"),
+)
 def df_load(input_data: DataSource, header: list[str] | None = None) -> pd.DataFrame:
     """Load data into a pandas DataFrame from various input types.
 
@@ -1403,6 +1468,14 @@ def df_load(input_data: DataSource, header: list[str] | None = None) -> pd.DataF
     )
 
 
+@gui_exposed(
+    label="Indices",
+    category="reader",
+    returns="array",
+    path_arg="input_data",
+    extensions=(".txt",),
+    hide=("input_data", "numbered_from_1"),
+)
 def indices_load(
     input_data: PathOrStr | list | np.ndarray,
     numbered_from_1: bool = True,
@@ -1540,6 +1613,14 @@ def defocus_remove_file_entries(
             print(f"The defocus filetype {file_type} is not supported and thus will not be cleaned.")
 
 
+@gui_exposed(
+    label="FSC curve",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_path",
+    extensions=(".csv", ".xml", ".txt"),
+    hide=("input_path", "pixel_size", "box_size"),
+)
 def fsc_read(
     input_path: PathOrStr,
     pixel_size: float | None = None,
@@ -1650,6 +1731,14 @@ def fsc_write(
         raise ValueError(f"Unsupported FSC output format: {output_path!r}. Use .csv or .xml.")
 
 
+@gui_exposed(
+    label="CMM markers",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_path",
+    extensions=(".cmm",),
+    hide=("input_path",),
+)
 def cmm_read(input_path: PathOrStr) -> pd.DataFrame:
     """Reads a file in ChimeraX .cmm format ad returns a DataFrame containing the data.
 
@@ -1696,6 +1785,14 @@ def cmm_read(input_path: PathOrStr) -> pd.DataFrame:
     # return np.asarray([x, y, z]).astype(float)
 
 
+@gui_exposed(
+    label="Marker coordinates",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_data",
+    extensions=(".txt", ".csv"),
+    hide=("input_data",),
+)
 def marker_coords_load(input_data: DataSource | TripletLike) -> pd.DataFrame:   #str | np.ndarray | pd.DataFrame | list[float]) -> pd.DataFrame:
     """Extract 3D coordinates of points from various sources.
 

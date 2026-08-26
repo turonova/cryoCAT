@@ -17,6 +17,7 @@ GRAPH_SETTINGS_DEFAULTS = {
     "discrete_palette": "StarryNight",
     "continuous_palette": "StarryNight",
     "bg_color": "white",
+    "palette_is_user_set": False,
 }
 
 _FONT_FAMILIES = ["Arial", "Helvetica", "Courier New", "Times New Roman", "Verdana"]
@@ -182,8 +183,25 @@ def register_graph_settings_callbacks(app):
             "discrete_palette": discrete_palette or GRAPH_SETTINGS_DEFAULTS["discrete_palette"],
             "continuous_palette": continuous_palette or GRAPH_SETTINGS_DEFAULTS["continuous_palette"],
             "bg_color": bg_color or GRAPH_SETTINGS_DEFAULTS["bg_color"],
+            "palette_is_user_set": True,
         }
         return settings, "Applied."
+
+    @app.callback(
+        Output(ids.GRAPH_SETTINGS_STORE, "data", allow_duplicate=True),
+        Input(ids.SUITE_URL, "pathname"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
+        prevent_initial_call=True,
+    )
+    def _set_tab_palette(pathname, settings):
+        tool = (pathname or "").lstrip("/").split("/")[0] or ""
+        settings = dict(settings or GRAPH_SETTINGS_DEFAULTS)
+        if settings.get("palette_is_user_set"):
+            return no_update
+        target = "Monet" if tool == "tango" else "StarryNight"
+        if settings.get("discrete_palette") == target:
+            return no_update
+        return {**settings, "discrete_palette": target, "continuous_palette": target}
 
     @app.callback(
         Output({"type": "styled-graph", "owner": ALL}, "figure"),

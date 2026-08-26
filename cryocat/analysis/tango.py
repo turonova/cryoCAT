@@ -1225,10 +1225,23 @@ class TwistDescriptor(Descriptor):
                 self.df = input_twist
             elif isinstance(input_twist, str):
                 self.df = self.read_in(input_twist)
+            # Store or derive nn_radius so downstream code (clustering, GUI) can use it.
+            if nn_radius is not None:
+                self.nn_radius: float | None = float(nn_radius)
+                self.radius_source: str = "given"
+            else:
+                try:
+                    self.nn_radius = TwistDescriptor.derive_nn_radius(self.df)
+                    self.radius_source = "computed"
+                except Exception:
+                    self.nn_radius = None
+                    self.radius_source = "unknown"
         elif input_motl is not None and isinstance(nn_radius, (float, int)):
             self.df = TwistDescriptor.get_nn_twist_stats_within_radius(
                 input_motl, nn_radius, column_name, symm, remove_qp=remove_qp, remove_duplicates=remove_duplicates
             )
+            self.nn_radius = float(nn_radius)
+            self.radius_source = "given"
         else:
             raise ValueError(
                 "One has to specify (at least) either input_twist or input_motl in combination with nn_radius."
@@ -1383,6 +1396,20 @@ class TwistDescriptor(Descriptor):
             columns.append("angular_score")
 
         return columns
+
+    @staticmethod
+    def derive_nn_radius(df: "pd.DataFrame") -> float:
+        """Compute nn_radius as the max twist-vector magnitude found in df."""
+        import numpy as np
+
+        mags = (df["twist_x"] ** 2 + df["twist_y"] ** 2 + df["twist_z"] ** 2) ** 0.5
+        return float(np.max(mags))
+
+    @staticmethod
+    def check_twist_columns(df: "pd.DataFrame", symm: bool = False) -> list[str]:
+        """Return column names required by TwistDescriptor that are missing from df."""
+        required = TwistDescriptor.get_all_feature_ids(symm=symm)
+        return [c for c in required if c not in df.columns]
 
     @staticmethod
     def process_tomo_twist(t_nn, symm=None, symm_max_value=None, symm_category=None):
@@ -2122,7 +2149,7 @@ class CustomSupport(Support):
 
 class Sphere(Support):
 
-    def __init__(self, twist_desc, radius=None):
+    def __init__(self, twist_desc, radius: float | None = None):
         """Crop the initial twist descriptor support to a sphere of a given radius.
 
         Parameters
@@ -2142,7 +2169,7 @@ class Sphere(Support):
 
 class Shell(Support):
 
-    def __init__(self, twist_desc, radius_min, radius_max):
+    def __init__(self, twist_desc, radius_min: float, radius_max: float):
         """Crop the initial twist descriptor support to a shell given two radii.
 
         Parameters
@@ -2279,7 +2306,7 @@ class Torus(Support):
 
 class Cylinder(Support):
     def __init__(
-        self, twist_desc: TwistDescriptor, radius: float, height: float, axis: list | None = None, mode: Literal["position", "orientation", "mixed"] = "position", symmetric=True
+        self, twist_desc: TwistDescriptor, radius: float, height: float, axis: list | None = None, mode: Literal["position", "orientation", "mixed"] = "position", symmetric: bool = True
     ):
         """Crop the initial twist descriptor support to a cylinder defined by radius and height.
         The cylinder is defined by its radius and height, and the axis of revolution.
@@ -2993,7 +3020,7 @@ class PLComplexDescriptor(Descriptor):
 
 class SHOTDescriptor(Descriptor):
 
-    def __init__(self, twist_df, cone_number=6, shell_number=1, north_pole_axis=None, build_unique_desc=True):
+    def __init__(self, twist_df, cone_number: int = 6, shell_number: int = 1, north_pole_axis=None, build_unique_desc=True):
         """The SHOTDescriptor computes a 3D histogram describing the occupancy of nearest neighbors
         within a subdivided spherical support.
 
@@ -3199,7 +3226,7 @@ class SHOTDescriptor(Descriptor):
 
 class AlphaComplexDescriptor(Descriptor):
 
-    def __init__(self, twist_df, alpha_param=200.0, build_unique_desc=True):
+    def __init__(self, twist_df, alpha_param: float = 200.0, build_unique_desc=True):
         """The AlphaComplexDescriptor computes geometric and topological properties describing the links and stars of vertices in an alpha complex.
 
         Parameters

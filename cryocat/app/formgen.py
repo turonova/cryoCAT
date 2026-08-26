@@ -63,6 +63,27 @@ def make_dropdown(cid, options, value, clearable=False, **kwargs):
     )
 
 
+def section_divider(title: str) -> html.Div:
+    """A horizontal rule with the title centred on it."""
+    return html.Div(
+        style={
+            "display": "flex",
+            "alignItems": "center",
+            "gap": "0.5rem",
+            "marginTop": styles.SECTION_GAP,
+            "marginBottom": styles.SECTION_GAP,
+        },
+        children=[
+            html.Hr(style={"flex": "1", "margin": "0"}),
+            html.Span(
+                title,
+                style={"fontSize": styles.FONT_SM, "color": styles.COLOR_MUTED, "whiteSpace": "nowrap"},
+            ),
+            html.Hr(style={"flex": "1", "margin": "0"}),
+        ],
+    )
+
+
 # ── Widget factories: descriptor string -> Dash component ───────────────────
 
 def _truly_optional(required, default):
@@ -286,10 +307,12 @@ WIDGET_FACTORIES: dict[str, WidgetFactory] = {
 }
 
 
-def form_row(name, widget, description, truly_optional=False, label_id=None):
+def form_row(name, widget, description, truly_optional=False, label_id=None, label_text=None):
     if label_id is None:
         label_id = f"formgen-lbl-{name}"
-    label_text = name.replace("_", " ").capitalize() + (" (opt.)" if truly_optional else "")
+    if label_text is None:
+        label_text = name.replace("_", " ").capitalize()
+    label_text = label_text + (" (opt.)" if truly_optional else "")
     label = html.Div(
         [
             html.Label(label_text, id=label_id, style={"margin": 0}),
@@ -350,10 +373,13 @@ def build_form(fn_or_entry, id_type="op-param", id_extra=None, exclude=()):
 
     # For classes, parameter descriptions normally live in the *class* docstring
     # (numpydoc convention). Try __init__ first, fall back to the class itself.
-    if inspect.isclass(fn):
-        descriptions = process_method_docstring(fn, "__init__") or process_method_docstring(fn)
-    else:
-        descriptions = process_method_docstring(fn)
+    try:
+        if inspect.isclass(fn):
+            descriptions = process_method_docstring(fn, "__init__") or process_method_docstring(fn)
+        else:
+            descriptions = process_method_docstring(fn)
+    except Exception:
+        descriptions = {}
 
     rows = []
     for name, param in sig.parameters.items():

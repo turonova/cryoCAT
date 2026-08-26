@@ -26,6 +26,9 @@ POOL_META:     str = "pool-meta"        # { motl_id: <relion params, data_type, 
 POOL_NEXT_ID:  str = "pool-next-id"    # incrementing counter for stable motl_id
 POOL_GROUPS:   str = "pool-groups"     # { groups: { group_id: {label, members} }, next_id: int }
 
+DATA_POOL_REGISTRY: str = "data-pool-registry"  # { data_id: DataEntry as dict }
+DATA_POOL_NEXT_ID:  str = "data-pool-next-id"   # incrementing counter for stable data_id
+
 # ── Suite navigation / chrome ────────────────────────────────────────────────────
 # Owned by app/suite/app.py.  Navigation components and the page-content container.
 
@@ -72,6 +75,13 @@ BROWSER_RESULT: str = "browser-result"
 
 ROTATION_REQUEST: str = "rotation-request"
 # { "target": <rotation-build-btn id dict> } — written when any Build button fires
+
+# ── Orientation-picker modal (ORIENTATION_PICKER_PLACEMENT.md) ──────────────────
+# Owned exclusively by app/components/orientmodal.py.  One modal per app (D1).
+# Pick buttons write to this store; write-back callback routes output to the field.
+
+ORIENT_REQUEST: str = "orientation-request"
+# { "target": <orient-pick-btn id dict> } — written when any Pick button fires
 
 # ── Variable picker (Part F) ─────────────────────────────────────────────────────
 # Owned exclusively by app/components/varpicker.py.  One modal per app (D1).

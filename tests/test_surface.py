@@ -777,3 +777,144 @@ def test_opc_save_em_writes_motl_file(unit_sphere_opc, tmp_path):
     out = tmp_path / "pc.em"
     unit_sphere_opc.save(out, format="em")
     assert out.exists() and out.stat().st_size > 0
+
+
+# ── Mesh.from_alpha_shape / suggest_alpha_range / alpha_shape_tetra ──────────
+
+
+def _sphere_points(n=500, radius=10.0, seed=0):
+    rng = np.random.default_rng(seed)
+    pts = rng.standard_normal((n, 3))
+    pts /= np.linalg.norm(pts, axis=1, keepdims=True)
+    return pts * radius
+
+
+def _two_cluster_points(n=200, sep=50.0):
+    rng = np.random.default_rng(1)
+    a = rng.standard_normal((n, 3))
+    b = rng.standard_normal((n, 3)) + np.array([sep, 0.0, 0.0])
+    return np.vstack([a, b])
+
+
+class TestFromAlphaShape:
+    def test_returns_mesh_with_geometry(self):
+        from cryocat.core.surface import Mesh
+        pts = _sphere_points()
+        lo, hi = Mesh.suggest_alpha_range(pts)
+        mesh = Mesh.from_alpha_shape(pts, alpha=(lo + hi) / 2)
+        assert mesh.vertices is not None
+        assert mesh.faces is not None
+        assert len(mesh.vertices) > 0
+        assert len(mesh.faces) > 0
+
+    def test_precomputed_tetra_gives_same_result(self):
+        from cryocat.core.surface import Mesh
+        pts = _sphere_points(n=300, seed=42)
+        alpha = 3.0
+        tetra_mesh, pt_map = Mesh.alpha_shape_tetra(pts)
+        mesh_with = Mesh.from_alpha_shape(pts, alpha, tetra_mesh, pt_map)
+        mesh_without = Mesh.from_alpha_shape(pts, alpha)
+        np.testing.assert_array_equal(mesh_with.vertices, mesh_without.vertices)
+        np.testing.assert_array_equal(mesh_with.faces, mesh_without.faces)
+
+    def test_large_alpha_matches_convex_hull_vertex_count(self):
+        from cryocat.core.surface import Mesh
+        import open3d as o3d
+        pts = _sphere_points(n=200, seed=7)
+        alpha = 1e9
+        mesh = Mesh.from_alpha_shape(pts, alpha)
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pts)
+        hull, _ = pcd.compute_convex_hull()
+        assert len(mesh.vertices) == len(np.asarray(hull.vertices))
+
+    def test_small_alpha_fragments_two_clusters(self):
+        from cryocat.core.surface import Mesh
+        pts = _two_cluster_points(n=300, sep=50.0)
+        lo, _ = Mesh.suggest_alpha_range(pts)
+        mesh = Mesh.from_alpha_shape(pts, alpha=lo * 2)
+        n_comp = mesh.get_connected_component_count()
+        assert n_comp > 1
+
+    def test_fewer_than_four_points_raises(self):
+        from cryocat.core.surface import Mesh
+        with pytest.raises(ValueError, match="at least 4"):
+            Mesh.from_alpha_shape(np.zeros((3, 3)), alpha=1.0)
+
+    def test_coplanar_points_raise_via_tetra(self):
+        from cryocat.core.surface import Mesh
+        pts = np.column_stack([
+            np.linspace(0, 1, 20), np.linspace(0, 1, 20), np.zeros(20)
+        ])
+        with pytest.raises(ValueError, match="coplanar"):
+            Mesh.alpha_shape_tetra(pts)
+
+
+class TestSuggestAlphaRange:
+    def test_returns_positive_pair_ordered(self):
+        from cryocat.core.surface import Mesh
+        pts = _sphere_points()
+        lo, hi = Mesh.suggest_alpha_range(pts)
+        assert lo > 0
+        assert hi > lo
+
+    def test_scales_linearly_with_cloud(self):
+        from cryocat.core.surface import Mesh
+        pts = _sphere_points(n=400, seed=3)
+        lo1, hi1 = Mesh.suggest_alpha_range(pts)
+        lo2, hi2 = Mesh.suggest_alpha_range(pts * 10.0)
+        assert lo2 == pytest.approx(lo1 * 10.0, rel=1e-6)
+        assert hi2 == pytest.approx(hi1 * 10.0, rel=1e-6)
+
+    def test_fewer_than_four_points_raises(self):
+        from cryocat.core.surface import Mesh
+        with pytest.raises(ValueError, match="at least 4"):
+            Mesh.suggest_alpha_range(np.zeros((3, 3)))
+
+
+class TestAlphaShapeTetra:
+    def test_fewer_than_four_points_raises(self):
+        from cryocat.core.surface import Mesh
+        with pytest.raises(ValueError, match="at least 4"):
+            Mesh.alpha_shape_tetra(np.zeros((3, 3)))
+
+    def test_coplanar_raises(self):
+        from cryocat.core.surface import Mesh
+        pts = np.column_stack([
+            np.linspace(0, 1, 10), np.linspace(0, 1, 10), np.zeros(10)
+        ])
+        with pytest.raises(ValueError, match="coplanar"):
+            Mesh.alpha_shape_tetra(pts)
+
+    def test_returns_two_objects(self):
+        from cryocat.core.surface import Mesh
+        pts = _sphere_points(n=100)
+        result = Mesh.alpha_shape_tetra(pts)
+        assert len(result) == 2
+
+
+class TestConnectivityMetrics:
+    def test_empty_mesh_component_count_zero(self):
+        from cryocat.core.surface import Mesh
+        m = Mesh()
+        assert m.get_connected_component_count() == 0
+
+    def test_empty_mesh_not_watertight(self):
+        from cryocat.core.surface import Mesh
+        m = Mesh()
+        assert m.is_watertight() is False
+
+    def test_sphere_single_component(self):
+        from cryocat.core.surface import Mesh
+        pts = _sphere_points(n=500)
+        lo, hi = Mesh.suggest_alpha_range(pts)
+        mesh = Mesh.from_alpha_shape(pts, alpha=(lo + hi) / 2)
+        n_comp = mesh.get_connected_component_count()
+        assert n_comp == 1
+
+    def test_two_clusters_two_components(self):
+        from cryocat.core.surface import Mesh
+        pts = _two_cluster_points(n=300, sep=50.0)
+        lo, _ = Mesh.suggest_alpha_range(pts)
+        mesh = Mesh.from_alpha_shape(pts, alpha=lo * 2)
+        assert mesh.get_connected_component_count() > 1

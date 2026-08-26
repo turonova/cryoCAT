@@ -21,7 +21,6 @@ import pytest
 
 _APP = pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app"
 _SUITE = _APP / "suite"
-_TANGO = _APP / "tango"
 _COMPONENTS = _APP / "components"
 
 
@@ -153,15 +152,11 @@ def test_call_event_only_in_invoke_operation():
 
 # pageshell.py owns the sticky-sidebar skeleton and legitimately carries 100vh.
 _STYLE_MODULES = {"styles.py", "pageshell.py"}
-# tango/ uses inline styles pending a doc 7 style extraction pass.
-_STYLE_MODULES_EXEMPT_DIRS = {_TANGO}
+_STYLE_MODULES_EXEMPT_DIRS: set[pathlib.Path] = set()
 
 
 def test_100vh_only_in_style_modules():
-    """§8 — '100vh' string appears only in styles.py and pageshell.py.
-
-    tango/ is exempt (doc 7 — style extraction not yet done).
-    """
+    """§8 — '100vh' string appears only in styles.py and pageshell.py."""
     violations = []
     for p in _py_files(_APP):
         if p.name in _STYLE_MODULES:
@@ -175,7 +170,7 @@ def test_100vh_only_in_style_modules():
             if val == "100vh":
                 violations.append(f"{p.relative_to(_APP)}:{lineno}")
     assert not violations, (
-        "'100vh' literal outside style modules (tango/ exempt):\n" + "\n".join(violations)
+        "'100vh' literal outside style modules:\n" + "\n".join(violations)
     )
 
 
@@ -233,14 +228,12 @@ THIN_CALLBACK_EXEMPT: dict[str, str] = {
     "putilities":    "doc 8 — utilities page with multi-step builder callbacks",
     "pvolume":       "doc 8 — volume page with extraction loop callbacks",
     "consoleui":     "doc 8 — _on_submit owns pool mutations; _suggest iterates completions",
-    # tango page modules — not addressed by thin-callback lint in this phase
-    "sidebar":       "doc 8 — tango sidebar with inline 100vh and compound callbacks",
-    "table":         "doc 8 — tango table with column-iteration callbacks",
     # GRID_SERVER_SIDE_ROWS W1–W3 — infinite-model callbacks (doc 8 extraction pass)
     "tablegrid":     "doc 8 — _toggle_select_all (11 stmts: pool-aware select-all with deselect branch)",
     "tablefilter":   "doc 8 — _on_slider_change has for-loop (W2 zip merge), apply_filters_btn (9 stmts)",
     "tableedit":     "doc 8 — remove_selected_rows (11 stmts: pool-aware bulk remove)",
     "tablesave":     "doc 8 — create_from_selected (12 stmts: pool-fetch + slot-allocate + registry)",
+    "ptango":        "doc 8 — twist/desc compute loops",
 }
 
 _THIN_THRESHOLD_STMTS = 8
@@ -307,7 +300,7 @@ def test_thin_callback_exempt_list_is_bounded():
 
 # Baseline recorded at Phase 3 write time.  The test asserts the count only
 # goes DOWN (shrinks), never UP.  Update this number when the count drops.
-_ALLOW_DUPLICATE_BASELINE = 309  # 312 - 3: _on_load deleted (columnDefs, dashGridOptions, filterModel allow_duplicate removed)
+_ALLOW_DUPLICATE_BASELINE = 305  # W2: twist/desc removed from pool (-7 pool allow_duplicate outputs)
 
 
 def test_allow_duplicate_count_does_not_grow():
@@ -331,8 +324,8 @@ def test_allow_duplicate_count_does_not_grow():
 _ENTRY_POINTS: frozenset[str] = frozenset({
     "cryocat.app.server",
     "cryocat.app.suite.app",
-    "cryocat.app.tango.app",
     "cryocat.app.discovery",  # also used as __main__ for --report
+    "cryocat.app.run_grid",   # standalone dev/test Dash app for infinite-row-model iteration
 })
 # Modules that are only imported by test code or are intentionally standalone.
 _IMPORT_EXEMPT: frozenset[str] = frozenset({
@@ -346,8 +339,11 @@ _IMPORT_EXEMPT: frozenset[str] = frozenset({
     "cryocat.app.suite.pages.psta",
 
     "cryocat.app.suite.pages.pstructure",
+    "cryocat.app.suite.pages.ptango",
     "cryocat.app.suite.pages.putilities",
     "cryocat.app.suite.pages.pvolume",
+    "cryocat.app.suite.pages.porientpicker",
+    "cryocat.app.suite.pages.pdatapool",
     # Internal helpers only imported by sibling modules in the same package.
     "cryocat.app.suite.pages._codegen_base",
     "cryocat.app.suite.pages._memthick_analysis",
@@ -466,7 +462,7 @@ def test_single_log_panel_call_site_in_suite():
 # pd.DataFrame() — the old pre-pool pattern.  Correct form: pool.get_rows(mid).
 # May SHRINK as P6 lands; never grow.
 _DATAFRAME_FROM_STORE_EXEMPT: dict[str, str] = {
-    "pnn":         "non-motl data — NN statistics table cannot use motl pool without architectural redesign",
+    "pnn":         "non-motl data — _apply_postprocessing wraps nn-result (internal postprocessing store, not grid-facing)",
     "pstructure":  "non-motl data — _render_isect_results wraps intersection-distance hits (not particle data)",
     "motlio":      "blocked — save_data wraps tool-specific result stores that remain pre-pool",
     "tablesave":   "legitimate — do_csv_save wraps grid_data for CSV export (not a pool roundtrip)",
@@ -557,7 +553,7 @@ def test_no_dataframe_from_store_arg(src_path: pathlib.Path):
 # Shrinks as violations are fixed; remaining entries are permanently legitimate or blocked.
 _TO_DICT_RECORDS_EXEMPT: dict[str, str] = {
     "pstructure":   "non-motl data — _run_operation routes intersection-distance df and motl result to pre-pool stores",
-    "pnn":          "non-motl data — NN statistics table is not particle data; cannot use motl pool without redesign",
+    "pnn":          "non-motl data — nn-result store carries intermediate list[dict] for _apply_postprocessing; grid-facing data uses pool",
     "psta":         "non-motl data — STA parameter config tables are not motls; cannot use motl pool",
     "motlio":       "blocked — save_data wraps tool-specific result stores that remain pre-pool",
     "tablesave":    "legitimate — create_from_selected serialises a user-selected subset into a new motl slot (not grid-bound)",

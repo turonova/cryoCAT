@@ -32,6 +32,8 @@ GUI_MODULES: tuple[str, ...] = (
     "cryocat.utils.geom",
     "cryocat.utils.wedgeutils",
     "cryocat.analysis.structure",
+    "cryocat.utils.ioutils",
+    "cryocat.core.cryomap",
 )
 
 _loaded: bool = False
@@ -110,6 +112,15 @@ def multi_motl_ops() -> list[GuiEntry]:
             e for e in GUI_REGISTRY.values()
             if e.category == GuiCategory.MOTL_OP and e.motls is not None
         ),
+        key=lambda e: (e.group or "\x7f", e.order, e.label),
+    )
+
+
+def readers() -> list[GuiEntry]:
+    """File-reading callables registered with ``category="reader"``."""
+    _ensure_loaded()
+    return sorted(
+        (e for e in GUI_REGISTRY.values() if e.category == GuiCategory.READER),
         key=lambda e: (e.group or "\x7f", e.order, e.label),
     )
 

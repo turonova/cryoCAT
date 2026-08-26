@@ -58,7 +58,11 @@ def start_session(log_dir: str | Path | None = None) -> Path:
     try:
         from cryocat import __version__ as _cv
     except Exception:
-        _cv = "unknown"
+        try:
+            from importlib.metadata import version as _imv
+            _cv = _imv("cryocat")
+        except Exception:
+            _cv = "development"
 
     emit({
         "kind": "session",

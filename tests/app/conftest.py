@@ -163,8 +163,3 @@ def suite_app():
     return m.app
 
 
-@pytest.fixture(scope="session")
-def tango_app():
-    """The assembled Dash app from cryocat.app.tango.app."""
-    import cryocat.app.tango.app as m
-    return m.app

@@ -28,17 +28,25 @@ from cryocat.analysis import visplot
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app import ids, formgen
 from cryocat.app.formgen import make_dropdown
-from cryocat.app.components.pathfield import get_path_field
-from cryocat.app.pool import PoolState, insert_motl as _insert_motl, get_rows as _get_rows, PoolPayloadMissing as _PoolPayloadMissing
+from cryocat.app.pool import (
+    PoolState, insert_motl as _insert_motl, get_rows as _get_rows,
+    get_motl as _get_motl, PoolPayloadMissing as _PoolPayloadMissing,
+    resolve_df as pool_resolve_df, resolve_n_rows as pool_resolve_n_rows,
+)
 from cryocat.app.components.poolpicker import get_pool_picker, register_pool_picker_callbacks
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
 from cryocat.app.pageshell import page_shell, sidebar_accordion
+from cryocat.app.components.tablesource import get_table_source, register_table_source_callbacks
+from cryocat.app.components.tabletomotl import get_table_to_motl, register_table_to_motl_callbacks
+
+DYNAMIC_IDS: list[tuple[str, str]] = [
+    ("nn-out-tabv-grid-container", "nn-out-tabv-grid"),
+]
 
 
 _MOTL_COL_OPTIONS = [{"label": c, "value": c} for c in Motl.motl_columns]
-_NN_TRANSFER_EXCLUDE = {"motl_id", "qp_id", "nn_id"}
 
 
 def _nn_csv_save(path, grid_data, used_motls):
@@ -54,118 +62,6 @@ def _nn_csv_save(path, grid_data, used_motls):
 
 
 # ── Layout ──────────────────────────────────────────────────────────────────────
-
-def _create_motl_sidebar_content():
-    """Sidebar content for the 'Create motl from NN table' accordion item."""
-    hint = {"color": "var(--color9)", "marginBottom": "0.4rem"}
-    lbl = {"fontWeight": "bold", "marginBottom": "0.2rem"}
-    return html.Div(
-        [
-            html.Div(id="nn-sel-motl-info", style=hint),
-            html.Label("Motls to include:", style=lbl),
-            html.P(
-                "Order matters — first = query-particle motl, subsequent = neighbor motls.",
-                style=hint,
-            ),
-            dcc.Checklist(
-                id="nn-sel-motl-checklist",
-                options=[],
-                value=[],
-                labelStyle={"display": "block", "marginBottom": "0.2rem"},
-            ),
-            html.Hr(style={"margin": "0.4rem 0"}),
-            html.Label("Rows to include:", style=lbl),
-            dbc.RadioItems(
-                id="nn-sel-rows-mode",
-                options=[
-                    {"label": "All", "value": "all"},
-                    {"label": "Selected rows only", "value": "selected"},
-                ],
-                value="all",
-                inline=False,
-                className="sidebar-checklist",
-                labelStyle={},
-            ),
-            html.Div(
-                [
-                    html.Hr(style={"margin": "0.4rem 0"}),
-                    html.Label("Use particle IDs from:", style=lbl),
-                    dbc.RadioItems(
-                        id="nn-sel-motl-id-type",
-                        options=[
-                            {"label": "Query particle (qp_subtomo_id)", "value": "qp"},
-                            {"label": "Neighbor (nn_subtomo_id)", "value": "nn"},
-                        ],
-                        value="qp",
-                        inline=False,
-                        className="sidebar-checklist",
-                        labelStyle={},
-                    ),
-                ],
-                id="nn-sel-motl-id-type-wrap",
-                style={"display": "none"},
-            ),
-            html.Div(
-                [
-                    html.Hr(style={"margin": "0.4rem 0"}),
-                    html.Label("Source-motl index column:", style=lbl),
-                    make_dropdown("nn-sel-motl-id-col", _MOTL_COL_OPTIONS, None,
-                                  placeholder="Select column…", style={"marginBottom": "0.4rem"}),
-                ],
-                id="nn-sel-motl-id-col-wrap",
-                style={"display": "none"},
-            ),
-            html.Div(
-                [
-                    html.Hr(style={"margin": "0.4rem 0"}),
-                    html.Label("Transfer NN columns to motl:", style=lbl),
-                    html.P(
-                        "Select columns from the NN table to carry over. "
-                        "Map each to a target motl column.",
-                        style=hint,
-                    ),
-                    make_dropdown("nn-sel-nn-cols", [], [], multi=True,
-                                  placeholder="Select NN columns to transfer…",
-                                  style={"marginBottom": "0.4rem"}),
-                    html.Div(id="nn-sel-nn-col-target-rows"),
-                ],
-                id="nn-cluster-transfer-wrap",
-                style={"display": "none"},
-            ),
-            html.Hr(style={"margin": "0.4rem 0"}),
-            html.Label("Save to file:", style=lbl),
-            html.Div(get_path_field("nn-sel-motl-save-path", mode="save",
-                                    placeholder="Output file path (.em, .csv, …)"),
-                     style={"marginBottom": "0.3rem"}),
-            dbc.Button(
-                "Save",
-                id="nn-sel-motl-save-btn",
-                color="secondary",
-                size="sm",
-                style={"width": "100%", "marginBottom": "0.5rem"},
-            ),
-            html.Label("Send to editor:", style=lbl),
-            dbc.Input(
-                id="nn-sel-motl-editor-label",
-                placeholder="Label (optional)",
-                size="sm",
-                style={"marginBottom": "0.3rem"},
-            ),
-            dbc.Button(
-                "Send to editor",
-                id="nn-sel-motl-send-btn",
-                color="primary",
-                size="sm",
-                style={"width": "100%"},
-            ),
-            html.Div(
-                id="nn-sel-motl-status",
-                style={"color": "var(--color9)",
-                       "marginTop": "0.4rem", "wordBreak": "break-word"},
-            ),
-        ]
-    )
-
 
 def _postprocess_sidebar_content():
     """Sidebar content for the 'Post-processing' accordion item."""
@@ -238,40 +134,10 @@ def _postprocess_sidebar_content():
     )
 
 
-def _load_csv_sidebar_content():
-    """Sidebar content for the 'Load from CSV' accordion item."""
-    hint = {"color": "var(--color9)", "marginBottom": "0.4rem"}
-    lbl = {"fontWeight": "bold", "marginBottom": "0.2rem"}
-    return html.Div(
-        [
-            html.P(
-                "Load a previously saved NN table. Motls selected in "
-                "'Input motls' will be reattached; leave none selected for a "
-                "data-only load (post-processing will still work, but 'Create "
-                "motl from NN table' requires attached motls).",
-                style=hint,
-            ),
-            html.Label("CSV file path:", style=lbl),
-            html.Div(get_path_field("nn-load-csv-path", extensions=(".csv",),
-                                    placeholder="Path to .csv file…"),
-                     style={"marginBottom": "0.5rem"}),
-            dbc.Button(
-                "Load",
-                id="nn-load-csv-btn",
-                color="primary",
-                size="sm",
-                style={"width": "100%"},
-            ),
-            html.Div(
-                id="nn-load-csv-status",
-                style={
-                    "color": "var(--color9)",
-                    "marginTop": "0.4rem",
-                    "wordBreak": "break-word",
-                },
-            ),
-        ]
-    )
+def _nn_load_fn(path):
+    """Load an NN table from a CSV file; returns dict with df and column_name."""
+    nn = NearestNeighbors.load(file_path=path)
+    return {"df": nn.df, "column_name": nn.column_name}
 
 
 def _sidebar() -> list:
@@ -279,130 +145,126 @@ def _sidebar() -> list:
         sidebar_accordion(
             [
                 dbc.AccordionItem(
-                    get_pool_picker("nn"),
-                    title="Input motls",
-                    item_id="nn-acc-input",
-                ),
-                dbc.AccordionItem(
-                    [
-                        # nn_type: user-friendly labels; build widget manually, wrap with form_row
-                        formgen.form_row(
-                            "nn_type",
-                            formgen.make_dropdown(
-                                formgen._mk_id("nn-forms-params", "nn_type", "Literal", {"cls_name": "nn-params"}),
-                                [
-                                    {"label": "Closest distance", "value": "closest_dist"},
-                                    {"label": "Radius", "value": "radius"},
-                                ],
-                                "closest_dist",
-                                clearable=False,
-                            ),
-                            "How nearest-neighbor candidates are selected: by closest k distances, or all within a radius.",
-                        ),
-                        html.Div(
-                            formgen.build_form(
-                                NearestNeighbors,
-                                id_type="nn-forms-params",
-                                id_extra={"cls_name": "nn-params"},
-                                exclude=["input_data", "nn_type", "exclude_column_name"],
-                            ),
-                        ),
-                        # exclude_column_name: clearable motl-column dropdown (None by default)
-                        html.Div(
-                            [
-                                html.Div(
+                    get_table_source(
+                        "nn-src",
+                        compute_children=[
+                            get_pool_picker("nn"),
+                            # nn_type: user-friendly labels; build widget manually, wrap with form_row
+                            formgen.form_row(
+                                "nn_type",
+                                formgen.make_dropdown(
+                                    formgen._mk_id("nn-forms-params", "nn_type", "Literal", {"cls_name": "nn-params"}),
                                     [
-                                        html.Label(
-                                            "Exclude column name (opt.)",
-                                            id="nn-excl-col-lbl",
-                                            style={"margin": 0},
-                                        ),
-                                        dbc.Tooltip(
-                                            "When set, NN candidates sharing the query "
-                                            "particle's value in this column are excluded. "
-                                            "For closest-distance (k-NN) mode the row count "
-                                            "is unchanged (k neighbors are still returned, "
-                                            "just from different objects) and distances "
-                                            "typically increase. For radius mode the row "
-                                            "count can decrease because excluded candidates "
-                                            "are simply dropped.",
-                                            target="nn-excl-col-lbl",
-                                            placement="right",
-                                        ),
+                                        {"label": "Closest distance", "value": "closest_dist"},
+                                        {"label": "Radius", "value": "radius"},
                                     ],
-                                    style={
-                                        "width": "45%", "display": "flex",
-                                        "alignItems": "center", "boxSizing": "border-box",
-                                        "paddingRight": "4px",
-                                    },
+                                    "closest_dist",
+                                    clearable=False,
                                 ),
-                                html.Div(
-                                    make_dropdown(
-                                        {
-                                            "type": "nn-forms-params",
-                                            "owner": "",
-                                            "param": "exclude_column_name",
-                                            "tag": "Literal",
-                                            "cls_name": "nn-params",
+                                "How nearest-neighbor candidates are selected: by closest k distances, or all within a radius.",
+                            ),
+                            html.Div(
+                                formgen.build_form(
+                                    NearestNeighbors,
+                                    id_type="nn-forms-params",
+                                    id_extra={"cls_name": "nn-params"},
+                                    exclude=["input_data", "nn_type", "exclude_column_name"],
+                                ),
+                            ),
+                            # exclude_column_name: clearable motl-column dropdown (None by default)
+                            html.Div(
+                                [
+                                    html.Div(
+                                        [
+                                            html.Label(
+                                                "Exclude column name (opt.)",
+                                                id="nn-excl-col-lbl",
+                                                style={"margin": 0},
+                                            ),
+                                            dbc.Tooltip(
+                                                "When set, NN candidates sharing the query "
+                                                "particle's value in this column are excluded. "
+                                                "For closest-distance (k-NN) mode the row count "
+                                                "is unchanged (k neighbors are still returned, "
+                                                "just from different objects) and distances "
+                                                "typically increase. For radius mode the row "
+                                                "count can decrease because excluded candidates "
+                                                "are simply dropped.",
+                                                target="nn-excl-col-lbl",
+                                                placement="right",
+                                            ),
+                                        ],
+                                        style={
+                                            "width": "45%", "display": "flex",
+                                            "alignItems": "center", "boxSizing": "border-box",
+                                            "paddingRight": "4px",
                                         },
-                                        _MOTL_COL_OPTIONS, None,
-                                        clearable=True,
-                                        placeholder="None (optional)",
                                     ),
-                                    style={"width": "55%"},
+                                    html.Div(
+                                        make_dropdown(
+                                            {
+                                                "type": "nn-forms-params",
+                                                "owner": "",
+                                                "param": "exclude_column_name",
+                                                "tag": "Literal",
+                                                "cls_name": "nn-params",
+                                            },
+                                            _MOTL_COL_OPTIONS, None,
+                                            clearable=True,
+                                            placeholder="None (optional)",
+                                        ),
+                                        style={"width": "55%"},
+                                    ),
+                                ],
+                                style={**{"display": "flex", "flexDirection": "row", "width": "100%", "alignItems": "center"}, "marginBottom": "0.25rem"},
+                            ),
+                            html.Div(
+                                dbc.Checklist(
+                                    id="nn-dist-toggle",
+                                    options=[{"label": "Compute euclidean distances", "value": "on"}],
+                                    value=[],
+                                    inline=True,
                                 ),
-                            ],
-                            style={**{"display": "flex", "flexDirection": "row", "width": "100%", "alignItems": "center"}, "marginBottom": "0.25rem"},
-                        ),
-                        html.Div(
+                                id="nn-dist-toggle-wrap",
+                                style={"display": "none", "marginTop": "0.3rem"},
+                            ),
                             dbc.Checklist(
-                                id="nn-dist-toggle",
-                                options=[{"label": "Compute euclidean distances", "value": "on"}],
+                                id="nn-angular-toggle",
+                                options=[{"label": "Compute angular distances", "value": "on"}],
                                 value=[],
                                 inline=True,
+                                style={"marginBottom": "0.4rem"},
                             ),
-                            id="nn-dist-toggle-wrap",
-                            style={"display": "none", "marginTop": "0.3rem"},
-                        ),
-                        dbc.Checklist(
-                            id="nn-angular-toggle",
-                            options=[{"label": "Compute angular distances", "value": "on"}],
-                            value=[],
-                            inline=True,
-                            style={"marginBottom": "0.4rem"},
-                        ),
-                        html.Div(
-                            formgen.build_form(
-                                NearestNeighbors.get_angular_distances,
-                                id_type="nn-forms-params",
-                                id_extra={"cls_name": "nn-angular"},
+                            html.Div(
+                                formgen.build_form(
+                                    NearestNeighbors.get_angular_distances,
+                                    id_type="nn-forms-params",
+                                    id_extra={"cls_name": "nn-angular"},
+                                ),
+                                id="nn-angular-form-wrap",
+                                style={"display": "none"},
                             ),
-                            id="nn-angular-form-wrap",
-                            style={"display": "none"},
-                        ),
-                        dbc.Button(
-                            "Compute NN analysis",
-                            id="nn-compute-btn",
-                            color="primary",
-                            size="sm",
-                            style={"width": "100%", "marginTop": "0.5rem"},
-                        ),
-                        html.Div(
-                            id="nn-stats-text",
-                            style={
-                                "color": "var(--color9)",
-                                "marginTop": "0.5rem",
-                                "wordBreak": "break-word",
-                            },
-                        ),
-                    ],
-                    title="Compute NN table",
+                            dbc.Button(
+                                "Compute NN analysis",
+                                id="nn-compute-btn",
+                                color="primary",
+                                size="sm",
+                                style={"width": "100%", "marginTop": "0.5rem"},
+                            ),
+                            html.Div(
+                                id="nn-stats-text",
+                                style={
+                                    "color": "var(--color9)",
+                                    "marginTop": "0.5rem",
+                                    "wordBreak": "break-word",
+                                },
+                            ),
+                        ],
+                        file_extensions=(".csv",),
+                        label="Source",
+                    ),
+                    title="NN table",
                     item_id="nn-acc-params",
-                ),
-                dbc.AccordionItem(
-                    _load_csv_sidebar_content(),
-                    title="Load existing NN table",
-                    item_id="nn-acc-load",
                 ),
                 dbc.AccordionItem(
                     _postprocess_sidebar_content(),
@@ -410,12 +272,12 @@ def _sidebar() -> list:
                     item_id="nn-acc-postprocess",
                 ),
                 dbc.AccordionItem(
-                    _create_motl_sidebar_content(),
+                    get_table_to_motl("nn-ttm"),
                     title="Create motl from NN table",
                     item_id="nn-acc-create",
                 ),
             ],
-            active_item=["nn-acc-input", "nn-acc-params"],
+            active_item=["nn-acc-params"],
         ),
     ]
 
@@ -457,8 +319,19 @@ def _kwargs_by_cls(param_ids, param_values, target_cls):
 
 def register_callbacks(app):
     register_pool_picker_callbacks(app, "nn")
+    register_table_to_motl_callbacks(
+        app, "nn-ttm",
+        source_table_id="nn-out-tabv-grid",
+        id_column="qp_subtomo_id",
+    )
+    register_table_source_callbacks(
+        app, "nn-src",
+        check_fn=NearestNeighbors.check_nn_columns,
+        load_fn=_nn_load_fn,
+    )
     register_table_callbacks(
         app, "nn-out-tabv",
+        resolve_df=pool_resolve_df, resolve_n_rows=pool_resolve_n_rows,
         extra_csv_states=[State("nn-used-motls-store", "data")],
         custom_csv_save_fn=_nn_csv_save,
     )
@@ -481,57 +354,6 @@ def register_callbacks(app):
         return {"display": "block"} if nn_type == "radius" else {"display": "none"}
 
     @app.callback(
-        Output("nn-sel-nn-cols", "options"),
-        Output("nn-cluster-transfer-wrap", "style"),
-        Input("nn-out-tabv-global-data-store", "data"),
-    )
-    def _update_nn_col_transfer_options(table_data):
-        if not table_data:
-            return [], {"display": "none"}
-        df_cols = pd.DataFrame(table_data).columns.tolist()
-        opts = [
-            {"label": c, "value": c}
-            for c in df_cols
-            if c not in _NN_TRANSFER_EXCLUDE
-        ]
-        if not opts:
-            return [], {"display": "none"}
-        return opts, {"display": "block"}
-
-    @app.callback(
-        Output("nn-sel-nn-col-target-rows", "children"),
-        Input("nn-sel-nn-cols", "value"),
-    )
-    def _build_nn_col_target_rows(selected_cols):
-        if not selected_cols:
-            return []
-        rows = []
-        for col in selected_cols:
-            rows.append(
-                html.Div(
-                    [
-                        html.Span(
-                            f"{col} →",
-                            style={
-                                "whiteSpace": "nowrap",
-                                "marginRight": "6px",
-                                "color": "var(--color9)",
-                            },
-                        ),
-                        make_dropdown(
-                            {"type": "nn-sel-nn-col-target", "col": col},
-                            _MOTL_COL_OPTIONS, None,
-                            clearable=True,
-                            placeholder="Motl column…",
-                            style={"flex": 1},
-                        ),
-                    ],
-                    style={**{"display": "flex", "alignItems": "center", "width": "100%"}, "marginBottom": "0.3rem"},
-                )
-            )
-        return rows
-
-    @app.callback(
         Output("nn-angular-form-wrap", "style"),
         Input("nn-angular-toggle", "value"),
     )
@@ -552,35 +374,42 @@ def register_callbacks(app):
         Output("nn-stats-text", "children"),
         Output("nn-result", "data"),
         Output("nn-used-motls-store", "data"),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("nn-compute-btn", "n_clicks"),
         State("nn-value", "data"),
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State("nn-angular-toggle", "value"),
         State("nn-dist-toggle", "value"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def compute_nn(n_clicks, selected, param_values, param_ids, angular_on, compute_dist):
+    def compute_nn(n_clicks, selected, param_values, param_ids, angular_on, compute_dist,
+                   pool_registry, pool_meta, pool_next_id):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
 
+        _no_pool = (no_update, no_update, no_update)
         if not selected:
             return (no_update, no_update, "Select at least one motl from the pool.",
-                    no_update, no_update)
+                    no_update, no_update, *_no_pool)
         if isinstance(selected, str):
             selected = [selected]
 
         motls = []
         for m in selected:
             try:
-                motl_obj = Motl(_get_rows(m))
-                motl_obj._pool_motl_id = m
+                motl_obj = _get_motl(m)
                 motls.append(motl_obj)
             except _PoolPayloadMissing:
                 pass
         if not motls:
             return (no_update, no_update, "The selected motls have no data.",
-                    no_update, no_update)
+                    no_update, no_update, *_no_pool)
 
         nn_kwargs = _kwargs_by_cls(param_ids, param_values, "nn-params")
         angular_kwargs = _kwargs_by_cls(param_ids, param_values, "nn-angular")
@@ -592,7 +421,7 @@ def register_callbacks(app):
             nn_stats.get_rotated_coord(add_to_df=True)
         except Exception as exc:
             return (no_update, no_update, f"Error: {exc}",
-                    no_update, no_update)
+                    no_update, no_update, *_no_pool)
 
         status_bits = []
         if nn_kwargs.get("nn_type") == "closest_dist" and "nn_dist" in nn_stats.df:
@@ -633,6 +462,10 @@ def register_callbacks(app):
 
         table_data = nn_stats.df.to_dict("records")
 
+        state = PoolState.from_stores(pool_registry, pool_meta, pool_next_id)
+        new_state, pool_motl_id = _insert_motl(state, nn_stats.df, label="NN results")
+        pool_ref = {"motl_id": pool_motl_id, "rev": 0, "n_rows": len(nn_stats.df)}
+
         nn_df = pd.DataFrame(
             np.column_stack((normalized, nn_stats.df["nn_subtomo_id"].values)),
             columns=["x", "y", "z", "nn_subtomo_id"],
@@ -650,8 +483,9 @@ def register_callbacks(app):
         }
 
         return (
-            xyz_graph, table_data, " | ".join(status_bits), table_data,
+            xyz_graph, pool_ref, " | ".join(status_bits), table_data,
             used_motls_store,
+            new_state.registry, new_state.meta, new_state.next_id,
         )
 
     # ── Post-processing: enrich existing NN table without recomputing. ────────
@@ -659,6 +493,9 @@ def register_callbacks(app):
         Output("nn-result", "data", allow_duplicate=True),
         Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
         Output("nn-pp-status", "children"),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("nn-pp-apply-btn", "n_clicks"),
         State("nn-result", "data"),
         State("nn-used-motls-store", "data"),
@@ -668,16 +505,21 @@ def register_callbacks(app):
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State("nn-pp-dist-toggle", "value"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
     def _apply_postprocessing(
         n_clicks, nn_result, used_motls,
         add_cols, sides, angular_on, param_values, param_ids, dist_on,
+        pool_registry, pool_meta, pool_next_id,
     ):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
+        _no_pool = (no_update, no_update, no_update)
         if not nn_result:
-            return no_update, no_update, "Run NN analysis first."
+            return no_update, no_update, "Run NN analysis first.", *_no_pool
 
         df = pd.DataFrame(nn_result)
         status_bits = []
@@ -750,214 +592,40 @@ def register_callbacks(app):
                 status_bits.append(f"NN distances failed: {exc}")
 
         if not status_bits:
-            return no_update, no_update, "Nothing selected."
+            return no_update, no_update, "Nothing selected.", *_no_pool
 
         new_data = df.to_dict("records")
-        return new_data, new_data, " | ".join(status_bits)
+        state = PoolState.from_stores(pool_registry, pool_meta, pool_next_id)
+        new_state, pool_motl_id = _insert_motl(state, df, label="NN results (pp)")
+        pool_ref = {"motl_id": pool_motl_id, "rev": 0, "n_rows": len(df)}
+        return new_data, pool_ref, " | ".join(status_bits), new_state.registry, new_state.meta, new_state.next_id
 
-    # ── Create motl from selection (sidebar) ────────────────────────────────────
-
-    @app.callback(
-        Output("nn-sel-motl-checklist", "options"),
-        Output("nn-sel-motl-checklist", "value"),
-        Output("nn-sel-motl-id-type-wrap", "style"),
-        Output("nn-sel-motl-info", "children"),
-        Input("nn-used-motls-store", "data"),
-        State(ids.POOL_REGISTRY, "data"),
-        prevent_initial_call=True,
-    )
-    def _populate_sel_panel(used_motls, registry):
-        if not used_motls:
-            return [], [], {"display": "none"}, "Run NN analysis first."
-
-        names = used_motls.get("names", [])
-        is_multi = used_motls.get("is_multi", False)
-        registry = registry or {}
-
-        options = []
-        for i, name in enumerate(names):
-            lbl = registry.get(name, {}).get("label", name)
-            role = "qp — query particle" if i == 0 else f"nn #{i} — neighbor"
-            options.append({"label": f"{i + 1}.  {lbl}  ({role})", "value": name})
-
-        info = (
-            "Single-motl analysis — choose query-particle or neighbor IDs."
-            if not is_multi
-            else (
-                f"Multi-motl analysis — {len(names)} motl(s). "
-                "First uses qp_subtomo_id; subsequent use nn_subtomo_id."
-            )
-        )
-        id_type_style = {"display": "block"} if not is_multi else {"display": "none"}
-        return options, list(names), id_type_style, info
-
-    @app.callback(
-        Output("nn-sel-motl-id-col-wrap", "style"),
-        Input("nn-sel-motl-checklist", "value"),
-    )
-    def _toggle_id_col_wrap(checked):
-        return {"display": "block"} if checked and len(checked) > 1 else {"display": "none"}
-
-    @app.callback(
-        Output("nn-sel-motl-status", "children"),
-        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_META, "data", allow_duplicate=True),
-        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
-        Input("nn-sel-motl-save-btn", "n_clicks"),
-        Input("nn-sel-motl-send-btn", "n_clicks"),
-        State("nn-out-tabv-grid", "selectedRows"),
-        State("nn-out-tabv-grid", "rowData"),
-        State("nn-sel-rows-mode", "value"),
-        State("nn-sel-motl-checklist", "value"),
-        State("nn-used-motls-store", "data"),
-        State("nn-sel-motl-id-type", "value"),
-        State("nn-sel-motl-id-col", "value"),
-        State({"type": "path-input", "owner": "nn-sel-motl-save-path"}, "value"),
-        State("nn-sel-motl-editor-label", "value"),
-        State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_META, "data"),
-        State(ids.POOL_NEXT_ID, "data"),
-        State("nn-sel-nn-cols", "value"),
-        State({"type": "nn-sel-nn-col-target", "col": ALL}, "value"),
-        State({"type": "nn-sel-nn-col-target", "col": ALL}, "id"),
-        prevent_initial_call=True,
-    )
-    def _build_and_act(
-        _save_click, _send_click,
-        selected_rows, all_rows, rows_mode,
-        checked_motls, used_motls, id_type, id_col,
-        save_path, editor_label, registry, pool_meta, next_id,
-        nn_cols, nn_col_target_vals, nn_col_target_ids,
-    ):
-        trigger = ctx.triggered_id
-        rows_mode = rows_mode or "all"
-        if rows_mode == "all":
-            active_rows = all_rows or []
-        else:
-            active_rows = selected_rows or []
-        _nu3 = (no_update,) * 3
-        if not active_rows:
-            msg = "No rows in the table." if rows_mode == "all" else "No rows selected in the table."
-            return msg, *_nu3
-        if not checked_motls:
-            return "No motls checked.", *_nu3
-        if not used_motls:
-            return "Run NN analysis first.", *_nu3
-
-        all_names = used_motls.get("names", [])
-        is_multi = used_motls.get("is_multi", False)
-
-        # Build NN-column → motl-column mapping
-        col_mapping = {}
-        if nn_cols and nn_col_target_vals:
-            for tid, tval in zip(nn_col_target_ids, nn_col_target_vals):
-                src = tid.get("col")
-                if src and src in nn_cols and tval:
-                    col_mapping[src] = tval
-            used_targets = list(col_mapping.values())
-            if len(used_targets) != len(set(used_targets)):
-                return "Two NN columns cannot map to the same motl column.", *_nu3
-
-        sel_df = pd.DataFrame(active_rows)
-        parts = []
-        for i, motl_name in enumerate(all_names):
-            if motl_name not in checked_motls:
-                continue
-            try:
-                motl_df = _get_rows(motl_name).copy()
-            except _PoolPayloadMissing:
-                continue
-
-            if is_multi:
-                if i == 0:
-                    ids = set(sel_df["qp_subtomo_id"].dropna().astype(float).values)
-                else:
-                    mask = sel_df["motl_id"].astype(float) == float(i)
-                    ids = set(sel_df.loc[mask, "nn_subtomo_id"].dropna().astype(float).values)
-            else:
-                col = "qp_subtomo_id" if (id_type or "qp") == "qp" else "nn_subtomo_id"
-                ids = set(sel_df[col].dropna().astype(float).values)
-
-            subset = motl_df[motl_df["subtomo_id"].isin(ids)].copy()
-            if col_mapping and len(subset) > 0:
-                if is_multi:
-                    if i == 0:
-                        id_col_nn = "qp_subtomo_id"
-                        slice_df = sel_df
-                    else:
-                        id_col_nn = "nn_subtomo_id"
-                        slice_df = sel_df[sel_df["motl_id"].astype(float) == float(i)]
-                else:
-                    id_col_nn = "qp_subtomo_id" if (id_type or "qp") == "qp" else "nn_subtomo_id"
-                    slice_df = sel_df
-                for src_col, dst_col in col_mapping.items():
-                    if src_col in slice_df.columns:
-                        id_to_val = (
-                            slice_df.drop_duplicates(subset=[id_col_nn])
-                            .set_index(id_col_nn)[src_col]
-                            .dropna()
-                            .to_dict()
-                        )
-                        subset[dst_col] = subset["subtomo_id"].map(id_to_val)
-            if len(subset) == 0:
-                continue
-            if id_col and len(checked_motls) > 1:
-                subset[id_col] = float(i)
-            parts.append(subset)
-
-        if not parts:
-            return (
-                "No particles matched the selection. "
-                "Make sure rows are selected and the motl IDs align.",
-                *_nu3,
-            )
-
-        merged_df = pd.concat(parts, ignore_index=True)
-
-        if trigger == "nn-sel-motl-save-btn":
-            if not save_path:
-                return "Specify an output file path.", *_nu5
-            try:
-                m = Motl(merged_df)
-                run_operation(m.save_to, {"output_path": save_path})
-            except Exception as exc:
-                return f"Save failed: {exc}", *_nu3
-            return f"Saved {len(merged_df)} particles to {save_path}.", *_nu3
-
-        if trigger == "nn-sel-motl-send-btn":
-            pool_state = PoolState.from_stores(registry, pool_meta, next_id)
-            # TODO(P9): route through run_operation_to_pool once NN merge is tracked.
-            pool_state, new_id = _insert_motl(
-                pool_state, merged_df.to_dict("records"), label=editor_label,
-            )
-            display_label = pool_state.registry[new_id]["label"]
-            return (
-                f"Sent '{display_label}' ({len(merged_df)} particles) to the editor.",
-                *pool_state.to_stores(),
-            )
-
-        return no_update, *_nu3
-
-    # ── Load NN table from CSV ────────────────────────────────────────────────
+    # ── Handle NN table loaded from file (via tablesource) ────────────────────
     @app.callback(
         Output("nn-xyz-graph-area", "children", allow_duplicate=True),
         Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
         Output("nn-result", "data", allow_duplicate=True),
         Output("nn-used-motls-store", "data", allow_duplicate=True),
-        Output("nn-load-csv-status", "children"),
-        Input("nn-load-csv-btn", "n_clicks"),
-        State({"type": "path-input", "owner": "nn-load-csv-path"}, "value"),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        Input("nn-src-ts-loaded", "data"),
         State("nn-value", "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def _load_nn_from_csv(n_clicks, csv_path, selected):
-        if not n_clicks:
+    def _handle_nn_loaded(loaded, selected, pool_registry, pool_meta, pool_next_id):
+        if not loaded:
             raise dash.exceptions.PreventUpdate
-        if not csv_path:
-            return no_update, no_update, no_update, no_update, "Specify a CSV file path."
 
-        motl_list = None
+        from io import StringIO
+        df = pd.read_json(StringIO(loaded["df"]), orient="split")
+        column_name = loaded.get("column_name", "tomo_id")
+
         selected_names = []
+        motl_list = None
         is_multi = False
 
         if selected:
@@ -972,16 +640,13 @@ def register_callbacks(app):
                     pass
             if motl_objs:
                 is_multi = len(selected_names) > 1
-                # Single-motl NearestNeighbors stores motls=[motl, motl]
-                if not is_multi:
-                    motl_list = [motl_objs[0], motl_objs[0]]
-                else:
-                    motl_list = motl_objs
+                motl_list = motl_objs if is_multi else [motl_objs[0], motl_objs[0]]
 
-        try:
-            nn_stats = run_operation(NearestNeighbors.load, {"file_path": csv_path, "motls": motl_list})
-        except Exception as exc:
-            return no_update, no_update, no_update, no_update, f"Load failed: {exc}"
+        nn_stats = NearestNeighbors(input_data=None)
+        nn_stats.df = df
+        nn_stats.column_name = column_name
+        nn_stats.motls = motl_list
+        nn_stats.paired = False
 
         xyz_graph = no_update
         try:
@@ -1000,13 +665,16 @@ def register_callbacks(app):
             pass
 
         table_data = nn_stats.df.to_dict("records")
+        state = PoolState.from_stores(pool_registry, pool_meta, pool_next_id)
+        new_state, pool_motl_id = _insert_motl(state, nn_stats.df, label="NN results (loaded)")
+        pool_ref = {"motl_id": pool_motl_id, "rev": 0, "n_rows": len(nn_stats.df)}
         used_motls_store = {
             "names": selected_names,
             "is_multi": is_multi,
-            "column_name": nn_stats.column_name,
+            "column_name": column_name,
         }
 
-        n_rows = len(nn_stats.df)
-        motl_note = f" ({len(selected_names)} motl(s) attached)" if selected_names else " (no motls attached)"
-        status = f"Loaded {n_rows} rows{motl_note}."
-        return xyz_graph, table_data, table_data, used_motls_store, status
+        return (
+            xyz_graph, pool_ref, table_data, used_motls_store,
+            new_state.registry, new_state.meta, new_state.next_id,
+        )

@@ -226,10 +226,12 @@ def _cluster_store_to_df(data) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, table_grid_id=None, is_motl=False, motl_cols=None, cluster_cols_store_id=None, pool_aware=False):
+def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, table_grid_id=None, is_motl=False, motl_cols=None, cluster_cols_store_id=None, pool_aware=False, resolve_df=None):
 
     def _df_from_store(data):
         """Return a DataFrame from a pool reference or a list[dict]."""
+        if resolve_df is not None:
+            return resolve_df(data) or pd.DataFrame()
         if pool_aware and isinstance(data, dict) and "motl_id" in data:
             from cryocat.app.pool import get_rows, PoolPayloadMissing
             try:
@@ -280,8 +282,10 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
             df_feat = df[numeric_cols].dropna()
             if len(df_feat) > 1:
                 try:
+                    scaler = StandardScaler()
+                    X_scaled = scaler.fit_transform(df_feat.values)
                     pca = _PCA()
-                    pca.fit(df_feat)
+                    pca.fit(X_scaled)
                     cumulative = np.cumsum(pca.explained_variance_ratio_)
                     imp = clustering_mod.pca_feature_importance(pca, numeric_cols)
                     fig = visplot.plot_pca_summary(cumulative, imp)
@@ -289,6 +293,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
                         font=dict(size=10),
                         margin=dict(l=20, r=20, t=30, b=20),
                         height=200,
+                        title=dict(text="PCA — z-scored features", font=dict(size=10)),
                     )
                     pca_children = dcc.Graph(figure=fig)
                 except Exception as exc:

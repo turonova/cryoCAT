@@ -17,8 +17,10 @@ import pytest
 from cryocat.app.components.tablegrid import (
     apply_filter_model,
     apply_sort_model,
+    resolve_filtered_ids,
     resolve_select_all_ids,
     slice_block,
+    subset_motl_rows,
 )
 
 # T2: block_to_records lives in pool (pool serialisation boundary)
@@ -334,11 +336,11 @@ def test_rows_response_row_count_is_filtered_total(large_df):
     assert len(result["rowData"]) <= 100
 
 
-def test_initial_grid_options_sets_row_count(large_df):
-    """Cache-refresh signal: initial_grid_options(n) sets infiniteInitialRowCount == n (W1 wiring)."""
-    from cryocat.app.components.tablegrid import initial_grid_options
-    opts = initial_grid_options(len(large_df))
-    assert opts["infiniteInitialRowCount"] == len(large_df)
+def test_get_grid_starts_with_empty_col_defs():
+    """GRID_ROWS_FIX_3: get_grid() must start with columnDefs=[] so no request fires before load."""
+    from cryocat.app.components.tablegrid import get_grid
+    grid = get_grid("test-pfx")
+    assert grid.columnDefs == [], f"Expected [], got {grid.columnDefs!r}"
 
 
 # ── GRID_EMPTY_TABLE_FIX T1 ───────────────────────────────────────────────────
@@ -364,45 +366,120 @@ def test_rows_response_with_data_ignores_hint(large_df):
 
 
 # ── GRID_EMPTY_TABLE_FIX T2 ───────────────────────────────────────────────────
-# T2: after W1 remount, the grid is built with correct initial state before
-# its first getRowsRequest fires.  Tests are RED until W1 adds _build_grid.
+# T2: col_defs_from_df produces the correct column list for the static grid.
 
-def test_build_grid_sets_initial_row_count(large_df):
-    """GRID_EMPTY_TABLE_FIX T2a: _build_grid sets infiniteInitialRowCount from df length."""
-    from cryocat.app.components.tablegrid import _build_grid
-    grid = _build_grid("test-pfx", large_df)
-    assert grid.dashGridOptions["infiniteInitialRowCount"] == len(large_df)
-
-
-def test_build_grid_sets_column_defs(sample_df):
-    """GRID_EMPTY_TABLE_FIX T2b: _build_grid sets columnDefs matching df columns."""
-    from cryocat.app.components.tablegrid import _build_grid
-    grid = _build_grid("test-pfx", sample_df)
-    col_fields = [c["field"] for c in grid.columnDefs]
+def test_col_defs_fields_match_df_columns(sample_df):
+    """GRID_EMPTY_TABLE_FIX T2b: col_defs_from_df produces fields matching df columns."""
+    from cryocat.app.components.tablegrid import col_defs_from_df
+    defs = col_defs_from_df(sample_df)
+    col_fields = [c["field"] for c in defs]
     assert col_fields == list(sample_df.columns)
 
 
-# ── GRID_VISIBILITY_AND_METADATA T1 ──────────────────────────────────────────
+# ── GRID_ROWS_FIX ─────────────────────────────────────────────────────────────
 
-def test_tab_active_guard_rejects_inactive():
-    """T1 (visibility signal) — _tab_active returns False when active_tab != tab_value."""
-    from cryocat.app.components.tablegrid import _tab_active  # RED until W1
-    assert _tab_active("me-tab-1", "me-tab-0") is False
-    assert _tab_active(None, "me-tab-0") is False
-
-
-def test_tab_active_guard_passes_for_matching_tab():
-    """T1 (visibility signal) — _tab_active returns True when active_tab == tab_value."""
-    from cryocat.app.components.tablegrid import _tab_active  # RED until W1
-    assert _tab_active("me-tab-0", "me-tab-0") is True
+def test_rows_response_null_request_returns_empty():
+    """GRID_ROWS_FIX: rows_response(None, None, 0) returns empty dict, never raises."""
+    from cryocat.app.components.tablegrid import rows_response
+    result = rows_response(None, None, 0)
+    assert result == {"rowData": [], "rowCount": 0}
 
 
-def test_tab_active_guard_passes_without_tab_configuration():
-    """T1 (visibility signal) — _tab_active returns True when tab_value is None (no tab tracking)."""
-    from cryocat.app.components.tablegrid import _tab_active  # RED until W1
-    assert _tab_active("anything", None) is True
-    assert _tab_active(None, None) is True
+def test_rows_callback_not_prevent_initial_call():
+    """GRID_ROWS_FIX: _rows must not use prevent_initial_call.
 
+    prevent_initial_call suppresses the first getRowsRequest, which fires when
+    the grid mounts.  AG Grid does not retry, so the grid stays empty forever.
+    """
+    from dash import Dash, html
+    from cryocat.app.components.tablegrid import register_tablegrid_callbacks
+
+    app = Dash(__name__, suppress_callback_exceptions=True)
+    app.layout = html.Div(id="ric-grid-container")
+    register_tablegrid_callbacks(
+        app, "ric",
+        resolve_df=lambda ref: None,
+        resolve_n_rows=lambda ref: 0,
+    )
+
+    rows_output = "ric-grid.getRowsResponse"
+    cb_entry = next(
+        (c for c in app._callback_list if c.get("output") == rows_output),
+        None,
+    )
+    assert cb_entry is not None, f"_rows callback not found (output={rows_output!r})"
+    assert not cb_entry.get("prevent_initial_call"), (
+        "_rows has prevent_initial_call=True — this swallows the first getRowsRequest; "
+        "remove it; AG Grid does not retry, so the grid stays empty"
+    )
+
+
+def test_mount_grid_callback_registered():
+    """GRID_ROWS_FINAL: _mount_grid must output to {prefix}-grid-container.children.
+
+    The grid is built with real columns only when the motl loads and the container
+    is visible, so AG Grid always initialises with a non-empty viewport.
+    """
+    from dash import Dash, html
+    from cryocat.app.components.tablegrid import register_tablegrid_callbacks
+
+    app = Dash(__name__, suppress_callback_exceptions=True)
+    app.layout = html.Div(id="ric-grid-container")
+    register_tablegrid_callbacks(
+        app, "ric",
+        resolve_df=lambda ref: None,
+        resolve_n_rows=lambda ref: 0,
+    )
+
+    cb_entry = next(
+        (c for c in app._callback_list if c.get("output") == "ric-grid-container.children"),
+        None,
+    )
+    assert cb_entry is not None, "_mount_grid callback not found (output=ric-grid-container.children)"
+    assert not cb_entry.get("prevent_initial_call"), (
+        "_mount_grid has prevent_initial_call=True — it will not fire on page load"
+    )
+
+
+def test_make_grid_has_responsive_column_size(sample_df):
+    """GRID_ROWS_FINAL: _make_grid must set columnSize='responsiveSizeToFit'.
+
+    responsiveSizeToFit calls sizeColumnsToFit() immediately and registers a
+    gridSizeChanged listener so columns re-fit on tab activation.
+    """
+    from cryocat.app.components.tablegrid import _make_grid, col_defs_from_df
+    col_defs = col_defs_from_df(sample_df)
+    grid = _make_grid("test-pfx", col_defs)
+    assert grid.columnSize == "responsiveSizeToFit", (
+        f"_make_grid has columnSize={grid.columnSize!r}, expected 'responsiveSizeToFit'"
+    )
+
+
+def test_make_grid_nonempty_col_defs_and_positive_initial_row_count(sample_df):
+    """GRID_EMPTY_ROWS_REGRESSION T1: _make_grid must produce non-empty columnDefs
+    and a positive infiniteInitialRowCount.
+
+    An empty columnDefs means AG Grid never requests rows (cause 3 of the original
+    bug).  infiniteInitialRowCount=0 is rejected by AG Grid as invalid; the value
+    must be >= 1 and should reflect the actual data size.
+    """
+    from cryocat.app.components.tablegrid import _make_grid, col_defs_from_df
+    col_defs = col_defs_from_df(sample_df)
+    grid = _make_grid("test-pfx", col_defs, n_rows=len(sample_df))
+    assert len(grid.columnDefs) > 0, (
+        "columnDefs must not be empty — an empty grid never requests rows"
+    )
+    init_count = (grid.dashGridOptions or {}).get("infiniteInitialRowCount", 0)
+    assert init_count > 0, (
+        f"infiniteInitialRowCount must be > 0, got {init_count!r} — "
+        "AG Grid rejects 0 as invalid"
+    )
+
+
+# ── GRID_VISIBILITY_AND_METADATA T1/T2 ───────────────────────────────────────
+# T1 tab-guard tests removed: the tab-activation machinery (_tab_active,
+# tabs_id/tab_value) was itself a workaround for prevent_initial_call=True on
+# _rows.  Removing prevent_initial_call makes it unnecessary.
 
 def test_rows_response_returns_real_rows_with_no_sort_or_filter(sample_df):
     """T1 — _rows still returns real rows for startRow=0, endRow=100 with no sort/filter."""
@@ -414,14 +491,19 @@ def test_rows_response_returns_real_rows_with_no_sort_or_filter(sample_df):
     assert result["rowData"][0]["subtomo_id"] == sample_df.iloc[0]["subtomo_id"]
 
 
-# ── GRID_VISIBILITY_AND_METADATA T2 ──────────────────────────────────────────
+def test_get_grid_has_no_static_column_size():
+    """GRID_ZERO_WIDTH: get_grid() must NOT set columnSize statically.
 
-def test_build_grid_has_column_size_to_fit(large_df):
-    """T2 (column sizing) — _build_grid constructs grid with columnSize='sizeToFit' (RED until W1)."""
-    from cryocat.app.components.tablegrid import _build_grid
-    grid = _build_grid("test-pfx", large_df)
-    assert grid.columnSize == "sizeToFit", (
-        f"Expected columnSize='sizeToFit', got {grid.columnSize!r}"
+    Setting columnSize at construction calls sizeColumnsToFit() while the grid is
+    inside a hidden Bootstrap tab pane or page-wrapper (display:none), producing
+    warning #29 and leaving columns at zero width. columnSize is set by
+    _update_col_defs when the motl loads, at which point the container is visible.
+    """
+    from cryocat.app.components.tablegrid import get_grid
+    grid = get_grid("test-pfx")
+    val = getattr(grid, "columnSize", None)
+    assert val is None, (
+        f"get_grid sets columnSize={val!r} statically — move it to _update_col_defs output"
     )
 
 
@@ -433,3 +515,136 @@ def test_col_defs_no_fixed_width(sample_df):
         assert "width" not in col_def, (
             f"Column '{col_def['field']}' has fixed width {col_def['width']!r} — remove it"
         )
+
+
+# ── GRID_ROWS_FIX_2 / GRID_ROWS_FIX_3 ───────────────────────────────────────
+
+
+def test_col_defs_no_none_min_width(sample_df):
+    """GRID_ROWS_FIX_2: col_defs_from_df must not set minWidth to None."""
+    from cryocat.app.components.tablegrid import col_defs_from_df
+    defs = col_defs_from_df(sample_df)
+    for col_def in defs:
+        assert col_def.get("minWidth") is not None or "minWidth" not in col_def, (
+            f"Column '{col_def['field']}' has minWidth=None — omit the key instead"
+        )
+
+
+def test_col_defs_no_checkbox_selection(sample_df):
+    """GRID_ROWS_FIX_3: col_defs_from_df must not set checkboxSelection.
+
+    AG Grid 35 warning #129: headerCheckbox is only available for clientSide /
+    serverSide row models; using it with infinite row model prevents the
+    datasource from initialising.
+    """
+    from cryocat.app.components.tablegrid import col_defs_from_df
+    defs = col_defs_from_df(sample_df)
+    for col_def in defs:
+        assert "checkboxSelection" not in col_def, (
+            f"Column '{col_def['field']}' has checkboxSelection — "
+            "incompatible with infinite row model (warning #129)"
+        )
+
+
+def test_get_grid_no_column_size_options():
+    """GRID_ROWS_FIX_3: get_grid() must not pass columnSizeOptions.
+
+    AG Grid 35 reports 'invalid gridOptions property columnSizeOptions'.
+    """
+    from cryocat.app.components.tablegrid import get_grid
+    grid = get_grid("test-pfx")
+    val = getattr(grid, "columnSizeOptions", None)
+    assert val is None, (
+        f"get_grid has columnSizeOptions={val!r} — remove it"
+    )
+
+
+# ── TABLE_SELECTION_TO_MOTL T1: resolve_filtered_ids ─────────────────────────
+
+
+def test_resolve_filtered_ids_returns_subtomo_ids(sample_df):
+    """T1 — resolve_filtered_ids returns subtomo_id values for matching rows."""
+    filter_model = {"score": {"filterType": "number", "type": "greaterThan", "filter": 0.7}}
+    ids = resolve_filtered_ids(sample_df, filter_model, {})
+    expected = sample_df.loc[sample_df["score"] > 0.7, "subtomo_id"].tolist()
+    assert ids == expected
+
+
+def test_resolve_filtered_ids_no_subtomo_id_raises():
+    """T1 — resolve_filtered_ids raises ValueError when subtomo_id column is absent."""
+    df = pd.DataFrame({"score": [0.1, 0.5, 0.9], "x": [1.0, 2.0, 3.0]})
+    with pytest.raises(ValueError, match="subtomo_id"):
+        resolve_filtered_ids(df, {}, {})
+
+
+def test_resolve_filtered_ids_agrees_with_select_all(sample_df):
+    """T1 — resolve_filtered_ids and resolve_select_all_ids return the same ids."""
+    filter_model = {"tomo_id": {"filterType": "number", "type": "equals", "filter": 2.0}}
+    ids_filtered = resolve_filtered_ids(sample_df, filter_model, {})
+    ids_select_all = resolve_select_all_ids(sample_df, filter_model, {})
+    assert ids_filtered == ids_select_all
+
+
+def test_resolve_filtered_ids_empty_filters_returns_all(sample_df):
+    """T1 — empty filter_model and slider_filters return all subtomo_ids."""
+    ids = resolve_filtered_ids(sample_df, {}, {})
+    assert ids == sample_df["subtomo_id"].tolist()
+
+
+def test_resolve_filtered_ids_slider_and_grid_combine(sample_df):
+    """T1 — grid filterModel and slider_filters combine with AND."""
+    filter_model = {"score": {"filterType": "number", "type": "greaterThan", "filter": 0.4}}
+    slider_filters = {"x": (-25.0, 25.0)}
+    ids = resolve_filtered_ids(sample_df, filter_model, slider_filters)
+    mask = (sample_df["score"] > 0.4) & (sample_df["x"] >= -25.0) & (sample_df["x"] <= 25.0)
+    expected = sample_df.loc[mask, "subtomo_id"].tolist()
+    assert ids == expected
+
+
+# ── TABLE_SELECTION_TO_MOTL T2: subset_motl_rows ─────────────────────────────
+
+
+def test_subset_motl_rows_basic(sample_df):
+    """T2 — subset_motl_rows returns rows matching the given ids in original order."""
+    target_ids = sample_df["subtomo_id"].iloc[5:10].tolist()
+    result = subset_motl_rows(sample_df, target_ids)
+    assert list(result["subtomo_id"]) == target_ids
+
+
+def test_subset_motl_rows_missing_ids_ignored(sample_df):
+    """T2 — ids not present in the DataFrame are silently ignored."""
+    target_ids = [1.0, 2.0, 9999.0]  # 9999 does not exist
+    result = subset_motl_rows(sample_df, target_ids)
+    assert set(result["subtomo_id"]) == {1.0, 2.0}
+
+
+def test_subset_motl_rows_duplicates_no_duplicate_rows(sample_df):
+    """T2 — passing duplicate ids does not produce duplicate rows."""
+    target_ids = [1.0, 1.0, 2.0, 2.0]
+    result = subset_motl_rows(sample_df, target_ids)
+    assert len(result) == 2
+    assert list(result["subtomo_id"]) == list(result["subtomo_id"].unique())
+
+
+def test_subset_motl_rows_preserves_all_columns(sample_df):
+    """T2 — all source DataFrame columns are present in the result."""
+    target_ids = sample_df["subtomo_id"].iloc[:10].tolist()
+    result = subset_motl_rows(sample_df, target_ids)
+    assert list(result.columns) == list(sample_df.columns)
+
+
+def test_subset_motl_rows_store_column(sample_df):
+    """T2 — store_column writes values mapped from subtomo_id into a new column."""
+    target_ids = [1.0, 2.0, 3.0]
+    val_map = {1.0: "A", 2.0: "B", 3.0: "C"}
+    result = subset_motl_rows(sample_df, target_ids, store_column="label2", values=val_map)
+    assert "label2" in result.columns
+    for row in result.itertuples():
+        assert row.label2 == val_map[row.subtomo_id]
+
+
+def test_subset_motl_rows_no_subtomo_id_raises():
+    """T2 — subset_motl_rows raises ValueError when subtomo_id column is absent."""
+    df = pd.DataFrame({"score": [0.1, 0.5, 0.9]})
+    with pytest.raises(ValueError, match="subtomo_id"):
+        subset_motl_rows(df, [0, 1])

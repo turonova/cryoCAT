@@ -794,6 +794,25 @@ class NearestNeighbors:
         self.df[cols].to_csv(file_path, index=False)
 
     @classmethod
+    def get_required_columns(cls, column_name: str = "tomo_id") -> list[str]:
+        """Return every column name that a saved NearestNeighbors CSV must contain."""
+        return [
+            "motl_id", column_name,
+            "qp_id", "qp_subtomo_id",
+            "nn_id", "nn_subtomo_id",
+            *cls._QP_ANGLE_COLS,
+            *cls._QP_COORD_COLS,
+            *cls._NN_ANGLE_COLS,
+            *cls._NN_COORD_COLS,
+        ]
+
+    @staticmethod
+    def check_nn_columns(df: "pd.DataFrame", column_name: str = "tomo_id") -> list[str]:
+        """Return column names required by NearestNeighbors that are missing from df."""
+        required = NearestNeighbors.get_required_columns(column_name=column_name)
+        return [c for c in required if c not in df.columns]
+
+    @classmethod
     def load(
         cls,
         file_path: PathOrStr,

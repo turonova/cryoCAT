@@ -544,6 +544,12 @@ _SMOKE_EXEMPT: set[str] = {
     # pmotl.py routes commits through apputils.save_motl (which calls run_operation
     # internally) — it never imports run_operation directly.
     str(pathlib.Path("cryocat/app/suite/pages/pmotl.py")),
+    # ptango.py routes commits through insert_motl / run_operation_to_pool
+    # (which call run_operation internally) — it does not import it directly.
+    str(pathlib.Path("cryocat/app/suite/pages/ptango.py")),
+    # porientpicker.py is a backward-compat shim; the real implementation
+    # lives in cryocat.app.components.orientpicker and is no longer a TOOLS entry.
+    str(pathlib.Path("cryocat/app/suite/pages/porientpicker.py")),
 }
 
 
@@ -566,3 +572,174 @@ def test_a4_suite_pages_import_run_operation() -> None:
     if violations:
         lines = [f"  {f}  {d}" for f, d in violations]
         pytest.fail(f"A4 missing run_operation ({len(violations)}):\n" + "\n".join(lines))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §10 — No hand-rolled form rows (html.Div / dbc.Row with label + input child)
+# ─────────────────────────────────────────────────────────────────────────────
+# A hand-rolled form row is an html.Div([…]) or dbc.Row([…]) whose LITERAL
+# children list contains both a label-ish element (html.Label) and a direct
+# input-ish element (dcc.Input, dbc.Input, dcc.Slider, dcc.RadioItems, etc.).
+# Correct pattern: formgen.form_row(name, widget, description).
+
+_S10_EXEMPT: dict[tuple[str, int], str] = {
+    # ── Pre-existing hand-rolled rows — fix in future per-module refactors ────
+    (str(pathlib.Path("cryocat/app/suite/pages/pnn.py")), 70):
+        "pre-existing: _postprocess_sidebar_content Div has Label+Checklist; deferred to pnn refactor",
+    (str(pathlib.Path("cryocat/app/suite/pages/psta.py")), 102):
+        "pre-existing: _field_text helper Div has Label+dbc.Input; deferred to psta refactor",
+    (str(pathlib.Path("cryocat/app/suite/pages/psta.py")), 113):
+        "pre-existing: _field_num helper Div has Label+dbc.Input; deferred",
+    (str(pathlib.Path("cryocat/app/suite/pages/psta.py")), 1303):
+        "pre-existing: _mc_panel Div has Label+dcc.Slider; deferred",
+    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 166):
+        "pre-existing: _slider_row Div has Label+dbc.Input; deferred to pvolume refactor",
+    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 186):
+        "pre-existing: _lp_slider_row Div has Label+dbc.Input; deferred",
+    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 211):
+        "pre-existing: _lp_number_row Div has Label+dbc.Input; deferred",
+    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 362):
+        "pre-existing: vol sidebar Bin-factor Div has Label+dbc.Input; deferred",
+    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 423):
+        "pre-existing: vol sidebar View Div has Label+dcc.RadioItems; deferred",
+    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 463):
+        "pre-existing: vol Create-mask Pixel-size Div has Label+dbc.Input; deferred",
+    (str(pathlib.Path("cryocat/app/components/tablecluster.py")), 48):
+        "pre-existing: kmeans-opts Div has Label+dcc.Checklist+dcc.Slider; deferred to tablecluster refactor",
+    (str(pathlib.Path("cryocat/app/components/tablecluster.py")), 124):
+        "pre-existing: prox-opts Div has Label+dcc.Slider; deferred",
+    (str(pathlib.Path("cryocat/app/components/customel.py")), 72):
+        "pre-existing: inline_input helper Div has dbc.Label+dbc.Input; deferred to customel refactor",
+    (str(pathlib.Path("cryocat/app/components/motlinput.py")), 40):
+        "pre-existing: get_motl_input Div has html.Label+dbc.RadioItems; deferred",
+    (str(pathlib.Path("cryocat/app/components/rotationbuilder.py")), 49):
+        "pre-existing: _num_row helper Div has html.Label+dcc.Input; deferred to rotationbuilder refactor",
+    (str(pathlib.Path("cryocat/app/suite/pages/pstructure.py")), 1448):
+        "pre-existing: surfaces send-to-editor Div has html.Label+dbc.Input; deferred",
+}
+
+_S10_LABEL_LIKE: frozenset[str] = frozenset({"Label"})
+_S10_INPUT_LIKE: frozenset[str] = frozenset({
+    "Input", "Slider", "RangeSlider",
+    "Checklist", "RadioItems", "Select",
+})
+
+
+def _s10_has_label_and_input(children: ast.List) -> bool:
+    """Return True if the literal children list has both a label-ish and an input-ish call."""
+    has_label = has_input = False
+    for elt in children.elts:
+        if not isinstance(elt, ast.Call):
+            continue
+        func = elt.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr in _S10_LABEL_LIKE:
+            has_label = True
+        elif func.attr in _S10_INPUT_LIKE:
+            has_input = True
+        if has_label and has_input:
+            return True
+    return False
+
+
+def _s10_collect() -> list[tuple[str, int, str]]:
+    out: list[tuple[str, int, str]] = []
+    for path in _suite_files():
+        tree = _parse(path)
+        rel = _rel(path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and func.attr in ("Div", "Row")):
+                continue
+            # Locate the children list — first positional arg or children= keyword
+            children: ast.List | None = None
+            if node.args and isinstance(node.args[0], ast.List):
+                children = node.args[0]
+            if children is None:
+                for kw in node.keywords:
+                    if kw.arg == "children" and isinstance(kw.value, ast.List):
+                        children = kw.value
+                        break
+            if children is None:
+                continue
+            if _s10_has_label_and_input(children):
+                key = (rel, node.lineno)
+                if key not in _S10_EXEMPT:
+                    out.append((rel, node.lineno, f"{func.attr}([label + input])"))
+    return out
+
+
+def test_s10_no_hand_rolled_form_row() -> None:
+    """§10: no html.Div/dbc.Row with both html.Label and an input as direct children."""
+    violations = _s10_collect()
+    if violations:
+        lines = [f"  {f}:{ln}  {d}" for f, ln, d in violations]
+        pytest.fail(f"§10 hand-rolled form row ({len(violations)}):\n" + "\n".join(lines))
+
+
+# ── T1: tango palette scoping ─────────────────────────────────────────────────
+
+_SUITE_ASSETS_THEME = (
+    pathlib.Path(__file__).parent.parent.parent
+    / "cryocat" / "app" / "suite" / "assets" / "theme.css"
+)
+
+_TANGO_PALETTE_VARS = [
+    "--color1", "--color2", "--color3", "--color4", "--color5",
+    "--color6", "--color7", "--color8", "--color9", "--color10",
+    "--color11", "--color12", "--color13",
+]
+
+_SUITE_PAGES_DIR = (
+    pathlib.Path(__file__).parent.parent.parent
+    / "cryocat" / "app" / "suite" / "pages"
+)
+
+
+def test_t1_tango_layout_has_tango_theme_class() -> None:
+    """T1: ptango.layout root carries className containing 'tango-theme'."""
+    from cryocat.app.suite.pages import ptango
+    root = ptango.layout
+    cls = getattr(root, "className", None) or ""
+    assert "tango-theme" in cls, (
+        f"ptango.layout root className={cls!r} does not contain 'tango-theme'"
+    )
+
+
+def test_t1_served_css_defines_tango_theme_block() -> None:
+    """T1: suite/assets/theme.css contains a .tango-theme block with all 13 variables."""
+    css = _SUITE_ASSETS_THEME.read_text(encoding="utf-8")
+    assert ".tango-theme" in css, (
+        "suite/assets/theme.css has no .tango-theme block — W1 palette not written"
+    )
+    missing = [v for v in _TANGO_PALETTE_VARS if v not in css]
+    assert not missing, (
+        f".tango-theme block is missing variables: {missing}"
+    )
+
+
+def test_t1_no_other_suite_page_carries_tango_theme() -> None:
+    """T1: no suite page other than ptango carries className='tango-theme'."""
+    import importlib.util
+    bad: list[str] = []
+    for py in sorted(_SUITE_PAGES_DIR.glob("*.py")):
+        if py.stem == "ptango":
+            continue
+        spec = importlib.util.spec_from_file_location(py.stem, py)
+        if spec is None or spec.loader is None:
+            continue
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            continue
+        layout = getattr(mod, "layout", None)
+        if layout is None:
+            continue
+        cls = getattr(layout, "className", None) or ""
+        if "tango-theme" in cls:
+            bad.append(py.name)
+    assert not bad, f"Suite pages other than ptango carry tango-theme: {bad}"

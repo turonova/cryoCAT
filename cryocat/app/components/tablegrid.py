@@ -1,25 +1,25 @@
 """AG Grid with infinite row model — server-side sort, filter, and selection.
 
-The grid never receives the full DataFrame.  On each scroll or filter event
+The grid never receives the full DataFrame. On each scroll or filter event
 AG Grid sends getRowsRequest; the _rows callback applies sort + filter to the
 server-side pool entry and returns one 100-row block via getRowsResponse.
 
 Pure functions (apply_sort_model, apply_filter_model, slice_block,
-resolve_select_all_ids) are testable without Dash.  Block serialisation goes
+resolve_select_all_ids) are testable without Dash. Block serialisation goes
 through pool.block_to_records so the T3 AST guard is not triggered.
 """
 from __future__ import annotations
 
 import pandas as pd
-from dash import html, Input, Output, State, exceptions, no_update
+from dash import Input, Output, State, exceptions, html, no_update
 import dash_ag_grid as dag
 
 from cryocat.app import ids
 from cryocat.app.pool import (
     _CACHE_BLOCK_SIZE,
     block_to_records,
-    get_rows,
-    PoolPayloadMissing,
+    insert_motl,
+    PoolState,
 )
 
 CACHE_BLOCK_SIZE = _CACHE_BLOCK_SIZE  # re-exported so test can import from here
@@ -86,15 +86,9 @@ def slice_block(df: pd.DataFrame, start_row: int, end_row: int) -> pd.DataFrame:
 def rows_response(request: dict | None, df: pd.DataFrame | None, n_rows_hint: int = 0) -> dict:
     """Pure getRowsResponse handler.  Never raises.
 
-    W2: when df is absent but the handle says n_rows > 0, return that count
-    instead of 0.  rowCount=0 is permanent poison — AG Grid concludes the
-    dataset is empty and never requests again.  n_rows_hint comes from the
-    pool registry entry; it is 0 only when no motl is loaded (correct) or
-    when the entry itself has n_rows=0 (also correct: motl is genuinely empty).
-
-    The normal W1 path (grid remounted with data already present) means
-    n_rows_hint is only exercised on hot-reload, when the payload was evicted
-    but the handle survives in the browser store.
+    When df is absent and n_rows_hint > 0, return that count so the grid does
+    not see rowCount=0 while the pool payload is temporarily missing (hot-reload).
+    n_rows_hint comes from the pool registry; it is 0 when no motl is loaded.
     """
     if request is None:
         return {"rowData": [], "rowCount": n_rows_hint}
@@ -113,24 +107,6 @@ def rows_response(request: dict | None, df: pd.DataFrame | None, n_rows_hint: in
     }
 
 
-def initial_grid_options(n_rows: int) -> dict:
-    """Return the ``dashGridOptions`` dict to emit when a motl loads.
-
-    Setting ``infiniteInitialRowCount`` to the real row count signals AG Grid
-    that rows exist and triggers an immediate block request (cache-refresh
-    signal, W1 wiring).  Must be a full options dict because Dash replaces the
-    entire ``dashGridOptions`` property on each write.
-    """
-    return {
-        "cacheBlockSize": CACHE_BLOCK_SIZE,
-        "maxBlocksInCache": 4,
-        "rowBuffer": 0,
-        "infiniteInitialRowCount": n_rows,
-        "rowSelection": "multiple",
-        "suppressRowClickSelection": True,
-    }
-
-
 def resolve_select_all_ids(
     df: pd.DataFrame,
     filter_model: dict,
@@ -138,13 +114,63 @@ def resolve_select_all_ids(
 ) -> list:
     """Return the *subtomo_id* values for all rows that pass the current filters.
 
-    Used for server-side "select all filtered" (W3).  If *subtomo_id* is absent,
+    Used for server-side "select all filtered".  If *subtomo_id* is absent,
     falls back to the integer row index.
     """
     filtered = apply_filter_model(df, filter_model, slider_filters)
     if "subtomo_id" in filtered.columns:
         return filtered["subtomo_id"].tolist()
     return list(range(len(filtered)))
+
+
+def resolve_filtered_ids(
+    df: pd.DataFrame,
+    filter_model: dict,
+    slider_filters: dict[str, tuple[float, float]],
+) -> list:
+    """Return *subtomo_id* values for every row passing all current filters.
+
+    Raises ``ValueError`` if the DataFrame has no *subtomo_id* column — the
+    caller must check before inserting a subset into the pool.
+    """
+    if "subtomo_id" not in df.columns:
+        raise ValueError(
+            "resolve_filtered_ids: DataFrame has no 'subtomo_id' column; "
+            "cannot create a stable motl subset."
+        )
+    filtered = apply_filter_model(df, filter_model, slider_filters)
+    return filtered["subtomo_id"].tolist()
+
+
+def subset_motl_rows(
+    df: pd.DataFrame,
+    ids: list,
+    *,
+    store_column: str | None = None,
+    values: dict | None = None,
+) -> pd.DataFrame:
+    """Return rows where *subtomo_id* is in *ids*, original order, no duplicates.
+
+    Parameters
+    ----------
+    df:
+        Source DataFrame — must contain *subtomo_id*.
+    ids:
+        Sequence of subtomo_id values to keep.
+    store_column:
+        Optional column name to write per-row values into.
+    values:
+        Mapping ``{subtomo_id: value}`` written to *store_column* when set.
+
+    Raises ``ValueError`` if the DataFrame has no *subtomo_id* column.
+    """
+    if "subtomo_id" not in df.columns:
+        raise ValueError("subset_motl_rows: DataFrame has no 'subtomo_id' column.")
+    id_set = set(ids)
+    result = df[df["subtomo_id"].isin(id_set)].copy()
+    if store_column is not None and values:
+        result[store_column] = result["subtomo_id"].map(values)
+    return result
 
 
 # ── Layout helpers ─────────────────────────────────────────────────────────────
@@ -163,15 +189,13 @@ _GRID_STYLE = {"height": "300px", "width": "100%"}
 def col_defs_from_df(df: pd.DataFrame) -> list[dict]:
     """Build AG Grid columnDefs from a DataFrame.  Pure."""
     col_defs = []
-    for i, col in enumerate(df.columns):
+    for col in df.columns:
         col_def = {
             "field": col,
             "headerName": col,
             "headerTooltip": col,
-            "checkboxSelection": i == 0,
             "filter": True,
             "floatingFilter": False,
-            "minWidth": 80 if i == 0 else None,
         }
         if pd.api.types.is_float_dtype(df[col]):
             col_def["valueFormatter"] = {
@@ -181,65 +205,61 @@ def col_defs_from_df(df: pd.DataFrame) -> list[dict]:
     return col_defs
 
 
-def _tab_active(active_tab: str | None, tab_value: str | None) -> bool:
-    """Return True when this grid's tab is active (or no tab tracking is configured)."""
-    return tab_value is None or active_tab == tab_value
+def get_grid_container(prefix: str) -> html.Div:
+    """Placeholder div that _mount_grid fills with a real AgGrid when the motl loads.
+
+    An empty AgGrid (no columns) is pre-rendered so every callback that references
+    f"{prefix}-grid" is satisfied from startup, preventing Dash debug-mode
+    validation errors.  _mount_grid replaces it with a real AgGrid (with actual
+    columns and columnSize) when data loads and the tab is active.  Because the
+    pre-rendered grid has no columns it never fires getRowsRequest, so _rows stays
+    idle until the real grid mounts.
+    """
+    return html.Div([get_grid(prefix)], id=f"{prefix}-grid-container")
 
 
-def _build_grid(prefix: str, df: pd.DataFrame) -> dag.AgGrid:
-    """Build a fresh AgGrid configured for df.  Pure; no Dash calls.
+def _make_grid(prefix: str, col_defs: list[dict], n_rows: int = 1) -> dag.AgGrid:
+    """Build a fully configured AgGrid with real columnDefs.
 
-    W1: returned by _mount_grid as the container's children so AG Grid mounts
-    with correct columnDefs and infiniteInitialRowCount before its first
-    getRowsRequest fires.  The first request therefore always finds pool data
-    present and is answered with real rows.
-
-    columnSize="sizeToFit" is set at construction time so columns fit the page
-    width immediately when the grid is mounted into a visible container.
+    Called by _mount_grid after the motl loads, with the container visible.
+    columnSize="responsiveSizeToFit" calls sizeColumnsToFit() immediately and
+    registers a gridSizeChanged listener for subsequent tab activations.
+    n_rows sets infiniteInitialRowCount so AG Grid knows the data size upfront;
+    must be >= 1 (AG Grid rejects 0 as invalid).
     """
     return dag.AgGrid(
         id=f"{prefix}-grid",
-        columnDefs=col_defs_from_df(df),
+        columnDefs=col_defs,
         rowModelType="infinite",
-        dashGridOptions=initial_grid_options(len(df)),
+        dashGridOptions={
+            "cacheBlockSize": CACHE_BLOCK_SIZE,
+            "maxBlocksInCache": 4,
+            "infiniteInitialRowCount": max(1, n_rows),
+        },
         defaultColDef=_DEFAULT_COL_DEF,
         style=_GRID_STYLE,
         className="ag-theme-balham",
-        columnSizeOptions={"skipHeader": False},
-        columnSize="sizeToFit",
+        columnSize="responsiveSizeToFit",
     )
 
 
-def get_grid(prefix: str) -> html.Div:
-    """Return a container Div with an empty placeholder AgGrid.
+def get_grid(prefix: str) -> dag.AgGrid:
+    """Return a static AgGrid with empty columnDefs and no columnSize.
 
-    W1: the placeholder has columnDefs=[] and infiniteInitialRowCount=0 so the
-    grid makes no initial getRowsRequest (zero rows, nothing to ask for).
-    _mount_grid replaces it with a fully-configured grid when a motl loads;
-    the new grid's first request arrives after the pool payload is present.
-    The grid id must be in the static layout so callbacks registered against it
-    are accepted (suppress_callback_exceptions=True still requires the id at
-    callback-registration time to avoid the ID-resolution test failures).
+    Used both by get_grid_container() (to pre-render an inert placeholder grid)
+    and by unit tests that register callbacks without a real data load.
     """
-    return html.Div(
-        dag.AgGrid(
-            id=f"{prefix}-grid",
-            columnDefs=[],
-            rowModelType="infinite",
-            dashGridOptions={
-                "cacheBlockSize": CACHE_BLOCK_SIZE,
-                "maxBlocksInCache": 4,
-                "rowBuffer": 0,
-                "infiniteInitialRowCount": 0,
-                "rowSelection": "multiple",
-                "suppressRowClickSelection": True,
-            },
-            defaultColDef=_DEFAULT_COL_DEF,
-            style=_GRID_STYLE,
-            className="ag-theme-balham",
-            columnSizeOptions={"skipHeader": False},
-        ),
-        id=f"{prefix}-grid-container",
+    return dag.AgGrid(
+        id=f"{prefix}-grid",
+        columnDefs=[],
+        rowModelType="infinite",
+        dashGridOptions={
+            "cacheBlockSize": CACHE_BLOCK_SIZE,
+            "maxBlocksInCache": 4,
+        },
+        defaultColDef=_DEFAULT_COL_DEF,
+        style=_GRID_STYLE,
+        className="ag-theme-balham",
     )
 
 
@@ -250,88 +270,54 @@ def register_tablegrid_callbacks(
     app,
     prefix: str,
     *,
+    resolve_df,
+    resolve_n_rows,
     tabs_id: str | None = None,
     tab_value: str | None = None,
 ) -> None:
-    """Register all AG Grid callbacks for *prefix*.
+    """Register grid callbacks for *prefix*.
 
-    When *tabs_id* and *tab_value* are supplied, ``_mount_grid`` is also
-    triggered by tab-activation events and skips mounting when the grid's tab
-    is not the active one.  This prevents AG Grid from being constructed into
-    a ``display: none`` container (inactive ``dbc.Tab`` pane), which would
-    suppress the first ``getRowsRequest`` and break column fitting.
+    Parameters
+    ----------
+    resolve_df:
+        ``(ref) -> pd.DataFrame | None`` — resolves the store reference to a
+        DataFrame.  Pass :func:`cryocat.app.pool.resolve_df` for pool-backed
+        grids; supply a custom callable for non-pool data sources.
+    resolve_n_rows:
+        ``(ref) -> int`` — returns the row-count hint used when the payload is
+        temporarily absent (hot-reload).  Returns 0 when unknown.
     """
-    _mount_inputs = [Input(f"{prefix}-global-data-store", "data")]
+    _inputs = [Input(f"{prefix}-global-data-store", "data")]
     if tabs_id:
-        _mount_inputs.append(Input(tabs_id, "active_tab"))
+        _inputs.append(Input(tabs_id, "active_tab"))
 
     @app.callback(
         Output(f"{prefix}-grid-container", "children"),
-        *_mount_inputs,
-        State(ids.POOL_REGISTRY, "data"),
-        prevent_initial_call=True,
+        *_inputs,
     )
     def _mount_grid(*args):
-        """W1: mount the grid only when its tab is active; skip for invisible tabs.
-
-        Without tab awareness _mount_grid fires for all slots on every pool
-        change, including slots whose dbc.Tab is hidden (display: none).
-        AG Grid in a zero-size viewport never fires getRowsRequest and cannot
-        run sizeColumnsToFit, explaining both the missing rows and the wide
-        column regression.
-
-        With tabs_id/tab_value: the callback also fires when the user switches
-        to this grid's tab (Input on active_tab), and raises PreventUpdate when
-        a different tab is active so the container stays empty.  When the tab
-        becomes active with pool data already loaded, _mount_grid builds the
-        grid into a now-visible container → getRowsRequest fires immediately.
-        """
-        if tabs_id:
-            ref, active_tab, registry = args
-            if not _tab_active(active_tab, tab_value):
-                raise exceptions.PreventUpdate
-        else:
-            ref, registry = args
-        if not ref or not isinstance(ref, dict) or not ref.get("motl_id"):
-            raise exceptions.PreventUpdate
-        motl_id = ref["motl_id"]
-        try:
-            df = get_rows(motl_id)
-        except PoolPayloadMissing:
-            raise exceptions.PreventUpdate
-        return _build_grid(prefix, df)
+        """Build and return a real AgGrid when data loads into a visible container."""
+        ref = args[0]
+        active_tab = args[1] if tabs_id else None
+        if tabs_id and active_tab != tab_value:
+            return no_update
+        if not ref:
+            return no_update
+        df = resolve_df(ref)
+        if df is None:
+            return no_update
+        return _make_grid(prefix, col_defs_from_df(df), n_rows=len(df))
 
     @app.callback(
         Output(f"{prefix}-grid", "getRowsResponse"),
         Input(f"{prefix}-grid", "getRowsRequest"),
         State(f"{prefix}-global-data-store", "data"),
-        State(ids.POOL_REGISTRY, "data"),
-        prevent_initial_call=True,
     )
-    def _rows(request, ref, registry):
-        """Respond to AG Grid's infinite-model row request with one sorted+filtered block.
-
-        W2: rowCount comes from the handle when df is absent (hot-reload edge
-        case) so the grid never sees rowCount=0 for a non-empty motl.
-        """
-        motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
-        df = None
-        n_rows_hint = 0
-        if motl_id:
-            n_rows_hint = (registry or {}).get(motl_id, {}).get("n_rows", 0)
-            try:
-                df = get_rows(motl_id)
-            except PoolPayloadMissing:
-                pass
+    def _rows(request, ref):
+        """Respond to AG Grid's infinite-model row request with one sorted+filtered block."""
+        df = resolve_df(ref)
+        n_rows_hint = resolve_n_rows(ref) if df is None else 0
         return rows_response(request, df, n_rows_hint)
-
-    @app.callback(
-        Output(f"{prefix}-grid", "columnSize"),
-        Input(f"{prefix}-grid", "columnDefs"),
-        prevent_initial_call=True,
-    )
-    def adapt_column_size(_col):
-        return "sizeToFit"
 
     @app.callback(
         Output(f"{prefix}-selection-ids-store", "data", allow_duplicate=True),
@@ -346,18 +332,11 @@ def register_tablegrid_callbacks(
         """Select all filtered rows by subtomo_id, or deselect if already all selected."""
         if not n_clicks:
             raise exceptions.PreventUpdate
-        motl_id = (ref or {}).get("motl_id")
-        if not motl_id:
-            raise exceptions.PreventUpdate
-
         if current_ids:
             return [], "Select All Filtered"
-
-        try:
-            df = get_rows(motl_id)
-        except PoolPayloadMissing:
+        df = resolve_df(ref)
+        if df is None:
             raise exceptions.PreventUpdate
-
         ids_list = resolve_select_all_ids(df, filter_model or {}, {})
         total = len(df)
         n = len(ids_list)
@@ -367,13 +346,114 @@ def register_tablegrid_callbacks(
     @app.callback(
         Output(f"{prefix}-active-filter-count", "children"),
         Input(f"{prefix}-grid", "filterModel"),
+        State(f"{prefix}-global-data-store", "data"),
         prevent_initial_call=True,
     )
-    def _update_filter_count(filter_model):
-        n = sum(1 for v in (filter_model or {}).values() if v)
-        if n == 0:
-            return ""
-        return f"{n} active filter{'s' if n != 1 else ''}"
+    def _update_filter_count(filter_model, ref):
+        df = resolve_df(ref)
+        if df is None:
+            n = sum(1 for v in (filter_model or {}).values() if v)
+            return f"{n} active filter{'s' if n != 1 else ''}" if n else ""
+        total = len(df)
+        filtered_df = apply_filter_model(df, filter_model or {}, {})
+        n_filtered = len(filtered_df)
+        active_filters = sum(1 for v in (filter_model or {}).values() if v)
+        if active_filters == 0:
+            return f"{total:,} rows"
+        return f"{n_filtered:,} of {total:,} rows"
+
+    @app.callback(
+        Output(f"{prefix}-pool-from-filtered-btn", "children"),
+        Output(f"{prefix}-pool-from-filtered-btn", "disabled"),
+        Output(f"{prefix}-pool-from-filtered-btn", "style"),
+        Input(f"{prefix}-grid", "filterModel"),
+        Input(f"{prefix}-global-data-store", "data"),
+    )
+    def _update_filtered_btn(filter_model, ref):
+        df = resolve_df(ref)
+        if df is None:
+            return "Create from filtered", True, {"display": "none"}
+        if "subtomo_id" not in df.columns:
+            return "Create from filtered", True, {"display": "none"}
+        filtered_df = apply_filter_model(df, filter_model or {}, {})
+        n = len(filtered_df)
+        return f"Create from filtered ({n:,})", n == 0, {}
+
+    @app.callback(
+        Output(f"{prefix}-pool-from-selected-btn", "children"),
+        Output(f"{prefix}-pool-from-selected-btn", "disabled"),
+        Output(f"{prefix}-pool-from-selected-btn", "style"),
+        Input(f"{prefix}-selection-ids-store", "data"),
+        Input(f"{prefix}-global-data-store", "data"),
+    )
+    def _update_selected_btn(selected_ids, ref):
+        df = resolve_df(ref)
+        if df is None:
+            return "Create from selected", True, {"display": "none"}
+        if "subtomo_id" not in df.columns:
+            return "Create from selected", True, {"display": "none"}
+        n = len(selected_ids or [])
+        return f"Create from selected ({n:,})", n == 0, {}
+
+    @app.callback(
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        Input(f"{prefix}-pool-from-filtered-btn", "n_clicks"),
+        State(f"{prefix}-global-data-store", "data"),
+        State(f"{prefix}-grid", "filterModel"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
+    )
+    def _create_from_filtered(n_clicks, ref, filter_model, registry, pool_meta, next_id):
+        if not n_clicks:
+            raise exceptions.PreventUpdate
+        df = resolve_df(ref)
+        if df is None:
+            raise exceptions.PreventUpdate
+        try:
+            filtered_ids = resolve_filtered_ids(df, filter_model or {}, {})
+        except ValueError:
+            raise exceptions.PreventUpdate
+        if not filtered_ids:
+            raise exceptions.PreventUpdate
+        subset_df = subset_motl_rows(df, filtered_ids)
+        state = PoolState.from_stores(registry, pool_meta, next_id)
+        motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
+        source_label = (registry or {}).get(motl_id, {}).get("label", "Data") if motl_id else "Data"
+        active_filters = sum(1 for v in (filter_model or {}).values() if v)
+        label = f"{source_label} filtered" if active_filters else f"{source_label} subset"
+        new_state, _ = insert_motl(state, subset_df, label=label)
+        return new_state.to_stores()
+
+    @app.callback(
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        Input(f"{prefix}-pool-from-selected-btn", "n_clicks"),
+        State(f"{prefix}-selection-ids-store", "data"),
+        State(f"{prefix}-global-data-store", "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
+    )
+    def _create_from_selected(n_clicks, selected_ids, ref, registry, pool_meta, next_id):
+        if not n_clicks or not selected_ids:
+            raise exceptions.PreventUpdate
+        df = resolve_df(ref)
+        if df is None:
+            raise exceptions.PreventUpdate
+        subset_df = subset_motl_rows(df, selected_ids)
+        if subset_df.empty:
+            raise exceptions.PreventUpdate
+        state = PoolState.from_stores(registry, pool_meta, next_id)
+        motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
+        source_label = (registry or {}).get(motl_id, {}).get("label", "Data") if motl_id else "Data"
+        new_state, _ = insert_motl(state, subset_df, label=f"{source_label} selection")
+        return new_state.to_stores()
 
     @app.callback(
         Output(f"{prefix}-selection-count", "children"),
@@ -385,12 +465,9 @@ def register_tablegrid_callbacks(
         n_sel = len(ids_list or [])
         if n_sel == 0:
             return ""
-        motl_id = (ref or {}).get("motl_id")
-        if motl_id:
-            try:
-                total = len(get_rows(motl_id))
-                if n_sel < total:
-                    return f"{n_sel:,} rows selected (of {total:,})"
-            except PoolPayloadMissing:
-                pass
+        df = resolve_df(ref)
+        if df is not None:
+            total = len(df)
+            if n_sel < total:
+                return f"{n_sel:,} rows selected (of {total:,})"
         return f"{n_sel:,} rows selected"

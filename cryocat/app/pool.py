@@ -306,6 +306,45 @@ def get_extra(motl_id: str) -> pd.DataFrame | None:
     return payload.extra if payload is not None else None
 
 
+def resolve_df(ref: dict | None) -> pd.DataFrame | None:
+    """Resolve a pool reference dict to its rows DataFrame.
+
+    Returns ``None`` if *ref* is absent, has no ``motl_id``, or the server-side
+    payload has been evicted (e.g. after a hot-reload).  Never raises.
+    """
+    motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
+    if not motl_id:
+        return None
+    try:
+        return get_rows(motl_id)
+    except PoolPayloadMissing:
+        return None
+
+
+def resolve_n_rows(ref: dict | None) -> int:
+    """Return the ``n_rows`` hint embedded in a pool reference, or 0.
+
+    Used as the ``rowCount`` fallback when the server-side payload is temporarily
+    absent (hot-reload).  Callers that embed ``n_rows`` in their ref get the
+    correct hint; others get 0 and the grid re-requests once data reloads.
+    """
+    return (ref or {}).get("n_rows", 0) if isinstance(ref, dict) else 0
+
+
+def get_motl(motl_id: str) -> "Motl":
+    """Return the pool entry as a :class:`~cryocat.core.cryomotl.Motl`.
+
+    Stamps ``_pool_motl_id`` on the returned object so provenance resolution
+    in :func:`~cryocat.app.logger.invoke_operation` can map it back to its
+    variable name.  Raises :exc:`PoolPayloadMissing` if the payload is absent.
+    """
+    from cryocat.core.cryomotl import Motl
+    df = get_rows(motl_id)
+    motl = Motl(df)
+    motl._pool_motl_id = motl_id
+    return motl
+
+
 def save_snapshot(motl_id: str, df: "pd.DataFrame") -> None:
     """Save a pre-operation snapshot for pool-aware undo.  Server-side only."""
     import pandas as _pd

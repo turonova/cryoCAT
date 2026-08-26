@@ -470,10 +470,12 @@ def get_table_plot_component(prefix: str):
     )
 
 
-def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_graphs=None, table_grid_id=None, pool_aware=False):
+def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_graphs=None, table_grid_id=None, pool_aware=False, resolve_df=None):
 
     def _df_from_store(data):
         """Return a DataFrame from a pool reference or a list[dict]."""
+        if resolve_df is not None:
+            return resolve_df(data) or pd.DataFrame()
         if pool_aware and isinstance(data, dict) and "motl_id" in data:
             from cryocat.app.pool import get_rows, PoolPayloadMissing
             try:

@@ -22,7 +22,7 @@ from sklearn.decomposition import PCA
 from cryocat.core import cryomap
 from cryocat.utils import geom
 from cryocat.core import cryomotl
-from cryocat._types import PathOrStr, MapSource
+from cryocat._types import PathOrStr, MapSource, ArrayLike
 
 
 def _axis_aligned_bbox_from_input(bbox: o3d.geometry.AxisAlignedBoundingBox | dict[str, Any]) -> o3d.geometry.AxisAlignedBoundingBox:
@@ -1418,6 +1418,180 @@ class Mesh(DiscreteSurface):
             unit_info = Mesh._get_curvature_unit_str(units)
             print(f"  → Curvatures will be in: {unit_info}")
         
+        return mesh
+
+    # ── Connectivity metrics ───────────────────────────────────────────────────
+
+    def get_connected_component_count(self) -> int:
+        """Return the number of connected triangle components.
+
+        Returns
+        -------
+        int
+            Number of connected components; 0 for an empty mesh.
+        """
+        if self.faces is None or len(self.faces) == 0:
+            return 0
+        from scipy.sparse import csr_matrix
+        from scipy.sparse.csgraph import connected_components as _cc
+        n = len(self.vertices)
+        rows = np.concatenate([self.faces[:, 0], self.faces[:, 1], self.faces[:, 2]])
+        cols = np.concatenate([self.faces[:, 1], self.faces[:, 2], self.faces[:, 0]])
+        adj = csr_matrix(
+            (np.ones(len(rows), dtype=np.bool_), (rows, cols)), shape=(n, n)
+        )
+        n_comp, _ = _cc(adj, directed=False)
+        return int(n_comp)
+
+    def is_watertight(self) -> bool:
+        """Return True if every edge is shared by exactly two triangles.
+
+        Returns
+        -------
+        bool
+            False for an empty or open mesh.
+        """
+        if self.faces is None or len(self.faces) == 0:
+            return False
+        edges = np.sort(
+            np.vstack([
+                self.faces[:, [0, 1]],
+                self.faces[:, [1, 2]],
+                self.faces[:, [2, 0]],
+            ]),
+            axis=1,
+        )
+        _, counts = np.unique(edges, axis=0, return_counts=True)
+        return bool(np.all(counts == 2))
+
+    # ── Alpha-shape constructors ───────────────────────────────────────────────
+
+    @staticmethod
+    def alpha_shape_tetra(points: ArrayLike) -> tuple:
+        """Return ``(tetra_mesh, pt_map)`` for reuse across alpha values.
+
+        The tetrahedralisation is the expensive step.  Compute it once and pass
+        the result to :meth:`from_alpha_shape` to avoid redundant work when
+        scanning a range of alpha values.
+
+        Parameters
+        ----------
+        points : ArrayLike, shape (N, 3)
+            3D point coordinates.  Requires N ≥ 4 non-coplanar points.
+
+        Returns
+        -------
+        tuple
+            ``(tetra_mesh, pt_map)`` suitable for direct use with
+            ``open3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape``.
+
+        Raises
+        ------
+        ValueError
+            If fewer than 4 points are provided or all points are coplanar.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+        if len(pts) < 4:
+            raise ValueError(
+                f"alpha_shape_tetra requires at least 4 points; got {len(pts)}."
+            )
+        centred = pts - pts.mean(axis=0)
+        rank = np.linalg.matrix_rank(centred, tol=1e-10)
+        if rank < 3:
+            raise ValueError(
+                "alpha_shape_tetra: all points are coplanar (rank of centred "
+                f"matrix is {rank}); cannot build a tetrahedralisation."
+            )
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pts)
+        return o3d.geometry.TetraMesh.create_from_point_cloud(pcd)
+
+    @staticmethod
+    def suggest_alpha_range(points: ArrayLike) -> tuple[float, float]:
+        """Return a ``(min, max)`` alpha range derived from the cloud's own spacing.
+
+        Uses the mean nearest-neighbour distance so the range is meaningful
+        regardless of the units of the input.
+
+        Parameters
+        ----------
+        points : ArrayLike, shape (N, 3)
+            3D point coordinates.  Requires N ≥ 4 points.
+
+        Returns
+        -------
+        tuple[float, float]
+            ``(min_alpha, max_alpha)`` — a plausible tuning range.
+            ``min_alpha`` captures fine detail; ``max_alpha`` approaches the
+            convex hull.
+
+        Raises
+        ------
+        ValueError
+            If fewer than 4 points are provided.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+        if len(pts) < 4:
+            raise ValueError(
+                f"suggest_alpha_range requires at least 4 points; got {len(pts)}."
+            )
+        tree = KDTree(pts)
+        dists, _ = tree.query(pts, k=2)  # k=0 is self; k=1 is nearest neighbour
+        mean_nn = float(np.mean(dists[:, 1]))
+        return mean_nn * 0.5, mean_nn * 50.0
+
+    @classmethod
+    def from_alpha_shape(
+        cls,
+        points: ArrayLike,
+        alpha: float,
+        tetra_mesh=None,
+        pt_map=None,
+    ) -> "Mesh":
+        """Build a mesh as the alpha shape of a point cloud.
+
+        Pass a precomputed *tetra_mesh* / *pt_map* (from
+        :meth:`alpha_shape_tetra`) to reuse the Delaunay tetrahedralisation
+        across several alpha values.
+
+        Parameters
+        ----------
+        points : ArrayLike, shape (N, 3)
+            3D point coordinates.  Requires N ≥ 4 non-coplanar points.
+        alpha : float
+            Alpha parameter.  Larger values tend toward the convex hull;
+            smaller values follow finer surface detail and may fragment the mesh.
+        tetra_mesh : open3d.geometry.TetraMesh, optional
+            Precomputed tetrahedralisation from :meth:`alpha_shape_tetra`.
+            When omitted the tetrahedralisation is recomputed internally.
+        pt_map : open3d.utility.IntVector, optional
+            Point-map companion to *tetra_mesh*.
+
+        Returns
+        -------
+        Mesh
+            Alpha-shape triangle mesh.
+
+        Raises
+        ------
+        ValueError
+            If fewer than 4 points are provided or all points are coplanar.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+        if len(pts) < 4:
+            raise ValueError(
+                f"from_alpha_shape requires at least 4 points; got {len(pts)}."
+            )
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pts)
+        if tetra_mesh is None or pt_map is None:
+            tetra_mesh, pt_map = o3d.geometry.TetraMesh.create_from_point_cloud(pcd)
+        o3d_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(
+            pcd, alpha, tetra_mesh, pt_map
+        )
+        mesh = cls()
+        mesh.vertices = np.asarray(o3d_mesh.vertices)
+        mesh.faces = np.asarray(o3d_mesh.triangles)
         return mesh
 
     @staticmethod

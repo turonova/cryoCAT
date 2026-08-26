@@ -5,31 +5,7 @@ from pathlib import Path
 from cryocat.analysis import nnana
 from cryocat.analysis.structure import Chain
 from cryocat.core import cryomotl
-
-"""
-# for test creation
-for f in ["tomo_id", "object_id"]:
-    for i in ["angular_distance", "cone_distance", "in_plane_distance"]:
-        df = nnana.get_nn_stats(m, m, column_name=f, nn_number=2, rotation_type=i)
-        if f == "object_id":
-            df=df.sort_values(by="distance")
-        df = df.iloc[31:]
-        df=df.sort_values(by="subtomo_idx")
-        df = df.round(4)
-        df.reset_index(inplace=True, drop=True)
-        df.to_csv(f"./tests/test_data/nnana_data/nn_{f}_{i}.csv", index=False)
-
-# for radius
-for f in ["tomo_id", "object_id"]:
-    for r in [0.1, 0.51, 1.0]:
-        df = nnana.get_nn_stats_within_radius(m, nn_radius=r, column_name=f)
-        #df = df.iloc[31:]
-        #df=df.sort_values(by="subtomo_idx")
-        df = df.round(4)
-        #df.reset_index(inplace=True, drop=True)
-        df.to_csv(f"./tests/test_data/nnana_data/nn_stats_radius_{f}_{str(r)}.csv", index=False)
-
-"""
+from cryocat.analysis.nnana import NearestNeighbors
 
 
 @pytest.fixture
@@ -923,3 +899,203 @@ class TestRoundTrip:
         bogus_nn = _make_bogus()
         with pytest.raises(ValueError, match="subtomo_id"):
             nnana.NearestNeighbors.load(csv, motls=[qp, bogus_nn])
+
+
+# ── find_nn_indices: label-exclusion and zero-padding branches ────────────────
+
+def _fni(coords_qp, coords_nn, k=1, remove_qp=False, qp_labels=None, nn_labels=None):
+    """Thin wrapper so test bodies stay readable."""
+    return nnana.find_nn_indices(
+        coords_qp, coords_nn,
+        k=k, remove_qp=remove_qp,
+        qp_labels=qp_labels, nn_labels=nn_labels,
+    )
+
+
+class TestLabelExclusionRemoveQpFalse:
+    coords_qp = np.array([[0.0, 0, 0], [10.0, 0, 0], [20.0, 0, 0]])
+    coords_nn = np.array([[1.0, 0, 0], [2.0, 0, 0], [11.0, 0, 0], [12.0, 0, 0]])
+    qp_labels = np.array([0, 1, 0])
+    nn_labels = np.array([0, 1, 0, 1])
+
+    def test_qp_idx(self):
+        qp_idx, _, _, _ = _fni(
+            self.coords_qp, self.coords_nn, k=1, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        np.testing.assert_array_equal(qp_idx, [0, 1, 2])
+
+    def test_nn_idx(self):
+        _, nn_idx, _, _ = _fni(
+            self.coords_qp, self.coords_nn, k=1, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        np.testing.assert_array_equal(nn_idx, [[1], [2], [3]])
+
+    def test_nn_dist(self):
+        _, _, nn_dist, _ = _fni(
+            self.coords_qp, self.coords_nn, k=1, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        np.testing.assert_allclose(nn_dist, [[2.0], [1.0], [8.0]])
+
+    def test_k_eff(self):
+        _, _, _, k_eff = _fni(
+            self.coords_qp, self.coords_nn, k=1, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        assert k_eff == 1
+
+    def test_candidates_not_from_same_label(self):
+        _, nn_idx, _, _ = _fni(
+            self.coords_qp, self.coords_nn, k=1, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        for i, row in enumerate(nn_idx):
+            for j in row:
+                assert self.nn_labels[j] != self.qp_labels[i]
+
+
+class TestZeroPadding:
+    coords_qp = np.array([[0.0, 0, 0], [100.0, 0, 0]])
+    coords_nn = np.array([[1.0, 0, 0], [2.0, 0, 0], [3.0, 0, 0]])
+    qp_labels = np.array([0, 1])
+    nn_labels = np.array([0, 0, 0])
+
+    def test_padded_row_indices(self):
+        _, nn_idx, _, _ = _fni(
+            self.coords_qp, self.coords_nn, k=2, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        np.testing.assert_array_equal(nn_idx[0], [0, 0])
+
+    def test_padded_row_distances(self):
+        _, _, nn_dist, _ = _fni(
+            self.coords_qp, self.coords_nn, k=2, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        np.testing.assert_allclose(nn_dist[0], [0.0, 0.0])
+
+    def test_unpadded_row_indices(self):
+        _, nn_idx, _, _ = _fni(
+            self.coords_qp, self.coords_nn, k=2, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        np.testing.assert_array_equal(nn_idx[1], [2, 1])
+
+    def test_unpadded_row_distances(self):
+        _, _, nn_dist, _ = _fni(
+            self.coords_qp, self.coords_nn, k=2, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        np.testing.assert_allclose(nn_dist[1], [97.0, 98.0])
+
+    def test_k_eff(self):
+        _, _, _, k_eff = _fni(
+            self.coords_qp, self.coords_nn, k=2, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        assert k_eff == 2
+
+    def test_shape(self):
+        _, nn_idx, nn_dist, _ = _fni(
+            self.coords_qp, self.coords_nn, k=2, remove_qp=False,
+            qp_labels=self.qp_labels, nn_labels=self.nn_labels,
+        )
+        assert nn_idx.shape == (2, 2)
+        assert nn_dist.shape == (2, 2)
+
+
+def test_partial_padding_mixed_rows():
+    coords_qp = np.array([[0.0, 0, 0], [100.0, 0, 0]])
+    coords_nn = np.array([[1.0, 0, 0], [2.0, 0, 0], [3.0, 0, 0]])
+    qp_labels = np.array([0, 1])
+    nn_labels = np.array([0, 0, 0])
+
+    qp_idx, nn_idx, nn_dist, k_eff = _fni(
+        coords_qp, coords_nn, k=2, remove_qp=False,
+        qp_labels=qp_labels, nn_labels=nn_labels,
+    )
+    np.testing.assert_array_equal(qp_idx, [0, 1])
+    np.testing.assert_array_equal(nn_idx, [[0, 0], [2, 1]])
+    np.testing.assert_allclose(nn_dist, [[0.0, 0.0], [97.0, 98.0]])
+    assert k_eff == 2
+
+
+# ── NearestNeighbors column validation ───────────────────────────────────────
+
+
+def _nn_df(column_name="tomo_id", missing=()):
+    cols = [c for c in NearestNeighbors.get_required_columns(column_name) if c not in missing]
+    return pd.DataFrame({c: [0.0] for c in cols})
+
+
+class TestGetRequiredColumns:
+    def test_returns_list(self):
+        cols = NearestNeighbors.get_required_columns()
+        assert isinstance(cols, list) and len(cols) > 0
+
+    def test_includes_motl_id(self):
+        assert "motl_id" in NearestNeighbors.get_required_columns()
+
+    def test_includes_default_column_name(self):
+        assert "tomo_id" in NearestNeighbors.get_required_columns(column_name="tomo_id")
+
+    def test_custom_column_name_included(self):
+        cols = NearestNeighbors.get_required_columns(column_name="object_id")
+        assert "object_id" in cols
+        assert "tomo_id" not in cols
+
+    def test_includes_angle_and_coord_cols(self):
+        cols = NearestNeighbors.get_required_columns()
+        for expected_group in (
+            NearestNeighbors._QP_ANGLE_COLS,
+            NearestNeighbors._NN_ANGLE_COLS,
+            NearestNeighbors._QP_COORD_COLS,
+            NearestNeighbors._NN_COORD_COLS,
+        ):
+            for c in expected_group:
+                assert c in cols, f"{c} not in required columns"
+
+
+class TestCheckNNColumns:
+    def test_complete_df_returns_empty(self):
+        df = _nn_df()
+        assert NearestNeighbors.check_nn_columns(df) == []
+
+    def test_missing_columns_reported(self):
+        missing = ["qp_id", "qp_angles_phi"]
+        df = _nn_df(missing=missing)
+        result = NearestNeighbors.check_nn_columns(df)
+        assert set(result) == set(missing)
+
+    def test_extra_columns_ignored(self):
+        df = _nn_df()
+        df["extra"] = 0.0
+        assert NearestNeighbors.check_nn_columns(df) == []
+
+    def test_custom_column_name(self):
+        df = _nn_df(column_name="object_id")
+        assert NearestNeighbors.check_nn_columns(df, column_name="object_id") == []
+
+    def test_wrong_column_name_reported(self):
+        df = _nn_df(column_name="tomo_id")
+        result = NearestNeighbors.check_nn_columns(df, column_name="object_id")
+        assert "object_id" in result
+
+    def test_checker_tracks_get_required_columns(self, monkeypatch):
+        sentinel = ["alpha", "beta"]
+        monkeypatch.setattr(
+            NearestNeighbors, "get_required_columns",
+            classmethod(lambda cls, column_name="tomo_id": sentinel),
+        )
+        df_good = pd.DataFrame({"alpha": [1], "beta": [2]})
+        df_bad = pd.DataFrame({"alpha": [1]})
+        assert NearestNeighbors.check_nn_columns(df_good) == []
+        assert NearestNeighbors.check_nn_columns(df_bad) == ["beta"]
+
+    def test_empty_df_reports_all_required(self):
+        df = pd.DataFrame()
+        result = NearestNeighbors.check_nn_columns(df)
+        expected = NearestNeighbors.get_required_columns()
+        assert set(result) == set(expected)

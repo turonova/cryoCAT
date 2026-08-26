@@ -249,7 +249,50 @@ html, body {
     left : 0px;
 }
 
-/* Override danger button */
+/* Override buttons to use palette variables so tango theme applies automatically */
+.btn-primary {
+    background-color: var(--color10) !important;
+    border-color: var(--color9) !important;
+    color: var(--color11) !important;
+}
+
+.btn-primary:hover,
+.btn-primary:focus,
+.btn-primary:active,
+.btn-primary.active {
+    background-color: var(--color9) !important;
+    border-color: var(--color8) !important;
+    color: var(--color11) !important;
+}
+
+.btn-secondary {
+    background-color: var(--color5) !important;
+    border-color: var(--color6) !important;
+    color: var(--color11) !important;
+}
+
+.btn-secondary:hover,
+.btn-secondary:focus,
+.btn-secondary:active {
+    background-color: var(--color6) !important;
+    border-color: var(--color7) !important;
+    color: var(--color11) !important;
+}
+
+.btn-light {
+    background-color: var(--color11) !important;
+    border-color: var(--color6) !important;
+    color: var(--color10) !important;
+}
+
+.btn-light:hover,
+.btn-light:focus,
+.btn-light:active {
+    background-color: var(--color6) !important;
+    border-color: var(--color9) !important;
+    color: var(--color11) !important;
+}
+
 .btn-danger {
     background-color: var(--color10) !important;
     border-color: var(--color9) !important;
@@ -383,4 +426,35 @@ html, body {
 .graph-settings-modal .modal-dialog {
     margin-left: 2rem;
     margin-right: auto;
+}
+
+/* ── Tango palette scope ───────────────────────────────────────────────────── */
+/* body[data-tool="tango"] is set by the suite router (suite/app.py W1).       */
+/* Redeclaring all palette tokens here ensures portals (modals, offcanvases)    */
+/* that render at body level also inherit the tango palette.                    */
+body[data-tool="tango"] {
+    --color1:  #AEC684;
+    --color2:  #7EC9AD;
+    --color3:  #4EACB6;
+    --color4:  #6494B8;
+    --color5:  #C0A3BA;
+    --color6:  #AA90BE;
+    --color7:  #9378B8;
+    --color8:  #4D6A35;
+    --color9:  #375820;
+    --color10: #4A7230;
+    --color11: #edfaf8;
+    --color12: #14241a;
+    --color13: #4EACB6;
+}
+
+/* ── Tango page: per-tab parameter tile ──────────────────────────────────── */
+/* The tile sits in the left column of each tango tab, matching the tango     */
+/* sidebar colour (--color13) and scrolling independently of the grid.        */
+
+.tango-tile {
+    background-color: var(--color13);
+    padding: 0.5rem;
+    height: calc(100vh - 80px);
+    overflow-y: auto;
 }

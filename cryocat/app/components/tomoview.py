@@ -198,7 +198,8 @@ def get_viewer_component(prefix: str):
                                         {"label": s, "value": s}
                                         for s in ["StarryNight", "Monet", "Viridis", "Cividis", "Plasma", "Jet", "Hot"]
                                     ],
-                                    "StarryNight",
+                                    None,
+                                    placeholder="Auto (palette)",
                                     style={"width": "150px"},
                                 ),
                                 style={"flex": "0 0 auto"},
@@ -247,7 +248,7 @@ def get_viewer_component(prefix: str):
     )
 
 
-def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_info="full", detailed_table=None, tabs_id="table-tabs", visible_on_tabs=("motl-tab", "twist-tab", "nn-motl-tab", "cluster-tab")):
+def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_info="full", detailed_table=None, tabs_id=None, visible_on_tabs=("motl-tab", "twist-tab", "nn-motl-tab", "cluster-tab"), radius_store_id=None, resolve_detail_df=None):
 
     def _motl_df(data):
         """Return a DataFrame from a pool reference dict or a legacy list[dict]."""
@@ -338,12 +339,14 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         Input(f"{prefix}-colorscale-dropdown", "value"),
         Input(f"{prefix}-marker-size", "value"),
         Input(f"{prefix}-data", "data"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
-    def update_plot(index, color_col, colorscale, marker_size, data):
+    def update_plot(index, color_col, colorscale, marker_size, data, settings):
         if not data:
             raise exceptions.PreventUpdate
-        return tomo_figure(_motl_df(data), index, color_col, colorscale, marker_size, hover_info, show_dual_graph)
+        effective = colorscale or (settings or {}).get("discrete_palette", "StarryNight")
+        return tomo_figure(_motl_df(data), index, color_col, effective, marker_size, hover_info, show_dual_graph)
 
     @app.callback(
         Output(f"{prefix}-tomo-selector", "children"),
@@ -392,20 +395,46 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         raise exceptions.PreventUpdate
 
     if show_dual_graph:
+        if not radius_store_id:
+            raise ValueError(
+                "radius_store_id is required when show_dual_graph=True; "
+                "pass the id of the store that holds the NN radius."
+            )
 
         @app.callback(
             Output(f"{prefix}-graph2-container", "children"),
             Input(f"{prefix}-graph", "clickData"),
             State(f"{prefix}-data", "data"),
             State(f"{detailed_table}", "data"),
-            State("twist-global-radius", "data"),
+            State(radius_store_id, "data"),
             State(f"{prefix}-index", "data"),
             prevent_initial_call=True,
         )
-        def show_detail_on_click(clickData, data, twist_data, radius, tomo_index):
+        def show_detail_on_click(clickData, data, twist_data, radius_data, tomo_index):
             if not clickData or not data:
                 raise dash.exceptions.PreventUpdate
-            fig = detail_figure(clickData, _motl_df(data), twist_data, radius, tomo_index)
-            if fig is None:
+            if isinstance(radius_data, dict):
+                radius = radius_data.get("nn_radius")
+            else:
+                radius = radius_data
+            if radius is None:
                 raise exceptions.PreventUpdate
+            if resolve_detail_df is not None:
+                twist_records = resolve_detail_df(twist_data)
+                if twist_records is None:
+                    raise exceptions.PreventUpdate
+            elif isinstance(twist_data, dict) and "motl_id" in twist_data:
+                try:
+                    from cryocat.app.pool import get_rows, PoolPayloadMissing
+                    twist_records = get_rows(twist_data["motl_id"])
+                except Exception:
+                    raise exceptions.PreventUpdate
+            else:
+                twist_records = twist_data
+            fig = detail_figure(clickData, _motl_df(data), twist_records, radius, tomo_index)
+            if fig is None:
+                return html.Div(
+                    "No twist neighbours for this particle.",
+                    style={"color": "#888", "padding": "1rem", "textAlign": "center"},
+                )
             return dcc.Graph(id=f"{prefix}-detail-graph", figure=fig)

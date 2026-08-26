@@ -28,6 +28,7 @@ from dash import html, dcc, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 
 from cryocat.app import ids
+from cryocat.app.pool import resolve_df as pool_resolve_df, resolve_n_rows as pool_resolve_n_rows
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
@@ -178,7 +179,10 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
             rev = (registry or {}).get(mid, {}).get("revision", 0)
             return {"motl_id": mid, "rev": rev}
 
-        register_table_callbacks(app, f"{prefix}-src-tabv")
+        register_table_callbacks(
+            app, f"{prefix}-src-tabv",
+            resolve_df=pool_resolve_df, resolve_n_rows=pool_resolve_n_rows,
+        )
         register_table_plot_callbacks(
             app,
             f"{prefix}-src-tabv-table-plot",

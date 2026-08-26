@@ -74,6 +74,8 @@ _PERMITTED_EXACT: frozenset[str] = frozenset(
         _ids.BROWSER_RESULT,
         # Phase 11 — single app-level rotation-builder modal (D1)
         _ids.ROTATION_REQUEST,
+        # ORIENTATION_PICKER_PLACEMENT.md — single app-level orient-picker modal (D1)
+        _ids.ORIENT_REQUEST,
     }
 )
 
@@ -82,6 +84,7 @@ _PERMITTED_PREFIXES: tuple[str, ...] = (
     _ids.SUITE_LOG_PREFIX,
     "browser-",    # Phase 10: single app-level file-browser modal (D1)
     "rotation-modal-",  # Phase 11: single app-level rotation-builder modal (D1)
+    "orient-modal-",    # ORIENTATION_PICKER_PLACEMENT.md: single app-level orient-picker modal
 )
 
 
@@ -160,7 +163,6 @@ def _all_dep_ids(app):
 
 APPS = [
     pytest.param("suite", id="suite"),
-    pytest.param("tango", id="tango"),
 ]
 
 
@@ -201,16 +203,11 @@ _DYNAMIC_ID_MODULES: tuple = ()
 
 
 def _load_dynamic_modules(app_name: str = "suite"):
-    """Lazy import to avoid circular deps at module level.
-
-    Dynamic-ID modules are suite-specific.  Returning an empty tuple for non-suite
-    apps prevents the container-presence assertion from firing against a layout that
-    is not expected to mount those containers.
-    """
-    if app_name != "suite":
-        return ()
-    from cryocat.app.suite.pages import pstructure
-    return (pstructure,)
+    """Lazy import to avoid circular deps at module level."""
+    if app_name == "suite":
+        from cryocat.app.suite.pages import pstructure, pmotl, pnn, ptango
+        return (pstructure, pmotl, pnn, ptango)
+    return ()
 
 
 def _collect_dynamic_ids(layout_ids: set, app_name: str = "suite") -> frozenset:

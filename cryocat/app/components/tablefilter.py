@@ -139,7 +139,7 @@ def _slider_col(s: dict, prefix: str) -> dbc.Col:
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
 
-def register_tablefilter_callbacks(app, prefix: str) -> None:
+def register_tablefilter_callbacks(app, prefix: str, resolve_df=None) -> None:
     @app.callback(
         Output(f"{prefix}-filters-container", "children"),
         Input(f"{prefix}-global-data-store", "data"),
@@ -147,11 +147,20 @@ def register_tablefilter_callbacks(app, prefix: str) -> None:
         prevent_initial_call=True,
     )
     def build_range_sliders(ref, registry):
-        if not ref or not isinstance(ref, dict) or not ref.get("motl_id"):
+        if not ref or not isinstance(ref, dict):
             raise exceptions.PreventUpdate
-        motl_id = ref["motl_id"]
-        entry = (registry or {}).get(motl_id, {})
-        col_ranges = entry.get("column_ranges", {})
+        if ref.get("motl_id"):
+            motl_id = ref["motl_id"]
+            entry = (registry or {}).get(motl_id, {})
+            col_ranges = entry.get("column_ranges", {})
+        elif resolve_df is not None:
+            df = resolve_df(ref)
+            if df is None or df.empty:
+                raise exceptions.PreventUpdate
+            from cryocat.app.pool import _compute_entry_metadata
+            _, col_ranges, _ = _compute_entry_metadata(df)
+        else:
+            raise exceptions.PreventUpdate
         if not col_ranges:
             raise exceptions.PreventUpdate
         cols = [_slider_col(s, prefix) for s in slider_specs(col_ranges)]

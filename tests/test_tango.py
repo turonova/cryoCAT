@@ -1,3 +1,4 @@
+import math
 import sys
 import types
 import numpy as np
@@ -643,3 +644,157 @@ class TestTwistDescriptorProcessTwist:
         np.testing.assert_allclose(result[["twist_so_x", "twist_so_y", "twist_so_z"]].values,
                                    0.0, atol=1e-6)
 
+
+
+# ── TwistDescriptor.check_twist_columns ──────────────────────────────────────
+
+
+def _twist_df(extra_cols=(), missing=()):
+    cols = [c for c in TwistDescriptor.get_all_feature_ids(symm=False) if c not in missing]
+    data = {c: [0.0] for c in cols}
+    for c in extra_cols:
+        data[c] = [0.0]
+    return pd.DataFrame(data)
+
+
+class TestCheckTwistColumns:
+    def test_complete_df_returns_empty(self):
+        df = _twist_df()
+        assert TwistDescriptor.check_twist_columns(df) == []
+
+    def test_missing_columns_reported(self):
+        missing = ["qp_id", "twist_x"]
+        df = _twist_df(missing=missing)
+        result = TwistDescriptor.check_twist_columns(df)
+        assert set(result) == set(missing)
+
+    def test_extra_columns_not_reported(self):
+        df = _twist_df(extra_cols=["custom_col"])
+        assert TwistDescriptor.check_twist_columns(df) == []
+
+    def test_symm_false_excludes_angular_score(self):
+        df = _twist_df()
+        assert "angular_score" not in TwistDescriptor.get_all_feature_ids(symm=False)
+        assert TwistDescriptor.check_twist_columns(df, symm=False) == []
+
+    def test_symm_true_requires_angular_score(self):
+        df = _twist_df()  # no angular_score column
+        result = TwistDescriptor.check_twist_columns(df, symm=True)
+        assert "angular_score" in result
+
+    def test_symm_true_ok_when_angular_score_present(self):
+        df = _twist_df(extra_cols=["angular_score"])
+        assert TwistDescriptor.check_twist_columns(df, symm=True) == []
+
+    def test_checker_tracks_get_all_feature_ids(self, monkeypatch):
+        sentinel = ["col_a", "col_b"]
+        monkeypatch.setattr(TwistDescriptor, "get_all_feature_ids", staticmethod(lambda symm=False: sentinel))
+        df_good = pd.DataFrame({"col_a": [1], "col_b": [2]})
+        df_bad = pd.DataFrame({"col_a": [1]})
+        assert TwistDescriptor.check_twist_columns(df_good) == []
+        assert TwistDescriptor.check_twist_columns(df_bad) == ["col_b"]
+
+    def test_empty_df_reports_all_required(self):
+        df = pd.DataFrame()
+        result = TwistDescriptor.check_twist_columns(df)
+        expected = TwistDescriptor.get_all_feature_ids(symm=False)
+        assert set(result) == set(expected)
+
+
+# ── TwistDescriptor radius derivation ────────────────────────────────────────
+
+
+def _minimal_twist_df(rows=None):
+    all_cols = TwistDescriptor.get_all_feature_ids(symm=False)
+    n_rows = max((len(v) for v in rows.values()), default=1) if rows else 1
+    base = {c: [0.0] * n_rows for c in all_cols if not rows or c not in rows}
+    if rows:
+        base.update(rows)
+    return pd.DataFrame(base)
+
+
+class TestDeriveNNRadius:
+    def test_single_row(self):
+        df = _minimal_twist_df({"twist_x": [3.0], "twist_y": [4.0], "twist_z": [0.0]})
+        result = TwistDescriptor.derive_nn_radius(df)
+        assert math.isclose(result, 5.0, rel_tol=1e-9)
+
+    def test_returns_maximum(self):
+        df = _minimal_twist_df({
+            "twist_x": [1.0, 0.0, 3.0],
+            "twist_y": [0.0, 2.0, 4.0],
+            "twist_z": [0.0, 0.0, 0.0],
+        })
+        assert math.isclose(TwistDescriptor.derive_nn_radius(df), 5.0, rel_tol=1e-9)
+
+    def test_zero_vectors(self):
+        df = _minimal_twist_df({"twist_x": [0.0], "twist_y": [0.0], "twist_z": [0.0]})
+        assert TwistDescriptor.derive_nn_radius(df) == 0.0
+
+    def test_returns_float(self):
+        df = _minimal_twist_df({"twist_x": [1.0], "twist_y": [0.0], "twist_z": [0.0]})
+        result = TwistDescriptor.derive_nn_radius(df)
+        assert isinstance(result, float)
+
+    def test_all_equal_magnitudes(self):
+        df = _minimal_twist_df({
+            "twist_x": [3.0, 3.0],
+            "twist_y": [4.0, 4.0],
+            "twist_z": [0.0, 0.0],
+        })
+        assert math.isclose(TwistDescriptor.derive_nn_radius(df), 5.0, rel_tol=1e-9)
+
+
+class TestTwistDescriptorRadiusStorage:
+    def _make_td(self, twist_x=3.0, twist_y=4.0, twist_z=0.0, nn_radius=None):
+        df = _minimal_twist_df({
+            "twist_x": [twist_x],
+            "twist_y": [twist_y],
+            "twist_z": [twist_z],
+        })
+        return TwistDescriptor(input_twist=df, nn_radius=nn_radius)
+
+    def test_radius_derived_when_not_given(self):
+        td = self._make_td(twist_x=3.0, twist_y=4.0, twist_z=0.0, nn_radius=None)
+        assert math.isclose(td.nn_radius, 5.0, rel_tol=1e-9)
+        assert td.radius_source == "computed"
+
+    def test_radius_used_as_given_when_provided(self):
+        td = self._make_td(nn_radius=42.0)
+        assert td.nn_radius == pytest.approx(42.0)
+        assert td.radius_source == "given"
+
+    def test_given_radius_overrides_table(self):
+        td = self._make_td(twist_x=3.0, twist_y=4.0, twist_z=0.0, nn_radius=99.0)
+        assert td.nn_radius == pytest.approx(99.0)
+
+    def test_computed_radius_matches_derive_nn_radius(self):
+        df = _minimal_twist_df({"twist_x": [0.0, 6.0], "twist_y": [1.0, 8.0], "twist_z": [0.0, 0.0]})
+        expected = TwistDescriptor.derive_nn_radius(df)
+        td = TwistDescriptor(input_twist=df.copy(), nn_radius=None)
+        assert math.isclose(td.nn_radius, expected, rel_tol=1e-9)
+        assert td.radius_source == "computed"
+
+    def test_compute_path_sets_given_source(self):
+        from cryocat.core.cryomotl import Motl
+
+        df = pd.DataFrame({
+            col: [1.0, 2.0] for col in Motl.motl_columns
+        })
+        df["subtomo_id"] = [1.0, 2.0]
+        df["tomo_id"] = [1.0, 1.0]
+        motl = Motl(df)
+
+        td = TwistDescriptor(input_motl=motl, nn_radius=50.0, build_unique_desc=False)
+        assert td.nn_radius == pytest.approx(50.0)
+        assert td.radius_source == "given"
+
+    def test_nn_radius_attribute_exists_after_file_load(self, tmp_path):
+        df = _minimal_twist_df({"twist_x": [3.0], "twist_y": [4.0], "twist_z": [0.0]})
+        csv_path = str(tmp_path / "twist.csv")
+        df.to_csv(csv_path, index=False)
+
+        td = TwistDescriptor(input_twist=csv_path, nn_radius=None)
+        assert hasattr(td, "nn_radius")
+        assert hasattr(td, "radius_source")
+        assert td.radius_source in ("computed", "given", "unknown")

@@ -139,3 +139,54 @@ class TestMembraneHandleSchema:
             "n_finite_inflection_thickness_nm", "by_detection_mode",
             "pixel_size_nm", "thickness_csv",
         }
+
+
+# ── surface_registry.make_handle ─────────────────────────────────────────────
+
+class TestSurfaceMakeHandle:
+    """Tests for make_handle — representation, n_elements, visible coercion."""
+
+    @pytest.fixture
+    def tiny_mesh(self):
+        import numpy as np
+        from cryocat.analysis.structure import PleomorphicSurface
+        from cryocat.core.surface import Mesh
+        m = Mesh()
+        m.vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=float)
+        m.faces = np.array([[0, 1, 2]], dtype=np.int32)
+        return PleomorphicSurface(m)
+
+    @pytest.fixture
+    def tiny_opc(self):
+        import numpy as np
+        from cryocat.analysis.structure import PleomorphicSurface
+        from cryocat.core.surface import OrientedPointCloud
+        opc = OrientedPointCloud()
+        opc.vertices = np.array(
+            [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]], dtype=float
+        )
+        opc.normals = opc.vertices.copy()
+        return PleomorphicSurface(opc)
+
+    def test_mesh_representation_and_elements(self, tiny_mesh):
+        from cryocat.app.components.surface_registry import make_handle
+        h = make_handle(tiny_mesh, label="my mesh")
+        assert h["representation"] == "mesh"
+        assert h["n_elements"] == 3
+        assert h["label"] == "my mesh"
+        assert h["parent_id"] is None
+        assert h["visible"] is True
+
+    def test_point_cloud_representation(self, tiny_opc):
+        from cryocat.app.components.surface_registry import make_handle
+        h = make_handle(tiny_opc, label="capsid", parent_id="surface-0", visible=False)
+        assert h["representation"] == "point_cloud"
+        assert h["n_elements"] == 6
+        assert h["parent_id"] == "surface-0"
+        assert h["visible"] is False
+
+    def test_visible_truthy_coerced_to_bool(self, tiny_opc):
+        from cryocat.app.components.surface_registry import make_handle
+        h = make_handle(tiny_opc, label="x", visible=1)
+        assert h["visible"] is True
+        assert isinstance(h["visible"], bool)

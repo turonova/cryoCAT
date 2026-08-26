@@ -44,7 +44,6 @@ def test_cluster_subunits_to_rings():
     )
 
     gt = cryomotl.Motl.load(str(DATA_DIR / "gt_ir_merged.em"))
-
     result_df = result.df.sort_values("subtomo_id").reset_index(drop=True)
     gt_df = gt.df.sort_values("subtomo_id").reset_index(drop=True)
 
@@ -56,17 +55,33 @@ def _make_toy_chain_motl():
     rows = []
     for chain_id in (1, 2):
         for order in (1, 2, 3):
-            rows.append({
-                "score": 0.0, "geom1": 0.0, "geom2": float(order),
-                "subtomo_id": float(chain_id * 10 + order),
-                "tomo_id": 1.0, "object_id": float(chain_id),
-                "subtomo_mean": 0.0,
-                "x": float(order), "y": float(chain_id), "z": 0.0,
-                "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
-                "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
-                "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
-                "exit_x": float(order) + 0.5, "exit_y": float(chain_id), "exit_z": 0.0,
-            })
+            rows.append(
+                {
+                    "score": 0.0,
+                    "geom1": 0.0,
+                    "geom2": float(order),
+                    "subtomo_id": float(chain_id * 10 + order),
+                    "tomo_id": 1.0,
+                    "object_id": float(chain_id),
+                    "subtomo_mean": 0.0,
+                    "x": float(order),
+                    "y": float(chain_id),
+                    "z": 0.0,
+                    "shift_x": 0.0,
+                    "shift_y": 0.0,
+                    "shift_z": 0.0,
+                    "geom3": 0.0,
+                    "geom4": 0.0,
+                    "geom5": 0.0,
+                    "phi": 0.0,
+                    "psi": 0.0,
+                    "theta": 0.0,
+                    "class": 1.0,
+                    "exit_x": float(order) + 0.5,
+                    "exit_y": float(chain_id),
+                    "exit_z": 0.0,
+                }
+            )
     df = pd.DataFrame(rows)
     m = cryomotl.Motl()
     m.df = df
@@ -75,8 +90,11 @@ def _make_toy_chain_motl():
 
 def test_get_chain_stats_no_keyerror():
     chain = structure.Chain(
-        traced_motl=_make_toy_chain_motl(), pixel_size=1.0,
-        column_name="tomo_id", chain_id_col="object_id", order_id_col="geom2",
+        traced_motl=_make_toy_chain_motl(),
+        pixel_size=1.0,
+        column_name="tomo_id",
+        chain_id_col="object_id",
+        order_id_col="geom2",
     )
     stats = chain.get_chain_stats(min_chain_size=2)
     assert len(stats) == 4
@@ -84,8 +102,11 @@ def test_get_chain_stats_no_keyerror():
 
 def test_get_chain_stats_chain_size_is_particle_count():
     chain = structure.Chain(
-        traced_motl=_make_toy_chain_motl(), pixel_size=1.0,
-        column_name="tomo_id", chain_id_col="object_id", order_id_col="geom2",
+        traced_motl=_make_toy_chain_motl(),
+        pixel_size=1.0,
+        column_name="tomo_id",
+        chain_id_col="object_id",
+        order_id_col="geom2",
     )
     stats = chain.get_chain_stats(min_chain_size=2)
     assert set(stats["chain_size"].unique()) == {3.0}
@@ -93,8 +114,11 @@ def test_get_chain_stats_chain_size_is_particle_count():
 
 def test_get_chain_stats_rot_unit_vectors():
     chain = structure.Chain(
-        traced_motl=_make_toy_chain_motl(), pixel_size=1.0,
-        column_name="tomo_id", chain_id_col="object_id", order_id_col="geom2",
+        traced_motl=_make_toy_chain_motl(),
+        pixel_size=1.0,
+        column_name="tomo_id",
+        chain_id_col="object_id",
+        order_id_col="geom2",
     )
     stats = chain.get_chain_stats(min_chain_size=2)
     rot = stats[["rot_x", "rot_y", "rot_z"]].values.astype(float)
@@ -109,8 +133,11 @@ def test_get_chain_stats_rot_unit_vectors():
 def _make_traced_chain(_factory=_make_toy_chain_motl):
     """Wrap _make_toy_chain_motl into a Chain instance."""
     return structure.Chain(
-        traced_motl=_factory(), pixel_size=1.0,
-        column_name="tomo_id", chain_id_col="object_id", order_id_col="geom2",
+        traced_motl=_factory(),
+        pixel_size=1.0,
+        column_name="tomo_id",
+        chain_id_col="object_id",
+        order_id_col="geom2",
     )
 
 
@@ -127,8 +154,7 @@ def test_chain_get_occupancy_writes_chain_length_per_particle():
 def test_chain_from_motls_traces_and_returns_chain(mocker):
     """``from_motls`` delegates to ``nnana.trace_chains`` and wraps the result."""
     fake_motl = _make_toy_chain_motl()
-    mocker.patch("cryocat.analysis.structure.nnana.trace_chains",
-                 return_value=fake_motl)
+    mocker.patch("cryocat.analysis.structure.nnana.trace_chains", return_value=fake_motl)
     c = structure.Chain.from_motls(fake_motl, fake_motl, max_distance=5.0)
     assert isinstance(c, structure.Chain)
     assert c.pixel_size == 1.0
@@ -169,19 +195,30 @@ def _make_npc_motl(n_subunits: int = 8, n_rings: int = 1):
         for s in range(1, n_subunits + 1):
             theta = 2 * np.pi * (s - 1) / n_subunits
             r = 50.0
-            rows.append({
-                "score": 0.0, "geom1": 0.0, "geom2": float(s),
-                "subtomo_id": float(ring_id * 100 + s),
-                "tomo_id": 1.0, "object_id": float(ring_id),
-                "subtomo_mean": 0.0,
-                "x": float(center[0] + r * np.cos(theta)),
-                "y": float(center[1] + r * np.sin(theta)),
-                "z": float(center[2]),
-                "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
-                "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
-                "phi": float(np.degrees(theta)), "psi": 0.0, "theta": 0.0,
-                "class": 1.0,
-            })
+            rows.append(
+                {
+                    "score": 0.0,
+                    "geom1": 0.0,
+                    "geom2": float(s),
+                    "subtomo_id": float(ring_id * 100 + s),
+                    "tomo_id": 1.0,
+                    "object_id": float(ring_id),
+                    "subtomo_mean": 0.0,
+                    "x": float(center[0] + r * np.cos(theta)),
+                    "y": float(center[1] + r * np.sin(theta)),
+                    "z": float(center[2]),
+                    "shift_x": 0.0,
+                    "shift_y": 0.0,
+                    "shift_z": 0.0,
+                    "geom3": 0.0,
+                    "geom4": 0.0,
+                    "geom5": 0.0,
+                    "phi": float(np.degrees(theta)),
+                    "psi": 0.0,
+                    "theta": 0.0,
+                    "class": 1.0,
+                }
+            )
     m = cryomotl.Motl()
     m.df = pd.DataFrame(rows)
     return m
@@ -267,18 +304,30 @@ def _ellipsoid_motl(n: int = 80):
     for i in range(n):
         u = rng.uniform(0, np.pi)
         v = rng.uniform(0, 2 * np.pi)
-        rows.append({
-            "score": 0.0, "geom1": 0.0, "geom2": 0.0,
-            "subtomo_id": float(i + 1),
-            "tomo_id": 1.0, "object_id": 1.0,
-            "subtomo_mean": 0.0,
-            "x": a * np.sin(u) * np.cos(v),
-            "y": b * np.sin(u) * np.sin(v),
-            "z": c * np.cos(u),
-            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
-            "geom3": 0.0, "geom4": 0.0, "geom5": 25.0,
-            "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
-        })
+        rows.append(
+            {
+                "score": 0.0,
+                "geom1": 0.0,
+                "geom2": 0.0,
+                "subtomo_id": float(i + 1),
+                "tomo_id": 1.0,
+                "object_id": 1.0,
+                "subtomo_mean": 0.0,
+                "x": a * np.sin(u) * np.cos(v),
+                "y": b * np.sin(u) * np.sin(v),
+                "z": c * np.cos(u),
+                "shift_x": 0.0,
+                "shift_y": 0.0,
+                "shift_z": 0.0,
+                "geom3": 0.0,
+                "geom4": 0.0,
+                "geom5": 25.0,
+                "phi": 0.0,
+                "psi": 0.0,
+                "theta": 0.0,
+                "class": 1.0,
+            }
+        )
     m = cryomotl.Motl()
     m.df = pd.DataFrame(rows)
     return m
@@ -307,7 +356,8 @@ def test_ParametricSurface_assign_affiliation_distance_based_returns_motl():
 
 def test_ParametricSurface_assign_affiliation_intersection_based_returns_motl():
     out = _parametric_surface().assign_affiliation_intersection_based(
-        _ellipsoid_motl(), keep_unassigned=True,
+        _ellipsoid_motl(),
+        keep_unassigned=True,
     )
     assert isinstance(out, cryomotl.Motl)
 
@@ -327,8 +377,10 @@ def test_ParametricSurface_clean_by_radius_returns_motl():
 
 def test_ParametricSurface_create_spherical_oversampling_returns_motl():
     out = structure.ParametricSurface.create_spherical_oversampling(
-        _ellipsoid_motl(), motl_radius_id="geom5",
-        sampling_distance=30.0, sampling_angle=360.0,
+        _ellipsoid_motl(),
+        motl_radius_id="geom5",
+        sampling_distance=30.0,
+        sampling_angle=360.0,
     )
     assert isinstance(out, cryomotl.Motl)
 
@@ -348,19 +400,17 @@ def test_ParametricSurface_assign_affiliation_mask_based_call_path():
 def _tiny_mesh_psurf():
     """A 4-vertex tetrahedron mesh wrapped as PleomorphicSurface."""
     from cryocat.core.surface import Mesh
+
     m = Mesh()
-    m.vertices = np.array(
-        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float
-    )
-    m.faces = np.array(
-        [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], dtype=np.int32
-    )
+    m.vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float)
+    m.faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], dtype=np.int32)
     return structure.PleomorphicSurface(m)
 
 
 def _tiny_pointcloud_psurf():
     """A small point cloud wrapped as PleomorphicSurface."""
     from cryocat.core.surface import OrientedPointCloud
+
     opc = OrientedPointCloud()
     rng = np.random.default_rng(0)
     opc.vertices = rng.standard_normal((30, 3))
@@ -471,6 +521,7 @@ def test_PleomorphicSurface_apply_vertex_mask_returns_psurf():
 def test_PleomorphicSurface_crop_returns_psurf():
     """``crop`` forwards to open3d which expects an AxisAlignedBoundingBox."""
     import open3d as o3d
+
     psurf = _tiny_mesh_psurf()
     bbox = o3d.geometry.AxisAlignedBoundingBox(min_bound=(-1, -1, -1), max_bound=(2, 2, 2))
     out = psurf.crop(bbox=bbox)
@@ -517,8 +568,7 @@ def test_PleomorphicSurface_distance_to_pointcloud_returns_array():
 def test_PleomorphicSurface_get_points_within_distance_returns_indices():
     psurf = _tiny_mesh_psurf()
     try:
-        out = psurf.get_points_within_distance(query_point=np.array([0.0, 0.0, 0.0]),
-                                                distance=2.0)
+        out = psurf.get_points_within_distance(query_point=np.array([0.0, 0.0, 0.0]), distance=2.0)
         assert hasattr(out, "__iter__")
     except (TypeError, AttributeError):
         pass
@@ -591,17 +641,30 @@ def _make_poly_motl(n_particles: int = 6) -> cryomotl.Motl:
     """Minimal Motl with *n_particles* rows, each in its own object."""
     rows = []
     for i in range(n_particles):
-        rows.append({
-            "score": 0.9 - i * 0.1, "geom1": 1.0, "geom2": 2.0,
-            "subtomo_id": float(i + 1), "tomo_id": (1.0 if i < 3 else 2.0),
-            "object_id": float(100 * (i + 1)),
-            "subtomo_mean": float(i + 1) * 0.1,
-            "x": float(10 + i), "y": float(10 + i), "z": float(10 + i),
-            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
-            "geom3": 3.0, "geom4": 4.0, "geom5": 5.0,
-            "phi": float(i * 10), "psi": float(i * 10 + 5),
-            "theta": float(i * 10 + 10), "class": float(1 + i % 2),
-        })
+        rows.append(
+            {
+                "score": 0.9 - i * 0.1,
+                "geom1": 1.0,
+                "geom2": 2.0,
+                "subtomo_id": float(i + 1),
+                "tomo_id": (1.0 if i < 3 else 2.0),
+                "object_id": float(100 * (i + 1)),
+                "subtomo_mean": float(i + 1) * 0.1,
+                "x": float(10 + i),
+                "y": float(10 + i),
+                "z": float(10 + i),
+                "shift_x": 0.0,
+                "shift_y": 0.0,
+                "shift_z": 0.0,
+                "geom3": 3.0,
+                "geom4": 4.0,
+                "geom5": 5.0,
+                "phi": float(i * 10),
+                "psi": float(i * 10 + 5),
+                "theta": float(i * 10 + 10),
+                "class": float(1 + i % 2),
+            }
+        )
     m = cryomotl.Motl()
     m.df = pd.DataFrame(rows)
     return m
@@ -645,17 +708,18 @@ class TestPolyhedralComplex:
 
     def test_abstract_recover_features_raises(self, path_test_marker_file, mrc_file):
         with pytest.raises(TypeError, match="concrete subclass"):
-            structure.PolyhedralComplex.recover_features(
-                path_test_marker_file, str(mrc_file)
-            )
+            structure.PolyhedralComplex.recover_features(path_test_marker_file, str(mrc_file))
 
     # ------------------------------------------------------------------ concrete subclasses
 
-    @pytest.mark.parametrize("cls, sym, n_subunits, solid_cls", [
-        (structure.TetrahedralComplex, "T", 12, geom.Tetrahedron),
-        (structure.OctahedralComplex, "O", 24, geom.Octahedron),
-        (structure.IcosahedralComplex, "I", 60, geom.Icosahedron),
-    ])
+    @pytest.mark.parametrize(
+        "cls, sym, n_subunits, solid_cls",
+        [
+            (structure.TetrahedralComplex, "T", 12, geom.Tetrahedron),
+            (structure.OctahedralComplex, "O", 24, geom.Octahedron),
+            (structure.IcosahedralComplex, "I", 60, geom.Icosahedron),
+        ],
+    )
     def test_concrete_class_attributes(self, sample_motl, cls, sym, n_subunits, solid_cls):
         pc = cls(sample_motl)
         assert pc.group == sym
@@ -665,24 +729,28 @@ class TestPolyhedralComplex:
     def test_stores_column_names(self, sample_motl):
         pc = structure.IcosahedralComplex(
             sample_motl,
-            affiliation_column="geom3", order_column="geom4",
+            affiliation_column="geom3",
+            order_column="geom4",
         )
         assert pc.affiliation_column == "geom3"
         assert pc.order_column == "geom4"
 
     # ------------------------------------------------------------------ feature_vectors
 
-    @pytest.mark.parametrize("cls, mode, expected_n", [
-        (structure.TetrahedralComplex, "vertices", 4),
-        (structure.TetrahedralComplex, "edges", 6),
-        (structure.TetrahedralComplex, "faces", 4),
-        (structure.OctahedralComplex, "vertices", 6),
-        (structure.OctahedralComplex, "edges", 12),
-        (structure.OctahedralComplex, "faces", 8),
-        (structure.IcosahedralComplex, "vertices", 12),
-        (structure.IcosahedralComplex, "edges", 30),
-        (structure.IcosahedralComplex, "faces", 20),
-    ])
+    @pytest.mark.parametrize(
+        "cls, mode, expected_n",
+        [
+            (structure.TetrahedralComplex, "vertices", 4),
+            (structure.TetrahedralComplex, "edges", 6),
+            (structure.TetrahedralComplex, "faces", 4),
+            (structure.OctahedralComplex, "vertices", 6),
+            (structure.OctahedralComplex, "edges", 12),
+            (structure.OctahedralComplex, "faces", 8),
+            (structure.IcosahedralComplex, "vertices", 12),
+            (structure.IcosahedralComplex, "edges", 30),
+            (structure.IcosahedralComplex, "faces", 20),
+        ],
+    )
     def test_feature_vectors_count(self, sample_motl, cls, mode, expected_n):
         pc = cls(sample_motl)
         vecs = pc.feature_vectors(mode=mode)
@@ -694,15 +762,30 @@ class TestPolyhedralComplex:
         """Subunit indices follow x→y→z ascending lexicographic order."""
         rows = []
         for x_val, y_val, z_val in [(3, 1, 1), (1, 3, 1), (1, 1, 3), (2, 2, 2)]:
-            rows.append({
-                "score": 0.0, "geom1": 0.0, "geom2": 0.0,
-                "subtomo_id": float(len(rows) + 1), "tomo_id": 1.0,
-                "object_id": 1.0, "subtomo_mean": 0.0,
-                "x": float(x_val), "y": float(y_val), "z": float(z_val),
-                "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
-                "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
-                "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
-            })
+            rows.append(
+                {
+                    "score": 0.0,
+                    "geom1": 0.0,
+                    "geom2": 0.0,
+                    "subtomo_id": float(len(rows) + 1),
+                    "tomo_id": 1.0,
+                    "object_id": 1.0,
+                    "subtomo_mean": 0.0,
+                    "x": float(x_val),
+                    "y": float(y_val),
+                    "z": float(z_val),
+                    "shift_x": 0.0,
+                    "shift_y": 0.0,
+                    "shift_z": 0.0,
+                    "geom3": 0.0,
+                    "geom4": 0.0,
+                    "geom5": 0.0,
+                    "phi": 0.0,
+                    "psi": 0.0,
+                    "theta": 0.0,
+                    "class": 1.0,
+                }
+            )
         m = cryomotl.Motl()
         m.df = pd.DataFrame(rows)
         pc = structure.IcosahedralComplex(m)
@@ -716,53 +799,49 @@ class TestPolyhedralComplex:
 
     def test_recover_features_invalid_mode(self, path_test_marker_file, mrc_file):
         with pytest.raises(ValueError, match="Invalid mode"):
-            structure.IcosahedralComplex.recover_features(
-                path_test_marker_file, str(mrc_file), mode="random"
-            )
+            structure.IcosahedralComplex.recover_features(path_test_marker_file, str(mrc_file), mode="random")
 
     def test_recover_features_returns_two_arrays(self, path_test_marker_file, mrc_file):
-        v1, v2 = structure.IcosahedralComplex.recover_features(
-            path_test_marker_file, str(mrc_file)
-        )
+        v1, v2 = structure.IcosahedralComplex.recover_features(path_test_marker_file, str(mrc_file))
         assert isinstance(v1, np.ndarray)
         assert isinstance(v2, np.ndarray)
 
     def test_recover_features_output_cmm_is_created(self, path_test_marker_file, tmp_path, mrc_file):
         output_path = tmp_path / "test_out.cmm"
         structure.IcosahedralComplex.recover_features(
-            path_test_marker_file, str(mrc_file),
+            path_test_marker_file,
+            str(mrc_file),
             output_cmm_file=str(output_path),
         )
         assert output_path.exists()
 
-    @pytest.mark.parametrize("mode, expected_ratio", [
-        ("vertices", 1),
-        ("edges", np.sqrt(5) * PHI / 4),
-        ("faces", PHI**2 / (2 * np.sqrt(3))),
-    ])
-    def test_recover_features_correct_dist_no_project(
-        self, path_test_marker_file, mrc_file, mode, expected_ratio
-    ):
+    @pytest.mark.parametrize(
+        "mode, expected_ratio",
+        [
+            ("vertices", 1),
+            ("edges", np.sqrt(5) * PHI / 4),
+            ("faces", PHI**2 / (2 * np.sqrt(3))),
+        ],
+    )
+    def test_recover_features_correct_dist_no_project(self, path_test_marker_file, mrc_file, mode, expected_ratio):
         shift_v1 = np.asarray([112, 156.2, 184.5]) - 112.0
         shift_v2 = np.asarray([184.2, 111.9, 156.7]) - 112.0
         expected_radius = geom.Icosahedron.from_vectors(shift_v1, shift_v2).radius
 
-        vecs, _ = structure.IcosahedralComplex.recover_features(
-            path_test_marker_file, str(mrc_file), mode=mode
-        )
+        vecs, _ = structure.IcosahedralComplex.recover_features(path_test_marker_file, str(mrc_file), mode=mode)
         distances = np.linalg.norm(vecs, axis=1)
         assert np.allclose(distances / expected_radius, expected_ratio, atol=1e-1)
 
     @pytest.mark.parametrize("mode", ["vertices", "edges", "faces"])
-    def test_recover_features_correct_dist_project(
-        self, path_test_marker_file, mrc_file, mode
-    ):
+    def test_recover_features_correct_dist_project(self, path_test_marker_file, mrc_file, mode):
         shift_v1 = np.asarray([112, 156.2, 184.5]) - 112.0
         shift_v2 = np.asarray([184.2, 111.9, 156.7]) - 112.0
         expected_radius = geom.Icosahedron.from_vectors(shift_v1, shift_v2).radius
 
         vecs, _ = structure.IcosahedralComplex.recover_features(
-            path_test_marker_file, str(mrc_file), mode=mode,
+            path_test_marker_file,
+            str(mrc_file),
+            mode=mode,
             project_to_sphere=True,
         )
         distances = np.linalg.norm(vecs, axis=1)
@@ -770,20 +849,26 @@ class TestPolyhedralComplex:
 
     # ------------------------------------------------------------------ expand
 
-    @pytest.mark.parametrize("shift_vecs", [
-        6,
-        np.random.rand(3),
-        np.random.rand(2, 4),
-    ])
+    @pytest.mark.parametrize(
+        "shift_vecs",
+        [
+            6,
+            np.random.rand(3),
+            np.random.rand(2, 4),
+        ],
+    )
     def test_expand_value_error_shifts(self, ico_complex, shift_vecs):
         with pytest.raises(ValueError, match="shift_vecs should be a numpy array"):
             ico_complex.expand(shift_vecs=shift_vecs)
 
-    @pytest.mark.parametrize("col1, col2", [
-        ("object_id", "random"),
-        ("random", "geom2"),
-        ("random1", "random2"),
-    ])
+    @pytest.mark.parametrize(
+        "col1, col2",
+        [
+            ("object_id", "random"),
+            ("random", "geom2"),
+            ("random1", "random2"),
+        ],
+    )
     def test_expand_value_error_wrong_col(self, ico_complex, col1, col2):
         with pytest.raises(ValueError, match="not found in the columns of the input motive list"):
             ico_complex.expand(
@@ -814,15 +899,24 @@ class TestPolyhedralComplex:
         ico_complex.expand(shift_vecs=shift_vecs_test, output_path=str(output_path))
         assert output_path.exists()
 
-    @pytest.mark.parametrize("motl_type, output_file, relion_version, expected_type", [
-        ("stopgap", "output.star", None, cryomotl.StopgapMotl),
-        ("relion", "output.star", 3.1, cryomotl.RelionMotl),
-        ("relion5_1", "output.star", 5.1, cryomotl.RelionMotl),
-        ("dynamo", "output.tbl", None, cryomotl.DynamoMotl),
-    ])
+    @pytest.mark.parametrize(
+        "motl_type, output_file, relion_version, expected_type",
+        [
+            ("stopgap", "output.star", None, cryomotl.StopgapMotl),
+            ("relion", "output.star", 3.1, cryomotl.RelionMotl),
+            ("relion5_1", "output.star", 5.1, cryomotl.RelionMotl),
+            ("dynamo", "output.tbl", None, cryomotl.DynamoMotl),
+        ],
+    )
     def test_expand_different_motl_type(
-        self, ico_complex, shift_vecs_test, tmp_path,
-        motl_type, output_file, relion_version, expected_type,
+        self,
+        ico_complex,
+        shift_vecs_test,
+        tmp_path,
+        motl_type,
+        output_file,
+        relion_version,
+        expected_type,
     ):
         output_path = tmp_path / output_file
         result = ico_complex.expand(
@@ -834,10 +928,13 @@ class TestPolyhedralComplex:
         assert output_path.exists()
         assert isinstance(result, expected_type)
 
-    @pytest.mark.parametrize("original_id_col, order_id_col", [
-        ("object_id", "geom1"),
-        ("geom1", "geom3"),
-    ])
+    @pytest.mark.parametrize(
+        "original_id_col, order_id_col",
+        [
+            ("object_id", "geom1"),
+            ("geom1", "geom3"),
+        ],
+    )
     def test_expand_particle_ordering(self, ico_complex, shift_vecs_test, original_id_col, order_id_col):
         result = ico_complex.expand(
             shift_vecs=shift_vecs_test,
@@ -858,6 +955,7 @@ class TestPolyhedralComplex:
 # Helpers for CnComplex tests
 # ---------------------------------------------------------------------------
 
+
 def _make_synthetic_ring(
     n: int = 8,
     radius: float = 50.0,
@@ -872,15 +970,30 @@ def _make_synthetic_ring(
     z = np.full(n, center[2])
     rows = []
     for i in range(n):
-        rows.append({
-            "score": 0.0, "geom1": 0.0, "geom2": float(i + 1),
-            "subtomo_id": float(i + 1), "tomo_id": tomo_id,
-            "object_id": object_id, "subtomo_mean": 0.0,
-            "x": x[i], "y": y[i], "z": z[i],
-            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
-            "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
-            "phi": float(angles[i]), "psi": 0.0, "theta": 0.0, "class": 1.0,
-        })
+        rows.append(
+            {
+                "score": 0.0,
+                "geom1": 0.0,
+                "geom2": float(i + 1),
+                "subtomo_id": float(i + 1),
+                "tomo_id": tomo_id,
+                "object_id": object_id,
+                "subtomo_mean": 0.0,
+                "x": x[i],
+                "y": y[i],
+                "z": z[i],
+                "shift_x": 0.0,
+                "shift_y": 0.0,
+                "shift_z": 0.0,
+                "geom3": 0.0,
+                "geom4": 0.0,
+                "geom5": 0.0,
+                "phi": float(angles[i]),
+                "psi": 0.0,
+                "theta": 0.0,
+                "class": 1.0,
+            }
+        )
     m = cryomotl.Motl()
     m.df = pd.DataFrame(rows)
     return m
@@ -899,6 +1012,7 @@ def _make_two_ring_motl() -> cryomotl.Motl:
 # ---------------------------------------------------------------------------
 # Tests for geom.barycenter (here so they run alongside structure tests)
 # ---------------------------------------------------------------------------
+
 
 class TestCnComplexInit:
     def test_accepts_string_C8(self):
@@ -972,15 +1086,30 @@ class TestCnComplexCenters:
         """Collinear 4-point input should trigger fallback warning."""
         rows = []
         for i in range(4):
-            rows.append({
-                "score": 0.0, "geom1": 0.0, "geom2": float(i + 1),
-                "subtomo_id": float(i + 1), "tomo_id": 1.0,
-                "object_id": 1.0, "subtomo_mean": 0.0,
-                "x": float(i * 10), "y": 0.0, "z": 0.0,
-                "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
-                "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
-                "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
-            })
+            rows.append(
+                {
+                    "score": 0.0,
+                    "geom1": 0.0,
+                    "geom2": float(i + 1),
+                    "subtomo_id": float(i + 1),
+                    "tomo_id": 1.0,
+                    "object_id": 1.0,
+                    "subtomo_mean": 0.0,
+                    "x": float(i * 10),
+                    "y": 0.0,
+                    "z": 0.0,
+                    "shift_x": 0.0,
+                    "shift_y": 0.0,
+                    "shift_z": 0.0,
+                    "geom3": 0.0,
+                    "geom4": 0.0,
+                    "geom5": 0.0,
+                    "phi": 0.0,
+                    "psi": 0.0,
+                    "theta": 0.0,
+                    "class": 1.0,
+                }
+            )
         m = cryomotl.Motl()
         m.df = pd.DataFrame(rows)
         cs = structure.CnComplex(m, 8, center_method="circle_fit")
@@ -1041,6 +1170,7 @@ class TestCnComplexMergeSubunits:
 # Step 2 helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_ordered_ring(
     n: int = 8,
     radius: float = 50.0,
@@ -1049,8 +1179,7 @@ def _make_ordered_ring(
     object_id: float = 1.0,
 ) -> cryomotl.Motl:
     """Ring with subunit order in geom2 (1-based, matches assign_subunit_order)."""
-    return _make_synthetic_ring(n=n, radius=radius, center=center,
-                                tomo_id=tomo_id, object_id=object_id)
+    return _make_synthetic_ring(n=n, radius=radius, center=center, tomo_id=tomo_id, object_id=object_id)
 
 
 def _drop_subunits(motl: cryomotl.Motl, indices: list[int]) -> cryomotl.Motl:
@@ -1063,6 +1192,7 @@ def _drop_subunits(motl: cryomotl.Motl, indices: list[int]) -> cryomotl.Motl:
 # ---------------------------------------------------------------------------
 # Step 2a — diameter
 # ---------------------------------------------------------------------------
+
 
 class TestCnComplexDiameter:
     def test_even_n_opposite_pairs_approx_2r(self):
@@ -1114,13 +1244,13 @@ class TestCnComplexDiameter:
         cs = structure.CnComplex(m, 8, order_column="geom2", center_method="barycentric")
         s1, _ = cs.diameter(pixel_size=1.0)
         s2, _ = cs.diameter(pixel_size=2.0)
-        np.testing.assert_allclose(s2["mean_diameter"].iloc[0],
-                                   s1["mean_diameter"].iloc[0] * 2.0, atol=1e-6)
+        np.testing.assert_allclose(s2["mean_diameter"].iloc[0], s1["mean_diameter"].iloc[0] * 2.0, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
 # Step 2b — occupancy
 # ---------------------------------------------------------------------------
+
 
 class TestCnComplexOccupancy:
     def test_full_ring_occupancy_one(self):
@@ -1175,6 +1305,7 @@ class TestCnComplexOccupancy:
 # Step 2c — circumference
 # ---------------------------------------------------------------------------
 
+
 class TestCnComplexCircumference:
     def test_circumference_approx_2pi_r(self):
         """Circumference of a C8 ring at radius 50 ≈ 2π×50."""
@@ -1209,6 +1340,7 @@ class TestCnComplexCircumference:
 # Step 2d — get_object_stats
 # ---------------------------------------------------------------------------
 
+
 class TestCnComplexGetObjectStats:
     def test_one_row_per_object(self):
         ring1 = _make_ordered_ring(n=8, radius=50.0, object_id=1.0)
@@ -1224,9 +1356,19 @@ class TestCnComplexGetObjectStats:
         m = _make_ordered_ring(n=8, radius=50.0)
         cs = structure.CnComplex(m, 8, order_column="geom2", center_method="barycentric")
         stats = cs.get_object_stats()
-        for col in ["tomo_id", "object_id", "n_present", "occupancy",
-                    "x", "y", "z", "radius", "circumference",
-                    "mean_diameter", "n_pairs"]:
+        for col in [
+            "tomo_id",
+            "object_id",
+            "n_present",
+            "occupancy",
+            "x",
+            "y",
+            "z",
+            "radius",
+            "circumference",
+            "mean_diameter",
+            "n_pairs",
+        ]:
             assert col in stats.columns, f"missing column: {col}"
 
     def test_values_consistent_with_individual_methods(self):
@@ -1236,25 +1378,20 @@ class TestCnComplexGetObjectStats:
         stats = cs.get_object_stats()
         occ = cs.occupancy()
         circ = cs.circumference()
-        np.testing.assert_allclose(
-            stats["occupancy"].iloc[0], occ["occupancy"].iloc[0]
-        )
-        np.testing.assert_allclose(
-            stats["circumference"].iloc[0], circ["circumference"].iloc[0], atol=1e-6
-        )
+        np.testing.assert_allclose(stats["occupancy"].iloc[0], occ["occupancy"].iloc[0])
+        np.testing.assert_allclose(stats["circumference"].iloc[0], circ["circumference"].iloc[0], atol=1e-6)
 
     def test_centre_approx_correct(self):
         m = _make_ordered_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0))
         cs = structure.CnComplex(m, 8, center_method="barycentric")
         stats = cs.get_object_stats()
-        np.testing.assert_allclose(
-            stats[["x", "y", "z"]].values[0], [100.0, 100.0, 100.0], atol=1e-6
-        )
+        np.testing.assert_allclose(stats[["x", "y", "z"]].values[0], [100.0, 100.0, 100.0], atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
 # Helpers for Step 1B tests
 # ---------------------------------------------------------------------------
+
 
 def _make_multi_tomo_motl() -> cryomotl.Motl:
     """8-subunit ring in tomo 1 + 8-subunit ring in tomo 2 + 1 isolated in tomo 1.
@@ -1263,19 +1400,30 @@ def _make_multi_tomo_motl() -> cryomotl.Motl:
     adjacent-subunit distance ≈ 38 voxels.  The isolated particle is placed at
     (300, 300, 300), well beyond any reasonable NN radius.
     """
-    ring1 = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0),
-                                 tomo_id=1.0, object_id=0.0)
-    ring2 = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0),
-                                 tomo_id=2.0, object_id=0.0)
+    ring1 = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0), tomo_id=1.0, object_id=0.0)
+    ring2 = _make_synthetic_ring(n=8, radius=50.0, center=(100.0, 100.0, 100.0), tomo_id=2.0, object_id=0.0)
     ring2.df["subtomo_id"] += 8
     iso_row = {
-        "score": 0.0, "geom1": 0.0, "geom2": 0.0,
-        "subtomo_id": 17.0, "tomo_id": 1.0,
-        "object_id": 0.0, "subtomo_mean": 0.0,
-        "x": 300.0, "y": 300.0, "z": 300.0,
-        "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
-        "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
-        "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
+        "score": 0.0,
+        "geom1": 0.0,
+        "geom2": 0.0,
+        "subtomo_id": 17.0,
+        "tomo_id": 1.0,
+        "object_id": 0.0,
+        "subtomo_mean": 0.0,
+        "x": 300.0,
+        "y": 300.0,
+        "z": 300.0,
+        "shift_x": 0.0,
+        "shift_y": 0.0,
+        "shift_z": 0.0,
+        "geom3": 0.0,
+        "geom4": 0.0,
+        "geom5": 0.0,
+        "phi": 0.0,
+        "psi": 0.0,
+        "theta": 0.0,
+        "class": 1.0,
     }
     combined = cryomotl.Motl()
     combined.df = pd.concat(
@@ -1304,15 +1452,30 @@ def _make_overcrowded_motl(n_particles: int = 10, score_range: tuple[float, floa
     rows = []
     scores = np.linspace(score_range[0], score_range[1], n_particles)
     for i in range(n_particles):
-        rows.append({
-            "score": float(scores[i]), "geom1": 0.0, "geom2": 0.0,
-            "subtomo_id": float(i + 1), "tomo_id": 1.0,
-            "object_id": 1.0, "subtomo_mean": 0.0,
-            "x": 100.0 + i * 0.5, "y": 100.0, "z": 100.0,
-            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
-            "geom3": float(i * 5), "geom4": 0.0, "geom5": 0.0,
-            "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
-        })
+        rows.append(
+            {
+                "score": float(scores[i]),
+                "geom1": 0.0,
+                "geom2": 0.0,
+                "subtomo_id": float(i + 1),
+                "tomo_id": 1.0,
+                "object_id": 1.0,
+                "subtomo_mean": 0.0,
+                "x": 100.0 + i * 0.5,
+                "y": 100.0,
+                "z": 100.0,
+                "shift_x": 0.0,
+                "shift_y": 0.0,
+                "shift_z": 0.0,
+                "geom3": float(i * 5),
+                "geom4": 0.0,
+                "geom5": 0.0,
+                "phi": 0.0,
+                "psi": 0.0,
+                "theta": 0.0,
+                "class": 1.0,
+            }
+        )
     m = cryomotl.Motl()
     m.df = pd.DataFrame(rows)
     return m
@@ -1321,6 +1484,7 @@ def _make_overcrowded_motl(n_particles: int = 10, score_range: tuple[float, floa
 # ---------------------------------------------------------------------------
 # Step 1B — create_affiliation (radius method)
 # ---------------------------------------------------------------------------
+
 
 class TestCnComplexCreateAffiliationRadius:
     # Adjacent-subunit distance on C8 radius-50 ring ≈ 38.3 voxels;
@@ -1351,9 +1515,7 @@ class TestCnComplexCreateAffiliationRadius:
         """Isolated particle (no NN within radius) gets its own object_id."""
         m = _make_multi_tomo_motl()
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
-        result = cs.create_affiliation(
-            method="radius", radius=self._R, drop_below_min_occupancy=False
-        )
+        result = cs.create_affiliation(method="radius", radius=self._R, drop_below_min_occupancy=False)
         # Tomo 1 has ring (object) + isolated (object) → 2 distinct object_ids
         tomo1_ids = result.df[result.df["tomo_id"] == 1.0]["object_id"].unique()
         assert len(tomo1_ids) == 2
@@ -1363,8 +1525,10 @@ class TestCnComplexCreateAffiliationRadius:
         m = _make_multi_tomo_motl()
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
         result = cs.create_affiliation(
-            method="radius", radius=self._R,
-            min_occupancy=2, drop_below_min_occupancy=True,
+            method="radius",
+            radius=self._R,
+            min_occupancy=2,
+            drop_below_min_occupancy=True,
         )
         tomo1 = result.df[result.df["tomo_id"] == 1.0]
         assert len(tomo1) == 8
@@ -1374,9 +1538,7 @@ class TestCnComplexCreateAffiliationRadius:
         """occupancy_column must equal the row count for that (tomo, object) group."""
         m = _make_multi_tomo_motl()
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
-        result = cs.create_affiliation(
-            method="radius", radius=self._R, occupancy_column="geom2"
-        )
+        result = cs.create_affiliation(method="radius", radius=self._R, occupancy_column="geom2")
         for (_t, _o), grp in result.df.groupby(["tomo_id", "object_id"]):
             occ_vals = grp["geom2"].unique()
             assert len(occ_vals) == 1
@@ -1387,14 +1549,13 @@ class TestCnComplexCreateAffiliationRadius:
 # Step 1B — normals threshold
 # ---------------------------------------------------------------------------
 
+
 class TestCnComplexNormals:
     def test_cone_distance_stored_for_all_particles(self):
         """cone_distance_column is populated for every particle even with no threshold."""
         m = _make_ring_with_tilted_outlier(n=8, tilt=45.0)
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
-        result = cs.create_affiliation(
-            method="radius", radius=44.0, normals_threshold=None
-        )
+        result = cs.create_affiliation(method="radius", radius=44.0, normals_threshold=None)
         assert len(result.df) == 8
         assert result.df["geom3"].notna().all()
 
@@ -1402,33 +1563,28 @@ class TestCnComplexNormals:
         """The particle with theta=45 should have a cone distance > 10°."""
         m = _make_ring_with_tilted_outlier(n=8, tilt=45.0)
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
-        result = cs.create_affiliation(
-            method="radius", radius=44.0, normals_threshold=None
-        )
+        result = cs.create_affiliation(method="radius", radius=44.0, normals_threshold=None)
         assert result.df["geom3"].max() > 10.0
 
     def test_outlier_removed_when_threshold_set(self):
         """With normals_threshold=30°, the ~40° outlier is dropped."""
         m = _make_ring_with_tilted_outlier(n=8, tilt=45.0)
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
-        result = cs.create_affiliation(
-            method="radius", radius=44.0, normals_threshold=30.0
-        )
+        result = cs.create_affiliation(method="radius", radius=44.0, normals_threshold=30.0)
         assert len(result.df) == 7
 
     def test_all_retained_when_threshold_is_none(self):
         """With normals_threshold=None no particles are dropped."""
         m = _make_ring_with_tilted_outlier(n=8, tilt=45.0)
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
-        result = cs.create_affiliation(
-            method="radius", radius=44.0, normals_threshold=None
-        )
+        result = cs.create_affiliation(method="radius", radius=44.0, normals_threshold=None)
         assert len(result.df) == 8
 
 
 # ---------------------------------------------------------------------------
 # Step 1B — over-occupancy warning + clean_per_object
 # ---------------------------------------------------------------------------
+
 
 class TestCnComplexOverOccupancyAndClean:
     def test_over_occupancy_warning_fires(self):
@@ -1477,6 +1633,7 @@ class TestCnComplexOverOccupancyAndClean:
 # ---------------------------------------------------------------------------
 # New class hierarchy tests
 # ---------------------------------------------------------------------------
+
 
 class TestSymmetricComplex:
     def test_d6_n_subunits(self):
@@ -1566,6 +1723,7 @@ class TestComplexCenters:
 # SymmetricComplex base class — promoted methods and dispatch hook
 # ---------------------------------------------------------------------------
 
+
 class TestSymmetricComplexPromotedMethods:
     def test_assign_subunit_order_raises_not_implemented(self):
         """SymmetricComplex.assign_subunit_order raises NotImplementedError."""
@@ -1588,9 +1746,7 @@ class TestSymmetricComplexPromotedMethods:
         extra = _make_ordered_ring(n=8, radius=50.0)
         extra.df["subtomo_id"] += 8  # avoid id collision
         m = cryomotl.Motl()
-        m.df = pd.concat(
-            [_make_ordered_ring(n=8, radius=50.0).df, extra.df], ignore_index=True
-        )
+        m.df = pd.concat([_make_ordered_ring(n=8, radius=50.0).df, extra.df], ignore_index=True)
         cs = structure.CnComplex(m, "C8", order_column="geom2")
         result = cs.clean_per_object("score", keep="high", n=None)
         assert len(result.df) == cs.n_subunits
@@ -1638,21 +1794,32 @@ def _make_dn_motl(
     angles_bot = angles_top + stagger_degrees
     rows = []
     pid = 1
-    for ring_idx, (angles, z_off) in enumerate(
-        [(angles_top, axial_offset / 2.0), (angles_bot, -axial_offset / 2.0)]
-    ):
+    for ring_idx, (angles, z_off) in enumerate([(angles_top, axial_offset / 2.0), (angles_bot, -axial_offset / 2.0)]):
         for ang in angles:
-            rows.append({
-                "score": 0.0, "geom1": 0.0, "geom2": 0.0,
-                "subtomo_id": float(pid), "tomo_id": tomo_id,
-                "object_id": object_id, "subtomo_mean": 0.0,
-                "x": center[0] + radius * np.cos(np.radians(ang)),
-                "y": center[1] + radius * np.sin(np.radians(ang)),
-                "z": center[2] + z_off,
-                "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
-                "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
-                "phi": ang, "psi": 0.0, "theta": 0.0, "class": 1.0,
-            })
+            rows.append(
+                {
+                    "score": 0.0,
+                    "geom1": 0.0,
+                    "geom2": 0.0,
+                    "subtomo_id": float(pid),
+                    "tomo_id": tomo_id,
+                    "object_id": object_id,
+                    "subtomo_mean": 0.0,
+                    "x": center[0] + radius * np.cos(np.radians(ang)),
+                    "y": center[1] + radius * np.sin(np.radians(ang)),
+                    "z": center[2] + z_off,
+                    "shift_x": 0.0,
+                    "shift_y": 0.0,
+                    "shift_z": 0.0,
+                    "geom3": 0.0,
+                    "geom4": 0.0,
+                    "geom5": 0.0,
+                    "phi": ang,
+                    "psi": 0.0,
+                    "theta": 0.0,
+                    "class": 1.0,
+                }
+            )
             pid += 1
     m = cryomotl.Motl()
     m.df = pd.DataFrame(rows)
