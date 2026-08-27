@@ -195,7 +195,7 @@ def register_callbacks(app):
             f"me-{_i}-tabv-table-plot",
             f"me-{_i}-tabv-global-data-store",
             table_grid_id=f"me-{_i}-tabv-grid",
-            pool_aware=True,
+            resolve_df=pool_resolve_df,
         )
         register_table_cluster_callbacks(
             app,
@@ -203,6 +203,7 @@ def register_callbacks(app):
             f"me-{_i}-tabv-global-data-store",
             table_grid_id=f"me-{_i}-tabv-grid",
             pool_aware=True,
+            resolve_df=pool_resolve_df,
         )
 
     # Results tab
@@ -214,8 +215,8 @@ def register_callbacks(app):
         resolve_n_rows=pool_resolve_n_rows,
     )
     register_table_save_callbacks(app, "me-res-tabv", connected_motl_prefix="me-res")
-    register_table_plot_callbacks(app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store", pool_aware=True)
-    register_table_cluster_callbacks(app, "me-res-tabv-table-cluster", "me-res-tabv-global-data-store", pool_aware=True)
+    register_table_plot_callbacks(app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store", resolve_df=pool_resolve_df)
+    register_table_cluster_callbacks(app, "me-res-tabv-table-cluster", "me-res-tabv-global-data-store", pool_aware=True, resolve_df=pool_resolve_df)
 
     _register_pool_sync(app)
     _register_create_from_selected(app)

@@ -124,6 +124,7 @@ def register_tablesave_csv_callbacks(
     app,
     prefix: str,
     *,
+    resolve_df=None,
     extra_csv_states: list | None = None,
     custom_csv_save_fn=None,
 ) -> None:
@@ -149,10 +150,9 @@ def register_tablesave_csv_callbacks(
         if not path:
             return no_update, "Specify a filename."
         try:
-            from cryocat.app.pool import get_rows as _get_rows, PoolPayloadMissing as _PPM
             from cryocat.app.components.tablegrid import apply_filter_model as _afm
-            if global_ref and isinstance(global_ref, dict) and global_ref.get("motl_id"):
-                df = _get_rows(global_ref["motl_id"])
+            df = resolve_df(global_ref) if resolve_df is not None else None
+            if df is not None:
                 df = _afm(df, filter_model or {}, {})
                 if custom_csv_save_fn is not None:
                     result = custom_csv_save_fn(path, df.to_dict("records"), *extra)

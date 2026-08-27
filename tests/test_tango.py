@@ -4,26 +4,26 @@ import types
 import numpy as np
 import pandas as pd
 import pytest
+from pathlib import Path
 from scipy.spatial.transform import Rotation as R
 
 
-# emfile is an optional binary dependency not present in all environments.
-# Stub it so that cryomotl (and everything that imports it) can be collected.
-if "emfile" not in sys.modules:
-    sys.modules["emfile"] = types.ModuleType("emfile")
-
 from cryocat.analysis import nnana
+from cryocat.core import cryomotl
 from cryocat.analysis.tango import (
     Particle,
     SymmParticle,
     Descriptor,
     TwistDescriptor,
+    SHOTDescriptor,
+    AlphaComplexDescriptor,
+    PLComplexDescriptor,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def identity_particle():
@@ -48,6 +48,7 @@ def rotated_particle():
 # ===========================================================================
 # Particle.__init__
 # ===========================================================================
+
 
 class TestParticleInit:
     def test_euler_angles_degrees(self):
@@ -113,6 +114,7 @@ class TestParticleInit:
 # Particle.identity
 # ===========================================================================
 
+
 class TestParticleIdentity:
     def test_rotation_is_eye(self, identity_particle):
         np.testing.assert_allclose(identity_particle.rotation, np.eye(3), atol=1e-12)
@@ -124,6 +126,7 @@ class TestParticleIdentity:
 # ===========================================================================
 # Particle.__eq__ and __hash__
 # ===========================================================================
+
 
 class TestParticleEq:
     def test_equal_to_self(self, simple_particle):
@@ -156,6 +159,7 @@ class TestParticleEq:
 # Particle.inv
 # ===========================================================================
 
+
 class TestParticleInv:
     def test_identity_inv_is_identity(self, identity_particle):
         inv = identity_particle.inv()
@@ -177,6 +181,7 @@ class TestParticleInv:
 # Particle.__mul__
 # ===========================================================================
 
+
 class TestParticleMul:
     def test_identity_times_p_is_p(self, identity_particle, simple_particle):
         result = identity_particle * simple_particle
@@ -194,6 +199,7 @@ class TestParticleMul:
 # ===========================================================================
 # Particle.scale
 # ===========================================================================
+
 
 class TestParticleScale:
     def test_scale_overwrite_true(self):
@@ -221,6 +227,7 @@ class TestParticleScale:
 # ===========================================================================
 # Particle.distance
 # ===========================================================================
+
 
 class TestParticleDistance:
     def test_position_distance_zero_same(self, identity_particle):
@@ -267,6 +274,7 @@ class TestParticleDistance:
 # Particle.in_plane_angle
 # ===========================================================================
 
+
 class TestParticleInPlaneAngle:
     def test_identity_angle_zero(self, identity_particle):
         angle = identity_particle.in_plane_angle(degrees=True)
@@ -288,6 +296,7 @@ class TestParticleInPlaneAngle:
 # Particle.random and Particle.__str__
 # ===========================================================================
 
+
 class TestParticleMisc:
     def test_random_returns_particle(self):
         p = Particle.random((0, 10), (0, 10), (0, 10))
@@ -304,6 +313,7 @@ class TestParticleMisc:
 # ===========================================================================
 # SymmParticle
 # ===========================================================================
+
 
 class TestSymmParticle:
     def test_cyclic_symmetry_integer(self):
@@ -346,6 +356,7 @@ class TestSymmParticle:
 # ===========================================================================
 # Descriptor static methods
 # ===========================================================================
+
 
 class TestDescriptor:
     def test_remove_nans_row(self):
@@ -394,6 +405,7 @@ class TestDescriptor:
 # Particle.tangent_at_identity
 # ===========================================================================
 
+
 class TestParticleTangentAtIdentity:
     def test_identity_returns_zero_vector(self, identity_particle):
         t = identity_particle.tangent_at_identity()
@@ -409,6 +421,7 @@ class TestParticleTangentAtIdentity:
 # ===========================================================================
 # Particle.twist_vector
 # ===========================================================================
+
 
 class TestParticleTwistVector:
     def test_identity_twist_self_is_zero(self, identity_particle):
@@ -428,6 +441,7 @@ class TestParticleTwistVector:
 # ===========================================================================
 # Particle.tangent_subspace_projection
 # ===========================================================================
+
 
 class TestParticleTangentSubspaceProjection:
     def test_orientation_returns_3d(self, identity_particle, simple_particle):
@@ -460,6 +474,7 @@ class TestParticleTangentSubspaceProjection:
 # Particle.add_noise
 # ===========================================================================
 
+
 class TestParticleAddNoise:
     def test_orientation_noise_returns_particle(self, simple_particle):
         noisy = simple_particle.add_noise(noise_level=0.01, mode="orientation")
@@ -490,6 +505,7 @@ class TestParticleAddNoise:
 # SymmParticle.similarity_symm
 # ===========================================================================
 
+
 class TestSymmParticleSimilaritySymm:
     def test_self_similarity_is_one(self):
         sp = SymmParticle(np.eye(3), np.zeros(3), symm=4)
@@ -519,15 +535,18 @@ class TestSymmParticleSimilaritySymm:
 # Descriptor.filter_features
 # ===========================================================================
 
+
 class TestDescriptorFilterFeatures:
     @pytest.fixture
     def desc_with_df(self):
         d = Descriptor()
-        d.desc = pd.DataFrame({
-            "qp_id": [1, 2, 3],
-            "feat_a": [0.1, 0.2, 0.3],
-            "feat_b": [1.0, 2.0, 3.0],
-        })
+        d.desc = pd.DataFrame(
+            {
+                "qp_id": [1, 2, 3],
+                "feat_a": [0.1, 0.2, 0.3],
+                "feat_b": [1.0, 2.0, 3.0],
+            }
+        )
         return d
 
     def test_all_returns_full_df(self, desc_with_df):
@@ -562,27 +581,30 @@ class TestDescriptorFilterFeatures:
 # TwistDescriptor.process_tomo_twist
 # ===========================================================================
 
+
 def _make_nn(column_name="tomo_id", feature_value=1, n_pairs=2):
     """Return a blank NearestNeighbors with a minimal df for process_tomo_twist."""
     nn = nnana.NearestNeighbors()
     nn.column_name = column_name
-    nn.df = pd.DataFrame({
-        column_name:       [feature_value] * n_pairs,
-        "qp_subtomo_id":   list(range(1, n_pairs + 1)),
-        "nn_subtomo_id":   list(range(n_pairs + 1, 2 * n_pairs + 1)),
-        "qp_angles_phi":   [0.0]  * n_pairs,
-        "qp_angles_theta": [0.0]  * n_pairs,
-        "qp_angles_psi":   [0.0]  * n_pairs,
-        "nn_angles_phi":   [90.0] * n_pairs,
-        "nn_angles_theta": [45.0] * n_pairs,
-        "nn_angles_psi":   [0.0]  * n_pairs,
-        "qp_coord_x":      [0.0]  * n_pairs,
-        "qp_coord_y":      [0.0]  * n_pairs,
-        "qp_coord_z":      [0.0]  * n_pairs,
-        "nn_coord_x":      [10.0] * n_pairs,
-        "nn_coord_y":      [10.0] * n_pairs,
-        "nn_coord_z":      [10.0] * n_pairs,
-    })
+    nn.df = pd.DataFrame(
+        {
+            column_name: [feature_value] * n_pairs,
+            "qp_subtomo_id": list(range(1, n_pairs + 1)),
+            "nn_subtomo_id": list(range(n_pairs + 1, 2 * n_pairs + 1)),
+            "qp_angles_phi": [0.0] * n_pairs,
+            "qp_angles_theta": [0.0] * n_pairs,
+            "qp_angles_psi": [0.0] * n_pairs,
+            "nn_angles_phi": [90.0] * n_pairs,
+            "nn_angles_theta": [45.0] * n_pairs,
+            "nn_angles_psi": [0.0] * n_pairs,
+            "qp_coord_x": [0.0] * n_pairs,
+            "qp_coord_y": [0.0] * n_pairs,
+            "qp_coord_z": [0.0] * n_pairs,
+            "nn_coord_x": [10.0] * n_pairs,
+            "nn_coord_y": [10.0] * n_pairs,
+            "nn_coord_z": [10.0] * n_pairs,
+        }
+    )
     return nn
 
 
@@ -608,10 +630,17 @@ class TestTwistDescriptorProcessTwist:
         nn = _make_nn(column_name="tomo_id")
         result = TwistDescriptor.process_tomo_twist(nn)
         expected = {
-            "qp_id", "nn_id", "tomo_id",
-            "twist_so_x", "twist_so_y", "twist_so_z",
-            "twist_x", "twist_y", "twist_z",
-            "qp_inplane", "nn_inplane",
+            "qp_id",
+            "nn_id",
+            "tomo_id",
+            "twist_so_x",
+            "twist_so_y",
+            "twist_so_z",
+            "twist_x",
+            "twist_y",
+            "twist_z",
+            "qp_inplane",
+            "nn_inplane",
         }
         assert set(result.columns) == expected
 
@@ -637,13 +666,11 @@ class TestTwistDescriptorProcessTwist:
 
     def test_identity_rotation_zero_so_twist(self):
         nn = _make_nn()
-        nn.df["nn_angles_phi"]   = 0.0
+        nn.df["nn_angles_phi"] = 0.0
         nn.df["nn_angles_theta"] = 0.0
-        nn.df["nn_angles_psi"]   = 0.0
+        nn.df["nn_angles_psi"] = 0.0
         result = TwistDescriptor.process_tomo_twist(nn)
-        np.testing.assert_allclose(result[["twist_so_x", "twist_so_y", "twist_so_z"]].values,
-                                   0.0, atol=1e-6)
-
+        np.testing.assert_allclose(result[["twist_so_x", "twist_so_y", "twist_so_z"]].values, 0.0, atol=1e-6)
 
 
 # ── TwistDescriptor.check_twist_columns ──────────────────────────────────────
@@ -720,11 +747,13 @@ class TestDeriveNNRadius:
         assert math.isclose(result, 5.0, rel_tol=1e-9)
 
     def test_returns_maximum(self):
-        df = _minimal_twist_df({
-            "twist_x": [1.0, 0.0, 3.0],
-            "twist_y": [0.0, 2.0, 4.0],
-            "twist_z": [0.0, 0.0, 0.0],
-        })
+        df = _minimal_twist_df(
+            {
+                "twist_x": [1.0, 0.0, 3.0],
+                "twist_y": [0.0, 2.0, 4.0],
+                "twist_z": [0.0, 0.0, 0.0],
+            }
+        )
         assert math.isclose(TwistDescriptor.derive_nn_radius(df), 5.0, rel_tol=1e-9)
 
     def test_zero_vectors(self):
@@ -737,21 +766,25 @@ class TestDeriveNNRadius:
         assert isinstance(result, float)
 
     def test_all_equal_magnitudes(self):
-        df = _minimal_twist_df({
-            "twist_x": [3.0, 3.0],
-            "twist_y": [4.0, 4.0],
-            "twist_z": [0.0, 0.0],
-        })
+        df = _minimal_twist_df(
+            {
+                "twist_x": [3.0, 3.0],
+                "twist_y": [4.0, 4.0],
+                "twist_z": [0.0, 0.0],
+            }
+        )
         assert math.isclose(TwistDescriptor.derive_nn_radius(df), 5.0, rel_tol=1e-9)
 
 
 class TestTwistDescriptorRadiusStorage:
     def _make_td(self, twist_x=3.0, twist_y=4.0, twist_z=0.0, nn_radius=None):
-        df = _minimal_twist_df({
-            "twist_x": [twist_x],
-            "twist_y": [twist_y],
-            "twist_z": [twist_z],
-        })
+        df = _minimal_twist_df(
+            {
+                "twist_x": [twist_x],
+                "twist_y": [twist_y],
+                "twist_z": [twist_z],
+            }
+        )
         return TwistDescriptor(input_twist=df, nn_radius=nn_radius)
 
     def test_radius_derived_when_not_given(self):
@@ -778,9 +811,7 @@ class TestTwistDescriptorRadiusStorage:
     def test_compute_path_sets_given_source(self):
         from cryocat.core.cryomotl import Motl
 
-        df = pd.DataFrame({
-            col: [1.0, 2.0] for col in Motl.motl_columns
-        })
+        df = pd.DataFrame({col: [1.0, 2.0] for col in Motl.motl_columns})
         df["subtomo_id"] = [1.0, 2.0]
         df["tomo_id"] = [1.0, 1.0]
         motl = Motl(df)
@@ -798,3 +829,49 @@ class TestTwistDescriptorRadiusStorage:
         assert hasattr(td, "nn_radius")
         assert hasattr(td, "radius_source")
         assert td.radius_source in ("computed", "given", "unknown")
+
+
+# ── TwistDescriptor Integration tests ──────────────────────────────────────
+
+GT_TWIST_DF = pd.read_csv(Path(__file__).parent / "test_data" / "tango" / "gt_twist_vector_r5.csv")
+
+
+def test_integration_twist_computation():
+
+    input_motl = cryomotl.Motl.load(Path(__file__).parent / "test_data" / "tango" / "motl_cone.em")
+
+    motl = cryomotl.Motl.load(input_motl=input_motl, motl_type="emmotl")
+    twist = TwistDescriptor(
+        input_motl=motl,
+        nn_radius=5,
+        column_name="tomo_id",
+        symm=None,
+        remove_qp=False,
+        remove_duplicates=False,
+        build_unique_desc=False,
+    )
+    np.testing.assert_allclose(twist.df.to_numpy(), GT_TWIST_DF.to_numpy(), atol=1e-10)
+
+
+def test_integration_shot_descriptor():
+    desc = SHOTDescriptor(twist_df=GT_TWIST_DF, cone_number=6, shell_number=1, north_pole_axis=None)
+    gt_shot = pd.read_csv(Path(__file__).parent / "test_data" / "tango" / "gt_shot.csv")
+    np.testing.assert_allclose(desc.desc.to_numpy(), gt_shot.to_numpy(), atol=1e-10)
+
+
+def test_integration_alpha_complex_descriptor():
+    desc = AlphaComplexDescriptor(twist_df=GT_TWIST_DF, alpha_param=200.0)
+    gt_alpha = pd.read_csv(Path(__file__).parent / "test_data" / "tango" / "gt_alpha.csv")
+    np.testing.assert_allclose(desc.desc.to_numpy(), gt_alpha.to_numpy(), atol=1e-10)
+
+
+def test_integration_pl_complex_descriptor():
+    desc = PLComplexDescriptor(twist_df=GT_TWIST_DF)
+    gt_pl = df = pd.read_csv(Path(__file__).parent / "test_data" / "tango" / "gt_pl.csv")
+    np.testing.assert_allclose(desc.desc.to_numpy(), gt_pl.to_numpy(), atol=1e-10)
+
+
+def test_integration_twist_descriptor_from_input():
+    desc = TwistDescriptor(input_twist=GT_TWIST_DF)
+    gt_twist_desc = pd.read_csv(Path(__file__).parent / "test_data" / "tango" / "gt_twist_desc.csv")
+    np.testing.assert_allclose(desc.desc.to_numpy(), gt_twist_desc.to_numpy(), atol=1e-10)

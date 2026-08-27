@@ -414,11 +414,12 @@ def test_rows_callback_not_prevent_initial_call():
     )
 
 
-def test_mount_grid_callback_registered():
-    """GRID_ROWS_FINAL: _mount_grid must output to {prefix}-grid-container.children.
+def test_cols_callback_registered():
+    """GRID_BUILD_ONCE: _cols must output to {prefix}-grid.columnDefs.
 
-    The grid is built with real columns only when the motl loads and the container
-    is visible, so AG Grid always initialises with a non-empty viewport.
+    The grid is built once in the layout.  _cols updates columnDefs in-place
+    when data loads — this is the signal that triggers purgeInfiniteCache and
+    a fresh getRowsRequest.
     """
     from dash import Dash, html
     from cryocat.app.components.tablegrid import register_tablegrid_callbacks
@@ -431,50 +432,23 @@ def test_mount_grid_callback_registered():
         resolve_n_rows=lambda ref: 0,
     )
 
-    cb_entry = next(
-        (c for c in app._callback_list if c.get("output") == "ric-grid-container.children"),
-        None,
-    )
-    assert cb_entry is not None, "_mount_grid callback not found (output=ric-grid-container.children)"
-    assert not cb_entry.get("prevent_initial_call"), (
-        "_mount_grid has prevent_initial_call=True — it will not fire on page load"
+    outputs = [str(c.get("output", "")) for c in app._callback_list]
+    assert any("ric-grid.columnDefs" in o for o in outputs), (
+        "_cols callback not found — nothing outputs to ric-grid.columnDefs"
     )
 
 
-def test_make_grid_has_no_size_to_fit(sample_df):
-    """POST_RESET_CHANGES W2: _make_grid must NOT set columnSize.
+def test_row_keys_match_column_fields(sample_df):
+    """GRID_BUILD_ONCE S3: to_dict('records') keys must cover all col_defs_from_df fields.
 
-    responsiveSizeToFit / sizeToFit calls sizeColumnsToFit() which returns 0 for
-    a hidden container (AG Grid warning #29).  Columns carry minWidth instead and
-    the grid scrolls horizontally.
+    If a field name in columnDefs doesn't match a key in the row dicts, AG Grid
+    renders blank cells even though the data loaded correctly.
     """
-    from cryocat.app.components.tablegrid import _make_grid, col_defs_from_df
-    col_defs = col_defs_from_df(sample_df)
-    grid = _make_grid("test-pfx", col_defs)
-    val = getattr(grid, "columnSize", None)
-    assert val is None, (
-        f"_make_grid has columnSize={val!r} — remove it; use minWidth on columnDefs instead"
-    )
-
-
-def test_make_grid_nonempty_col_defs_and_positive_initial_row_count(sample_df):
-    """GRID_EMPTY_ROWS_REGRESSION T1: _make_grid must produce non-empty columnDefs
-    and a positive infiniteInitialRowCount.
-
-    An empty columnDefs means AG Grid never requests rows (cause 3 of the original
-    bug).  infiniteInitialRowCount=0 is rejected by AG Grid as invalid; the value
-    must be >= 1 and should reflect the actual data size.
-    """
-    from cryocat.app.components.tablegrid import _make_grid, col_defs_from_df
-    col_defs = col_defs_from_df(sample_df)
-    grid = _make_grid("test-pfx", col_defs, n_rows=len(sample_df))
-    assert len(grid.columnDefs) > 0, (
-        "columnDefs must not be empty — an empty grid never requests rows"
-    )
-    init_count = (grid.dashGridOptions or {}).get("infiniteInitialRowCount", 0)
-    assert init_count > 0, (
-        f"infiniteInitialRowCount must be > 0, got {init_count!r} — "
-        "AG Grid rejects 0 as invalid"
+    from cryocat.app.components.tablegrid import col_defs_from_df
+    fields = {d["field"] for d in col_defs_from_df(sample_df)}
+    row = sample_df.to_dict("records")[0]
+    assert set(row) >= fields, (
+        f"Row dict keys {set(row)} do not cover all col_def fields {fields}"
     )
 
 

@@ -2916,9 +2916,9 @@ class PLComplexDescriptor(Descriptor):
         self.ordered_vertices = {}
         self.ordered_nn = {}
         self.triangles = {}
-        self.pl_df = pd.DataFrame()
 
         # Group input_twist by 'qp_id'
+        _pl_frames = []
         for qp_id, group in twist_df.groupby("qp_id"):
 
             self.ordered_vertices[qp_id], sorted_indices = geom.order_points_on_circle(
@@ -2927,7 +2927,8 @@ class PLComplexDescriptor(Descriptor):
             self.ordered_nn[qp_id] = group["nn_id"].to_numpy()[sorted_indices]
             self.triangles[qp_id] = self.compute_triangles(qp_id)
             if self.triangles[qp_id] is not None:
-                self.pl_df = pd.concat([self.pl_df, self.compute_features(qp_id)])
+                _pl_frames.append(self.compute_features(qp_id))
+        self.pl_df = pd.concat(_pl_frames) if _pl_frames else pd.DataFrame()
 
         self.df = twist_df
 
@@ -3043,9 +3044,10 @@ class SHOTDescriptor(Descriptor):
         max_radius = twist_df["euclidean_distance"].max()
         self.cone_number = cone_number
         self.shell_number = shell_number
+        self._cone_dirs = self.generate_rotated_axes(cone_number, north_pole_axis)
 
-        self.shot_df = pd.DataFrame()
         # Group input_twist by 'qp_id'
+        _shot_frames = []
         for qp_id, group_df in twist_df.groupby("qp_id"):
             coord = group_df[["twist_x", "twist_y", "twist_z"]].to_numpy()
             assigned_df = self.assign_shell_and_cone_ids(
@@ -3053,7 +3055,8 @@ class SHOTDescriptor(Descriptor):
             )
             assigned_df["qp_id"] = qp_id
             assigned_df["nn_id"] = group_df["nn_id"].values
-            self.shot_df = pd.concat([self.shot_df, assigned_df])
+            _shot_frames.append(assigned_df)
+        self.shot_df = pd.concat(_shot_frames) if _shot_frames else pd.DataFrame()
 
         self.df = twist_df
         if build_unique_desc:
@@ -3202,8 +3205,9 @@ class SHOTDescriptor(Descriptor):
         shell_edges = np.linspace(0, radius, num_shells + 1)
         shell_id = np.digitize(r_norms, shell_edges) - 1
 
-        # Get predefined cone directions
-        cone_dirs = self.generate_rotated_axes(num_cones, north_pole_axis=north_pole_axis)
+        # Use pre-computed directions if available (set by __init__), else compute on demand.
+        _cached = getattr(self, "_cone_dirs", None)
+        cone_dirs = _cached if _cached is not None else self.generate_rotated_axes(num_cones, north_pole_axis=north_pole_axis)
 
         # Normalize points and cone directions
         normed_points = points / np.linalg.norm(points, axis=1, keepdims=True)
@@ -3246,9 +3250,9 @@ class AlphaComplexDescriptor(Descriptor):
         self.stars = {}
         self.triangles = {}
         self.link_edges = {}
-        self.alpha_df = pd.DataFrame()
 
         # Group input_twist by 'qp_id'
+        _alpha_frames = []
         for qp_id, group in twist_df.groupby("qp_id"):
             coord = group[["twist_x", "twist_y", "twist_z"]].to_numpy()
             if coord.shape[0] < 2:
@@ -3257,7 +3261,8 @@ class AlphaComplexDescriptor(Descriptor):
             self.triangles[qp_id], self.link_edges[qp_id] = self.compute_alpha_complex(coord)
 
             if self.triangles[qp_id] is not None:
-                self.alpha_df = pd.concat([self.alpha_df, self.compute_features(qp_id)])
+                _alpha_frames.append(self.compute_features(qp_id))
+        self.alpha_df = pd.concat(_alpha_frames) if _alpha_frames else pd.DataFrame()
 
         self.df = twist_df
         if build_unique_desc:

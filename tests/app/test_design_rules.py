@@ -14,6 +14,7 @@ Run::
 
 to get the full violation listing before starting D3.
 """
+
 from __future__ import annotations
 
 import ast
@@ -53,6 +54,7 @@ def _rel(path: pathlib.Path) -> str:
 
 # ── AST helpers ───────────────────────────────────────────────────────────────
 
+
 def _parse(path: pathlib.Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
@@ -77,28 +79,48 @@ _S1_EXEMPT: dict[tuple[str, int], str] = {
     # (rel_path, line): reason
     # ── Pre-existing fontSize literals in files outside the current scope ───────
     # motlinput.py — label/span sizes; deferred to motlinput refactor
-    (str(pathlib.Path("cryocat/app/components/motlinput.py")), 72):
-        "pre-existing fontSize in motlinput; deferred to motlinput refactor",
-    (str(pathlib.Path("cryocat/app/components/motlinput.py")), 131):
-        "pre-existing fontSize in motlinput; deferred to motlinput refactor",
+    (
+        str(pathlib.Path("cryocat/app/components/motlinput.py")),
+        72,
+    ): "pre-existing fontSize in motlinput; deferred to motlinput refactor",
+    (
+        str(pathlib.Path("cryocat/app/components/motlinput.py")),
+        131,
+    ): "pre-existing fontSize in motlinput; deferred to motlinput refactor",
     # poolpicker.py — span label sizes; deferred to pool-list refactor
-    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 101):
-        "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
-    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 120):
-        "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
-    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 147):
-        "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
-    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 188):
-        "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
+    (
+        str(pathlib.Path("cryocat/app/components/poolpicker.py")),
+        101,
+    ): "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
+    (
+        str(pathlib.Path("cryocat/app/components/poolpicker.py")),
+        120,
+    ): "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
+    (
+        str(pathlib.Path("cryocat/app/components/poolpicker.py")),
+        147,
+    ): "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
+    (
+        str(pathlib.Path("cryocat/app/components/poolpicker.py")),
+        188,
+    ): "pre-existing fontSize in poolpicker; deferred to pool-list refactor",
     # motlsidebar.py — motl-type / file labels; deferred to sidebar refactor
-    (str(pathlib.Path("cryocat/app/suite/motlsidebar.py")), 170):
-        "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
-    (str(pathlib.Path("cryocat/app/suite/motlsidebar.py")), 188):
-        "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
-    (str(pathlib.Path("cryocat/app/suite/motlsidebar.py")), 391):
-        "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
-    (str(pathlib.Path("cryocat/app/suite/motlsidebar.py")), 482):
-        "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
+    (
+        str(pathlib.Path("cryocat/app/suite/motlsidebar.py")),
+        170,
+    ): "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
+    (
+        str(pathlib.Path("cryocat/app/suite/motlsidebar.py")),
+        188,
+    ): "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
+    (
+        str(pathlib.Path("cryocat/app/suite/motlsidebar.py")),
+        391,
+    ): "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
+    (
+        str(pathlib.Path("cryocat/app/suite/motlsidebar.py")),
+        482,
+    ): "pre-existing fontSize in motlsidebar; deferred to sidebar refactor",
 }
 
 
@@ -139,22 +161,34 @@ _S3_EXEMPT: dict[tuple[str, int], str] = {
     # poolpicker.py: list-item helper divs are also the flex containers; the
     # marginBottom gives per-item gap.  Proper fix is parent gap= — deferred to
     # the pool-list display refactor.
-    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 110):
-        "list-item flex row: marginBottom is item gap; fix when pool list is refactored",
-    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 130):
-        "list-item flex row: marginBottom is item gap; fix when pool list is refactored",
-    (str(pathlib.Path("cryocat/app/components/poolpicker.py")), 157):
-        "list-item flex row: marginBottom is item gap; fix when pool list is refactored",
+    (
+        str(pathlib.Path("cryocat/app/components/poolpicker.py")),
+        110,
+    ): "list-item flex row: marginBottom is item gap; fix when pool list is refactored",
+    (
+        str(pathlib.Path("cryocat/app/components/poolpicker.py")),
+        130,
+    ): "list-item flex row: marginBottom is item gap; fix when pool list is refactored",
+    (
+        str(pathlib.Path("cryocat/app/components/poolpicker.py")),
+        157,
+    ): "list-item flex row: marginBottom is item gap; fix when pool list is refactored",
     # motlinput.py: RadioItems flex row with marginBottom (selector spacing).
-    (str(pathlib.Path("cryocat/app/components/motlinput.py")), 54):
-        "RadioItems flex row: marginBottom gives post-selector spacing; deferred to motlinput refactor",
+    (
+        str(pathlib.Path("cryocat/app/components/motlinput.py")),
+        54,
+    ): "RadioItems flex row: marginBottom gives post-selector spacing; deferred to motlinput refactor",
     # motlinput.py: dict returned as a callback Output (not a rendered component);
     # §3 targets layout literals, not programmatic style values.
-    (str(pathlib.Path("cryocat/app/components/motlinput.py")), 216):
-        "callback Output style dict — not a rendered literal; §3 applies to layout literals only",
+    (
+        str(pathlib.Path("cryocat/app/components/motlinput.py")),
+        216,
+    ): "callback Output style dict — not a rendered literal; §3 applies to layout literals only",
     # motlsidebar.py: RadioItems flex row with marginBottom for post-load spacing.
-    (str(pathlib.Path("cryocat/app/suite/motlsidebar.py")), 109):
-        "RadioItems flex row: marginBottom gives post-load spacing; deferred to sidebar refactor",
+    (
+        str(pathlib.Path("cryocat/app/suite/motlsidebar.py")),
+        109,
+    ): "RadioItems flex row: marginBottom gives post-load spacing; deferred to sidebar refactor",
 }
 
 _S3_MARGIN_KEYS = {"marginBottom", "marginTop"}
@@ -315,7 +349,8 @@ def _s6_collect() -> list[tuple[str, int, str]]:
                 elif kw.arg == "style" and isinstance(kw.value, ast.Dict):
                     for k, v in _dict_pairs(kw.value):
                         if (
-                            _is_str(k) and k.value in _GREEN_STYLE_KEYS
+                            _is_str(k)
+                            and k.value in _GREEN_STYLE_KEYS
                             and isinstance(v, ast.Constant)
                             and isinstance(v.value, str)
                             and _is_green(v.value)
@@ -338,9 +373,9 @@ def test_s6_no_green_buttons() -> None:
 # §7 — Every visplot palette appears in paletteloader presets
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_s7_palette_coverage() -> None:
     """§7: every palette/scale registered in visplot is listed in paletteloader."""
-    sys.modules.setdefault("emfile", types.ModuleType("emfile"))
 
     from cryocat.analysis.visplot import CUSTOM_PALETTES, CUSTOM_SCALES
     from cryocat.app.components.paletteloader import _DISCRETE_PRESETS, _CONTINUOUS_PRESETS
@@ -482,7 +517,7 @@ def test_s9_no_bare_path_input() -> None:
 
 _DISPATCH_BLACKLIST: dict[tuple[str, str], str] = {
     # module       attr           why direct call is forbidden
-    ("cryomap",  "write"):     "must route through run_operation(cryomap.write, …)",
+    ("cryomap", "write"): "must route through run_operation(cryomap.write, …)",
 }
 
 _DISPATCH_EXEMPT: dict[tuple[str, int], str] = {
@@ -584,45 +619,83 @@ def test_a4_suite_pages_import_run_operation() -> None:
 
 _S10_EXEMPT: dict[tuple[str, int], str] = {
     # ── Pre-existing hand-rolled rows — fix in future per-module refactors ────
-    (str(pathlib.Path("cryocat/app/suite/pages/pnn.py")), 70):
-        "pre-existing: _postprocess_sidebar_content Div has Label+Checklist; deferred to pnn refactor",
-    (str(pathlib.Path("cryocat/app/suite/pages/psta.py")), 102):
-        "pre-existing: _field_text helper Div has Label+dbc.Input; deferred to psta refactor",
-    (str(pathlib.Path("cryocat/app/suite/pages/psta.py")), 113):
-        "pre-existing: _field_num helper Div has Label+dbc.Input; deferred",
-    (str(pathlib.Path("cryocat/app/suite/pages/psta.py")), 1303):
-        "pre-existing: _mc_panel Div has Label+dcc.Slider; deferred",
-    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 166):
-        "pre-existing: _slider_row Div has Label+dbc.Input; deferred to pvolume refactor",
-    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 186):
-        "pre-existing: _lp_slider_row Div has Label+dbc.Input; deferred",
-    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 211):
-        "pre-existing: _lp_number_row Div has Label+dbc.Input; deferred",
-    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 362):
-        "pre-existing: vol sidebar Bin-factor Div has Label+dbc.Input; deferred",
-    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 423):
-        "pre-existing: vol sidebar View Div has Label+dcc.RadioItems; deferred",
-    (str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")), 463):
-        "pre-existing: vol Create-mask Pixel-size Div has Label+dbc.Input; deferred",
-    (str(pathlib.Path("cryocat/app/components/tablecluster.py")), 48):
-        "pre-existing: kmeans-opts Div has Label+dcc.Checklist+dcc.Slider; deferred to tablecluster refactor",
-    (str(pathlib.Path("cryocat/app/components/tablecluster.py")), 124):
-        "pre-existing: prox-opts Div has Label+dcc.Slider; deferred",
-    (str(pathlib.Path("cryocat/app/components/customel.py")), 72):
-        "pre-existing: inline_input helper Div has dbc.Label+dbc.Input; deferred to customel refactor",
-    (str(pathlib.Path("cryocat/app/components/motlinput.py")), 40):
-        "pre-existing: get_motl_input Div has html.Label+dbc.RadioItems; deferred",
-    (str(pathlib.Path("cryocat/app/components/rotationbuilder.py")), 49):
-        "pre-existing: _num_row helper Div has html.Label+dcc.Input; deferred to rotationbuilder refactor",
-    (str(pathlib.Path("cryocat/app/suite/pages/pstructure.py")), 1448):
-        "pre-existing: surfaces send-to-editor Div has html.Label+dbc.Input; deferred",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/pnn.py")),
+        70,
+    ): "pre-existing: _postprocess_sidebar_content Div has Label+Checklist; deferred to pnn refactor",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/psta.py")),
+        102,
+    ): "pre-existing: _field_text helper Div has Label+dbc.Input; deferred to psta refactor",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/psta.py")),
+        113,
+    ): "pre-existing: _field_num helper Div has Label+dbc.Input; deferred",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/psta.py")),
+        1303,
+    ): "pre-existing: _mc_panel Div has Label+dcc.Slider; deferred",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")),
+        166,
+    ): "pre-existing: _slider_row Div has Label+dbc.Input; deferred to pvolume refactor",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")),
+        186,
+    ): "pre-existing: _lp_slider_row Div has Label+dbc.Input; deferred",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")),
+        211,
+    ): "pre-existing: _lp_number_row Div has Label+dbc.Input; deferred",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")),
+        362,
+    ): "pre-existing: vol sidebar Bin-factor Div has Label+dbc.Input; deferred",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")),
+        423,
+    ): "pre-existing: vol sidebar View Div has Label+dcc.RadioItems; deferred",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/pvolume.py")),
+        463,
+    ): "pre-existing: vol Create-mask Pixel-size Div has Label+dbc.Input; deferred",
+    (
+        str(pathlib.Path("cryocat/app/components/tablecluster.py")),
+        48,
+    ): "pre-existing: kmeans-opts Div has Label+dcc.Checklist+dcc.Slider; deferred to tablecluster refactor",
+    (
+        str(pathlib.Path("cryocat/app/components/tablecluster.py")),
+        124,
+    ): "pre-existing: prox-opts Div has Label+dcc.Slider; deferred",
+    (
+        str(pathlib.Path("cryocat/app/components/customel.py")),
+        72,
+    ): "pre-existing: inline_input helper Div has dbc.Label+dbc.Input; deferred to customel refactor",
+    (
+        str(pathlib.Path("cryocat/app/components/motlinput.py")),
+        40,
+    ): "pre-existing: get_motl_input Div has html.Label+dbc.RadioItems; deferred",
+    (
+        str(pathlib.Path("cryocat/app/components/rotationbuilder.py")),
+        49,
+    ): "pre-existing: _num_row helper Div has html.Label+dcc.Input; deferred to rotationbuilder refactor",
+    (
+        str(pathlib.Path("cryocat/app/suite/pages/pstructure.py")),
+        1448,
+    ): "pre-existing: surfaces send-to-editor Div has html.Label+dbc.Input; deferred",
 }
 
 _S10_LABEL_LIKE: frozenset[str] = frozenset({"Label"})
-_S10_INPUT_LIKE: frozenset[str] = frozenset({
-    "Input", "Slider", "RangeSlider",
-    "Checklist", "RadioItems", "Select",
-})
+_S10_INPUT_LIKE: frozenset[str] = frozenset(
+    {
+        "Input",
+        "Slider",
+        "RangeSlider",
+        "Checklist",
+        "RadioItems",
+        "Select",
+    }
+)
 
 
 def _s10_has_label_and_input(children: ast.List) -> bool:
@@ -682,48 +755,48 @@ def test_s10_no_hand_rolled_form_row() -> None:
 
 # ── T1: tango palette scoping ─────────────────────────────────────────────────
 
-_SUITE_ASSETS_THEME = (
-    pathlib.Path(__file__).parent.parent.parent
-    / "cryocat" / "app" / "suite" / "assets" / "theme.css"
-)
+_SUITE_ASSETS_THEME = pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app" / "suite" / "assets" / "theme.css"
 
 _TANGO_PALETTE_VARS = [
-    "--color1", "--color2", "--color3", "--color4", "--color5",
-    "--color6", "--color7", "--color8", "--color9", "--color10",
-    "--color11", "--color12", "--color13",
+    "--color1",
+    "--color2",
+    "--color3",
+    "--color4",
+    "--color5",
+    "--color6",
+    "--color7",
+    "--color8",
+    "--color9",
+    "--color10",
+    "--color11",
+    "--color12",
+    "--color13",
 ]
 
-_SUITE_PAGES_DIR = (
-    pathlib.Path(__file__).parent.parent.parent
-    / "cryocat" / "app" / "suite" / "pages"
-)
+_SUITE_PAGES_DIR = pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app" / "suite" / "pages"
 
 
 def test_t1_tango_layout_has_tango_theme_class() -> None:
     """T1: ptango.layout root carries className containing 'tango-theme'."""
     from cryocat.app.suite.pages import ptango
+
     root = ptango.layout
     cls = getattr(root, "className", None) or ""
-    assert "tango-theme" in cls, (
-        f"ptango.layout root className={cls!r} does not contain 'tango-theme'"
-    )
+    assert "tango-theme" in cls, f"ptango.layout root className={cls!r} does not contain 'tango-theme'"
 
 
 def test_t1_served_css_defines_tango_theme_block() -> None:
     """T1: suite/assets/theme.css contains a .tango-theme block with all 13 variables."""
     css = _SUITE_ASSETS_THEME.read_text(encoding="utf-8")
-    assert ".tango-theme" in css, (
-        "suite/assets/theme.css has no .tango-theme block — W1 palette not written"
-    )
+    assert ".tango-theme" in css, "suite/assets/theme.css has no .tango-theme block — W1 palette not written"
     missing = [v for v in _TANGO_PALETTE_VARS if v not in css]
-    assert not missing, (
-        f".tango-theme block is missing variables: {missing}"
-    )
+    assert not missing, f".tango-theme block is missing variables: {missing}"
 
 
 def test_t1_no_other_suite_page_carries_tango_theme() -> None:
     """T1: no suite page other than ptango carries className='tango-theme'."""
     import importlib.util
+
     bad: list[str] = []
     for py in sorted(_SUITE_PAGES_DIR.glob("*.py")):
         if py.stem == "ptango":

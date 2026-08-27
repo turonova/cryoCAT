@@ -545,10 +545,10 @@ def register_callbacks(app):  # noqa: C901
         resolve_df=pool_resolve_df, resolve_n_rows=pool_resolve_n_rows,
     )
     register_table_plot_callbacks(
-        app, "dp-view-tabv-table-plot", "dp-view-tabv-global-data-store", pool_aware=True,
+        app, "dp-view-tabv-table-plot", "dp-view-tabv-global-data-store", resolve_df=pool_resolve_df,
     )
     register_table_cluster_callbacks(
-        app, "dp-view-tabv-table-cluster", "dp-view-tabv-global-data-store", pool_aware=True,
+        app, "dp-view-tabv-table-cluster", "dp-view-tabv-global-data-store", pool_aware=True, resolve_df=pool_resolve_df,
     )
 
     # ── Formgen write-back callbacks for reader param fields ───────────────────

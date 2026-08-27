@@ -19,7 +19,18 @@ from cryocat.utils import imageutils
 from cryocat.utils import ioutils
 from cryocat.analysis import nnana
 from cryocat.utils import imod
-from cryocat._types import ArrayLike, BoundaryType, MapSource, MotlColumn, MotlType, PathOrStr, RotationLike, Symmetry, TomoDimensions, RelionVersion
+from cryocat._types import (
+    ArrayLike,
+    BoundaryType,
+    MapSource,
+    MotlColumn,
+    MotlType,
+    PathOrStr,
+    RotationLike,
+    Symmetry,
+    TomoDimensions,
+    RelionVersion,
+)
 from cryocat.utils.classutils import gui_exposed
 from typing import Literal
 
@@ -334,14 +345,11 @@ class Motl:
         """
         _VALID = {"phi", "psi", "theta", "all"}
         if angles not in _VALID:
-            raise ValueError(
-                f"Invalid angle selection {angles!r}. "
-                f"Choose from: {sorted(_VALID)}."
-            )
+            raise ValueError(f"Invalid angle selection {angles!r}. " f"Choose from: {sorted(_VALID)}.")
 
         _DEFAULT_RANGES: dict[str, tuple[float, float]] = {
-            "phi":   (0.0, 360.0),
-            "psi":   (0.0, 360.0),
+            "phi": (0.0, 360.0),
+            "psi": (0.0, 360.0),
             "theta": (0.0, 180.0),
         }
 
@@ -548,9 +556,7 @@ class Motl:
         """
         if boundary_type == "whole":
             if not box_size:
-                raise UserInputError(
-                    "You need to specify box_size when boundary_type is set to 'whole'."
-                )
+                raise UserInputError("You need to specify box_size when boundary_type is set to 'whole'.")
             return ceil(box_size / 2)
         if boundary_type == "center":
             return 0
@@ -659,7 +665,9 @@ class Motl:
         return cleaned_motl
 
     @gui_exposed(category="Cleaning")
-    def clean_by_otsu(self, column_name: MotlColumn, histogram_bin: int | None = None, global_level: bool = False) -> None:
+    def clean_by_otsu(
+        self, column_name: MotlColumn, histogram_bin: int | None = None, global_level: bool = False
+    ) -> None:
         """Clean the DataFrame by applying Otsu's thresholding algorithm on the scores.
 
         Parameters
@@ -1197,7 +1205,13 @@ class Motl:
     # else:
     #     raise UserInputError(f"The class Motl does not contain column with name {feature_id}")
 
-    def get_motl_subset(self, column_values: ArrayLike | int | float, column_name: MotlColumn = "tomo_id", return_df: bool = False, reset_index: bool = True) -> "Motl" | pd.DataFrame:
+    def get_motl_subset(
+        self,
+        column_values: ArrayLike | int | float,
+        column_name: MotlColumn = "tomo_id",
+        return_df: bool = False,
+        reset_index: bool = True,
+    ) -> "Motl" | pd.DataFrame:
         """Get a subset of the Motl object based on specified column values.
 
         Parameters
@@ -1235,7 +1249,9 @@ class Motl:
             return Motl(motl_df=new_df)
 
     @gui_exposed(
-        label="Intersection of two motls", category="Combine", output="motl",
+        label="Intersection of two motls",
+        category="Combine",
+        output="motl",
         motls={"arity": "pair", "ordered": True, "main_first": True},
     )
     @classmethod
@@ -1472,7 +1488,9 @@ class Motl:
         self.df[cols] = self.df[cols] * scaling_factor
 
     @gui_exposed(category="Subsets", output="motl_group", label="Split by feature", hide=("write_out", "output_prefix"))
-    def split_by_feature(self, column_name: MotlColumn, write_out: bool = False, output_prefix: str = "") -> list["Motl"]:
+    def split_by_feature(
+        self, column_name: MotlColumn, write_out: bool = False, output_prefix: str = ""
+    ) -> list["Motl"]:
         """Splits motl by the column_name and writes them out.
 
         Parameters
@@ -1595,7 +1613,14 @@ class Motl:
         return str(output_path)
 
     @gui_exposed(category="Utility", label="Write to IMOD model")
-    def write_to_model_file(self, column_name: MotlColumn, output_base: str, point_size: int, binning: float = 1.0, zero_padding: int | None = None) -> None:
+    def write_to_model_file(
+        self,
+        column_name: MotlColumn,
+        output_base: str,
+        point_size: int,
+        binning: float = 1.0,
+        zero_padding: int | None = None,
+    ) -> None:
         """It splits the dataframe based on column_name and writes them out as mod files (from IMOD). The values in "class"
         column are used to created different objects, the countour is always the same. This function requires IMOD's
         point2model function to exist and being in PATH.
@@ -1736,7 +1761,9 @@ class Motl:
         return merged_motl
 
     @gui_exposed(
-        label="Merge and renumber", category="Combine", output="motl",
+        label="Merge and renumber",
+        category="Combine",
+        output="motl",
         motls={"arity": "list", "ordered": True, "main_first": False, "param": "motl_list"},
     )
     @classmethod
@@ -1765,7 +1792,9 @@ class Motl:
         return merged_motl
 
     @gui_exposed(
-        label="Merge and drop duplicates", category="Combine", output="motl",
+        label="Merge and drop duplicates",
+        category="Combine",
+        output="motl",
         motls={"arity": "list", "ordered": True, "main_first": True, "param": "motl_list"},
     )
     @classmethod
@@ -1795,7 +1824,9 @@ class Motl:
         return merged_motl
 
     @gui_exposed(category="Cleaning")
-    def remove_out_of_bounds_particles(self, dimensions: TomoDimensions, boundary_type: BoundaryType = "center", box_size: int | None = None) -> None:
+    def remove_out_of_bounds_particles(
+        self, dimensions: TomoDimensions, boundary_type: BoundaryType = "center", box_size: int | None = None
+    ) -> None:
         """Removes particles that are out of tomogram bounds.
 
         Parameters
@@ -1854,7 +1885,12 @@ class Motl:
         print(f"Original size {original_size}, new_size {len(self.df)}")
 
     @gui_exposed(category="Cleaning")
-    def drop_duplicates(self, column_name: MotlColumn = "subtomo_id", decision_column_name: MotlColumn = "score", decision_sort_ascending: bool = False) -> None:
+    def drop_duplicates(
+        self,
+        column_name: MotlColumn = "subtomo_id",
+        decision_column_name: MotlColumn = "score",
+        decision_sort_ascending: bool = False,
+    ) -> None:
         """Drop duplicates based on a specified column and keep the first occurrence with the highest/lowest score.
 
         Parameters
@@ -1890,9 +1926,7 @@ class Motl:
         """
 
         # Sort the DataFrame by "score" in descending order
-        self.df = self.df.sort_values(
-            by=[column_name, decision_column_name], ascending=[True, decision_sort_ascending]
-        )
+        self.df = self.df.sort_values(by=[column_name, decision_column_name], ascending=[True, decision_sort_ascending])
 
         # Drop duplicates based on "subtomo_id" keeping the first occurrence (highest score)
         self.df = self.df.drop_duplicates(subset=column_name)
@@ -1900,7 +1934,13 @@ class Motl:
 
     @gui_exposed(category="Geometry", output="motl", label="Recenter to subparticle")
     @staticmethod
-    def recenter_to_subparticle(input_motl: "MotlSource", input_map: MapSource, input_rotation: RotationLike | None = None, motl_type: MotlType = "emmotl", **kwargs) -> "Motl":
+    def recenter_to_subparticle(
+        input_motl: "MotlSource",
+        input_map: MapSource,
+        input_rotation: RotationLike | None = None,
+        motl_type: MotlType = "emmotl",
+        **kwargs,
+    ) -> "Motl":
         """Computes the center of mass of the provided binary mask and computes the necessary shift between the mask box
         center and the center of mass. This shift is applied to the motl positions. If input_rotation is specified it applies
         it to the shifted particles as well.
@@ -2031,9 +2071,7 @@ class Motl:
         angles = target.df[["phi", "theta", "psi"]].to_numpy()
         rotations = rot.from_euler("zxz", angles, degrees=True)
         rshifts = rotations.apply(np.asarray(shift))
-        target.df[["shift_x", "shift_y", "shift_z"]] = (
-            target.df[["shift_x", "shift_y", "shift_z"]].to_numpy() + rshifts
-        )
+        target.df[["shift_x", "shift_y", "shift_z"]] = target.df[["shift_x", "shift_y", "shift_z"]].to_numpy() + rshifts
         target.df.reset_index(drop=True, inplace=True)
 
         return None if inplace else target
@@ -2784,6 +2822,12 @@ class RelionMotl(Motl):
                     tomo_idx.append(float(numbers[-2] if len(numbers) >= 2 else numbers[-1]))
 
             self.df["tomo_id"] = tomo_idx
+        else:
+            warnings.warn(
+                f"Neither '{self.tomo_id_name}' nor '{self.subtomo_id_name}' is present in the star file; "
+                "setting tomo_id to 1 for all particles."
+            )
+            self.df["tomo_id"] = 1
 
     def parse_subtomo_id(self, relion_df, subtomo_format=""):
         """The function parses the subtomogram id from a Relion starfile. The function takes
@@ -2858,6 +2902,11 @@ class RelionMotl(Motl):
                         )
                         numbers = re.findall(r"\d+", clean_name)
                         subtomo_idx.append(float(numbers[-1]))
+        else:
+            warnings.warn(
+                f"'{self.subtomo_id_name}' is not present in the star file; " "numbering subtomo_id from 1 to N."
+            )
+            subtomo_idx = np.arange(1, relion_df.shape[0] + 1, 1)
 
         # Check if the subtomo_idx are unique and if not store them at geom3 and renumber particles
         self.df["geom3"] = subtomo_idx
@@ -4040,8 +4089,7 @@ class RelionMotlv5(RelionMotl, Motl):
         merged_df = self._merge_tomo_sizes(relion_df)
         for axis in ("X", "Y", "Z"):
             merged_df[f"rlnCoordinate{axis}"] = (
-                merged_df[f"rlnTomoSize{axis}"] / 2
-                + merged_df[f"rlnCenteredCoordinate{axis}Angst"] / self.pixel_size
+                merged_df[f"rlnTomoSize{axis}"] / 2 + merged_df[f"rlnCenteredCoordinate{axis}Angst"] / self.pixel_size
             )
         merged_df = RelionMotlv5.clean_tomo_name_column(merged_df)
         if "rlnTomoParticleName" in merged_df.columns:
@@ -5433,7 +5481,9 @@ def relion2emmotl(
     return em_motl
 
 
-def stopgap2emmotl(input_motl: "MotlSource", output_path: PathOrStr | None = None, update_coordinates: bool = False) -> "EmMotl":
+def stopgap2emmotl(
+    input_motl: "MotlSource", output_path: PathOrStr | None = None, update_coordinates: bool = False
+) -> "EmMotl":
     """Converts a StopgapMotl to EmMotl format and optionally writes it to a file.
 
     Parameters
@@ -5462,7 +5512,12 @@ def stopgap2emmotl(input_motl: "MotlSource", output_path: PathOrStr | None = Non
     return em_motl
 
 
-def emmotl2stopgap(input_motl: "MotlSource", output_path: PathOrStr | None = None, update_coordinates: bool = False, reset_index: bool = False) -> "StopgapMotl":
+def emmotl2stopgap(
+    input_motl: "MotlSource",
+    output_path: PathOrStr | None = None,
+    update_coordinates: bool = False,
+    reset_index: bool = False,
+) -> "StopgapMotl":
     """Converts an EmMotl to StopgapMotl format and optionally writes it to a file.
 
     Parameters
@@ -5603,7 +5658,9 @@ def stopgap2relion(
     return rln_motl
 
 
-def emmotl2mod(input_motl: "MotlSource", output_path: PathOrStr | None = None, mod_prefix: str = "", mod_suffix: str = ".mod") -> "ModMotl":
+def emmotl2mod(
+    input_motl: "MotlSource", output_path: PathOrStr | None = None, mod_prefix: str = "", mod_suffix: str = ".mod"
+) -> "ModMotl":
     """Converts an EmMotl to ModMotl format and optionally writes it to a .mod file.
 
     Parameters
@@ -5632,7 +5689,13 @@ def emmotl2mod(input_motl: "MotlSource", output_path: PathOrStr | None = None, m
     return mod_motl
 
 
-def mod2emmotl(input_mod: "MotlSource", output_path: PathOrStr | None = None, mod_prefix: str = "", mod_suffix: str = ".mod", update_coordinates: bool = False) -> "EmMotl":
+def mod2emmotl(
+    input_mod: "MotlSource",
+    output_path: PathOrStr | None = None,
+    mod_prefix: str = "",
+    mod_suffix: str = ".mod",
+    update_coordinates: bool = False,
+) -> "EmMotl":
     """Converts a ModMotl to EmMotl format and optionally writes it to a file.
 
     Parameters
@@ -5667,14 +5730,14 @@ def mod2emmotl(input_mod: "MotlSource", output_path: PathOrStr | None = None, mo
 
 
 def motl_converter_kwargs(
-        input_motl: "MotlSource",
-        output_motl_type: MotlType | None = "emmotl",
-        output_path: PathOrStr | None = None,
-        relion_version: RelionVersion | None = None,
-        **output_kwargs
+    input_motl: "MotlSource",
+    output_motl_type: MotlType | None = "emmotl",
+    output_path: PathOrStr | None = None,
+    relion_version: RelionVersion | None = None,
+    **output_kwargs,
 ) -> "MotlSource":
     """Convert a motl (EmMotl) to a specified output motl type and optionally write it to file.
-    The function checks for a valid outupt motl type, consistency of relion version (in case of 
+    The function checks for a valid outupt motl type, consistency of relion version (in case of
     relion output motls), and kwargs provided for the conversion. It then performs the conversion
     based on the specified output motl type and returns the converted motl object.
 
@@ -5687,9 +5750,9 @@ def motl_converter_kwargs(
     output_path : str, optional
         If provided, the converted motl will be written to this path.
     relion_version : str, optional
-        The version of the relion STAR file format to be returned. Required if output_motl_type is "relion". 
-        Versions currently supported: "3.0", "3.1", "4.0". As for versions 5.0 and 5.1, those are automatically 
-        assigned if the output_motl_type is set to "relion5" or "relion5_1", respectively, and the provided 
+        The version of the relion STAR file format to be returned. Required if output_motl_type is "relion".
+        Versions currently supported: "3.0", "3.1", "4.0". As for versions 5.0 and 5.1, those are automatically
+        assigned if the output_motl_type is set to "relion5" or "relion5_1", respectively, and the provided
         relion_version argument will be ignored with a warning.
     **output_kwargs
         Additional keyword arguments for the conversion function. The accepted kwargs depend on the specified output_motl_type.
@@ -5709,35 +5772,46 @@ def motl_converter_kwargs(
         If the provided relion_version is ignored due to the specified output_motl_type being "relion5" or "relion5_1", or if a relion_version is provided but not relevant for the specified output_motl_type.
     """
     # map motl types and acceptable kwargs
-    motl_type_to_kwargs = {"emmotl": [],
-                           "mod": ["mod_prefix", "mod_suffix"],
-                           "stopgap": ["update_coordinates", "reset_index"],
-                           "dynamo": [],
-                           "relion": ["flip_handedness", "tomo_dim", "load_kwargs", "write_kwargs"]
-                           }
+    motl_type_to_kwargs = {
+        "emmotl": [],
+        "mod": ["mod_prefix", "mod_suffix"],
+        "stopgap": ["update_coordinates", "reset_index"],
+        "dynamo": [],
+        "relion": ["flip_handedness", "tomo_dim", "load_kwargs", "write_kwargs"],
+    }
     motl_type_to_kwargs["relion5"] = motl_type_to_kwargs["relion"]
     motl_type_to_kwargs["relion5_1"] = motl_type_to_kwargs["relion"]
 
     # check for valid MotlType for the output
     if output_motl_type is not None and output_motl_type not in motl_type_to_kwargs:
-        raise ValueError(f"output_motl_type {output_motl_type} is not supported. Supported types are: {list(motl_type_to_kwargs)}")
+        raise ValueError(
+            f"output_motl_type {output_motl_type} is not supported. Supported types are: {list(motl_type_to_kwargs)}"
+        )
 
     # check the consistency of relion version specification
     if output_motl_type != "relion":
         if output_motl_type == "relion5":
             relion_version = "5.0"
-            warnings.warn(f"Setting output relion version to {relion_version} for relion5 output motl type.", UserWarning)
+            warnings.warn(
+                f"Setting output relion version to {relion_version} for relion5 output motl type.", UserWarning
+            )
         elif output_motl_type == "relion5_1":
             relion_version = "5.1"
-            warnings.warn(f"Setting output relion version to {relion_version} for relion5_1 output motl type.", UserWarning)
+            warnings.warn(
+                f"Setting output relion version to {relion_version} for relion5_1 output motl type.", UserWarning
+            )
         else:
             if relion_version is not None:
-                warnings.warn(f"Provided output relion version {relion_version} is not relevant for motl type {output_motl_type}. Ignoring relion_version argument.")
+                warnings.warn(
+                    f"Provided output relion version {relion_version} is not relevant for motl type {output_motl_type}. Ignoring relion_version argument."
+                )
                 relion_version = None
-    
+
     elif output_motl_type == "relion" and relion_version is None:
-        raise ValueError(f"output_relion_version argument is required when output_motl_type is 'relion'.\n"
-                             "Valid output_relion_version values are: 3.0, 3.1, 4.0, 5.0, 5.1.\n")
+        raise ValueError(
+            f"output_relion_version argument is required when output_motl_type is 'relion'.\n"
+            "Valid output_relion_version values are: 3.0, 3.1, 4.0, 5.0, 5.1.\n"
+        )
 
     relion_version = float(relion_version) if relion_version is not None else None
 
@@ -5746,9 +5820,11 @@ def motl_converter_kwargs(
         valid_kwargs = motl_type_to_kwargs.get(output_motl_type, [])
         invalid_kwargs = [kwarg for kwarg in output_kwargs if kwarg not in valid_kwargs]
         if invalid_kwargs:
-            raise ValueError(f"Got invalid output kwargs {invalid_kwargs} for output_motl_type {output_motl_type}. "
-                             f"Valid kwargs for this motl type are: {valid_kwargs}")
-        
+            raise ValueError(
+                f"Got invalid output kwargs {invalid_kwargs} for output_motl_type {output_motl_type}. "
+                f"Valid kwargs for this motl type are: {valid_kwargs}"
+            )
+
     # perform the conversion based on the output motl type
     output_motl = Motl.load(input_motl=input_motl, motl_type="emmotl")
 
@@ -5760,10 +5836,23 @@ def motl_converter_kwargs(
         if output_path is not None:
             output_motl.write_out(output_path)
     elif output_motl_type == "mod":
-        output_motl = emmotl2mod(output_motl.df, output_path=output_path, **{kwarg: output_kwargs[kwarg] for kwarg in motl_type_to_kwargs["mod"] if kwarg in output_kwargs})
+        output_motl = emmotl2mod(
+            output_motl.df,
+            output_path=output_path,
+            **{kwarg: output_kwargs[kwarg] for kwarg in motl_type_to_kwargs["mod"] if kwarg in output_kwargs},
+        )
     elif output_motl_type == "stopgap":
-        output_motl = emmotl2stopgap(output_motl.df, output_path=output_path, **{kwarg: output_kwargs[kwarg] for kwarg in motl_type_to_kwargs["stopgap"] if kwarg in output_kwargs})
+        output_motl = emmotl2stopgap(
+            output_motl.df,
+            output_path=output_path,
+            **{kwarg: output_kwargs[kwarg] for kwarg in motl_type_to_kwargs["stopgap"] if kwarg in output_kwargs},
+        )
     elif output_motl_type in ["relion", "relion5", "relion5_1"]:
-        output_motl = emmotl2relion(output_motl.df, relion_version=relion_version, output_path=output_path, **{kwarg: output_kwargs[kwarg] for kwarg in motl_type_to_kwargs["relion"] if kwarg in output_kwargs}) 
+        output_motl = emmotl2relion(
+            output_motl.df,
+            relion_version=relion_version,
+            output_path=output_path,
+            **{kwarg: output_kwargs[kwarg] for kwarg in motl_type_to_kwargs["relion"] if kwarg in output_kwargs},
+        )
 
     return output_motl

@@ -25,6 +25,8 @@ from cryocat.app.pool import (
 
 CACHE_BLOCK_SIZE = _CACHE_BLOCK_SIZE  # re-exported so test can import from here
 
+_BASE_GRID_OPTIONS = {"cacheBlockSize": CACHE_BLOCK_SIZE, "maxBlocksInCache": 4}
+
 
 # ── Pure functions ─────────────────────────────────────────────────────────────
 
@@ -181,6 +183,8 @@ _DEFAULT_COL_DEF = {
     "filter": True,
     "editable": False,
     "resizable": True,
+    "flex": 1,  # share available width equally between columns
+    "minWidth": 90,  # never narrower — the grid scrolls instead
 }
 
 _GRID_STYLE = {"height": "300px", "width": "100%"}
@@ -197,7 +201,7 @@ def col_defs_from_df(df: pd.DataFrame) -> list[dict]:
             "headerTooltip": col,
             "filter": True,
             "floatingFilter": False,
-            "minWidth": 20 if is_float else 30,
+            # "minWidth": 20 if is_float else 30,
         }
         if is_float:
             col_def["valueFormatter"] = {"function": "(params.value != null) ? params.value.toFixed(3) : ''"}
@@ -206,40 +210,10 @@ def col_defs_from_df(df: pd.DataFrame) -> list[dict]:
 
 
 def get_grid_container(prefix: str) -> html.Div:
-    """Empty container that _mount_grid fills with a real AgGrid when the motl loads.
-
-    Starting empty (no placeholder) is essential: an infinite-mode placeholder fires
-    getRowsRequest at startup (before any data is loaded).  AG Grid does not retry
-    after receiving no response, so _rows is never triggered with the real ref when
-    _mount_grid later mounts the grid in-place with the same component ID.
-
-    suppress_callback_exceptions=True in app.py covers the brief window before the
-    grid component is added to the layout.
-    """
-    return html.Div([], id=f"{prefix}-grid-container")
-
-
-def _make_grid(prefix: str, col_defs: list[dict], n_rows: int = 1) -> dag.AgGrid:
-    """Build a fully configured AgGrid with real columnDefs.
-
-    Called by _mount_grid after the motl loads.  Columns carry minWidth (set by
-    col_defs_from_df) so the grid scrolls horizontally rather than forcing
-    sizeColumnsToFit() in a possibly-hidden container (avoids AG Grid warning #29).
-    n_rows sets infiniteInitialRowCount so AG Grid knows the data size upfront;
-    must be >= 1 (AG Grid rejects 0 as invalid).
-    """
-    return dag.AgGrid(
-        id=f"{prefix}-grid",
-        columnDefs=col_defs,
-        rowModelType="infinite",
-        dashGridOptions={
-            "cacheBlockSize": CACHE_BLOCK_SIZE,
-            "maxBlocksInCache": 4,
-            "infiniteInitialRowCount": max(1, n_rows),
-        },
-        defaultColDef=_DEFAULT_COL_DEF,
-        style=_GRID_STYLE,
-        className="ag-theme-balham",
+    """Container holding the grid (built once) and a hidden sink for the purge callback."""
+    return html.Div(
+        [html.Div(id=f"{prefix}-purge-sink", style={"display": "none"}), get_grid(prefix)],
+        id=f"{prefix}-grid-container",
     )
 
 
@@ -277,36 +251,40 @@ def register_tablegrid_callbacks(
 ) -> None:
     """Register grid callbacks for *prefix*.
 
+    The grid lives in the layout from startup (via get_grid_container) with
+    columnDefs=[].  Two callbacks drive it: _cols sets real columns when data
+    loads; a clientside purgeInfiniteCache fires on the column change so AG Grid
+    issues a fresh getRowsRequest; _rows answers that request from the pool.
+
     Parameters
     ----------
     resolve_df:
-        ``(ref) -> pd.DataFrame | None`` — resolves the store reference to a
-        DataFrame.  Pass :func:`cryocat.app.pool.resolve_df` for pool-backed
-        grids; supply a custom callable for non-pool data sources.
+        ``(ref) -> pd.DataFrame | None`` — resolves the store reference.
     resolve_n_rows:
-        ``(ref) -> int`` — returns the row-count hint used when the payload is
-        temporarily absent (hot-reload).  Returns 0 when unknown.
+        Accepted for API compatibility; not used.
+    tabs_id, tab_value:
+        Accepted for API compatibility; not used.
     """
-    _inputs = [Input(f"{prefix}-global-data-store", "data")]
-    if tabs_id:
-        _inputs.append(Input(tabs_id, "active_tab"))
 
     @app.callback(
-        Output(f"{prefix}-grid-container", "children"),
-        *_inputs,
+        Output(f"{prefix}-grid", "columnDefs"),
+        Output(f"{prefix}-grid", "dashGridOptions"),
+        Input(f"{prefix}-global-data-store", "data"),
     )
-    def _mount_grid(*args):
-        """Build and return a real AgGrid when data loads into a visible container."""
-        ref = args[0]
-        active_tab = args[1] if tabs_id else None
-        if tabs_id and active_tab != tab_value:
-            return no_update
-        if not ref:
-            return no_update
+    def _cols(ref):
         df = resolve_df(ref)
         if df is None:
-            return no_update
-        return _make_grid(prefix, col_defs_from_df(df), n_rows=len(df))
+            return no_update, no_update
+        return col_defs_from_df(df), {**_BASE_GRID_OPTIONS, "infiniteInitialRowCount": len(df)}
+
+    app.clientside_callback(
+        "function(c){if(!c||!c.length)return window.dash_clientside.no_update;"
+        f'window.dash_ag_grid.getApiAsync("{prefix}-grid")'
+        ".then(function(a){if(a)a.purgeInfiniteCache()});"
+        "return window.dash_clientside.no_update;}",
+        Output(f"{prefix}-purge-sink", "children"),
+        Input(f"{prefix}-grid", "columnDefs"),
+    )
 
     @app.callback(
         Output(f"{prefix}-grid", "getRowsResponse"),
@@ -317,8 +295,9 @@ def register_tablegrid_callbacks(
         if request is None or not ref:
             return no_update
         df = resolve_df(ref)
-        resp = rows_response(request, df, len(df) if df is not None else 0)
-        return resp
+        if df is None:
+            return no_update
+        return rows_response(request, df, len(df))
 
     @app.callback(
         Output(f"{prefix}-selection-ids-store", "data", allow_duplicate=True),

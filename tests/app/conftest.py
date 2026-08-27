@@ -5,23 +5,12 @@ fixtures.  They can be imported directly:
     from tests.app.conftest import collect_ids, collect_id_paths
 """
 
-import sys
-import types
-
 import pytest
-
-# ---------------------------------------------------------------------------
-# Stub optional binary deps before any app module is imported.
-# ---------------------------------------------------------------------------
-
-for _mod_name in ("emfile",):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = types.ModuleType(_mod_name)
-
 
 # ---------------------------------------------------------------------------
 # Component-tree helpers
 # ---------------------------------------------------------------------------
+
 
 def _norm_id(id_val):
     """Normalise a Dash id to a hashable form.
@@ -73,9 +62,6 @@ def _walk_paths(node, path: list[str], result: dict) -> None:
 
 def make_motl_rows(n: int = 5) -> list[dict]:
     """Return *n* rows in the 20-column Motl format (all zeroes, subtomo_id 1..n)."""
-    import sys
-    import types
-    sys.modules.setdefault("emfile", types.ModuleType("emfile"))
     import numpy as np
     from cryocat.core.cryomotl import Motl
     import pandas as pd
@@ -117,6 +103,7 @@ def collect_id_paths(component) -> dict:
 # State-cleaning fixture  (autouse — must run around every test)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def _clean_server_state():
     """Clear every server-side singleton between tests.
@@ -136,30 +123,30 @@ def _clean_server_state():
     dash_logger.clear()
     try:
         from cryocat.app.pool import clear_payloads
+
         clear_payloads()
     except ImportError:
         pass
     try:
         from cryocat.app.console.execute import _CONSOLE_LOCALS, _add_pending
+
         _CONSOLE_LOCALS.clear()
         _add_pending.clear()
     except ImportError:
         pass
     # Do NOT call _sess.close_session() — session files are persistent artifacts.
     # Verify the provenance table is empty so any leaking test is caught here.
-    assert _prov._producers == {}, (
-        "provenance table not empty after test — a test leaked pool state"
-    )
+    assert _prov._producers == {}, "provenance table not empty after test — a test leaked pool state"
 
 
 # ---------------------------------------------------------------------------
 # App fixtures  (session-scoped: both apps import exactly once per test run)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def suite_app():
     """The assembled Dash app from cryocat.app.suite.app."""
     import cryocat.app.suite.app as m
+
     return m.app
-
-
