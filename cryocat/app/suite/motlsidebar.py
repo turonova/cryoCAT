@@ -27,15 +27,22 @@ from cryocat.core.cryomotl import Motl
 from cryocat.app.components.motlio import motl_types, register_motl_load_callbacks
 from cryocat.app.components.relionopts import get_relion_options
 from cryocat.app.components.savedialog import (
-    get_save_dialog, register_save_dialog_callbacks,
-    build_batch_paths, execute_batch_save, validate_save,
+    get_save_dialog,
+    register_save_dialog_callbacks,
+    build_batch_paths,
+    execute_batch_save,
+    validate_save,
 )
 from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.components.motlsource import (
-    get_multi_motl_picker, register_multi_motl_picker_callbacks,
+    get_multi_motl_picker,
+    register_multi_motl_picker_callbacks,
 )
 from cryocat.app.apputils import (
-    generate_kwargs, run_operation, run_operation_to_pool, record_load_to_pool,
+    generate_kwargs,
+    run_operation,
+    run_operation_to_pool,
+    record_load_to_pool,
 )
 from cryocat.app import ids, styles
 from cryocat.app import discovery as _discovery
@@ -45,10 +52,22 @@ from cryocat.app import session as _session
 from cryocat.app.event import message_event
 from cryocat.app.pageshell import _SIDEBAR_STYLE, _SIDEBAR_COL_STYLE
 from cryocat.app.pool import (
-    PoolState, remove_motl, get_rows, PoolPayloadMissing,
-    GroupState, create_group, delete_group, reorder_group, remove_from_group,
-    purge_motl_from_groups, set_has_tab, natural_sort_key, insert_motl,
-    replace_motl_rows, save_snapshot, restore_snapshot,
+    PoolState,
+    remove_motl,
+    get_rows,
+    PoolPayloadMissing,
+    GroupState,
+    create_group,
+    delete_group,
+    reorder_group,
+    remove_from_group,
+    purge_motl_from_groups,
+    set_has_tab,
+    natural_sort_key,
+    insert_motl,
+    replace_motl_rows,
+    save_snapshot,
+    restore_snapshot,
 )
 
 # Number of editor *view slots* (rendered table/viewer surfaces). The motl pool
@@ -57,11 +76,14 @@ N_SLOTS = 5
 
 # Fetched at import time from GUI_REGISTRY — adding a new @gui_exposed method
 # to Motl is sufficient; no edits needed here.
-_MOTL_METHODS       = [{"label": e.label, "value": e.fn.__name__}
-                       for e in _discovery.single_motl_ops()
-                       if e.fn.__module__ == "cryocat.core.cryomotl"]
-_MULTI_MOTL_METHODS = [{"label": e.label, "value": e.fn.__name__, "motls": e.motls}
-                       for e in _discovery.multi_motl_ops()]
+_MOTL_METHODS = [
+    {"label": e.label, "value": e.fn.__name__}
+    for e in _discovery.single_motl_ops()
+    if e.fn.__module__ == "cryocat.core.cryomotl"
+]
+_MULTI_MOTL_METHODS = [
+    {"label": e.label, "value": e.fn.__name__, "motls": e.motls} for e in _discovery.multi_motl_ops()
+]
 # Lookup of `method_name -> motls spec` for the run callback.
 _MULTI_MOTL_SPECS = {m["value"]: m["motls"] for m in _MULTI_MOTL_METHODS}
 
@@ -114,7 +136,12 @@ def _build_col_merge_table(labels, draft):
                         id={"type": "me-col-cell", "col": col, "row": row_i},
                         color="primary" if draft.get(col, 0) == row_i else "link",
                         size="sm",
-                        style={"padding": "0 3px", "minWidth": "28px", "fontSize": styles.FONT_MED, "lineHeight": "1.2"},
+                        style={
+                            "padding": "0 3px",
+                            "minWidth": "28px",
+                            "fontSize": styles.FONT_MED,
+                            "lineHeight": "1.2",
+                        },
                         n_clicks=0,
                     ),
                     style={"textAlign": "center", "padding": "2px"},
@@ -154,14 +181,18 @@ def _apply_col_merge(result_df, source_motls, col_config):
     return df
 
 
-def _run_pair_operations(fn, main_motl, sec_motls, kwargs, pool_state, op_label, src_labels, col_merge_config, has_col_config):
+def _run_pair_operations(
+    fn, main_motl, sec_motls, kwargs, pool_state, op_label, src_labels, col_merge_config, has_col_config
+):
     sig_params = list(inspect.signature(fn).parameters.keys())
     last_result, last_mid = None, None
     for i, sec_motl in enumerate(sec_motls):
         sec_label = src_labels[i + 1] if i + 1 < len(src_labels) else str(getattr(sec_motl, "_pool_motl_id", i))
         full_kwargs = {sig_params[0]: main_motl, sig_params[1]: sec_motl, **kwargs}
         pool_state, pair_mid, pair_result = run_operation_to_pool(
-            fn, full_kwargs, pool_state,
+            fn,
+            full_kwargs,
+            pool_state,
             label=f"{op_label} of {src_labels[0]} + {sec_label}",
         )
         if not isinstance(pair_result, Motl):
@@ -378,7 +409,10 @@ def get_motl_editor_sidebar():
                                     "Click a group label in the pool list to select the target group.",
                                     style={"color": "var(--color9)", "marginBottom": "0.5rem"},
                                 ),
-                                html.Div(id="me-batch-convert-target", style={"color": "var(--color9)", "marginBottom": "0.4rem"}),
+                                html.Div(
+                                    id="me-batch-convert-target",
+                                    style={"color": "var(--color9)", "marginBottom": "0.4rem"},
+                                ),
                                 get_save_dialog("me-batch-save", mode="batch"),
                             ],
                             title="Batch Convert",
@@ -525,7 +559,9 @@ def get_motl_editor_sidebar():
                                 html.Div(
                                     id="me-multi-op-status",
                                     style={
-                                        "marginTop": "0.5rem",                                        "color": "var(--color9)", "wordBreak": "break-word",
+                                        "marginTop": "0.5rem",
+                                        "color": "var(--color9)",
+                                        "wordBreak": "break-word",
                                     },
                                 ),
                             ],
@@ -543,10 +579,12 @@ def get_motl_editor_sidebar():
                             html.Div(id="me-col-merge-body"),
                             style={"overflowY": "auto"},
                         ),
-                        dbc.ModalFooter([
-                            dbc.Button("Cancel", id="me-col-merge-cancel", color="secondary", className="me-2"),
-                            dbc.Button("Confirm", id="me-col-merge-confirm", color="primary"),
-                        ]),
+                        dbc.ModalFooter(
+                            [
+                                dbc.Button("Cancel", id="me-col-merge-cancel", color="secondary", className="me-2"),
+                                dbc.Button("Confirm", id="me-col-merge-confirm", color="primary"),
+                            ]
+                        ),
                     ],
                     id="me-col-merge-modal",
                     is_open=False,
@@ -629,8 +667,18 @@ def register_motl_editor_sidebar_callbacks(app):
         prevent_initial_call=True,
     )
     def route_motl(
-        motl_data, extra, dtype, optics, r5t, r5tn, motl_path, relion_params,
-        registry, pool_meta, next_id, slot_map,
+        motl_data,
+        extra,
+        dtype,
+        optics,
+        r5t,
+        r5tn,
+        motl_path,
+        relion_params,
+        registry,
+        pool_meta,
+        next_id,
+        slot_map,
     ):
         import os as _os
         from cryocat.app.components.filesystem import resolve_input as _resolve
@@ -679,7 +727,10 @@ def register_motl_editor_sidebar_callbacks(app):
         current_pool = PoolState.from_stores(registry, pool_meta, next_id)
         try:
             pool_state, mid, _ = record_load_to_pool(
-                motl_data, effective_type, resolved_path or label, rln_kwargs,
+                motl_data,
+                effective_type,
+                resolved_path or label,
+                rln_kwargs,
                 current_pool,
                 label=label,
                 extra=extra,
@@ -706,7 +757,6 @@ def register_motl_editor_sidebar_callbacks(app):
                 f"(all {N_SLOTS} slots in use; assign it via 'Slot assignment')"
             )
         status += _relion_params_summary(relion_params)
-
         return (*pool_state.to_stores(), slot_map, active_tab, status)
 
     # ── Pool motl list ─────────────────────────────────────────────────────────
@@ -734,7 +784,7 @@ def register_motl_editor_sidebar_callbacks(app):
             glabel = g.get("label", gid)
             expanded = expand_data.get(gid, False)
             toggle_icon = "▾" if expanded else "▶"
-            is_active_group = (at_type == "group" and at_id == gid)
+            is_active_group = at_type == "group" and at_id == gid
             group_row_style = {"display": "flex", "alignItems": "center", "padding": "4px 8px"}
             if is_active_group:
                 group_row_style["backgroundColor"] = "var(--bs-primary-bg-subtle)"
@@ -828,18 +878,14 @@ def register_motl_editor_sidebar_callbacks(app):
                     )
 
         # ── Ungrouped motls (R2: grouped motls never appear here) ────────────
-        all_grouped = {
-            mid
-            for g in gstate.groups.values()
-            for mid in g.get("members", [])
-        }
+        all_grouped = {mid for g in gstate.groups.values() for mid in g.get("members", [])}
         for mid, meta in registry.items():
             if not meta.get("active", True):
                 continue
             if mid in all_grouped:
                 continue  # R2: grouped motls appear only under their group
             label = meta.get("label", mid)
-            is_active_motl = (at_type == "motl" and at_id == mid)
+            is_active_motl = at_type == "motl" and at_id == mid
             motl_row_style = {"display": "flex", "alignItems": "center", "padding": "4px 8px", "cursor": "pointer"}
             if is_active_motl:
                 motl_row_style["backgroundColor"] = "var(--bs-primary-bg-subtle)"
@@ -891,10 +937,7 @@ def register_motl_editor_sidebar_callbacks(app):
             if m.get("active", True) and m.get("has_tab", True)
         ]
         options = [[{"label": "(empty)", "value": _NONE_OPT}] + motl_opts for _ in range(N_SLOTS)]
-        values = [
-            (slot_map[i] if i < len(slot_map) and slot_map[i] else _NONE_OPT)
-            for i in range(N_SLOTS)
-        ]
+        values = [(slot_map[i] if i < len(slot_map) and slot_map[i] else _NONE_OPT) for i in range(N_SLOTS)]
         return options, values
 
     # ── Slot-assignment dropdowns: apply user change → slot_map ────────────────
@@ -1188,9 +1231,7 @@ def register_motl_editor_sidebar_callbacks(app):
             return {"display": "block"}, {"display": "none"}, "Motls"
         if arity == "list":
             label = (
-                "Motls (first = kept on duplicates)"
-                if spec.get("main_first") else
-                "Motls to merge (order preserved)"
+                "Motls (first = kept on duplicates)" if spec.get("main_first") else "Motls to merge (order preserved)"
             )
             return {"display": "none"}, {"display": "block"}, label
         return {"display": "none"}, {"display": "none"}, "Motls"
@@ -1304,9 +1345,18 @@ def register_motl_editor_sidebar_callbacks(app):
         prevent_initial_call=True,
     )
     def run_multi_op(
-        n_clicks, method_name, main_id, second_ids, list_ids,
-        param_values, param_ids,
-        registry, pool_meta, next_id, slot_map, col_merge_config,
+        n_clicks,
+        method_name,
+        main_id,
+        second_ids,
+        list_ids,
+        param_values,
+        param_ids,
+        registry,
+        pool_meta,
+        next_id,
+        slot_map,
+        col_merge_config,
     ):
         pool_noup = (no_update,) * 5
 
@@ -1368,8 +1418,15 @@ def register_motl_editor_sidebar_callbacks(app):
             if spec["arity"] == "pair":
                 try:
                     pool_state, mid, result = _run_pair_operations(
-                        fn, motls[0], motls[1:], kwargs, current_pool,
-                        op_label, src_labels, col_merge_config, has_col_config,
+                        fn,
+                        motls[0],
+                        motls[1:],
+                        kwargs,
+                        current_pool,
+                        op_label,
+                        src_labels,
+                        col_merge_config,
+                        has_col_config,
                     )
                 except Exception as exc:
                     return _err(f"Error running '{method_name}': {exc}")
@@ -1378,7 +1435,9 @@ def register_motl_editor_sidebar_callbacks(app):
                     list_param = spec.get("param", "motl_list")
                     full_kwargs = {list_param: motls, **kwargs}
                     pool_state, mid, result = run_operation_to_pool(
-                        fn, full_kwargs, current_pool,
+                        fn,
+                        full_kwargs,
+                        current_pool,
                         label=f"{op_label} of {' + '.join(src_labels)}",
                     )
                 except Exception as exc:
@@ -1392,7 +1451,8 @@ def register_motl_editor_sidebar_callbacks(app):
         else:
             result = motls[0]
             pool_state, mid = insert_motl(
-                current_pool, motls[0].df,
+                current_pool,
+                motls[0].df,
                 label=f"col-merge of {' + '.join(src_labels)}",
                 has_tab=False,
             )
@@ -1465,9 +1525,18 @@ def register_motl_editor_sidebar_callbacks(app):
     )
     def apply_operation(n_clicks, method_name, active_tab, param_values, param_ids, *rest):
         all_slot_data = rest[:N_SLOTS]
-        (registry, pool_meta, next_id, slot_map,
-         create_group_val, save_to_disk_val, save_dir_val, save_fmt_val, groups_data,
-         active_target) = rest[N_SLOTS:]
+        (
+            registry,
+            pool_meta,
+            next_id,
+            slot_map,
+            create_group_val,
+            save_to_disk_val,
+            save_dir_val,
+            save_fmt_val,
+            groups_data,
+            active_target,
+        ) = rest[N_SLOTS:]
 
         # 5 pool-related outputs: registry, meta, next_id, slot_map, active_tab
         pool_noup = (no_update,) * 5
@@ -1498,6 +1567,7 @@ def register_motl_editor_sidebar_callbacks(app):
         # Operation produces a list of Motls — route through the group output path.
         if gui.get("output") == "motl_group":
             import os as _os
+
             want_group = bool(create_group_val)
             want_save = bool(save_to_disk_val)
             slot_map = list(slot_map or [None] * N_SLOTS)
@@ -1516,30 +1586,30 @@ def register_motl_editor_sidebar_callbacks(app):
             except Exception as exc:
                 return _ret(nochange, nochange, f"Error running '{method_name}': {exc}")
             if not isinstance(result_list, list):
-                return _ret(nochange, nochange,
-                            f"'{method_name}' did not return a list (got {type(result_list).__name__}).")
+                return _ret(
+                    nochange, nochange, f"'{method_name}' did not return a list (got {type(result_list).__name__})."
+                )
             col_name = kwargs.get("column_name", "")
             new_ids = []
             for i, m in enumerate(result_list):
                 df = m.df if hasattr(m, "df") else pd.DataFrame()
-                stem = (
-                    f"{src_label}_{col_name}_{i + 1}"
-                    if col_name else
-                    f"{src_label}_{op_label}_{i + 1}"
-                )
+                stem = f"{src_label}_{col_name}_{i + 1}" if col_name else f"{src_label}_{op_label}_{i + 1}"
                 current_pool, new_mid = insert_motl(current_pool, df, label=stem, has_tab=False)
                 new_ids.append(new_mid)
             new_gstate = GroupState.from_store(groups_data)
             if want_group and new_ids:
-                glabel = (
-                    f"{src_label}_by_{col_name}" if col_name
-                    else f"{op_label} of {src_label}"
-                )
+                glabel = f"{src_label}_by_{col_name}" if col_name else f"{op_label} of {src_label}"
                 new_gstate, _ = create_group(new_gstate, new_ids, label=glabel)
             _save_errs = []
             if want_save and new_ids and save_dir_val:
-                _ext_map = {"emmotl": ".em", "stopgap": ".star", "dynamo": ".tbl",
-                            "relion": ".star", "relion5": ".star", "relion5_1": ".star"}
+                _ext_map = {
+                    "emmotl": ".em",
+                    "stopgap": ".star",
+                    "dynamo": ".tbl",
+                    "relion": ".star",
+                    "relion5": ".star",
+                    "relion5_1": ".star",
+                }
                 _fmt = save_fmt_val or "emmotl"
                 _ext = _ext_map.get(_fmt, ".em")
                 _sdir = save_dir_val.strip()
@@ -1559,9 +1629,13 @@ def register_motl_editor_sidebar_callbacks(app):
                 status += f", saved {n_saved}/{len(new_ids)} to disk"
                 if _save_errs:
                     status += ". Errors: " + "; ".join(_save_errs[:3])
-            return _ret(nochange, nochange, status,
-                        pool=(*current_pool.to_stores(), slot_map, no_update),
-                        groups=new_gstate.to_store())
+            return _ret(
+                nochange,
+                nochange,
+                status,
+                pool=(*current_pool.to_stores(), slot_map, no_update),
+                groups=new_gstate.to_store(),
+            )
 
         # Operation produces a NEW motl — route through the atomic chokepoint.
         if gui.get("output") == "motl":
@@ -1576,7 +1650,9 @@ def register_motl_editor_sidebar_callbacks(app):
             motl._pool_motl_id = slot_map[slot_idx]
             try:
                 pool_state, mid, result = run_operation_to_pool(
-                    getattr(motl, method_name), kwargs, current_pool,
+                    getattr(motl, method_name),
+                    kwargs,
+                    current_pool,
                     label=f"{gui.get('label', method_name)} of {src_label}",
                 )
             except Exception as exc:
@@ -1590,7 +1666,9 @@ def register_motl_editor_sidebar_callbacks(app):
                 active = no_update
                 status = f"'{method_name}' -> new motl in the pool (no free slot; use 'Slot assignment')."
             return _ret(
-                nochange, nochange, status,
+                nochange,
+                nochange,
+                status,
                 pool=(*pool_state.to_stores(), slot_map, active),
             )
 
@@ -1630,7 +1708,7 @@ def register_motl_editor_sidebar_callbacks(app):
                 save_snapshot(mid, pre_op_df)
                 state = replace_motl_rows(state, mid, result_df)
                 data_out[si] = no_update  # pool updated; _sync_revisions refreshes the view
-                undo_out[si] = mid        # pool-aware undo: restore from snapshot
+                undo_out[si] = mid  # pool-aware undo: restore from snapshot
                 n_ok += 1
             status = f"'{method_name}' applied to {n_ok}/{len(members)} motl(s)."
             if errs:
@@ -1744,12 +1822,14 @@ def register_motl_editor_sidebar_callbacks(app):
         import glob as _glob
         import os as _os
         from pathlib import Path as _Path
+
         if not pattern:
             return ""
         pattern = pattern.strip()
         if _os.path.isdir(pattern):
             matches = [
-                str(p) for p in _Path(pattern).iterdir()
+                str(p)
+                for p in _Path(pattern).iterdir()
                 if p.is_file() and p.suffix.lower() in (".em", ".star", ".csv", ".tbl")
             ]
         else:
@@ -1776,7 +1856,9 @@ def register_motl_editor_sidebar_callbacks(app):
         State(ids.POOL_GROUPS, "data"),
         prevent_initial_call=True,
     )
-    def _load_multi(n_clicks, motl_type, rln_value, rln_tomos, pattern, group_name, registry, pool_meta, next_id, groups_data):
+    def _load_multi(
+        n_clicks, motl_type, rln_value, rln_tomos, pattern, group_name, registry, pool_meta, next_id, groups_data
+    ):
         import glob as _glob
         import os as _os
         from pathlib import Path as _Path
@@ -1814,15 +1896,23 @@ def register_motl_editor_sidebar_callbacks(app):
             label = _Path(path).stem
             try:
                 table_data, extra_data, _optics, _rln_t, _dtype, _rln_params = _load(
-                    path, motl_type, rln_tomos=rln_tomos, **_rln_kws,
+                    path,
+                    motl_type,
+                    rln_tomos=rln_tomos,
+                    **_rln_kws,
                 )
             except Exception as exc:
                 failed.append(f"{label}: {exc}")
                 continue
             try:
                 pool_state, mid, _ = record_load_to_pool(
-                    table_data, motl_type, path, {},
-                    pool_state, label=label, extra=extra_data,
+                    table_data,
+                    motl_type,
+                    path,
+                    {},
+                    pool_state,
+                    label=label,
+                    extra=extra_data,
                 )
                 new_mids.append(mid)
             except Exception as exc:
@@ -1954,8 +2044,20 @@ def register_motl_editor_sidebar_callbacks(app):
         State(ids.POOL_GROUPS, "data"),
         prevent_initial_call=True,
     )
-    def _batch_save(n_clicks, active_target, fmt, out_dir, policy, suffix,
-                    overwrite, rln_value, sg_vals, sg_ids, registry, groups_data):
+    def _batch_save(
+        n_clicks,
+        active_target,
+        fmt,
+        out_dir,
+        policy,
+        suffix,
+        overwrite,
+        rln_value,
+        sg_vals,
+        sg_ids,
+        registry,
+        groups_data,
+    ):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not active_target or active_target.get("type") != "group":
@@ -1966,7 +2068,9 @@ def register_motl_editor_sidebar_callbacks(app):
         members = list(g.get("members", []))
         registry = registry or {}
         paths = build_batch_paths(members, out_dir or "", fmt or "emmotl", policy or "stem", suffix, registry)
-        probs = validate_save(out_dir, fmt, rln_value, mode="batch", members=members, paths=paths, overwrite=overwrite or "refuse")
+        probs = validate_save(
+            out_dir, fmt, rln_value, mode="batch", members=members, paths=paths, overwrite=overwrite or "refuse"
+        )
         if probs:
             return no_update, "\n".join(probs)
         sg_kwargs = generate_kwargs(sg_ids, sg_vals) if sg_ids else {}
@@ -1976,5 +2080,6 @@ def register_motl_editor_sidebar_callbacks(app):
 
     # ── Part F: write-back @-variable results to the form text inputs ──────────
     from cryocat.app.formgen import register_var_picker_writeback
+
     register_var_picker_writeback(app, "me-op-param")
     register_var_picker_writeback(app, "me-multi-param")

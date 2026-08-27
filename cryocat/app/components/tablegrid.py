@@ -8,6 +8,7 @@ Pure functions (apply_sort_model, apply_filter_model, slice_block,
 resolve_select_all_ids) are testable without Dash. Block serialisation goes
 through pool.block_to_records so the T3 AST guard is not triggered.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -135,8 +136,7 @@ def resolve_filtered_ids(
     """
     if "subtomo_id" not in df.columns:
         raise ValueError(
-            "resolve_filtered_ids: DataFrame has no 'subtomo_id' column; "
-            "cannot create a stable motl subset."
+            "resolve_filtered_ids: DataFrame has no 'subtomo_id' column; " "cannot create a stable motl subset."
         )
     filtered = apply_filter_model(df, filter_model, slider_filters)
     return filtered["subtomo_id"].tolist()
@@ -190,40 +190,41 @@ def col_defs_from_df(df: pd.DataFrame) -> list[dict]:
     """Build AG Grid columnDefs from a DataFrame.  Pure."""
     col_defs = []
     for col in df.columns:
+        is_float = pd.api.types.is_float_dtype(df[col])
         col_def = {
             "field": col,
             "headerName": col,
             "headerTooltip": col,
             "filter": True,
             "floatingFilter": False,
+            "minWidth": 20 if is_float else 30,
         }
-        if pd.api.types.is_float_dtype(df[col]):
-            col_def["valueFormatter"] = {
-                "function": "(params.value != null) ? params.value.toFixed(3) : ''"
-            }
+        if is_float:
+            col_def["valueFormatter"] = {"function": "(params.value != null) ? params.value.toFixed(3) : ''"}
         col_defs.append(col_def)
     return col_defs
 
 
 def get_grid_container(prefix: str) -> html.Div:
-    """Placeholder div that _mount_grid fills with a real AgGrid when the motl loads.
+    """Empty container that _mount_grid fills with a real AgGrid when the motl loads.
 
-    An empty AgGrid (no columns) is pre-rendered so every callback that references
-    f"{prefix}-grid" is satisfied from startup, preventing Dash debug-mode
-    validation errors.  _mount_grid replaces it with a real AgGrid (with actual
-    columns and columnSize) when data loads and the tab is active.  Because the
-    pre-rendered grid has no columns it never fires getRowsRequest, so _rows stays
-    idle until the real grid mounts.
+    Starting empty (no placeholder) is essential: an infinite-mode placeholder fires
+    getRowsRequest at startup (before any data is loaded).  AG Grid does not retry
+    after receiving no response, so _rows is never triggered with the real ref when
+    _mount_grid later mounts the grid in-place with the same component ID.
+
+    suppress_callback_exceptions=True in app.py covers the brief window before the
+    grid component is added to the layout.
     """
-    return html.Div([get_grid(prefix)], id=f"{prefix}-grid-container")
+    return html.Div([], id=f"{prefix}-grid-container")
 
 
 def _make_grid(prefix: str, col_defs: list[dict], n_rows: int = 1) -> dag.AgGrid:
     """Build a fully configured AgGrid with real columnDefs.
 
-    Called by _mount_grid after the motl loads, with the container visible.
-    columnSize="responsiveSizeToFit" calls sizeColumnsToFit() immediately and
-    registers a gridSizeChanged listener for subsequent tab activations.
+    Called by _mount_grid after the motl loads.  Columns carry minWidth (set by
+    col_defs_from_df) so the grid scrolls horizontally rather than forcing
+    sizeColumnsToFit() in a possibly-hidden container (avoids AG Grid warning #29).
     n_rows sets infiniteInitialRowCount so AG Grid knows the data size upfront;
     must be >= 1 (AG Grid rejects 0 as invalid).
     """
@@ -239,7 +240,6 @@ def _make_grid(prefix: str, col_defs: list[dict], n_rows: int = 1) -> dag.AgGrid
         defaultColDef=_DEFAULT_COL_DEF,
         style=_GRID_STYLE,
         className="ag-theme-balham",
-        columnSize="responsiveSizeToFit",
     )
 
 
@@ -314,10 +314,11 @@ def register_tablegrid_callbacks(
         State(f"{prefix}-global-data-store", "data"),
     )
     def _rows(request, ref):
-        """Respond to AG Grid's infinite-model row request with one sorted+filtered block."""
+        if request is None or not ref:
+            return no_update
         df = resolve_df(ref)
-        n_rows_hint = resolve_n_rows(ref) if df is None else 0
-        return rows_response(request, df, n_rows_hint)
+        resp = rows_response(request, df, len(df) if df is not None else 0)
+        return resp
 
     @app.callback(
         Output(f"{prefix}-selection-ids-store", "data", allow_duplicate=True),

@@ -144,7 +144,17 @@ app.layout = dbc.Container(
             className="suite-nav-bar",
             style={"display": "flex", "alignItems": "center"},
         ),
-        html.Div(_page_wrappers(), id=ids.SUITE_PAGE_CONTENT),
+        html.Div(
+            [
+                html.Div(
+                    "Loading cryoCAT…",
+                    id="suite-startup-indicator",
+                    style={"padding": "2rem", "color": "#888", "fontStyle": "italic"},
+                ),
+                *_page_wrappers(),
+            ],
+            id=ids.SUITE_PAGE_CONTENT,
+        ),
     ],
     fluid=True,
     className="p-0",
@@ -155,7 +165,8 @@ app.layout = dbc.Container(
 # All pages are mounted once at startup. Navigation only toggles display style —
 # no React tree is destroyed, so in-page state is fully preserved across routes.
 _route_outputs = [Output(ids.page_wrap_id(t["id"]), "style") for t in TOOLS] + [
-    Output(ids.SUITE_TOOL_SELECTOR, "children")
+    Output(ids.SUITE_TOOL_SELECTOR, "children"),
+    Output("suite-startup-indicator", "style"),
 ]
 
 
@@ -163,7 +174,7 @@ _route_outputs = [Output(ids.page_wrap_id(t["id"]), "style") for t in TOOLS] + [
 def _route(pathname):
     active_id = _resolve_active_tool(pathname)
     styles = [{"display": "block"} if t["id"] == active_id else {"display": "none"} for t in TOOLS]
-    return *styles, _tool_selector(active_id)
+    return *styles, _tool_selector(active_id), {"display": "none"}
 
 
 # ── Callback registration ───────────────────────────────────────────────────────

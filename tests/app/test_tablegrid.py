@@ -441,17 +441,19 @@ def test_mount_grid_callback_registered():
     )
 
 
-def test_make_grid_has_responsive_column_size(sample_df):
-    """GRID_ROWS_FINAL: _make_grid must set columnSize='responsiveSizeToFit'.
+def test_make_grid_has_no_size_to_fit(sample_df):
+    """POST_RESET_CHANGES W2: _make_grid must NOT set columnSize.
 
-    responsiveSizeToFit calls sizeColumnsToFit() immediately and registers a
-    gridSizeChanged listener so columns re-fit on tab activation.
+    responsiveSizeToFit / sizeToFit calls sizeColumnsToFit() which returns 0 for
+    a hidden container (AG Grid warning #29).  Columns carry minWidth instead and
+    the grid scrolls horizontally.
     """
     from cryocat.app.components.tablegrid import _make_grid, col_defs_from_df
     col_defs = col_defs_from_df(sample_df)
     grid = _make_grid("test-pfx", col_defs)
-    assert grid.columnSize == "responsiveSizeToFit", (
-        f"_make_grid has columnSize={grid.columnSize!r}, expected 'responsiveSizeToFit'"
+    val = getattr(grid, "columnSize", None)
+    assert val is None, (
+        f"_make_grid has columnSize={val!r} — remove it; use minWidth on columnDefs instead"
     )
 
 
@@ -648,3 +650,119 @@ def test_subset_motl_rows_no_subtomo_id_raises():
     df = pd.DataFrame({"score": [0.1, 0.5, 0.9]})
     with pytest.raises(ValueError, match="subtomo_id"):
         subset_motl_rows(df, [0, 1])
+
+
+# ── POST_RESET_CHANGES T1 — Sizing ───────────────────────────────────────────
+
+
+def test_no_size_to_fit_in_source():
+    """POST_RESET_CHANGES T1: no responsiveSizeToFit, sizeToFit, or columnSizeOptions
+    anywhere under cryocat/app/.
+
+    These attributes call sizeColumnsToFit() which produces AG Grid warning #29
+    (zero-width columns) when the grid container is hidden.
+    """
+    app_dir = pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app"
+    found = []
+    for py_file in sorted(app_dir.rglob("*.py")):
+        text = py_file.read_text(encoding="utf-8", errors="ignore")
+        rel = str(py_file.relative_to(app_dir))
+        if "responsiveSizeToFit" in text:
+            found.append(f"{rel}: responsiveSizeToFit")
+        if "columnSizeOptions" in text:
+            found.append(f"{rel}: columnSizeOptions")
+    assert not found, (
+        "Found fit-to-window attributes that cause AG Grid warning #29: " + str(found)
+    )
+
+
+def test_every_col_def_has_min_width(sample_df):
+    """POST_RESET_CHANGES T1: col_defs_from_df gives every column a positive minWidth.
+
+    minWidth prevents zero-width columns in hidden containers and ensures readable
+    column headers even on narrow viewports.
+    """
+    from cryocat.app.components.tablegrid import col_defs_from_df
+    defs = col_defs_from_df(sample_df)
+    for col_def in defs:
+        assert "minWidth" in col_def, (
+            f"Column '{col_def['field']}' is missing minWidth"
+        )
+        assert col_def["minWidth"] > 0, (
+            f"Column '{col_def['field']}' has non-positive minWidth={col_def['minWidth']!r}"
+        )
+
+
+def test_col_defs_no_fixed_width(sample_df):
+    """POST_RESET_CHANGES T1: col_defs_from_df must not set a fixed 'width'.
+
+    A fixed width prevents columns from growing when there is room and defeats
+    the purpose of the horizontal-scroll approach.
+    """
+    from cryocat.app.components.tablegrid import col_defs_from_df
+    defs = col_defs_from_df(sample_df)
+    for col_def in defs:
+        assert "width" not in col_def, (
+            f"Column '{col_def['field']}' has fixed width {col_def.get('width')!r} — remove it"
+        )
+
+
+# ── POST_RESET_CHANGES T2 — The indicator ────────────────────────────────────
+
+
+def test_no_dcc_loading_in_app_and_tablegrid():
+    """POST_RESET_CHANGES T2: dcc.Loading must not appear in app.py or tablegrid.py.
+
+    dcc.Loading hides its children while any callback runs into that subtree, and
+    unmounts stateful components like AG Grid on each loading toggle.
+    """
+    files = {
+        "suite/app.py": pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app" / "suite" / "app.py",
+        "components/tablegrid.py": pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app" / "components" / "tablegrid.py",
+    }
+    for rel, path in files.items():
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        assert "dcc.Loading" not in text, (
+            f"dcc.Loading found in {rel} — it must not wrap page containers or grids"
+        )
+
+
+def test_startup_indicator_in_layout(suite_app):
+    """POST_RESET_CHANGES T2: suite-startup-indicator must be in the static layout."""
+    from tests.app.conftest import collect_ids
+    layout_ids = collect_ids(suite_app.layout)
+    assert "suite-startup-indicator" in layout_ids, (
+        "suite-startup-indicator not found in layout — W1 startup indicator is missing"
+    )
+
+
+def test_router_hides_startup_indicator(suite_app):
+    """POST_RESET_CHANGES T2: the router callback must output suite-startup-indicator.style.
+
+    This ensures the indicator is replaced (hidden) by the first callback fire —
+    it does not wrap the content; content and indicator are never both visible.
+    """
+    found = False
+    for item in suite_app._callback_list:
+        out = item.get("output", "")
+        targets = []
+        if isinstance(out, str) and out.startswith(".."):
+            parts = out.split("...")
+            parts[0] = parts[0][2:]
+            if parts[-1].endswith(".."):
+                parts[-1] = parts[-1][:-2]
+            targets = [p for p in parts if p]
+        elif isinstance(out, list):
+            targets = out
+        else:
+            targets = [out]
+        for o in targets:
+            if isinstance(o, str) and "." in o:
+                cid, prop = o.rsplit(".", 1)
+                prop = prop.split("@", 1)[0]
+                if cid == "suite-startup-indicator" and prop == "style":
+                    found = True
+    assert found, (
+        "No callback outputs to suite-startup-indicator.style — "
+        "the indicator will never be hidden when the app is ready"
+    )

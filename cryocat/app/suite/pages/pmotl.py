@@ -18,8 +18,13 @@ import dash_bootstrap_components as dbc
 
 from cryocat.app import ids
 from cryocat.app.pool import (
-    PoolState, insert_motl, get_rows, get_extra, PoolPayloadMissing,
-    resolve_df as pool_resolve_df, resolve_n_rows as pool_resolve_n_rows,
+    PoolState,
+    insert_motl,
+    get_rows,
+    get_extra,
+    PoolPayloadMissing,
+    resolve_df as pool_resolve_df,
+    resolve_n_rows as pool_resolve_n_rows,
 )
 from cryocat.app.suite.motlsidebar import (
     get_motl_editor_sidebar,
@@ -33,16 +38,16 @@ from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
 from cryocat.app.apputils import _format_relion_params
 
-DYNAMIC_IDS: list[tuple[str, str]] = [
-    (f"me-{i}-tabv-grid-container", f"me-{i}-tabv-grid")
-    for i in range(N_SLOTS)
-] + [("me-res-tabv-grid-container", "me-res-tabv-grid")]
+DYNAMIC_IDS: list[tuple[str, str]] = [(f"me-{i}-tabv-grid-container", f"me-{i}-tabv-grid") for i in range(N_SLOTS)] + [
+    ("me-res-tabv-grid-container", "me-res-tabv-grid")
+]
 
 
 # ── Stores ──────────────────────────────────────────────────────────────────────
 # Pool stores (pool-*) live in suite/app.py. Declared here: the editor's load
 # staging stores, the Results-tab stores, the per-view-slot stores, and the
 # slot<->motl_id map.
+
 
 def _make_stores():
     stores = [
@@ -86,6 +91,7 @@ def _make_stores():
 
 
 # ── Per-slot tab content ────────────────────────────────────────────────────────
+
 
 def _slot_tab_content(i):
     return dbc.Tab(
@@ -161,6 +167,7 @@ layout = html.Div(
 
 # ── Callback registration ───────────────────────────────────────────────────────
 
+
 def register_callbacks(app):
 
     register_motl_editor_sidebar_callbacks(app)
@@ -170,12 +177,16 @@ def register_callbacks(app):
     for _i in range(N_SLOTS):
         register_viewer_callbacks(app, f"me-{_i}-tv", tabs_id=None)
         register_table_callbacks(
-            app, f"me-{_i}-tabv",
-            resolve_df=pool_resolve_df, resolve_n_rows=pool_resolve_n_rows,
-            tabs_id="me-tabs", tab_value=f"me-tab-{_i}",
+            app,
+            f"me-{_i}-tabv",
+            resolve_df=pool_resolve_df,
+            resolve_n_rows=pool_resolve_n_rows,
+            tabs_id="me-tabs",
+            tab_value=f"me-tab-{_i}",
         )
         register_table_save_callbacks(
-            app, f"me-{_i}-tabv",
+            app,
+            f"me-{_i}-tabv",
             connected_motl_prefix=f"me-{_i}",
             save_dialog_prefix=f"me-{_i}-save",
         )
@@ -197,8 +208,10 @@ def register_callbacks(app):
     # Results tab
     register_viewer_callbacks(app, "me-res-tv", tabs_id=None)
     register_table_callbacks(
-        app, "me-res-tabv",
-        resolve_df=pool_resolve_df, resolve_n_rows=pool_resolve_n_rows,
+        app,
+        "me-res-tabv",
+        resolve_df=pool_resolve_df,
+        resolve_n_rows=pool_resolve_n_rows,
     )
     register_table_save_callbacks(app, "me-res-tabv", connected_motl_prefix="me-res")
     register_table_plot_callbacks(app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store", pool_aware=True)
@@ -251,8 +264,8 @@ def register_callbacks(app):
         return False, data, data, display_label, "me-tab-results"
 
 
-
 # ── Pool <-> slot synchronisation ────────────────────────────────────────────────
+
 
 def _register_pool_sync(app):
     """pool -> slots: fires when the slot map changes (load / reassignment)."""
@@ -337,6 +350,7 @@ def _register_pool_sync(app):
 
 # ── "Create new from selected" → new pool motl ───────────────────────────────────
 
+
 def _register_create_from_selected(app):
     """Each slot table's "Create new from selected" button spawns a new pool motl
     from that grid's selected rows, and surfaces it in the first free slot."""
@@ -387,7 +401,8 @@ def _register_create_from_selected(app):
 
         # TODO(P9): route through run_operation_to_pool once selection is tracked.
         state, mid = insert_motl(
-            state, selected_rows,
+            state,
+            selected_rows,
             label=f"Sel from {short} ({len(selected_rows)})",
             motl_type=src_type,
             meta={
@@ -410,8 +425,10 @@ def _register_create_from_selected(app):
 
 # ── Save dialog connectors — keep save dialog motl-id and prefill in sync ────────
 
+
 def _register_save_connectors(app):
     """Update each slot's save dialog stores when the slot map or pool meta changes."""
+
     @app.callback(
         *[Output(f"me-{i}-save-motl-id", "data") for i in range(N_SLOTS)],
         *[Output(f"me-{i}-save-prefill", "data") for i in range(N_SLOTS)],
@@ -431,6 +448,7 @@ def _register_save_connectors(app):
 
 
 # ── Per-slot connecting callbacks ────────────────────────────────────────────────
+
 
 def _register_slot_connectors_all(app):
     for slot_idx in range(N_SLOTS):
@@ -455,6 +473,7 @@ def _register_slot_connectors(app, slot_idx):
 
 
 # ── Per-slot relion params inline display ────────────────────────────────────────
+
 
 def _register_relion_params_connectors_all(app):
     for slot_idx in range(N_SLOTS):
