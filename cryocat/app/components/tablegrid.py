@@ -12,7 +12,7 @@ through pool.block_to_records so the T3 AST guard is not triggered.
 from __future__ import annotations
 
 import pandas as pd
-from dash import Input, Output, State, exceptions, html, no_update
+from dash import Input, Output, State, exceptions, html, dcc, no_update
 import dash_ag_grid as dag
 
 from cryocat.app import ids
@@ -25,7 +25,7 @@ from cryocat.app.pool import (
 
 CACHE_BLOCK_SIZE = _CACHE_BLOCK_SIZE  # re-exported so test can import from here
 
-_BASE_GRID_OPTIONS = {"cacheBlockSize": CACHE_BLOCK_SIZE, "maxBlocksInCache": 4}
+_BASE_GRID_OPTIONS = {"cacheBlockSize": CACHE_BLOCK_SIZE, "maxBlocksInCache": 4, "rowSelection": "multiple"}
 
 
 # ── Pure functions ─────────────────────────────────────────────────────────────
@@ -86,7 +86,13 @@ def slice_block(df: pd.DataFrame, start_row: int, end_row: int) -> pd.DataFrame:
     return df.iloc[start_row:end_row]
 
 
-def rows_response(request: dict | None, df: pd.DataFrame | None, n_rows_hint: int = 0) -> dict:
+def rows_response(
+    request: dict | None,
+    df: pd.DataFrame | None,
+    n_rows_hint: int = 0,
+    *,
+    slider_filters: dict | None = None,
+) -> dict:
     """Pure getRowsResponse handler.  Never raises.
 
     When df is absent and n_rows_hint > 0, return that count so the grid does
@@ -101,28 +107,37 @@ def rows_response(request: dict | None, df: pd.DataFrame | None, n_rows_hint: in
     sort_model = request.get("sortModel") or []
     start_row = request.get("startRow", 0)
     end_row = request.get("endRow", CACHE_BLOCK_SIZE)
-    filtered = apply_filter_model(df, filter_model, {})
+    print(f"_ROWS filter_in={len(df)} filterModel={filter_model!r} slider_filters={slider_filters!r}")
+    filtered = apply_filter_model(df, filter_model, slider_filters or {})
+    print(f"_ROWS filter_out={len(filtered)} applied={list(filter_model.keys())!r}")
     sorted_df = apply_sort_model(filtered, sort_model)
     block = slice_block(sorted_df, start_row, end_row)
-    return {
+    resp = {
         "rowData": block_to_records(block, max_rows=CACHE_BLOCK_SIZE),
         "rowCount": len(filtered),
     }
+    print(f"_ROWS resp_n={len(resp['rowData'])} rowCount={resp['rowCount']}")
+    return resp
 
 
 def resolve_select_all_ids(
     df: pd.DataFrame,
     filter_model: dict,
     slider_filters: dict[str, tuple[float, float]],
+    *,
+    id_column: str | None = None,
 ) -> list:
-    """Return the *subtomo_id* values for all rows that pass the current filters.
+    """Return identity-column values for all rows that pass the current filters.
 
-    Used for server-side "select all filtered".  If *subtomo_id* is absent,
-    falls back to the integer row index.
+    Uses *id_column* when given; probes common identity columns otherwise;
+    falls back to the integer row index when none is found.
     """
     filtered = apply_filter_model(df, filter_model, slider_filters)
-    if "subtomo_id" in filtered.columns:
-        return filtered["subtomo_id"].tolist()
+    if id_column and id_column in filtered.columns:
+        return filtered[id_column].tolist()
+    for candidate in ("subtomo_id", "qp_id", "qp_subtomo_id"):
+        if candidate in filtered.columns:
+            return filtered[candidate].tolist()
     return list(range(len(filtered)))
 
 
@@ -212,7 +227,11 @@ def col_defs_from_df(df: pd.DataFrame) -> list[dict]:
 def get_grid_container(prefix: str) -> html.Div:
     """Container holding the grid (built once) and a hidden sink for the purge callback."""
     return html.Div(
-        [html.Div(id=f"{prefix}-purge-sink", style={"display": "none"}), get_grid(prefix)],
+        [
+            html.Div(id=f"{prefix}-purge-sink", style={"display": "none"}),
+            dcc.Store(id=f"{prefix}-slider-filters-store", data={}),
+            get_grid(prefix),
+        ],
         id=f"{prefix}-grid-container",
     )
 
@@ -286,18 +305,52 @@ def register_tablegrid_callbacks(
         Input(f"{prefix}-grid", "columnDefs"),
     )
 
+    app.clientside_callback(
+        "function(f){"
+        f'window.dash_ag_grid.getApiAsync("{prefix}-grid")'
+        ".then(function(a){if(a)a.purgeInfiniteCache()});"
+        "return window.dash_clientside.no_update;}",
+        Output(f"{prefix}-purge-sink", "children", allow_duplicate=True),
+        Input(f"{prefix}-slider-filters-store", "data"),
+        prevent_initial_call=True,
+    )
+
     @app.callback(
         Output(f"{prefix}-grid", "getRowsResponse"),
         Input(f"{prefix}-grid", "getRowsRequest"),
         State(f"{prefix}-global-data-store", "data"),
+        State(f"{prefix}-slider-filters-store", "data"),
     )
-    def _rows(request, ref):
+    def _rows(request, ref, slider_filters):
+        print(f"_ROWS prefix={prefix} fired request={'present' if request else 'None'} "
+              f"filterModel={request.get('filterModel') if request else 'N/A'!r} "
+              f"slider_filters={slider_filters!r}")
         if request is None or not ref:
             return no_update
         df = resolve_df(ref)
         if df is None:
             return no_update
-        return rows_response(request, df, len(df))
+        return rows_response(request, df, len(df), slider_filters=slider_filters)
+
+    @app.callback(
+        Output(f"{prefix}-selection-ids-store", "data", allow_duplicate=True),
+        Input(f"{prefix}-grid", "selectedRows"),
+        State(f"{prefix}-global-data-store", "data"),
+        prevent_initial_call=True,
+    )
+    def _track_grid_selection(selected_rows, ref):
+        if not selected_rows:
+            return []
+        id_col = (ref or {}).get("id_column") if isinstance(ref, dict) else None
+        if not id_col:
+            first = selected_rows[0] or {}
+            for candidate in ("subtomo_id", "qp_id", "qp_subtomo_id"):
+                if candidate in first:
+                    id_col = candidate
+                    break
+        if not id_col:
+            return []
+        return [row[id_col] for row in selected_rows if id_col in row]
 
     @app.callback(
         Output(f"{prefix}-selection-ids-store", "data", allow_duplicate=True),
@@ -306,10 +359,11 @@ def register_tablegrid_callbacks(
         State(f"{prefix}-global-data-store", "data"),
         State(f"{prefix}-grid", "filterModel"),
         State(f"{prefix}-selection-ids-store", "data"),
+        State(f"{prefix}-slider-filters-store", "data"),
         prevent_initial_call=True,
     )
-    def _toggle_select_all(n_clicks, ref, filter_model, current_ids):
-        """Select all filtered rows by subtomo_id, or deselect if already all selected."""
+    def _toggle_select_all(n_clicks, ref, filter_model, current_ids, slider_filters):
+        """Select all filtered rows by identity column, or deselect if already all selected."""
         if not n_clicks:
             raise exceptions.PreventUpdate
         if current_ids:
@@ -317,7 +371,8 @@ def register_tablegrid_callbacks(
         df = resolve_df(ref)
         if df is None:
             raise exceptions.PreventUpdate
-        ids_list = resolve_select_all_ids(df, filter_model or {}, {})
+        id_col = (ref or {}).get("id_column") if isinstance(ref, dict) else None
+        ids_list = resolve_select_all_ids(df, filter_model or {}, slider_filters or {}, id_column=id_col)
         total = len(df)
         n = len(ids_list)
         label = f"Deselect All ({n:,})" if n < total else "Deselect All"
@@ -326,18 +381,20 @@ def register_tablegrid_callbacks(
     @app.callback(
         Output(f"{prefix}-active-filter-count", "children"),
         Input(f"{prefix}-grid", "filterModel"),
+        Input(f"{prefix}-slider-filters-store", "data"),
         State(f"{prefix}-global-data-store", "data"),
         prevent_initial_call=True,
     )
-    def _update_filter_count(filter_model, ref):
+    def _update_filter_count(filter_model, slider_filters, ref):
         df = resolve_df(ref)
+        active_filters = (
+            sum(1 for v in (filter_model or {}).values() if v) + len(slider_filters or {})
+        )
         if df is None:
-            n = sum(1 for v in (filter_model or {}).values() if v)
-            return f"{n} active filter{'s' if n != 1 else ''}" if n else ""
+            return f"{active_filters} active filter{'s' if active_filters != 1 else ''}" if active_filters else ""
         total = len(df)
-        filtered_df = apply_filter_model(df, filter_model or {}, {})
+        filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
         n_filtered = len(filtered_df)
-        active_filters = sum(1 for v in (filter_model or {}).values() if v)
         if active_filters == 0:
             return f"{total:,} rows"
         return f"{n_filtered:,} of {total:,} rows"
@@ -348,14 +405,16 @@ def register_tablegrid_callbacks(
         Output(f"{prefix}-pool-from-filtered-btn", "style"),
         Input(f"{prefix}-grid", "filterModel"),
         Input(f"{prefix}-global-data-store", "data"),
+        Input(f"{prefix}-slider-filters-store", "data"),
     )
-    def _update_filtered_btn(filter_model, ref):
+    def _update_filtered_btn(filter_model, ref, slider_filters):
         df = resolve_df(ref)
         if df is None:
             return "Create from filtered", True, {"display": "none"}
-        if "subtomo_id" not in df.columns:
+        id_col = (ref or {}).get("id_column") if isinstance(ref, dict) else None
+        if not id_col and not any(c in df.columns for c in ("subtomo_id", "qp_id", "qp_subtomo_id")):
             return "Create from filtered", True, {"display": "none"}
-        filtered_df = apply_filter_model(df, filter_model or {}, {})
+        filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
         n = len(filtered_df)
         return f"Create from filtered ({n:,})", n == 0, {}
 
@@ -370,7 +429,8 @@ def register_tablegrid_callbacks(
         df = resolve_df(ref)
         if df is None:
             return "Create from selected", True, {"display": "none"}
-        if "subtomo_id" not in df.columns:
+        id_col = (ref or {}).get("id_column") if isinstance(ref, dict) else None
+        if not id_col and not any(c in df.columns for c in ("subtomo_id", "qp_id", "qp_subtomo_id")):
             return "Create from selected", True, {"display": "none"}
         n = len(selected_ids or [])
         return f"Create from selected ({n:,})", n == 0, {}
@@ -379,22 +439,38 @@ def register_tablegrid_callbacks(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        Output(f"{prefix}-global-data-store", "data", allow_duplicate=True),
         Input(f"{prefix}-pool-from-filtered-btn", "n_clicks"),
         State(f"{prefix}-global-data-store", "data"),
         State(f"{prefix}-grid", "filterModel"),
+        State(f"{prefix}-slider-filters-store", "data"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def _create_from_filtered(n_clicks, ref, filter_model, registry, pool_meta, next_id):
+    def _create_from_filtered(n_clicks, ref, filter_model, slider_filters, registry, pool_meta, next_id):
         if not n_clicks:
             raise exceptions.PreventUpdate
         df = resolve_df(ref)
         if df is None:
             raise exceptions.PreventUpdate
+        active_filters = (
+            sum(1 for v in (filter_model or {}).values() if v) + len(slider_filters or {})
+        )
+        if isinstance(ref, dict) and ref.get("data_id"):
+            from cryocat.app import datapool as _datapool
+            id_col = ref.get("id_column")
+            if not id_col or id_col not in df.columns:
+                raise exceptions.PreventUpdate
+            filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
+            if filtered_df.empty:
+                raise exceptions.PreventUpdate
+            label = f"{ref.get('label', 'Data')} filtered" if active_filters else f"{ref.get('label', 'Data')} subset"
+            new_ref = _datapool.insert(filtered_df, label=label, id_column=id_col)
+            return no_update, no_update, no_update, new_ref
         try:
-            filtered_ids = resolve_filtered_ids(df, filter_model or {}, {})
+            filtered_ids = resolve_filtered_ids(df, filter_model or {}, slider_filters or {})
         except ValueError:
             raise exceptions.PreventUpdate
         if not filtered_ids:
@@ -403,15 +479,15 @@ def register_tablegrid_callbacks(
         state = PoolState.from_stores(registry, pool_meta, next_id)
         motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
         source_label = (registry or {}).get(motl_id, {}).get("label", "Data") if motl_id else "Data"
-        active_filters = sum(1 for v in (filter_model or {}).values() if v)
         label = f"{source_label} filtered" if active_filters else f"{source_label} subset"
         new_state, _ = insert_motl(state, subset_df, label=label)
-        return new_state.to_stores()
+        return *new_state.to_stores(), no_update
 
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        Output(f"{prefix}-global-data-store", "data", allow_duplicate=True),
         Input(f"{prefix}-pool-from-selected-btn", "n_clicks"),
         State(f"{prefix}-selection-ids-store", "data"),
         State(f"{prefix}-global-data-store", "data"),
@@ -426,6 +502,17 @@ def register_tablegrid_callbacks(
         df = resolve_df(ref)
         if df is None:
             raise exceptions.PreventUpdate
+        if isinstance(ref, dict) and ref.get("data_id"):
+            from cryocat.app import datapool as _datapool
+            id_col = ref.get("id_column")
+            if not id_col or id_col not in df.columns:
+                raise exceptions.PreventUpdate
+            id_set = set(selected_ids)
+            subset_df = df[df[id_col].isin(id_set)]
+            if subset_df.empty:
+                raise exceptions.PreventUpdate
+            new_ref = _datapool.insert(subset_df, label=f"{ref.get('label', 'Data')} selection", id_column=id_col)
+            return no_update, no_update, no_update, new_ref
         subset_df = subset_motl_rows(df, selected_ids)
         if subset_df.empty:
             raise exceptions.PreventUpdate
@@ -433,7 +520,7 @@ def register_tablegrid_callbacks(
         motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
         source_label = (registry or {}).get(motl_id, {}).get("label", "Data") if motl_id else "Data"
         new_state, _ = insert_motl(state, subset_df, label=f"{source_label} selection")
-        return new_state.to_stores()
+        return *new_state.to_stores(), no_update
 
     @app.callback(
         Output(f"{prefix}-selection-count", "children"),

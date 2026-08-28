@@ -6,7 +6,7 @@ is partial in the infinite model.
 """
 from __future__ import annotations
 
-from dash import Input, Output, State, exceptions
+from dash import Input, Output, State, exceptions, no_update
 
 from cryocat.app import ids
 from cryocat.app.pool import PoolState, get_rows, replace_motl_rows, PoolPayloadMissing
@@ -29,22 +29,36 @@ def register_tableedit_callbacks(app, prefix: str) -> None:
         prevent_initial_call=True,
     )
     def remove_selected_rows(_, selection_ids, ref, registry, pool_meta, next_id):
-        """Remove all rows whose subtomo_id is in selection_ids from the pool entry."""
-        if not selection_ids or not isinstance(ref, dict) or not ref.get("motl_id"):
+        """Remove rows whose identity column value is in selection_ids."""
+        if not selection_ids or not isinstance(ref, dict):
             raise exceptions.PreventUpdate
-        motl_id = ref["motl_id"]
-        try:
-            df = get_rows(motl_id)
-        except PoolPayloadMissing:
-            raise exceptions.PreventUpdate
-        if "subtomo_id" not in df.columns:
-            raise exceptions.PreventUpdate
-        id_set = set(selection_ids)
-        kept_df = df[~df["subtomo_id"].isin(id_set)]
-        state = PoolState.from_stores(registry, pool_meta, next_id)
-        state = replace_motl_rows(state, motl_id, kept_df)
-        new_rev = state.registry[motl_id]["revision"]
-        return *state.to_stores(), {"motl_id": motl_id, "rev": new_rev}, []
+        if ref.get("motl_id"):
+            motl_id = ref["motl_id"]
+            try:
+                df = get_rows(motl_id)
+            except PoolPayloadMissing:
+                raise exceptions.PreventUpdate
+            if "subtomo_id" not in df.columns:
+                raise exceptions.PreventUpdate
+            id_set = set(selection_ids)
+            kept_df = df[~df["subtomo_id"].isin(id_set)]
+            state = PoolState.from_stores(registry, pool_meta, next_id)
+            state = replace_motl_rows(state, motl_id, kept_df)
+            new_rev = state.registry[motl_id]["revision"]
+            return *state.to_stores(), {"motl_id": motl_id, "rev": new_rev}, []
+        if ref.get("data_id"):
+            from cryocat.app import datapool as _datapool
+            id_col = ref.get("id_column")
+            if not id_col:
+                raise exceptions.PreventUpdate
+            df = _datapool.resolve_df(ref)
+            if df is None or id_col not in df.columns:
+                raise exceptions.PreventUpdate
+            id_set = set(selection_ids)
+            kept_df = df[~df[id_col].isin(id_set)]
+            new_ref = _datapool.insert(kept_df, label=ref.get("label", ""), id_column=id_col)
+            return no_update, no_update, no_update, new_ref, []
+        raise exceptions.PreventUpdate
 
     @app.callback(
         Output(f"{prefix}-selection-ids-store", "data", allow_duplicate=True),
@@ -56,13 +70,26 @@ def register_tableedit_callbacks(app, prefix: str) -> None:
     )
     def select_inverse_rows(_, ref, filter_model, current_ids):
         """Invert the selection: all filtered rows not currently selected."""
-        if not isinstance(ref, dict) or not ref.get("motl_id"):
+        if not isinstance(ref, dict):
             raise exceptions.PreventUpdate
-        motl_id = ref["motl_id"]
-        try:
-            df = get_rows(motl_id)
-        except PoolPayloadMissing:
-            raise exceptions.PreventUpdate
-        all_filtered_ids = resolve_select_all_ids(df, filter_model or {}, {})
-        current_set = set(current_ids or [])
-        return [i for i in all_filtered_ids if i not in current_set]
+        if ref.get("motl_id"):
+            motl_id = ref["motl_id"]
+            try:
+                df = get_rows(motl_id)
+            except PoolPayloadMissing:
+                raise exceptions.PreventUpdate
+            all_filtered_ids = resolve_select_all_ids(df, filter_model or {}, {})
+            current_set = set(current_ids or [])
+            return [i for i in all_filtered_ids if i not in current_set]
+        if ref.get("data_id"):
+            from cryocat.app import datapool as _datapool
+            id_col = ref.get("id_column")
+            if not id_col:
+                raise exceptions.PreventUpdate
+            df = _datapool.resolve_df(ref)
+            if df is None:
+                raise exceptions.PreventUpdate
+            all_filtered_ids = resolve_select_all_ids(df, filter_model or {}, {}, id_column=id_col)
+            current_set = set(current_ids or [])
+            return [i for i in all_filtered_ids if i not in current_set]
+        raise exceptions.PreventUpdate

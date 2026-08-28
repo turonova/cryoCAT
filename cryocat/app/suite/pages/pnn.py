@@ -29,9 +29,8 @@ from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app import ids, formgen
 from cryocat.app.formgen import make_dropdown
 from cryocat.app.pool import (
-    PoolState, insert_motl as _insert_motl, get_rows as _get_rows,
+    get_rows as _get_rows,
     get_motl as _get_motl, PoolPayloadMissing as _PoolPayloadMissing,
-    resolve_df as pool_resolve_df, resolve_n_rows as pool_resolve_n_rows,
 )
 from cryocat.app.components.poolpicker import get_pool_picker, register_pool_picker_callbacks
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
@@ -47,6 +46,10 @@ DYNAMIC_IDS: list[tuple[str, str]] = [
 
 
 _MOTL_COL_OPTIONS = [{"label": c, "value": c} for c in Motl.motl_columns]
+
+_nn_counter: list[int] = [0]
+
+from cryocat.app import datapool as _datapool
 
 
 def _nn_csv_save(path, grid_data, used_motls):
@@ -331,7 +334,7 @@ def register_callbacks(app):
     )
     register_table_callbacks(
         app, "nn-out-tabv",
-        resolve_df=pool_resolve_df, resolve_n_rows=pool_resolve_n_rows,
+        resolve_df=_datapool.resolve_df, resolve_n_rows=_datapool.resolve_n_rows,
         extra_csv_states=[State("nn-used-motls-store", "data")],
         custom_csv_save_fn=_nn_csv_save,
     )
@@ -374,29 +377,21 @@ def register_callbacks(app):
         Output("nn-stats-text", "children"),
         Output("nn-result", "data"),
         Output("nn-used-motls-store", "data"),
-        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_META, "data", allow_duplicate=True),
-        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("nn-compute-btn", "n_clicks"),
         State("nn-value", "data"),
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State("nn-angular-toggle", "value"),
         State("nn-dist-toggle", "value"),
-        State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_META, "data"),
-        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def compute_nn(n_clicks, selected, param_values, param_ids, angular_on, compute_dist,
-                   pool_registry, pool_meta, pool_next_id):
+    def compute_nn(n_clicks, selected, param_values, param_ids, angular_on, compute_dist):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
 
-        _no_pool = (no_update, no_update, no_update)
         if not selected:
             return (no_update, no_update, "Select at least one motl from the pool.",
-                    no_update, no_update, *_no_pool)
+                    no_update, no_update)
         if isinstance(selected, str):
             selected = [selected]
 
@@ -409,19 +404,24 @@ def register_callbacks(app):
                 pass
         if not motls:
             return (no_update, no_update, "The selected motls have no data.",
-                    no_update, no_update, *_no_pool)
+                    no_update, no_update)
 
         nn_kwargs = _kwargs_by_cls(param_ids, param_values, "nn-params")
         angular_kwargs = _kwargs_by_cls(param_ids, param_values, "nn-angular")
 
+        _nn_counter[0] += 1
+        nn_key = f"nn-{_nn_counter[0]}"
+        from cryocat.app import provenance as _prov
+        from cryocat.app.logger import invoke_operation as _invoke_op
+        var = _prov.bind(nn_key)
         try:
             nn_input = motls[0] if len(motls) == 1 else motls
-            nn_stats = run_operation(NearestNeighbors, {"input_data": nn_input, **nn_kwargs})
+            nn_stats = _invoke_op(NearestNeighbors, {"input_data": nn_input, **nn_kwargs}, assign_to=var)
             normalized = nn_stats.get_normalized_coord(add_to_df=True)
             nn_stats.get_rotated_coord(add_to_df=True)
         except Exception as exc:
             return (no_update, no_update, f"Error: {exc}",
-                    no_update, no_update, *_no_pool)
+                    no_update, no_update)
 
         status_bits = []
         if nn_kwargs.get("nn_type") == "closest_dist" and "nn_dist" in nn_stats.df:
@@ -461,10 +461,9 @@ def register_callbacks(app):
                 status_bits.append(f"Angular distances skipped: {exc}")
 
         table_data = nn_stats.df.to_dict("records")
-
-        state = PoolState.from_stores(pool_registry, pool_meta, pool_next_id)
-        new_state, pool_motl_id = _insert_motl(state, nn_stats.df, label="NN results")
-        pool_ref = {"motl_id": pool_motl_id, "rev": 0, "n_rows": len(nn_stats.df)}
+        nn_ref = _datapool.insert(nn_stats.df, label="NN analysis", id_column="qp_subtomo_id")
+        from cryocat.app import session as _session
+        _prov.record(nn_key, _session.last_seq())
 
         nn_df = pd.DataFrame(
             np.column_stack((normalized, nn_stats.df["nn_subtomo_id"].values)),
@@ -483,9 +482,8 @@ def register_callbacks(app):
         }
 
         return (
-            xyz_graph, pool_ref, " | ".join(status_bits), table_data,
+            xyz_graph, nn_ref, " | ".join(status_bits), table_data,
             used_motls_store,
-            new_state.registry, new_state.meta, new_state.next_id,
         )
 
     # ── Post-processing: enrich existing NN table without recomputing. ────────
@@ -493,9 +491,6 @@ def register_callbacks(app):
         Output("nn-result", "data", allow_duplicate=True),
         Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
         Output("nn-pp-status", "children"),
-        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_META, "data", allow_duplicate=True),
-        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("nn-pp-apply-btn", "n_clicks"),
         State("nn-result", "data"),
         State("nn-used-motls-store", "data"),
@@ -505,21 +500,16 @@ def register_callbacks(app):
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State("nn-pp-dist-toggle", "value"),
-        State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_META, "data"),
-        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
     def _apply_postprocessing(
         n_clicks, nn_result, used_motls,
         add_cols, sides, angular_on, param_values, param_ids, dist_on,
-        pool_registry, pool_meta, pool_next_id,
     ):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
-        _no_pool = (no_update, no_update, no_update)
         if not nn_result:
-            return no_update, no_update, "Run NN analysis first.", *_no_pool
+            return no_update, no_update, "Run NN analysis first."
 
         df = pd.DataFrame(nn_result)
         status_bits = []
@@ -592,13 +582,11 @@ def register_callbacks(app):
                 status_bits.append(f"NN distances failed: {exc}")
 
         if not status_bits:
-            return no_update, no_update, "Nothing selected.", *_no_pool
+            return no_update, no_update, "Nothing selected."
 
         new_data = df.to_dict("records")
-        state = PoolState.from_stores(pool_registry, pool_meta, pool_next_id)
-        new_state, pool_motl_id = _insert_motl(state, df, label="NN results (pp)")
-        pool_ref = {"motl_id": pool_motl_id, "rev": 0, "n_rows": len(df)}
-        return new_data, pool_ref, " | ".join(status_bits), new_state.registry, new_state.meta, new_state.next_id
+        nn_ref = _datapool.insert(df, label="NN analysis", id_column="qp_subtomo_id")
+        return new_data, nn_ref, " | ".join(status_bits)
 
     # ── Handle NN table loaded from file (via tablesource) ────────────────────
     @app.callback(
@@ -606,17 +594,11 @@ def register_callbacks(app):
         Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
         Output("nn-result", "data", allow_duplicate=True),
         Output("nn-used-motls-store", "data", allow_duplicate=True),
-        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_META, "data", allow_duplicate=True),
-        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("nn-src-ts-loaded", "data"),
         State("nn-value", "data"),
-        State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_META, "data"),
-        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def _handle_nn_loaded(loaded, selected, pool_registry, pool_meta, pool_next_id):
+    def _handle_nn_loaded(loaded, selected):
         if not loaded:
             raise dash.exceptions.PreventUpdate
 
@@ -665,9 +647,7 @@ def register_callbacks(app):
             pass
 
         table_data = nn_stats.df.to_dict("records")
-        state = PoolState.from_stores(pool_registry, pool_meta, pool_next_id)
-        new_state, pool_motl_id = _insert_motl(state, nn_stats.df, label="NN results (loaded)")
-        pool_ref = {"motl_id": pool_motl_id, "rev": 0, "n_rows": len(nn_stats.df)}
+        nn_ref = _datapool.insert(nn_stats.df, label="NN analysis", id_column="qp_subtomo_id")
         used_motls_store = {
             "names": selected_names,
             "is_multi": is_multi,
@@ -675,6 +655,5 @@ def register_callbacks(app):
         }
 
         return (
-            xyz_graph, pool_ref, table_data, used_motls_store,
-            new_state.registry, new_state.meta, new_state.next_id,
+            xyz_graph, nn_ref, table_data, used_motls_store,
         )

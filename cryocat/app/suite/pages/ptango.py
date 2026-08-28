@@ -49,32 +49,9 @@ _desc_feat_map: dict = Descriptor.build_descriptor_feature_map(_descriptors, _fe
 
 _twist_objects: Registry[TwistDescriptor] = Registry("tango-twist", max_items=5)
 
-_desc_payloads: dict[str, pd.DataFrame] = {}
-
 _DESC_SLOTS = 5
 
-
-def _twist_resolve_df(ref: dict | None) -> pd.DataFrame | None:
-    obj_key = (ref or {}).get("obj_key") if isinstance(ref, dict) else None
-    if not obj_key:
-        return None
-    twist = _twist_objects.get(obj_key)
-    return twist.df if twist is not None else None
-
-
-def _twist_resolve_n_rows(ref: dict | None) -> int:
-    return (ref or {}).get("n_rows", 0) if isinstance(ref, dict) else 0
-
-
-def _desc_resolve_df(ref: dict | None) -> pd.DataFrame | None:
-    desc_key = (ref or {}).get("desc_key") if isinstance(ref, dict) else None
-    if not desc_key:
-        return None
-    return _desc_payloads.get(desc_key)
-
-
-def _desc_resolve_n_rows(ref: dict | None) -> int:
-    return (ref or {}).get("n_rows", 0) if isinstance(ref, dict) else 0
+from cryocat.app import datapool as _datapool
 
 DYNAMIC_IDS: list[tuple[str, str]] = [
     ("tango-twist-tabv-grid-container", "tango-twist-tabv-grid"),
@@ -446,31 +423,31 @@ def register_callbacks(app) -> None:
 
     register_table_callbacks(
         app, "tango-twist-tabv",
-        resolve_df=_twist_resolve_df, resolve_n_rows=_twist_resolve_n_rows,
+        resolve_df=_datapool.resolve_df, resolve_n_rows=_datapool.resolve_n_rows,
         tabs_id="tango-tabs", tab_value="tango-tab-twist",
     )
     register_table_plot_callbacks(
         app, "tango-twist-tabv-table-plot", "tango-twist-tabv-global-data-store",
-        table_grid_id="tango-twist-tabv-grid", resolve_df=_twist_resolve_df,
+        table_grid_id="tango-twist-tabv-grid", resolve_df=_datapool.resolve_df,
     )
     register_table_cluster_callbacks(
         app, "tango-twist-tabv-table-cluster", "tango-twist-tabv-global-data-store",
-        table_grid_id="tango-twist-tabv-grid", resolve_df=_twist_resolve_df,
+        table_grid_id="tango-twist-tabv-grid", resolve_df=_datapool.resolve_df,
     )
 
     for _i in range(_DESC_SLOTS):
         register_table_callbacks(
             app, f"tango-desc-{_i}",
-            resolve_df=_desc_resolve_df, resolve_n_rows=_desc_resolve_n_rows,
+            resolve_df=_datapool.resolve_df, resolve_n_rows=_datapool.resolve_n_rows,
             tabs_id="tango-tabs", tab_value=f"tango-tab-desc-{_i}",
         )
         register_table_plot_callbacks(
             app, f"tango-desc-{_i}-table-plot", f"tango-desc-{_i}-global-data-store",
-            table_grid_id=f"tango-desc-{_i}-grid", resolve_df=_desc_resolve_df,
+            table_grid_id=f"tango-desc-{_i}-grid", resolve_df=_datapool.resolve_df,
         )
         register_table_cluster_callbacks(
             app, f"tango-desc-{_i}-table-cluster", f"tango-desc-{_i}-global-data-store",
-            table_grid_id=f"tango-desc-{_i}-grid", resolve_df=_desc_resolve_df,
+            table_grid_id=f"tango-desc-{_i}-grid", resolve_df=_datapool.resolve_df,
         )
 
     register_table_to_motl_callbacks(app, "tango-ttm", source_table_id="tango-twist-tabv-grid", id_column="qp_id")
@@ -661,7 +638,8 @@ def register_callbacks(app) -> None:
         _prov.record(twist_id, _session.last_seq())
 
         obj_key = _twist_objects.add(twist_desc)
-        n = len(twist_desc.df) if hasattr(twist_desc, "df") and twist_desc.df is not None else 0
+        _df = twist_desc.df if hasattr(twist_desc, "df") and twist_desc.df is not None else pd.DataFrame()
+        n = len(_df)
         handle = {
             "obj_key": obj_key,
             "twist_id": twist_id,
@@ -669,7 +647,7 @@ def register_callbacks(app) -> None:
             "label": f"{source_label} twist",
             "nn_radius": nn_radius,
         }
-        global_ref = {"obj_key": obj_key, "n_rows": n}
+        global_ref = _datapool.insert(_df, label=f"{source_label} twist", id_column="qp_id")
         status = f"Twist computed: {n:,} pairs."
         return handle, global_ref, "tango-tab-twist", status, new_twist_id
 
@@ -718,7 +696,8 @@ def register_callbacks(app) -> None:
             if twist_desc.nn_radius is not None
             else "unknown"
         )
-        n = len(twist_desc.df) if twist_desc.df is not None else 0
+        _df = twist_desc.df if twist_desc.df is not None else pd.DataFrame()
+        n = len(_df)
         handle = {
             "obj_key": obj_key,
             "twist_id": twist_id,
@@ -726,7 +705,7 @@ def register_callbacks(app) -> None:
             "label": "Loaded twist",
             "nn_radius": twist_desc.nn_radius,
         }
-        global_ref = {"obj_key": obj_key, "n_rows": n}
+        global_ref = _datapool.insert(_df, label="Loaded twist", id_column="qp_id")
         status = f"Twist loaded: {n:,} pairs. Radius: {radius_note}."
         return handle, global_ref, "tango-tab-twist", status, new_twist_id
 
@@ -888,14 +867,13 @@ def register_callbacks(app) -> None:
             duration_s=duration,
             result={"type": type(desc_obj).__name__},
         ))
-        _desc_payloads[desc_id] = desc_obj.desc
         _prov.record(desc_id, _session.last_seq())
 
         desc_df = desc_obj.desc
         twist_sig = twist_handle.get("obj_key")
         desc_registry[str(slot)] = {"label": desc_label, "twist_sig": twist_sig, "stale": False}
         slot_global = [no_update] * _DESC_SLOTS
-        slot_global[slot] = {"desc_key": desc_id, "n_rows": len(desc_df)}
+        slot_global[slot] = _datapool.insert(desc_df, label=desc_label, id_column="qp_id")
         status = f"Descriptor computed: {len(desc_df):,} rows."
         return desc_registry, *slot_global, f"tango-tab-desc-{slot}", status, new_desc_next_id
 
@@ -981,7 +959,7 @@ def register_callbacks(app) -> None:
                 prevent_initial_call=True,
             )
             def _update_diagnostics(ref, settings):
-                df = _desc_resolve_df(ref)
+                df = _datapool.resolve_df(ref)
                 return _build_diagnostics(df, settings)
         _make_diag_cb()
 
@@ -1006,6 +984,6 @@ def register_callbacks(app) -> None:
         detailed_table="tango-twist-tabv-global-data-store",
         tabs_id=None,
         radius_store_id="tango-twist-handle",
-        resolve_detail_df=_twist_resolve_df,
+        resolve_detail_df=_datapool.resolve_df,
     )
 

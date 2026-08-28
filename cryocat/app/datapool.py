@@ -12,6 +12,14 @@ For DataFrame/2D-array entries, set_view_df() writes into pool._payloads
 under the reserved key "dp-view" so pool.get_rows("dp-view") works and the
 existing tablegrid component can display data pool entries without changes.
 Call clear_view_df() when nothing is selected.
+
+Table pool (non-motl tables)
+-----------------------------
+A second, simpler store (``_table_payloads``) holds DataFrames for non-motl
+table components (NN analysis, tango twist, tango descriptors).  These refs
+carry ``data_id`` values with the ``"tab_"`` prefix so they are distinct from
+the file-pool ``"data-N"`` ids.  Use ``insert`` / ``resolve_df`` /
+``resolve_n_rows`` / ``id_column_for`` for this lighter API.
 """
 from __future__ import annotations
 
@@ -260,3 +268,57 @@ def clear_view_df() -> None:
     """
     from cryocat.app.pool import _payloads as _pool_payloads
     _pool_payloads.pop("dp-view", None)
+
+
+# ── Table pool (non-motl tables) ──────────────────────────────────────────────
+# Simpler store for NN analysis, tango twist, and tango descriptor DataFrames.
+# IDs use the "data_N" format (underscore); file-pool uses "data-N" (hyphen).
+# The ref that flows through dcc.Store is:
+#   {"data_id": "tab_1", "n_rows": N, "id_column": str|None, "label": str}
+
+_table_payloads: dict[str, pd.DataFrame] = {}
+_table_counter: list[int] = [0]
+
+
+def insert(
+    df: pd.DataFrame,
+    *,
+    label: str,
+    id_column: str | None,
+    source: str = "",
+) -> dict:
+    """Store *df* and return a ref dict for dcc.Store."""
+    _table_counter[0] += 1
+    data_id = f"data_{_table_counter[0]}"
+    _table_payloads[data_id] = df.copy()
+    return {
+        "data_id": data_id,
+        "n_rows": len(df),
+        "id_column": id_column,
+        "label": label,
+        "source": source,
+    }
+
+
+def resolve_df(ref: dict | None) -> pd.DataFrame | None:
+    """Return the DataFrame for a table-pool ref, or ``None``."""
+    if not isinstance(ref, dict):
+        return None
+    data_id = ref.get("data_id")
+    if not data_id:
+        return None
+    return _table_payloads.get(data_id)
+
+
+def resolve_n_rows(ref: dict | None) -> int:
+    """Return the row count recorded in *ref*, or 0."""
+    if not isinstance(ref, dict):
+        return 0
+    return ref.get("n_rows", 0)
+
+
+def id_column_for(ref: dict | None) -> str | None:
+    """Return the identity column embedded in *ref*, or ``None``."""
+    if not isinstance(ref, dict):
+        return None
+    return ref.get("id_column")

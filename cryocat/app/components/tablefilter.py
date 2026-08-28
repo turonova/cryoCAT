@@ -188,34 +188,25 @@ def register_tablefilter_callbacks(app, prefix: str, resolve_df=None) -> None:
         return result
 
     @app.callback(
-        Output(f"{prefix}-grid", "filterModel", allow_duplicate=True),
+        Output(f"{prefix}-slider-filters-store", "data"),
         Input({"type": f"{prefix}-filter-slider", "column": ALL}, "value"),
         State({"type": f"{prefix}-filter-slider", "column": ALL}, "id"),
         State({"type": f"{prefix}-filter-slider", "column": ALL}, "min"),
         State({"type": f"{prefix}-filter-slider", "column": ALL}, "max"),
-        State(f"{prefix}-grid", "filterModel"),
         prevent_initial_call=True,
     )
-    def _on_slider_change(slider_values, slider_ids, slider_mins, slider_maxs, current_filter_model):
-        """Encode active slider ranges into filterModel to trigger infinite-cache purge.
+    def _on_slider_change(slider_values, slider_ids, slider_mins, slider_maxs):
+        """Write active slider ranges to slider-filters-store to trigger server-side re-filter.
 
         Full-range sliders contribute nothing (W2 — no no-op filtering).
-        Non-slider column filters from the grid header are preserved.
         """
-        slider_cols = {sid["column"] for sid in slider_ids}
-        # Keep non-slider column filters; rebuild slider portion from current values
-        merged = {k: v for k, v in (current_filter_model or {}).items()
-                  if k not in slider_cols}
+        slider_filters = {}
         for val, sid, mn, mx in zip(slider_values, slider_ids, slider_mins, slider_maxs):
             lo, hi = val[0], val[1]
-            if lo != mn or hi != mx:  # non-trivial — add to filterModel
-                merged[sid["column"]] = {
-                    "filterType": "number",
-                    "type": "inRange",
-                    "filter": lo,
-                    "filterTo": hi,
-                }
-        return merged
+            if lo != mn or hi != mx:
+                slider_filters[sid["column"]] = [lo, hi]
+        print(f"SLIDER cb=_on_slider_change writing_to={prefix}-slider-filters-store out={slider_filters!r}")
+        return slider_filters
 
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
@@ -223,30 +214,44 @@ def register_tablefilter_callbacks(app, prefix: str, resolve_df=None) -> None:
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
         Output(f"{prefix}-global-data-store", "data", allow_duplicate=True),
         Output(f"{prefix}-grid", "filterModel", allow_duplicate=True),
+        Output(f"{prefix}-slider-filters-store", "data", allow_duplicate=True),
         Input(f"{prefix}-apply-btn", "n_clicks"),
         State(f"{prefix}-global-data-store", "data"),
         State(f"{prefix}-grid", "filterModel"),
+        State(f"{prefix}-slider-filters-store", "data"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def apply_filters_btn(_, ref, filter_model, registry, pool_meta, next_id):
+    def apply_filters_btn(_, ref, filter_model, slider_filters, registry, pool_meta, next_id):
         """Commit the currently filtered subset back to the pool (permanent filter).
 
-        Reads both slider-encoded and column-header filters from filterModel,
-        applies them to the pool entry, and commits the result.  Clears
-        filterModel afterward so the grid reflects the new baseline.
+        Reads column-header filters (filterModel) and slider filters (slider-filters-store),
+        applies both to the table entry, and commits the result.  Clears both stores
+        afterward so the grid reflects the new baseline.
         """
-        if not ref or not isinstance(ref, dict) or not ref.get("motl_id"):
+        if not ref or not isinstance(ref, dict):
             raise exceptions.PreventUpdate
-        motl_id = ref["motl_id"]
-        try:
-            df = get_rows(motl_id)
-        except PoolPayloadMissing:
-            raise exceptions.PreventUpdate
-        filtered_df = apply_filter_model(df, filter_model or {}, {})
-        state = PoolState.from_stores(registry, pool_meta, next_id)
-        state = replace_motl_rows(state, motl_id, filtered_df)
-        new_rev = state.registry[motl_id]["revision"]
-        return *state.to_stores(), {"motl_id": motl_id, "rev": new_rev}, {}
+        if ref.get("motl_id"):
+            motl_id = ref["motl_id"]
+            try:
+                df = get_rows(motl_id)
+            except PoolPayloadMissing:
+                raise exceptions.PreventUpdate
+            filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
+            state = PoolState.from_stores(registry, pool_meta, next_id)
+            state = replace_motl_rows(state, motl_id, filtered_df)
+            new_rev = state.registry[motl_id]["revision"]
+            return *state.to_stores(), {"motl_id": motl_id, "rev": new_rev}, {}, {}
+        if ref.get("data_id"):
+            from cryocat.app import datapool as _datapool
+            from dash import no_update
+            df = _datapool.resolve_df(ref)
+            if df is None:
+                raise exceptions.PreventUpdate
+            filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
+            id_column = ref.get("id_column")
+            new_ref = _datapool.insert(filtered_df, label=ref.get("label", ""), id_column=id_column)
+            return no_update, no_update, no_update, new_ref, {}, {}
+        raise exceptions.PreventUpdate

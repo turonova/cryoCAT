@@ -13,7 +13,6 @@ import pandas as pd
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from cryocat.analysis import visplot
-from cryocat.core.cryomotl import Motl
 from cryocat.utils.classutils import get_class_names_by_parent
 from cryocat.app import ids
 from cryocat.app.apputils import save_output
@@ -475,7 +474,8 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
     def _df_from_store(data):
         """Return a DataFrame from the store reference via resolve_df, or from raw records."""
         if resolve_df is not None:
-            return resolve_df(data) or pd.DataFrame()
+            df = resolve_df(data)
+            return pd.DataFrame() if df is None else df
         return pd.DataFrame.from_records(data) if data else pd.DataFrame()
 
     graph_options = [
