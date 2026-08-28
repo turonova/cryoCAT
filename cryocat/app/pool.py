@@ -26,7 +26,7 @@ import pandas as pd
 
 
 # ── Server-side payload store ────────────────────────────────────────────────────
-# Process-local (§12).  Keyed by motl_id ("motl-1", "motl-2", …).
+# Process-local (§12).  Keyed by motl_id ("motl_1", "motl_2", …).
 # Clears on hot-reload / restart; handles in the browser then point to missing
 # payloads, which :func:`get_rows` surfaces as :exc:`PoolPayloadMissing`.
 
@@ -174,7 +174,7 @@ def insert_motl(
     has_tab: bool = True,
 ) -> tuple[PoolState, str]:
     """Append one motl; store its payload server-side; return (new_state, motl_id)."""
-    motl_id = f"motl-{state.next_id + 1}"
+    motl_id = f"motl_{state.next_id + 1}"
 
     df = _to_df(rows)
     extra_df = _to_df(extra) if extra is not None else None
@@ -278,7 +278,7 @@ def get_rows(motl_id: str, *, state: PoolState | None = None) -> pd.DataFrame:
     Parameters
     ----------
     motl_id:
-        Pool entry id (e.g. ``"motl-3"``).
+        Pool entry id (e.g. ``"motl_3"``).
     state:
         Optional :class:`PoolState`; used only to include ``source_path`` in
         the error message when the payload has been evicted.
@@ -531,6 +531,140 @@ def natural_sort_key(s: str) -> list:
     """Key function for natural sorting (run_2 before run_10).  Use in sorted(...)."""
     import re
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r"(\d+)", s)]
+
+
+# ── Generic pool helpers (motl and table pool) ────────────────────────────────────
+
+
+def get_id_column(ref: dict | None) -> str | None:
+    """Return the identity column name for any ref type.
+
+    Motl refs → ``"subtomo_id"``.
+    Table-pool refs → ``ref["id_column"]`` (may be ``None``).
+    All other → ``None``.
+    """
+    if not isinstance(ref, dict):
+        return None
+    if "motl_id" in ref:
+        return "subtomo_id"
+    return ref.get("id_column")
+
+
+def get_table_df(ref: dict | None) -> pd.DataFrame | None:
+    """Return the DataFrame for any ref type, or ``None``.
+
+    Motl refs → :func:`get_rows`; returns ``None`` on :exc:`PoolPayloadMissing`.
+    Table-pool refs → :func:`~cryocat.app.datapool.resolve_df`.
+    """
+    if not isinstance(ref, dict):
+        return None
+    if "motl_id" in ref:
+        try:
+            return get_rows(ref["motl_id"])
+        except PoolPayloadMissing:
+            return None
+    if "table_id" in ref:
+        from cryocat.app import datapool as _datapool
+        return _datapool.resolve_df(ref)
+    return None
+
+
+def get_entry_label(ref: dict | None, registry: dict | None = None) -> str:
+    """Return the display label for any ref type."""
+    if not isinstance(ref, dict):
+        return "Data"
+    if "motl_id" in ref:
+        return (registry or {}).get(ref["motl_id"], {}).get("label", "Data")
+    return ref.get("label", "Data")
+
+
+def get_column_ranges_for_ref(
+    ref: dict | None,
+    registry: dict | None,
+    resolve_df=None,
+) -> dict:
+    """Return ``column_ranges`` metadata for any ref type.
+
+    Motl refs: pulled from ``registry[motl_id]["column_ranges"]``.
+    Table-pool refs: computed from the live DataFrame (via *resolve_df* when
+    provided, otherwise via :func:`~cryocat.app.datapool.resolve_df`).
+    """
+    if not isinstance(ref, dict):
+        return {}
+    if "motl_id" in ref:
+        return (registry or {}).get(ref["motl_id"], {}).get("column_ranges", {})
+    if "table_id" in ref:
+        df = resolve_df(ref) if resolve_df is not None else None
+        if df is None:
+            from cryocat.app import datapool as _datapool
+            df = _datapool.resolve_df(ref)
+        if df is None or df.empty:
+            return {}
+        _, col_ranges, _ = _compute_entry_metadata(df)
+        return col_ranges
+    return {}
+
+
+def commit_rows(
+    ref: dict,
+    df: pd.DataFrame,
+    registry,
+    pool_meta,
+    next_id,
+    *,
+    label: str | None = None,
+) -> tuple:
+    """Persist a modified DataFrame back to whichever pool owns *ref*.
+
+    Returns ``(pool_registry, pool_meta, pool_next_id, new_ref)`` for
+    unpacking into four Dash Outputs.  For table-pool refs the first three
+    values are ``no_update``; for motl refs ``new_ref`` carries
+    ``{"motl_id": …, "rev": …}``.
+    """
+    from dash import no_update as _nu
+    if "motl_id" in ref:
+        motl_id = ref["motl_id"]
+        state = PoolState.from_stores(registry, pool_meta, next_id)
+        state = replace_motl_rows(state, motl_id, df)
+        new_rev = state.registry[motl_id]["revision"]
+        return (*state.to_stores(), {"motl_id": motl_id, "rev": new_rev})
+    if "table_id" in ref:
+        from cryocat.app import datapool as _datapool
+        entry_label = label if label is not None else ref.get("label", "")
+        new_ref = _datapool.insert(df, label=entry_label, id_column=ref.get("id_column"))
+        return _nu, _nu, _nu, new_ref
+    raise ValueError(f"commit_rows: unrecognised ref {ref!r}")
+
+
+def create_pool_entry(
+    ref: dict,
+    df: pd.DataFrame,
+    registry,
+    pool_meta,
+    next_id,
+    *,
+    label: str = "",
+) -> tuple:
+    """Create a *new* pool entry from *df* using the same pool as *ref*.
+
+    Returns ``(pool_registry, pool_meta, pool_next_id, new_ref)`` for
+    unpacking into four Dash Outputs.
+
+    * Motl refs: registers a new entry; ``new_ref`` is ``no_update`` so the
+      active view stays on the original motl (pool browser handles navigation).
+    * Table-pool refs: inserts a new entry; ``new_ref`` carries the new handle
+      so the active view switches to the new entry.
+    """
+    from dash import no_update as _nu
+    if "motl_id" in ref:
+        state = PoolState.from_stores(registry, pool_meta, next_id)
+        state, _ = insert_motl(state, df, label=label)
+        return (*state.to_stores(), _nu)
+    if "table_id" in ref:
+        from cryocat.app import datapool as _datapool
+        new_ref = _datapool.insert(df, label=label or ref.get("label", ""), id_column=ref.get("id_column"))
+        return _nu, _nu, _nu, new_ref
+    raise ValueError(f"create_pool_entry: unrecognised ref {ref!r}")
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────────

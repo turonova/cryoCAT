@@ -26,7 +26,7 @@ def render_script(
         replayable recipe.  ``"verbatim"`` — every call in order; failed
         calls appear as real uncommented code with the error comment above.
     lineage_of:
-        Pool id (e.g. ``"motl-3"``). When given, only the transitive
+        Pool id (e.g. ``"motl_3"``). When given, only the transitive
         producers of that entry are included.
     """
     if mode not in ("successful", "verbatim"):

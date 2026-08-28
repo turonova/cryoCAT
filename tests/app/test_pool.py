@@ -92,7 +92,7 @@ class TestToStores:
 class TestInsertMotl:
     def test_first_id_is_motl_1(self):
         _, mid = insert_motl(_empty(), _ROWS)
-        assert mid == "motl-1"
+        assert mid == "motl_1"
 
     def test_next_id_increments(self):
         s, _ = insert_motl(_empty(), _ROWS)
@@ -166,16 +166,16 @@ class TestIdsNeverReused:
         s, m1 = insert_motl(s, _ROWS)
         s, m2 = insert_motl(s, _ROWS)
         s, m3 = insert_motl(s, _ROWS)
-        assert [m1, m2, m3] == ["motl-1", "motl-2", "motl-3"]
+        assert [m1, m2, m3] == ["motl_1", "motl_2", "motl_3"]
 
     def test_remove_then_insert_yields_next_id(self):
         s = _empty()
-        s, _ = insert_motl(s, _ROWS)   # motl-1
-        s, _ = insert_motl(s, _ROWS)   # motl-2
-        s, _ = insert_motl(s, _ROWS)   # motl-3
-        s = remove_motl(s, "motl-2")
+        s, _ = insert_motl(s, _ROWS)   # motl_1
+        s, _ = insert_motl(s, _ROWS)   # motl_2
+        s, _ = insert_motl(s, _ROWS)   # motl_3
+        s = remove_motl(s, "motl_2")
         s, m4 = insert_motl(s, _ROWS)
-        assert m4 == "motl-4"
+        assert m4 == "motl_4"
 
 
 # ── remove_motl ──────────────────────────────────────────────────────────────────
@@ -306,14 +306,14 @@ class TestActiveIds:
         s, _ = insert_motl(s, _ROWS)
         s, _ = insert_motl(s, _ROWS)
         s, _ = insert_motl(s, _ROWS)
-        assert active_ids(s) == ["motl-1", "motl-2", "motl-3"]
+        assert active_ids(s) == ["motl_1", "motl_2", "motl_3"]
 
     def test_inactive_excluded(self):
         s = _empty()
         s, _ = insert_motl(s, _ROWS)
         s, _ = insert_motl(s, _ROWS)
-        s = set_active(s, "motl-1", False)
-        assert active_ids(s) == ["motl-2"]
+        s = set_active(s, "motl_1", False)
+        assert active_ids(s) == ["motl_2"]
 
 
 # ── clear_payloads ───────────────────────────────────────────────────────────────

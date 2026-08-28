@@ -7,7 +7,7 @@ import pandas as pd
 from dash import html, dcc, Input, Output, State, exceptions, no_update, ctx
 import dash_bootstrap_components as dbc
 
-from cryocat.app.apputils import save_motl
+from cryocat.app.apputils import run_operation, save_motl
 from cryocat.app.components.customel import InlineLabeledDropdown, InlineInputForm
 from cryocat.app.components.relionopts import (
     get_relion_options,
@@ -124,7 +124,6 @@ def register_tablesave_csv_callbacks(
     app,
     prefix: str,
     *,
-    resolve_df=None,
     extra_csv_states: list | None = None,
     custom_csv_save_fn=None,
 ) -> None:
@@ -150,15 +149,16 @@ def register_tablesave_csv_callbacks(
         if not path:
             return no_update, "Specify a filename."
         try:
+            from cryocat.app import pool as _pool
             from cryocat.app.components.tablegrid import apply_filter_model as _afm
-            df = resolve_df(global_ref) if resolve_df is not None else None
+            df = _pool.get_table_df(global_ref)
             if df is not None:
                 df = _afm(df, filter_model or {}, {})
                 if custom_csv_save_fn is not None:
                     result = custom_csv_save_fn(path, df.to_dict("records"), *extra)
                     if result is not None:
                         return result
-                df.to_csv(path, index=False)
+                run_operation(df.to_csv, {"path_or_buf": path, "index": False})
                 return False, f"Saved {len(df):,} rows to {path}"
         except Exception as e:
             return no_update, str(e)

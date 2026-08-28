@@ -26,7 +26,7 @@ from cryocat.analysis import visplot
 from cryocat.app.formgen import make_dropdown
 
 
-def get_table_cluster_component(prefix: str, is_motl=False, motl_cols=None):
+def get_table_cluster_component(prefix: str):
     lbl = {"fontWeight": "bold", "marginBottom": "0.3rem"}
     return html.Div(
         children=[
@@ -191,17 +191,6 @@ def get_table_cluster_component(prefix: str, is_motl=False, motl_cols=None):
                         size="sm",
                         style={"marginBottom": "0.3rem"},
                     ),
-                    style={"display": "none" if is_motl else "block"},
-                ),
-                html.Div(
-                    make_dropdown(
-                        f"{prefix}-cluster-save-motlcol",
-                        [{"label": c, "value": c} for c in (motl_cols or [])],
-                        "class" if (motl_cols and "class" in motl_cols) else (motl_cols[0] if motl_cols else None),
-                        clearable=False,
-                        style={"marginBottom": "0.3rem"},
-                    ),
-                    style={"display": "block" if is_motl else "none"},
                 ),
                 dbc.Button(
                     "Save to table",
@@ -226,7 +215,7 @@ def _cluster_store_to_df(data) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, table_grid_id=None, is_motl=False, motl_cols=None, cluster_cols_store_id=None, pool_aware=False, resolve_df=None):
+def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, table_grid_id=None, cluster_cols_store_id=None, pool_aware=False, resolve_df=None):
 
     def _df_from_store(data):
         """Return a DataFrame from the store reference via resolve_df, or from raw records."""
@@ -441,7 +430,6 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         State(f"{prefix}-cluster-data-store", "data"),
         State(connected_store_id, "data"),
         State(f"{prefix}-cluster-save-colname", "value"),
-        State(f"{prefix}-cluster-save-motlcol", "value"),
     ]
     if cluster_cols_store_id:
         _save_states.append(State(cluster_cols_store_id, "data"))
@@ -459,7 +447,7 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         *_save_states,
         prevent_initial_call=True,
     )
-    def _save_cluster(n_clicks, cluster_data, main_data, col_name, motl_col, *extra):
+    def _save_cluster(n_clicks, cluster_data, main_data, col_name, *extra):
         # unpack extra positional args based on mode
         if pool_aware:
             if cluster_cols_store_id:
@@ -474,13 +462,10 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         n_pool_out = 3 if pool_aware else 0
         n_out = len(_save_out)
 
-        def _ret(*vals):
-            return vals[0] if n_out == 1 else vals
-
         if not n_clicks or not cluster_data or not main_data:
             raise dash.exceptions.PreventUpdate
 
-        col_target = motl_col if is_motl else col_name
+        col_target = col_name
         if not col_target:
             nu = [no_update] * n_pool_out + [no_update, "Enter a column name first."]
             if cluster_cols_store_id:
@@ -500,13 +485,11 @@ def register_table_cluster_callbacks(app, prefix: str, connected_store_id: str, 
         status = f"Saved cluster assignments to column '{col_target}'."
 
         if pool_aware:
-            from cryocat.app.pool import replace_motl_rows, PoolState
-            motl_id = main_data["motl_id"]
-            state = PoolState.from_stores(registry, pool_meta, next_id)
-            state = replace_motl_rows(state, motl_id, df)
-            new_rev = state.registry[motl_id]["revision"]
-            new_ref = {"motl_id": motl_id, "rev": new_rev}
-            result = [*state.to_stores(), new_ref, status]
+            from cryocat.app import pool as _pool
+            pool_reg, pool_meta_out, pool_next_id, new_ref = _pool.commit_rows(
+                main_data, df, registry, pool_meta, next_id
+            )
+            result = [pool_reg, pool_meta_out, pool_next_id, new_ref, status]
             if cluster_cols_store_id:
                 cols = list(existing_cols or [])
                 if col_target not in cols:

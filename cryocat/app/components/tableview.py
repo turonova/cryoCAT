@@ -185,7 +185,6 @@ def register_table_callbacks(
     register_tableedit_callbacks(app, prefix)
     register_tablesave_csv_callbacks(
         app, prefix,
-        resolve_df=resolve_df,
         extra_csv_states=extra_csv_states,
         custom_csv_save_fn=custom_csv_save_fn,
     )

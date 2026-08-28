@@ -204,7 +204,7 @@ def invoke_operation(
         When ``None``, the call event carries no ``assign_to``.  Set by
         :func:`~cryocat.app.apputils.run_operation_to_pool`.
     pool_id:
-        Pool id of the entry this result will occupy (e.g. ``"motl-1"``).
+        Pool id of the entry this result will occupy (e.g. ``"motl_1"``).
         Folded into the result summary so the record shows pool identity.
     label:
         Human-readable label of the pool entry (folded into result summary).

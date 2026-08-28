@@ -54,7 +54,7 @@ def describe(
     obj:
         The live return value to summarise.
     pool_id:
-        Pool id of the result entry (e.g. ``"motl-1"``); set by
+        Pool id of the result entry (e.g. ``"motl_1"``); set by
         :func:`~cryocat.app.apputils.run_operation_to_pool`.
     label:
         Human-readable label of the pool entry.
@@ -272,7 +272,7 @@ def pool_event(
     action : str
         ``"rename"``, ``"remove"``, or ``"set_active"``.
     motl_id : str
-        The pool entry affected, e.g. ``"motl-3"``.
+        The pool entry affected, e.g. ``"motl_3"``.
     detail : dict, optional
         Action-specific payload (e.g. new label for a rename).
     """

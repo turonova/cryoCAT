@@ -4,7 +4,7 @@ Mirrors the motl pool (pool.py) for heterogeneous loaded data:
 DataFrames, numpy arrays, dicts, and volumes.  Browser stores carry only
 lightweight DataEntry handles; actual objects live in _payloads (server-side).
 
-IDs are "data-1", "data-2", … using DATA_POOL_NEXT_ID counter; never reused.
+IDs are "data_1", "data_2", … using DATA_POOL_NEXT_ID counter; never reused.
 
 Bridging to the motl pool viewer
 ----------------------------------
@@ -71,6 +71,7 @@ class DataEntry:
     columns:     list[str] | None  # column names, capped at _MAX_COLUMNS
     shape:       tuple | None      # array / volume shape
     dtype:       str | None        # array dtype string
+    id_column:   str | None = None  # identity column name (for row-level edit operations)
 
 
 # ── Pool state ────────────────────────────────────────────────────────────────
@@ -172,9 +173,9 @@ def insert_entry(
 ) -> tuple[DataPoolState, str]:
     """Store *payload* server-side; return (new_state, data_id).
 
-    The id is ``f"data-{state.next_id + 1}"`` and is never reused.
+    The id is ``f"data_{state.next_id + 1}"`` and is never reused.
     """
-    data_id = f"data-{state.next_id + 1}"
+    data_id = f"data_{state.next_id + 1}"
     _payloads[data_id] = payload
     entry = _make_entry(payload, data_id, label, reader, source_path)
     return DataPoolState(
@@ -203,7 +204,7 @@ def get_payload(data_id: str, state: DataPoolState | None = None) -> Any:
     Parameters
     ----------
     data_id:
-        Pool entry id (e.g. ``"data-3"``).
+        Pool entry id (e.g. ``"data_3"``).
     state:
         Optional :class:`DataPoolState`; used only to include ``label`` and
         ``source_path`` in the error message when the payload has been evicted.
@@ -272,9 +273,9 @@ def clear_view_df() -> None:
 
 # ── Table pool (non-motl tables) ──────────────────────────────────────────────
 # Simpler store for NN analysis, tango twist, and tango descriptor DataFrames.
-# IDs use the "data_N" format (underscore); file-pool uses "data-N" (hyphen).
+# IDs use the "table_N" format; file-pool uses "data_N".
 # The ref that flows through dcc.Store is:
-#   {"data_id": "tab_1", "n_rows": N, "id_column": str|None, "label": str}
+#   {"table_id": "table_1", "n_rows": N, "id_column": str|None, "label": str}
 
 _table_payloads: dict[str, pd.DataFrame] = {}
 _table_counter: list[int] = [0]
@@ -289,10 +290,10 @@ def insert(
 ) -> dict:
     """Store *df* and return a ref dict for dcc.Store."""
     _table_counter[0] += 1
-    data_id = f"data_{_table_counter[0]}"
-    _table_payloads[data_id] = df.copy()
+    table_id = f"table_{_table_counter[0]}"
+    _table_payloads[table_id] = df.copy()
     return {
-        "data_id": data_id,
+        "table_id": table_id,
         "n_rows": len(df),
         "id_column": id_column,
         "label": label,
@@ -304,10 +305,10 @@ def resolve_df(ref: dict | None) -> pd.DataFrame | None:
     """Return the DataFrame for a table-pool ref, or ``None``."""
     if not isinstance(ref, dict):
         return None
-    data_id = ref.get("data_id")
-    if not data_id:
+    table_id = ref.get("table_id")
+    if not table_id:
         return None
-    return _table_payloads.get(data_id)
+    return _table_payloads.get(table_id)
 
 
 def resolve_n_rows(ref: dict | None) -> int:

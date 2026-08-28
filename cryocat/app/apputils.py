@@ -426,7 +426,7 @@ def run_operation_to_pool(
         motl_id = replaces
         var = _prov.bind(replaces)
     else:
-        motl_id = f"motl-{state.next_id + 1}"
+        motl_id = f"motl_{state.next_id + 1}"
         var = _prov.bind(motl_id)
 
     # Run through the chokepoint.  Re-raises on exception; pool is untouched.
@@ -497,7 +497,7 @@ def record_load_to_pool(
 
     functools.update_wrapper(_preloaded, Motl.load)
 
-    motl_id = f"motl-{pool_state.next_id + 1}"
+    motl_id = f"motl_{pool_state.next_id + 1}"
     var = _prov.bind(motl_id)
 
     call_kwargs: dict = {"input_motl": display_name, "motl_type": motl_type, **rln_kwargs}

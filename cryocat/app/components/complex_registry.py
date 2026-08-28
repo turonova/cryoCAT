@@ -36,7 +36,7 @@ class ComplexHandle:
     symmetry: str            # e.g. "I", "C8", "D6"; empty for polyhedral subclasses
     n_subunits: int
     n_objects: int
-    source_motl_id: str      # "motl-3" — provenance link
+    source_motl_id: str      # "motl_3" — provenance link
     affiliation_column: str
     order_column: str
     tomo_id_column: str
@@ -70,7 +70,7 @@ def make_handle(
     label:
         Human-readable label shown in the complex list.
     source_motl_id:
-        Pool motl id (e.g. ``"motl-3"``) that was used as input.
+        Pool motl id (e.g. ``"motl_3"``) that was used as input.
     init_kwargs:
         Extra constructor keyword arguments (beyond ``motl``), JSON-serialisable.
     """

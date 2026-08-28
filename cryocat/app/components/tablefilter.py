@@ -19,13 +19,7 @@ from __future__ import annotations
 from dash import html, dcc, Input, Output, State, ALL, MATCH, exceptions, no_update, ctx
 import dash_bootstrap_components as dbc
 
-from cryocat.app import ids
-from cryocat.app.pool import (
-    get_rows,
-    replace_motl_rows,
-    PoolPayloadMissing,
-    PoolState,
-)
+from cryocat.app import ids, pool as _pool
 from cryocat.app.components.tablegrid import apply_filter_model
 
 
@@ -149,18 +143,7 @@ def register_tablefilter_callbacks(app, prefix: str, resolve_df=None) -> None:
     def build_range_sliders(ref, registry):
         if not ref or not isinstance(ref, dict):
             raise exceptions.PreventUpdate
-        if ref.get("motl_id"):
-            motl_id = ref["motl_id"]
-            entry = (registry or {}).get(motl_id, {})
-            col_ranges = entry.get("column_ranges", {})
-        elif resolve_df is not None:
-            df = resolve_df(ref)
-            if df is None or df.empty:
-                raise exceptions.PreventUpdate
-            from cryocat.app.pool import _compute_entry_metadata
-            _, col_ranges, _ = _compute_entry_metadata(df)
-        else:
-            raise exceptions.PreventUpdate
+        col_ranges = _pool.get_column_ranges_for_ref(ref, registry, resolve_df)
         if not col_ranges:
             raise exceptions.PreventUpdate
         cols = [_slider_col(s, prefix) for s in slider_specs(col_ranges)]
@@ -205,7 +188,6 @@ def register_tablefilter_callbacks(app, prefix: str, resolve_df=None) -> None:
             lo, hi = val[0], val[1]
             if lo != mn or hi != mx:
                 slider_filters[sid["column"]] = [lo, hi]
-        print(f"SLIDER cb=_on_slider_change writing_to={prefix}-slider-filters-store out={slider_filters!r}")
         return slider_filters
 
     @app.callback(
@@ -233,25 +215,8 @@ def register_tablefilter_callbacks(app, prefix: str, resolve_df=None) -> None:
         """
         if not ref or not isinstance(ref, dict):
             raise exceptions.PreventUpdate
-        if ref.get("motl_id"):
-            motl_id = ref["motl_id"]
-            try:
-                df = get_rows(motl_id)
-            except PoolPayloadMissing:
-                raise exceptions.PreventUpdate
-            filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
-            state = PoolState.from_stores(registry, pool_meta, next_id)
-            state = replace_motl_rows(state, motl_id, filtered_df)
-            new_rev = state.registry[motl_id]["revision"]
-            return *state.to_stores(), {"motl_id": motl_id, "rev": new_rev}, {}, {}
-        if ref.get("data_id"):
-            from cryocat.app import datapool as _datapool
-            from dash import no_update
-            df = _datapool.resolve_df(ref)
-            if df is None:
-                raise exceptions.PreventUpdate
-            filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
-            id_column = ref.get("id_column")
-            new_ref = _datapool.insert(filtered_df, label=ref.get("label", ""), id_column=id_column)
-            return no_update, no_update, no_update, new_ref, {}, {}
-        raise exceptions.PreventUpdate
+        df = _pool.get_table_df(ref)
+        if df is None:
+            raise exceptions.PreventUpdate
+        filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
+        return (*_pool.commit_rows(ref, filtered_df, registry, pool_meta, next_id), {}, {})

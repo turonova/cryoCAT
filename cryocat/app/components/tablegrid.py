@@ -15,13 +15,8 @@ import pandas as pd
 from dash import Input, Output, State, exceptions, html, dcc, no_update
 import dash_ag_grid as dag
 
-from cryocat.app import ids
-from cryocat.app.pool import (
-    _CACHE_BLOCK_SIZE,
-    block_to_records,
-    insert_motl,
-    PoolState,
-)
+from cryocat.app import ids, pool as _pool
+from cryocat.app.pool import _CACHE_BLOCK_SIZE, block_to_records
 
 CACHE_BLOCK_SIZE = _CACHE_BLOCK_SIZE  # re-exported so test can import from here
 
@@ -107,17 +102,13 @@ def rows_response(
     sort_model = request.get("sortModel") or []
     start_row = request.get("startRow", 0)
     end_row = request.get("endRow", CACHE_BLOCK_SIZE)
-    print(f"_ROWS filter_in={len(df)} filterModel={filter_model!r} slider_filters={slider_filters!r}")
     filtered = apply_filter_model(df, filter_model, slider_filters or {})
-    print(f"_ROWS filter_out={len(filtered)} applied={list(filter_model.keys())!r}")
     sorted_df = apply_sort_model(filtered, sort_model)
     block = slice_block(sorted_df, start_row, end_row)
-    resp = {
+    return {
         "rowData": block_to_records(block, max_rows=CACHE_BLOCK_SIZE),
         "rowCount": len(filtered),
     }
-    print(f"_ROWS resp_n={len(resp['rowData'])} rowCount={resp['rowCount']}")
-    return resp
 
 
 def resolve_select_all_ids(
@@ -153,7 +144,7 @@ def resolve_filtered_ids(
     """
     if "subtomo_id" not in df.columns:
         raise ValueError(
-            "resolve_filtered_ids: DataFrame has no 'subtomo_id' column; " "cannot create a stable motl subset."
+            "resolve_filtered_ids: DataFrame has no 'subtomo_id' column."
         )
     filtered = apply_filter_model(df, filter_model, slider_filters)
     return filtered["subtomo_id"].tolist()
@@ -322,9 +313,6 @@ def register_tablegrid_callbacks(
         State(f"{prefix}-slider-filters-store", "data"),
     )
     def _rows(request, ref, slider_filters):
-        print(f"_ROWS prefix={prefix} fired request={'present' if request else 'None'} "
-              f"filterModel={request.get('filterModel') if request else 'N/A'!r} "
-              f"slider_filters={slider_filters!r}")
         if request is None or not ref:
             return no_update
         df = resolve_df(ref)
@@ -341,7 +329,7 @@ def register_tablegrid_callbacks(
     def _track_grid_selection(selected_rows, ref):
         if not selected_rows:
             return []
-        id_col = (ref or {}).get("id_column") if isinstance(ref, dict) else None
+        id_col = _pool.get_id_column(ref)
         if not id_col:
             first = selected_rows[0] or {}
             for candidate in ("subtomo_id", "qp_id", "qp_subtomo_id"):
@@ -371,7 +359,7 @@ def register_tablegrid_callbacks(
         df = resolve_df(ref)
         if df is None:
             raise exceptions.PreventUpdate
-        id_col = (ref or {}).get("id_column") if isinstance(ref, dict) else None
+        id_col = _pool.get_id_column(ref)
         ids_list = resolve_select_all_ids(df, filter_model or {}, slider_filters or {}, id_column=id_col)
         total = len(df)
         n = len(ids_list)
@@ -411,8 +399,8 @@ def register_tablegrid_callbacks(
         df = resolve_df(ref)
         if df is None:
             return "Create from filtered", True, {"display": "none"}
-        id_col = (ref or {}).get("id_column") if isinstance(ref, dict) else None
-        if not id_col and not any(c in df.columns for c in ("subtomo_id", "qp_id", "qp_subtomo_id")):
+        id_col = _pool.get_id_column(ref)
+        if not id_col or id_col not in df.columns:
             return "Create from filtered", True, {"display": "none"}
         filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
         n = len(filtered_df)
@@ -429,8 +417,8 @@ def register_tablegrid_callbacks(
         df = resolve_df(ref)
         if df is None:
             return "Create from selected", True, {"display": "none"}
-        id_col = (ref or {}).get("id_column") if isinstance(ref, dict) else None
-        if not id_col and not any(c in df.columns for c in ("subtomo_id", "qp_id", "qp_subtomo_id")):
+        id_col = _pool.get_id_column(ref)
+        if not id_col or id_col not in df.columns:
             return "Create from selected", True, {"display": "none"}
         n = len(selected_ids or [])
         return f"Create from selected ({n:,})", n == 0, {}
@@ -455,33 +443,12 @@ def register_tablegrid_callbacks(
         df = resolve_df(ref)
         if df is None:
             raise exceptions.PreventUpdate
-        active_filters = (
-            sum(1 for v in (filter_model or {}).values() if v) + len(slider_filters or {})
-        )
-        if isinstance(ref, dict) and ref.get("data_id"):
-            from cryocat.app import datapool as _datapool
-            id_col = ref.get("id_column")
-            if not id_col or id_col not in df.columns:
-                raise exceptions.PreventUpdate
-            filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
-            if filtered_df.empty:
-                raise exceptions.PreventUpdate
-            label = f"{ref.get('label', 'Data')} filtered" if active_filters else f"{ref.get('label', 'Data')} subset"
-            new_ref = _datapool.insert(filtered_df, label=label, id_column=id_col)
-            return no_update, no_update, no_update, new_ref
-        try:
-            filtered_ids = resolve_filtered_ids(df, filter_model or {}, slider_filters or {})
-        except ValueError:
+        filtered_df = apply_filter_model(df, filter_model or {}, slider_filters or {})
+        if filtered_df.empty:
             raise exceptions.PreventUpdate
-        if not filtered_ids:
-            raise exceptions.PreventUpdate
-        subset_df = subset_motl_rows(df, filtered_ids)
-        state = PoolState.from_stores(registry, pool_meta, next_id)
-        motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
-        source_label = (registry or {}).get(motl_id, {}).get("label", "Data") if motl_id else "Data"
-        label = f"{source_label} filtered" if active_filters else f"{source_label} subset"
-        new_state, _ = insert_motl(state, subset_df, label=label)
-        return *new_state.to_stores(), no_update
+        active_filters = sum(1 for v in (filter_model or {}).values() if v) + len(slider_filters or {})
+        label = f"{_pool.get_entry_label(ref, registry)} {'filtered' if active_filters else 'subset'}"
+        return _pool.create_pool_entry(ref, filtered_df, registry, pool_meta, next_id, label=label)
 
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
@@ -502,25 +469,15 @@ def register_tablegrid_callbacks(
         df = resolve_df(ref)
         if df is None:
             raise exceptions.PreventUpdate
-        if isinstance(ref, dict) and ref.get("data_id"):
-            from cryocat.app import datapool as _datapool
-            id_col = ref.get("id_column")
-            if not id_col or id_col not in df.columns:
-                raise exceptions.PreventUpdate
-            id_set = set(selected_ids)
-            subset_df = df[df[id_col].isin(id_set)]
-            if subset_df.empty:
-                raise exceptions.PreventUpdate
-            new_ref = _datapool.insert(subset_df, label=f"{ref.get('label', 'Data')} selection", id_column=id_col)
-            return no_update, no_update, no_update, new_ref
-        subset_df = subset_motl_rows(df, selected_ids)
+        id_col = _pool.get_id_column(ref)
+        if not id_col or id_col not in df.columns:
+            raise exceptions.PreventUpdate
+        id_set = set(selected_ids)
+        subset_df = df[df[id_col].isin(id_set)]
         if subset_df.empty:
             raise exceptions.PreventUpdate
-        state = PoolState.from_stores(registry, pool_meta, next_id)
-        motl_id = (ref or {}).get("motl_id") if isinstance(ref, dict) else None
-        source_label = (registry or {}).get(motl_id, {}).get("label", "Data") if motl_id else "Data"
-        new_state, _ = insert_motl(state, subset_df, label=f"{source_label} selection")
-        return *new_state.to_stores(), no_update
+        label = f"{_pool.get_entry_label(ref, registry)} selection"
+        return _pool.create_pool_entry(ref, subset_df, registry, pool_meta, next_id, label=label)
 
     @app.callback(
         Output(f"{prefix}-selection-count", "children"),

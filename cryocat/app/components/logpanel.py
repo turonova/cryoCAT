@@ -181,7 +181,7 @@ def export_session(
     fmt:
         ``".py"``, ``".md"``, or ``".ipynb"``.
     lineage_of:
-        Pool id (e.g. ``"motl-3"``).  When given, only the transitive
+        Pool id (e.g. ``"motl_3"``).  When given, only the transitive
         producers of that entry are included.  Only used for ``.py`` exports.
     """
     if fmt == ".py":
@@ -267,9 +267,9 @@ def get_log_panel(prefix: str):
                                 value=".py",
                                 className="mb-3",
                             ),
-                            dbc.Label("Lineage of (optional, e.g. motl-3)", className="fw-bold"),
+                            dbc.Label("Lineage of (optional, e.g. motl_3)", className="fw-bold"),
                             dbc.Input(id=f"{prefix}-export-lineage", type="text",
-                                      placeholder="motl-3", className="mb-3"),
+                                      placeholder="motl_3", className="mb-3"),
                             dbc.Label("Save to (full path)", className="fw-bold"),
                             dbc.Input(id=f"{prefix}-export-path", type="text",
                                       placeholder="/path/to/session_export.py"),

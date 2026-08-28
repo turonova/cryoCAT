@@ -150,7 +150,7 @@ def build_namespace(state: PoolState) -> dict:
     for motl_id, meta in state.registry.items():
         if not meta.get("active", True):
             continue
-        var_name = provenance.bind(motl_id)   # "motl-3" → "motl_3"
+        var_name = provenance.bind(motl_id)   # "motl_3" → Python var "motl_3"
         try:
             df = _pool_get_rows(motl_id)
         except _PoolPayloadMissing:
@@ -335,7 +335,7 @@ def execute(cmd: Command, state: PoolState) -> ConsoleResult:
 
         # -- Post-eval pool updates -------------------------------------------
         if cmd.kind == "pool_assign":
-            motl_key = f"motl-{cmd.target}"
+            motl_key = f"motl_{cmd.target}"
             new_state = _update_pool_entry(state, motl_key, value)
             _CONSOLE_LOCALS["_"] = value
             assign_var = provenance.bind(motl_key)
@@ -366,7 +366,7 @@ def execute(cmd: Command, state: PoolState) -> ConsoleResult:
 
         # Record provenance for pool_assign after emit (needs last_seq).
         if cmd.kind == "pool_assign":
-            provenance.record(f"motl-{cmd.target}", _session.last_seq())
+            provenance.record(f"motl_{cmd.target}", _session.last_seq())
 
         # Flush any add() calls that happened during eval.
         if _add_pending:
