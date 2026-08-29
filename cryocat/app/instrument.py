@@ -1,12 +1,65 @@
 """Temporary diagnostic: count and time every callback, per instance."""
 
-import atexit, collections, functools, time
+import atexit, collections, datetime, functools, time
 import dash
 from dash import ctx
 
 COUNTS = collections.Counter()
 TIMES = collections.Counter()
 WRAPPED = []
+TRACE: list = []        # (timestamp_float, event, key) when _tracing is True
+_tracing: bool = False
+_snap_t0: float = 0.0
+
+
+def reset() -> None:
+    """Zero COUNTS, TIMES, TRACE and record the snapshot start time."""
+    global _snap_t0, _tracing
+    COUNTS.clear()
+    TIMES.clear()
+    TRACE.clear()
+    _tracing = False
+    _snap_t0 = time.perf_counter()
+
+
+def start_trace() -> None:
+    """Enable entry/exit wall-clock tracing from this point.  reset() stops it."""
+    global _tracing
+    TRACE.clear()
+    _tracing = True
+
+
+def _ts(t: float) -> str:
+    """Format a time.time() float as HH:MM:SS.mmm."""
+    return datetime.datetime.fromtimestamp(t).strftime("%H:%M:%S.") + f"{datetime.datetime.fromtimestamp(t).microsecond // 1000:03d}"
+
+
+def print_trace(label: str = "") -> None:
+    """Print the wall-clock entry/exit log recorded since start_trace()."""
+    if not TRACE:
+        return
+    tag = f" [{label}]" if label else ""
+    print(f"\n=== trace{tag} ===")
+    for ts, event, key in TRACE:
+        # Strip module prefix: keep only last two segments for readability.
+        parts = key.split(".")
+        short = ".".join(parts[-2:]) if len(parts) >= 2 else key
+        print(f"  {_ts(ts)}  {event:5s}  {short}")
+
+
+def snapshot(label: str = "") -> None:
+    """Print the trace (if any), then per-callback counts/times, then reset.
+
+    Rows are sorted by total time descending.  Wall time is elapsed since reset().
+    """
+    print_trace(label)
+    elapsed = time.perf_counter() - _snap_t0
+    tag = f" [{label}]" if label else ""
+    print(f"\n=== snapshot{tag}  wall {elapsed * 1000:.0f} ms ===")
+    items = [(k, TIMES[k]) for k in COUNTS if TIMES[k] > 0]
+    for key, ms in sorted(items, key=lambda kv: -kv[1]):
+        print(f"  {COUNTS[key]:4d}x  {ms * 1000:8.1f} ms  {key}")
+    reset()
 
 
 def _instance_key(default):
@@ -40,12 +93,16 @@ def _wrap(fn):
     @functools.wraps(fn)
     def inner(*args, **kwargs):
         t0 = time.perf_counter()
+        if _tracing:
+            TRACE.append((time.time(), "ENTER", _instance_key(name)))
         try:
             return fn(*args, **kwargs)
         finally:
             key = _instance_key(name)
             COUNTS[key] += 1
             TIMES[key] += time.perf_counter() - t0
+            if _tracing:
+                TRACE.append((time.time(), "EXIT ", key))
 
     return inner
 

@@ -597,10 +597,13 @@ def register_callbacks(app) -> None:
         registry,
         twist_next_id,
     ):
+        from cryocat.app.instrument import snapshot as _snap, reset as _reset, start_trace as _start_trace
         if not n_clicks:
             raise PreventUpdate
         if not motl_ids:
             return no_update, no_update, no_update, "Select a motl first.", no_update
+        _snap("load+select")   # D1/D4: everything since load_motl reset() — also prints trace
+        _start_trace()         # D3: begin twist trace
         motl_id = motl_ids[0]
         if nn_radius is None or nn_radius <= 0:
             return no_update, no_update, no_update, "NN radius is required.", no_update
@@ -649,6 +652,7 @@ def register_callbacks(app) -> None:
         }
         global_ref = _datapool.insert(_df, label=f"{source_label} twist", id_column="qp_id")
         status = f"Twist computed: {n:,} pairs."
+        _snap("twist")   # D2: _compute_twist wall time (grid update follows async)
         return handle, global_ref, "tango-tab-twist", status, new_twist_id
 
     # ── Load twist from file (via tablesource) ────────────────────────────────

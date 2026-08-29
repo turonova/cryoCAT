@@ -391,6 +391,8 @@ def register_save_dialog_callbacks(
         prevent_initial_call=True,
     )
     def _on_prefill(prefill):
+        if not prefill:
+            raise dash.exceptions.PreventUpdate
         return _prefill_to_form_values(prefill)
 
     if mode == "single":

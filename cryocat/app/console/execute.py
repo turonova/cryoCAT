@@ -248,10 +248,11 @@ def _handle_directive(cmd: Command, state: PoolState) -> ConsoleResult:
         _CONSOLE_LOCALS.clear()
         summary = "Console locals cleared."
     elif d == "vars":
+        from cryocat.app import provenance as _prov
         pool_vars = [
-            f"motl_{mid.split('-')[1]} ({meta.get('label', mid)})"
+            f"{_prov.bind(mid)} ({meta.get('label', mid)})"
             for mid, meta in state.registry.items()
-            if meta.get("active", True) and "-" in mid and mid.split("-")[1].isdigit()
+            if meta.get("active", True)
         ]
         local_names = list(_CONSOLE_LOCALS.keys())
         lines = []

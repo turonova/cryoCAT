@@ -175,7 +175,7 @@ def register_callbacks(app):
     # Per-slot viewer / table / plot / save callbacks — registered once up front
     # with literal prefixes (shared components are untouched).
     for _i in range(N_SLOTS):
-        register_viewer_callbacks(app, f"me-{_i}-tv", tabs_id=None)
+        register_viewer_callbacks(app, f"me-{_i}-tv", tabs_id="me-tabs", tab_value=f"me-tab-{_i}", visible_on_tabs=(f"me-tab-{_i}",))
         register_table_callbacks(
             app,
             f"me-{_i}-tabv",
@@ -215,8 +215,12 @@ def register_callbacks(app):
         resolve_n_rows=pool_resolve_n_rows,
     )
     register_table_save_callbacks(app, "me-res-tabv", connected_motl_prefix="me-res")
-    register_table_plot_callbacks(app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store", resolve_df=pool_resolve_df)
-    register_table_cluster_callbacks(app, "me-res-tabv-table-cluster", "me-res-tabv-global-data-store", pool_aware=True, resolve_df=pool_resolve_df)
+    register_table_plot_callbacks(
+        app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store", resolve_df=pool_resolve_df
+    )
+    register_table_cluster_callbacks(
+        app, "me-res-tabv-table-cluster", "me-res-tabv-global-data-store", pool_aware=True, resolve_df=pool_resolve_df
+    )
 
     _register_pool_sync(app)
     _register_create_from_selected(app)
@@ -284,9 +288,10 @@ def _register_pool_sync(app):
         Input("me-slot-map", "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_REGISTRY, "data"),
+        *[State(f"me-{i}-tabv-global-data-store", "data") for i in range(N_SLOTS)],
         prevent_initial_call=True,
     )
-    def sync_pool_to_slots(slot_map, pool_meta, registry):
+    def sync_pool_to_slots(slot_map, pool_meta, registry, *current_table_refs):
         slot_map = slot_map or [None] * N_SLOTS
         pool_meta = pool_meta or {}
         registry = registry or {}
@@ -301,12 +306,24 @@ def _register_pool_sync(app):
                     has_payload = True
                 except PoolPayloadMissing:
                     pass
+
+            current_ref = current_table_refs[i] if i < len(current_table_refs) else None
+
             if has_payload:
                 meta = pool_meta.get(mid) or {}
                 extra_df = get_extra(mid)
                 rev = registry.get(mid, {}).get("revision", 0)
-                data.append(None)  # motl-data-store: no rows serialized; use pool ref via tabv-global-data-store
-                extra.append(mid if extra_df is not None else None)  # mid string — callers use get_extra(mid)
+
+                # Slot unchanged since the last sync — skip the downstream cascade.
+                # rev is part of the ref and bumps whenever the rows change, so an
+                # unchanged ref means nothing about this slot needs rewriting.
+                if current_ref == {"motl_id": mid, "rev": rev}:
+                    for lst in (data, extra, dtype, optics, r5t, r5tn, rparams, undo, table_refs):
+                        lst.append(no_update)
+                    continue
+
+                data.append(None)
+                extra.append(mid if extra_df is not None else None)
                 dtype.append(meta.get("data_type"))
                 optics.append(meta.get("relion_optics"))
                 r5t.append(meta.get("relion5_tomos"))
@@ -315,10 +332,14 @@ def _register_pool_sync(app):
                 undo.append(None)
                 table_refs.append({"motl_id": mid, "rev": rev})
             else:
+                # Write None only if clearing a previously-occupied slot; skip the
+                # downstream cascade for slots that were already empty.
+                sentinel = None if current_ref is not None else no_update
                 for lst in (data, extra, dtype, optics, r5t, r5tn, rparams, undo, table_refs):
-                    lst.append(None)
+                    lst.append(sentinel)
 
-        return (*data, *extra, *dtype, *optics, *r5t, *r5tn, *rparams, *undo, *table_refs)
+        result = (*data, *extra, *dtype, *optics, *r5t, *r5tn, *rparams, *undo, *table_refs)
+        return result
 
     @app.callback(
         *[Output(f"me-{i}-tabv-global-data-store", "data", allow_duplicate=True) for i in range(N_SLOTS)],
@@ -435,16 +456,21 @@ def _register_save_connectors(app):
         *[Output(f"me-{i}-save-prefill", "data") for i in range(N_SLOTS)],
         Input("me-slot-map", "data"),
         State(ids.POOL_META, "data"),
+        *[State(f"me-{i}-save-prefill", "data") for i in range(N_SLOTS)],
         prevent_initial_call=True,
     )
-    def _sync_save_stores(slot_map, pool_meta):
+    def _sync_save_stores(slot_map, pool_meta, *current_prefills):
         slot_map = slot_map or [None] * N_SLOTS
         pool_meta = pool_meta or {}
         motl_ids, prefills = [], []
         for i in range(N_SLOTS):
             mid = slot_map[i] if i < len(slot_map) else None
             motl_ids.append(mid)
-            prefills.append(pool_meta.get(mid) if mid else None)
+            if mid:
+                prefills.append(pool_meta.get(mid))
+            else:
+                current = current_prefills[i] if i < len(current_prefills) else None
+                prefills.append(None if current is not None else no_update)
         return (*motl_ids, *prefills)
 
 

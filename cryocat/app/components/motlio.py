@@ -308,5 +308,8 @@ def register_motl_load_callbacks(app, prefix: str):
     def load_motl(n_clicks, path, motl_type, rln_value, rln_tomos):
         if not n_clicks or not path:
             raise dash.exceptions.PreventUpdate
+        from cryocat.app.instrument import reset as _reset, start_trace as _start_trace
+        _reset()
+        _start_trace()
         kwargs = load_kwargs_from_store(rln_value)
         return load_motl_from_path(path, motl_type, rln_tomos=rln_tomos, **kwargs)

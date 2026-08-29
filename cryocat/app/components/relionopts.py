@@ -181,7 +181,7 @@ def register_relion_options_callbacks(
     def _on_type(motl_type):
         if motl_type == "relion":
             return 3.0, "flex", "flex"
-        return 3.0, "hidden", "hidden"
+        return no_update, "hidden", "hidden"
 
     @app.callback(
         Output(f"{prefix}-rln-tomos-store", "data", allow_duplicate=True),

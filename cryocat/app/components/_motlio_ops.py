@@ -60,9 +60,14 @@ def load_motl_from_path(
     as a string from the tomos-store and written to a temp file, because
     ``Motl.load`` requires a file path for ``input_tomograms``.
     """
+    import time as _time
+    _d1_t0 = _time.perf_counter()
+
     from cryocat.app.components.filesystem import resolve_input
 
     resolved, err = resolve_input(path)
+    _d1_t1 = _time.perf_counter()
+    print(f"  D1 resolve_input:   {(_d1_t1-_d1_t0)*1000:7.1f} ms")
     if err:
         raise ValueError(f"Cannot resolve path {path!r}: {err}")
 
@@ -73,10 +78,18 @@ def load_motl_from_path(
 
     if motl_type != "relion":
         motl = Motl.load(resolved, motl_type)
+        _d1_t2 = _time.perf_counter()
+        print(f"  D1 Motl.load:       {(_d1_t2-_d1_t1)*1000:7.1f} ms  ({motl_type}, {len(motl.df)} rows)")
         if motl_type == "stopgap":
             extra_data = motl.sg_df.to_dict("records")
+            _d1_t3 = _time.perf_counter()
+            print(f"  D1 sg_df.to_dict:   {(_d1_t3-_d1_t2)*1000:7.1f} ms  ({len(motl.sg_df)} rows x {len(motl.sg_df.columns)} cols)")
         elif motl_type == "dynamo":
             extra_data = motl.dynamo_df.to_dict("records")
+            _d1_t3 = _time.perf_counter()
+            print(f"  D1 dynamo_df.to_dict: {(_d1_t3-_d1_t2)*1000:7.1f} ms")
+        else:
+            _d1_t3 = _d1_t2
     else:
         rln_kwargs: dict = {}
         actual_type = relion_version_to_type(rln_version) if rln_version else "relion"
@@ -124,8 +137,13 @@ def load_motl_from_path(
             "tomo_format": rln_tomoformat or "",
             "subtomo_format": rln_subtomoformat or "",
         }
+        _d1_t3 = _time.perf_counter()
+        print(f"  D1 Motl.load+relion_df.to_dict: {(_d1_t3-_d1_t1)*1000:7.1f} ms  ({actual_type}, {len(motl.df)} rows)")
 
     table_data = motl.df.fillna(0.0).to_dict("records")
+    _d1_tx = _time.perf_counter()
+    print(f"  D1 fillna+to_dict:  {(_d1_tx-_d1_t3)*1000:7.1f} ms  ({len(motl.df)} rows x {len(motl.df.columns)} cols)")
+    print(f"  D1 TOTAL inside load_motl_from_path: {(_d1_tx-_d1_t0)*1000:7.1f} ms")
     return table_data, extra_data, relion_optics, relion_tomos_out, motl_type, relion_params
 
 

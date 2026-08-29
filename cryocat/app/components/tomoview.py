@@ -248,7 +248,7 @@ def get_viewer_component(prefix: str):
     )
 
 
-def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_info="full", detailed_table=None, tabs_id=None, visible_on_tabs=("motl-tab", "twist-tab", "nn-motl-tab", "cluster-tab"), radius_store_id=None, resolve_detail_df=None):
+def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_info="full", detailed_table=None, tabs_id=None, tab_value: str | None = None, visible_on_tabs=("motl-tab", "twist-tab", "nn-motl-tab", "cluster-tab"), radius_store_id=None, resolve_detail_df=None):
 
     def _motl_df(data):
         """Return a DataFrame from a pool reference dict or a legacy list[dict]."""
@@ -329,6 +329,8 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         numeric_cols = df.select_dtypes(include="number").columns.tolist()
         return [{"label": col, "value": col} for col in numeric_cols if col not in ["tomo_id"]]
 
+    _tab_state = [State(tabs_id, "active_tab")] if (tabs_id and tab_value) else []
+
     @app.callback(
         Output(f"{prefix}-graph", "figure"),
         Output(f"{prefix}-graph1-col", "width"),
@@ -339,10 +341,18 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         Input(f"{prefix}-colorscale-dropdown", "value"),
         Input(f"{prefix}-marker-size", "value"),
         Input(f"{prefix}-data", "data"),
+        *_tab_state,
         State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
-    def update_plot(index, color_col, colorscale, marker_size, data, settings):
+    def update_plot(index, color_col, colorscale, marker_size, data, *rest):
+        # rest is (active_tab, settings) when tab guard active, else (settings,)
+        if tab_value:
+            active_tab, settings = rest[0], rest[1]
+            if active_tab != tab_value:
+                raise exceptions.PreventUpdate
+        else:
+            settings = rest[0]
         if not data:
             raise exceptions.PreventUpdate
         effective = colorscale or (settings or {}).get("discrete_palette", "StarryNight")

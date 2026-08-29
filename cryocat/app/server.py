@@ -34,7 +34,7 @@ def main():
         application,
         use_reloader=False,
         use_debugger=False,
-        threaded=True,
+        threaded=False,
     )
 
 
