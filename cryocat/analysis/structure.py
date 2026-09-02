@@ -2837,6 +2837,48 @@ class PleomorphicSurface:
             raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
         return self.surface.get_curvature_directions()
 
+    def get_shape_index(self) -> np.ndarray:
+        """Return per-vertex shape index for a mesh-backed surface.
+
+        Returns
+        -------
+        np.ndarray, shape (N,)
+            Shape index S = (2/pi) * arctan2(k1 + k2, k1 - k2) at each vertex, in [-1, 1].
+        """
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.get_shape_index()
+
+    def get_curvedness(self) -> np.ndarray:
+        """Return per-vertex curvedness for a mesh-backed surface.
+
+        Returns
+        -------
+        np.ndarray, shape (N,)
+            Curvedness C = sqrt((k1^2 + k2^2) / 2) at each vertex, in [0, inf).
+        """
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.get_curvedness()
+
+    def get_surface_type(self, as_labels: bool = False) -> np.ndarray:
+        """Return per-vertex categorical surface type for a mesh-backed surface.
+
+        Parameters
+        ----------
+        as_labels : bool, default=False
+            If True, return string labels (e.g. ``"cap"``); otherwise integer
+            category codes (-1 flat, 0 cup .. 8 cap).
+
+        Returns
+        -------
+        np.ndarray, shape (N,)
+            Surface type per vertex.
+        """
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.get_surface_type(as_labels=as_labels)
+
     def get_surface_area(self) -> float:
         """Return total surface area of a mesh-backed surface."""
         if not isinstance(self.surface, Mesh):
