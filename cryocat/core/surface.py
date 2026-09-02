@@ -22,7 +22,7 @@ from sklearn.decomposition import PCA
 from cryocat.core import cryomap
 from cryocat.utils import geom
 from cryocat.core import cryomotl
-from cryocat._types import PathOrStr, MapSource, ArrayLike
+from cryocat._types import PathOrStr, MapSource, ArrayLike, MotlColumn
 
 
 def _axis_aligned_bbox_from_input(bbox: o3d.geometry.AxisAlignedBoundingBox | dict[str, Any]) -> o3d.geometry.AxisAlignedBoundingBox:
@@ -646,7 +646,7 @@ class DiscreteSurface(Surface):
             invalidate()
         return target
 
-    def apply_normals_mask(self, angle_threshold: float = 90.0, reference_normal: np.ndarray | None = None, inplace: bool = False) -> "DiscreteSurface" | None:
+    def apply_normals_mask(self, angle_threshold: float = 90.0, reference_normal: np.ndarray | None = None, inplace: bool = False, signed: bool = False) -> "DiscreteSurface" | None:
         """
         Remove vertices/points whose normal deviates more than ``angle_threshold`` degrees
         from the mean (or a supplied reference) normal direction.
@@ -659,6 +659,12 @@ class DiscreteSurface(Surface):
             Reference direction. If None, the mean of all normals is used.
         inplace : bool, default=False
             If True, modify in place and return None. If False, return a new instance.
+        signed : bool, default=False
+            Direction handling for the angle. If False (default), antiparallel normals
+            are folded onto parallel (a flipped normal counts as aligned) — appropriate
+            for cleaning against the mean normal. If True, the sign is respected so a
+            normal pointing opposite the reference is treated as a 180° deviation —
+            use this for directional cleaning against a fixed axis.
 
         Returns
         -------
@@ -678,7 +684,8 @@ class DiscreteSurface(Surface):
         reference_normal = reference_normal / (np.linalg.norm(reference_normal) + 1e-12)
 
         dots = np.clip(np.dot(normals, reference_normal), -1.0, 1.0)
-        keep_mask = np.degrees(np.arccos(np.abs(dots))) <= angle_threshold
+        angles = np.degrees(np.arccos(dots if signed else np.abs(dots)))
+        keep_mask = angles <= angle_threshold
 
         if inplace:
             self._apply_filter_mask(keep_mask)
@@ -4731,19 +4738,23 @@ class OrientedPointCloud(DiscreteSurface):
         return oriented
 
     @classmethod
-    def from_motl(cls, input_path: PathOrStr, group_by_subtomo_id: bool = False, recompute_normals: bool = False, knn: int = 30, 
-                orient_normals: bool = True, tangent_plane_knn: int = 50) -> "OrientedPointCloud" | dict[str, "OrientedPointCloud"]:
+    def from_motl(cls, input_path: PathOrStr, group_by: "MotlColumn | None" = None, recompute_normals: bool = False, knn: int = 30,
+                orient_normals: bool = True, tangent_plane_knn: int = 50, group_by_subtomo_id: bool | None = None) -> "OrientedPointCloud" | dict[str, "OrientedPointCloud"]:
         """
         Load oriented point cloud directly from motl file.
-        
+
         Parameters
         ----------
         input_path : str
             Path to motl file
-        group_by_subtomo_id : bool, default=False
-            If True and multiple subtomo_ids exist, returns dict of OrientedPointCloud 
-            instances keyed by subtomo_id. If False, returns single OrientedPointCloud 
-            with all points.
+        group_by : MotlColumn, optional
+            Motl column used to split the points into separate point clouds. If given
+            (e.g. ``'subtomo_id'`` or ``'object_id'``) and more than one unique value
+            exists, returns a dict of :class:`OrientedPointCloud` instances keyed by
+            that column's value. If None (default), returns a single OrientedPointCloud
+            with all points. Follows the same grouping convention as
+            :class:`~cryocat.analysis.structure.ParametricSurface`
+            (``column_name``).
         recompute_normals : bool, default=False
             If True, recompute normals from geometry instead of using Euler angles.
         knn : int, default=30
@@ -4752,25 +4763,41 @@ class OrientedPointCloud(DiscreteSurface):
             Whether to orient normals consistently (if recompute_normals=True)
         tangent_plane_knn : int, default=50
             Neighbors for orientation (if recompute_normals=True)
-        
+        group_by_subtomo_id : bool, optional
+            Deprecated. Kept for backward compatibility: if True, behaves like
+            ``group_by='subtomo_id'``. Prefer ``group_by`` instead.
+
         Returns
         -------
         OrientedPointCloud or dict
-            Single point cloud if group_by_subtomo_id=False, else dict keyed by subtomo_id
+            Single point cloud if ``group_by`` is None (and no grouping requested),
+            else a dict keyed by the unique values of the ``group_by`` column.
         """
+        # Backward-compat: map the old boolean flag onto the new column parameter.
+        if group_by_subtomo_id is not None:
+            warnings.warn(
+                "'group_by_subtomo_id' is deprecated; use group_by='subtomo_id' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if group_by is None and group_by_subtomo_id:
+                group_by = "subtomo_id"
+
         motl = cryomotl.Motl.load(input_path)
-        
-        # Get subtomo_ids
-        subtomo_ids = motl.df['subtomo_id'].values
-        unique_ids = np.unique(subtomo_ids)
-        
+
         # Check if grouping is needed
-        if group_by_subtomo_id and len(unique_ids) > 1:
+        if group_by is not None:
+            group_values = motl.df[group_by].values
+            unique_ids = np.unique(group_values)
+        else:
+            unique_ids = np.array([])
+
+        if group_by is not None and len(unique_ids) > 1:
             # Return dictionary of point clouds
             pcds = {}
             for obj_id in unique_ids:
-                mask = (subtomo_ids == obj_id)
-                
+                mask = (group_values == obj_id)
+
                 oriented = cls()
                 oriented.vertices = motl.get_coordinates()[mask]
                 
