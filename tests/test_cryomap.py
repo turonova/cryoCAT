@@ -1426,3 +1426,67 @@ def test_symmetrize_volume_shape_preserved():
     """Output shape matches input."""
     vol = np.random.rand(10, 10, 10).astype(np.float32)
     assert symmetrize_volume(vol, 2).shape == vol.shape
+
+
+# ---------------------------------------------------------------------------
+# calculate_masked_fsc / fsc_read column compatibility
+# ---------------------------------------------------------------------------
+
+
+def test_calculate_masked_fsc_and_fsc_read_same_columns(tmp_path):
+    """calculate_masked_fsc and fsc_read must return the same columns.
+
+    A downstream consumer that reads a curve from disk or computes one
+    on the fly must not need to branch on the source.  With n_repeats=0
+    (no phase randomisation) calculate_masked_fsc produces exactly
+    ``x`` and ``uncorrected_fsc``, matching every fsc_read path.
+    """
+    from cryocat.utils.ioutils import fsc_read
+
+    np.random.seed(42)
+    box = 16
+    vol = np.random.rand(box, box, box).astype(np.float32)
+
+    df_computed = calculate_masked_fsc(vol, vol, n_repeats=0)
+
+    # Write the uncorrected_fsc curve as a plain-text file and read it back.
+    pixel_size = 2.0
+    fsc_path = tmp_path / "fsc.txt"
+    np.savetxt(str(fsc_path), df_computed["uncorrected_fsc"].values)
+    df_read = fsc_read(str(fsc_path), pixel_size=pixel_size, box_size=box)
+
+    assert list(df_computed.columns) == list(df_read.columns), (
+        f"Column mismatch: compute={list(df_computed.columns)}, "
+        f"read={list(df_read.columns)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# calculate_masked_fsc: signature and cubic-constraint tests (P5)
+# ---------------------------------------------------------------------------
+
+import inspect
+
+
+def test_calculate_masked_fsc_signature():
+    """Volume and return annotations must match what formgen expects.
+
+    MapSource (and MapSource | None) both resolve to a path picker widget.
+    This test pins the annotations so that a refactor cannot silently
+    break the form without a test failure.
+    """
+    from cryocat._types import MapSource
+
+    sig = inspect.signature(calculate_masked_fsc)
+    params = sig.parameters
+    assert params["input_map_even"].annotation is MapSource
+    assert params["input_map_odd"].annotation is MapSource
+    assert params["input_mask"].annotation == (MapSource | None)
+    assert sig.return_annotation is pd.DataFrame
+
+
+def test_calculate_masked_fsc_non_cubic_raises_with_shape():
+    """ValueError for non-cubic input names the offending shape."""
+    vol = np.zeros((8, 8, 16), dtype=np.float32)
+    with pytest.raises(ValueError, match=r"\(8, 8, 16\)"):
+        calculate_masked_fsc(vol, vol)

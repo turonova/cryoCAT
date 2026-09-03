@@ -900,13 +900,11 @@ from cryocat.utils.geom import (
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="cone_indicator passes Point3D (no .ndim) to angle_between_n_vectors; needs source fix")
 def test_point3d_cone_indicator_inside_default_axis():
     """Default axis points into -z; point on -z within the cone returns True."""
     assert _P3(0.0, 0.0, -0.5).cone_indicator(1.0, 1.0)
 
 
-@pytest.mark.xfail(reason="cone_indicator passes Point3D (no .ndim) to angle_between_n_vectors; needs source fix")
 def test_point3d_cone_indicator_outside_radius():
     """Point outside the radial limit returns False."""
     assert not _P3(2.0, 0.0, -0.5).cone_indicator(1.0, 0.5)

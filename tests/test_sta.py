@@ -1151,6 +1151,31 @@ def test_novasta_resolvers_pass_through_without_override():
     assert nv.resolve_ref_base() == "../ref_base_"
 
 
+def test_novasta_get_fsc_filename_bare_refname():
+    """Bare refname: iteration appended with underscores, .txt suffix."""
+    nv = NovaStaParams(pd.DataFrame({"ref": ["myref"], "motl": ["motl_"], "iteration": [1]}))
+    assert nv.get_fsc_filename(5) == "myref_5_fsc.txt"
+
+
+def test_novasta_get_fsc_filename_path_refname():
+    """Path-based refname: directory preserved, filename built correctly."""
+    nv = NovaStaParams(pd.DataFrame({"ref": ["../ref_base"], "motl": ["motl_"], "iteration": [1]}))
+    assert nv.get_fsc_filename(3) == "../ref_base_3_fsc.txt"
+
+
+def test_novasta_get_fsc_filename_with_working_dir():
+    """working_dir overrides the directory component of the refname."""
+    nv = NovaStaParams(pd.DataFrame({"ref": ["./myref"], "motl": ["motl_"], "iteration": [1]}))
+    result = nv.get_fsc_filename(7, working_dir="/scratch").replace("\\", "/")
+    assert result == "/scratch/myref_7_fsc.txt"
+
+
+def test_novasta_get_fsc_filename_missing_ref_returns_none():
+    """Returns None when the ref column is absent."""
+    nv = NovaStaParams(pd.DataFrame({"motl": ["motl_"], "iteration": [1]}))
+    assert nv.get_fsc_filename(1) is None
+
+
 # ── evaluate_*_from_params plumbs working_dir to the resolver ────────────────
 
 
@@ -2528,4 +2553,81 @@ def test_invalid_linkage_raises():
     factor = _three_class_factor(n_per_class=5, n_runs=3)
     with pytest.raises(UserInputError, match="linkage"):
         consensus_groups(factor, linkage="ward")
+
+
+# ── get_half_map_paths ────────────────────────────────────────────────────────
+
+
+def test_novasta_get_half_map_paths_bare_refname():
+    """Bare refname: even/odd inserted after root, before iteration."""
+    nv = NovaStaParams(pd.DataFrame({"ref": ["myref"], "motl": ["motl_"], "iteration": [1]}))
+    even, odd = nv.get_half_map_paths(5)
+    assert even == "myref_even_5.em"
+    assert odd == "myref_odd_5.em"
+
+
+def test_novasta_get_half_map_paths_with_working_dir():
+    """working_dir is applied to the ref path."""
+    nv = NovaStaParams(pd.DataFrame({"ref": ["./myref"], "motl": ["motl_"], "iteration": [1]}))
+    even, odd = nv.get_half_map_paths(3, working_dir="/scratch")
+    assert even.replace("\\", "/") == "/scratch/myref_even_3.em"
+    assert odd.replace("\\", "/") == "/scratch/myref_odd_3.em"
+
+
+def test_novasta_get_half_map_paths_no_ref_returns_none():
+    """Returns None when the ref column is absent."""
+    nv = NovaStaParams(pd.DataFrame({"motl": ["motl_"], "iteration": [1]}))
+    assert nv.get_half_map_paths(1) is None
+
+
+def test_stopgap_get_half_map_paths_defaults_to_em():
+    """When no file exists on disk, .em is the default."""
+    sg = StopgapParams(_stopgap_df())
+    a, b = sg.get_half_map_paths(5)
+    assert a.replace("\\", "/") == "/work/run42/refs/pent_b2_64px_ref_A_5.em"
+    assert b.replace("\\", "/") == "/work/run42/refs/pent_b2_64px_ref_B_5.em"
+
+
+def test_stopgap_get_half_map_paths_picks_mrc_when_exists(tmp_path):
+    """Returns .mrc path when .mrc exists and .em does not."""
+    df = pd.DataFrame({
+        "rootdir": [str(tmp_path)],
+        "motl": ["allmotl"],
+        "ref": ["myref"],
+        "iteration": [1],
+    })
+    sg = StopgapParams(df)
+    refs_dir = tmp_path / "refs"
+    refs_dir.mkdir()
+    (refs_dir / "myref_A_2.mrc").write_bytes(b"")
+    (refs_dir / "myref_B_2.mrc").write_bytes(b"")
+    a, b = sg.get_half_map_paths(2)
+    assert a.replace("\\", "/").endswith("refs/myref_A_2.mrc")
+    assert b.replace("\\", "/").endswith("refs/myref_B_2.mrc")
+
+
+def test_stopgap_get_half_map_paths_prefers_em_when_both_exist(tmp_path):
+    """When both .em and .mrc exist, returns .em and warns."""
+    df = pd.DataFrame({
+        "rootdir": [str(tmp_path)],
+        "motl": ["allmotl"],
+        "ref": ["myref"],
+        "iteration": [1],
+    })
+    sg = StopgapParams(df)
+    refs_dir = tmp_path / "refs"
+    refs_dir.mkdir()
+    for name in ("myref_A_7.em", "myref_A_7.mrc", "myref_B_7.em", "myref_B_7.mrc"):
+        (refs_dir / name).write_bytes(b"")
+    with pytest.warns(UserWarning, match=r"Both.*exist"):
+        a, b = sg.get_half_map_paths(7)
+    assert a.replace("\\", "/").endswith("refs/myref_A_7.em")
+    assert b.replace("\\", "/").endswith("refs/myref_B_7.em")
+
+
+def test_stopgap_get_half_map_paths_no_ref_returns_none():
+    """Returns None when the ref column is absent."""
+    df = pd.DataFrame({"rootdir": ["/work"], "motl": ["motl"], "iteration": [1]})
+    sg = StopgapParams(df)
+    assert sg.get_half_map_paths(1) is None
 

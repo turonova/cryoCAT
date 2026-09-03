@@ -471,6 +471,18 @@ class NearestNeighbors:
     _NORM_COORD_COLS = ["norm_nn_x", "norm_nn_y", "norm_nn_z"]
     _ROT_COORD_COLS = ["rot_nn_x", "rot_nn_y", "rot_nn_z"]
 
+    @staticmethod
+    def default_feature_columns(df: "pd.DataFrame") -> list[str]:
+        """Columns of *df* that are meaningful as clustering / PCA features."""
+        _ID_COLS = frozenset({"motl_id", "qp_id", "nn_id", "qp_subtomo_id", "nn_subtomo_id"})
+        _MEASUREMENT_COLS = frozenset(
+            NearestNeighbors._QP_COORD_COLS + NearestNeighbors._NN_COORD_COLS
+            + NearestNeighbors._QP_ANGLE_COLS + NearestNeighbors._NN_ANGLE_COLS
+            + NearestNeighbors._NORM_COORD_COLS + NearestNeighbors._ROT_COORD_COLS
+            + ["nn_dist"]
+        )
+        return [c for c in df.columns if c in _MEASUREMENT_COLS and c not in _ID_COLS]
+
     def __init__(
         self,
         input_data: MotlSource | list[MotlSource] | None = None,

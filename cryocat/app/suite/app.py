@@ -23,6 +23,8 @@ import dash
 from dash import html, dcc, Input, Output
 import dash_bootstrap_components as dbc
 
+dbc.Tooltip = lambda *a, **kw: None  # DEMO: tooltips disabled globally
+
 from cryocat.app import ids
 from cryocat.app.suite.tools import TOOLS, DEFAULT_PATH
 from cryocat.app.components.graphsettings import (
@@ -39,6 +41,7 @@ from cryocat.app.components.filebrowser import (
     get_file_browser,
     register_file_browser_callbacks,
 )
+from cryocat.app.components.pathfield import register_path_field_callbacks
 from cryocat.app.components.rotationmodal import (
     get_rotation_modal,
     register_rotation_modal_callbacks,
@@ -51,6 +54,7 @@ from cryocat.app.components.varpicker import (
     get_var_picker_modal,
     register_var_picker_callbacks,
 )
+from cryocat.app.components.customel import register_customel_callbacks
 
 app = dash.Dash(
     __name__,
@@ -77,6 +81,8 @@ POOL_STORES = [
     # pool-motls and pool-extra removed — row data lives in pool._payloads (server-side)
     dcc.Store(id=ids.DATA_POOL_REGISTRY, data={}),  # { data_id: DataEntry as dict }
     dcc.Store(id=ids.DATA_POOL_NEXT_ID, data=0),  # monotone counter for stable data_id
+    dcc.Store(id=ids.GRAPH_POOL_REGISTRY, data={}),  # { graph_id: {graph_id, label, kind} }
+    dcc.Store(id=ids.GRAPH_POOL_NEXT_ID, data=1),  # monotone counter for stable graph_id
 ]
 
 
@@ -182,10 +188,12 @@ def _route(pathname):
 # page is mounted in the layout — suppress_callback_exceptions is still set as a
 # safety net but is no longer strictly required.
 register_file_browser_callbacks(app)
+register_path_field_callbacks(app)
 register_rotation_modal_callbacks(app)
 register_orient_modal_callbacks(app)
 register_var_picker_callbacks(app)
 register_graph_settings_callbacks(app)
+register_customel_callbacks(app)
 register_log_panel_callbacks(app, "suite-log", open_btn_id="suite-open-log-btn")
 register_console_callbacks(app, "suite-console")
 for _t in TOOLS:
@@ -207,5 +215,5 @@ app.clientside_callback(
 
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    app.run(debug=True)
     # app.run(debug=True, use_reloader=False)

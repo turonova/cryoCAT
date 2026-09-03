@@ -35,7 +35,7 @@ from cryocat.utils import ioutils
 from cryocat.core import cryomotl
 from cryocat.analysis import tmana
 from cryocat.analysis import visplot
-from cryocat.utils import wedgeutils
+from cryocat.core import cryowedge
 from cryocat.utils import imageutils
 from cryocat.utils.classutils import gui_exposed
 from scipy.spatial.transform import Rotation as srot

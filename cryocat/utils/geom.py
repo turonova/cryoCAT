@@ -217,7 +217,7 @@ class Point3D:
 
         cone_slope_angle = np.arctan2(cone_radius, cone_height)
 
-        input_axis_angle = angle_between_n_vectors(self, axis)
+        input_axis_angle = angle_between_n_vectors(np.asarray(self), axis)
 
         # projection of input point onto axis of revolution
         axis_porjection = np.dot(self, axis) * axis

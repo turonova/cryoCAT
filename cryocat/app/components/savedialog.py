@@ -9,7 +9,7 @@ Published result id: {prefix}-status
 
 IDs owned
     {prefix}-format            format dropdown
-    {prefix}-sg-opts           Stopgap options panel (shown/hidden)
+    {prefix}-writer-form       dynamic writer-params form (swaps on format change)
     {prefix}-rln-*             Relion options (via relionopts component)
     {prefix}-dest              destination path field  (single mode)
     {prefix}-dest-dir          destination directory   (batch mode)
@@ -40,7 +40,7 @@ from cryocat.app.components.relionopts import (
     register_relion_options_callbacks,
     read_relion_kwargs,
 )
-from cryocat.app.formgen import make_dropdown, build_form, form_row
+from cryocat.app.formgen import make_dropdown, build_form, form_row, register_form_callbacks
 from cryocat.app import styles
 
 
@@ -72,6 +72,39 @@ _DATA_TYPE_TO_FMT = {
     "emmotl": "emmotl", "stopgap": "stopgap", "dynamo": "dynamo",
     "relion": "relion", "relion5": "relion", "relion5_1": "relion",
 }
+
+# Params already handled elsewhere (motl itself, output path, or relionopts).
+# Everything NOT in this exclude set is offered via the dynamic writer form.
+_RELION_WRITER_EXCLUDE = (
+    "output_path",
+    "version",              # controls constructor routing; handled by relionopts
+    "write_optics",         # derived from whether optics_data is loaded
+    "pixel_size",           # handled by relionopts
+    "binning",              # handled by relionopts
+    "tomo_format",          # handled by relionopts
+    "subtomo_format",       # handled by relionopts
+    "use_original_entries", # handled by relionopts
+    "subtomo_size",         # handled by relionopts
+    "optics_data",          # complex DataFrame; handled internally
+    "convert",              # v5 only; handled by relionopts
+)
+
+
+# ── Writer-form helpers ───────────────────────────────────────────────────────
+
+def _writer_form_for(fmt: str, prefix: str) -> list:
+    """Return build_form rows for the writer of *fmt*, or [] if no params to show.
+
+    The form uses id_type ``{prefix}-writer-param`` so the save callback can
+    collect all values with a single ALL-pattern State.
+    """
+    id_type = f"{prefix}-writer-param"
+    if fmt == "stopgap":
+        return build_form(StopgapMotl.write_out, id_type=id_type, exclude=("output_path",))
+    if fmt == "relion":
+        return build_form(RelionMotl.write_out, id_type=id_type, exclude=_RELION_WRITER_EXCLUDE)
+    # emmotl and dynamo: write_out has only output_path — nothing to show.
+    return []
 
 
 # ── Pure helpers ─────────────────────────────────────────────────────────────
@@ -117,7 +150,7 @@ def validate_save(
     return probs
 
 
-def _build_motl(fmt: str, df, extra_df, rln_value: dict | None, sg_kwargs: dict) -> tuple:
+def _build_motl(fmt: str, df, extra_df, rln_value: dict | None, writer_kwargs: dict) -> tuple:
     """Return (motl_instance, write_out_kwargs) for the given format."""
     if fmt == "emmotl":
         return EmMotl(df), {}
@@ -127,7 +160,7 @@ def _build_motl(fmt: str, df, extra_df, rln_value: dict | None, sg_kwargs: dict)
         if extra_df is not None:
             src = pd.DataFrame(extra_df) if not isinstance(extra_df, pd.DataFrame) else extra_df
             m.sg_df = src
-        return m, {k: bool(v) for k, v in sg_kwargs.items()}
+        return m, writer_kwargs
 
     if fmt == "dynamo":
         m = DynamoMotl(df)
@@ -150,6 +183,8 @@ def _build_motl(fmt: str, df, extra_df, rln_value: dict | None, sg_kwargs: dict)
             "use_original_entries": bool(rln.get("use_original")),
             "write_optics": optics is not None,
         }
+        # Merge writer-form params (keep_all_entries, add_object_id, add_subunit_id).
+        write_kw.update(writer_kwargs)
         if ver >= 5.0:
             tomo_df = pd.DataFrame(tomos_raw) if tomos_raw else None
             m = RelionMotlv5(df, input_tomograms=tomo_df, pixel_size=px, binning=bn, optics_data=optics)
@@ -179,7 +214,7 @@ def _prefill_to_form_values(prefill: dict | None) -> tuple:
     return fmt, (ver if ver is not None else no_update), (px or no_update), (bn or no_update)
 
 
-def execute_save_single(motl_id: str, path: str, fmt: str, rln_value: dict | None, sg_kwargs: dict) -> str:
+def execute_save_single(motl_id: str, path: str, fmt: str, rln_value: dict | None, writer_kwargs: dict) -> str:
     """Load motl from pool and write to *path*. Returns status string."""
     df = get_rows(motl_id)
     extra_df = get_extra(motl_id)
@@ -187,7 +222,7 @@ def execute_save_single(motl_id: str, path: str, fmt: str, rln_value: dict | Non
     out_dir = os.path.dirname(resolved)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    m, write_kw = _build_motl(fmt, df, extra_df, rln_value, sg_kwargs)
+    m, write_kw = _build_motl(fmt, df, extra_df, rln_value, writer_kwargs)
     run_operation(m.write_out, {"output_path": resolved, **write_kw})
     return f"Saved {len(df)} particles → {resolved}"
 
@@ -197,7 +232,7 @@ def execute_batch_save(
     paths: dict[str, str],
     fmt: str,
     rln_value: dict | None,
-    sg_kwargs: dict,
+    writer_kwargs: dict,
     registry: dict,
 ) -> tuple[str, str]:
     """Write each member to its path. Returns (status, validation) strings."""
@@ -209,7 +244,7 @@ def execute_batch_save(
         try:
             df = get_rows(mid)
             extra_df = get_extra(mid)
-            m, write_kw = _build_motl(fmt, df, extra_df, rln_value, sg_kwargs)
+            m, write_kw = _build_motl(fmt, df, extra_df, rln_value, writer_kwargs)
             run_operation(m.write_out, {"output_path": out_path, **write_kw})
             done += 1
         except Exception as exc:
@@ -253,6 +288,10 @@ def get_save_dialog(prefix: str, *, mode: Literal["single", "batch"] = "single")
     Single mode: saves one pool motl identified by {prefix}-motl-id store.
     Batch mode: converts all members of the active group; caller wires the
     save callback (register_save_dialog_callbacks skips it for batch).
+
+    Writer parameters are rendered dynamically when the format changes —
+    the same pattern as the clustering method form.  ``{prefix}-writer-form``
+    is populated by the ``_on_format`` callback in register_save_dialog_callbacks.
     """
     format_row = form_row(
         "Output format",
@@ -261,16 +300,9 @@ def get_save_dialog(prefix: str, *, mode: Literal["single", "batch"] = "single")
         label_id=f"{prefix}-lbl-format",
     )
 
-    stopgap_panel = html.Div(
-        id=f"{prefix}-sg-opts",
-        className="hidden",
-        children=build_form(
-            StopgapMotl.write_out,
-            id_type=f"{prefix}-sg-param",
-            exclude=("output_path",),
-        ),
-        style={"flexDirection": "column", "width": "100%"},
-    )
+    # Dynamic writer-params form: populated by callback when format changes.
+    # Empty on load; for emmotl/dynamo it stays empty (no extra params).
+    writer_form = html.Div(id=f"{prefix}-writer-form", children=[])
 
     relion_panel = get_relion_options(prefix, for_load=False)
 
@@ -345,7 +377,7 @@ def get_save_dialog(prefix: str, *, mode: Literal["single", "batch"] = "single")
         id=f"{prefix}-container",
         children=[
             format_row,
-            stopgap_panel,
+            writer_form,
             relion_panel,
             dest_section,
             overwrite_row,
@@ -374,13 +406,16 @@ def register_save_dialog_callbacks(
         app, prefix, for_load=False, type_input_id=f"{prefix}-format",
     )
 
+    # Register all formgen callbacks for the dynamic writer-params form type.
+    register_form_callbacks(app, f"{prefix}-writer-param")
+
     @app.callback(
-        Output(f"{prefix}-sg-opts", "className"),
+        Output(f"{prefix}-writer-form", "children"),
         Input(f"{prefix}-format", "value"),
         prevent_initial_call=True,
     )
     def _on_format(fmt):
-        return "flex" if fmt == "stopgap" else "hidden"
+        return _writer_form_for(fmt or "", prefix)
 
     @app.callback(
         Output(f"{prefix}-format", "value"),
@@ -416,12 +451,12 @@ def register_save_dialog_callbacks(
             State({"type": "path-input", "owner": f"{prefix}-dest"}, "value"),
             State(f"{prefix}-overwrite", "value"),
             State(f"{prefix}-rln-value", "data"),
-            State({"type": f"{prefix}-sg-param", "owner": ALL, "param": ALL, "tag": ALL}, "value"),
-            State({"type": f"{prefix}-sg-param", "owner": ALL, "param": ALL, "tag": ALL}, "id"),
+            State({"type": f"{prefix}-writer-param", "owner": ALL, "param": ALL, "tag": ALL}, "value"),
+            State({"type": f"{prefix}-writer-param", "owner": ALL, "param": ALL, "tag": ALL}, "id"),
             State(f"{prefix}-motl-id", "data"),
             prevent_initial_call=True,
         )
-        def _save_single(n_clicks, fmt, path, overwrite, rln_value, sg_vals, sg_ids, motl_id):
+        def _save_single(n_clicks, fmt, path, overwrite, rln_value, writer_vals, writer_ids, motl_id):
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
             probs = validate_save(path, fmt, rln_value, mode="single")
@@ -433,9 +468,9 @@ def register_save_dialog_callbacks(
                 return no_update, "\n".join(probs)
             if not motl_id:
                 return no_update, "No motl selected for this slot."
-            sg_kwargs = generate_kwargs(sg_ids, sg_vals) if sg_ids else {}
+            writer_kwargs = generate_kwargs(writer_ids, writer_vals) if writer_ids else {}
             try:
-                status = execute_save_single(motl_id, path, fmt, rln_value, sg_kwargs)
+                status = execute_save_single(motl_id, path, fmt, rln_value, writer_kwargs)
                 return status, ""
             except Exception as exc:
                 return no_update, str(exc)

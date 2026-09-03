@@ -23,6 +23,8 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
 from cryocat.app import formgen, ids, styles, discovery
+from cryocat.app import datapool as _dp
+from cryocat.app.datapool import DataPoolState
 from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.apputils import generate_kwargs, run_operation
 from cryocat.app.components.anglesbuilder import (
@@ -277,6 +279,66 @@ def _alpha_shape_sidebar_content() -> html.Div:
     ])
 
 
+# ── Loader sidebar content (W3 — file loading moved from Tables tab) ──────────
+
+
+def _loader_reader_options() -> list[dict]:
+    return [{"label": e.label, "value": e.key} for e in discovery.readers()]
+
+
+def _loader_sidebar_content() -> html.Div:
+    return html.Div([
+        formgen.form_row(
+            "path",
+            get_path_field("util-load-path", mode="open", extensions=(), placeholder="Select file…"),
+            "Absolute path to the file to load.",
+            label_id="util-load-path-lbl",
+            label_text="Path",
+        ),
+        formgen.form_row(
+            "file_type",
+            formgen.make_dropdown(
+                "util-load-reader-dd",
+                options=_loader_reader_options(),
+                value=None,
+                clearable=True,
+            ),
+            "Reader function used to parse the file.",
+            label_id="util-load-reader-lbl",
+            label_text="File type",
+        ),
+        formgen.form_row(
+            "register_as",
+            formgen.make_dropdown(
+                "util-load-dest-dd",
+                options=[{"label": "Data pool", "value": "data_pool"}],
+                value="data_pool",
+                clearable=False,
+            ),
+            "Destination for the loaded result. Motl pool is not offered here; "
+            "load motls in the Motl Editor.",
+            label_id="util-load-dest-lbl",
+            label_text="Register as",
+        ),
+        formgen.form_row(
+            "variable_name",
+            dbc.Input(id="util-load-varname", type="text", placeholder="optional…", debounce=True),
+            "Python identifier. The result is accessible as @name in the console.",
+            truly_optional=True,
+            label_id="util-load-varname-lbl",
+            label_text="Variable name",
+        ),
+        dbc.Button(
+            "Load",
+            id="util-load-btn",
+            color=styles.BTN_PRIMARY,
+            size="sm",
+            style={"width": "100%"},
+        ),
+        html.Div(id="util-load-status", style=styles.HINT),
+    ])
+
+
 # ── Sidebar helpers ────────────────────────────────────────────────────────────
 
 
@@ -290,7 +352,7 @@ def _sidebar_content(builder: GuiEntry) -> html.Div:
 
 
 def _wedge_mask_sidebar_content(prefix: str) -> html.Div:
-    entry = discovery.get("wedgeutils.generate_wedge_mask")
+    entry = discovery.get("cryowedge.generate_wedge_mask")
     form_rows = formgen.build_form(
         entry,
         id_type=_WEDGE_ID_TYPE,
@@ -343,6 +405,13 @@ def _sidebar(builders: list[GuiEntry]) -> list:
         )
         for b in builders
     ]
+    items.append(
+        dbc.AccordionItem(
+            _loader_sidebar_content(),
+            title="Load dataset",
+            item_id="util-acc-loader",
+        )
+    )
     items.append(
         dbc.AccordionItem(
             _alpha_shape_sidebar_content(),
@@ -486,9 +555,52 @@ def _register_alpha_shape_callbacks(app) -> None:
         return _do_alpha_register(alpha, name)
 
 
+def _loader_register_callbacks(app) -> None:
+    import pathlib as _pathlib
+    from dash import no_update
+
+    @app.callback(
+        Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output("util-load-status", "children"),
+        Input("util-load-btn", "n_clicks"),
+        State({"type": "path-input", "owner": "util-load-path"}, "value"),
+        State("util-load-reader-dd", "value"),
+        State("util-load-varname",   "value"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        State(ids.DATA_POOL_NEXT_ID,  "data"),
+        prevent_initial_call=True,
+    )
+    def _util_load(n, path, reader_key, varname, registry, next_id):
+        if not path or not reader_key:
+            return no_update, no_update, "Select a file and reader."
+        entry = discovery.get(reader_key)
+        kwargs = ({entry.path_arg: path} if entry.path_arg else {})
+        try:
+            result = run_operation(entry.fn, kwargs)
+        except Exception as exc:
+            return no_update, no_update, f"Error ({entry.label}, {_pathlib.Path(path).name}): {exc}"
+        if result is None:
+            return no_update, no_update, f"Reader {entry.label!r} returned None."
+        effective_label = _pathlib.Path(path).stem
+        state = DataPoolState.from_stores(registry, next_id)
+        state, data_id = _dp.insert_entry(
+            state, result, label=effective_label, reader=reader_key, source_path=path,
+        )
+        status = f"Loaded {effective_label!r} → {data_id}."
+        name = (varname or "").strip()
+        if name and name.isidentifier():
+            from cryocat.app.console.execute import _CONSOLE_LOCALS
+            _CONSOLE_LOCALS[name] = result
+            status += f"  Registered as @{name}."
+        return *state.to_stores(), status
+
+
 def register_callbacks(app) -> None:
     from cryocat.analysis import visplot
 
+    formgen.register_form_callbacks(app, _WEDGE_ID_TYPE)
+    _loader_register_callbacks(app)
     _register_alpha_shape_callbacks(app)
     register_orientation_picker_callbacks(app, _ORIENT_PREFIX, mode=None, show_structure=True)
 
@@ -587,7 +699,7 @@ def _register_wedge_mask_callbacks(app, prefix: str) -> None:
         try:
             # In-memory only: drop any output_path the user typed for the actual generate.
             kwargs = {k: v for k, v in params.items() if v is not None and k != "output_path"}
-            _wedge_fn = discovery.get("wedgeutils.generate_wedge_mask").fn
+            _wedge_fn = discovery.get("cryowedge.generate_wedge_mask").fn
             result = _wedge_fn(**kwargs)
             mask = result["mask"] if isinstance(result, dict) else result
             output = dcc.Graph(
@@ -619,7 +731,7 @@ def _register_wedge_mask_callbacks(app, prefix: str) -> None:
             kwargs = {k: v for k, v in params.items() if v is not None}
             if out_path and str(out_path).strip():
                 kwargs["output_path"] = out_path
-            run_operation(discovery.get("wedgeutils.generate_wedge_mask").fn, kwargs)
+            run_operation(discovery.get("cryowedge.generate_wedge_mask").fn, kwargs)
             msg = f"Wedge mask generated"
             if out_path:
                 msg += f" → {out_path}"

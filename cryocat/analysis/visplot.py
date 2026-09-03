@@ -101,12 +101,19 @@ _BUILTIN_SCALES = _collect_builtin_colorscales()  # e.g. "viridis", "plasma", "r
 CUSTOM_PALETTES: dict[str, list[Color]] = {}
 CUSTOM_SCALES: dict[str, Colorscale] = {}
 
+# Proper-case registration order — lets paletteloader build its preset list from
+# the registry rather than a hand-maintained duplicate.
+CUSTOM_PALETTE_NAMES: list[str] = []
+CUSTOM_SCALE_NAMES: list[str] = []
+
 
 def register_palette(name: str, colors: list[Color]) -> None:
     """Register a discrete palette (used for categorical colorway)."""
     if not colors:
         raise ValueError("Palette must contain at least one color.")
     CUSTOM_PALETTES[name.lower()] = list(colors)
+    if name not in CUSTOM_PALETTE_NAMES:
+        CUSTOM_PALETTE_NAMES.append(name)
 
 
 def register_colorscale(name: str, hex_colors: list[Color]) -> None:
@@ -115,6 +122,8 @@ def register_colorscale(name: str, hex_colors: list[Color]) -> None:
         raise ValueError("Colorscale must contain at least one color.")
     k = len(hex_colors) - 1 if len(hex_colors) > 1 else 1
     CUSTOM_SCALES[name.lower()] = [(i / k, c) for i, c in enumerate(hex_colors)]
+    if name not in CUSTOM_SCALE_NAMES:
+        CUSTOM_SCALE_NAMES.append(name)
 
 
 def resolve_palette(spec: str | list[Color] | None) -> list[Color]:
@@ -1604,6 +1613,16 @@ class KDEBuilder(Hist2DBuilder):
             self.fig.update_xaxes(title_text=self.x_id[i], row=r, col=c, range=x_ranges[i])
             self.fig.update_yaxes(title_text=self.y_id[i], row=r, col=c, range=y_ranges[i])
 
+        self.fig.update_layout(meta={
+            "kde_grids": [
+                {
+                    "step_x": float(xg[i][1] - xg[i][0]) if len(xg[i]) > 1 else 0.0,
+                    "step_y": float(yg[i][1] - yg[i][0]) if len(yg[i]) > 1 else 0.0,
+                }
+                for i in range(len(xg))
+            ]
+        })
+
         return self.fig
 
     def plot_single(self, *args: Any, **kwargs: Any) -> go.Figure | None:
@@ -1813,6 +1832,30 @@ def plot_histogram_2d(
     return fig
 
 
+def _spherical_df_transform(
+    data: pd.DataFrame,
+    cols: list[str],
+    normalize: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """NaN-filter *cols* from *data*, then convert to spherical coordinates.
+
+    Returns
+    -------
+    phi : ndarray, shape (n_valid, n_triplets)
+    theta : ndarray, shape (n_valid, n_triplets)
+    valid_indices : ndarray of int, shape (n_valid,)
+        Original row positions in *data* that had no NaN values.
+    """
+    valid_mask = data[cols].notna().all(axis=1)
+    valid_indices = np.where(valid_mask.values)[0]
+    filtered = data[cols][valid_mask].to_numpy(copy=True)
+    phi, theta = geom.cartesian_to_spherical(filtered, normalize=normalize)
+    if phi.ndim == 1:
+        phi = phi[:, np.newaxis]
+        theta = theta[:, np.newaxis]
+    return phi, theta, valid_indices
+
+
 def plot_spherical_density_2d(
     input_data: DataSource,
     column_names_x: ColumnNames = None,
@@ -1881,10 +1924,13 @@ def plot_spherical_density_2d(
         cols = [c for c in column_names_x if c in input_data.columns]
         if len(cols) == 0 or (len(cols) % 3) != 0:
             raise ValueError(f"Expected a multiple of 3 columns, got {len(cols)}.")
-        # drop rows with NaNs across the selected columns
-        input_data = input_data[cols].dropna().to_numpy(copy=True)
-
-    phi, theta = geom.cartesian_to_spherical(input_data, normalize=normalize_coord)
+        phi, theta, _ = _spherical_df_transform(input_data, cols, normalize=normalize_coord)
+        input_data = None
+    else:
+        phi, theta = geom.cartesian_to_spherical(input_data, normalize=normalize_coord)
+        if phi.ndim == 1:
+            phi = phi[:, np.newaxis]
+            theta = theta[:, np.newaxis]
 
     # Uniform bin edges (Histogram2d requires uniform start/end/size)
     if x_range is None:
@@ -2762,12 +2808,14 @@ def _hemisphere_distance_traces(
     cmin: float,
     cmax: float,
     show_cbar: bool,
+    customdata: np.ndarray | None = None,
 ) -> go.Scatterpolar:
     """Build a Scatterpolar trace for one hemisphere of NN-distance points."""
     return go.Scatterpolar(
         r=theta_r[:, 1],
         theta=np.degrees(theta_r[:, 0]),
         mode="markers",
+        customdata=customdata,
         marker=dict(
             color=distances,
             colorscale=colorscale,
@@ -2820,13 +2868,17 @@ def plot_polar_nn_distances(
     """
     coordinates = np.asarray(coordinates)
     distances = np.asarray(distances)
-    coord_sorted = coordinates[coordinates[:, 2].argsort()]
-    dist_sorted = distances[coordinates[:, 2].argsort()]
+    sort_idx = coordinates[:, 2].argsort()
+    coord_sorted = coordinates[sort_idx]
+    dist_sorted = distances[sort_idx]
 
     theta_r_pos, _, theta_r_neg, _ = geom.create_projection(coord_sorted)
 
-    dist_neg = dist_sorted[0: theta_r_neg.shape[0]]
-    dist_pos = dist_sorted[theta_r_neg.shape[0]:]
+    n_neg = theta_r_neg.shape[0]
+    dist_neg = dist_sorted[:n_neg]
+    dist_pos = dist_sorted[n_neg:]
+    orig_idx_neg = sort_idx[:n_neg]
+    orig_idx_pos = sort_idx[n_neg:]
 
     if max_radius is None:
         max_radius = float(np.amax(np.hstack((theta_r_pos[:, 1], theta_r_neg[:, 1]))))
@@ -2842,11 +2894,13 @@ def plot_polar_nn_distances(
         horizontal_spacing=0.1,
     )
     fig.add_trace(
-        _hemisphere_distance_traces(theta_r_pos, dist_pos, colorscale, marker_size, cmin, cmax, show_cbar=False),
+        _hemisphere_distance_traces(theta_r_pos, dist_pos, colorscale, marker_size, cmin, cmax,
+                                     show_cbar=False, customdata=orig_idx_pos),
         row=1, col=1,
     )
     fig.add_trace(
-        _hemisphere_distance_traces(theta_r_neg, dist_neg, colorscale, marker_size, cmin, cmax, show_cbar=True),
+        _hemisphere_distance_traces(theta_r_neg, dist_neg, colorscale, marker_size, cmin, cmax,
+                                     show_cbar=True, customdata=orig_idx_neg),
         row=1, col=2,
     )
     fig.update_polars(

@@ -574,6 +574,8 @@ _SMOKE_EXEMPT: set[str] = {
     str(pathlib.Path("cryocat/app/suite/pages/_codegen_base.py")),
     str(pathlib.Path("cryocat/app/suite/pages/_memthick_analysis.py")),
     str(pathlib.Path("cryocat/app/suite/pages/_memthick_codegen.py")),
+    str(pathlib.Path("cryocat/app/suite/pages/_motl_link.py")),
+    str(pathlib.Path("cryocat/app/suite/pages/_wcopy.py")),
     str(pathlib.Path("cryocat/app/suite/pages/_pana_codegen.py")),
     str(pathlib.Path("cryocat/app/suite/pages/_pstructure_intersect.py")),
     # pmotl.py routes commits through apputils.save_motl (which calls run_operation

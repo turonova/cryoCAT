@@ -36,6 +36,7 @@ from dash import dcc, html, Input, Output, State
 from cryocat.app import ids
 from cryocat.app.components.surface_registry import registry as _surface_registry, _mesh_has_curvatures
 from cryocat.app.components.graphsettings import styled_figure
+from cryocat.app.components.customel import customel_graph
 from cryocat.analysis.visplot import resolve_palette as _resolve_palette
 from cryocat.app.formgen import make_dropdown
 
@@ -325,11 +326,12 @@ def get_surface_view(prefix: str):
                 ],
                 style={**{"display": "flex", "alignItems": "center", "gap": "0.5rem"}, "marginBottom": "0.4rem"},
             ),
-            dcc.Graph(
-                id={"type": "styled-graph", "owner": prefix, "name": "graph"},
-                style={"height": "620px"},
-                config={"scrollZoom": True},
-            ),
+            customel_graph(prefix, "graph",
+                dcc.Graph(
+                    id={"type": "styled-graph", "owner": prefix, "name": "graph"},
+                    style={"height": "620px"},
+                    config={"scrollZoom": True},
+                )),
         ]
     )
 

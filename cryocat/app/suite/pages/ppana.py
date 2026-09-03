@@ -34,7 +34,8 @@ import numpy as np
 import pandas as pd
 
 from cryocat.analysis import pana
-from cryocat.app import formgen
+from cryocat.app import formgen, ids
+from cryocat.app.pool import PoolState
 from cryocat.app.formgen import make_dropdown
 from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.styles import (
@@ -46,7 +47,7 @@ from cryocat.app.styles import (
 )
 from cryocat.app.apputils import run_operation, generate_kwargs
 from cryocat.app.components.anglesfield import get_angles_field, register_angles_field_callbacks
-from cryocat.utils.wedgeutils import generate_wedge_mask
+from cryocat.core.cryowedge import generate_wedge_mask
 from cryocat.app.components.wedgepreview import wedge_xz_figure
 from cryocat.app.suite.pages import _pana_codegen as codegen
 from cryocat.app.suite.pages._codegen_base import parse_sbatch_text as _parse_sbatch_text
@@ -486,7 +487,7 @@ def _slot_placeholder(i: int):
 
 
 def _main() -> list:
-    slot_tabs = [dcc.Tab(label=f"Result {i}", value=f"tab-r{i}",
+    slot_tabs = [dbc.Tab(label=f"Result {i}", tab_id=f"tab-r{i}",
                          children=[html.Div(id=f"ppana-slot-{i}", children=_slot_placeholder(i))])
                  for i in range(1, _N_SLOTS + 1)]
 
@@ -501,18 +502,17 @@ def _main() -> list:
                 "minHeight": "1.4rem",
             },
         ),
-        dcc.Tabs(
+        dbc.Tabs(
             id="ppana-main-tabs",
-            value="tab-csv",
+            active_tab="tab-csv",
             children=[
-                dcc.Tab(
+                dbc.Tab(
                     label="Results table",
-                    value="tab-csv",
+                    tab_id="tab-csv",
                     children=[_csv_tab_content()],
                 ),
                 *slot_tabs,
             ],
-            style={"marginBottom": "0"},
         ),
         # Stores
         dcc.Store(id="ppana-slots-store", data={}),
@@ -667,6 +667,7 @@ def _table_columns() -> list[dict]:
 # ── Callbacks ─────────────────────────────────────────────────────────────────
 
 def register_callbacks(app):
+    formgen.register_form_callbacks(app, _WEDGE_ID_TYPE)
     register_angles_field_callbacks(app, "ppana-angles")
 
     # ── toggle subtomogram sub-form ──────────────────────────────────────────
@@ -732,11 +733,15 @@ def register_callbacks(app):
         Output("ppana-wedge-params", "data"),
         Input({"type": _WEDGE_ID_TYPE, "owner": _WEDGE_BUILDER, "param": ALL, "tag": ALL}, "value"),
         State({"type": _WEDGE_ID_TYPE, "owner": _WEDGE_BUILDER, "param": ALL, "tag": ALL}, "id"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
     )
-    def _collect_wedge_params(values, ids):
-        if not values or not ids:
+    def _collect_wedge_params(values, form_ids, registry, pool_meta, pool_next_id):
+        if not values or not form_ids:
             raise PreventUpdate
-        return generate_kwargs(ids, values)
+        pool_state = PoolState.from_stores(registry, pool_meta, pool_next_id)
+        return generate_kwargs(form_ids, values, pool_state)
 
     # ── wedge mask builder: generate ─────────────────────────────────────────
     @app.callback(
@@ -864,7 +869,7 @@ def register_callbacks(app):
         Output("ppana-slots-store", "data"),
         Output("ppana-csv-rows-store", "data"),
         Output("ppana-next-slot", "data"),
-        Output("ppana-main-tabs", "value"),
+        Output("ppana-main-tabs", "active_tab"),
         Output("ppana-s-last-run", "data"),
         Output("ppana-s-recompute-btn", "disabled"),
         Output("ppana-s-recompute-gradual-btn", "disabled"),
@@ -1192,7 +1197,7 @@ def register_callbacks(app):
     @app.callback(
         Output("ppana-slots-store", "data", allow_duplicate=True),
         Output("ppana-next-slot", "data", allow_duplicate=True),
-        Output("ppana-main-tabs", "value", allow_duplicate=True),
+        Output("ppana-main-tabs", "active_tab", allow_duplicate=True),
         Output("ppana-csv-vis-status", "children"),
         Input("ppana-csv-visualize-btn", "n_clicks"),
         State("ppana-csv-table", "selected_rows"),
@@ -1264,7 +1269,7 @@ def register_callbacks(app):
     @app.callback(
         Output("ppana-status", "children", allow_duplicate=True),
         Output("ppana-slots-store", "data", allow_duplicate=True),
-        Output("ppana-main-tabs", "value", allow_duplicate=True),
+        Output("ppana-main-tabs", "active_tab", allow_duplicate=True),
         Input("ppana-s-recompute-btn", "n_clicks"),
         State("ppana-s-last-run", "data"),
         State("ppana-s-degrees", "value"),
@@ -1347,7 +1352,7 @@ def register_callbacks(app):
     @app.callback(
         Output("ppana-status", "children", allow_duplicate=True),
         Output("ppana-slots-store", "data", allow_duplicate=True),
-        Output("ppana-main-tabs", "value", allow_duplicate=True),
+        Output("ppana-main-tabs", "active_tab", allow_duplicate=True),
         Input("ppana-s-recompute-gradual-btn", "n_clicks"),
         State("ppana-s-last-run", "data"),
         State("ppana-s-angular-range", "value"),

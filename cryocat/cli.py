@@ -10,7 +10,7 @@ generator uses. There is one type authority (annotations) and one table.
 import argparse
 import inspect
 
-from cryocat.utils import wedgeutils
+from cryocat.core import cryowedge
 from cryocat.analysis import tmana
 from cryocat.utils.classutils import resolve_param_type, process_method_docstring, TYPE_HANDLERS
 
@@ -122,7 +122,7 @@ def wedge_list():
     # To get help: wedge_list --help
     # To get help on specific subcommand: wedge_list stopgap --help
     """
-    f_dict = {"stopgap_batch": wedgeutils.create_wedge_list_sg_batch, "stopgap": wedgeutils.create_wedge_list_sg}
+    f_dict = {"stopgap_batch": cryowedge.create_wedge_list_sg_batch, "stopgap": cryowedge.create_wedge_list_sg}
     description = (
         "Function to create wedge lists in different formats. For help on specific option run wedge_list option --help"
     )

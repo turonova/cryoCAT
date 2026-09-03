@@ -25,7 +25,7 @@ Sidebar accordion (top-level menu):
   * **Run folder creation** — STOPGAP folder layout, preflight, creation
     and (optional) reference renaming.  STOPGAP only.
 
-Main area: ``dcc.Tabs`` with five tabs (Parameter file table /
+Main area: ``dbc.Tabs`` with five tabs (Parameter file table /
 Alignment / Classification / STA setup output / Run folder manifest).
 
 Contract: exposes ``layout`` and ``register_callbacks(app)``.
@@ -52,7 +52,8 @@ from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.apputils import run_operation
 from cryocat.app.components.anglesbuilder import register_angles_builder_callbacks
 from cryocat.app.components.poolpicker import get_pool_picker, register_pool_picker_callbacks
-from cryocat.app.components.graphsettings import styled_figure, error_figure
+from cryocat.app.components.graphsettings import styled_figure, error_figure, register_figure_in_pool
+from cryocat.app.components.customel import customel_graph
 from cryocat.utils.geom import generate_angles
 from cryocat.app.pageshell import page_shell, sidebar_accordion
 from cryocat.analysis.sta import (
@@ -323,13 +324,15 @@ def _slim_angles_builder(prefix: str) -> html.Div:
             dbc.Row(
                 [
                     dbc.Col(
-                        dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "preview"},
-                                  style={"height": "260px"}),
+                        customel_graph(prefix, "preview",
+                            dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "preview"},
+                                      style={"height": "260px"})),
                         width=6,
                     ),
                     dbc.Col(
-                        dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "inplane"},
-                                  style={"height": "260px"}),
+                        customel_graph(prefix, "inplane",
+                            dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "inplane"},
+                                      style={"height": "260px"})),
                         width=6,
                     ),
                 ],
@@ -1070,10 +1073,11 @@ def _mc_diagnose_figures(summary, gs, factor=None):
             yaxis_title="Fraction of pairs",
             margin={"l": 50, "r": 10, "t": t_margin, "b": 40},
         )
-        row1.append(dcc.Graph(
+        row1.append(customel_graph("sta-classification", "mc-hist", dcc.Graph(
+            id={"type": "styled-graph", "owner": "sta-classification", "name": "mc-hist"},
             figure=styled_figure(fig_h, settings, uirevision="mc-hist"),
             style={"flex": "1", "minWidth": 0, "height": "220px"},
-        ))
+        )))
 
         # --- cumulative histogram (threshold preview, C3) ---
         fig_c = go.Figure(go.Scatter(
@@ -1091,10 +1095,11 @@ def _mc_diagnose_figures(summary, gs, factor=None):
             yaxis={"range": [0, 1]},
             margin={"l": 50, "r": 10, "t": t_margin, "b": 40},
         )
-        row1.append(dcc.Graph(
+        row1.append(customel_graph("sta-classification", "mc-cumul", dcc.Graph(
+            id={"type": "styled-graph", "owner": "sta-classification", "name": "mc-cumul"},
             figure=styled_figure(fig_c, settings, uirevision="mc-cumul"),
             style={"flex": "1", "minWidth": 0, "height": "220px"},
-        ))
+        )))
 
     evals = summary.get("eigenvalues")
     if evals is not None and len(evals):
@@ -1119,10 +1124,11 @@ def _mc_diagnose_figures(summary, gs, factor=None):
             margin={"l": 50, "r": 10, "t": 42 if ev1_note else 30, "b": 40},
             title_text=ev1_note, title_x=0.5, title_font_size=10,
         )
-        row1.append(dcc.Graph(
+        row1.append(customel_graph("sta-classification", "mc-evals", dcc.Graph(
+            id={"type": "styled-graph", "owner": "sta-classification", "name": "mc-evals"},
             figure=styled_figure(fig_e, settings, uirevision="mc-evals"),
             style={"flex": "1", "minWidth": 0, "height": "220px"},
-        ))
+        )))
 
     # --- per-run ARI (C2) ---
     if factor is not None:
@@ -1147,10 +1153,11 @@ def _mc_diagnose_figures(summary, gs, factor=None):
                 yaxis={"tickfont": {"size": 8}},
                 margin={"l": 70, "r": 10, "t": 36, "b": 60},
             )
-            row2.append(dcc.Graph(
+            row2.append(customel_graph("sta-classification", "mc-ari-heat", dcc.Graph(
+                id={"type": "styled-graph", "owner": "sta-classification", "name": "mc-ari-heat"},
                 figure=styled_figure(fig_heat, settings, uirevision="mc-ari-heat"),
                 style={"flex": "1", "minWidth": 0, "height": "260px"},
-            ))
+            )))
 
             # bar chart
             fig_bar = go.Figure(go.Bar(
@@ -1168,10 +1175,11 @@ def _mc_diagnose_figures(summary, gs, factor=None):
                 yaxis={"tickfont": {"size": 8}},
                 margin={"l": 120, "r": 10, "t": 36, "b": 40},
             )
-            row2.append(dcc.Graph(
+            row2.append(customel_graph("sta-classification", "mc-ari-bar", dcc.Graph(
+                id={"type": "styled-graph", "owner": "sta-classification", "name": "mc-ari-bar"},
                 figure=styled_figure(fig_bar, settings, uirevision="mc-ari-bar"),
                 style={"flex": "1", "minWidth": 0, "height": "260px"},
-            ))
+            )))
         except Exception:
             pass
 
@@ -1230,10 +1238,14 @@ def _mc_preview_children(result, gs):
         ),
         html.Div(
             [
-                dcc.Graph(figure=styled_figure(fig_s, settings, uirevision="mc-sizes"),
-                          style={"flex": "2", "minWidth": 0, "height": "200px"}),
-                dcc.Graph(figure=styled_figure(fig_b, settings, uirevision="mc-bar"),
-                          style={"flex": "1", "minWidth": 0, "height": "200px"}),
+                customel_graph("sta-classification", "mc-sizes",
+                    dcc.Graph(id={"type": "styled-graph", "owner": "sta-classification", "name": "mc-sizes"},
+                              figure=styled_figure(fig_s, settings, uirevision="mc-sizes"),
+                              style={"flex": "2", "minWidth": 0, "height": "200px"})),
+                customel_graph("sta-classification", "mc-bar",
+                    dcc.Graph(id={"type": "styled-graph", "owner": "sta-classification", "name": "mc-bar"},
+                              figure=styled_figure(fig_b, settings, uirevision="mc-bar"),
+                              style={"flex": "1", "minWidth": 0, "height": "200px"})),
             ],
             style={"display": "flex", "gap": "0.5rem"},
         ),
@@ -1255,8 +1267,10 @@ def _mc_heatmap_div(factor, result, gs):
         yaxis={"showticklabels": False, "autorange": "reversed"},
         margin={"l": 10, "r": 10, "t": 30, "b": 10},
     )
-    return dcc.Graph(figure=styled_figure(fig, settings, uirevision="mc-heatmap"),
-                     style={"height": "400px"})
+    return customel_graph("sta-classification", "mc-heatmap",
+                          dcc.Graph(id={"type": "styled-graph", "owner": "sta-classification", "name": "mc-heatmap"},
+                                    figure=styled_figure(fig, settings, uirevision="mc-heatmap"),
+                                    style={"height": "400px"}))
 
 
 def _mc_apply_labels(result, source_df, class_column="class"):
@@ -1387,6 +1401,423 @@ def _tab_mc() -> html.Div:
     )
 
 
+# ── FSC pure helpers ─────────────────────────────────────────────────────────
+
+
+def _prefill_fsc_from_params_data(
+    params_data: dict | None,
+    loader_config: dict | None,
+) -> dict:
+    """Extract FSC-relevant field values from the loaded parameter store.
+
+    Returns dict with keys mask, pixel_size, box_size, curve_file, even_map,
+    odd_map.  None means the field cannot be prefilled from the available
+    parameters.
+    novaSTA: fsc mask (falling back to mask), pixel size, subtomo size,
+    FSC curve filename, and half-map paths from get_half_map_paths.
+    STOPGAP: mask and half-map paths (pixel size and subtomo size are
+    novaSTA-only).
+    """
+    result: dict = {
+        "mask": None,
+        "pixel_size": None,
+        "box_size": None,
+        "curve_file": None,
+        "even_map": None,
+        "odd_map": None,
+    }
+    if not params_data or not params_data.get("records"):
+        return result
+    records = params_data["records"]
+    columns = params_data.get("columns", [])
+    first = records[0]
+
+    def _s(v):
+        return str(v).strip() if v not in (None, "", "nan") else None
+
+    is_nova = "fsc mask" in columns or "pixel size" in columns
+    if is_nova:
+        fsc_mask_val = _s(first.get("fsc mask"))
+        mask_val = _s(first.get("mask"))
+        if fsc_mask_val and fsc_mask_val.lower() != "none":
+            result["mask"] = fsc_mask_val
+        elif mask_val:
+            result["mask"] = mask_val
+
+        ps = first.get("pixel size")
+        if ps not in (None, "", "nan"):
+            try:
+                result["pixel_size"] = float(ps)
+            except (ValueError, TypeError):
+                pass
+
+        sz = first.get("subtomo size")
+        if sz not in (None, "", "nan"):
+            try:
+                result["box_size"] = int(sz)
+            except (ValueError, TypeError):
+                pass
+
+        if loader_config and loader_config.get("end_it") is not None:
+            end_it = loader_config["end_it"]
+            working_dir = loader_config.get("working_dir")
+            try:
+                df = pd.DataFrame(records, columns=columns)
+                nova = sta_mod.NovaStaParams(df)
+                result["curve_file"] = nova.get_fsc_filename(end_it, working_dir=working_dir)
+                halves = nova.get_half_map_paths(end_it, working_dir=working_dir)
+                if halves is not None:
+                    result["even_map"], result["odd_map"] = halves
+            except Exception:
+                pass
+    else:
+        result["mask"] = _s(first.get("mask") or first.get("mask name"))
+        if loader_config and loader_config.get("end_it") is not None:
+            end_it = loader_config["end_it"]
+            working_dir = loader_config.get("working_dir")
+            try:
+                df = pd.DataFrame(records, columns=columns)
+                sg = sta_mod.StopgapParams(df)
+                halves = sg.get_half_map_paths(end_it, working_dir=working_dir)
+                if halves is not None:
+                    result["even_map"], result["odd_map"] = halves
+            except Exception:
+                pass
+
+    return result
+
+
+def _compute_fsc_resolution(
+    fsc_values: list,
+    x_values: list,
+    threshold: float,
+) -> float | None:
+    """Return the x-value at the first shell where FSC drops below threshold.
+
+    Uses linear interpolation between the shell just above the threshold and
+    the first shell below it.  Returns None when the curve never crosses.
+    """
+    fsc = np.asarray(fsc_values, dtype=float)
+    x = np.asarray(x_values, dtype=float)
+    below = np.where(fsc < threshold)[0]
+    if len(below) == 0:
+        return None
+    idx = below[0]
+    if idx == 0:
+        return float(x[0])
+    f0, f1 = fsc[idx - 1], fsc[idx]
+    x0, x1 = x[idx - 1], x[idx]
+    if f1 == f0:
+        return float(x0)
+    t = (threshold - f0) / (f1 - f0)
+    return float(x0 + t * (x1 - x0))
+
+
+_FSC_THRESHOLDS = [("0.143", 0.143, "dash"), ("0.5", 0.5, "dot")]
+
+
+def _is_shell_index(x_vals) -> bool:
+    """True iff x values are consecutive integers starting from 0 or 1."""
+    x = np.asarray(x_vals, dtype=float)
+    if len(x) < 2:
+        return False
+    start = round(x[0])
+    if start not in (0, 1):
+        return False
+    expected = np.arange(start, start + len(x), dtype=float)
+    return bool(np.allclose(x, expected, atol=0.01))
+
+
+def _classify_fsc_axis(
+    x_vals,
+    pixel_size: float | None,
+    box_size: int | None,
+) -> tuple[bool, str, bool]:
+    """Classify x-axis units from the data itself, not the file extension.
+
+    Returns (needs_conversion, x_label, x_is_angstrom).
+    - needs_conversion: True → x is shell index; caller divides by (box_size * pixel_size).
+    - x_label: axis title for the figure.
+    - x_is_angstrom: x (after optional conversion) is in 1/Å; resolution in Å.
+
+    When x is not a shell index, units are unknown from the data alone; the
+    caller must apply a user declaration (T3) to override.
+    """
+    has_params = pixel_size is not None and box_size is not None
+    if _is_shell_index(x_vals):
+        if has_params:
+            return True, "Spatial frequency (1/Å)", True
+        return False, "Shell index", False
+    # x is not consecutive integers — units cannot be established from data alone.
+    return False, "x (units unknown)", False
+
+
+def _resolve_fsc_axis(
+    raw_df: "pd.DataFrame",
+    pixel_size: float | None,
+    box_size: int | None,
+    x_units_choice: str | None,
+    source: str,
+) -> "tuple[pd.DataFrame, str, bool, object]":
+    """Apply the x-units choice to *raw_df* and return display artefacts.
+
+    *raw_df* must hold x as shell indices (the storage convention).  Returns
+    (display_df, x_label, x_is_angstrom, units_hint_component).
+    """
+    x_units_eff = (x_units_choice or "auto") if source == "file" else "auto"
+    has_params = pixel_size is not None and box_size is not None
+
+    if x_units_eff == "shell":
+        if has_params:
+            needs_conv, x_label, x_is_angstrom = True, "Spatial frequency (1/Å)", True
+        else:
+            needs_conv, x_label, x_is_angstrom = False, "Shell index", False
+        units_hint: object = ""
+    elif x_units_eff == "angstrom":
+        needs_conv, x_label, x_is_angstrom = False, "Spatial frequency (1/Å)", True
+        units_hint = ""
+    else:  # auto
+        needs_conv, x_label, x_is_angstrom = _classify_fsc_axis(
+            raw_df["x"], pixel_size, box_size
+        )
+        if x_label == "x (units unknown)":
+            units_hint = html.Span(
+                "Auto: x values are not consecutive integers — units unknown. "
+                "Declare 'Shell index' or '1/Å' above if you know the units.",
+                style={**_styles.HINT_SM, "color": "var(--bs-warning)"},
+            )
+        else:
+            units_hint = html.Span(
+                f"Auto: detected {x_label}.",
+                style={**_styles.HINT_SM},
+            )
+
+    if needs_conv:
+        raw_df = raw_df.copy()
+        raw_df["x"] = raw_df["x"] / (float(box_size) * float(pixel_size))
+
+    return raw_df, x_label, x_is_angstrom, units_hint
+
+
+def _build_fsc_figure(
+    fsc_df: "pd.DataFrame",
+    gs: dict,
+    x_label: str,
+    x_is_angstrom: bool,
+):
+    """Build the FSC multi-trace figure and resolution report.
+
+    Every FSC column (all columns except 'x') is plotted as its own trace,
+    labelled by column name.  Horizontal lines mark the 0.143 and 0.5
+    thresholds.  Returns (styled_figure, report_children).
+    """
+    fsc_cols = [c for c in fsc_df.columns if c != "x"]
+    x_vals = fsc_df["x"].tolist()
+
+    fig = go.Figure()
+    for col in fsc_cols:
+        fig.add_trace(go.Scatter(x=x_vals, y=fsc_df[col].tolist(), mode="lines", name=col))
+
+    for thr_name, thr_val, dash_style in _FSC_THRESHOLDS:
+        fig.add_hline(
+            y=thr_val,
+            line_dash=dash_style,
+            line_color="gray",
+            annotation_text=thr_name,
+            annotation_position="right",
+        )
+
+    fig.update_layout(
+        xaxis_title=x_label,
+        yaxis_title="FSC",
+        yaxis={"range": [-0.1, 1.05]},
+        legend={"title": "Curve"},
+        margin={"l": 50, "r": 80, "t": 30, "b": 50},
+    )
+
+    styled = styled_figure(fig, gs or {}, uirevision="sta-fsc")
+
+    report_items: list = []
+    if x_label == "x (units unknown)":
+        report_items.append(html.Div(
+            "x units could not be determined (not consecutive integers). "
+            "Provide pixel size and box size if x is a shell index.",
+            style={"color": "var(--bs-warning)", "marginBottom": "0.4rem",
+                   "fontSize": _styles.FONT_SM},
+        ))
+    elif not x_is_angstrom and x_label == "Shell index":
+        report_items.append(html.Div(
+            "Pixel size or box size not provided — showing shell index.",
+            style={"color": "var(--bs-warning)", "marginBottom": "0.4rem",
+                   "fontSize": _styles.FONT_SM},
+        ))
+
+    for thr_name, thr_val, _ in _FSC_THRESHOLDS:
+        for col in fsc_cols:
+            x_cross = _compute_fsc_resolution(fsc_df[col].tolist(), x_vals, thr_val)
+            if x_cross is None:
+                line = f"{col} at FSC={thr_name}: curve never crosses threshold."
+            elif x_is_angstrom:
+                res_ang = 1.0 / x_cross if x_cross > 0 else float("inf")
+                line = f"{col} at FSC={thr_name}: {res_ang:.2f} Å  (x = {x_cross:.4f} 1/Å)"
+            elif x_label == "Shell index":
+                line = f"{col} at FSC={thr_name}: shell index {x_cross:.1f}"
+            else:
+                line = f"{col} at FSC={thr_name}: x = {x_cross:.4f} (units unknown)"
+            report_items.append(html.Div(
+                line, style={"marginBottom": "2px", "fontSize": _styles.FONT_SM}
+            ))
+
+    return styled, report_items
+
+
+# ── FSC layout ────────────────────────────────────────────────────────────────
+
+
+def _fsc_panel() -> html.Div:
+    """FSC sidebar panel — source choice, form inputs, Compute button."""
+    return html.Div([
+        formgen.form_row(
+            "source",
+            dcc.RadioItems(
+                id="sta-fsc-source",
+                options=[
+                    {"label": " From maps", "value": "maps"},
+                    {"label": " From file", "value": "file"},
+                ],
+                value="maps",
+                inputStyle=_styles.RADIO_INLINE_INPUT,
+                labelStyle={**_styles.RADIO_INLINE_LABEL, "marginRight": "1.4rem"},
+                style={"display": "flex", "flexWrap": "wrap", "alignItems": "center"},
+            ),
+            "Compute the FSC from two half-maps (with optional phase-randomisation "
+            "correction), or load a pre-computed curve file.",
+            label_text="Source",
+        ),
+        html.Div(id="sta-fsc-maps-section", children=[
+            formgen.form_row(
+                "even_half_map",
+                get_path_field("sta-fsc-even-map"),
+                "First half-map (even subtomograms). Path to an MRC or EM file.",
+                label_text="Even half-map",
+            ),
+            formgen.form_row(
+                "odd_half_map",
+                get_path_field("sta-fsc-odd-map"),
+                "Second half-map (odd subtomograms). Path to an MRC or EM file.",
+                label_text="Odd half-map",
+            ),
+            formgen.form_row(
+                "mask",
+                get_path_field("sta-fsc-mask"),
+                "Real-space mask. Leave blank for a box-filling mask of ones.",
+                truly_optional=True,
+                label_text="Mask",
+            ),
+            formgen.form_row(
+                "n_repeats",
+                dbc.Input(
+                    id="sta-fsc-n-repeats", type="number",
+                    value=10, step=1, min=0, size="sm",
+                ),
+                "Phase-randomisation repeats. 0 = skip phase randomisation "
+                "(faster; result has x and uncorrected_fsc only).",
+                label_text="Phase rand. repeats",
+            ),
+        ]),
+        html.Div(id="sta-fsc-file-section", style={"display": "none"}, children=[
+            formgen.form_row(
+                "curve_file",
+                get_path_field("sta-fsc-curve-file"),
+                "FSC curve file. Supported: .csv (columns x + fsc), "
+                ".xml (ChimeraX format), .txt (one value per line). "
+                "Pixel size and box size below convert shell-index x to 1/Å.",
+                label_text="Curve file",
+            ),
+            formgen.form_row(
+                "x_units",
+                dcc.Dropdown(
+                    id="sta-fsc-x-units",
+                    options=[
+                        {"label": "Auto-detect", "value": "auto"},
+                        {"label": "Shell index", "value": "shell"},
+                        {"label": "1/Å (already a frequency)", "value": "angstrom"},
+                    ],
+                    value="auto",
+                    clearable=False,
+                    style={"fontSize": _styles.FONT_SM},
+                ),
+                "How to interpret the x column. Auto-detect checks whether x "
+                "is consecutive integers (shell index) or already a frequency. "
+                "Override when auto-detect is wrong — e.g. a .csv already in 1/Å.",
+                label_text="x units",
+            ),
+            html.Div(id="sta-fsc-x-units-hint", style={**_styles.HINT_SM, "marginTop": "2px"}),
+        ]),
+        html.Hr(style={"margin": "0.4rem 0"}),
+        formgen.form_row(
+            "pixel_size",
+            dbc.Input(
+                id="sta-fsc-pixel-size", type="number",
+                step=0.001, min=0.001, size="sm",
+            ),
+            "Pixel size in Å. When provided, the x-axis is in 1/Å and "
+            "resolution is reported in Å. Required for .txt curve files.",
+            truly_optional=True,
+            label_text="Pixel size (Å)",
+        ),
+        formgen.form_row(
+            "box_size",
+            dbc.Input(
+                id="sta-fsc-box-size", type="number",
+                step=1, min=1, size="sm",
+            ),
+            "Subtomogram box edge length in voxels. Required for .txt curve files. "
+            "Inferred automatically from the curve file when left empty.",
+            truly_optional=True,
+            label_text="Box size (px)",
+        ),
+        html.Div(id="sta-fsc-box-size-hint", style={"marginTop": "2px"}),
+        html.Hr(style={"margin": "0.4rem 0"}),
+        dbc.Button(
+            "Compute FSC",
+            id="sta-fsc-compute-btn",
+            color="primary",
+            size="sm",
+            style={"width": "100%"},
+        ),
+        html.Div(
+            id="sta-fsc-status",
+            style={"color": "var(--color9)", "marginTop": "0.4rem",
+                   "wordBreak": "break-word", "fontSize": _styles.FONT_SM},
+        ),
+    ])
+
+
+def _tab_fsc() -> html.Div:
+    """FSC main-area tab — multi-curve graph with threshold lines and resolution report."""
+    return html.Div(
+        [
+            html.Div(
+                "Fill the FSC sidebar panel and click 'Compute FSC'. "
+                "Resolution is reported per curve and per threshold.",
+                style={"color": "var(--color9)", "marginBottom": "0.5rem",
+                       "fontSize": _styles.FONT_SM},
+            ),
+            customel_graph("sta-fsc", "fsc",
+                dcc.Graph(
+                    id={"type": "styled-graph", "owner": "sta-fsc", "name": "fsc"},
+                    figure=error_figure(
+                        "No FSC computed yet. Fill the sidebar panel and click 'Compute FSC'."
+                    ),
+                    style={"width": "100%", "height": "420px"},
+                )),
+            html.Div(id="sta-fsc-report", style={"marginTop": "0.5rem"}),
+        ],
+        style={"padding": "0.5rem"},
+    )
+
+
 def _sidebar() -> list:
     return [
         sidebar_accordion(
@@ -1415,6 +1846,11 @@ def _sidebar() -> list:
                     _mc_panel(),
                     title="Multi-class consensus",
                     item_id="sta-acc-mc",
+                ),
+                dbc.AccordionItem(
+                    _fsc_panel(),
+                    title="FSC",
+                    item_id="sta-acc-fsc",
                 ),
             ],
             active_item=["sta-acc-eval"],
@@ -1454,14 +1890,15 @@ def _tab_params() -> html.Div:
 def _tab_alignment() -> html.Div:
     return html.Div(
         [
-            dcc.Graph(
-                id="sta-alignment-graph",
-                figure=error_figure(
-                    "Load a config and click 'Alignment evaluation' to compute "
-                    "compute_alignment_statistics."
-                ),
-                style={"width": "100%"},
-            ),
+            customel_graph("sta-alignment", "plot",
+                dcc.Graph(
+                    id={"type": "styled-graph", "owner": "sta-alignment", "name": "plot"},
+                    figure=error_figure(
+                        "Load a config and click 'Alignment evaluation' to compute "
+                        "compute_alignment_statistics."
+                    ),
+                    style={"width": "100%"},
+                )),
         ],
         style={"padding": "0.5rem"},
     )
@@ -1470,14 +1907,15 @@ def _tab_alignment() -> html.Div:
 def _tab_classification() -> html.Div:
     return html.Div(
         [
-            dcc.Graph(
-                id="sta-classification-graph",
-                figure=error_figure(
-                    "Load a config and click 'Classification evaluation' to "
-                    "compute evaluate_classification."
-                ),
-                style={"width": "100%", "height": "420px"},
-            ),
+            customel_graph("sta-classification", "plot",
+                dcc.Graph(
+                    id={"type": "styled-graph", "owner": "sta-classification", "name": "plot"},
+                    figure=error_figure(
+                        "Load a config and click 'Classification evaluation' to "
+                        "compute evaluate_classification."
+                    ),
+                    style={"width": "100%", "height": "420px"},
+                )),
         ],
         style={"padding": "0.5rem"},
     )
@@ -1571,28 +2009,31 @@ def _tab_run_folder_manifest() -> html.Div:
 
 def _main() -> list:
     return [
-        dcc.Tabs(
+        dbc.Tabs(
             id="sta-main-tabs",
-            value="tab-params",
+            active_tab="tab-params",
             children=[
-                dcc.Tab(label="Parameter file",
-                        value="tab-params",
+                dbc.Tab(label="Parameter file",
+                        tab_id="tab-params",
                         children=_tab_params()),
-                dcc.Tab(label="Alignment evaluation",
-                        value="tab-align",
+                dbc.Tab(label="Alignment evaluation",
+                        tab_id="tab-align",
                         children=_tab_alignment()),
-                dcc.Tab(label="Classification evaluation",
-                        value="tab-class",
+                dbc.Tab(label="Classification evaluation",
+                        tab_id="tab-class",
                         children=_tab_classification()),
-                dcc.Tab(label="STA setup output",
-                        value="tab-setup",
+                dbc.Tab(label="STA setup output",
+                        tab_id="tab-setup",
                         children=_tab_setup_output()),
-                dcc.Tab(label="Run folder manifest",
-                        value="tab-rf-manifest",
+                dbc.Tab(label="Run folder manifest",
+                        tab_id="tab-rf-manifest",
                         children=_tab_run_folder_manifest()),
-                dcc.Tab(label="Multi-class consensus",
-                        value="tab-mc",
+                dbc.Tab(label="Multi-class consensus",
+                        tab_id="tab-mc",
                         children=_tab_mc()),
+                dbc.Tab(label="FSC",
+                        tab_id="tab-fsc",
+                        children=_tab_fsc()),
             ],
         ),
     ]
@@ -1612,6 +2053,7 @@ layout = html.Div(
         dcc.Store(id="sta-bp-ranges-store"),
         dcc.Store(id="sta-mc-factor-store"),
         dcc.Store(id="sta-mc-run-counter", data=0),
+        dcc.Store(id="sta-fsc-df-store"),
         _sep_range_modal("ang", "Angular search — set separately", _ANG_RANGE_COL_DEFS),
         _sep_range_modal("bp", "Bandpass filter — set separately", _BP_RANGE_COL_DEFS),
         page_shell(_sidebar(), _main()),
@@ -2099,6 +2541,7 @@ def _pool_paths_to_sta_config(source_paths: list[str | None], motl_type: str) ->
 
 
 def register_callbacks(app):
+    formgen.register_form_callbacks(app, "angles-param")
 
     # Slim angles builder: params collect comes for free; we replace the
     # auto-preview with a manual "Visualize" button so the user controls
@@ -2250,14 +2693,15 @@ def register_callbacks(app):
 
     # ── Alignment evaluation: compute + plot (tab 2) ─────────────────────────
     @app.callback(
-        Output("sta-alignment-graph", "figure"),
+        Output({"type": "styled-graph", "owner": "sta-alignment", "name": "plot"}, "figure"),
         Output("sta-action-status", "children", allow_duplicate=True),
-        Output("sta-main-tabs", "value", allow_duplicate=True),
+        Output("sta-main-tabs", "active_tab", allow_duplicate=True),
         Input("sta-run-alignment-btn", "n_clicks"),
         State("sta-loader-config", "data"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
-    def run_alignment_evaluation(n_clicks, config):
+    def run_alignment_evaluation(n_clicks, config, settings):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not config:
@@ -2293,7 +2737,8 @@ def register_callbacks(app):
         stats_df = stats_df.loc[keep].reset_index(drop=True)
 
         records = stats_df.to_dict("records")
-        fig = _build_stats_grid(records, x_key="iteration", cols=3)
+        fig = styled_figure(_build_stats_grid(records, x_key="iteration", cols=3),
+                            settings or {}, uirevision="sta-alignment")
         return (
             fig,
             f"Alignment evaluation done: {len(records)} transition(s) "
@@ -2303,14 +2748,15 @@ def register_callbacks(app):
 
     # ── Classification evaluation: compute + plot (tab 3) ────────────────────
     @app.callback(
-        Output("sta-classification-graph", "figure"),
+        Output({"type": "styled-graph", "owner": "sta-classification", "name": "plot"}, "figure"),
         Output("sta-action-status", "children", allow_duplicate=True),
-        Output("sta-main-tabs", "value", allow_duplicate=True),
+        Output("sta-main-tabs", "active_tab", allow_duplicate=True),
         Input("sta-run-classification-btn", "n_clicks"),
         State("sta-loader-config", "data"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
-    def run_classification_evaluation(n_clicks, config):
+    def run_classification_evaluation(n_clicks, config, settings):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not config:
@@ -2348,7 +2794,7 @@ def register_callbacks(app):
         n_classes = len(occupancy)
         n_iters = max((len(v) for v in occupancy.values()), default=0)
         return (
-            fig,
+            styled_figure(fig, settings or {}, uirevision="sta-classification"),
             f"Classification evaluation done: {n_classes} class(es) "
             f"over {n_iters} iteration(s).",
             "tab-class",
@@ -2493,7 +2939,7 @@ def register_callbacks(app):
     @app.callback(
         Output("sta-setup-df-store", "data"),
         Output("sta-setup-create-status", "children"),
-        Output("sta-main-tabs", "value", allow_duplicate=True),
+        Output("sta-main-tabs", "active_tab", allow_duplicate=True),
         Input("sta-setup-create-btn", "n_clicks"),
         State("sta-setup-sta-type", "value"),
         State("sta-setup-iter", "value"),
@@ -3294,7 +3740,7 @@ def register_callbacks(app):
     @app.callback(
         Output("sta-setup-df-store", "data", allow_duplicate=True),
         Output("sta-cls-gen-status", "children"),
-        Output("sta-main-tabs", "value", allow_duplicate=True),
+        Output("sta-main-tabs", "active_tab", allow_duplicate=True),
         Input("sta-cls-gen-denovo-btn", "n_clicks"),
         Input("sta-cls-gen-exrefs-btn", "n_clicks"),
         State("sta-setup-sta-type", "value"),
@@ -3511,7 +3957,7 @@ def register_callbacks(app):
         Output("sta-mc-diagnose-area", "children"),
         Output("sta-mc-run-status", "children"),
         Output("sta-mc-produce-btn", "disabled"),
-        Output("sta-main-tabs", "value", allow_duplicate=True),
+        Output("sta-main-tabs", "active_tab", allow_duplicate=True),
         Input("sta-mc-run-btn", "n_clicks"),
         State("sta-mc-pool-value", "data"),
         State(ids.POOL_REGISTRY, "data"),
@@ -3583,6 +4029,210 @@ def register_callbacks(app):
         factor = _mc_deserialize_factor(factor_data)
         k = int(k_val) if k_val is not None else factor.n_runs
         return _MC_STYLE_ENABLED if k < factor.n_runs else _MC_STYLE_DISABLED
+
+    # ── FSC callbacks ────────────────────────────────────────────────────────
+
+    @app.callback(
+        Output("sta-fsc-maps-section", "style"),
+        Output("sta-fsc-file-section", "style"),
+        Output("sta-fsc-box-size-hint", "children"),
+        Input("sta-fsc-source", "value"),
+        prevent_initial_call=True,
+    )
+    def _toggle_fsc_source(source):
+        show, hide = {"display": "block"}, {"display": "none"}
+        if source == "file":
+            return hide, show, ""
+        return show, hide, ""
+
+    @app.callback(
+        Output("sta-fsc-box-size", "value", allow_duplicate=True),
+        Output("sta-fsc-box-size-hint", "children", allow_duplicate=True),
+        Input({"type": "path-input", "owner": "sta-fsc-curve-file"}, "value"),
+        State("sta-fsc-box-size", "value"),
+        State("sta-fsc-source", "value"),
+        prevent_initial_call=True,
+    )
+    def _infer_box_size_from_curve(curve_file, current_box_size, source):
+        if source != "file" or not curve_file or not str(curve_file).strip():
+            return no_update, ""
+        path = str(curve_file).strip()
+        try:
+            import xml.etree.ElementTree as _ET
+            from pathlib import Path as _Path
+            ext = _Path(path).suffix.lower()
+            if ext == ".txt":
+                vals = np.loadtxt(path)
+                n = int(vals.shape[0]) if vals.ndim >= 1 else 0
+            elif ext == ".csv":
+                _df_tmp = pd.read_csv(path)
+                n = len(_df_tmp)
+            elif ext == ".xml":
+                _root = _ET.parse(path).getroot()
+                n = len(_root.findall("coordinate"))
+            else:
+                return no_update, ""
+        except Exception:
+            return no_update, ""
+
+        if n <= 0:
+            return no_update, ""
+
+        inferred = 2 * n
+
+        if current_box_size is None:
+            return inferred, html.Span(
+                f"(inferred from file: {n} entries → box {inferred})",
+                style={**_styles.HINT_SM},
+            )
+        try:
+            user_val = int(current_box_size)
+        except (TypeError, ValueError):
+            return no_update, ""
+
+        if user_val == inferred:
+            return no_update, html.Span(
+                f"(matches file estimate: {n} entries → box {inferred})",
+                style={**_styles.HINT_SM},
+            )
+        return no_update, html.Span(
+            f"File has {n} entries, suggesting box {inferred}; your value {user_val} is kept.",
+            style={"fontSize": _styles.FONT_SM, "color": "var(--bs-warning)",
+                   "fontStyle": "italic", "marginTop": "2px"},
+        )
+
+    @app.callback(
+        Output({"type": "path-input", "owner": "sta-fsc-mask"}, "value", allow_duplicate=True),
+        Output("sta-fsc-pixel-size", "value"),
+        Output("sta-fsc-box-size", "value"),
+        Output({"type": "path-input", "owner": "sta-fsc-curve-file"}, "value", allow_duplicate=True),
+        Output({"type": "path-input", "owner": "sta-fsc-even-map"}, "value", allow_duplicate=True),
+        Output({"type": "path-input", "owner": "sta-fsc-odd-map"}, "value", allow_duplicate=True),
+        Input("sta-params-store", "data"),
+        State("sta-loader-config", "data"),
+        prevent_initial_call=True,
+    )
+    def _prefill_fsc_fields(params_data, loader_config):
+        info = _prefill_fsc_from_params_data(params_data, loader_config)
+        return (
+            info["mask"],
+            info["pixel_size"],
+            info["box_size"],
+            info["curve_file"],
+            info["even_map"],
+            info["odd_map"],
+        )
+
+    @app.callback(
+        Output("sta-main-tabs", "active_tab", allow_duplicate=True),
+        # allow_duplicate: _mc_run, run_alignment, run_classification also write active_tab.
+        Output("sta-fsc-status", "children"),
+        Output("sta-fsc-df-store", "data"),
+        Output(ids.GRAPH_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.GRAPH_POOL_NEXT_ID, "data", allow_duplicate=True),
+        Input("sta-fsc-compute-btn", "n_clicks"),
+        State("sta-fsc-source", "value"),
+        State({"type": "path-input", "owner": "sta-fsc-even-map"}, "value"),
+        State({"type": "path-input", "owner": "sta-fsc-odd-map"}, "value"),
+        State({"type": "path-input", "owner": "sta-fsc-mask"}, "value"),
+        State("sta-fsc-n-repeats", "value"),
+        State({"type": "path-input", "owner": "sta-fsc-curve-file"}, "value"),
+        State("sta-fsc-pixel-size", "value"),
+        State("sta-fsc-box-size", "value"),
+        State("sta-fsc-x-units", "value"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
+        State(ids.GRAPH_POOL_REGISTRY, "data"),
+        State(ids.GRAPH_POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
+    )
+    def _compute_fsc(n_clicks, source, even_map, odd_map, mask, n_repeats,
+                     curve_file, pixel_size, box_size, x_units, gs,
+                     pool_registry, pool_next_id):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+
+        from cryocat.app import graphpool as _graphpool
+
+        _tab = "tab-fsc"
+
+        def _fail(msg):
+            return no_update, msg, None, no_update, no_update
+
+        try:
+            if source == "maps":
+                from cryocat.core.cryomap import calculate_masked_fsc
+                if not even_map or not odd_map:
+                    return _fail("Both half-map paths are required.")
+                kwargs: dict = {
+                    "input_map_even": str(even_map).strip(),
+                    "input_map_odd": str(odd_map).strip(),
+                    "n_repeats": int(n_repeats) if n_repeats is not None else 10,
+                }
+                if mask and str(mask).strip():
+                    kwargs["input_mask"] = str(mask).strip()
+                # Convention: GUI does NOT pass pixel_size to the library.
+                # x is always a shell index from calculate_masked_fsc.
+                fsc_df = run_operation(calculate_masked_fsc, kwargs)
+            else:
+                from cryocat.utils.ioutils import fsc_read
+                if not curve_file or not str(curve_file).strip():
+                    return _fail("Curve file path is required.")
+                # Convention: GUI does NOT pass pixel_size/box_size to fsc_read.
+                # x is always a shell index (or raw from file); render callback converts.
+                fsc_df = run_operation(fsc_read, {"input_path": str(curve_file).strip()})
+
+        except Exception as exc:
+            return _fail(f"FSC computation failed: {exc}")
+
+        # Store raw shell-index df.  The render callback applies the Å conversion.
+        fsc_store = {"records": fsc_df.to_dict("records"), "columns": list(fsc_df.columns)}
+
+        # Pool snapshot: build figure with current display params at compute time.
+        display_df, x_label, x_is_angstrom, _ = _resolve_fsc_axis(
+            fsc_df, pixel_size, box_size, x_units, source or "maps"
+        )
+        pool_fig, _ = _build_fsc_figure(display_df, gs, x_label, x_is_angstrom)
+        pool_state = _graphpool.GraphPoolState.from_stores(pool_registry, pool_next_id)
+        pool_state, graph_id = register_figure_in_pool(
+            pool_state, pool_fig, label=f"FSC {pool_state.next_id}", kind="frozen"
+        )
+        pool_reg, pool_nid = pool_state.to_stores()
+
+        fsc_cols = [c for c in fsc_df.columns if c != "x"]
+        status = html.Span(
+            f"FSC computed: {len(fsc_df)} shells, curves: {', '.join(fsc_cols)}."
+            f" Registered as {graph_id}.",
+            style={"color": "#EAAE47"},
+        )
+        return _tab, status, fsc_store, pool_reg, pool_nid
+
+    @app.callback(
+        Output({"type": "styled-graph", "owner": "sta-fsc", "name": "fsc"}, "figure"),
+        Output("sta-fsc-report", "children"),
+        Output("sta-fsc-x-units-hint", "children"),
+        Input("sta-fsc-df-store", "data"),
+        Input("sta-fsc-pixel-size", "value"),
+        Input("sta-fsc-box-size", "value"),
+        Input("sta-fsc-x-units", "value"),
+        State("sta-fsc-source", "value"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
+        prevent_initial_call=True,
+    )
+    def _render_fsc(store, pixel_size, box_size, x_units, source, gs):
+        if not store or not store.get("records"):
+            return (
+                error_figure(
+                    "No FSC computed yet. Fill the sidebar panel and click 'Compute FSC'."
+                ),
+                [],
+                "",
+            )
+        fsc_df = pd.DataFrame(store["records"], columns=store["columns"])
+        display_df, x_label, x_is_angstrom, units_hint = _resolve_fsc_axis(
+            fsc_df, pixel_size, box_size, x_units, source or "maps"
+        )
+        fig, report = _build_fsc_figure(display_df, gs, x_label, x_is_angstrom)
+        return fig, report, units_hint
 
     @app.callback(
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),

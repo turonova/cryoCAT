@@ -30,7 +30,7 @@ from cryocat.utils.classutils import GUI_REGISTRY, GuiCategory, GuiEntry
 GUI_MODULES: tuple[str, ...] = (
     "cryocat.core.cryomotl",
     "cryocat.utils.geom",
-    "cryocat.utils.wedgeutils",
+    "cryocat.core.cryowedge",
     "cryocat.analysis.structure",
     "cryocat.utils.ioutils",
     "cryocat.core.cryomap",

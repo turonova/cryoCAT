@@ -13,6 +13,7 @@ string ``"pool-registry"`` etc.; the §11.3 test enforces this.
 # this store as State; one app-level callback (T4c) rewrites graphs on change.
 
 GRAPH_SETTINGS_STORE: str = "graph-settings-store"
+GRAPH_PALETTE_SIGNAL: str = "graph-palette-signal"
 
 # ── Motl pool ───────────────────────────────────────────────────────────────────
 # Managed exclusively through app/pool.py (§5).  No other module may mutate
@@ -28,6 +29,9 @@ POOL_GROUPS:   str = "pool-groups"     # { groups: { group_id: {label, members} 
 
 DATA_POOL_REGISTRY: str = "data-pool-registry"  # { data_id: DataEntry as dict }
 DATA_POOL_NEXT_ID:  str = "data-pool-next-id"   # incrementing counter for stable data_id
+
+GRAPH_POOL_REGISTRY: str = "graph-pool-registry"  # { graph_id: {graph_id, label, kind} }
+GRAPH_POOL_NEXT_ID:  str = "graph-pool-next-id"   # incrementing counter for stable graph_id
 
 # ── Suite navigation / chrome ────────────────────────────────────────────────────
 # Owned by app/suite/app.py.  Navigation components and the page-content container.

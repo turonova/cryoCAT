@@ -106,6 +106,7 @@ def _slot_tab_content(i):
                     connected_motl_prefix=f"me-{i}",
                     show_create_from_selected=True,
                     save_dialog_prefix=f"me-{i}-save",
+                    show_editor=True,
                 ),
                 html.Hr(style={"margin": "0.5rem 0"}),
                 get_viewer_component(f"me-{i}-tv"),
@@ -183,6 +184,7 @@ def register_callbacks(app):
             resolve_n_rows=pool_resolve_n_rows,
             tabs_id="me-tabs",
             tab_value=f"me-tab-{_i}",
+            show_editor=True,
         )
         register_table_save_callbacks(
             app,

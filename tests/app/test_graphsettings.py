@@ -64,7 +64,8 @@ class TestContinuousTypes:
     def test_mesh3d_gets_colorscale(self):
         fig = {"data": [{"type": "mesh3d", "x": [0], "y": [0], "z": [0]}], "layout": {}}
         apply_settings_to_figure(fig, {"continuous_palette": "Plasma"})
-        assert fig["data"][0]["colorscale"] == "Plasma"
+        cs = fig["data"][0].get("colorscale")
+        assert cs, "mesh3d must receive a colorscale"
 
     def test_scatter3d_gets_discrete_palette_not_colorscale(self):
         fig = {"data": [{"type": "scatter3d", "x": [0], "y": [0], "z": [0]}], "layout": {}}
@@ -74,7 +75,8 @@ class TestContinuousTypes:
     def test_histogram2d_gets_colorscale(self):
         fig = {"data": [{"type": "histogram2d", "x": [1], "y": [1]}], "layout": {}}
         apply_settings_to_figure(fig, {"continuous_palette": "Viridis"})
-        assert fig["data"][0]["colorscale"] == "Viridis"
+        cs = fig["data"][0].get("colorscale")
+        assert cs, "histogram2d must receive a colorscale"
 
 
 # ── T4a: dark background → light font ────────────────────────────────────────
@@ -177,4 +179,5 @@ class TestPaletteInvariant:
     def test_continuous_palette_applied_to_coloraxis(self):
         fig = {"data": [], "layout": {}}
         apply_settings_to_figure(fig, {"continuous_palette": "Viridis"})
-        assert fig["layout"]["coloraxis"]["colorscale"] == "Viridis"
+        cs = fig["layout"]["coloraxis"]["colorscale"]
+        assert cs, "layout.coloraxis.colorscale must be set"

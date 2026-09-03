@@ -340,7 +340,7 @@ def register_analyzer_subform_callbacks(app, prefix: str) -> None:
     # No-op.
 
 
-def read_analyzer_kwargs(ids: list[dict], values: list[Any]) -> dict:
+def read_analyzer_kwargs(ids: list[dict], values: list[Any], pool_state) -> dict:
     """Re-use :func:`generate_kwargs` to turn the sub-form's ALL-state into
     the kwargs dict an :class:`IntensityProfileAnalyzer` constructor accepts.
 
@@ -348,5 +348,5 @@ def read_analyzer_kwargs(ids: list[dict], values: list[Any]) -> dict:
     emits ``IntensityProfileAnalyzer(<only set params>)`` -- a compact call
     that mirrors how a hand-written script would be written.
     """
-    kwargs = generate_kwargs(ids, values) if (ids and values) else {}
+    kwargs = generate_kwargs(ids, values, pool_state) if (ids and values) else {}
     return {k: v for k, v in kwargs.items() if v not in (None, "", [])}

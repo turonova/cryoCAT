@@ -114,6 +114,15 @@ class Motl:
         "class",
     ]
 
+    @staticmethod
+    def default_feature_columns(df: "pd.DataFrame") -> list[str]:
+        """Columns of *df* that are meaningful as clustering / PCA features."""
+        _EXCLUDED = frozenset({
+            "subtomo_id", "tomo_id", "object_id", "class",
+            "geom1", "geom2", "geom3", "geom4", "geom5",
+        })
+        return [c for c in df.columns if c not in _EXCLUDED]
+
     def __init__(self, motl_df: pd.DataFrame | None = None) -> None:
         if motl_df is not None:
             if self.check_df_correct_format(motl_df):
@@ -3625,17 +3634,17 @@ class RelionMotl(Motl):
 
     def write_out(
         self,
-        output_path,
-        write_optics=True,
-        tomo_format="",
-        subtomo_format="",
-        use_original_entries=False,
-        keep_all_entries=False,
-        version=None,
-        add_object_id=False,
-        add_subunit_id=False,
+        output_path: PathOrStr,
+        write_optics: bool = True,
+        tomo_format: str = "",
+        subtomo_format: str = "",
+        use_original_entries: bool = False,
+        keep_all_entries: bool = False,
+        version: float | None = None,
+        add_object_id: bool = False,
+        add_subunit_id: bool = False,
         binning=None,
-        pixel_size=None,
+        pixel_size: float | None = None,
         optics_data=None,
         subtomo_size=None,
     ):
@@ -4557,19 +4566,19 @@ class RelionMotlv5(RelionMotl, Motl):
 
     def write_out(
         self,
-        output_path,
-        write_optics=True,
-        tomo_format="",
-        subtomo_format="",
-        use_original_entries=False,
-        keep_all_entries=False,
-        add_object_id=False,
-        add_subunit_id=False,
+        output_path: PathOrStr,
+        write_optics: bool = True,
+        tomo_format: str = "",
+        subtomo_format: str = "",
+        use_original_entries: bool = False,
+        keep_all_entries: bool = False,
+        add_object_id: bool = False,
+        add_subunit_id: bool = False,
         binning=None,
-        pixel_size=None,
+        pixel_size: float | None = None,
         optics_data=None,
         subtomo_size=None,
-        convert=False,
+        convert: bool = False,
     ):
         """Write the motl to a RELION 5 ``.star`` file.
 

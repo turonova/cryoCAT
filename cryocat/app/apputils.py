@@ -256,7 +256,7 @@ def _resolve_at_var(name: str, expected_tag: str, pool_state) -> object:
     # Narrow type checks — only reject clear mismatches; let the library
     # catch deeper type errors so we don't replicate its validation.
     # These are handler tags (from TYPE_HANDLERS keys), not widget names.
-    _PATH_TAGS = {"MapSource", "DataSource", "TiltStack", "PathOrStr"}
+    _PATH_TAGS = {"MapSource", "DataSource", "TiltStack", "PathOrStr", "path"}
     _NUM_TAGS  = {"int", "float"}
 
     if expected_tag in _PATH_TAGS and not isinstance(value, (str, bytes)):

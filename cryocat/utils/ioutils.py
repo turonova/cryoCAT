@@ -1646,9 +1646,11 @@ def fsc_read(
             (spatial frequency in 1/Å).
 
     pixel_size : float, optional
-        Pixel size in Angstroms.  Required for ``.txt`` input.
+        Pixel size in Angstroms.  When both *pixel_size* and *box_size* are
+        given for a ``.txt`` file, ``x`` is expressed as spatial frequency
+        in 1/Å; otherwise ``x`` is the shell index (1, 2, …, N).
     box_size : int, optional
-        Box edge length in voxels.  Required for ``.txt`` input.
+        Box edge length in voxels.  See *pixel_size*.
 
     Returns
     -------
@@ -1658,8 +1660,7 @@ def fsc_read(
     Raises
     ------
     ValueError
-        If the extension is unsupported, or if *pixel_size* / *box_size*
-        are missing for a ``.txt`` file.
+        If the extension is unsupported.
     """
     if input_path.endswith(".csv"):
         return pd.read_csv(input_path)
@@ -1671,11 +1672,13 @@ def fsc_read(
             ys.append(float(coord.find("y").text))
         return pd.DataFrame({"x": xs, "uncorrected_fsc": ys})
     elif input_path.endswith(".txt"):
-        if pixel_size is None or box_size is None:
-            raise ValueError("pixel_size and box_size are required for .txt FSC files.")
         fsc_vals = np.loadtxt(input_path)
         shells = np.arange(1, len(fsc_vals) + 1)
-        return pd.DataFrame({"x": shells / (int(box_size) * float(pixel_size)), "uncorrected_fsc": fsc_vals})
+        if pixel_size is not None and box_size is not None:
+            x = shells / (int(box_size) * float(pixel_size))
+        else:
+            x = shells.astype(float)
+        return pd.DataFrame({"x": x, "uncorrected_fsc": fsc_vals})
     else:
         raise ValueError(f"Unsupported FSC file format: {input_path!r}. Use .csv, .xml, or .txt.")
 

@@ -205,8 +205,8 @@ _DYNAMIC_ID_MODULES: tuple = ()
 def _load_dynamic_modules(app_name: str = "suite"):
     """Lazy import to avoid circular deps at module level."""
     if app_name == "suite":
-        from cryocat.app.suite.pages import pstructure, pmotl, pnn, ptango
-        return (pstructure, pmotl, pnn, ptango)
+        from cryocat.app.suite.pages import pstructure, pmotl, pnn, ptango, pdatapool, pgraphs
+        return (pstructure, pmotl, pnn, ptango, pdatapool, pgraphs)
     return ()
 
 

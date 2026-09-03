@@ -762,6 +762,10 @@ def register_callbacks(app):
     register_send_to_editor_callbacks(app, "surfaces-isect-send",
                                       "surfaces-isect-filtered-motl")
 
+    from dash import ALL as _ALL
+    formgen.register_form_callbacks(app, _LOAD_ID_TYPE, {"op": _ALL})
+    formgen.register_form_callbacks(app, _OP_ID_TYPE,   {"op": _ALL})
+
     # Pool pickers used by the Operations + Loading panels.
     register_motl_source_callbacks(app, "surfaces-load-motl", multi=False)
     register_motl_source_callbacks(app, _PARAM_INPUT_PICKER, multi=False)
@@ -802,9 +806,12 @@ def register_callbacks(app):
         State({"type": _LOAD_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "id"),
         State("surfaces-load-motl-motl-select", "value"),
         State("surfaces-pool", "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def _run_loader(n_clicks, load_id, values, ids, motl_id, pool):
+    def _run_loader(n_clicks, load_id, values, ids, motl_id, pool, registry, pool_meta, pool_next_id):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not load_id:
@@ -815,7 +822,8 @@ def register_callbacks(app):
         method = op["method"]
 
         # Collect form kwargs (formgen form is rendered for every loader).
-        kwargs = generate_kwargs(ids, values) if (ids and values) else {}
+        pool_state = _pool.PoolState.from_stores(registry, pool_meta, pool_next_id)
+        kwargs = generate_kwargs(ids, values, pool_state) if (ids and values) else {}
         kwargs = {k: v for k, v in kwargs.items() if v not in (None, "", [])}
 
         # Pool-motl-driven loader: inject the Motl under the right kwarg.
@@ -929,6 +937,9 @@ def register_callbacks(app):
         State("surfaces-isect-max-dist", "value"),
         State("surfaces-isect-inner-r", "value"),
         State("surfaces-isect-outer-r", "value"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
     def _run_operation(
@@ -937,6 +948,7 @@ def register_callbacks(app):
         in_motl_id, obj_motl_id,
         isect_motl_id, isect_px, isect_rev, isect_oh,
         isect_maxd, isect_inner, isect_outer,
+        registry, pool_meta, pool_next_id,
     ):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
@@ -944,10 +956,11 @@ def register_callbacks(app):
             return (no_update,) * 6 + ("Pick an operation first.",)
         op = OPERATIONS[op_id]
         pool = dict(pool or {})
+        pool_state = _pool.PoolState.from_stores(registry, pool_meta, pool_next_id)
 
         # ── Mesh op ─────────────────────────────────────────────────────
         if op["category"] == "mesh":
-            kwargs = generate_kwargs(ids, values) if (ids and values) else {}
+            kwargs = generate_kwargs(ids, values, pool_state) if (ids and values) else {}
             kwargs = {k: v for k, v in kwargs.items() if v not in (None, "", [])}
 
             psurf: PleomorphicSurface | None = None
@@ -1024,7 +1037,7 @@ def register_callbacks(app):
                     return (no_update,) * 6 + (
                         "Pick a non-empty motl for 'object_motl'.",)
                 kwargs["object_motl"] = obj
-            scalar_kwargs = generate_kwargs(ids, values) if (ids and values) else {}
+            scalar_kwargs = generate_kwargs(ids, values, pool_state) if (ids and values) else {}
             scalar_kwargs = {k: v for k, v in scalar_kwargs.items()
                              if v not in (None, "", [])}
             kwargs.update(scalar_kwargs)

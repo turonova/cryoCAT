@@ -32,6 +32,7 @@ from dash.exceptions import PreventUpdate
 from cryocat.analysis import visplot
 from cryocat.app import ids, styles
 from cryocat.app.components.graphsettings import styled_figure, error_figure
+from cryocat.app.components.customel import customel_graph
 from cryocat.app.formgen import make_dropdown
 
 _ROT_TYPES = [
@@ -160,9 +161,10 @@ def get_rotation_builder_sidebar_content(prefix: str) -> html.Div:
     return html.Div(_controls(prefix))
 
 
-def get_rotation_builder_graph(prefix: str) -> dcc.Graph:
+def get_rotation_builder_graph(prefix: str) -> html.Div:
     """Preview graph only — companion to :func:`get_rotation_builder_sidebar_content`."""
-    return dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "rot-preview"}, style={"height": "400px"})
+    return customel_graph(prefix, "rot-preview",
+                          dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "rot-preview"}, style={"height": "400px"}))
 
 
 def get_rotation_builder_panel(prefix: str) -> html.Div:
@@ -180,7 +182,8 @@ def get_rotation_builder_panel(prefix: str) -> html.Div:
             [
                 dbc.Col(html.Div(_controls(prefix)), width=5),
                 dbc.Col(
-                    dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "rot-preview"}, style={"height": "340px"}),
+                    customel_graph(prefix, "rot-preview",
+                                   dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "rot-preview"}, style={"height": "340px"})),
                     width=7,
                 ),
             ],

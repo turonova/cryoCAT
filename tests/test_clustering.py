@@ -4,7 +4,8 @@ import pytest
 from sklearn.decomposition import PCA
 
 from cryocat.analysis import clustering
-from cryocat.analysis.tango import Descriptor
+from cryocat.analysis.tango import Descriptor, TwistDescriptor, CustomDescriptor
+from cryocat.core.cryomotl import Motl
 
 
 def _make_desc_df(n=40, seed=0):
@@ -262,3 +263,221 @@ def test_wrapper_proximity_clustering_returns_list():
     result = d.proximity_clustering(num_connected_components=2)
     assert isinstance(result, list)
     assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_blobs_df(n_per_blob=40, noise=5, sep=20.0, seed=0):
+    """Three well-separated blobs plus optional isolated noise points.
+
+    Noise points are placed on a circle of radius ``sep * 1.5`` centred on
+    the centroid of the three blob centres, evenly spaced in angle.  This
+    guarantees each noise point is (a) far from every blob and (b) far from
+    every other noise point, so DBSCAN cannot recruit them into a cluster
+    regardless of ``eps`` or ``min_samples``.
+    """
+    rng = np.random.default_rng(seed)
+    centers = np.array([[0, 0], [sep, 0], [0, sep]])
+    parts = []
+    for cx, cy in centers:
+        pts = rng.standard_normal((n_per_blob, 2)) + np.array([cx, cy])
+        parts.append(pts)
+    blobs = np.vstack(parts)
+    if noise > 0:
+        angles = np.linspace(0, 2 * np.pi, noise, endpoint=False)
+        radius = sep * 1.5
+        centroid = centers.mean(axis=0)
+        noise_pts = np.column_stack([
+            radius * np.cos(angles) + centroid[0],
+            radius * np.sin(angles) + centroid[1],
+        ])
+        data = np.vstack([blobs, noise_pts])
+    else:
+        data = blobs
+    n = len(data)
+    return pd.DataFrame({
+        "qp_id": np.arange(n, dtype=float),
+        "x": data[:, 0],
+        "y": data[:, 1],
+    })
+
+
+# ---------------------------------------------------------------------------
+# dbscan_cluster
+# ---------------------------------------------------------------------------
+
+def test_dbscan_cluster_columns_match_kmeans():
+    df = _make_desc_df(n=30)
+    k_result = clustering.kmeans_cluster(df, n_clusters=2)
+    d_result = clustering.dbscan_cluster(df, eps=5.0)
+    assert set(k_result.columns) == set(d_result.columns)
+
+
+def test_dbscan_cluster_three_blobs():
+    df = _make_blobs_df(n_per_blob=40, noise=5, sep=20.0)
+    result = clustering.dbscan_cluster(df, eps=1.5, min_samples=3)
+    real_clusters = [c for c in result["cluster"].unique() if c != -1]
+    assert len(real_clusters) == 3
+    assert -1 in result["cluster"].values
+
+
+def test_dbscan_cluster_large_eps_one_cluster():
+    df = _make_blobs_df()
+    result = clustering.dbscan_cluster(df, eps=100.0, min_samples=2)
+    real_clusters = set(result["cluster"].unique()) - {-1}
+    assert len(real_clusters) == 1
+    assert -1 not in result["cluster"].values
+
+
+def test_dbscan_cluster_tiny_eps_all_noise():
+    df = _make_blobs_df()
+    result = clustering.dbscan_cluster(df, eps=1e-10, min_samples=2)
+    assert set(result["cluster"].unique()) == {-1}
+
+
+def test_dbscan_cluster_scale_invariant():
+    df = _make_blobs_df(n_per_blob=40, noise=0, sep=20.0)
+    result_orig = clustering.dbscan_cluster(df, eps=1.5, min_samples=3)
+
+    df_scaled = df.copy()
+    df_scaled["x"] = df_scaled["x"] * 100  # rescale one feature
+    result_scaled = clustering.dbscan_cluster(df_scaled, eps=1.5, min_samples=3)
+
+    np.testing.assert_array_equal(
+        result_orig["cluster"].values, result_scaled["cluster"].values,
+        err_msg="Labels changed after rescaling — standardisation missing",
+    )
+
+
+# ---------------------------------------------------------------------------
+# k_distance_curve
+# ---------------------------------------------------------------------------
+
+def test_k_distance_curve_monotonic():
+    df = _make_blobs_df()
+    curve = clustering.k_distance_curve(df, min_samples=5)
+    assert np.all(np.diff(curve) >= 0), "k-distance curve must be non-decreasing"
+
+
+def test_k_distance_curve_length():
+    df = _make_blobs_df(n_per_blob=20, noise=3)
+    curve = clustering.k_distance_curve(df, min_samples=4)
+    assert len(curve) == len(df)
+
+
+# ---------------------------------------------------------------------------
+# screen_feature_columns
+# ---------------------------------------------------------------------------
+
+def _make_screen_df():
+    n = 201
+    rng = np.random.default_rng(42)
+    return pd.DataFrame({
+        "good":        rng.standard_normal(n),
+        "constant":    np.ones(n),
+        "all_nan":     np.full(n, np.nan),
+        "all_zero":    np.zeros(n),
+        "non_numeric": ["a"] * n,
+        "near_const":  np.array([1.0] * (n - 1) + [2.0]),   # 2/201 ≈ 0.995 % < 1 %
+    })
+
+
+def test_screen_constant_column():
+    excluded, _ = clustering.screen_feature_columns(_make_screen_df())
+    assert excluded.get("constant") == "constant"
+
+
+def test_screen_all_nan_column():
+    excluded, _ = clustering.screen_feature_columns(_make_screen_df())
+    assert excluded.get("all_nan") == "all NaN"
+
+
+def test_screen_all_zero_column():
+    excluded, _ = clustering.screen_feature_columns(_make_screen_df())
+    assert excluded.get("all_zero") == "all zero"
+
+
+def test_screen_non_numeric_column():
+    excluded, _ = clustering.screen_feature_columns(_make_screen_df())
+    assert excluded.get("non_numeric") == "non-numeric"
+
+
+def test_screen_good_column_not_excluded():
+    excluded, warnings = clustering.screen_feature_columns(_make_screen_df())
+    assert "good" not in excluded
+    assert "good" not in warnings
+
+
+def test_screen_near_constant_is_warning_not_exclusion():
+    excluded, warnings = clustering.screen_feature_columns(_make_screen_df())
+    assert "near_const" not in excluded
+    assert warnings.get("near_const") == "near-constant"
+
+
+def test_screen_near_constant_at_boundary_not_warned():
+    # 2 distinct out of 200 = exactly 1 % — the boundary of the < 1 % rule.
+    # The docstring specifies this is NOT warned (strict less-than).
+    n = 200
+    df = pd.DataFrame({"col": np.array([1.0] * (n - 1) + [2.0])})
+    _, warnings = clustering.screen_feature_columns(df)
+    assert "col" not in warnings
+
+
+# ---------------------------------------------------------------------------
+# default_feature_columns
+# ---------------------------------------------------------------------------
+
+def _make_twist_df():
+    n = 10
+    rng = np.random.default_rng(0)
+    cols = TwistDescriptor.get_all_feature_ids()
+    data = {c: rng.standard_normal(n) for c in cols}
+    return pd.DataFrame(data)
+
+
+def test_default_feature_columns_twist():
+    df = _make_twist_df()
+    result = TwistDescriptor.default_feature_columns(df)
+    assert result == TwistDescriptor.get_all_feature_ids()
+
+
+def test_default_feature_columns_motl_excludes_identifiers():
+    n = 5
+    rng = np.random.default_rng(1)
+    motl_data = {c: rng.standard_normal(n) for c in Motl.motl_columns}
+    df = pd.DataFrame(motl_data)
+    result = Motl.default_feature_columns(df)
+    _excluded = {"subtomo_id", "tomo_id", "object_id", "class",
+                 "geom1", "geom2", "geom3", "geom4", "geom5"}
+    for col in _excluded:
+        assert col not in result, f"Expected {col!r} to be excluded from motl defaults"
+    assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# Regression: _prepare_features identical for both callers
+# ---------------------------------------------------------------------------
+
+def test_prepare_features_identical_for_both():
+    df = _make_desc_df(n=30)
+    feat_km, ids_km = clustering._prepare_features(
+        df, feature_ids="all", id_columns=("qp_id",), nan_drop="row", pca_dict=None
+    )
+    feat_db, ids_db = clustering._prepare_features(
+        df, feature_ids="all", id_columns=("qp_id",), nan_drop="row", pca_dict=None
+    )
+    pd.testing.assert_frame_equal(feat_km, feat_db)
+    np.testing.assert_array_equal(ids_km, ids_db)
+
+
+# ---------------------------------------------------------------------------
+# Descriptor wrapper for DBSCAN
+# ---------------------------------------------------------------------------
+
+def test_wrapper_dbscan_columns_present():
+    d, _ = _make_descriptor(n=40)
+    result = d.dbscan_clustering(eps=5.0, min_samples=3)
+    assert "cluster" in result.columns
+    assert "qp_id" in result.columns

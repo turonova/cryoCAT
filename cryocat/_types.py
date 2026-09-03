@@ -349,7 +349,7 @@ Used by :func:`cryocat.utils.geom.create_projection` and consumed by
 """
 
 type WedgeMaskMethod = Literal["geometric", "analytic"]
-"""Slab-construction algorithm for :func:`cryocat.utils.wedgeutils.generate_wedge_mask`.
+"""Slab-construction algorithm for :func:`cryocat.core.cryowedge.generate_wedge_mask`.
 * ``"geometric"`` -- rotate a 2D seed line and threshold the interpolation
   halo (historical cryoCAT behaviour). Slabs are bounded by the 2D image
   extent, so high frequencies near the volume corner may be uncovered for

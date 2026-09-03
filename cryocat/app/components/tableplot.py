@@ -16,11 +16,11 @@ from cryocat.analysis import visplot
 from cryocat.utils.classutils import get_class_names_by_parent
 from cryocat.app import ids
 from cryocat.app.apputils import save_output
-from cryocat.app.components.customel import LabeledDropdown, InlineLabeledDropdown, InlineInputForm
-from cryocat.app.components.graphsettings import styled_figure, get_graph_settings_button
+from cryocat.app.components.customel import LabeledDropdown, InlineLabeledDropdown, InlineInputForm, customel_graph
+from cryocat.app.components.graphsettings import styled_figure
 from cryocat.app.formgen import make_dropdown, form_row
 from cryocat.app import styles
-from cryocat.app.components.paletteloader import _DISCRETE_PRESETS, _CONTINUOUS_PRESETS
+import plotly.express as _px
 
 hist_norms = [
     {"label": "None", "value": ""},
@@ -31,14 +31,118 @@ hist_norms = [
 ]
 hist_types = ["Count", "Sum", "Avg", "Min", "Max"]
 
-_PALETTE_PRESETS = sorted({*_DISCRETE_PRESETS, *_CONTINUOUS_PRESETS})
-_PALETTE_HINT = {
-    "label": "─ or type any Plotly palette name ─",
-    "value": "__hint__",
-    "disabled": True,
-}
+
+def _build_discrete() -> list[str]:
+    from cryocat.analysis.visplot import CUSTOM_PALETTE_NAMES
+    builtin = sorted(n for n in dir(_px.colors.qualitative) if not n.startswith("_"))
+    seen = set(builtin)
+    return builtin + [n for n in CUSTOM_PALETTE_NAMES if n not in seen]
+
+
+def _build_continuous() -> list[str]:
+    from cryocat.analysis.visplot import CUSTOM_SCALE_NAMES
+    builtin = sorted(
+        n for mod in (_px.colors.sequential, _px.colors.diverging, _px.colors.cyclical)
+        for n in dir(mod) if not n.startswith("_")
+    )
+    seen = set(builtin)
+    return builtin + [n for n in CUSTOM_SCALE_NAMES if n not in seen]
+
+
+# Full Plotly discrete / continuous lists, with cryoCAT names appended to both.
+_DISCRETE = _build_discrete()
+_CONTINUOUS = _build_continuous()
+
 # Plot types that aggregate data; clickData gives a bin position, not row indices.
-_AGGREGATED_CLICK_IGNORE = {"Histogram 2D", "Kernel density estimation", "Spherical histogram"}
+_AGGREGATED_CLICK_IGNORE: set[str] = set()
+# Plot types that use a discrete palette; all others use the continuous colorscale.
+_DISCRETE_PLOT_TYPES = {"Histogram", "Line plot", "Scatter plot 1D", "Scatter plot 2D"}
+
+
+def _cd_first_int(customdata) -> int | None:
+    """Return the first integer from a point's customdata, or None if absent.
+
+    Convention: the value at position 0 is always the primary selection key
+    (row index or bin index depending on the caller). Additional positions, if
+    ever added by a chart, are ignored here — decide the layout at that point.
+    Handles bare int/float, one-element list/tuple, and None.
+    """
+    if customdata is None:
+        return None
+    if isinstance(customdata, (list, tuple)):
+        return int(customdata[0]) if customdata else None
+    return int(customdata)
+
+
+def _spherical_bin_assignment(
+    input_data: pd.DataFrame,
+    all_ids: list,
+    fig,
+) -> tuple[list[dict], list[dict]]:
+    """Compute per-original-row bin assignment for Spherical histogram traces.
+
+    Uses the same NaN filtering and coordinate conversion as
+    ``visplot.plot_spherical_density_2d``, reading the resolved xbins/ybins
+    from the already-built figure so the bin boundaries match exactly.
+
+    Returns
+    -------
+    bin_to_rows_list : list[dict[str, list[int]]]
+        One dict per trace. Maps "{xi},{yi}" -> [original DataFrame row positions].
+    bin_spec_list : list[dict]
+        One dict per trace with x_start, x_size, y_start, y_size, n_x, n_y
+        needed to compute the lookup key from a click coordinate at selection time.
+    """
+    cols = [c for c in all_ids if c in input_data.columns]
+    if not cols or (len(cols) % 3) != 0:
+        return [], []
+
+    phi, theta, valid_indices = visplot._spherical_df_transform(input_data, cols, normalize=True)
+
+    bin_to_rows_list: list[dict] = []
+    bin_spec_list: list[dict] = []
+
+    for i in range(phi.shape[1]):
+        if i >= len(fig.data):
+            bin_to_rows_list.append({})
+            bin_spec_list.append({})
+            continue
+        trace = fig.data[i]
+        xb = trace.xbins
+        yb = trace.ybins
+        if xb is None or yb is None:
+            bin_to_rows_list.append({})
+            bin_spec_list.append({})
+            continue
+
+        x_size = float(xb.size or 1.0)
+        y_size = float(yb.size or 1.0)
+        n_x = max(1, round((float(xb.end) - float(xb.start)) / x_size))
+        n_y = max(1, round((float(yb.end) - float(yb.start)) / y_size))
+
+        xi = np.clip(
+            np.floor((phi[:, i] - float(xb.start)) / x_size).astype(int), 0, n_x - 1
+        )
+        yi = np.clip(
+            np.floor((theta[:, i] - float(yb.start)) / y_size).astype(int), 0, n_y - 1
+        )
+
+        d: dict = {}
+        for filt_i, (xi_val, yi_val) in enumerate(zip(xi, yi)):
+            orig_i = int(valid_indices[filt_i])
+            d.setdefault(f"{int(xi_val)},{int(yi_val)}", []).append(orig_i)
+
+        bin_to_rows_list.append(d)
+        bin_spec_list.append({
+            "x_start": float(xb.start),
+            "x_size": x_size,
+            "y_start": float(yb.start),
+            "y_size": y_size,
+            "n_x": n_x,
+            "n_y": n_y,
+        })
+
+    return bin_to_rows_list, bin_spec_list
 
 
 def get_table_plot_component(prefix: str):
@@ -88,22 +192,31 @@ def get_table_plot_component(prefix: str):
                                     ),
                                     dbc.Col(
                                         html.Div([
-                                            InlineLabeledDropdown(
-                                                id_=f"{prefix}-plot-color-palette-dropdown",
-                                                label="Color scheme",
-                                                multi=False,
-                                                placeholder="Color palette",
-                                                options=[
-                                                    {"label": p, "value": p}
-                                                    for p in _PALETTE_PRESETS
-                                                ] + [_PALETTE_HINT],
-                                                value="StarryNight",
+                                            html.Div(
+                                                InlineLabeledDropdown(
+                                                    id_=f"{prefix}-plot-discrete-palette-dropdown",
+                                                    label="Palette",
+                                                    multi=False,
+                                                    placeholder="Discrete palette",
+                                                    options=[{"label": "Auto", "value": ""}] + [{"label": n, "value": n} for n in _DISCRETE],
+                                                    value="",
+                                                ),
+                                                id=f"{prefix}-discrete-palette-div",
+                                                style={"display": "none"},
                                             ),
                                             html.Div(
-                                                id=f"{prefix}-palette-error",
-                                                style=styles.HINT_SM,
+                                                InlineLabeledDropdown(
+                                                    id_=f"{prefix}-plot-continuous-colorscale-dropdown",
+                                                    label="Colorscale",
+                                                    multi=False,
+                                                    placeholder="Continuous scale",
+                                                    options=[{"label": "Auto", "value": ""}] + [{"label": n, "value": n} for n in _CONTINUOUS],
+                                                    value="",
+                                                ),
+                                                id=f"{prefix}-continuous-colorscale-div",
+                                                style={"display": "none"},
                                             ),
-                                        ]),
+                                        ], style={"display": "flex", "flexDirection": "row", "gap": "0.25rem"}),
                                         width=2,
                                     ),
                                     dbc.Col(
@@ -363,23 +476,29 @@ def get_table_plot_component(prefix: str):
                                         width=4,
                                     ),
                                     dbc.Col(
-                                        get_graph_settings_button(prefix),
+                                        dbc.Button(
+                                            "Register plots",
+                                            id=f"{prefix}-register-plots-btn",
+                                            color="light",
+                                            style={"width": "100%"},
+                                            n_clicks=0,
+                                        ),
                                         width=4,
                                     ),
                                 ]
                             ),
+                            html.Div(id=f"{prefix}-register-status", style=styles.HINT_SM),
                             dbc.Row(
                                 dbc.Col(
                                     dbc.RadioItems(
                                         id=f"{prefix}-selection-mode",
                                         options=[
-                                            {"label": "Replace selection", "value": "replace"},
-                                            {"label": "Add to selection", "value": "add"},
-                                            {"label": "Subtract from selection", "value": "subtract"},
+                                            {"label": "Replace", "value": "replace"},
+                                            {"label": "Add", "value": "add"},
+                                            {"label": "Subtract", "value": "subtract"},
                                         ],
                                         value="replace",
                                         inline=True,
-                                        className="sidebar-checklist",
                                         labelStyle={"color": "var(--color9)", "marginRight": "1rem"},
                                     ),
                                     width=12,
@@ -476,7 +595,9 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         if resolve_df is not None:
             df = resolve_df(data)
             return pd.DataFrame() if df is None else df
-        return pd.DataFrame.from_records(data) if data else pd.DataFrame()
+        if not data or not isinstance(data, list):
+            return pd.DataFrame()
+        return pd.DataFrame.from_records(data)
 
     graph_options = [
         "Line plot",
@@ -507,6 +628,8 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         Output(f"{prefix}-plot-column-options-y-dropdown", "options"),
         Output(f"{prefix}-histogram2D-column-options-y-dropdown", "options"),
         Output(f"{prefix}-orbd-row-options", "style"),
+        Output(f"{prefix}-discrete-palette-div", "style"),
+        Output(f"{prefix}-continuous-colorscale-div", "style"),
         Input(f"{prefix}-graph-options-dropdown", "value"),
         State(connected_store_id, "data"),
         prevent_initial_call=True,
@@ -594,6 +717,11 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             histogram2D_options = {"display": "none"}
             scatter_2D_options = {"display": "none"}
 
+        _show = {"display": "block"}
+        _hide = {"display": "none"}
+        discrete_vis = _show if graph_type in _DISCRETE_PLOT_TYPES else _hide
+        continuous_vis = _hide if graph_type in _DISCRETE_PLOT_TYPES else _show
+
         return (
             {"display": "flex"},
             x_axis_options,
@@ -603,6 +731,8 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             y_axis_options,
             y_axis_options,
             orbd_options,
+            discrete_vis,
+            continuous_vis,
         )
 
     @app.callback(
@@ -667,7 +797,8 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         State(f"{prefix}-plot-separately", "value"),
         State(f"{prefix}-same-range", "value"),
         State(f"{prefix}-plot-grid-dropdown", "value"),
-        State(f"{prefix}-plot-color-palette-dropdown", "value"),
+        State(f"{prefix}-plot-discrete-palette-dropdown", "value"),
+        State(f"{prefix}-plot-continuous-colorscale-dropdown", "value"),
         State(f"{prefix}-graph-meta-store", "data"),
         State(f"{prefix}-graph-counter", "data"),
         State(ids.GRAPH_SETTINGS_STORE, "data"),
@@ -696,7 +827,8 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         plot_separately,
         same_range,
         grid_spec,
-        colorscale,
+        discrete_pal,
+        continuous_pal,
         graph_meta,
         graph_counter,
         settings,
@@ -722,10 +854,8 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                     no_update,
                 )
 
-            effective_colorscale = (
-                colorscale
-                or (settings.get("discrete_palette") if settings else None)
-            )
+            eff_discrete = discrete_pal or (settings.get("discrete_palette") if settings else None)
+            eff_continuous = continuous_pal or (settings.get("continuous_palette") if settings else None)
 
             fig = None
             _orbd_meta: dict = {}
@@ -739,7 +869,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                     hist_type=h_type.lower(),
                     hist_norm=h_norm.lower(),
                     same_range_for_separate=same_range,
-                    colors=effective_colorscale,
+                    colors=eff_discrete,
                     opacity=None,
                     grid_spec=grid_spec,
                 )
@@ -756,7 +886,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                     nbinsx=h2D_binsx,
                     nbinsy=h2D_binsy,
                     same_range_for_separate=same_range,
-                    colors=effective_colorscale,
+                    colors=eff_continuous,
                     opacity=None,
                     grid_spec=grid_spec,
                     same_scale=h2D_same_scale,
@@ -771,7 +901,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                     nbinsy=h2D_binsy,
                     hist_type=h2D_type.lower(),
                     hist_norm=h2D_norm.lower(),
-                    colors=effective_colorscale,
+                    colors=eff_continuous,
                     opacity=None,
                     grid_spec=grid_spec,
                     same_range_for_separate=same_range,
@@ -792,11 +922,14 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                     hist_type=h2D_type.lower(),
                     hist_norm=h2D_norm.lower(),
                     normalize_coord=True,
-                    colors=effective_colorscale,
+                    colors=eff_continuous,
                     same_scale=h2D_same_scale,
                     same_range_for_separate=same_range,
                     grid_spec=grid_spec,
                 )
+                if fig is not None:
+                    _sph_btr, _sph_bsp = _spherical_bin_assignment(input_data, all_ids, fig)
+                    _orbd_meta = {"bin_to_rows": _sph_btr, "bin_spec": _sph_bsp}
             elif graph_type == "Orientational distribution":
                 all_ids = []
                 for s in x_values:
@@ -851,7 +984,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                     column_names_x=x_values,
                     separate_graphs=plot_separately,
                     same_range_for_separate=same_range,
-                    colors=effective_colorscale,
+                    colors=eff_discrete,
                     opacity=None,
                     grid_spec=grid_spec,
                 )
@@ -861,7 +994,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                     column_names_x=x_values,
                     separate_graphs=plot_separately,
                     same_range_for_separate=same_range,
-                    colors=effective_colorscale,
+                    colors=eff_discrete,
                     opacity=None,
                     grid_spec=grid_spec,
                 )
@@ -898,7 +1031,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                     column_names_y=y_values,
                     separate_graphs=plot_separately,
                     same_range_for_separate=same_range,
-                    colors=effective_colorscale,
+                    colors=eff_discrete,
                     opacity=None,
                     grid_spec=grid_spec,
                 )
@@ -913,10 +1046,14 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                 # Apply global graph settings to the new figure
                 fig = styled_figure(fig, settings or {}, uirevision=f"{prefix}-graph-{graph_counter}")
                 graph_meta = graph_meta or {}
-                graph_meta[str(graph_counter)] = {"type": graph_type, "x_cols": x_values, **_orbd_meta}
-                new_graph = dcc.Graph(
-                    id={"type": "styled-graph", "owner": prefix, "name": graph_counter},
-                    figure=fig,
+                _y_cols_meta: list[str] = list(h2D_column_options) if graph_type in ("Histogram 2D", "Kernel density estimation") and h2D_column_options else []
+                graph_meta[str(graph_counter)] = {"type": graph_type, "x_cols": x_values, "y_cols": _y_cols_meta, **_orbd_meta}
+                new_graph = customel_graph(
+                    prefix, graph_counter,
+                    dcc.Graph(
+                        id={"type": "styled-graph", "owner": prefix, "name": graph_counter},
+                        figure=fig,
+                    ),
                 )
                 return graph_area + [new_graph], [], graph_meta, graph_counter + 1
 
@@ -940,42 +1077,6 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             return False
 
         return False
-
-    # ── Section 1: palette dropdown — dynamic options + search + validation ──
-
-    @app.callback(
-        Output(f"{prefix}-plot-color-palette-dropdown", "options"),
-        Input(f"{prefix}-plot-color-palette-dropdown", "search_value"),
-        State(f"{prefix}-plot-color-palette-dropdown", "value"),
-        prevent_initial_call=True,
-    )
-    def _palette_options(typed, current):
-        opts = [{"label": p, "value": p} for p in _PALETTE_PRESETS]
-        if current and current not in _PALETTE_PRESETS and current != "__hint__":
-            opts.append({"label": current, "value": current})
-        if typed and len(typed) >= 2 and typed not in _PALETTE_PRESETS:
-            opts.insert(0, {"label": f'Use "{typed}"', "value": typed})
-        opts.append(_PALETTE_HINT)
-        return opts
-
-    @app.callback(
-        Output(f"{prefix}-palette-error", "children"),
-        Input(f"{prefix}-plot-color-palette-dropdown", "value"),
-        prevent_initial_call=True,
-    )
-    def _palette_guard(value):
-        if not value or value == "__hint__" or value in _PALETTE_PRESETS:
-            return ""
-        try:
-            visplot.resolve_palette(value)
-            return ""
-        except Exception:
-            pass
-        try:
-            visplot.resolve_colorscale(value)
-            return ""
-        except Exception:
-            return f"Unknown palette: {value!r}"
 
     # ── Section 3: export controls ────────────────────────────────────────────
 
@@ -1057,16 +1158,19 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
             Input({"type": "styled-graph", "owner": prefix, "name": ALL}, "clickData"),
             Input({"type": "styled-graph", "owner": prefix, "name": ALL}, "selectedData"),
             State(f"{prefix}-graph-meta-store", "data"),
-            State(table_grid_id, "rowData"),
+            State(connected_store_id, "data"),
             State(f"{prefix}-selection-mode", "value"),
             State(table_grid_id, "selectedRows"),
+            State({"type": "styled-graph", "owner": prefix, "name": ALL}, "figure"),
+            State({"type": "styled-graph", "owner": prefix, "name": ALL}, "id"),
             prevent_initial_call=True,
         )
-        def sync_graph_selection(_click_list, _sel_list, graph_meta, row_data, sel_mode, current_selected):
+        def sync_graph_selection(_click_list, _sel_list, graph_meta, store_data, sel_mode, current_selected, figure_list, id_list):
             triggered = ctx.triggered_id
-            if not isinstance(triggered, dict) or not row_data or not graph_meta:
+            if not isinstance(triggered, dict) or not graph_meta:
                 raise dash.exceptions.PreventUpdate
 
+            row_data = _df_from_store(store_data).to_dict("records")
             prop_id = ctx.triggered[0]["prop_id"] if ctx.triggered else ""
             is_click = "clickData" in prop_id
 
@@ -1087,10 +1191,9 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                 from scipy.spatial import cKDTree as _cKDTree
                 from cryocat.utils import geom as _geom
 
-                raw_cd = points[0].get("customdata")
-                if raw_cd is None:
+                orig_bin_idx = _cd_first_int(points[0].get("customdata"))
+                if orig_bin_idx is None:
                     raise dash.exceptions.PreventUpdate
-                orig_bin_idx = int(raw_cd[0]) if isinstance(raw_cd, list) else int(raw_cd)
 
                 x_cols = meta_entry.get("x_cols", [])
                 if len(x_cols) < 3:
@@ -1120,6 +1223,150 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                 indices = []
                 for p in points:
                     indices.extend(p.get("pointNumbers", []))
+
+            elif graph_type == "Histogram 2D":
+                x_cols = meta_entry.get("x_cols") or []
+                y_cols = meta_entry.get("y_cols") or []
+                if not x_cols or not y_cols:
+                    raise dash.exceptions.PreventUpdate
+                fig_data = next(
+                    (g_fig for g_id, g_fig in zip(id_list, figure_list) if g_id.get("name") == graph_idx),
+                    None,
+                )
+                if fig_data is None:
+                    raise dash.exceptions.PreventUpdate
+                full_fig = go.Figure(fig_data).full_figure_for_development(warn=False)
+                df = _df_from_store(store_data)
+                indices_set: set[int] = set()
+                for p in points:
+                    curve = p.get("curveNumber", 0)
+                    if curve >= len(full_fig.data):
+                        continue
+                    trace = full_fig.data[curve]
+                    xbins = trace.xbins
+                    ybins = trace.ybins
+                    if xbins is None or ybins is None:
+                        continue
+                    px_val = p.get("x")
+                    py_val = p.get("y")
+                    if px_val is None or py_val is None:
+                        continue
+                    if curve >= len(x_cols) or curve >= len(y_cols):
+                        dash_logger.warning(
+                            f"Histogram 2D: curveNumber {curve} exceeds column count "
+                            f"(x_cols={len(x_cols)}, y_cols={len(y_cols)}); skipping."
+                        )
+                        continue
+                    x_col = x_cols[curve]
+                    y_col = y_cols[curve]
+                    if x_col not in df.columns or y_col not in df.columns:
+                        continue
+                    x_size = xbins.size or 1.0
+                    y_size = ybins.size or 1.0
+                    x_lo = xbins.start + round((px_val - xbins.start) / x_size) * x_size
+                    x_hi = x_lo + x_size
+                    y_lo = ybins.start + round((py_val - ybins.start) / y_size) * y_size
+                    y_hi = y_lo + y_size
+                    x_closed = x_hi >= xbins.end
+                    y_closed = y_hi >= ybins.end
+                    x_ser = df[x_col]
+                    y_ser = df[y_col]
+                    x_mask = (x_ser >= x_lo) & ((x_ser <= x_hi) if x_closed else (x_ser < x_hi))
+                    y_mask = (y_ser >= y_lo) & ((y_ser <= y_hi) if y_closed else (y_ser < y_hi))
+                    valid = x_ser.notna() & y_ser.notna()
+                    indices_set.update(np.where(x_mask & y_mask & valid)[0].tolist())
+                indices = list(indices_set)
+
+            elif graph_type == "Kernel density estimation":
+                x_cols = meta_entry.get("x_cols") or []
+                y_cols = meta_entry.get("y_cols") or []
+                if not x_cols or not y_cols:
+                    raise dash.exceptions.PreventUpdate
+                fig_data = next(
+                    (g_fig for g_id, g_fig in zip(id_list, figure_list) if g_id.get("name") == graph_idx),
+                    None,
+                )
+                if fig_data is None:
+                    raise dash.exceptions.PreventUpdate
+                kde_grids = (fig_data.get("layout") or {}).get("meta") or {}
+                kde_grids = kde_grids.get("kde_grids") if isinstance(kde_grids, dict) else None
+                if not kde_grids:
+                    raise dash.exceptions.PreventUpdate
+                df = _df_from_store(store_data)
+                indices_set: set[int] = set()
+                for p in points:
+                    curve = p.get("curveNumber", 0)
+                    if curve >= len(kde_grids):
+                        dash_logger.warning(
+                            f"KDE: curveNumber {curve} exceeds grid count {len(kde_grids)}; skipping."
+                        )
+                        continue
+                    grid = kde_grids[curve]
+                    step_x = grid.get("step_x", 0.0)
+                    step_y = grid.get("step_y", 0.0)
+                    if step_x <= 0 or step_y <= 0:
+                        continue
+                    px_val = p.get("x")
+                    py_val = p.get("y")
+                    if px_val is None or py_val is None:
+                        continue
+                    if curve >= len(x_cols) or curve >= len(y_cols):
+                        dash_logger.warning(
+                            f"KDE: curveNumber {curve} exceeds column count "
+                            f"(x_cols={len(x_cols)}, y_cols={len(y_cols)}); skipping."
+                        )
+                        continue
+                    x_col = x_cols[curve]
+                    y_col = y_cols[curve]
+                    if x_col not in df.columns or y_col not in df.columns:
+                        continue
+                    x_ser = df[x_col]
+                    y_ser = df[y_col]
+                    x_mask = (x_ser >= px_val - step_x / 2) & (x_ser <= px_val + step_x / 2)
+                    y_mask = (y_ser >= py_val - step_y / 2) & (y_ser <= py_val + step_y / 2)
+                    valid = x_ser.notna() & y_ser.notna()
+                    indices_set.update(np.where(x_mask & y_mask & valid)[0].tolist())
+                indices = list(indices_set)
+
+            elif graph_type == "Spherical histogram":
+                bin_to_rows = meta_entry.get("bin_to_rows") or []
+                bin_spec = meta_entry.get("bin_spec") or []
+                if not bin_to_rows or not bin_spec:
+                    raise dash.exceptions.PreventUpdate
+                indices_set_sph: set[int] = set()
+                for p in points:
+                    curve = p.get("curveNumber", 0)
+                    if curve >= len(bin_to_rows) or curve >= len(bin_spec):
+                        dash_logger.warning(
+                            f"Spherical histogram: curveNumber {curve} exceeds data count "
+                            f"{len(bin_to_rows)}; skipping."
+                        )
+                        continue
+                    btr = bin_to_rows[curve]
+                    bsp = bin_spec[curve]
+                    px_val = p.get("x")
+                    py_val = p.get("y")
+                    if px_val is None or py_val is None:
+                        continue
+                    x_start = bsp.get("x_start", 0.0)
+                    x_size = bsp.get("x_size", 1.0)
+                    y_start = bsp.get("y_start", 0.0)
+                    y_size = bsp.get("y_size", 1.0)
+                    n_x = bsp.get("n_x", 1)
+                    n_y = bsp.get("n_y", 1)
+                    xi = int(np.clip(int(np.floor((px_val - x_start) / x_size)), 0, n_x - 1))
+                    yi = int(np.clip(int(np.floor((py_val - y_start) / y_size)), 0, n_y - 1))
+                    key = f"{xi},{yi}"
+                    indices_set_sph.update(btr.get(key, []))
+                indices = list(indices_set_sph)
+
+            elif graph_type == "Polar NN distances":
+                indices_set_polar: set[int] = set()
+                for p in points:
+                    idx = _cd_first_int(p.get("customdata"))
+                    if idx is not None:
+                        indices_set_polar.add(idx)
+                indices = list(indices_set_polar)
 
             else:
                 if is_click and graph_type in _AGGREGATED_CLICK_IGNORE:
@@ -1157,3 +1404,38 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
                 return result, _count(result)
 
             return new_rows, _count(new_rows)
+
+    # ── Register plots to graph pool (C4) ──────────────────────────────────────
+
+    @app.callback(
+        Output(ids.GRAPH_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.GRAPH_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output(f"{prefix}-register-status", "children"),
+        Input(f"{prefix}-register-plots-btn", "n_clicks"),
+        State({"type": "styled-graph", "owner": prefix, "name": ALL}, "figure"),
+        State(ids.GRAPH_POOL_REGISTRY, "data"),
+        State(ids.GRAPH_POOL_NEXT_ID,  "data"),
+        prevent_initial_call=True,
+    )
+    def _register_plots(n, figures, registry, next_id):
+        if not n:
+            raise dash.exceptions.PreventUpdate
+        figures = [f for f in (figures or []) if f]
+        if not figures:
+            return no_update, no_update, "No plots to register."
+        from cryocat.app import graphpool as _graphpool
+        state = _graphpool.GraphPoolState.from_stores(registry, next_id)
+        ids_registered = []
+        for fig_data in figures:
+            lbl = f"Table plot {state.next_id}"
+            state, graph_id = _graphpool.insert_graph_entry(
+                state, fig_data, label=lbl, kind="frozen"
+            )
+            ids_registered.append(graph_id)
+        from cryocat.app import session as _session
+        from cryocat.app.event import message_event as _msg_event
+        _session.emit(_msg_event(
+            f"Registered {len(ids_registered)} graph(s): {', '.join(ids_registered)}",
+            level="info",
+        ))
+        return (*state.to_stores(), f"Registered {len(ids_registered)}: {', '.join(ids_registered)}.")

@@ -114,6 +114,15 @@ class PoolState:
             next_id=int(next_id or 0),
         )
 
+    @classmethod
+    def empty(cls) -> PoolState:
+        """Return a pool state with no entries.
+
+        Intended for tests and pure-conversion callers that have no
+        Dash-store context and do not need ``@``-variable resolution.
+        """
+        return cls(registry={}, meta={}, next_id=0)
+
     def to_stores(self) -> tuple:
         """Return ``(registry, meta, next_id)`` for unpacking into Dash Outputs."""
         return self.registry, self.meta, self.next_id

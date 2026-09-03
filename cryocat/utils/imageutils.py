@@ -491,7 +491,7 @@ def dose_attenuator(dose: float, freq_array: np.ndarray) -> np.ndarray:
     attenuator ``exp(-dose / (2 * (a * f**b + c)))`` with the parameters from
     Grant & Grigorieff (2015). Shared primitive consumed by
     :func:`cryocat.core.tiltstack.dose_filter_single_image` and
-    :func:`cryocat.utils.wedgeutils._generate_exposure`.
+    :func:`cryocat.core.cryowedge._generate_exposure`.
 
     Parameters
     ----------

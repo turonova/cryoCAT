@@ -35,7 +35,9 @@ from dash.exceptions import PreventUpdate
 from cryocat.utils.geom import generate_angles
 from cryocat.app import formgen, ids, styles
 from cryocat.app.apputils import generate_kwargs, run_operation
+from cryocat.app.pool import PoolState
 from cryocat.app.components.graphsettings import styled_figure, error_figure
+from cryocat.app.components.customel import customel_graph
 
 _ID_TYPE = "angles-param"
 
@@ -239,8 +241,8 @@ def get_angles_builder_panel(prefix: str) -> html.Div:
             # Two graphs side-by-side (same as Utilities page)
             dbc.Row(
                 [
-                    dbc.Col(dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "preview"}, style={"height": "320px"}), width=6),
-                    dbc.Col(dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "inplane"}, style={"height": "320px"}), width=6),
+                    dbc.Col(customel_graph(prefix, "preview", dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "preview"}, style={"height": "320px"})), width=6),
+                    dbc.Col(customel_graph(prefix, "inplane", dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "inplane"}, style={"height": "320px"})), width=6),
                 ],
                 className="g-1",
             ),
@@ -271,11 +273,15 @@ def register_angles_builder_callbacks(app: dash.Dash, prefix: str, *, with_graph
         Output(f"{prefix}-params", "data"),
         Input({"type": _ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "value"),
         State({"type": _ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "id"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
     )
-    def _collect_params(values, ids):
-        if not values or not ids:
+    def _collect_params(values, form_ids, registry, pool_meta, pool_next_id):
+        if not values or not form_ids:
             raise PreventUpdate
-        return generate_kwargs(ids, values)
+        pool_state = PoolState.from_stores(registry, pool_meta, pool_next_id)
+        return generate_kwargs(form_ids, values, pool_state)
 
     if with_graphs:
         @app.callback(

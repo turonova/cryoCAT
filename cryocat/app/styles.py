@@ -79,6 +79,12 @@ CTRL_ROW: dict = {
 CTRL_LABEL: dict = {"flex": f"0 0 {FORM_LABEL_COL_WIDTH}", "marginBottom": "0"}
 CTRL_INPUT: dict = {"flex": "1 1 auto", "minWidth": "0"}
 
+# ── Tab strip sizing ──────────────────────────────────────────────────────────
+# Applied globally via .nav-tabs .nav-link in assets/styles.css.
+# All dbc.Tabs strips in the app inherit these; never set per-tab literally.
+TAB_NAV_PADDING     = "4px 12px"   # padding on each nav-link button
+TAB_NAV_LINE_HEIGHT = "1.4"        # line-height on each nav-link button
+
 # ── Section headers ───────────────────────────────────────────────────────────
 SECTION_HEADER: dict = {
     "fontSize": "0.9rem", "fontWeight": 600,

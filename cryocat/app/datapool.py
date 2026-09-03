@@ -71,7 +71,8 @@ class DataEntry:
     columns:     list[str] | None  # column names, capped at _MAX_COLUMNS
     shape:       tuple | None      # array / volume shape
     dtype:       str | None        # array dtype string
-    id_column:   str | None = None  # identity column name (for row-level edit operations)
+    id_column:      str | None = None  # identity column name (for row-level edit operations)
+    source_motl_id: str | None = None  # source motl (for loaded NN/twist tables)
 
 
 # ── Pool state ────────────────────────────────────────────────────────────────
@@ -271,6 +272,39 @@ def clear_view_df() -> None:
     _pool_payloads.pop("dp-view", None)
 
 
+def set_view_df_direct(df: pd.DataFrame) -> None:
+    """Bridge *df* directly into pool._payloads['dp-view'] for working-copy display.
+
+    Used by the working-copy path in tableeditor so the tablegrid can show the
+    working copy without creating a data pool entry.
+    """
+    from cryocat.app.pool import _payloads as _pool_payloads, PoolPayload
+    _pool_payloads["dp-view"] = PoolPayload(rows=df.copy(), extra=None)
+
+
+def replace_payload(
+    state: "DataPoolState",
+    data_id: str,
+    df: pd.DataFrame,
+) -> "DataPoolState":
+    """Replace the DataFrame payload for an existing data pool entry.
+
+    Updates n_rows and columns in the registry handle; leaves all other
+    metadata (label, reader, source_path, etc.) unchanged.  No-op if
+    *data_id* is not in the registry.
+    """
+    if data_id not in state.registry:
+        return state
+    _payloads[data_id] = df.copy()
+    old = dict(state.registry[data_id])
+    old["n_rows"] = len(df)
+    old["columns"] = list(df.columns)[:_MAX_COLUMNS]
+    return DataPoolState(
+        registry={**state.registry, data_id: old},
+        next_id=state.next_id,
+    )
+
+
 # ── Table pool (non-motl tables) ──────────────────────────────────────────────
 # Simpler store for NN analysis, tango twist, and tango descriptor DataFrames.
 # IDs use the "table_N" format; file-pool uses "data_N".
@@ -287,6 +321,7 @@ def insert(
     label: str,
     id_column: str | None,
     source: str = "",
+    source_motl_id: str | None = None,
 ) -> dict:
     """Store *df* and return a ref dict for dcc.Store."""
     _table_counter[0] += 1
@@ -298,6 +333,7 @@ def insert(
         "id_column": id_column,
         "label": label,
         "source": source,
+        "source_motl_id": source_motl_id,
     }
 
 

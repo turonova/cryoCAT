@@ -1755,7 +1755,8 @@ def calculate_masked_fsc(
         Ultramicroscopy 142:18-25): phases of the *unmasked* half-maps are
         randomised beyond ``fourier_cutoff``, the mask is applied in real space
         after the inverse FFT, and the resulting noise-floor FSC is used to
-        correct the masked FSC.
+        correct the masked FSC.  Both half-maps must be cubic 3-D volumes of
+        identical shape.
 
         Parameters
         ----------
@@ -1784,8 +1785,10 @@ def calculate_masked_fsc(
         Returns
         -------
         pandas.DataFrame
-            Columns: ``x``, ``uncorrected_fsc`` and, when phase randomisation
-            is performed, ``corrected_fsc`` and ``mean_phase_fsc``.
+            Always contains columns ``x`` and ``uncorrected_fsc``.  When
+            *n_repeats* is non-zero, also contains ``corrected_fsc`` and
+            ``mean_phase_fsc``.  Consumers should plot whichever FSC columns
+            are present rather than assuming a fixed set.
 
         Raises
         ------
@@ -1800,7 +1803,7 @@ def calculate_masked_fsc(
     if map_a.shape != map_b.shape:
         raise ValueError("Half-maps must have the same shape.")
     if map_a.ndim != 3 or len(set(map_a.shape)) != 1:
-        raise ValueError("Only cubic 3-D volumes are supported.")
+        raise ValueError(f"Only cubic 3-D volumes are supported; got shape {map_a.shape}.")
 
     box = map_a.shape[0]
     max_shell = box // 2

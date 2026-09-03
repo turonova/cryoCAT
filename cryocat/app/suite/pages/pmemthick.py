@@ -38,13 +38,15 @@ from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
 from cryocat.analysis import memthick
-from cryocat.app import formgen, ids
+from cryocat.app import formgen, ids, styles
 from cryocat.app.formgen import make_dropdown
 from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.apputils import generate_kwargs, run_operation
+from cryocat.app.pool import PoolState
 from cryocat.app.components import memthick_widgets as mw
 from cryocat.app.components import memthick_registry as mreg
 from cryocat.app.components.graphsettings import apply_settings_to_figure, error_figure
+from cryocat.app.components.customel import customel_graph
 from cryocat.app.components.motlsink import (
     get_send_to_editor_button, register_send_to_editor_callbacks,
 )
@@ -622,7 +624,7 @@ def _sidebar() -> list:
     ]
 
 
-def _plot_tab(tab_id: str, label: str) -> dcc.Tab:
+def _plot_tab(tab_id: str, label: str) -> dbc.Tab:
     if tab_id == "code":
         body = html.Pre(
             id="memthick-code-preview",
@@ -643,21 +645,22 @@ def _plot_tab(tab_id: str, label: str) -> dcc.Tab:
             style={"padding": "0.5rem"},
         )
     else:
-        body = dcc.Graph(
-            id={"type": "styled-graph", "owner": "memthick", "name": tab_id},
-            style={"height": "calc(100vh - 140px)", "width": "100%"},
-            config={"displayModeBar": True, "scrollZoom": True},
-        )
-    return dcc.Tab(label=label, value=tab_id, children=body)
+        body = customel_graph("memthick", tab_id,
+            dcc.Graph(
+                id={"type": "styled-graph", "owner": "memthick", "name": tab_id},
+                style={"height": "calc(100vh - 140px)", "width": "100%"},
+                config={"displayModeBar": True, "scrollZoom": True},
+            ))
+    return dbc.Tab(label=label, tab_id=tab_id, children=body)
 
 
 def _main() -> list:
     return [
-        dcc.Tabs(
+        dbc.Tabs(
             id="memthick-main-tabs",
-            value="code",
+            active_tab="code",
             children=[_plot_tab(tab_id, label) for tab_id, label in _PLOT_TABS],
-            style={"marginBottom": "0.25rem"},
+            style={"marginBottom": styles.FORM_ROW_GAP},
         ),
         dcc.Store(id="memthick-built-store"),
         dcc.Download(id="memthick-download"),
@@ -708,6 +711,7 @@ def _build_kwargs(
     mode_per_label_values: list[str],
     analyzer_ids: list[dict],
     analyzer_values: list,
+    pool_state,
 ) -> tuple[dict, dict]:
     """Combine the form + composite-widget states into pipeline + analyzer kwargs.
 
@@ -715,7 +719,7 @@ def _build_kwargs(
     the user explicitly chose; everything else falls back to the function
     signature's default.
     """
-    pipeline_kwargs = generate_kwargs(pipeline_ids or [], pipeline_values or [])
+    pipeline_kwargs = generate_kwargs(pipeline_ids or [], pipeline_values or [], pool_state)
     pipeline_kwargs = {k: v for k, v in pipeline_kwargs.items() if v not in (None, "", [])}
 
     labels = mw.read_label_dict(labels_rows)
@@ -726,7 +730,7 @@ def _build_kwargs(
         mode_toggle, mode_single, mode_per_label_ids, mode_per_label_values,
     )
 
-    analyzer_kwargs = mw.read_analyzer_kwargs(analyzer_ids or [], analyzer_values or [])
+    analyzer_kwargs = mw.read_analyzer_kwargs(analyzer_ids or [], analyzer_values or [], pool_state)
     return pipeline_kwargs, analyzer_kwargs
 
 
@@ -734,6 +738,9 @@ def _build_kwargs(
 
 
 def register_callbacks(app):
+    from cryocat.app import formgen as _formgen
+    _formgen.register_form_callbacks(app, _PIPELINE_ID_TYPE)
+
     mw.register_label_dict_callbacks(app, "memthick-labels")
     mw.register_per_membrane_mode_callbacks(app, "memthick-mode")
     mw.register_analyzer_subform_callbacks(app, _ANALYZER_PREFIX)
@@ -786,6 +793,9 @@ def register_callbacks(app):
         State("memthick-sbatch", "value"),
         State("memthick-modules", "value"),
         State({"type": "path-input", "owner": "memthick-save-path"}, "value"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
     def _build(
@@ -796,6 +806,7 @@ def register_callbacks(app):
         mode_toggle, mode_single, mode_per_label_vals, mode_per_label_ids,
         an_scalar_vals, an_scalar_ids, an_tuple_vals, an_tuple_ids,
         fmt, sbatch_text, modules_text, save_path,
+        registry, pool_meta, pool_next_id,
     ):
         if not n_clicks:
             raise PreventUpdate
@@ -806,11 +817,13 @@ def register_callbacks(app):
         an_ids = (an_scalar_ids or []) + (an_tuple_ids or [])
         an_vals = (an_scalar_vals or []) + (an_tuple_vals or [])
 
+        pool_state = PoolState.from_stores(registry, pool_meta, pool_next_id)
         try:
             pipeline_kwargs, analyzer_kwargs = _build_kwargs(
                 pipe_ids, pipe_vals,
                 labels_rows, mode_toggle, mode_single, mode_per_label_ids, mode_per_label_vals,
                 an_ids, an_vals,
+                pool_state,
             )
         except Exception as exc:
             return f"# error building kwargs: {exc}", no_update, f"Build error: {exc}"
@@ -1016,7 +1029,7 @@ def register_callbacks(app):
     # ── M2: Render plots ─────────────────────────────────────────────────────
     @app.callback(
         Output({"type": "styled-graph", "owner": "memthick", "name": ALL}, "figure"),
-        Input("memthick-main-tabs", "value"),
+        Input("memthick-main-tabs", "active_tab"),
         Input("memthick-membrane-select", "value"),
         Input("memthick-filter-thick-min", "value"),
         Input("memthick-filter-thick-max", "value"),

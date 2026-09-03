@@ -1071,6 +1071,46 @@ class Descriptor:
             scale_data=scale_data,
         )
 
+    def dbscan_clustering(
+        self, eps, min_samples=5, nan_drop="row", pca_dict=None, feature_ids="all", metric="euclidean"
+    ):
+        """Perform DBSCAN clustering on the descriptor DataFrame.
+
+        Parameters
+        ----------
+        eps : float
+            Maximum distance between two samples for one to be in the same
+            neighbourhood (in standardised feature space).
+        min_samples : int, default 5
+            Minimum number of samples in a neighbourhood for a core point.
+        nan_drop : {"row", "column"}, default "row"
+            Axis along which to drop NaN values before clustering.
+        pca_dict : dict, optional
+            If given, PCA is applied before clustering.  Keys map to keyword
+            arguments of :func:`~cryocat.analysis.clustering.compute_pca`;
+            ``feature_ids``, ``nan_drop``, and ``id_columns`` are forwarded
+            automatically.
+        feature_ids : str or list of str, default "all"
+            Feature columns to include; forwarded to
+            :func:`~cryocat.analysis.clustering.dbscan_cluster`.
+        metric : str, default "euclidean"
+            Distance metric used by DBSCAN.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Feature columns + ``"cluster"`` (``-1`` marks noise) + ``qp_id``.
+        """
+        return clustering_mod.dbscan_cluster(
+            self.desc,
+            eps=eps,
+            min_samples=min_samples,
+            feature_ids=feature_ids,
+            nan_drop=nan_drop,
+            pca_dict=pca_dict,
+            metric=metric,
+        )
+
     def plot_k_means(self, color_column_name):
         """Plot the k-means clustering results in 3D.
 
@@ -1396,6 +1436,11 @@ class TwistDescriptor(Descriptor):
             columns.append("angular_score")
 
         return columns
+
+    @staticmethod
+    def default_feature_columns(df: "pd.DataFrame") -> list[str]:
+        """Columns of *df* that are meaningful as clustering / PCA features."""
+        return [c for c in TwistDescriptor.get_all_feature_ids() if c in df.columns]
 
     @staticmethod
     def derive_nn_radius(df: "pd.DataFrame") -> float:
@@ -3457,6 +3502,11 @@ class CustomDescriptor(Descriptor):
         dc = CustomDescriptor(None)
         dc.desc = desc_df
         return dc
+
+    @staticmethod
+    def default_feature_columns(df: "pd.DataFrame") -> list[str]:
+        """Columns of *df* that are meaningful as clustering / PCA features."""
+        return [c for c in df.columns if c != "qp_id"]
 
     def create_additional_descriptors(self, support_df, feature_list, feature_kwargs):
         """Create additional descriptors based on the provided feature list and support.

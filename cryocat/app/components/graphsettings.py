@@ -1,5 +1,3 @@
-import copy
-
 import plotly.graph_objects as go
 from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
@@ -50,6 +48,10 @@ def get_graph_settings_components():
     """Global store + modal dialog; add to app.layout."""
     return [
         dcc.Store(id=ids.GRAPH_SETTINGS_STORE, data=GRAPH_SETTINGS_DEFAULTS),
+        dcc.Store(id=ids.GRAPH_PALETTE_SIGNAL, data={
+            "discrete_palette": GRAPH_SETTINGS_DEFAULTS["discrete_palette"],
+            "continuous_palette": GRAPH_SETTINGS_DEFAULTS["continuous_palette"],
+        }),
         dbc.Modal(
             id="graph-settings-modal",
             is_open=False,
@@ -120,6 +122,8 @@ def get_graph_settings_components():
                               style={"color": "grey", "marginRight": "auto"}),
                     dbc.Button("Apply Changes", id="gs-apply-btn", color="primary",
                                className="me-2", n_clicks=0),
+                    dbc.Button("Apply to existing", id="gs-apply-existing-btn", color="secondary",
+                               className="me-2", n_clicks=0),
                     dbc.Button("Close", id="gs-close-btn", color="secondary", n_clicks=0),
                 ]),
             ],
@@ -140,23 +144,58 @@ def get_graph_settings_button(prefix: str):
 def register_graph_settings_callbacks(app):
     register_palette_loader_callbacks(app, "gs-discrete-pal", mode="discrete")
     register_palette_loader_callbacks(app, "gs-continuous-pal", mode="continuous")
+
+    @app.callback(
+        Output(ids.GRAPH_PALETTE_SIGNAL, "data"),
+        Input(ids.GRAPH_SETTINGS_STORE, "data"),
+        State(ids.GRAPH_PALETTE_SIGNAL, "data"),
+        prevent_initial_call=True,
+    )
+    def _sync_palette_signal(settings, prev_signal):
+        s = settings or GRAPH_SETTINGS_DEFAULTS
+        new_dis = s.get("discrete_palette", GRAPH_SETTINGS_DEFAULTS["discrete_palette"])
+        new_con = s.get("continuous_palette", GRAPH_SETTINGS_DEFAULTS["continuous_palette"])
+        prev = prev_signal or {}
+        if prev.get("discrete_palette") == new_dis and prev.get("continuous_palette") == new_con:
+            return no_update
+        return {"discrete_palette": new_dis, "continuous_palette": new_con}
+
     @app.callback(
         Output("graph-settings-modal", "is_open"),
+        Output("gs-font-family", "value"),
+        Output("gs-font-size", "value"),
+        Output("gs-marker-size", "value"),
+        Output("gs-line-width", "value"),
+        Output("gs-line-dash", "value"),
+        Output("gs-bg-color", "value"),
         Input({"type": "open-graph-settings-btn", "owner": ALL}, "n_clicks"),
         Input("gs-close-btn", "n_clicks"),
         State("graph-settings-modal", "is_open"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
-    def toggle_modal(open_clicks_list, close_clicks, is_open):
+    def toggle_modal(open_clicks_list, close_clicks, is_open, settings):
+        _nu = (no_update,) * 6
         triggered = ctx.triggered_id
         if isinstance(triggered, dict) and triggered.get("type") == "open-graph-settings-btn":
             # Callback also fires when a new matching component appears in the DOM (n_clicks=0).
             # Only open on an actual user click (value > 0).
             triggered_value = ctx.triggered[0]["value"] if ctx.triggered else 0
-            return True if triggered_value else no_update
+            if not triggered_value:
+                return (no_update,) + _nu
+            s = settings or GRAPH_SETTINGS_DEFAULTS
+            return (
+                True,
+                s.get("font_family", GRAPH_SETTINGS_DEFAULTS["font_family"]),
+                s.get("font_size", GRAPH_SETTINGS_DEFAULTS["font_size"]),
+                s.get("marker_size", GRAPH_SETTINGS_DEFAULTS["marker_size"]),
+                s.get("line_width", GRAPH_SETTINGS_DEFAULTS["line_width"]),
+                s.get("line_dash", GRAPH_SETTINGS_DEFAULTS["line_dash"]),
+                s.get("bg_color", GRAPH_SETTINGS_DEFAULTS["bg_color"]),
+            )
         if triggered == "gs-close-btn":
-            return False
-        return no_update
+            return (False,) + _nu
+        return (no_update,) + _nu
 
     @app.callback(
         Output(ids.GRAPH_SETTINGS_STORE, "data"),
@@ -170,22 +209,26 @@ def register_graph_settings_callbacks(app):
         State("gs-discrete-pal-value", "data"),
         State("gs-continuous-pal-value", "data"),
         State("gs-bg-color", "value"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
     def apply_settings(_, font_family, font_size, marker_size, line_width, line_dash,
-                       discrete_palette, continuous_palette, bg_color):
-        settings = {
+                       discrete_palette, continuous_palette, bg_color, prev_settings):
+        prev = prev_settings or GRAPH_SETTINGS_DEFAULTS
+        new_dis = discrete_palette if discrete_palette else prev.get("discrete_palette", GRAPH_SETTINGS_DEFAULTS["discrete_palette"])
+        new_con = continuous_palette if continuous_palette else prev.get("continuous_palette", GRAPH_SETTINGS_DEFAULTS["continuous_palette"])
+        palette_is_user_set = True if (discrete_palette or continuous_palette) else prev.get("palette_is_user_set", False)
+        return {
             "font_family": font_family or GRAPH_SETTINGS_DEFAULTS["font_family"],
             "font_size": font_size or GRAPH_SETTINGS_DEFAULTS["font_size"],
             "marker_size": marker_size or GRAPH_SETTINGS_DEFAULTS["marker_size"],
             "line_width": line_width or GRAPH_SETTINGS_DEFAULTS["line_width"],
             "line_dash": line_dash or GRAPH_SETTINGS_DEFAULTS["line_dash"],
-            "discrete_palette": discrete_palette or GRAPH_SETTINGS_DEFAULTS["discrete_palette"],
-            "continuous_palette": continuous_palette or GRAPH_SETTINGS_DEFAULTS["continuous_palette"],
+            "discrete_palette": new_dis,
+            "continuous_palette": new_con,
             "bg_color": bg_color or GRAPH_SETTINGS_DEFAULTS["bg_color"],
-            "palette_is_user_set": True,
-        }
-        return settings, "Applied."
+            "palette_is_user_set": palette_is_user_set,
+        }, "Applied."
 
     @app.callback(
         Output(ids.GRAPH_SETTINGS_STORE, "data", allow_duplicate=True),
@@ -202,18 +245,6 @@ def register_graph_settings_callbacks(app):
         if settings.get("discrete_palette") == target:
             return no_update
         return {**settings, "discrete_palette": target, "continuous_palette": target}
-
-    @app.callback(
-        Output({"type": "styled-graph", "owner": ALL}, "figure"),
-        Input(ids.GRAPH_SETTINGS_STORE, "data"),
-        State({"type": "styled-graph", "owner": ALL}, "figure"),
-        prevent_initial_call=True,
-        allow_duplicate=True,
-    )
-    def _restyle_all_graphs(settings, all_figs):
-        if not settings or not all_figs:
-            return [no_update] * len(all_figs)
-        return [apply_settings_to_figure(copy.deepcopy(fig), settings) for fig in all_figs]
 
 
 _DISCRETE_TRACE_TYPES = {"scatter", "scattergl", "scatter3d", "bar", "histogram", "violin", "box"}
@@ -268,6 +299,12 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
                 ax.setdefault("gridcolor", "#444444")
                 ax.setdefault("tickfont", {}).setdefault("color", text_color)
 
+    # W1: palette_is_user_set=True  → clear existing scalar string colours first so the
+    #     chosen palette wins over Express-assigned per-trace colours.
+    # W1: palette_is_user_set=False → fill-only: skip traces that already carry any
+    #     explicit string colour (they were deliberately coloured by the figure builder).
+    palette_is_user_set = bool(settings.get("palette_is_user_set"))
+
     if settings.get("discrete_palette"):
         palette = resolve_palette(settings["discrete_palette"])
         layout["colorway"] = palette
@@ -276,10 +313,26 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
         for i, trace in enumerate(discrete_traces):
             color = palette[i % len(palette)]
             marker = trace.get("marker", {})
-            if not isinstance(marker.get("color"), list):
-                trace.setdefault("marker", {})["color"] = color
+            existing_mc = marker.get("color")
+
+            if isinstance(existing_mc, list):
+                # Per-point data array — never overwrite in either mode.
+                continue
+
+            if not palette_is_user_set and isinstance(existing_mc, str):
+                # Fill-only: trace already has an explicit colour — leave it.
+                continue
+
+            # User-set mode: clear scalar string colours so the palette wins.
+            if palette_is_user_set and isinstance(existing_mc, str):
+                trace.setdefault("marker", {}).pop("color", None)
+                existing_lc = trace.get("line", {}).get("color")
+                if isinstance(existing_lc, str):
+                    trace.setdefault("line", {}).pop("color", None)
+
+            trace.setdefault("marker", {})["color"] = color
             if trace.get("type") in ("histogram", "violin", "box", "bar"):
-                # bar/histogram/violin/box carry line styling inside marker.line, not top-level
+                # bar/histogram/violin/box carry line styling inside marker.line
                 mline = trace.setdefault("marker", {}).setdefault("line", {})
                 if not isinstance(mline.get("color"), list):
                     mline["color"] = color
@@ -290,10 +343,15 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
 
     if settings.get("continuous_palette"):
         scale = resolve_colorscale(settings["continuous_palette"])
+        # W2: coloraxis-bound traces (marker.coloraxis set) read the palette from
+        # layout.coloraxis.colorscale — that is the correct path for Express scatter
+        # with color="continuous_column".  Standalone heatmap/contour/surface traces
+        # keep their own trace-level colorscale and need it set directly.
         layout.setdefault("coloraxis", {})["colorscale"] = scale
         for trace in fig_dict.get("data", []):
             if trace.get("type") in _CONTINUOUS_TRACE_TYPES:
-                trace["colorscale"] = scale
+                if not trace.get("marker", {}).get("coloraxis"):
+                    trace["colorscale"] = scale
 
     marker_size = settings.get("marker_size")
     line_width = settings.get("line_width")
@@ -314,6 +372,21 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
                     line["dash"] = line_dash
 
     return fig_dict
+
+
+def style_figure(fig: go.Figure, settings: dict) -> dict:
+    """Serialise *fig* and apply settings. Returns a mutable dict.
+
+    Thin front for apply_settings_to_figure — the to_plotly_json call lives
+    here so callers outside graphsettings.py do not need to call it directly.
+    Does not stamp uirevision; use styled_figure when that is needed.
+    """
+    return apply_settings_to_figure(fig.to_plotly_json(), settings or {})
+
+
+def figure_to_dict(fig: go.Figure) -> dict:
+    """Serialise an already-styled figure to a Plotly JSON dict."""
+    return fig.to_plotly_json()
 
 
 def styled_figure(
@@ -344,6 +417,24 @@ def styled_figure(
     if height is not None:
         layout["height"] = height
     return go.Figure(fig_dict)
+
+
+def register_figure_in_pool(
+    state: "GraphPoolState",
+    fig: go.Figure,
+    *,
+    label: str,
+    kind: str,
+) -> "tuple[GraphPoolState, str]":
+    """Serialise *fig* here (allowed) and insert into the graph pool.
+
+    The only entry point for adding a go.Figure to the graph pool from outside
+    graphsettings.py.  Callers pass a Figure; the to_plotly_json call stays
+    inside this module.
+    """
+    from cryocat.app import graphpool as _graphpool
+    payload = fig.to_plotly_json()
+    return _graphpool.insert_graph_entry(state, payload, label=label, kind=kind)
 
 
 def error_figure(msg: str) -> go.Figure:

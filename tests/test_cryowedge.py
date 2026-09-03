@@ -1,4 +1,4 @@
-from cryocat.utils.wedgeutils import *
+from cryocat.core.cryowedge import *
 from cryocat.utils.ioutils import *
 from cryocat.core import cryomap
 import numpy as np
@@ -52,7 +52,7 @@ def test_create_wedge_list_sg():
     directory = Path(__file__).parent / "test_data"
     ts_017 = directory / "TS_017"
     ts_018 = directory / "TS_018"
-    wedge_output = directory / "wedgeutils_data"
+    wedge_output = directory / "cryowedge_data"
 
     pixel_size = 2.4
     #Case1: tomo17, TILT.COM, TLT, GCTF, no DOSE_FILE
@@ -104,14 +104,14 @@ def test_create_wedge_list_sg():
 
 def test_create_wedge_list_sg_batch():
     directory = Path(__file__).parent / "test_data"
-    wedgeutils_datad = directory / "wedgeutils_data"
+    cryowedge_datad = directory / "cryowedge_data"
     pixel_size = 2.4
-    tomo_list = wedgeutils_datad / "tomo_list.txt"
+    tomo_list = cryowedge_datad / "tomo_list.txt"
     tlt_file_format = directory / "TS_$xxx" / "$xxx.tlt"
     tomo_dim_file_format = directory / "TS_$xxx" / "tilt.com"
     z_shift_file_format = directory / "TS_$xxx" / "tilt.com"
     ctf_file_format = directory / "TS_$xxx" / "$xxx_gctf.star"
-    output_path = directory / "wedgeutils_data" / "wedge_list_1.star"
+    output_path = directory / "cryowedge_data" / "wedge_list_1.star"
     df17_18 = create_wedge_list_sg_batch(
         tomo_list = str(tomo_list),
         pixel_size = pixel_size,
@@ -121,9 +121,9 @@ def test_create_wedge_list_sg_batch():
         ctf_file_format = str(ctf_file_format),
         output_path = str(output_path)
     )
-    assert compare_star_files(str(output_path), str(wedgeutils_datad / "wedge_list.star"))
+    assert compare_star_files(str(output_path), str(cryowedge_datad / "wedge_list.star"))
     # check if returned pd is equal to given file
-    assert compare_pd_and_star(df17_18, str(wedgeutils_datad / "wedge_list.star"))
+    assert compare_pd_and_star(df17_18, str(cryowedge_datad / "wedge_list.star"))
     if os.path.exists(str(output_path)):
         os.remove(str(output_path))
 
@@ -145,7 +145,7 @@ def test_create_wedge_list_sg_batch():
         z_shift_file_format = str(z_shift_file_format),
         ctf_file_format = str(ctf_file_format)
     )
-    assert compare_pd_and_star(df17_18_2, str(wedgeutils_datad / "wedge_list_018.star"))
+    assert compare_pd_and_star(df17_18_2, str(cryowedge_datad / "wedge_list_018.star"))
 
     #case4: passing empty tomo_list :
     #ioutils tlt_load has to be changed, to check that input isn't an empty list or an empty nparray
@@ -187,26 +187,26 @@ def test_create_wedge_list_sg_batch():
 
 def test_create_wedge_list_em_batch():
     directory = Path(__file__).parent / "test_data"
-    wedgeutils_datad = directory / "wedgeutils_data"
+    cryowedge_datad = directory / "cryowedge_data"
 
     #case1: correct input to test given em file
-    tomograms = wedgeutils_datad / "tomo_list.txt"
+    tomograms = cryowedge_datad / "tomo_list.txt"
     tlt_file_format = str(directory / "TS_$xxx" / "$xxx.tlt")
     df_17 = create_wedge_list_em_batch(
         tomo_list=str(tomograms),
         tlt_file_format=tlt_file_format,
-        output_path=str(wedgeutils_datad / "wedge_list_1.em")
+        output_path=str(cryowedge_datad / "wedge_list_1.em")
     )
-    emfile1 = emfile.read(str(wedgeutils_datad / "wedge_list_1.em"))[1]  # Get the data part
-    emfile2 = emfile.read(str(wedgeutils_datad / "wedge_list.em"))[1]
+    emfile1 = emfile.read(str(cryowedge_datad / "wedge_list_1.em"))[1]  # Get the data part
+    emfile2 = emfile.read(str(cryowedge_datad / "wedge_list.em"))[1]
     #assert output em file is the same as test em file
-    np.testing.assert_equal(emfile1, emfile.read(str(wedgeutils_datad / "wedge_list.em"))[1])
+    np.testing.assert_equal(emfile1, emfile.read(str(cryowedge_datad / "wedge_list.em"))[1])
     #assert dataframe returned is the same as what is written in output file
     assert np.allclose(df_17.to_numpy(), emfile1.squeeze(), rtol=1e-5, atol=1e-8)
     #assert dataframe returned is the same as test em file
     assert np.allclose(df_17.to_numpy(), emfile2.squeeze(), rtol=1e-5, atol=1e-8)
-    if os.path.exists(str(wedgeutils_datad / "wedge_list_1.em")):
-        os.remove(str(wedgeutils_datad / "wedge_list_1.em"))
+    if os.path.exists(str(cryowedge_datad / "wedge_list_1.em")):
+        os.remove(str(cryowedge_datad / "wedge_list_1.em"))
 
 
 def test_load_wedge_list_sg_from_file():
@@ -230,8 +230,8 @@ def test_load_wedge_list_sg_invalid_type_raises():
 
 def test_load_wedge_list_em():
     directory = Path(__file__).parent / "test_data"
-    wedgeutils_datad = directory / "wedgeutils_data"
-    wedge_listem = wedgeutils_datad / "wedge_list.em"
+    cryowedge_datad = directory / "cryowedge_data"
+    wedge_listem = cryowedge_datad / "wedge_list.em"
 
     # Test loading from file
     df_file = load_wedge_list_em(str(wedge_listem))
@@ -267,9 +267,9 @@ def test_load_wedge_list_em():
 
 def test_create_wg_mask(tmp_path):
     #print(sample_wedge_list)
-    sample_wedge_list = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_list.star")
+    sample_wedge_list = str(Path(__file__).parent / "test_data" / "cryowedge_data" / "wedge_list.star")
     sample_wedge_list = load_wedge_list_sg(sample_wedge_list)
-    #sample_tomo_list = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "tomo_list.txt")
+    #sample_tomo_list = str(Path(__file__).parent / "test_data" / "cryowedge_data" / "tomo_list.txt")
     sample_tomo_list = np.asarray([17,18])
     box_size = 64
     mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size)
@@ -386,8 +386,8 @@ def test_wedge_list_sg_to_em_invalid_input(tmp_path):
 
 # ── generate_wedge_mask ────────────────────────────────────────────────────────
 
-_WL_PATH = str(Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_list.star")
-_DATA_DIR = Path(__file__).parent / "test_data" / "wedgeutils_data"
+_WL_PATH = str(Path(__file__).parent / "test_data" / "cryowedge_data" / "wedge_list.star")
+_DATA_DIR = Path(__file__).parent / "test_data" / "cryowedge_data"
 _TOMO_NUM = 17
 
 
@@ -462,7 +462,7 @@ def test_generate_wedge_mask_thickness_warning_when_geometric():
 # ── integration tests: voxel-level comparison against stored reference masks ──
 #
 # Reference files were generated once from the corrected implementation and
-# stored in test_data/wedgeutils_data/.  Any change to generate_wedge_mask,
+# stored in test_data/cryowedge_data/.  Any change to generate_wedge_mask,
 # _geometric_wedgemask_slices, _analytical_wedgemask_slices, or the filter
 # application path will cause a mismatch here.
 

@@ -13,9 +13,12 @@ drift.
 """
 
 import inspect
+import logging
 import typing
 from collections.abc import Callable
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 from dash import html, dcc, ALL
 import dash_bootstrap_components as dbc
@@ -128,12 +131,12 @@ def _text_field(cid, default, required, choices=None, extra=None):
 
 
 def _number_field(cid, default, required, choices=None, extra=None):
-    return dcc.Input(
-        type="number", id=cid,
-        value=None if _empty(default) else default,
+    return _with_var_picker(dcc.Input(
+        type="text", id=cid,
+        value=None if _empty(default) else str(default) if default is not None else None,
         placeholder="Optional" if _truly_optional(required, default) else "",
         style=styles.FORM_COMPACT_INPUT,
-    )
+    ), cid)
 
 
 def _bool_dropdown(cid, default, required, choices=None, extra=None):
@@ -159,6 +162,7 @@ def _path_field(cid, default, required, choices=None, extra=None):
     owner = _json.dumps(dict(sorted(cid.items()))) if isinstance(cid, dict) else str(cid)
 
     from dash import dcc as _dcc
+    hint_id = {**cid, "id_type": cid["type"], "type": "path-exists-hint"} if isinstance(cid, dict) else None
     return html.Div(
         [
             dcc.Store(
@@ -177,6 +181,14 @@ def _path_field(cid, default, required, choices=None, extra=None):
                 color="secondary",
                 size="sm",
                 style={"flexShrink": "0"},
+            ),
+            *(
+                [html.Span(
+                    id=hint_id,
+                    children="",
+                    style={**styles.HINT, "flexShrink": "0", "whiteSpace": "nowrap"},
+                )]
+                if hint_id is not None else []
             ),
         ],
         style={"display": "flex", "gap": "0.35rem", "width": "100%", "alignItems": "center"},
@@ -266,8 +278,8 @@ def _tuple_field(cid, default, required, choices=None, extra=None):
         inputs.append(
             html.Div(
                 dcc.Input(
-                    type="number", id=slot_cid,
-                    value=None if slot_value is None else slot_value,
+                    type="text", id=slot_cid,
+                    value=None if slot_value is None else str(slot_value),
                     placeholder="Optional" if _truly_optional(required, default) else "",
                     style=styles.FORM_COMPACT_INPUT,
                 ),
@@ -396,7 +408,10 @@ def build_form(fn_or_entry, id_type="op-param", id_extra=None, exclude=()):
         choices = extra.get("choices", [])
 
         handler = TYPE_HANDLERS[tag]
-        cid = _mk_id(id_type, name, tag, id_extra)
+        # Normalise all path-widget aliases (MapSource, PathOrStr, …) to the
+        # literal tag "path" so register_path_writeback's pattern matches them.
+        cid_tag = "path" if handler["widget"] == "path" else tag
+        cid = _mk_id(id_type, name, cid_tag, id_extra)
         # Composite widgets (Tuple) need length/elem from `extra`; pass it
         # through so simpler factories can ignore it without breaking.
         widget_fn = WIDGET_FACTORIES[handler["widget"]]
@@ -434,6 +449,8 @@ def register_var_picker_writeback(app, id_type: str, id_extra: dict | None = Non
     from cryocat.app import ids as _ids
 
     id_extra = id_extra or {}
+    if "owner" not in id_extra:
+        id_extra = {**id_extra, "owner": ALL}
     pattern = {"type": id_type, "param": ALL, "tag": ALL, **id_extra}
 
     @app.callback(
@@ -475,7 +492,7 @@ def register_path_writeback(app, id_type: str, id_extra: dict | None = None) -> 
     from cryocat.app import ids as _ids
 
     id_extra = id_extra or {}
-    pattern = {"type": id_type, "param": ALL, "tag": "path", **id_extra}
+    pattern = {"type": id_type, "owner": ALL, "param": ALL, "tag": "path", **id_extra}
 
     @app.callback(
         Output(pattern, "value"),
@@ -487,7 +504,54 @@ def register_path_writeback(app, id_type: str, id_extra: dict | None = None) -> 
             raise __import__("dash").exceptions.PreventUpdate
         target_owner = result.get("owner", "")
         final_value = result.get("value", "")
-        return [
-            final_value if _json.dumps(dict(sorted(e["id"].items()))) == target_owner else no_update
-            for e in ctx.outputs_list
-        ]
+        updates = []
+        for e in ctx.outputs_list:
+            if _json.dumps(dict(sorted(e["id"].items()))) == target_owner:
+                _log.debug("path writeback: matched %s → %r", e["id"], final_value)
+                updates.append(final_value)
+            else:
+                updates.append(no_update)
+        return updates
+
+
+def register_path_hint_callback(app, id_type: str, id_extra: dict | None = None) -> None:
+    """Register a path-existence hint callback for formgen path inputs of a given type.
+
+    Call once per unique ``(id_type, id_extra)`` combination used in
+    :func:`build_form` calls that produce path-tagged parameters — the same
+    combination passed to :func:`register_path_writeback`.
+
+    The hint span rendered by ``_path_field`` has id
+    ``{**cid, "type": "path-exists-hint"}``; this callback updates its text
+    on value change, showing "" when the path exists or is empty and
+    "not found" when it does not.  This is a hint, not a block — a missing
+    path is not an error.
+    """
+    from pathlib import Path
+    from dash import Input, Output, ALL as _ALL
+
+    id_extra = id_extra or {}
+
+    @app.callback(
+        Output({"type": "path-exists-hint", "id_type": id_type, "owner": _ALL, "param": _ALL, "tag": "path", **id_extra}, "children"),
+        Input({"type": id_type, "owner": _ALL, "param": _ALL, "tag": "path", **id_extra}, "value"),
+        prevent_initial_call=True,
+    )
+    def _update_path_hint(values):
+        return ["" if not v or Path(v).exists() else "not found" for v in values]
+
+
+def register_form_callbacks(app, id_type: str, id_extra: dict | None = None) -> None:
+    """Register all per-form-type callbacks for a :func:`build_form` form type.
+
+    Calls :func:`register_path_writeback`, :func:`register_path_hint_callback`,
+    and :func:`register_var_picker_writeback` unconditionally.  Inert
+    registrations (no matching components) never fire, so the cost of an inert
+    one is nothing and the cost of a forgotten one is a dead field.
+
+    Call once per unique ``(id_type, id_extra)`` combination wherever
+    :func:`build_form` is used.
+    """
+    register_path_writeback(app, id_type, id_extra)
+    register_path_hint_callback(app, id_type, id_extra)
+    register_var_picker_writeback(app, id_type, id_extra)

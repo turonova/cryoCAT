@@ -4410,10 +4410,11 @@ def test_fsc_read_txt(tmp_path):
     ],
 )
 def test_fsc_read_txt_missing_params(tmp_path, pixel_size, box_size):
+    """When pixel_size or box_size is absent, .txt returns shell indices."""
     txt_path = str(tmp_path / "fsc.txt")
     np.savetxt(txt_path, [0.9, 0.8])
-    with pytest.raises(ValueError, match="pixel_size and box_size are required"):
-        ioutils.fsc_read(txt_path, pixel_size=pixel_size, box_size=box_size)
+    df = ioutils.fsc_read(txt_path, pixel_size=pixel_size, box_size=box_size)
+    np.testing.assert_array_equal(df["x"].values, [1.0, 2.0])
 
 
 def test_fsc_read_unsupported_extension(tmp_path):

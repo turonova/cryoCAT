@@ -8,6 +8,7 @@ from dash import html
 from cryocat.app import formgen
 from cryocat.app.formgen import build_form, form_row, WIDGET_FACTORIES
 from cryocat.app.apputils import generate_kwargs
+from cryocat.app.pool import PoolState
 from cryocat.utils.classutils import TYPE_HANDLERS
 
 
@@ -127,33 +128,36 @@ class TestBuildForm:
 
 # ── T5d: generate_kwargs round-trip ──────────────────────────────────────────
 
+_PS = PoolState.empty()
+
+
 class TestGenerateKwargsRoundTrip:
     def test_str_roundtrip(self):
         ids = [{"type": "op-param", "param": "name", "tag": "str"}]
-        assert generate_kwargs(ids, ["hello"]) == {"name": "hello"}
+        assert generate_kwargs(ids, ["hello"], _PS) == {"name": "hello"}
 
     def test_int_roundtrip(self):
         ids = [{"type": "op-param", "param": "count", "tag": "int"}]
-        assert generate_kwargs(ids, [42]) == {"count": 42}
+        assert generate_kwargs(ids, [42], _PS) == {"count": 42}
 
     def test_float_roundtrip(self):
         ids = [{"type": "op-param", "param": "scale", "tag": "float"}]
-        assert generate_kwargs(ids, [3.14]) == {"scale": pytest.approx(3.14)}
+        assert generate_kwargs(ids, [3.14], _PS) == {"scale": pytest.approx(3.14)}
 
     def test_bool_roundtrip(self):
         ids = [{"type": "op-param", "param": "flag", "tag": "bool"}]
-        assert generate_kwargs(ids, ["True"]) == {"flag": True}
+        assert generate_kwargs(ids, ["True"], _PS) == {"flag": True}
 
     def test_literal_roundtrip(self):
         ids = [{"type": "op-param", "param": "mode", "tag": "Literal"}]
-        assert generate_kwargs(ids, ["a"]) == {"mode": "a"}
+        assert generate_kwargs(ids, ["a"], _PS) == {"mode": "a"}
 
     def test_tuple_roundtrip(self):
         ids = [
             {"type": "op-param", "param": "size", "tag": "Tuple", "slot": 0, "elem": "float"},
             {"type": "op-param", "param": "size", "tag": "Tuple", "slot": 1, "elem": "float"},
         ]
-        result = generate_kwargs(ids, [1.0, 2.0])
+        result = generate_kwargs(ids, [1.0, 2.0], _PS)
         assert result == {"size": (1.0, 2.0)}
 
     def test_multiple_params_roundtrip(self):
@@ -161,5 +165,5 @@ class TestGenerateKwargsRoundTrip:
             {"type": "op-param", "param": "name", "tag": "str"},
             {"type": "op-param", "param": "count", "tag": "int"},
         ]
-        result = generate_kwargs(ids, ["test", 5])
+        result = generate_kwargs(ids, ["test", 5], _PS)
         assert result == {"name": "test", "count": 5}

@@ -423,6 +423,13 @@ html, body {
   100% { opacity: 1; }
 }
 
+/* ── Tab strip sizing (styles.py: TAB_NAV_PADDING, TAB_NAV_LINE_HEIGHT) ───── */
+/* Applies to every dbc.Tabs strip in the app (slot strips, page tabs, etc.)  */
+.nav-tabs .nav-link {
+    padding: 4px 12px;
+    line-height: 1.4;
+}
+
 .graph-settings-modal .modal-dialog {
     margin-left: 2rem;
     margin-right: auto;

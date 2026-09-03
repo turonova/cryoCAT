@@ -312,4 +312,11 @@ def register_motl_load_callbacks(app, prefix: str):
         _reset()
         _start_trace()
         kwargs = load_kwargs_from_store(rln_value)
-        return load_motl_from_path(path, motl_type, rln_tomos=rln_tomos, **kwargs)
+        try:
+            return load_motl_from_path(path, motl_type, rln_tomos=rln_tomos, **kwargs)
+        except Exception as exc:
+            from cryocat.app import session as _session
+            from cryocat.app.event import message_event as _msg_event
+            dash_logger.write(f"Load failed ({motl_type}): {exc}", source="error")
+            _session.emit(_msg_event(f"Load failed ({motl_type}): {exc}", level="error"))
+            return (no_update,) * 6

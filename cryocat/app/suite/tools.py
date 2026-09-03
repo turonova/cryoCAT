@@ -22,7 +22,8 @@ TOOLS = [
     {"id": "memthick",  "label": "Membrane thickness", "path": "/memthick",  "module": "cryocat.app.suite.pages.pmemthick"},
     {"id": "complexes",   "label": "Complexes",           "path": "/complexes",   "module": "cryocat.app.suite.pages.pcomplexes"},
     {"id": "tango",       "label": "Tango",               "path": "/tango",       "module": "cryocat.app.suite.pages.ptango"},
-    {"id": "datapool",     "label": "Data Pool",          "path": "/datapool",     "module": "cryocat.app.suite.pages.pdatapool"},
+    {"id": "datapool",     "label": "Tables",             "path": "/datapool",     "module": "cryocat.app.suite.pages.pdatapool"},
+    {"id": "graphs",       "label": "Graphs",             "path": "/graphs",       "module": "cryocat.app.suite.pages.pgraphs"},
 ]
 
 # Route used when the URL is empty / root / unknown.

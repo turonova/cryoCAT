@@ -2568,6 +2568,57 @@ class StopgapParams(StaParameters):
             return str(val) + separator
         return str(Path(root) / "refs" / str(val)) + separator
 
+    def get_half_map_paths(
+        self,
+        iteration: int,
+        working_dir: PathOrStr | None = None,
+    ) -> tuple[str, str] | None:
+        """Return the (half_A, half_B) half-map paths for a given iteration.
+
+        STOPGAP names half-maps as ``<refbase>_A_<iteration>.<ext>`` and
+        ``<refbase>_B_<iteration>.<ext>``.  The extension (``.em`` or ``.mrc``)
+        is resolved by checking what exists on disk; ``.em`` is the default
+        when neither (or both) exist.
+
+        Parameters
+        ----------
+        iteration : int
+            Iteration number.
+        working_dir : PathOrStr or None, default=None
+            Directory override (see :meth:`resolve_ref_base`).
+
+        Returns
+        -------
+        tuple[str, str] or None
+            ``(path_A, path_B)``, or ``None`` if ``ref`` is not set.
+
+        Warns
+        -----
+        UserWarning
+            When both the ``.em`` and ``.mrc`` forms exist for the same half.
+        """
+        ref_base = self.resolve_ref_base(working_dir=working_dir, separator="")
+        if ref_base is None:
+            return None
+
+        def _pick_ext(letter: str) -> str:
+            em = f"{ref_base}_{letter}_{iteration}.em"
+            mrc = f"{ref_base}_{letter}_{iteration}.mrc"
+            em_exists = Path(em).exists()
+            mrc_exists = Path(mrc).exists()
+            if em_exists and mrc_exists:
+                warnings.warn(
+                    f"Both {em!r} and {mrc!r} exist; using .em.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                return em
+            if mrc_exists:
+                return mrc
+            return em
+
+        return _pick_ext("A"), _pick_ext("B")
+
     @classmethod
     def from_file(
         cls,
@@ -3014,6 +3065,66 @@ class NovaStaParams(StaParameters):
         if _is_none_val(val):
             return None
         return _apply_working_dir(str(val), working_dir) + separator
+
+    def get_fsc_filename(
+        self,
+        iteration: int,
+        working_dir: PathOrStr | None = None,
+    ) -> str | None:
+        """Return the novaSTA FSC curve path for a given iteration.
+
+        novaSTA writes its FSC curve as ``<refname>_<iteration>_fsc.txt``
+        (one correlation value per line).  The path is constructed from the
+        same ``ref`` column and the same optional ``working_dir`` override
+        used by :meth:`resolve_ref_base`.
+
+        Parameters
+        ----------
+        iteration : int
+            Iteration number, embedded verbatim (not zero-padded).
+        working_dir : PathOrStr or None, default=None
+            Directory override applied to the stored ``ref`` value
+            (see :func:`_apply_working_dir`).
+
+        Returns
+        -------
+        str or None
+            Full FSC filename, or ``None`` if ``ref`` is not set.
+        """
+        ref_base = self.resolve_ref_base(working_dir=working_dir, separator="")
+        if ref_base is None:
+            return None
+        return f"{ref_base}_{iteration}_fsc.txt"
+
+    def get_half_map_paths(
+        self,
+        iteration: int,
+        working_dir: PathOrStr | None = None,
+    ) -> tuple[str, str] | None:
+        """Return the (even, odd) half-map paths for a given iteration.
+
+        novaSTA names half-maps as ``<refname>_even_<iteration>.em`` and
+        ``<refname>_odd_<iteration>.em``.
+
+        Parameters
+        ----------
+        iteration : int
+            Iteration number.
+        working_dir : PathOrStr or None, default=None
+            Directory override (see :meth:`resolve_ref_base`).
+
+        Returns
+        -------
+        tuple[str, str] or None
+            ``(even_path, odd_path)``, or ``None`` if ``ref`` is not set.
+        """
+        ref_base = self.resolve_ref_base(working_dir=working_dir, separator="")
+        if ref_base is None:
+            return None
+        return (
+            f"{ref_base}_even_{iteration}.em",
+            f"{ref_base}_odd_{iteration}.em",
+        )
 
     @classmethod
     def from_file(cls, path: PathOrStr) -> "NovaStaParams":

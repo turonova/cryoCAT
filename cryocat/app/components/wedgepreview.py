@@ -16,7 +16,7 @@ def wedge_xz_figure(mask: np.ndarray) -> go.Figure:
     """Render the middle XZ slice of a 3D wedge mask as a square heatmap.
 
     The mask is returned by
-    :func:`cryocat.utils.wedgeutils.generate_wedge_mask` in xyz convention
+    :func:`cryocat.core.cryowedge.generate_wedge_mask` in xyz convention
     (axis 0 = x, axis 1 = y, axis 2 = z) and FFT layout (DC at corner). We
     ``fftshift`` first so DC lands at the centre, then slice at ``y = ny // 2``
     to get the XZ plane. ``scaleanchor`` locks the y axis to the x axis so the

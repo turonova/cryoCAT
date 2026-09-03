@@ -1,7 +1,7 @@
 """Table component — composition of grid, filter, edit, and save submodules."""
 from __future__ import annotations
 
-from dash import html, dcc, Input, Output
+from dash import html, dcc, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 
 from cryocat.app.components.tableplot import get_table_plot_component
@@ -23,6 +23,7 @@ def get_table_component(
     connected_motl_prefix=None,
     show_create_from_selected=True,
     save_dialog_prefix: str | None = None,
+    show_editor: bool = False,
 ):
     motl_mode = connected_motl_prefix is not None
     use_save_dialog = motl_mode and save_dialog_prefix is not None
@@ -92,7 +93,34 @@ def get_table_component(
         ),
     ]
 
+    if show_editor:
+        from cryocat.app.components import tableeditor
+        button_children.insert(
+            0,
+            dbc.Button(
+                "Edit table",
+                id=f"{prefix}-edit-open-btn",
+                color="secondary",
+                size="sm",
+                className="me-1",
+            ),
+        )
+
     extra_children = [get_csv_save_modal(prefix)]
+
+    if show_editor:
+        from cryocat.app.components import tableeditor
+        extra_children.append(
+            dbc.Offcanvas(
+                [tableeditor.get_table_editor(f"{prefix}-edit")],
+                id=f"{prefix}-edit-offcanvas",
+                title="Edit table",
+                placement="end",
+                scrollable=True,
+                style={"width": "520px"},
+                is_open=False,
+            )
+        )
 
     if use_save_dialog:
         from cryocat.app.components.savedialog import get_save_dialog
@@ -168,6 +196,7 @@ def register_table_callbacks(
     tab_value: str | None = None,
     extra_csv_states=None,
     custom_csv_save_fn=None,
+    show_editor: bool = False,
 ):
     """Register grid, filter, edit and CSV-save callbacks for *prefix*.
 
@@ -175,6 +204,7 @@ def register_table_callbacks(
     resolve_df and resolve_n_rows are forwarded to register_tablegrid_callbacks;
     pass :func:`cryocat.app.pool.resolve_df` / :func:`~resolve_n_rows` for
     pool-backed grids.  tabs_id / tab_value gate _mount_grid on the active tab.
+    When show_editor=True, also registers the table editor and its modal toggle.
     """
     register_tablegrid_callbacks(
         app, prefix,
@@ -204,3 +234,36 @@ def register_table_callbacks(
     )
     def open_cluster_panel(_):
         return True
+
+    if show_editor:
+        from cryocat.app.components import tableeditor
+
+        @app.callback(
+            Output(f"{prefix}-edit-offcanvas", "is_open", allow_duplicate=True),
+            Input(f"{prefix}-edit-open-btn", "n_clicks"),
+            prevent_initial_call=True,
+        )
+        def open_edit_offcanvas(_):
+            return True
+
+        # Pre-select the slot's current entry in the picker when the offcanvas opens
+        @app.callback(
+            Output(f"{prefix}-edit-src-dd", "value", allow_duplicate=True),
+            Input(f"{prefix}-edit-offcanvas", "is_open"),
+            State(f"{prefix}-global-data-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _preset_editor_source(is_open, ref):
+            if not is_open or not ref:
+                return no_update
+            if "motl_id" in (ref or {}):
+                mid = ref["motl_id"]
+                if mid == "dp-view":
+                    return no_update
+                return f"motl:{mid}"
+            if "data_id" in (ref or {}):
+                return f"data:{ref['data_id']}"
+            return no_update
+
+        tableeditor.register_table_editor_callbacks(app, f"{prefix}-edit")
+

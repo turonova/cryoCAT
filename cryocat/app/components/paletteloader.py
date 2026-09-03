@@ -8,7 +8,8 @@ palette or colorscale name into the custom input; the component validates it
 live and shows an error message if the name is unknown.
 
 The resolved palette name is written to ``{prefix}-value`` (a ``dcc.Store``).
-Callers should read from that store, not from the inner dropdown.
+Callers should read from that store, not from the inner dropdown.  When the
+user has not picked an explicit preset the store holds ``""`` (Auto).
 
 Public API
 ----------
@@ -21,27 +22,62 @@ register_palette_loader_callbacks(app, prefix, mode)
 from __future__ import annotations
 
 import dash
-from dash import html, dcc, Input, Output, State, no_update, ctx
-import dash_bootstrap_components as dbc
-from dash.exceptions import PreventUpdate
+from dash import html, dcc, Input, Output, no_update
 
 from cryocat.app import styles
 from cryocat.app.formgen import make_dropdown
 
-_DISCRETE_PRESETS = [
-    "StarryNight", "StarryNightBlues",
-    "Monet", "MonetWhite", "Klimt", "Hokusai",
+# Built-in Plotly palettes to include in the chooser (stable subset; the full
+# registry has hundreds of names that would make the dropdown unusable).
+_BUILTIN_DISCRETE_PRESETS = [
     "Plotly", "D3", "G10", "Vivid", "Bold", "Pastel", "Safe",
     "Alphabet", "Dark2", "Set1", "Set2", "Set3",
 ]
-
-_CONTINUOUS_PRESETS = [
-    "StarryNight", "StarryNightBlues", "StarryNightDiverging",
-    "Monet", "MonetWhite", "Hokusai",
+_BUILTIN_CONTINUOUS_PRESETS = [
     "Viridis", "Plasma", "Inferno", "Magma", "Cividis",
     "Jet", "Hot", "Blues", "RdBu", "Spectral",
     "Turbo", "Rainbow", "Portland", "Picnic",
 ]
+
+
+def _discrete_presets() -> list[str]:
+    """Return discrete preset names: all registered custom palettes, then selected built-ins."""
+    from cryocat.analysis.visplot import CUSTOM_PALETTE_NAMES
+    seen: set[str] = set()
+    result: list[str] = []
+    for name in CUSTOM_PALETTE_NAMES:
+        if name not in seen:
+            seen.add(name)
+            result.append(name)
+    for name in _BUILTIN_DISCRETE_PRESETS:
+        if name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result
+
+
+def _continuous_presets() -> list[str]:
+    """Return continuous preset names: all registered custom scales, then selected built-ins."""
+    from cryocat.analysis.visplot import CUSTOM_SCALE_NAMES
+    seen: set[str] = set()
+    result: list[str] = []
+    for name in CUSTOM_SCALE_NAMES:
+        if name not in seen:
+            seen.add(name)
+            result.append(name)
+    for name in _BUILTIN_CONTINUOUS_PRESETS:
+        if name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result
+
+
+# Evaluated once at import time after visplot registrations have run.
+_DISCRETE_PRESETS = _discrete_presets()
+_CONTINUOUS_PRESETS = _continuous_presets()
+
+# Palette name that Auto resolves to before any user choice (shown in the swatch).
+_AUTO_DEFAULT_PAL = "StarryNight"
 
 
 # ── Swatch helpers ─────────────────────────────────────────────────────────────
@@ -108,93 +144,104 @@ def _validate(palette_val: str, mode: str) -> None:
 
 # ── Layout ─────────────────────────────────────────────────────────────────────
 
-def get_palette_loader(prefix: str, mode: str = "discrete", default: str | None = None) -> html.Div:
-    """Palette selector: preset dropdown + free-text custom input + swatch.
+def get_palette_loader(
+    prefix: str,
+    mode: str = "discrete",
+    default: str | None = None,
+    allow_auto: bool = False,
+) -> html.Div:
+    """Palette selector: preset dropdown + swatch preview.
 
     Parameters
     ----------
     prefix : str
         Unique ID prefix.  The resolved palette name is stored in
-        ``{prefix}-value`` (a ``dcc.Store``).
+        ``{prefix}-value`` (a ``dcc.Store``).  When *allow_auto* is True the
+        store may hold ``""`` (Auto); otherwise it always holds a palette name.
     mode : {'discrete', 'continuous'}, default='discrete'
         Controls which preset list is offered and how the swatch is rendered.
     default : str, optional
-        Initial palette name.  If it matches a preset it is pre-selected in
-        the dropdown; otherwise it appears in the custom text field.
+        Initial palette name when *allow_auto* is False.  Falls back to the
+        first preset when *default* is not in the preset list.
+    allow_auto : bool, default=False
+        When True, prepend an "Auto" option (``value=""``) and start the
+        dropdown there.  Use for per-plot overrides where Auto means "follow
+        the global default".  When False (default), no Auto option is shown
+        and the dropdown starts at *default* (or the first preset).
     """
     presets = _DISCRETE_PRESETS if mode == "discrete" else _CONTINUOUS_PRESETS
-    preset_val = default if (default and default in presets) else None
-    custom_val = default if (default and default not in presets) else ""
+    if allow_auto:
+        options = [{"label": "Auto", "value": ""}] + [{"label": p, "value": p} for p in presets]
+        initial = ""
+        # Pre-render the swatch for the startup default so the control is never blank.
+        initial_swatch = _make_swatch(_AUTO_DEFAULT_PAL, mode)
+    else:
+        options = [{"label": p, "value": p} for p in presets]
+        initial = default if (default and default in presets) else (presets[0] if presets else "")
+        initial_swatch = _make_swatch(initial, mode) if initial else []
 
     return html.Div(
         [
             make_dropdown(
                 f"{prefix}-preset",
-                [{"label": p, "value": p} for p in presets],
-                preset_val,
-                clearable=True,
-                placeholder="Choose a preset…",
-            ),
-            dbc.Input(
-                id=f"{prefix}-custom",
-                type="text",
-                value=custom_val,
-                placeholder="…or type any Plotly palette name",
-                debounce=True,
-                size="sm",
-                style={"marginTop": "0.3rem"},
+                options,
+                initial,
+                clearable=False,
             ),
             html.Div(id=f"{prefix}-status", style=styles.HINT_SM),
             html.Div(
                 id=f"{prefix}-swatch",
-                children=_make_swatch(default, mode) if default else [],
+                children=initial_swatch,
                 style={"marginTop": "0.4rem", "minHeight": "18px"},
             ),
-            dcc.Store(id=f"{prefix}-value", data=default),
+            dcc.Store(id=f"{prefix}-value", data=initial),
         ]
     )
 
 
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
-def register_palette_loader_callbacks(app: dash.Dash, prefix: str, mode: str = "discrete") -> None:
-    """Register callbacks for the palette loader identified by *prefix*."""
+def register_palette_loader_callbacks(
+    app: dash.Dash,
+    prefix: str,
+    mode: str = "discrete",
+    settings_store_id: str | None = None,
+) -> None:
+    """Register callbacks for the palette loader identified by *prefix*.
 
-    @app.callback(
-        Output(f"{prefix}-value", "data"),
-        Output(f"{prefix}-swatch", "children"),
-        Output(f"{prefix}-status", "children"),
-        Input(f"{prefix}-preset", "value"),
-        Input(f"{prefix}-custom", "value"),
-        prevent_initial_call=True,
-    )
-    def _update(preset, custom_str):
-        triggered = ctx.triggered_id
-        if triggered == f"{prefix}-preset":
-            if preset is None:
-                return no_update, [], ""
+    Parameters
+    ----------
+    settings_store_id : str, optional
+        ID of the ``dcc.Store`` that holds the global graph settings dict.
+        When provided the callback adds it as an ``Input`` so that the Auto
+        swatch updates whenever the effective default palette changes.
+        Pass this for every Auto-capable loader (``allow_auto=True``).
+    """
+    _auto_key = "discrete_palette" if mode == "discrete" else "continuous_palette"
+
+    if settings_store_id:
+        @app.callback(
+            Output(f"{prefix}-value", "data"),
+            Output(f"{prefix}-swatch", "children"),
+            Output(f"{prefix}-status", "children"),
+            Input(f"{prefix}-preset", "value"),
+            Input(settings_store_id, "data"),
+            prevent_initial_call=True,
+        )
+        def _update(preset, settings):
+            if not preset:  # Auto — show the current effective default
+                auto_pal = (settings or {}).get(_auto_key) or _AUTO_DEFAULT_PAL
+                return "", _make_swatch(auto_pal, mode), ""
             return preset, _make_swatch(preset, mode), ""
-        else:
-            val = (custom_str or "").strip()
-            if not val:
-                return no_update, no_update, ""
-            try:
-                _validate(val, mode)
-            except Exception as exc:
-                return no_update, no_update, f"✗ {exc}"
-            return val, _make_swatch(val, mode), "✓ Valid"
-
-    @app.callback(
-        Output(f"{prefix}-preset", "value", allow_duplicate=True),
-        Output(f"{prefix}-custom", "value", allow_duplicate=True),
-        Input(f"{prefix}-preset", "value"),
-        Input(f"{prefix}-custom", "value"),
-        prevent_initial_call=True,
-    )
-    def _cross_clear(preset, custom_str):
-        triggered = ctx.triggered_id
-        if triggered == f"{prefix}-preset" and preset is not None:
-            return no_update, ""
-        if triggered == f"{prefix}-custom" and custom_str and custom_str.strip():
-            return None, no_update
-        return no_update, no_update
+    else:
+        @app.callback(
+            Output(f"{prefix}-value", "data"),
+            Output(f"{prefix}-swatch", "children"),
+            Output(f"{prefix}-status", "children"),
+            Input(f"{prefix}-preset", "value"),
+            prevent_initial_call=True,
+        )
+        def _update(preset):
+            if not preset:
+                return "", [], ""
+            return preset, _make_swatch(preset, mode), ""

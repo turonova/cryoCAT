@@ -21,6 +21,8 @@ import json
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 
+from cryocat.app import styles
+
 
 def get_path_field(
     prefix: str,
@@ -55,27 +57,36 @@ def get_path_field(
     """
     meta = {"mode": mode, "kind": kind, "extensions": list(extensions)}
 
+    children = [
+        dcc.Store(
+            id={"type": "path-browse-meta", "owner": prefix},
+            data=meta,
+        ),
+        dbc.Input(
+            id={"type": "path-input", "owner": prefix},
+            value=value,
+            placeholder=placeholder or "Path…",
+            type="text",
+            style={"flex": "1 1 0", "minWidth": "0"},
+        ),
+        dbc.Button(
+            "Browse…",
+            id={"type": "path-browse-btn", "owner": prefix},
+            color="secondary",
+            size="sm",
+            style={"flexShrink": "0"},
+        ),
+    ]
+    if mode == "open":
+        children.append(
+            html.Span(
+                id={"type": "path-exists-hint", "owner": prefix},
+                children="",
+                style={**styles.HINT, "flexShrink": "0", "whiteSpace": "nowrap"},
+            )
+        )
     return html.Div(
-        [
-            dcc.Store(
-                id={"type": "path-browse-meta", "owner": prefix},
-                data=meta,
-            ),
-            dbc.Input(
-                id={"type": "path-input", "owner": prefix},
-                value=value,
-                placeholder=placeholder or "Path…",
-                type="text",
-                style={"flex": "1 1 0", "minWidth": "0"},
-            ),
-            dbc.Button(
-                "Browse…",
-                id={"type": "path-browse-btn", "owner": prefix},
-                color="secondary",
-                size="sm",
-                style={"flexShrink": "0"},
-            ),
-        ],
+        children,
         style={
             "display": "flex",
             "gap": "0.35rem",
@@ -83,3 +94,23 @@ def get_path_field(
             "alignItems": "center",
         },
     )
+
+
+def register_path_field_callbacks(app) -> None:
+    """Register the path-existence hint callback for all get_path_field widgets.
+
+    Call once at app startup. Covers every field rendered with mode="open"; fields
+    with mode="save" or mode="directory" have no hint span and are not affected.
+    """
+    from pathlib import Path
+    from dash import Input, Output, MATCH
+
+    @app.callback(
+        Output({"type": "path-exists-hint", "owner": MATCH}, "children"),
+        Input({"type": "path-input", "owner": MATCH}, "value"),
+        prevent_initial_call=True,
+    )
+    def _update_path_hint(value):
+        if not value:
+            return ""
+        return "" if Path(value).exists() else "not found"

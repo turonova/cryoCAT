@@ -188,12 +188,14 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
             f"{prefix}-src-tabv-table-plot",
             f"{prefix}-src-tabv-global-data-store",
             table_grid_id=f"{prefix}-src-tabv-grid",
+            resolve_df=pool_resolve_df,
         )
         register_table_cluster_callbacks(
             app,
             f"{prefix}-src-tabv-table-cluster",
             f"{prefix}-src-tabv-global-data-store",
             table_grid_id=f"{prefix}-src-tabv-grid",
+            resolve_df=pool_resolve_df,
         )
 
 

@@ -25,7 +25,7 @@ Modules
     cryocat.utils.ioutils
     cryocat.utils.mathutils
     cryocat.utils.starfileio
-    cryocat.utils.wedgeutils
+    cryocat.core.cryowedge
     cryocat.analysis.memthick
     cryocat.analysis.nnana
     cryocat.analysis.pana

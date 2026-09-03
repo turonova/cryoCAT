@@ -6,7 +6,7 @@ from glob import glob
 from cryocat.analysis import pana
 from cryocat.core import cryomap
 from cryocat.utils import imageutils
-from cryocat.utils import wedgeutils
+from cryocat.core import cryowedge
 import pytest
 from pathlib import Path
 from scipy.spatial.transform import Rotation as srot
@@ -1190,9 +1190,9 @@ def test_run_single_case_rejects_wedgelist_kwarg():
                              wedgelist="fake.star", tomo_number=1)
 
 
-# ── wedgeutils.generate_wedge_mask parity ─────────────────────────────────────
+# ── cryowedge.generate_wedge_mask parity ─────────────────────────────────────
 
-_WL_STAR = Path(__file__).parent / "test_data" / "wedgeutils_data" / "wedge_list.star"
+_WL_STAR = Path(__file__).parent / "test_data" / "cryowedge_data" / "wedge_list.star"
 
 
 def test_generate_wedge_mask_template_side_shape_and_range():
@@ -1200,7 +1200,7 @@ def test_generate_wedge_mask_template_side_shape_and_range():
     # pana.generate_wedge_masks.  Verify it produces a correctly-shaped,
     # unit-interval float mask for a cubic template volume.
     template_size = 32
-    result = wedgeutils.generate_wedge_mask(template_size, str(_WL_STAR), 17)
+    result = cryowedge.generate_wedge_mask(template_size, str(_WL_STAR), 17)
     mask = result["mask"]
     assert mask.shape == (template_size,) * 3
     assert mask.dtype in (np.float32, np.float64)

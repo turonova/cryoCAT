@@ -1,5 +1,6 @@
+import dash
 import dash_bootstrap_components as dbc
-from dash import html
+from dash import html, Input, Output, State, ALL, ctx, no_update
 
 from cryocat.app import styles
 from cryocat.app.formgen import make_dropdown
@@ -83,3 +84,65 @@ def InlineInputForm(id_, label, default_visibility="flex", **input_kwargs):
         className=class_style,
         id=f"{id_}-topdiv",
     )
+
+
+# ── Graph wrapper (BC4) ────────────────────────────────────────────────────────
+
+def customel_graph(owner: str, name, graph_component) -> html.Div:
+    """Wrap a styled-graph in a container with a Send-to-editor button.
+
+    Parameters
+    ----------
+    owner, name :
+        Must match the ``owner``/``name`` keys of the wrapped graph's id dict.
+    graph_component :
+        The ``dcc.Graph`` to wrap.
+    """
+    return html.Div([
+        html.Div(
+            dbc.Button(
+                "Send to editor",
+                id={"type": "customel-send-btn", "owner": owner, "name": name},
+                size="sm",
+                color="light",
+                n_clicks=0,
+                style={"marginBottom": "0.3rem"},
+            ),
+        ),
+        graph_component,
+    ])
+
+
+def register_customel_callbacks(app: dash.Dash) -> None:
+    """Register the pattern-matching Send-to-editor callback."""
+    from cryocat.app import ids as _ids
+
+    @app.callback(
+        Output(_ids.GRAPH_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(_ids.GRAPH_POOL_NEXT_ID, "data", allow_duplicate=True),
+        Output("gr-pool-status", "children", allow_duplicate=True),
+        Input({"type": "customel-send-btn", "owner": ALL, "name": ALL}, "n_clicks"),
+        State({"type": "styled-graph", "owner": ALL, "name": ALL}, "figure"),
+        State(_ids.GRAPH_POOL_REGISTRY, "data"),
+        State(_ids.GRAPH_POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
+    )
+    def _send_to_editor(all_clicks, all_figures, registry, next_id):
+        triggered = ctx.triggered_id
+        if not isinstance(triggered, dict) or triggered.get("type") != "customel-send-btn":
+            raise dash.exceptions.PreventUpdate
+        if not ctx.triggered or not ctx.triggered[0].get("value"):
+            raise dash.exceptions.PreventUpdate
+        owner, name = triggered["owner"], triggered["name"]
+        figure = None
+        for entry in ctx.states_list[0]:
+            if entry["id"]["owner"] == owner and entry["id"]["name"] == name:
+                figure = entry["value"]
+                break
+        if not figure:
+            return no_update, no_update, "No figure to send."
+        from cryocat.app import graphpool as _graphpool
+        state = _graphpool.GraphPoolState.from_stores(registry, next_id)
+        lbl = f"Graph {state.next_id}"
+        state, graph_id = _graphpool.insert_graph_entry(state, figure, label=lbl, kind="frozen")
+        return *state.to_stores(), f"Sent {graph_id} to editor."

@@ -47,7 +47,13 @@ from cryocat.app.apputils import (
 from cryocat.app import ids, styles
 from cryocat.app import discovery as _discovery
 from cryocat.app.formgen import build_form, make_dropdown
-from cryocat.app.logger import invoke_operation
+from cryocat.app.components.poolslotlist import (
+    register_slot_change_callback,
+    register_slot_focus_callback,
+    _first_free_slot,
+    _UNASSIGNED as _PSL_UNASSIGNED,
+)
+from cryocat.app.logger import invoke_operation, dash_logger as _dash_logger
 from cryocat.app import session as _session
 from cryocat.app.event import message_event
 from cryocat.app.pageshell import _SIDEBAR_STYLE, _SIDEBAR_COL_STYLE
@@ -207,35 +213,6 @@ def _run_pair_operations(
 
 # ───────────────────────────────────────────────────────────────────────────────
 
-_NONE_OPT = "__none__"  # dropdown sentinel for an empty slot
-
-
-def _slot_assignment_rows():
-    """One dropdown per view slot — assigns a pool motl to that slot."""
-    rows = []
-    for i in range(N_SLOTS):
-        rows.append(
-            dbc.Row(
-                [
-                    dbc.Col(
-                        html.Label(f"Slot {i + 1}:"),
-                        width=3,
-                        className="d-flex align-items-center",
-                    ),
-                    dbc.Col(
-                        make_dropdown(
-                            {"type": "me-slot-assign", "slot": i},
-                            [{"label": "(empty)", "value": _NONE_OPT}],
-                            _NONE_OPT,
-                            clearable=False,
-                        ),
-                        width=9,
-                    ),
-                ],
-                className="mb-1",
-            )
-        )
-    return rows
 
 
 def get_motl_editor_sidebar():
@@ -361,6 +338,7 @@ def get_motl_editor_sidebar():
                                         style={"color": "var(--color9)", "padding": "4px"},
                                     ),
                                 ),
+                                html.Div(id="me-active-unslotted-note", style=styles.HINT),
                             ],
                             title="Loaded Motls (pool)",
                             item_id="me-sidebar-list",
@@ -417,19 +395,6 @@ def get_motl_editor_sidebar():
                             ],
                             title="Batch Convert",
                             item_id="me-sidebar-batch-convert",
-                        ),
-                        dbc.AccordionItem(
-                            [
-                                html.Div(
-                                    "Assign which pool motl is rendered in each editor slot. "
-                                    "Loading auto-fills free slots; use these when the pool exceeds "
-                                    f"{N_SLOTS} motls.",
-                                    style={"color": "var(--color9)", "marginBottom": "0.5rem"},
-                                ),
-                                *_slot_assignment_rows(),
-                            ],
-                            title="Slot assignment",
-                            item_id="me-sidebar-slots",
                         ),
                         dbc.AccordionItem(
                             [
@@ -601,11 +566,6 @@ def get_motl_editor_sidebar():
     )
 
 
-def _first_free_slot(slot_map):
-    for i in range(N_SLOTS):
-        if i >= len(slot_map) or not slot_map[i]:
-            return i
-    return None
 
 
 def _relion_params_summary(relion_params):
@@ -743,9 +703,13 @@ def register_motl_editor_sidebar_callbacks(app):
                 },
             )
         except Exception as exc:
+            from cryocat.app import session as _session
+            from cryocat.app.event import message_event as _msg_event
+            _dash_logger.write(f"Load failed: {exc}", source="error")
+            _session.emit(_msg_event(f"Load failed: {exc}", level="error"))
             return (no_update, no_update, no_update, slot_map, no_update, f"Load failed: {exc}")
 
-        free = _first_free_slot(slot_map)
+        free = _first_free_slot(slot_map, N_SLOTS)
         if free is not None:
             slot_map[free] = mid
             active_tab = f"me-tab-{free}"
@@ -754,7 +718,7 @@ def register_motl_editor_sidebar_callbacks(app):
             active_tab = no_update
             status = (
                 f"Loaded: {label} ({len(motl_data)} particles) → pool "
-                f"(all {N_SLOTS} slots in use; assign it via 'Slot assignment')"
+                f"(all {N_SLOTS} slots in use; use the slot dropdown in the pool list)"
             )
         status += _relion_params_summary(relion_params)
         return (*pool_state.to_stores(), slot_map, active_tab, status)
@@ -769,13 +733,15 @@ def register_motl_editor_sidebar_callbacks(app):
         Input("me-active-target", "data"),
         prevent_initial_call=True,
     )
-    def update_motl_list(registry, groups_data, _slot_map, expand_data, active_target):
+    def update_motl_list(registry, groups_data, slot_map_data, expand_data, active_target):
         registry = registry or {}
         gstate = GroupState.from_store(groups_data)
         expand_data = expand_data or {}
         active_target = active_target or {}
         at_type = active_target.get("type")
         at_id = active_target.get("id")
+        slot_map = list(slot_map_data or [None] * N_SLOTS)
+        mid_to_slot = {m: i for i, m in enumerate(slot_map) if m}
         items = []
 
         # ── Groups first ──────────────────────────────────────────────────────
@@ -889,6 +855,15 @@ def register_motl_editor_sidebar_callbacks(app):
             motl_row_style = {"display": "flex", "alignItems": "center", "padding": "4px 8px", "cursor": "pointer"}
             if is_active_motl:
                 motl_row_style["backgroundColor"] = "var(--bs-primary-bg-subtle)"
+            # Build per-motl slot dropdown
+            current_slot_str = str(mid_to_slot[mid]) if mid in mid_to_slot else _PSL_UNASSIGNED
+            slot_opts = [{"label": "—", "value": _PSL_UNASSIGNED}]
+            for slot_i in range(N_SLOTS):
+                occupant = slot_map[slot_i] if slot_i < len(slot_map) else None
+                if occupant and occupant != mid:
+                    slot_opts.append({"label": f"Slot {slot_i + 1} (taken)", "value": str(slot_i)})
+                else:
+                    slot_opts.append({"label": f"Slot {slot_i + 1}", "value": str(slot_i)})
             items.append(
                 dbc.ListGroupItem(
                     [
@@ -900,6 +875,15 @@ def register_motl_editor_sidebar_callbacks(app):
                                 "textOverflow": "ellipsis",
                                 "whiteSpace": "nowrap",
                             },
+                        ),
+                        html.Div(
+                            make_dropdown(
+                                {"type": "me-psl-slot", "item_id": mid},
+                                slot_opts,
+                                current_slot_str,
+                                clearable=False,
+                            ),
+                            style={"width": "8rem", "flexShrink": 0},
                         ),
                         dbc.Button(
                             "×",
@@ -920,70 +904,50 @@ def register_motl_editor_sidebar_callbacks(app):
             return html.Div("No motls loaded.", style={"color": "var(--color9)", "padding": "4px"})
         return dbc.ListGroup(items, flush=True)
 
-    # ── Slot-assignment dropdowns: render from slot_map + registry ─────────────
-    @app.callback(
-        Output({"type": "me-slot-assign", "slot": ALL}, "options"),
-        Output({"type": "me-slot-assign", "slot": ALL}, "value"),
-        Input(ids.POOL_REGISTRY, "data"),
-        Input("me-slot-map", "data"),
-        prevent_initial_call=True,
-    )
-    def render_slot_assignment(registry, slot_map):
-        registry = registry or {}
-        slot_map = list(slot_map or [None] * N_SLOTS)
-        motl_opts = [
-            {"label": m.get("label", mid), "value": mid}
-            for mid, m in registry.items()
-            if m.get("active", True) and m.get("has_tab", True)
-        ]
-        options = [[{"label": "(empty)", "value": _NONE_OPT}] + motl_opts for _ in range(N_SLOTS)]
-        values = [(slot_map[i] if i < len(slot_map) and slot_map[i] else _NONE_OPT) for i in range(N_SLOTS)]
-        return options, values
+    # ── Per-motl slot dropdowns: generic slot-change callback (E5) ────────────
+    register_slot_change_callback(app, "me", "me-slot-map", N_SLOTS)
+    register_slot_focus_callback(app, "me-slot-map", "me-tabs", "me-tab-", N_SLOTS)
 
-    # ── Slot-assignment dropdowns: apply user change → slot_map ────────────────
+    # ── H3: tab switch → sync active target (motl dict format, not raw string) ─
+
     @app.callback(
-        Output("me-slot-map", "data", allow_duplicate=True),
-        Input({"type": "me-slot-assign", "slot": ALL}, "value"),
-        State({"type": "me-slot-assign", "slot": ALL}, "id"),
+        Output("me-active-target", "data", allow_duplicate=True),
+        Input("me-tabs", "active_tab"),
         State("me-slot-map", "data"),
+        State("me-active-target", "data"),
         prevent_initial_call=True,
     )
-    def apply_slot_assignment(values, ids, slot_map):
-        slot_map = list(slot_map or [None] * N_SLOTS)
-        while len(slot_map) < N_SLOTS:
-            slot_map.append(None)
+    def _sync_tab_to_active_target(active_tab, slot_map, current_target):
+        if not active_tab or not active_tab.startswith("me-tab-"):
+            return no_update
+        try:
+            idx = int(active_tab[len("me-tab-"):])
+        except ValueError:
+            return no_update
+        sm = list(slot_map or [None] * N_SLOTS)
+        mid = sm[idx] if idx < len(sm) else None
+        if not mid:
+            return None
+        new_target = {"type": "motl", "id": mid}
+        if current_target == new_target:
+            return no_update
+        return new_target
 
-        # Current value of each slot's dropdown (None for the "(empty)" sentinel).
-        by_slot = {}
-        for id_, val in zip(ids, values):
-            by_slot[id_["slot"]] = val if (val and val != _NONE_OPT) else None
-        new_map = [by_slot.get(i) for i in range(N_SLOTS)]
+    # ── H3: unslotted note — visible when the active motl has no slot assigned ─
 
-        # A motl may occupy at most one slot. The dropdown the user just changed
-        # is authoritative: its choice moves into that slot and is cleared from
-        # any other slot it previously occupied (so re-assigning replaces,
-        # rather than emptying the target slot).
-        triggered = ctx.triggered_id
-        if isinstance(triggered, dict) and triggered.get("type") == "me-slot-assign":
-            changed_slot = triggered.get("slot")
-            chosen = new_map[changed_slot] if changed_slot is not None else None
-            if chosen is not None:
-                for i in range(N_SLOTS):
-                    if i != changed_slot and new_map[i] == chosen:
-                        new_map[i] = None
-        else:
-            # No specific trigger (e.g. a programmatic refresh): keep first.
-            seen = set()
-            for i in range(N_SLOTS):
-                if new_map[i] is not None:
-                    if new_map[i] in seen:
-                        new_map[i] = None
-                    else:
-                        seen.add(new_map[i])
-
-        if new_map == slot_map:
-            raise dash.exceptions.PreventUpdate
-        return new_map
+    @app.callback(
+        Output("me-active-unslotted-note", "children"),
+        Input("me-active-target", "data"),
+        State("me-slot-map", "data"),
+    )
+    def _update_active_unslotted_note(active_target, slot_map):
+        if not active_target or active_target.get("type") != "motl":
+            return ""
+        mid = active_target.get("id")
+        sm = list(slot_map or [None] * N_SLOTS)
+        if any(m == mid for m in sm):
+            return ""
+        return "[not displayed — assign to a slot to see edits live]"
 
     # ── Clicking a pool motl activates its slot tab and sets the active target ──
     @app.callback(
@@ -1012,19 +976,17 @@ def register_motl_editor_sidebar_callbacks(app):
         Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.POOL_META, "data", allow_duplicate=True),
         Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
-        Output(ids.POOL_GROUPS, "data", allow_duplicate=True),  # remove from any group
+        Output(ids.POOL_GROUPS, "data", allow_duplicate=True),
         Output("me-slot-map", "data", allow_duplicate=True),
-        Output("me-tabs", "active_tab", allow_duplicate=True),
         Input({"type": "me-close-motl", "mid": ALL}, "n_clicks"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         State(ids.POOL_GROUPS, "data"),
         State("me-slot-map", "data"),
-        State("me-tabs", "active_tab"),
         prevent_initial_call=True,
     )
-    def close_motl(n_clicks_list, registry, pool_meta, next_id, groups_data, slot_map, active_tab):
+    def close_motl(n_clicks_list, registry, pool_meta, next_id, groups_data, slot_map):
         if not any(n_clicks_list):
             raise dash.exceptions.PreventUpdate
         triggered = ctx.triggered_id
@@ -1036,15 +998,8 @@ def register_motl_editor_sidebar_callbacks(app):
         gstate = purge_motl_from_groups(GroupState.from_store(groups_data), mid)
 
         old_map = list(slot_map or [None] * N_SLOTS)
-        closed_slot = next((i for i, m in enumerate(old_map) if m == mid), None)
         new_map = [None if m == mid else m for m in old_map]
-
-        new_active = no_update
-        if closed_slot is not None and active_tab == f"me-tab-{closed_slot}":
-            nxt = next((i for i, m in enumerate(new_map) if m), None)
-            new_active = f"me-tab-{nxt}" if nxt is not None else "me-tab-0"
-
-        return (*pool_state.to_stores(), gstate.to_store(), new_map, new_active)
+        return (*pool_state.to_stores(), gstate.to_store(), new_map)
 
     # ── Group: toggle expand/collapse ─────────────────────────────────────────
     @app.callback(
@@ -1169,7 +1124,7 @@ def register_motl_editor_sidebar_callbacks(app):
         slot_map = list(slot_map or [None] * N_SLOTS)
         while len(slot_map) < N_SLOTS:
             slot_map.append(None)
-        free = _first_free_slot(slot_map)
+        free = _first_free_slot(slot_map, N_SLOTS)
         if free is not None:
             slot_map[free] = mid
             active = f"me-tab-{free}"
@@ -1463,7 +1418,7 @@ def register_motl_editor_sidebar_callbacks(app):
 
         # 6) Assign to the first free view slot.
         col_note = " + col-assign" if has_col_config else ""
-        free = _first_free_slot(slot_map)
+        free = _first_free_slot(slot_map, N_SLOTS)
         if free is not None:
             slot_map[free] = mid
             active = f"me-tab-{free}"
@@ -1475,7 +1430,7 @@ def register_motl_editor_sidebar_callbacks(app):
             active = no_update
             status = (
                 f"'{op_label}{col_note}' -> new motl in the pool "
-                f"({len(result.df)} particles; no free slot, use 'Slot assignment')."
+                f"({len(result.df)} particles; no free slot, use the slot dropdown in the pool list)."
             )
 
         return (*pool_state.to_stores(), slot_map, active, status)
@@ -1657,14 +1612,14 @@ def register_motl_editor_sidebar_callbacks(app):
                 )
             except Exception as exc:
                 return _ret(nochange, nochange, f"Error running '{method_name}': {exc}")
-            free = next((i for i in range(N_SLOTS) if not slot_map[i]), None)
+            free = _first_free_slot(slot_map, N_SLOTS)
             if free is not None:
                 slot_map[free] = mid
                 active = f"me-tab-{free}"
                 status = f"'{method_name}' -> new motl in slot {free + 1} ({len(result.df)} particles)."
             else:
                 active = no_update
-                status = f"'{method_name}' -> new motl in the pool (no free slot; use 'Slot assignment')."
+                status = f"'{method_name}' -> new motl in the pool (no free slot; use the slot dropdown in the pool list)."
             return _ret(
                 nochange,
                 nochange,
@@ -1902,6 +1857,10 @@ def register_motl_editor_sidebar_callbacks(app):
                     **_rln_kws,
                 )
             except Exception as exc:
+                from cryocat.app import session as _session
+                from cryocat.app.event import message_event as _msg_event
+                _dash_logger.write(f"Load failed ({label}): {exc}", source="error")
+                _session.emit(_msg_event(f"Load failed ({label}): {exc}", level="error"))
                 failed.append(f"{label}: {exc}")
                 continue
             try:
@@ -1916,6 +1875,10 @@ def register_motl_editor_sidebar_callbacks(app):
                 )
                 new_mids.append(mid)
             except Exception as exc:
+                from cryocat.app import session as _session
+                from cryocat.app.event import message_event as _msg_event
+                _dash_logger.write(f"Load failed ({label}): {exc}", source="error")
+                _session.emit(_msg_event(f"Load failed ({label}): {exc}", level="error"))
                 failed.append(f"{label}: {exc}")
 
         if not new_mids:
@@ -2038,10 +2001,12 @@ def register_motl_editor_sidebar_callbacks(app):
         State("me-batch-save-filename-suffix", "value"),
         State("me-batch-save-overwrite", "value"),
         State("me-batch-save-rln-value", "data"),
-        State({"type": "me-batch-save-sg-param", "owner": ALL, "param": ALL, "tag": ALL}, "value"),
-        State({"type": "me-batch-save-sg-param", "owner": ALL, "param": ALL, "tag": ALL}, "id"),
+        State({"type": "me-batch-save-writer-param", "owner": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": "me-batch-save-writer-param", "owner": ALL, "param": ALL, "tag": ALL}, "id"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_GROUPS, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
     def _batch_save(
@@ -2053,10 +2018,12 @@ def register_motl_editor_sidebar_callbacks(app):
         suffix,
         overwrite,
         rln_value,
-        sg_vals,
-        sg_ids,
+        writer_vals,
+        writer_ids,
         registry,
         groups_data,
+        pool_meta,
+        pool_next_id,
     ):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
@@ -2073,13 +2040,14 @@ def register_motl_editor_sidebar_callbacks(app):
         )
         if probs:
             return no_update, "\n".join(probs)
-        sg_kwargs = generate_kwargs(sg_ids, sg_vals) if sg_ids else {}
+        pool_state = PoolState.from_stores(registry, pool_meta, pool_next_id)
+        writer_kwargs = generate_kwargs(writer_ids, writer_vals, pool_state) if writer_ids else {}
         os.makedirs(out_dir, exist_ok=True)
-        status, val = execute_batch_save(members, paths, fmt, rln_value, sg_kwargs, registry)
+        status, val = execute_batch_save(members, paths, fmt, rln_value, writer_kwargs, registry)
         return status, val
 
     # ── Part F: write-back @-variable results to the form text inputs ──────────
-    from cryocat.app.formgen import register_var_picker_writeback
+    from cryocat.app.formgen import register_form_callbacks
 
-    register_var_picker_writeback(app, "me-op-param")
-    register_var_picker_writeback(app, "me-multi-param")
+    register_form_callbacks(app, "me-op-param")
+    register_form_callbacks(app, "me-multi-param")

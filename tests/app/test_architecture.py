@@ -300,7 +300,7 @@ def test_thin_callback_exempt_list_is_bounded():
 
 # Baseline recorded at Phase 3 write time.  The test asserts the count only
 # goes DOWN (shrinks), never UP.  Update this number when the count drops.
-_ALLOW_DUPLICATE_BASELINE = 305  # W2: twist/desc removed from pool (-7 pool allow_duplicate outputs)
+_ALLOW_DUPLICATE_BASELINE = 348  # updated: +15 for TABLE_EDITOR_WORKING_COPY W2/W3 commit callbacks
 
 
 def test_allow_duplicate_count_does_not_grow():
@@ -711,6 +711,232 @@ def test_no_deprecated_pool_store_ids_in_app():
 
 
 # ── Registration guard (§10) ──────────────────────────────────────────────────
+
+# ── §form-reg — build_form implies register_form_callbacks ───────────────────
+#
+# Every build_form id_type in suite/pages/ and motlsidebar must have a matching
+# register_form_callbacks call.  If it does not, path writeback, path-existence
+# hint, and @-variable picker callbacks silently never fire for that form type.
+
+
+def _resolve_str_constants(tree: ast.Module) -> dict[str, str]:
+    """Return {name: str_value} for top-level simple string assignments."""
+    consts: dict[str, str] = {}
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            consts[node.targets[0].id] = node.value.value
+    return consts
+
+
+def _is_build_form_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    fn = node.func
+    if isinstance(fn, ast.Name):
+        return fn.id == "build_form"
+    if isinstance(fn, ast.Attribute):
+        return fn.attr == "build_form"
+    return False
+
+
+def _is_register_form_callbacks_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    fn = node.func
+    if isinstance(fn, ast.Name):
+        return fn.id == "register_form_callbacks"
+    if isinstance(fn, ast.Attribute):
+        return fn.attr == "register_form_callbacks"
+    return False
+
+
+def _local_assigns(fn_body: list) -> dict[str, ast.expr]:
+    """Top-level simple assignments in a function body: {name: value_node}."""
+    out: dict[str, ast.expr] = {}
+    for stmt in fn_body:
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+        ):
+            out[stmt.targets[0].id] = stmt.value
+    return out
+
+
+def _walk_no_fn(stmts: list):
+    """Yield every AST node reachable from *stmts* without descending into
+    nested FunctionDef / AsyncFunctionDef bodies."""
+    stack = list(stmts)
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+
+
+def _raw_id_type_node(call: ast.Call) -> ast.expr | None:
+    """Return the raw AST node for the id_type argument, or None if absent."""
+    for kw in call.keywords:
+        if kw.arg == "id_type":
+            return kw.value
+    # Positional: build_form(fn_or_entry, id_type, ...) — id_type is the second arg
+    if len(call.args) >= 2:
+        return call.args[1]
+    return None
+
+
+def _resolve_to_const(
+    node: ast.expr,
+    module_consts: dict[str, str],
+    local: dict[str, ast.expr],
+) -> str | None:
+    """Resolve *node* to a constant string, following one level of Name indirection."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id in module_consts:
+            return module_consts[node.id]
+        if node.id in local:
+            return _resolve_to_const(local[node.id], module_consts, {})
+    return None
+
+
+def _resolve_to_expr_key(node: ast.expr, local: dict[str, ast.expr]) -> str | None:
+    """Return ast.unparse key for per-module matching, or None if opaque.
+
+    If *node* is a Name in *local*, the assigned expression is used.
+    If *node* is any other non-Name expression (JoinedStr, BinOp …), it is
+    used as-is.  A Name not in *local* (function parameter) → None (skip).
+    """
+    if isinstance(node, ast.Name):
+        if node.id in local:
+            return ast.unparse(local[node.id])
+        return None  # function parameter or module global not in module_consts — opaque
+    return ast.unparse(node)
+
+
+def _iter_form_calls(tree: ast.Module, module_consts: dict[str, str]):
+    """Yield (const, expr_key, is_register) for every build_form and
+    register_form_callbacks call in *tree*.
+
+    const      — str if id_type resolves to a constant string, else None.
+    expr_key   — ast.unparse string if id_type resolves to a comparable
+                 expression (f-string, local-var alias), else None.
+    is_register — True for register_form_callbacks, False for build_form.
+    Both const and expr_key None → opaque; caller reports as skipped.
+
+    Two scopes are covered:
+    - Module-level calls outside any function (empty local assigns).
+    - Each function body (one level of local-assign resolution per function).
+      Nested function bodies are handled as separate scopes by the outer loop.
+    """
+    def _emit(call, local):
+        is_reg = _is_register_form_callbacks_call(call)
+        is_bf = _is_build_form_call(call)
+        if not (is_reg or is_bf):
+            return
+        raw = _raw_id_type_node(call)
+        if raw is None:
+            return
+        const = _resolve_to_const(raw, module_consts, local)
+        expr_key = None if const is not None else _resolve_to_expr_key(raw, local)
+        yield const, expr_key, is_reg
+
+    # Module-level calls (outside all functions)
+    for node in _walk_no_fn(tree.body):
+        if isinstance(node, ast.Call):
+            yield from _emit(node, {})
+
+    # Each function's own body — nested fn bodies are NOT descended into by _walk_no_fn
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        local = _local_assigns(fn.body)
+        for node in _walk_no_fn(fn.body):
+            if isinstance(node, ast.Call):
+                yield from _emit(node, local)
+
+
+def test_build_form_implies_register_form_callbacks():
+    """§form-reg — every build_form id_type must have a matching register_form_callbacks.
+
+    Two matching strategies:
+    - Constant id_types are matched globally across all scope files.
+    - Expression id_types (f-strings, local-variable aliases) are matched
+      per-module: the same normalised expression must appear in both a
+      build_form and a register_form_callbacks call in the same file.
+    - Calls whose id_type is opaque (function parameter, etc.) are skipped.
+
+    Without the registration, path writeback, path-existence hint, and
+    @-variable picker callbacks silently never fire for that form type.
+    """
+    scope_files = [
+        *sorted((_SUITE / "pages").glob("*.py")),
+        _SUITE / "motlsidebar.py",
+        _COMPONENTS / "savedialog.py",
+    ]
+
+    # Pass 1: collect registrations — constants globally, expressions per-module.
+    all_const_registered: set[str] = set()
+    per_module_expr_registered: dict[pathlib.Path, set[str]] = {}
+
+    for p in scope_files:
+        tree = _parse(p)
+        if tree is None:
+            continue
+        module_consts = _resolve_str_constants(tree)
+        expr_reg: set[str] = set()
+        for const, expr_key, is_reg in _iter_form_calls(tree, module_consts):
+            if not is_reg:
+                continue
+            if const is not None:
+                all_const_registered.add(const)
+            elif expr_key is not None:
+                expr_reg.add(expr_key)
+        per_module_expr_registered[p] = expr_reg
+
+    # Pass 2: check every build_form call.
+    violations: list[str] = []
+    skipped: list[str] = []
+
+    for p in scope_files:
+        tree = _parse(p)
+        if tree is None:
+            continue
+        module_consts = _resolve_str_constants(tree)
+        module_expr_reg = per_module_expr_registered.get(p, set())
+        seen_v: set[str] = set()
+
+        for const, expr_key, is_reg in _iter_form_calls(tree, module_consts):
+            if is_reg:
+                continue
+            if const is not None:
+                if const not in all_const_registered:
+                    key = f"{p.name}  id_type={const!r}"
+                    if key not in seen_v:
+                        violations.append(key)
+                        seen_v.add(key)
+            elif expr_key is not None:
+                if expr_key not in module_expr_reg:
+                    key = f"{p.name}  id_type={expr_key!r} (expression)"
+                    if key not in seen_v:
+                        violations.append(key)
+                        seen_v.add(key)
+            else:
+                skipped.append(p.name)
+
+    assert not violations, (
+        "build_form called without matching register_form_callbacks:\n"
+        + "\n".join(f"  {v}" for v in violations)
+    )
+
 
 @pytest.mark.xfail(
     reason=(

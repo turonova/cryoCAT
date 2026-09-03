@@ -278,6 +278,8 @@ layout: Any = html.Div(
 # ── Callbacks ─────────────────────────────────────────────────────────────────
 
 def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
+    formgen.register_form_callbacks(app, _INIT)
+    formgen.register_form_callbacks(app, _METH)
     register_motl_source_callbacks(app, "cpx-build")
     register_send_to_editor_callbacks(app, "cpx-export", _CPX_RES_MOTL)
 
@@ -307,9 +309,12 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         State({"type": _INIT, "owner": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": _INIT, "owner": ALL, "param": ALL, "tag": ALL}, "id"),
         State(_CPX_POOL, "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def _create_complex(_, cls_name, motl_id, init_vals, init_ids, pool_data):
+    def _create_complex(_, cls_name, motl_id, init_vals, init_ids, pool_data, registry, pool_meta, pool_next_id):
         if not cls_name or not motl_id:
             raise PreventUpdate
         cls = COMPLEX_CLASSES.get(cls_name)
@@ -320,7 +325,8 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         if motl is None:
             return no_update, no_update, "No motl data found for the selected motl."
 
-        init_kwargs = generate_kwargs(init_ids, init_vals) if (init_ids and init_vals) else {}
+        pool_state = _pool.PoolState.from_stores(registry, pool_meta, pool_next_id)
+        init_kwargs = generate_kwargs(init_ids, init_vals, pool_state) if (init_ids and init_vals) else {}
         init_kwargs = {k: v for k, v in init_kwargs.items() if v not in (None, "", [])}
 
         try:
@@ -444,9 +450,12 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         State(_CPX_POOL, "data"),
         State({"type": _METH, "owner": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": _METH, "owner": ALL, "param": ALL, "tag": ALL}, "id"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def _run_method(_, entry_key, selected_id, pool_data, meth_vals, meth_ids):
+    def _run_method(_, entry_key, selected_id, pool_data, meth_vals, meth_ids, registry, pool_meta, pool_next_id):
         if not entry_key or not selected_id:
             raise PreventUpdate
 
@@ -461,7 +470,8 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         except KeyError:
             return no_update, no_update, no_update, f"Unknown entry {entry_key!r}.", no_update
 
-        meth_kwargs = generate_kwargs(meth_ids, meth_vals) if (meth_ids and meth_vals) else {}
+        pool_state = _pool.PoolState.from_stores(registry, pool_meta, pool_next_id)
+        meth_kwargs = generate_kwargs(meth_ids, meth_vals, pool_state) if (meth_ids and meth_vals) else {}
         meth_kwargs = {k: v for k, v in meth_kwargs.items() if v not in (None, "", [])}
 
         try:

@@ -26,6 +26,7 @@ from dash import html, dcc, Input, Output, State
 
 from cryocat.app import ids
 from cryocat.app.components.graphsettings import styled_figure
+from cryocat.app.components.customel import customel_graph
 
 
 # ── Private helpers ────────────────────────────────────────────────────────────
@@ -73,11 +74,12 @@ def get_volume_view(prefix: str):
             dcc.Store(id=f"{prefix}-map-mesh"),
             dcc.Store(id=f"{prefix}-mask-mesh"),
             dcc.Store(id=f"{prefix}-mask-store"),
-            dcc.Graph(
-                id={"type": "styled-graph", "owner": prefix, "name": "3d"},
-                style={"height": "620px"},
-                config={"scrollZoom": True},
-            ),
+            customel_graph(prefix, "3d",
+                dcc.Graph(
+                    id={"type": "styled-graph", "owner": prefix, "name": "3d"},
+                    style={"height": "620px"},
+                    config={"scrollZoom": True},
+                )),
         ]
     )
 

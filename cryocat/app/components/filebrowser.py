@@ -147,7 +147,7 @@ def _resolve_confirm_path(nav_value: str | None, filename_value: str | None, mod
 
 def _update_last_dirs(last_dirs, final_path: str, kind: str) -> dict:
     dirs = dict(last_dirs or {})
-    if final_path and kind:
+    if final_path:
         p = Path(final_path)
         dirs[kind] = str(p) if p.is_dir() else str(p.parent)
     return dirs
@@ -162,7 +162,7 @@ def get_file_browser() -> html.Div:
             # ── App-level stores ──────────────────────────────────────────────
             dcc.Store(id=ids.BROWSER_REQUEST, data={}),
             dcc.Store(id=ids.BROWSER_CWD, data=""),
-            dcc.Store(id=ids.BROWSER_LAST_DIR, data={}),
+            dcc.Store(id=ids.BROWSER_LAST_DIR, data={}, storage_type="local"),
             dcc.Store(id=ids.BROWSER_RESULT, data={}),
             # Internal: snapshot of the listed entry paths (by index)
             dcc.Store(id="browser-entry-paths", data=[]),

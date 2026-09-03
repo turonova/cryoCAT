@@ -1,9 +1,12 @@
-"""Data pool page — load, view, and publish heterogeneous datasets.
+"""Data pool page — view and publish heterogeneous datasets.
 
-Layout: sticky sidebar with four accordion sections (Load, Data pool, View
-options, Publish) + main area with four overlaid panels (table, graph, dict,
-empty state).  Panel visibility is switched by CSS display; only one is shown
-at a time.
+Layout: sticky sidebar with the table editor (entry picker + operations) at the
+top, then secondary accordion sections (Data pool, View options, Register as
+variable).  Main area shows the selected entry (table, graph, dict, or empty).
+
+File loading has moved to the Utilities page (W3).  The table editor's source
+picker in the sidebar is the primary selection mechanism for both viewing and
+transforming entries (W4, W5).
 
 Contract
 --------
@@ -12,30 +15,32 @@ Exposes ``layout``, ``register_callbacks(app)``, and ``DYNAMIC_IDS``.
 from __future__ import annotations
 
 import json
-import pathlib
 
 import numpy as np
 import plotly.graph_objects as go
 
-import dash
 from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 
 from cryocat.app import ids, styles
 from cryocat.app import datapool
-from cryocat.app import discovery
 from cryocat.app import formgen
-from cryocat.app.apputils import run_operation, generate_kwargs
-from cryocat.app.pageshell import page_shell, sidebar_accordion
-from cryocat.app.components.pathfield import get_path_field
+from cryocat.app.pageshell import page_shell
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
+from cryocat.app.components import tableeditor
 from cryocat.app.components.graphsettings import styled_figure
 from cryocat.app.components.volumeview import mesh_at
 from cryocat.app.datapool import DataPoolState, DataPayloadMissing
-from cryocat.app.pool import resolve_df as pool_resolve_df, resolve_n_rows as pool_resolve_n_rows
+from cryocat.app.pool import (
+    resolve_df as pool_resolve_df,
+    resolve_n_rows as pool_resolve_n_rows,
+    replace_motl_rows,
+    PoolState,
+)
+from cryocat.app.apputils import run_operation
 
 
 # ── Dynamic IDs for the suite app router ──────────────────────────────────────
@@ -52,18 +57,16 @@ _HIDE: dict = {"display": "none"}
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
 
-def _reader_options() -> list[dict]:
-    """Build dropdown options from the reader registry, sorted by label."""
-    return [{"label": e.label, "value": e.key} for e in discovery.readers()]
-
-
 def _render_pool_entry(entry_dict: dict) -> html.Div:
     """Render one pool list item with label, kind badge, and remove button."""
-    data_id = entry_dict["data_id"]
-    label   = entry_dict.get("label", data_id)
-    kind    = entry_dict.get("kind", "?")
-    n_rows  = entry_dict.get("n_rows")
-    meta    = f"{kind}" + (f" · {n_rows:,}" if n_rows is not None else "")
+    data_id    = entry_dict["data_id"]
+    label      = entry_dict.get("label", data_id)
+    kind       = entry_dict.get("kind", "?")
+    n_rows     = entry_dict.get("n_rows")
+    source_mid = entry_dict.get("source_motl_id")
+    meta = f"{kind}" + (f" · {n_rows:,}" if n_rows is not None else "")
+    if source_mid:
+        meta += f" · ↔ {source_mid}"
     return html.Div(
         [
             html.Span(
@@ -97,34 +100,6 @@ def _render_pool_entry(entry_dict: dict) -> html.Div:
             "borderRadius": "4px",
         },
     )
-
-
-def _do_load(
-    path: str,
-    reader_key: str,
-    label_val: str | None,
-    extra_values: list,
-    extra_ids: list,
-    registry: dict,
-    next_id: int,
-) -> tuple:
-    """Execute a reader load; return (registry, next_id, status, selected_id)."""
-    entry = discovery.get(reader_key)
-    extra_kwargs = generate_kwargs(extra_ids, extra_values) if extra_ids else {}
-    kwargs: dict = ({entry.path_arg: path} if entry.path_arg else {})
-    kwargs.update(extra_kwargs)
-    try:
-        result = run_operation(entry.fn, kwargs)
-    except Exception as exc:
-        return registry, next_id, f"Error ({entry.label}, {pathlib.Path(path).name}): {exc}", None
-    if result is None:
-        return registry, next_id, f"Reader {entry.label!r} returned None.", None
-    effective_label = (label_val or "").strip() or pathlib.Path(path).stem
-    state = DataPoolState.from_stores(registry, next_id)
-    state, data_id = datapool.insert_entry(
-        state, result, label=effective_label, reader=reader_key, source_path=path,
-    )
-    return *state.to_stores(), f"Loaded {effective_label!r}.", data_id
 
 
 def _do_remove(
@@ -276,116 +251,48 @@ def _make_stores() -> list:
 
 def _sidebar() -> list:
     return [
-        sidebar_accordion(
-            [
-                # ── Load ───────────────────────────────────────────────────────
-                dbc.AccordionItem(
-                    [
-                        formgen.form_row(
-                            "reader",
-                            formgen.make_dropdown(
-                                "dp-reader-dd",
-                                options=_reader_options(),
-                                value=None,
-                                clearable=True,
-                            ),
-                            "Select a reader function to parse the input file.",
-                            label_id="dp-reader-lbl",
-                            label_text="Reader",
-                        ),
-                        formgen.form_row(
-                            "path",
-                            get_path_field(
-                                "dp-path",
-                                mode="open",
-                                extensions=(),
-                                placeholder="Select file…",
-                            ),
-                            "Absolute path to the file to load.",
-                            label_id="dp-path-lbl",
-                            label_text="File",
-                        ),
-                        html.Div(id="dp-params-form", children=[]),
-                        formgen.form_row(
-                            "label",
-                            dbc.Input(
-                                id="dp-label",
-                                type="text",
-                                placeholder="auto",
-                                debounce=True,
-                            ),
-                            "Human-readable name for this dataset (blank = file stem).",
-                            truly_optional=True,
-                            label_id="dp-label-lbl",
-                            label_text="Label",
-                        ),
-                        dbc.Button(
-                            "Load",
-                            id="dp-load-btn",
-                            color=styles.BTN_PRIMARY,
-                            size="sm",
-                            style={"width": "100%"},
-                        ),
-                        html.Div(id="dp-load-status", style=styles.HINT),
-                    ],
-                    title="Load",
-                    item_id="dp-acc-load",
+        # Primary: entry picker + operations (working-copy mode — W1)
+        tableeditor.get_table_editor("dp-edit", multi_source=True, working_copy_mode=True),
+        html.Hr(style={"margin": f"{styles.SECTION_GAP} 0"}),
+        # Working-copy commit section (W5: below operations, clearly separated)
+        html.Div(
+            id="dp-wc-section",
+            style=_HIDE,  # shown by _on_wc_ui_update when ops are pending
+            children=[
+                html.Div(
+                    id="dp-wc-indicator",
+                    style={**styles.HINT, "marginBottom": styles.FORM_ROW_GAP},
                 ),
-                # ── Data pool ──────────────────────────────────────────────────
-                dbc.AccordionItem(
-                    [
-                        html.Div(id="dp-pool-list", children=[]),
-                    ],
-                    title="Data pool",
-                    item_id="dp-acc-pool",
+                dbc.Button(
+                    "Apply to original",
+                    id="dp-wc-apply-btn",
+                    color=styles.BTN_PRIMARY,
+                    size="sm",
+                    disabled=True,
+                    style={"width": "100%"},
+                    title="Apply the working copy back to the original entry (recorded).",
                 ),
-                # ── View options ───────────────────────────────────────────────
-                dbc.AccordionItem(
-                    [
-                        formgen.form_row(
-                            "iso_level",
-                            dcc.Slider(
-                                id="dp-iso-level",
-                                min=0.0, max=1.0, step=0.01, value=0.5,
-                                tooltip={"placement": "bottom"},
-                            ),
-                            "Isosurface level for 3D volume display (0 = min, 1 = max).",
-                            label_id="dp-iso-lbl",
-                            label_text="Iso level",
-                        ),
-                    ],
-                    title="View options",
-                    item_id="dp-acc-view",
+                dbc.Button(
+                    "Save as new table",
+                    id="dp-wc-save-btn",
+                    color=styles.BTN_SECONDARY,
+                    size="sm",
+                    style={"width": "100%", "marginTop": styles.FORM_ROW_GAP},
+                    title="Save the working copy as a new data pool entry; source is unchanged.",
                 ),
-                # ── Register as variable ───────────────────────────────────────
-                dbc.AccordionItem(
-                    [
-                        formgen.form_row(
-                            "variable_name",
-                            dbc.Input(
-                                id="dp-publish-name",
-                                type="text",
-                                placeholder="my_data",
-                                debounce=True,
-                            ),
-                            "Python identifier for console access via @name.",
-                            label_id="dp-publish-name-lbl",
-                            label_text="Variable name",
-                        ),
-                        dbc.Button(
-                            "Register as @name",
-                            id="dp-publish-btn",
-                            color=styles.BTN_SECONDARY,
-                            size="sm",
-                            style={"width": "100%"},
-                        ),
-                        html.Div(id="dp-publish-status", style=styles.HINT),
-                    ],
-                    title="Register as variable",
-                    item_id="dp-acc-publish",
+                dbc.Button(
+                    "Discard changes",
+                    id="dp-wc-discard-btn",
+                    color=styles.BTN_NEUTRAL,
+                    size="sm",
+                    style={"width": "100%", "marginTop": styles.FORM_ROW_GAP},
+                    title="Discard the working copy and return to the original.",
+                ),
+                html.Div(
+                    id="dp-wc-commit-status",
+                    style={**styles.HINT, "marginTop": styles.FORM_ROW_GAP},
                 ),
             ],
-            active_item=["dp-acc-load", "dp-acc-pool"],
         ),
     ]
 
@@ -393,7 +300,7 @@ def _sidebar() -> list:
 def _main() -> list:
     return [
         html.Div(
-            [get_table_component("dp-view-tabv", show_create_from_selected=True)],
+            get_table_component("dp-view-tabv", show_create_from_selected=True),
             id="dp-panel-table",
             style=_HIDE,
         ),
@@ -425,7 +332,7 @@ def _main() -> list:
             style=_HIDE,
         ),
         html.Div(
-            "Select an entry from the pool to view it.",
+            "Select an entry from the picker to view it.",
             id="dp-panel-empty",
             style={**styles.HINT, "padding": "1rem"},
         ),
@@ -438,106 +345,195 @@ layout = html.Div(
 )
 
 
+# ── Working-copy helpers (module-level — thin-callback law) ───────────────────
+
+def _wc_ui_update_op(wc_signal, src_ref):
+    from cryocat.app.suite.pages._wcopy import (
+        get_copy, get_meta, indicator_text, validate_for_apply, source_id_for_ref,
+    )
+    if not wc_signal or not src_ref:
+        return "", True, "No pending changes.", _HIDE
+    signal_source_id = wc_signal.get("source_id") if isinstance(wc_signal, dict) else None
+    current_source_id = source_id_for_ref(src_ref)
+    if signal_source_id != current_source_id:
+        return "", True, "No pending changes.", _HIDE
+    meta = get_meta(current_source_id)
+    if meta.get("ops_count", 0) == 0:
+        return "", True, "No pending changes.", _HIDE
+    wc_df = get_copy(current_source_id)
+    if wc_df is None:
+        return "", True, "Working copy lost — discard and retry.", _SHOW
+    ok, reason = validate_for_apply(wc_df, meta.get("source_kind", ""), meta.get("source_reader", ""))
+    ind = indicator_text(current_source_id)
+    if not ok:
+        return ind, True, f"Cannot apply: {reason}", _SHOW
+    return ind, False, "Apply the working copy back to the original entry (recorded).", _SHOW
+
+
+def _apply_to_original_op(src_ref, pool_reg, pool_meta_data, pool_next_id, dp_reg, dp_next_id):
+    from cryocat.app.suite.pages._wcopy import (
+        get_copy, get_meta, validate_for_apply, source_changed, clear, source_id_for_ref,
+    )
+    _no = no_update
+    _fail = (_no, _no, _no, _no, _no, _no)
+    source_id = source_id_for_ref(src_ref)
+    wc_df = get_copy(source_id)
+    if wc_df is None:
+        return *_fail, "No working copy found — nothing applied."
+    meta = get_meta(source_id)
+    ok, reason = validate_for_apply(wc_df, meta.get("source_kind", ""), meta.get("source_reader", ""))
+    if not ok:
+        return *_fail, f"Cannot apply: {reason}"
+    if "motl_id" in src_ref:
+        motl_id = src_ref["motl_id"]
+        current_n = (pool_reg or {}).get(motl_id, {}).get("n_rows")
+        warn = f" (warning: source was modified since copy was made)" if (
+            current_n is not None and source_changed(source_id, current_n)
+        ) else ""
+        p = PoolState.from_stores(pool_reg, pool_meta_data, pool_next_id)
+        p = run_operation(replace_motl_rows, {"state": p, "motl_id": motl_id, "rows": wc_df})
+        clear(source_id)
+        return *p.to_stores(), _no, _no, None, f"Applied to {motl_id} (revision bumped).{warn}"
+    if "data_id" in src_ref:
+        data_id = src_ref["data_id"]
+        current_n = (dp_reg or {}).get(data_id, {}).get("n_rows")
+        warn = f" (warning: source was modified since copy was made)" if (
+            current_n is not None and source_changed(source_id, current_n)
+        ) else ""
+        ds = DataPoolState.from_stores(dp_reg, dp_next_id)
+        ds = run_operation(datapool.replace_payload, {"state": ds, "data_id": data_id, "df": wc_df})
+        clear(source_id)
+        return _no, _no, _no, *ds.to_stores(), None, f"Applied to {data_id}.{warn}"
+    return *_fail, "Unknown source type."
+
+
+def _save_as_new_op(src_ref, label_val, dp_reg, dp_next_id):
+    from cryocat.app.suite.pages._wcopy import get_copy, clear, source_id_for_ref
+    _no = no_update
+    source_id = source_id_for_ref(src_ref)
+    wc_df = get_copy(source_id)
+    if wc_df is None:
+        return _no, _no, _no, _no, "No working copy found — nothing saved."
+    label = (label_val or "").strip() or f"Working copy of {source_id}"
+    ds = DataPoolState.from_stores(dp_reg, dp_next_id)
+    ds, did = run_operation(
+        datapool.insert_entry,
+        {"state": ds, "payload": wc_df, "label": label, "reader": "table_op", "source_path": ""},
+    )
+    clear(source_id)
+    return *ds.to_stores(), did, None, f"Saved as new table {did}."
+
+
 # ── Callbacks ─────────────────────────────────────────────────────────────────
 
 def register_callbacks(app):  # noqa: C901
     """Register all data pool page callbacks."""
 
-    # ── Build reader params form ───────────────────────────────────────────────
-    @app.callback(
-        Output("dp-params-form", "children"),
-        Input("dp-reader-dd", "value"),
-    )
-    def _build_params_form(reader_key):
-        if not reader_key:
-            return []
-        entry = discovery.get(reader_key)
-        return formgen.build_form(entry, id_type="dp-param", exclude=list(entry.hide))
-
-    # ── Load / Remove (single writer for all three mutable stores) ───────────────
+    # ── Remove entry ───────────────────────────────────────────────────────────
     @app.callback(
         Output(ids.DATA_POOL_REGISTRY, "data"),
         Output(ids.DATA_POOL_NEXT_ID,  "data"),
-        Output("dp-load-status",        "children"),
-        Output("dp-selected-id",        "data"),
-        Input("dp-load-btn",                              "n_clicks"),
         Input({"type": "dp-remove-btn", "data_id": ALL}, "n_clicks"),
-        State({"type": "path-input", "owner": "dp-path"}, "value"),
-        State("dp-reader-dd",  "value"),
-        State("dp-label",      "value"),
-        State({"type": "dp-param", "param": ALL, "tag": ALL}, "value"),
         State(ids.DATA_POOL_REGISTRY, "data"),
         State(ids.DATA_POOL_NEXT_ID,  "data"),
-        State("dp-selected-id",        "data"),
         prevent_initial_call=True,
     )
-    def _mutate(_load_n, _remove_list, path, reader_key, label_val, extra_values, registry, next_id, selected):
-        trigger = ctx.triggered_id
-        if trigger == "dp-load-btn":
-            if not path or not reader_key:
-                return no_update, no_update, "Select a file and reader.", no_update
-            extra_ids = [s["id"] for s in ctx.states_list[3]]
-            return _do_load(path, reader_key, label_val, extra_values, extra_ids, registry, next_id)
+    def _remove_entry(_remove_list, registry, next_id):
         if not any(n for n in (_remove_list or []) if n):
             raise PreventUpdate
-        state, new_sel = _do_remove(trigger["data_id"], registry, next_id, selected)
-        return *state.to_stores(), no_update, new_sel
+        trigger = ctx.triggered_id
+        state, _ = _do_remove(trigger["data_id"], registry, next_id, None)
+        return state.to_stores()
 
-    # ── Render pool list ───────────────────────────────────────────────────────
+    # ── Select entry / refresh working-copy view ───────────────────────────────
     @app.callback(
-        Output("dp-pool-list", "children"),
-        Input(ids.DATA_POOL_REGISTRY, "data"),
-    )
-    def _render_pool_list(registry):
-        if not registry:
-            return [html.Div("No data loaded.", style=styles.HINT)]
-        return [_render_pool_entry(v) for v in registry.values()]
-
-    # ── Select entry ───────────────────────────────────────────────────────────
-    @app.callback(
-        Output("dp-view-rev",                  "data"),
+        Output("dp-view-rev",                    "data"),
         Output("dp-view-tabv-global-data-store", "data"),
         Output("dp-panel-table",  "style"),
         Output("dp-panel-graph",  "style"),
         Output("dp-panel-dict",   "style"),
         Output("dp-panel-empty",  "style"),
-        Input(ids.DATA_POOL_REGISTRY, "data"),
-        Input("dp-selected-id",       "data"),
-        State("dp-view-rev",          "data"),
+        Input("dp-edit-src-ref",          "data"),
+        Input("dp-edit-wc-changed",       "data"),  # fires on wc op or commit
+        State(ids.DATA_POOL_REGISTRY,     "data"),
+        State("dp-view-rev",              "data"),
     )
-    def _select_entry(registry, data_id, rev):
-        return _do_select(data_id, registry, rev)
+    def _select_entry(src_ref, wc_signal, dp_registry, rev):
+        from cryocat.app.suite.pages._wcopy import get_copy, source_id_for_ref
+        # When working copy is active for the current source, show it
+        if src_ref and wc_signal:
+            signal_source_id = wc_signal.get("source_id") if isinstance(wc_signal, dict) else None
+            current_source_id = source_id_for_ref(src_ref)
+            if signal_source_id and signal_source_id == current_source_id:
+                wc_df = get_copy(current_source_id)
+                if wc_df is not None:
+                    datapool.set_view_df_direct(wc_df)
+                    new_rev = (rev or 0) + 1
+                    return new_rev, {"motl_id": "dp-view", "rev": new_rev}, _SHOW, _HIDE, _HIDE, _HIDE
+        # Normal routing (wc cleared or different source selected)
+        if not src_ref:
+            datapool.clear_view_df()
+            return rev, None, _HIDE, _HIDE, _HIDE, _SHOW
+        if "motl_id" in src_ref:
+            new_rev = (rev or 0) + 1
+            ref = {"motl_id": src_ref["motl_id"], "rev": new_rev}
+            return new_rev, ref, _SHOW, _HIDE, _HIDE, _HIDE
+        if "data_id" in src_ref:
+            return _do_select(src_ref["data_id"], dp_registry, rev)
+        datapool.clear_view_df()
+        return rev, None, _HIDE, _HIDE, _HIDE, _SHOW
+
+    # ── Sync dp-selected-id (written by tableeditor Apply) → picker ────────────
+    @app.callback(
+        Output("dp-edit-src-dd", "value", allow_duplicate=True),
+        Input("dp-selected-id", "data"),
+        prevent_initial_call=True,
+    )
+    def _sync_selection_to_picker(data_id):
+        if not data_id:
+            return no_update
+        return f"data:{data_id}"
+
+    # ── Clear picker when selected entry is removed ────────────────────────────
+    @app.callback(
+        Output("dp-edit-src-dd", "value", allow_duplicate=True),
+        Input(ids.DATA_POOL_REGISTRY, "data"),
+        Input(ids.POOL_REGISTRY,      "data"),
+        State("dp-edit-src-dd",       "value"),
+        prevent_initial_call=True,
+    )
+    def _clear_picker_if_stale(dp_reg, pool_reg, current_val):
+        if not current_val:
+            return no_update
+        if current_val.startswith("motl:"):
+            mid = current_val[5:]
+            if mid not in (pool_reg or {}):
+                return None
+        elif current_val.startswith("data:"):
+            did = current_val[5:]
+            if did not in (dp_reg or {}):
+                return None
+        return no_update
 
     # ── Graph viewer ───────────────────────────────────────────────────────────
     @app.callback(
         Output("dp-view-graph", "figure"),
-        Input("dp-selected-id",         "data"),
-        Input("dp-iso-level",            "value"),
+        Input("dp-edit-src-ref",         "data"),
         State(ids.DATA_POOL_REGISTRY,    "data"),
         State(ids.GRAPH_SETTINGS_STORE,  "data"),
     )
-    def _render_graph_viewer(data_id, level, registry, gs):
-        return _vol_or_arr_figure(data_id, level or 0.5, registry, gs)
+    def _render_graph_viewer(src_ref, registry, gs):
+        data_id = (src_ref or {}).get("data_id")
+        return _vol_or_arr_figure(data_id, 0.5, registry, gs)
 
     # ── Dict viewer ────────────────────────────────────────────────────────────
     @app.callback(
         Output("dp-view-dict", "children"),
-        Input("dp-selected-id", "data"),
+        Input("dp-edit-src-ref", "data"),
     )
-    def _render_dict_viewer(data_id):
+    def _render_dict_viewer(src_ref):
+        data_id = (src_ref or {}).get("data_id")
         return _dict_text(data_id)
-
-    # ── Publish ────────────────────────────────────────────────────────────────
-    @app.callback(
-        Output("dp-publish-status", "children"),
-        Input("dp-publish-btn",     "n_clicks"),
-        State("dp-selected-id",     "data"),
-        State("dp-publish-name",    "value"),
-        State(ids.DATA_POOL_REGISTRY, "data"),
-        prevent_initial_call=True,
-    )
-    def _publish(n_clicks, data_id, name, registry):
-        return _do_publish(data_id, name, registry)
 
     # ── Table sub-component callbacks ──────────────────────────────────────────
     register_table_callbacks(
@@ -551,6 +547,85 @@ def register_callbacks(app):  # noqa: C901
         app, "dp-view-tabv-table-cluster", "dp-view-tabv-global-data-store", pool_aware=True, resolve_df=pool_resolve_df,
     )
 
-    # ── Formgen write-back callbacks for reader param fields ───────────────────
-    formgen.register_path_writeback(app, "dp-param", None)
-    formgen.register_var_picker_writeback(app, "dp-param", None)
+    # ── Working-copy UI: indicator + Apply button disabled state ──────────────
+    @app.callback(
+        Output("dp-wc-indicator",  "children"),
+        Output("dp-wc-apply-btn",  "disabled"),
+        Output("dp-wc-apply-btn",  "title"),
+        Output("dp-wc-section",    "style"),
+        Input("dp-edit-wc-changed", "data"),
+        State("dp-edit-src-ref",    "data"),
+    )
+    def _on_wc_ui_update(wc_signal, src_ref):
+        return _wc_ui_update_op(wc_signal, src_ref)
+
+    # ── Working-copy commit: Apply to original ─────────────────────────────────
+    @app.callback(
+        # allow_duplicate: tableeditor._on_apply (modal path) also writes pool stores
+        Output(ids.POOL_REGISTRY,     "data", allow_duplicate=True),
+        Output(ids.POOL_META,         "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID,      "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_REGISTRY,"data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
+        # allow_duplicate: tableeditor._on_apply_wc also writes this store
+        Output("dp-edit-wc-changed",   "data", allow_duplicate=True),
+        # allow_duplicate: _on_save_as_new and _on_discard also write this
+        Output("dp-wc-commit-status",  "children", allow_duplicate=True),
+        Input("dp-wc-apply-btn",       "n_clicks"),
+        State("dp-edit-src-ref",      "data"),
+        State(ids.POOL_REGISTRY,      "data"),
+        State(ids.POOL_META,          "data"),
+        State(ids.POOL_NEXT_ID,       "data"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        State(ids.DATA_POOL_NEXT_ID,  "data"),
+        prevent_initial_call=True,
+    )
+    def _on_apply_to_original(
+        n_clicks, src_ref, pool_reg, pool_meta_data, pool_next_id, dp_reg, dp_next_id,
+    ):
+        if not n_clicks or not src_ref:
+            raise PreventUpdate
+        return _apply_to_original_op(src_ref, pool_reg, pool_meta_data, pool_next_id, dp_reg, dp_next_id)
+
+    # ── Working-copy commit: Save as new table ─────────────────────────────────
+    @app.callback(
+        # allow_duplicate: tableeditor._on_apply (modal) also writes DATA_POOL_REGISTRY
+        Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        # allow_duplicate: tableeditor._on_apply (modal) also writes dp-selected-id
+        Output("dp-selected-id",       "data", allow_duplicate=True),
+        # allow_duplicate: tableeditor._on_apply_wc and _on_discard also write this
+        Output("dp-edit-wc-changed",   "data", allow_duplicate=True),
+        Output("dp-wc-commit-status",  "children", allow_duplicate=True),
+        Input("dp-wc-save-btn",        "n_clicks"),
+        State("dp-edit-src-ref",       "data"),
+        State("dp-edit-label",         "value"),
+        State(ids.DATA_POOL_REGISTRY,  "data"),
+        State(ids.DATA_POOL_NEXT_ID,   "data"),
+        prevent_initial_call=True,
+    )
+    def _on_save_as_new(n_clicks, src_ref, label_val, dp_reg, dp_next_id):
+        if not n_clicks or not src_ref:
+            raise PreventUpdate
+        return _save_as_new_op(src_ref, label_val, dp_reg, dp_next_id)
+
+    # ── Working-copy commit: Discard changes ───────────────────────────────────
+    @app.callback(
+        # allow_duplicate: tableeditor._on_apply_wc and _on_apply_to_original also write this
+        Output("dp-edit-wc-changed",  "data", allow_duplicate=True),
+        Output("dp-wc-commit-status", "children", allow_duplicate=True),
+        Input("dp-wc-discard-btn",    "n_clicks"),
+        State("dp-edit-src-ref",      "data"),
+        prevent_initial_call=True,
+    )
+    def _on_discard(n_clicks, src_ref):
+        from cryocat.app.suite.pages._wcopy import clear, source_id_for_ref
+        if not n_clicks or not src_ref:
+            raise PreventUpdate
+        source_id = source_id_for_ref(src_ref)
+        clear(source_id)
+        return None, "Working copy discarded."
+
+    # ── Table editor callbacks (W1–W7) — sidebar mount (working-copy mode) ──────
+    tableeditor.register_table_editor_callbacks(app, "dp-edit", multi_source=True, working_copy_mode=True)
+

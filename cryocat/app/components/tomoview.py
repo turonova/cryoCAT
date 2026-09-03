@@ -11,6 +11,7 @@ from cryocat.app.apputils import make_axis_trace
 from cryocat.analysis import visplot
 from cryocat.app.formgen import make_dropdown
 from cryocat.app import ids
+from cryocat.app.components.tableplot import _CONTINUOUS as _PALETTE_DISCRETE
 
 
 def hover_template(columns, hover_info) -> str:
@@ -194,10 +195,7 @@ def get_viewer_component(prefix: str):
                             html.Div(
                                 make_dropdown(
                                     f"{prefix}-colorscale-dropdown",
-                                    [
-                                        {"label": s, "value": s}
-                                        for s in ["StarryNight", "Monet", "Viridis", "Cividis", "Plasma", "Jet", "Hot"]
-                                    ],
+                                    [{"label": s, "value": s} for s in _PALETTE_DISCRETE],
                                     None,
                                     placeholder="Auto (palette)",
                                     style={"width": "150px"},
@@ -227,7 +225,6 @@ def get_viewer_component(prefix: str):
                                         style={
                                             "width": "150px",
                                             "flex": "0 0 auto",
-                                            "paddingTop": "24px",  # adjust if needed for vertical alignment
                                         },
                                     ),
                                 ],
@@ -315,6 +312,7 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
 
     @app.callback(
         Output(f"{prefix}-color-dropdown", "options"),
+        Output(f"{prefix}-color-dropdown", "value"),
         Input(f"{prefix}-data", "data"),
         State(ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
@@ -324,10 +322,14 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
             raise exceptions.PreventUpdate
         if isinstance(data, dict) and "motl_id" in data:
             entry = (registry or {}).get(data["motl_id"], {})
-            return color_options_from_handle(entry)
-        df = _motl_df(data)
-        numeric_cols = df.select_dtypes(include="number").columns.tolist()
-        return [{"label": col, "value": col} for col in numeric_cols if col not in ["tomo_id"]]
+            opts = color_options_from_handle(entry)
+        else:
+            df = _motl_df(data)
+            numeric_cols = df.select_dtypes(include="number").columns.tolist()
+            opts = [{"label": col, "value": col} for col in numeric_cols if col not in ["tomo_id"]]
+        values = [o["value"] for o in opts]
+        default = "score" if "score" in values else (values[0] if values else None)
+        return opts, default
 
     _tab_state = [State(tabs_id, "active_tab")] if (tabs_id and tab_value) else []
 

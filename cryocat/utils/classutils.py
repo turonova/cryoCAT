@@ -722,6 +722,8 @@ TYPE_HANDLERS = {
     "EulerAngles":    {"widget": "triplet",  "parse": _parse_triplet,  "argparse": {"type": _arg_triplet}},
     "ListLike":       {"widget": "listlike", "parse": _parse_listlike, "argparse": {"type": _arg_listlike}},
     "PathOrStr":      {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
+    # Normalized tag used by formgen.build_form for all path-widget params.
+    "path":           {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
     "Symmetry":       {"widget": "text",     "parse": _parse_str,      "argparse": {"type": str}},
     "RotationLike":   {"widget": "rotation", "parse": _parse_str,      "argparse": {"type": str}},
     "Literal":        {"widget": "dropdown", "parse": _parse_literal,  "argparse": {"type": str}},

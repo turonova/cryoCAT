@@ -13,8 +13,9 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, DBSCAN
 from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import NearestNeighbors as _SkNN
 
 from cryocat._types import ArrayLike
 
@@ -96,6 +97,40 @@ def filter_feature_columns(
         return input_df[features + id_cols]
 
     raise ValueError("feature_ids must be 'all', a column name string, or a list of column names.")
+
+
+def _prepare_features(
+    input_df: pd.DataFrame,
+    feature_ids: str | list[str],
+    id_columns: tuple[str, ...],
+    nan_drop: Literal["row", "column"],
+    pca_dict: dict | None,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Shared data-preparation block for clustering and k-distance functions.
+
+    Returns
+    -------
+    feat_data : pandas.DataFrame
+        Feature matrix with id and nn_id columns removed.
+    qp_ids : numpy.ndarray
+        Values of the first id column for each retained row.
+    """
+    if pca_dict is None:
+        data = drop_nans(input_df, axis_type=nan_drop)
+        data = filter_feature_columns(data, feature_ids=feature_ids, id_columns=id_columns)
+        first_id = next((c for c in id_columns if c in data.columns), None)
+        qp_ids = data[first_id].to_numpy() if first_id is not None else np.array([])
+        drop_cols = [c for c in list(id_columns) + ["nn_id"] if c in data.columns]
+        data = data.drop(columns=drop_cols)
+    else:
+        data, qp_ids = compute_pca(
+            input_df,
+            feature_ids=feature_ids,
+            nan_drop=nan_drop,
+            id_columns=id_columns,
+            **pca_dict,
+        )
+    return data, qp_ids
 
 
 def pca_feature_importance(pca: PCA, feature_names: list[str]) -> pd.Series:
@@ -213,37 +248,183 @@ def kmeans_cluster(
     pandas.DataFrame
         Feature columns + ``"cluster"`` (int label) + first id column.
     """
-    if pca_dict is None:
-        km_data = drop_nans(input_df, axis_type=nan_drop)
-        km_data = filter_feature_columns(km_data, feature_ids=feature_ids, id_columns=id_columns)
-        first_id = next((c for c in id_columns if c in km_data.columns), None)
-        qp_ids = km_data[first_id].to_numpy() if first_id is not None else np.array([])
-        drop_cols = [c for c in list(id_columns) + ["nn_id"] if c in km_data.columns]
-        km_data = km_data.drop(columns=drop_cols)
-    else:
-        km_data, qp_ids = compute_pca(
-            input_df,
-            feature_ids=feature_ids,
-            nan_drop=nan_drop,
-            id_columns=id_columns,
-            **pca_dict,
-        )
+    feat_data, qp_ids = _prepare_features(input_df, feature_ids, id_columns, nan_drop, pca_dict)
 
     kmeans = KMeans(n_clusters=n_clusters, n_init="auto")
 
     if scale_data:
         scaler = StandardScaler()
-        scaled = scaler.fit_transform(km_data)
+        scaled = scaler.fit_transform(feat_data)
         clusters = kmeans.fit_predict(scaled)
     else:
-        clusters = kmeans.fit_predict(km_data)
+        clusters = kmeans.fit_predict(feat_data)
 
-    result_df = pd.DataFrame(km_data, columns=km_data.columns)
+    result_df = pd.DataFrame(feat_data, columns=feat_data.columns)
     result_df["cluster"] = clusters
     id_col_name = id_columns[0] if id_columns else "qp_id"
     result_df[id_col_name] = qp_ids
 
     return result_df
+
+
+def dbscan_cluster(
+    input_df: pd.DataFrame,
+    eps: float,
+    min_samples: int = 5,
+    feature_ids: str | list[str] = "all",
+    id_columns: tuple[str, ...] = ("qp_id",),
+    nan_drop: Literal["row", "column"] = "row",
+    pca_dict: dict | None = None,
+    metric: str = "euclidean",
+) -> pd.DataFrame:
+    """DBSCAN clustering on descriptor features.
+
+    Parameters
+    ----------
+    input_df : pandas.DataFrame
+        Descriptor DataFrame with feature columns and at least one id column.
+    eps : float
+        Maximum distance between two samples for one to be in the neighbourhood
+        of the other.  Measured in standardised feature space — features are
+        always standardised before clustering so that *eps* has a consistent
+        meaning regardless of the original units or scale of each feature.
+        Omitting standardisation would make *eps* sensitive to arbitrary
+        scaling differences between columns, defeating its purpose as a
+        geometric threshold.
+    min_samples : int, default 5
+        Minimum number of samples in a neighbourhood for a point to be a core
+        point.
+    feature_ids : str or list of str, default "all"
+        Feature columns to include.
+    id_columns : tuple of str, default ``("qp_id",)``
+        Identifier columns to strip before clustering.  The first one is
+        attached to the result DataFrame.
+    nan_drop : {"row", "column"}, default "row"
+        NaN-removal strategy.
+    pca_dict : dict, optional
+        If given, PCA is applied before clustering.  Keys map to keyword
+        arguments of :func:`compute_pca`.  ``feature_ids``, ``nan_drop``, and
+        ``id_columns`` are forwarded automatically.
+    metric : str, default "euclidean"
+        Distance metric passed to :class:`~sklearn.cluster.DBSCAN`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Feature columns + ``"cluster"`` (``-1`` marks noise) + first id column.
+        Interchangeable with the output of :func:`kmeans_cluster`.
+    """
+    feat_data, qp_ids = _prepare_features(input_df, feature_ids, id_columns, nan_drop, pca_dict)
+
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(feat_data)
+
+    labels = DBSCAN(eps=eps, min_samples=min_samples, metric=metric).fit_predict(scaled)
+
+    result_df = pd.DataFrame(feat_data, columns=feat_data.columns)
+    result_df["cluster"] = labels
+    id_col_name = id_columns[0] if id_columns else "qp_id"
+    result_df[id_col_name] = qp_ids
+
+    return result_df
+
+
+def k_distance_curve(
+    input_df: pd.DataFrame,
+    min_samples: int = 5,
+    feature_ids: str | list[str] = "all",
+    id_columns: tuple[str, ...] = ("qp_id",),
+    nan_drop: Literal["row", "column"] = "row",
+) -> np.ndarray:
+    """Sorted distances to the *min_samples*-th nearest neighbour, standardised.
+
+    Used to choose an *eps* value for :func:`dbscan_cluster`: plot the curve
+    and look for the "elbow".  The distances are computed in the same
+    standardised feature space that DBSCAN operates in, so the y-axis is on
+    the same scale as *eps*.
+
+    Parameters
+    ----------
+    input_df : pandas.DataFrame
+        Descriptor DataFrame with feature columns and at least one id column.
+    min_samples : int, default 5
+        Neighbour rank to compute distances to; should match the *min_samples*
+        used for DBSCAN.
+    feature_ids : str or list of str, default "all"
+        Feature columns to include.
+    id_columns : tuple of str, default ``("qp_id",)``
+        Identifier columns to strip before computing distances.
+    nan_drop : {"row", "column"}, default "row"
+        NaN-removal strategy.
+
+    Returns
+    -------
+    numpy.ndarray
+        Distances sorted in ascending order, one entry per retained row.
+    """
+    feat_data, _ = _prepare_features(input_df, feature_ids, id_columns, nan_drop, pca_dict=None)
+
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(feat_data)
+
+    nbrs = _SkNN(n_neighbors=min_samples, metric="euclidean").fit(scaled)
+    distances, _ = nbrs.kneighbors(scaled)
+    return np.sort(distances[:, -1])
+
+
+def screen_feature_columns(
+    df: pd.DataFrame,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Screen DataFrame columns for clustering / PCA suitability.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Any DataFrame; no prior declaration required.
+
+    Returns
+    -------
+    excluded : dict[str, str]
+        ``{column: reason}`` for every column that cannot be used as a
+        feature.  Reasons: ``"non-numeric"``, ``"constant"``, ``"all NaN"``,
+        ``"all zero"``.
+    warnings : dict[str, str]
+        ``{column: "near-constant"}`` for numeric columns that are valid
+        but have fewer than 1 % distinct values (``n_distinct / n_valid < 0.01``).
+        A column where exactly 1 % of values are distinct (the boundary) is
+        **not** warned.  These are borderline — the user decides whether to
+        include them.
+    """
+    excluded: dict[str, str] = {}
+    warnings: dict[str, str] = {}
+
+    for col in df.columns:
+        series = df[col]
+
+        if not pd.api.types.is_numeric_dtype(series):
+            excluded[col] = "non-numeric"
+            continue
+
+        if series.isna().all():
+            excluded[col] = "all NaN"
+            continue
+
+        non_nan = series.dropna()
+
+        if (non_nan == 0).all():
+            excluded[col] = "all zero"
+            continue
+
+        if series.nunique(dropna=True) <= 1:
+            excluded[col] = "constant"
+            continue
+
+        n_valid = series.notna().sum()
+        n_distinct = series.nunique(dropna=True)
+        if n_valid > 0 and n_distinct / n_valid < 0.01:
+            warnings[col] = "near-constant"
+
+    return excluded, warnings
 
 
 def connected_component_clusters(

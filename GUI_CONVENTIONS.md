@@ -180,6 +180,22 @@ Where an explicit override is genuinely wanted, it is opt-in:
 `_CONTINUOUS_TRACE_TYPES` must include the types this app actually emits:
 `mesh3d`, `isosurface`, `volume`, `histogram2d` in addition to the current set.
 
+### 4.3 Deliberately-coloured traces must be re-pinned after styling
+
+`apply_settings_to_figure` (called inside `style_figure` and `styled_figure`) clears existing
+scalar marker colours when `palette_is_user_set=True`, then overwrites them from the chosen
+palette.  A colour set on a trace **before** the styling call — whether via `color_discrete_map`
+or directly on the trace — is not preserved.
+
+**Rule:** Any trace that must keep a fixed colour (e.g. a "noise" cluster rendered in neutral grey)
+must have that colour applied **after** `style_figure` / `styled_figure`, not before.  The earlier
+`color_discrete_map` exists only to drive Plotly Express's initial rendering; it is not sufficient
+on its own.
+
+**Current instance:** `ploteditor._build_figure` re-pins the noise trace colour after `style_figure`.
+Moving that re-pin above `style_figure` would silently restore noise to the palette colour when the
+user has set a custom palette.
+
 ### 4.3 Live restyle
 
 Every `dcc.Graph` carries a dict id **in addition to** its string id role:
