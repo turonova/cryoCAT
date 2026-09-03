@@ -2682,6 +2682,11 @@ class PleomorphicSurface:
             - "point_cloud": oriented point cloud via :meth:`OrientedPointCloud.read`
             - "point_cloud_from_mrc": segmentation-to-point-cloud via
               :meth:`OrientedPointCloud.from_mrc`
+            - "point_cloud_from_motl": oriented point cloud from a motl file via
+              :meth:`OrientedPointCloud.from_motl`. Pass ``group_by`` (e.g.
+              ``'object_id'`` or ``'subtomo_id'``) to split the motl into one wrapped
+              surface per unique value; returns a ``dict`` of ``PleomorphicSurface``
+              in that case, otherwise a single ``PleomorphicSurface``.
         **kwargs
             Forwarded to the selected loader. Accepted keywords depend on ``method``:
 
@@ -2716,10 +2721,22 @@ class PleomorphicSurface:
             - ``transpose`` : bool, default=True — transpose the segmentation array on load.
             - ``smooth_sigma`` : float, optional — Gaussian pre-smooth sigma.
 
+            *"point_cloud_from_motl"*:
+
+            - ``group_by`` : MotlColumn, optional — motl column to split on (e.g.
+              ``'object_id'``, ``'subtomo_id'``). If given and >1 unique value exists,
+              returns a dict of wrapped surfaces keyed by that column's value.
+            - ``recompute_normals`` : bool, default=False — recompute normals from geometry.
+            - ``knn`` : int, default=30 — neighbors for normal estimation.
+            - ``orient_normals`` : bool, default=True — orient normals consistently.
+            - ``tangent_plane_knn`` : int, default=50 — neighbors for normal orientation.
+
         Returns
         -------
-        PleomorphicSurface
-            Wrapped surface loaded from ``input_path``.
+        PleomorphicSurface or dict[Any, PleomorphicSurface]
+            Wrapped surface loaded from ``input_path``. For
+            ``method="point_cloud_from_motl"`` with ``group_by`` splitting into
+            multiple groups, a dict of wrapped surfaces keyed by group value.
         """
         method = str(method).lower()
         aliases = {
@@ -2730,6 +2747,9 @@ class PleomorphicSurface:
             "pointcloud": "point_cloud",
             "mrc_point_cloud": "point_cloud_from_mrc",
             "mrc_pointcloud": "point_cloud_from_mrc",
+            "motl": "point_cloud_from_motl",
+            "motl_point_cloud": "point_cloud_from_motl",
+            "point_cloud_motl": "point_cloud_from_motl",
         }
         method = aliases.get(method, method)
 
@@ -2743,10 +2763,16 @@ class PleomorphicSurface:
             surface = OrientedPointCloud.read(input_path, **kwargs)
         elif method == "point_cloud_from_mrc":
             surface = OrientedPointCloud.from_mrc(input_path, **kwargs)
+        elif method == "point_cloud_from_motl":
+            surface = OrientedPointCloud.from_motl(input_path, **kwargs)
+            # from_motl returns a dict when splitting by group_by into >1 group.
+            if isinstance(surface, dict):
+                return {gid: cls(pcd) for gid, pcd in surface.items()}
         else:
             raise ValueError(
                 f"Unknown read method '{method}'. Use 'mesh', 'mesh_curvatures', "
-                "'mesh_from_mrc', 'point_cloud', or 'point_cloud_from_mrc'."
+                "'mesh_from_mrc', 'point_cloud', 'point_cloud_from_mrc', or "
+                "'point_cloud_from_motl'."
             )
 
         return cls(surface)
@@ -2836,6 +2862,48 @@ class PleomorphicSurface:
         if not isinstance(self.surface, Mesh):
             raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
         return self.surface.get_curvature_directions()
+
+    def get_shape_index(self) -> np.ndarray:
+        """Return per-vertex shape index for a mesh-backed surface.
+
+        Returns
+        -------
+        np.ndarray, shape (N,)
+            Shape index S = (2/pi) * arctan2(k1 + k2, k1 - k2) at each vertex, in [-1, 1].
+        """
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.get_shape_index()
+
+    def get_curvedness(self) -> np.ndarray:
+        """Return per-vertex curvedness for a mesh-backed surface.
+
+        Returns
+        -------
+        np.ndarray, shape (N,)
+            Curvedness C = sqrt((k1^2 + k2^2) / 2) at each vertex, in [0, inf).
+        """
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.get_curvedness()
+
+    def get_surface_type(self, as_labels: bool = False) -> np.ndarray:
+        """Return per-vertex categorical surface type for a mesh-backed surface.
+
+        Parameters
+        ----------
+        as_labels : bool, default=False
+            If True, return string labels (e.g. ``"cap"``); otherwise integer
+            category codes (-1 flat, 0 cup .. 8 cap).
+
+        Returns
+        -------
+        np.ndarray, shape (N,)
+            Surface type per vertex.
+        """
+        if not isinstance(self.surface, Mesh):
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+        return self.surface.get_surface_type(as_labels=as_labels)
 
     def get_surface_area(self) -> float:
         """Return total surface area of a mesh-backed surface."""
@@ -3164,6 +3232,11 @@ class PleomorphicSurface:
     def clean_by_normals(self, max_angle_deg: float = 90.0) -> "PleomorphicSurface":
         """Remove points whose normal deviates more than ``max_angle_deg`` from the mean direction.
 
+        Cleans against the *mean* normal of the surface. To clean against a fixed
+        axis/direction instead, use :meth:`clean_by_angle`. To split by orientation
+        relative to a reference *point* (e.g. centroid), use
+        :meth:`separate_surfaces` with ``surface_type='closed'``.
+
         Parameters
         ----------
         max_angle_deg : float, default=90.0
@@ -3175,11 +3248,45 @@ class PleomorphicSurface:
         PleomorphicSurface
             ``self`` (modified in-place).
         """
-        self.surface.filter_by_normal_orientation(
+        self.surface.apply_normals_mask(
             angle_threshold=max_angle_deg,
+            reference_normal=None,
             inplace=True,
         )
         print("Cleaned by normals (angle vs mean)")
+        return self
+
+    def clean_by_angle(self, max_angle_deg: float, reference_normal: np.ndarray, signed: bool = False) -> "PleomorphicSurface":
+        """Remove points whose normal deviates more than ``max_angle_deg`` from a given axis.
+
+        Companion to :meth:`clean_by_normals`; both delegate to the same engine
+        (:meth:`~DiscreteSurface.apply_normals_mask`) but this variant cleans against a
+        caller-supplied direction rather than the mean normal.
+
+        Parameters
+        ----------
+        max_angle_deg : float
+            Maximum allowed angle (degrees) between a point's normal and
+            ``reference_normal``. Points exceeding this threshold are removed.
+        reference_normal : np.ndarray (3,)
+            Reference direction/axis to measure each point's normal against.
+        signed : bool, default=False
+            If False (default), antiparallel normals count as aligned. If True, a
+            normal pointing opposite ``reference_normal`` is treated as a 180°
+            deviation (directional cleaning).
+
+        Returns
+        -------
+        PleomorphicSurface
+            ``self`` (modified in-place).
+        """
+        self.surface.apply_normals_mask(
+            angle_threshold=max_angle_deg,
+            reference_normal=reference_normal,
+            inplace=True,
+            signed=signed,
+        )
+        print("Cleaned by angle (angle vs given axis)")
         return self
 
     def separate_surfaces(
