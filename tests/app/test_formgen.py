@@ -51,10 +51,33 @@ class TestFormRowPublic:
         assert label_el.id == "custom-lbl"
 
     def test_form_row_tooltip_when_description(self):
+        """form_row tooltip respects styles.TOOLTIPS_ENABLED.
+
+        Off (default): the second label child is None — no Tooltip created.
+        On: the second label child is a dbc.Tooltip instance.
+        """
         import dash_bootstrap_components as dbc
-        row = form_row("x", html.Div("w"), "some tooltip text")
-        tooltip = row.children[0].children[1]
-        assert isinstance(tooltip, dbc.Tooltip)
+        from cryocat.app import styles
+
+        # Default flag value is False — no tooltip created.
+        assert not styles.TOOLTIPS_ENABLED, (
+            "TOOLTIPS_ENABLED default changed; update this test to match"
+        )
+        row_off = form_row("x", html.Div("w"), "some tooltip text")
+        assert row_off.children[0].children[1] is None, (
+            "Expected None when TOOLTIPS_ENABLED is False"
+        )
+
+        # With flag on, a Tooltip is created.
+        old = styles.TOOLTIPS_ENABLED
+        try:
+            styles.TOOLTIPS_ENABLED = True
+            row_on = form_row("x", html.Div("w"), "some tooltip text")
+            assert isinstance(row_on.children[0].children[1], dbc.Tooltip), (
+                "Expected dbc.Tooltip when TOOLTIPS_ENABLED is True"
+            )
+        finally:
+            styles.TOOLTIPS_ENABLED = old
 
     def test_form_row_no_tooltip_when_empty_description(self):
         row = form_row("x", html.Div("w"), "")

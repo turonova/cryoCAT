@@ -36,7 +36,7 @@ class ComplexHandle:
     symmetry: str            # e.g. "I", "C8", "D6"; empty for polyhedral subclasses
     n_subunits: int
     n_objects: int
-    source_motl_id: str      # "motl_3" — provenance link
+    motl_links: dict         # {"source": "motl_3"} — provenance link
     affiliation_column: str
     order_column: str
     tomo_id_column: str
@@ -56,7 +56,7 @@ def make_handle(
     cpx,
     complex_id: str,
     label: str,
-    source_motl_id: str,
+    motl_links: dict,
     init_kwargs: dict,
 ) -> dict:
     """Build the dcc.Store-safe handle dict for a live complex instance.
@@ -69,8 +69,8 @@ def make_handle(
         The stable key returned by :meth:`Registry.add`.
     label:
         Human-readable label shown in the complex list.
-    source_motl_id:
-        Pool motl id (e.g. ``"motl_3"``) that was used as input.
+    motl_links:
+        Role-keyed motl links, e.g. ``{"source": "motl_3"}``.
     init_kwargs:
         Extra constructor keyword arguments (beyond ``motl``), JSON-serialisable.
     """
@@ -105,7 +105,7 @@ def make_handle(
         symmetry=symmetry_str,
         n_subunits=n_subunits,
         n_objects=n_objects,
-        source_motl_id=source_motl_id,
+        motl_links=motl_links,
         affiliation_column=getattr(cpx, "affiliation_column", "object_id") or "object_id",
         order_column=getattr(cpx, "order_column", "geom1") or "geom1",
         tomo_id_column=getattr(cpx, "tomo_id_column", "tomo_id") or "tomo_id",

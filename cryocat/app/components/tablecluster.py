@@ -35,6 +35,7 @@ import dash_bootstrap_components as dbc
 from cryocat.analysis import clustering as clustering_mod
 from cryocat.app import formgen, styles
 from cryocat.app.formgen import make_dropdown
+from cryocat.app.components.customel import customel_graph
 
 
 # ── Feature-selector helpers ─────────────────────────────────────────────────
@@ -309,7 +310,7 @@ def get_table_cluster_component(prefix: str) -> html.Div:
             id=f"{prefix}-cluster-kdist-section",
             style={"display": "none"},
             children=[
-                dcc.Graph(id=f"{prefix}-cluster-kdist-graph", figure={}, style={"height": "150px"}),
+                customel_graph(prefix, "kdist", dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "kdist"}, figure={}, style={"height": "150px"})),
                 html.Div(
                     "The knee is the conventional starting point for eps.",
                     style=styles.FORM_HINT,
@@ -393,7 +394,7 @@ def get_table_cluster_component(prefix: str) -> html.Div:
                     ],
                     style={"display": "flex", "gap": "0.5rem", "marginBottom": "0.25rem"},
                 ),
-                dcc.Graph(id=f"{prefix}-cluster-scatter", figure={}),
+                customel_graph(prefix, "scatter", dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "scatter"}, figure={})),
                 formgen.form_row(
                     "selection_mode",
                     dbc.RadioItems(
@@ -676,7 +677,7 @@ def register_table_cluster_callbacks(
 
     @app.callback(
         Output(f"{prefix}-cluster-kdist-store", "data"),
-        Output(f"{prefix}-cluster-kdist-graph", "figure"),
+        Output({"type": "styled-graph", "owner": prefix, "name": "kdist"}, "figure"),
         Input({"type": "cluster-method-param", "owner": prefix, "param": ALL, "tag": ALL, "method": ALL}, "value"),
         Input({"type": "cluster-feat-row", "owner": prefix, "col": ALL}, "value"),
         State(connected_store_id, "data"),
@@ -714,7 +715,7 @@ def register_table_cluster_callbacks(
     # ── Eps line update (only the horizontal line moves; curve unchanged) ─────
 
     @app.callback(
-        Output(f"{prefix}-cluster-kdist-graph", "figure", allow_duplicate=True),
+        Output({"type": "styled-graph", "owner": prefix, "name": "kdist"}, "figure", allow_duplicate=True),
         Input({"type": "cluster-method-param", "owner": prefix, "param": ALL, "tag": ALL, "method": ALL}, "value"),
         State(f"{prefix}-cluster-kdist-store", "data"),
         State(f"{prefix}-cluster-type-dropdown", "value"),
@@ -843,7 +844,7 @@ def register_table_cluster_callbacks(
     # ── Scatter (re-renders when axes or result data changes) ─────────────────
 
     @app.callback(
-        Output(f"{prefix}-cluster-scatter", "figure"),
+        Output({"type": "styled-graph", "owner": prefix, "name": "scatter"}, "figure"),
         Input(f"{prefix}-cluster-xaxis",      "value"),
         Input(f"{prefix}-cluster-yaxis",      "value"),
         Input(f"{prefix}-cluster-data-store", "data"),
@@ -1068,8 +1069,8 @@ def register_table_cluster_callbacks(
         # Scatter → table selection sync; reads customdata[0] (row_idx) not pointIndex
         @app.callback(
             Output(table_grid_id, "selectedRows", allow_duplicate=True),
-            Input(f"{prefix}-cluster-scatter",  "clickData"),
-            Input(f"{prefix}-cluster-scatter",  "selectedData"),
+            Input({"type": "styled-graph", "owner": prefix, "name": "scatter"}, "clickData"),
+            Input({"type": "styled-graph", "owner": prefix, "name": "scatter"}, "selectedData"),
             State(f"{prefix}-cluster-data-store", "data"),
             State(connected_store_id,            "data"),
             State(f"{prefix}-cluster-selection-mode", "value"),

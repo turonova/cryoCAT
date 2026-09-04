@@ -23,8 +23,6 @@ import dash
 from dash import html, dcc, Input, Output
 import dash_bootstrap_components as dbc
 
-dbc.Tooltip = lambda *a, **kw: None  # DEMO: tooltips disabled globally
-
 from cryocat.app import ids
 from cryocat.app.suite.tools import TOOLS, DEFAULT_PATH
 from cryocat.app.components.graphsettings import (
@@ -215,5 +213,5 @@ app.clientside_callback(
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False)
     # app.run(debug=True, use_reloader=False)

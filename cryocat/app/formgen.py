@@ -328,7 +328,7 @@ def form_row(name, widget, description, truly_optional=False, label_id=None, lab
     label = html.Div(
         [
             html.Label(label_text, id=label_id, style={"margin": 0}),
-            dbc.Tooltip(description, target=label_id, placement="right") if description else None,
+            dbc.Tooltip(description, target=label_id, placement="right") if (description and styles.TOOLTIPS_ENABLED) else None,
         ],
         style=styles.FORM_LABEL,
     )

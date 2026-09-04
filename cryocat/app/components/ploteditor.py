@@ -1037,19 +1037,20 @@ def register_plot_editor_callbacks(
 
     @app.callback(
         *[Output(f"{prefix}-pe-role-{r}", "options") for r in _ALL_ROLES],
+        *[Output(f"{prefix}-pe-role-{r}", "value") for r in _ALL_ROLES],
         Input(src_store, "data"),
         prevent_initial_call=True,
     )
     def _populate_columns(src_ref):
+        n = len(_ALL_ROLES)
         df = _resolve_df(src_ref, pool_resolve_df, dp_resolve_df)
         if df is None:
-            empty = [no_update] * len(_ALL_ROLES)
-            return empty
+            return [[] for _ in _ALL_ROLES] + [None] * n
         import pandas as pd
         if not isinstance(df, pd.DataFrame) or df.empty:
-            return [[] for _ in _ALL_ROLES]
+            return [[] for _ in _ALL_ROLES] + [None] * n
         cols = [{"label": c, "value": c} for c in df.columns]
-        return [cols for _ in _ALL_ROLES]
+        return [cols for _ in _ALL_ROLES] + [None] * n
 
     # ── Role show/hide ─────────────────────────────────────────────────────────
 

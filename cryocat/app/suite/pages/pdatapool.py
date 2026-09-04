@@ -41,6 +41,7 @@ from cryocat.app.pool import (
     PoolState,
 )
 from cryocat.app.apputils import run_operation
+from cryocat.app.components.customel import customel_graph
 
 
 # ── Dynamic IDs for the suite app router ──────────────────────────────────────
@@ -63,10 +64,13 @@ def _render_pool_entry(entry_dict: dict) -> html.Div:
     label      = entry_dict.get("label", data_id)
     kind       = entry_dict.get("kind", "?")
     n_rows     = entry_dict.get("n_rows")
-    source_mid = entry_dict.get("source_motl_id")
+    motl_links = entry_dict.get("motl_links") or {}
     meta = f"{kind}" + (f" · {n_rows:,}" if n_rows is not None else "")
-    if source_mid:
-        meta += f" · ↔ {source_mid}"
+    if motl_links:
+        def _fmt(mid):
+            return ", ".join(mid) if isinstance(mid, list) else str(mid)
+        link_str = ", ".join(f"{r}:{_fmt(mid)}" for r, mid in motl_links.items())
+        meta += f" · ↔ {link_str}"
     return html.Div(
         [
             html.Span(
@@ -109,8 +113,10 @@ def _do_remove(
     selected: str | None,
 ) -> tuple[DataPoolState, str | None]:
     """Remove an entry; return (new_state, new_selected_id)."""
+    from cryocat.app.console.vars import unregister_console_var
     state = DataPoolState.from_stores(registry, next_id)
     state = datapool.remove_entry(state, data_id)
+    unregister_console_var(data_id)
     new_sel = None if selected == data_id else selected
     return state, new_sel
 
@@ -150,7 +156,7 @@ def _do_select(
 
 def _do_publish(data_id: str | None, name: str | None, registry: dict) -> str:
     """Bind *data_id*'s payload to a console variable.  Returns a status string."""
-    from cryocat.app.console.execute import _CONSOLE_LOCALS
+    from cryocat.app.console.vars import register_console_var
     if not data_id:
         return "No entry selected."
     if not name or not name.strip():
@@ -162,7 +168,7 @@ def _do_publish(data_id: str | None, name: str | None, registry: dict) -> str:
         payload = datapool.get_payload(data_id)
     except DataPayloadMissing as exc:
         return str(exc)
-    _CONSOLE_LOCALS[name] = payload
+    register_console_var(name, payload)
     return f"Registered as @{name}."
 
 
@@ -306,11 +312,11 @@ def _main() -> list:
         ),
         html.Div(
             [
-                dcc.Graph(
-                    id="dp-view-graph",
+                customel_graph("dp", "view", dcc.Graph(
+                    id={"type": "styled-graph", "owner": "dp", "name": "view"},
                     style={"height": "70vh"},
                     config={"displaylogo": False},
-                ),
+                )),
             ],
             id="dp-panel-graph",
             style=_HIDE,
@@ -517,7 +523,7 @@ def register_callbacks(app):  # noqa: C901
 
     # ── Graph viewer ───────────────────────────────────────────────────────────
     @app.callback(
-        Output("dp-view-graph", "figure"),
+        Output({"type": "styled-graph", "owner": "dp", "name": "view"}, "figure"),
         Input("dp-edit-src-ref",         "data"),
         State(ids.DATA_POOL_REGISTRY,    "data"),
         State(ids.GRAPH_SETTINGS_STORE,  "data"),

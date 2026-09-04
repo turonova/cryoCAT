@@ -37,6 +37,13 @@ from cryocat.app.pageshell import page_shell
 from cryocat.app.components.tablesource import get_table_source, register_table_source_callbacks
 from cryocat.app.components.tomoview import get_viewer_component, register_viewer_callbacks
 from cryocat.app.components.graphsettings import styled_figure as _styled_figure
+from cryocat.app.components.customel import customel_graph
+from cryocat.app.components.poolslotlist import (
+    get_pool_slot_list,
+    register_pool_slot_list_callbacks,
+    register_slot_focus_callback,
+    _first_free_slot,
+)
 
 from cryocat.analysis.tango import TwistDescriptor, Descriptor, CustomDescriptor
 from cryocat.utils.classutils import get_class_names_by_parent, get_classes_from_names
@@ -48,6 +55,7 @@ _feat_desc_map: dict = Descriptor.build_feature_descriptor_map(_features, _descr
 _desc_feat_map: dict = Descriptor.build_descriptor_feature_map(_descriptors, _features)
 
 _twist_objects: Registry[TwistDescriptor] = Registry("tango-twist", max_items=5)
+_desc_table_refs: dict[str, dict] = {}
 
 _DESC_SLOTS = 5
 
@@ -63,31 +71,7 @@ _hint = {"color": "var(--color9)"}
 
 # ── Diagnostics helper ────────────────────────────────────────────────────────
 
-def _graph_section_divider(text: str) -> html.Div:
-    """Thin labelled rule used as a section header between diagnostic graphs."""
-    line_style = {
-        "flex": "1",
-        "height": "1px",
-        "background": "var(--bs-border-color, rgba(128,128,128,0.3))",
-        "margin": "0",
-    }
-    return html.Div(
-        [
-            html.Div(style=line_style),
-            html.Span(text, style={
-                "fontSize": styles.FONT_XS,
-                "color": styles.COLOR_MUTED,
-                "padding": "0 0.5rem",
-                "whiteSpace": "nowrap",
-                "userSelect": "none",
-            }),
-            html.Div(style=line_style),
-        ],
-        style={"display": "flex", "alignItems": "center", "margin": "0.4rem 0 0.2rem"},
-    )
-
-
-def _build_diagnostics(data, settings=None):
+def _build_diagnostics(data, settings=None, slot: int = 0):
     """Return diagnostics children for a descriptor DataFrame or raw records."""
     if data is None or (not isinstance(data, pd.DataFrame) and not data):
         return []
@@ -122,8 +106,8 @@ def _build_diagnostics(data, settings=None):
             _scree_fig = _styled_figure(fig_scree, settings or {}, uirevision="scree")
         except Exception:
             _scree_fig = fig_scree
-        children.append(_graph_section_divider("Explained variance — z-scored features"))
-        children.append(dcc.Graph(figure=_scree_fig, style={"marginBottom": "0.25rem"}))
+        _owner = f"tango-desc-{slot}"
+        children.append(customel_graph(_owner, "scree", dcc.Graph(id={"type": "styled-graph", "owner": _owner, "name": "scree"}, figure=_scree_fig, style={"marginBottom": "0.25rem"})))
     except Exception as exc:
         children.append(html.Div(f"Scree plot failed: {exc}", style={"color": styles.COLOR_MUTED}))
     try:
@@ -139,8 +123,7 @@ def _build_diagnostics(data, settings=None):
             _corr_fig = _styled_figure(fig_corr, settings or {}, uirevision="corr")
         except Exception:
             _corr_fig = fig_corr
-        children.append(_graph_section_divider("Feature correlation heatmap"))
-        children.append(dcc.Graph(figure=_corr_fig, style={"marginBottom": "0.25rem"}))
+        children.append(customel_graph(_owner, "corr", dcc.Graph(id={"type": "styled-graph", "owner": _owner, "name": "corr"}, figure=_corr_fig, style={"marginBottom": "0.25rem"})))
     except Exception as exc:
         children.append(html.Div(f"Heatmap failed: {exc}", style={"color": styles.COLOR_MUTED}))
     try:
@@ -168,13 +151,16 @@ def _build_diagnostics(data, settings=None):
 
 # ── Tile helpers (one per tab) ─────────────────────────────────────────────────
 
-def _twist_load_fn(path, nn_radius=None, source_motl_id=None):
+def _twist_load_fn(path, nn_radius=None, source_motl_selection=None):
     """Load a TwistDescriptor table from a file; returns dict with df and nn_radius."""
     df = TwistDescriptor.read_in(path)
-    result = {"df": df, "nn_radius": nn_radius, "source_motl_id": source_motl_id}
-    if source_motl_id:
+    first = (source_motl_selection[0] if isinstance(source_motl_selection, list)
+             else source_motl_selection) if source_motl_selection else None
+    motl_links = {"source": [first]} if first else None
+    result = {"df": df, "nn_radius": nn_radius, "motl_links": motl_links}
+    if first:
         from cryocat.app.suite.pages._motl_link import check_motl_overlap
-        _, _, msg = check_motl_overlap(df, "qp_id", source_motl_id)
+        _, _, msg = check_motl_overlap(df, "qp_id", first)
         result["status_extra"] = msg
     return result
 
@@ -272,9 +258,10 @@ def _twist_tile() -> list:
         formgen.form_row(
             "source_motl",
             formgen.make_dropdown(
-                {"type": "tango-twist-src-ts-extra", "param": "source_motl_id"},
+                {"type": "tango-twist-src-ts-extra", "param": "source_motl_selection"},
                 [],
                 None,
+                multi=True,
                 clearable=True,
                 placeholder="None — set after loading",
             ),
@@ -295,35 +282,6 @@ def _twist_tile() -> list:
             label="Source",
         ),
         html.Div(id="tango-twist-status", style={**_hint, "marginTop": "0.3rem"}),
-        html.Div(
-            [
-                html.Div(id="tango-src-motl-display", style={**_hint, "marginBottom": "0.3rem"}),
-                formgen.form_row(
-                    "source_motl_change",
-                    formgen.make_dropdown(
-                        "tango-src-motl-dd",
-                        [],
-                        None,
-                        clearable=True,
-                        placeholder="Select motl…",
-                    ),
-                    "Motl whose qp_id values match this table's twist rows.",
-                    label_id="tango-src-motl-change-lbl",
-                    label_text="Source motl",
-                    truly_optional=True,
-                ),
-                dbc.Button(
-                    "Set source motl",
-                    id="tango-src-motl-btn",
-                    color=styles.BTN_SECONDARY,
-                    size="sm",
-                    style={"width": "100%", "marginTop": "0.3rem"},
-                ),
-                html.Div(id="tango-src-motl-status", style={**_hint, "marginTop": "0.3rem"}),
-            ],
-            id="tango-src-motl-section",
-            style={"marginTop": "0.5rem"},
-        ),
     ]
 
 
@@ -389,34 +347,35 @@ def _make_stores() -> list:
         dcc.Store(id="tango-twist-tabv-global-data-store"),
         dcc.Store(id="tango-twist-tv-data"),
         dcc.Store(id="tango-twist-tv-index", data=0),
-        dcc.Store(id="tango-desc-registry-store", data={}),
-        dcc.Store(id="tango-desc-next-id", data=0),
+        dcc.Store(id="tango-desc-pool-registry", data={}),
+        dcc.Store(id="tango-desc-pool-slot-map", data=[None] * _DESC_SLOTS),
+        dcc.Store(id="tango-desc-pool-active-id"),
         *[dcc.Store(id=f"tango-desc-{i}-global-data-store") for i in range(_DESC_SLOTS)],
     ]
 
 
 def _desc_slot_content(i: int) -> html.Div:
-    """Per-slot tab content: close button, stale notice, table, diagnostics."""
+    """Per-slot tab content: table + diagnostics."""
     return html.Div([
-        html.Div(
-            [
-                html.Span(id=f"tango-desc-{i}-stale-badge", style={"display": "none"}),
-                dbc.Button(
-                    "× Close",
-                    id=f"tango-desc-{i}-close-btn",
-                    color="link",
-                    size="sm",
-                    style={"padding": "0 0.25rem", "color": styles.COLOR_MUTED},
-                ),
-            ],
-            style={"display": "flex", "justifyContent": "flex-end", "alignItems": "center", "gap": "0.5rem", "marginBottom": styles.SECTION_GAP},
-        ),
         get_table_component(f"tango-desc-{i}"),
         html.Div(id=f"tango-desc-{i}-diagnostics", style={"marginTop": "0.5rem"}),
     ])
 
 
 # ── Layout ─────────────────────────────────────────────────────────────────────
+
+
+def _desc_pool_row_extra(data_id: str, entry: dict) -> list:
+    return [
+        dbc.Button(
+            "✕",
+            id={"type": "dp-remove-btn", "data_id": data_id},
+            size="sm",
+            color=styles.BTN_NEUTRAL,
+            n_clicks=0,
+            style={"flexShrink": 0, "padding": "0 4px"},
+        )
+    ]
 
 
 def _sidebar() -> list:
@@ -432,6 +391,11 @@ def _sidebar() -> list:
                     _desc_tile(),
                     title="Descriptor",
                     item_id="tango-acc-desc",
+                ),
+                dbc.AccordionItem(
+                    get_pool_slot_list("tango-desc-pool"),
+                    title="Descriptors in pool",
+                    item_id="tango-acc-desc-pool",
                 ),
                 dbc.AccordionItem(
                     get_table_to_motl("tango-ttm"),
@@ -463,7 +427,7 @@ def _main() -> list:
                 *[
                     dbc.Tab(
                         _desc_slot_content(i),
-                        label=f"Descriptor {i + 1}",
+                        label=f"Slot {i + 1}",
                         tab_id=f"tango-tab-desc-{i}",
                         id=f"tango-tab-desc-{i}",
                         disabled=True,
@@ -496,6 +460,15 @@ def register_callbacks(app) -> None:
         app, "tango-twist-src",
         check_fn=TwistDescriptor.check_twist_columns,
         load_fn=_twist_load_fn,
+    )
+    register_pool_slot_list_callbacks(
+        app, "tango-desc-pool", "tango-desc-pool-registry", "tango-desc-pool-slot-map", _DESC_SLOTS,
+        row_extra_fn=_desc_pool_row_extra,
+        active_id_store_id="tango-desc-pool-active-id",
+    )
+    register_slot_focus_callback(
+        app, "tango-desc-pool-slot-map", "tango-tabs", "tango-tab-desc-", _DESC_SLOTS,
+        active_id_store_id="tango-desc-pool-active-id",
     )
 
     register_table_callbacks(
@@ -727,17 +700,18 @@ def register_callbacks(app) -> None:
         obj_key = _twist_objects.add(twist_desc)
         _df = twist_desc.df if hasattr(twist_desc, "df") and twist_desc.df is not None else pd.DataFrame()
         n = len(_df)
+        twist_links = {"source": [motl_id]} if motl_id else None
         handle = {
             "obj_key": obj_key,
             "twist_id": twist_id,
-            "source_motl_id": motl_id,
+            "motl_links": twist_links,
             "label": f"{source_label} twist",
             "nn_radius": nn_radius,
         }
-        global_ref = _datapool.insert(_df, label=f"{source_label} twist", id_column="qp_id")
+        global_ref = _datapool.insert(_df, label=f"{source_label} twist", id_column="qp_id", motl_links=twist_links)
         from cryocat.app.datapool import DataPoolState as _DPState
         _ds = _DPState.from_stores(dp_registry, dp_next_id)
-        _ds, _dp_id = _datapool.insert_entry(_ds, _df, label=f"{source_label} twist", reader="tango", source_path="")
+        _ds, _dp_id = _datapool.insert_entry(_ds, _df, label=f"{source_label} twist", reader="tango", source_path="", motl_links=twist_links)
         new_dp_reg, new_dp_next = _ds.to_stores()
         status = f"Twist computed: {n:,} pairs."
         _snap("twist")   # D2: _compute_twist wall time (grid update follows async)
@@ -794,34 +768,33 @@ def register_callbacks(app) -> None:
         )
         _df = twist_desc.df if twist_desc.df is not None else pd.DataFrame()
         n = len(_df)
+        loaded_links = loaded.get("motl_links")
         handle = {
             "obj_key": obj_key,
             "twist_id": twist_id,
-            "source_motl_id": loaded.get("source_motl_id"),
+            "motl_links": loaded_links,
             "label": "Loaded twist",
             "nn_radius": twist_desc.nn_radius,
         }
-        global_ref = _datapool.insert(_df, label="Loaded twist", id_column="qp_id")
+        global_ref = _datapool.insert(_df, label="Loaded twist", id_column="qp_id", motl_links=loaded_links)
         from cryocat.app.datapool import DataPoolState as _DPState
         _ds = _DPState.from_stores(dp_registry, dp_next_id)
-        _ds, _dp_id = _datapool.insert_entry(_ds, _df, label="Loaded twist", reader="tango", source_path="")
+        _ds, _dp_id = _datapool.insert_entry(_ds, _df, label="Loaded twist", reader="tango", source_path="", motl_links=loaded_links)
         new_dp_reg, new_dp_next = _ds.to_stores()
         status = f"Twist loaded: {n:,} pairs. Radius: {radius_note}."
         return handle, global_ref, "tango-tab-twist", status, new_twist_id, new_dp_reg, new_dp_next
 
-    # ── Compute descriptor (5-slot) ───────────────────────────────────────────
+    # ── Compute descriptor (pool-slot) ────────────────────────────────────────
 
     @app.callback(
-        Output("tango-desc-registry-store", "data", allow_duplicate=True),
-        *[Output(f"tango-desc-{i}-global-data-store", "data", allow_duplicate=True) for i in range(_DESC_SLOTS)],
+        Output("tango-desc-pool-slot-map", "data", allow_duplicate=True),
         Output("tango-tabs", "active_tab", allow_duplicate=True),
         Output("tango-desc-status", "children"),
-        Output("tango-desc-next-id", "data"),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
         Input("tango-run-desc-btn", "n_clicks"),
         State("tango-twist-handle", "data"),
-        State("tango-desc-registry-store", "data"),
+        State("tango-desc-pool-slot-map", "data"),
         State("tango-desc-dropdown", "value"),
         State("tango-support-dropdown", "value"),
         State("tango-feat-dropdown", "value"),
@@ -831,7 +804,6 @@ def register_callbacks(app) -> None:
         State({"type": "tango-desc-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State({"type": "tango-feat-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "tango-feat-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
-        State("tango-desc-next-id", "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
         State(ids.DATA_POOL_NEXT_ID,  "data"),
         prevent_initial_call=True,
@@ -839,32 +811,31 @@ def register_callbacks(app) -> None:
     def _compute_desc(
         n_clicks,
         twist_handle,
-        desc_registry,
+        slot_map,
         selected_desc,
         selected_support,
         selected_features,
         supp_values, supp_ids,
         desc_values, desc_ids,
         feat_values, feat_ids,
-        desc_next_id,
         dp_registry,
         dp_next_id,
     ):
-        _NU = (no_update,) * (1 + _DESC_SLOTS + 1 + 1 + 1 + 2)
+        _NU = (no_update,) * 5
         if not n_clicks:
             raise PreventUpdate
         if not twist_handle or not selected_desc:
-            return *_NU[:7], "Select a descriptor and compute twist first.", *_NU[8:]
+            return *_NU[:2], "Select a descriptor and compute twist first.", *_NU[3:]
         twist_desc = _twist_objects.get(twist_handle["obj_key"])
         if twist_desc is None:
-            return *_NU[:7], "Twist object expired — recompute.", *_NU[8:]
-        desc_registry = dict(desc_registry or {})
-        slot = next((i for i in range(_DESC_SLOTS) if str(i) not in desc_registry), None)
-        if slot is None:
-            return *_NU[:7], "All descriptor slots full — close one first.", *_NU[8:]
+            return *_NU[:2], "Twist object expired — recompute.", *_NU[3:]
+        sm = list(slot_map or [None] * _DESC_SLOTS)
+        while len(sm) < _DESC_SLOTS:
+            sm.append(None)
+        free = _first_free_slot(sm, _DESC_SLOTS)
+        if free is None:
+            return *_NU[:2], "All descriptor slots full — remove one first.", *_NU[3:]
         twist_df = twist_desc.df
-        twist_label = twist_handle.get("label", "Twist")
-        desc_label = f"{twist_label} {selected_desc}"
 
         # Build support
         try:
@@ -875,7 +846,7 @@ def register_callbacks(app) -> None:
                 supp_cls = get_classes_from_names(selected_support, "cryocat.analysis.tango")
                 support = supp_cls(TwistDescriptor(input_twist=twist_df), **support_kwargs).support.df
         except Exception as exc:
-            return *_NU[:7], f"Error: {exc}", *_NU[8:]
+            return *_NU[:2], f"Error: {exc}", *_NU[3:]
 
         # Determine descriptor class and call kwargs.
         # Descriptor constructors take the support DataFrame as their first
@@ -924,9 +895,12 @@ def register_callbacks(app) -> None:
         from cryocat.app import session as _session
         from cryocat.app.event import call_event as _call_event
         from cryocat.app.logger import dash_logger as _dash_logger
+        from cryocat.app.datapool import DataPoolState as _DPState
+        from cryocat.app.console.vars import register_console_var
 
-        new_desc_next_id = (desc_next_id or 0) + 1
-        desc_id = f"desc-{new_desc_next_id}"
+        _ds = _DPState.from_stores(dp_registry, dp_next_id)
+        _kind_count = _ds.kind_counters.get("desc", 0) + 1
+        desc_id = f"desc_{_kind_count}"
         var = _prov.bind(desc_id)
 
         twist_id = (twist_handle or {}).get("twist_id")
@@ -962,7 +936,7 @@ def register_callbacks(app) -> None:
                 duration_s=duration,
                 error={"type": type(exc).__name__, "msg": str(exc)},
             ))
-            return *_NU[:7], f"Error: {exc}", *_NU[8:]
+            return *_NU[:2], f"Error: {exc}", *_NU[3:]
 
         duration = _time.monotonic() - t0
         _dash_logger.write(f"✓ {pane_call} ({duration:.3f} s)", source="cryocat")
@@ -976,106 +950,82 @@ def register_callbacks(app) -> None:
         _prov.record(desc_id, _session.last_seq())
 
         desc_df = desc_obj.desc
-        twist_sig = twist_handle.get("obj_key")
-        desc_registry[str(slot)] = {"label": desc_label, "twist_sig": twist_sig, "stale": False}
-        slot_global = [no_update] * _DESC_SLOTS
-        slot_global[slot] = _datapool.insert(desc_df, label=desc_label, id_column="qp_id")
-        from cryocat.app.datapool import DataPoolState as _DPState
-        _ds = _DPState.from_stores(dp_registry, dp_next_id)
-        _ds, _dp_id = _datapool.insert_entry(_ds, desc_df, label=desc_label, reader="tango", source_path="")
+        twist_motl_links = twist_handle.get("motl_links")  # BL4: copy links from twist
+        global_ref = _datapool.insert(desc_df, label=desc_id, id_column="qp_id",
+                                      motl_links=twist_motl_links)
+        _ds, _dp_id = _datapool.insert_entry(
+            _ds, desc_df, label=desc_id, reader="tango-desc", source_path="",
+            motl_links=twist_motl_links, entry_kind="desc",
+        )
+        global_ref = {**global_ref, "data_id": _dp_id}
+        _desc_table_refs[_dp_id] = global_ref
+        register_console_var(var, desc_df)
         new_dp_reg, new_dp_next = _ds.to_stores()
-        status = f"Descriptor computed: {len(desc_df):,} rows."
-        return desc_registry, *slot_global, f"tango-tab-desc-{slot}", status, new_desc_next_id, new_dp_reg, new_dp_next
 
-    # ── Mark descriptors stale when twist changes ─────────────────────────────
+        sm[free] = _dp_id
+        status = f"Descriptor computed: {len(desc_df):,} rows. → slot {free + 1}"
+        return sm, f"tango-tab-desc-{free}", status, new_dp_reg, new_dp_next
 
-    @app.callback(
-        Output("tango-desc-registry-store", "data", allow_duplicate=True),
-        Input("tango-twist-handle", "data"),
-        State("tango-desc-registry-store", "data"),
-        prevent_initial_call=True,
-    )
-    def _mark_stale_on_twist_change(twist_handle, registry):
-        registry = dict(registry or {})
-        if not twist_handle or not registry:
-            return no_update
-        sig = twist_handle.get("obj_key")
-        updated = False
-        for k, v in registry.items():
-            if v.get("twist_sig") != sig and not v.get("stale"):
-                registry[k] = {**v, "stale": True}
-                updated = True
-        return registry if updated else no_update
-
-    # ── Sync descriptor tab labels / disabled / stale badge ──────────────────
+    # ── Sync filtered descriptor pool registry from global data pool ──────────
 
     @app.callback(
-        *[Output(f"tango-tab-desc-{i}", "disabled") for i in range(_DESC_SLOTS)],
-        *[Output(f"tango-tab-desc-{i}", "label") for i in range(_DESC_SLOTS)],
-        *[Output(f"tango-desc-{i}-stale-badge", "children") for i in range(_DESC_SLOTS)],
-        *[Output(f"tango-desc-{i}-stale-badge", "style") for i in range(_DESC_SLOTS)],
-        Output("tango-tabs", "active_tab", allow_duplicate=True),
-        Input("tango-desc-registry-store", "data"),
-        State("tango-tabs", "active_tab"),
+        Output("tango-desc-pool-registry", "data"),
+        Input(ids.DATA_POOL_REGISTRY, "data"),
+    )
+    def _sync_desc_pool_registry(dp_registry):
+        return {
+            k: v for k, v in (dp_registry or {}).items()
+            if v.get("reader") == "tango-desc"
+        }
+
+    # ── Clear stale slot-map entries when pool entry is removed ───────────────
+
+    @app.callback(
+        Output("tango-desc-pool-slot-map", "data", allow_duplicate=True),
+        Input("tango-desc-pool-registry", "data"),
+        State("tango-desc-pool-slot-map", "data"),
         prevent_initial_call=True,
     )
-    def _sync_desc_tabs(registry, current_tab):
-        registry = registry or {}
-        disabled, labels, badge_children, badge_styles = [], [], [], []
+    def _clean_desc_slot_map(registry, slot_map):
+        reg = registry or {}
+        sm = list(slot_map or [None] * _DESC_SLOTS)
+        updated = [sid if sid in reg else None for sid in sm]
+        return updated if updated != sm else no_update
+
+    # ── Sync per-slot global-data-stores from slot map ────────────────────────
+
+    @app.callback(
+        *[Output(f"tango-desc-{i}-global-data-store", "data") for i in range(_DESC_SLOTS)],
+        Input("tango-desc-pool-slot-map", "data"),
+    )
+    def _sync_desc_slot_stores(slot_map):
+        sm = list(slot_map or [None] * _DESC_SLOTS)
+        result = []
         for i in range(_DESC_SLOTS):
-            entry = registry.get(str(i))
-            if entry:
-                disabled.append(False)
-                labels.append(entry.get("label", f"Descriptor {i + 1}"))
-                stale = entry.get("stale", False)
-                badge_children.append("⚠ stale" if stale else "")
-                badge_styles.append({
-                    "display": "inline" if stale else "none",
-                    "color": styles.COLOR_MUTED,
-                    "fontSize": styles.FONT_SM,
-                    "marginRight": "0.5rem",
-                })
+            data_id = sm[i] if i < len(sm) else None
+            result.append(_desc_table_refs.get(data_id) if data_id else None)
+        return tuple(result)
+
+    # ── Update descriptor tab labels and disabled state ───────────────────────
+
+    @app.callback(
+        *[Output(f"tango-tab-desc-{i}", "label") for i in range(_DESC_SLOTS)],
+        *[Output(f"tango-tab-desc-{i}", "disabled") for i in range(_DESC_SLOTS)],
+        Input("tango-desc-pool-slot-map", "data"),
+        State("tango-desc-pool-registry", "data"),
+    )
+    def _update_desc_slot_tabs(slot_map, pool_registry):
+        reg = pool_registry or {}
+        sm = list(slot_map or [None] * _DESC_SLOTS)
+        labels, disableds = [], []
+        for i, data_id in enumerate(sm[:_DESC_SLOTS]):
+            if data_id and data_id in reg:
+                labels.append(reg[data_id].get("label", data_id))
+                disableds.append(False)
             else:
-                disabled.append(True)
-                labels.append(f"Descriptor {i + 1}")
-                badge_children.append("")
-                badge_styles.append({"display": "none"})
-
-        # G5: if the active tab is now an empty descriptor slot, move focus
-        new_active = no_update
-        if current_tab and current_tab.startswith("tango-tab-desc-"):
-            try:
-                current_idx = int(current_tab.rsplit("-", 1)[-1])
-            except ValueError:
-                current_idx = None
-            if current_idx is not None and current_idx < len(disabled) and disabled[current_idx]:
-                for i in range(_DESC_SLOTS):
-                    if not disabled[i]:
-                        new_active = f"tango-tab-desc-{i}"
-                        break
-                else:
-                    new_active = "tango-tab-twist"
-
-        return *disabled, *labels, *badge_children, *badge_styles, new_active
-
-    # ── Close descriptor slots ────────────────────────────────────────────────
-
-    for _i in range(_DESC_SLOTS):
-        def _make_close_cb(_slot=_i):
-            @app.callback(
-                Output("tango-desc-registry-store", "data", allow_duplicate=True),
-                Output(f"tango-desc-{_slot}-global-data-store", "data", allow_duplicate=True),
-                Input(f"tango-desc-{_slot}-close-btn", "n_clicks"),
-                State("tango-desc-registry-store", "data"),
-                prevent_initial_call=True,
-            )
-            def _close_slot(n_clicks, registry, _s=_slot):
-                if not n_clicks:
-                    raise PreventUpdate
-                reg = dict(registry or {})
-                reg.pop(str(_s), None)
-                return reg, None
-        _make_close_cb()
+                labels.append(f"Slot {i + 1}")
+                disableds.append(True)
+        return *labels, *disableds
 
     # ── Per-slot diagnostics ──────────────────────────────────────────────────
 
@@ -1089,7 +1039,7 @@ def register_callbacks(app) -> None:
             )
             def _update_diagnostics(ref, settings):
                 df = _datapool.resolve_df(ref)
-                return _build_diagnostics(df, settings)
+                return _build_diagnostics(df, settings, _slot)
         _make_diag_cb()
 
     # ── Twist particle viewer ─────────────────────────────────────────────────
@@ -1102,7 +1052,8 @@ def register_callbacks(app) -> None:
     def _wire_twist_viewer(handle):
         if not handle:
             raise PreventUpdate
-        motl_id = handle.get("source_motl_id")
+        from cryocat.app.suite.pages._motl_link import get_motl_role_id
+        motl_id = get_motl_role_id(handle.get("motl_links"), "source")
         if not motl_id:
             raise PreventUpdate
         return {"motl_id": motl_id, "rev": 0}
@@ -1119,8 +1070,7 @@ def register_callbacks(app) -> None:
     # ── W1/W3: Populate source-motl dropdown options from pool registry ───────
 
     @app.callback(
-        Output({"type": "tango-twist-src-ts-extra", "param": "source_motl_id"}, "options"),
-        Output("tango-src-motl-dd", "options"),
+        Output({"type": "tango-twist-src-ts-extra", "param": "source_motl_selection"}, "options"),
         Input(ids.POOL_REGISTRY, "data"),
     )
     def _populate_twist_source_motl_options(registry):
@@ -1128,48 +1078,9 @@ def register_callbacks(app) -> None:
             {"label": v.get("label", k), "value": k}
             for k, v in (registry or {}).items()
         ]
-        return opts, opts
+        return opts
 
-    # ── W3: Show current source motl ──────────────────────────────────────────
-
-    @app.callback(
-        Output("tango-src-motl-display", "children"),
-        Input("tango-twist-handle", "data"),
-    )
-    def _show_twist_source_motl(handle):
-        if not isinstance(handle, dict) or "source_motl_id" not in handle:
-            return ""
-        mid = handle.get("source_motl_id")
-        if mid is None:
-            return html.Span("Source motl: not set", style=_hint)
-        return html.Span(f"Source motl: {mid}", style=_hint)
-
-    # ── W3: Set or change source motl after loading ───────────────────────────
-
-    @app.callback(
-        Output("tango-twist-handle", "data", allow_duplicate=True),
-        Output("tango-src-motl-status", "children"),
-        Input("tango-src-motl-btn", "n_clicks"),
-        State("tango-src-motl-dd", "value"),
-        State("tango-twist-handle", "data"),
-        prevent_initial_call=True,
-    )
-    def _set_twist_source_motl(n_clicks, motl_id, handle):
-        if not n_clicks:
-            raise PreventUpdate
-        if not isinstance(handle, dict):
-            return no_update, "No twist table loaded."
-        if not motl_id:
-            return {**handle, "source_motl_id": None}, "Source motl cleared."
-        from cryocat.app.suite.pages._motl_link import check_motl_overlap
-        twist_desc = _twist_objects.get(handle.get("obj_key"))
-        df = twist_desc.df if twist_desc is not None else None
-        if df is None:
-            return {**handle, "source_motl_id": motl_id}, f"Linked to {motl_id} (overlap check skipped — data not in memory)."
-        _, _, msg = check_motl_overlap(df, "qp_id", motl_id)
-        return {**handle, "source_motl_id": motl_id}, msg
-
-    # ── W4: Gate table-to-motl buttons on source_motl_id ─────────────────────
+    # ── W4: Gate table-to-motl buttons on motl_links["source"] ───────────────
 
     @app.callback(
         Output("tango-ttm-ttm-write-btn", "disabled"),
@@ -1177,11 +1088,18 @@ def register_callbacks(app) -> None:
         Output("tango-ttm-ttm-create-btn", "disabled"),
         Output("tango-ttm-ttm-create-btn", "title"),
         Input("tango-twist-handle", "data"),
+        Input(ids.POOL_REGISTRY, "data"),
     )
-    def _gate_tango_ttm(handle):
+    def _gate_tango_ttm(handle, pool_registry):
         from cryocat.app.suite.pages._motl_link import has_source_motl
-        if has_source_motl(handle):
-            return False, "", False, ""
-        msg = "Set a source motl in 'Source motl link' to enable motl operations."
-        return True, msg, True, msg
+        if not has_source_motl(handle):
+            msg = "Load data with a source motl selected to enable motl operations."
+            return True, msg, True, msg
+        links = (handle or {}).get("motl_links") or {}
+        source_ids = links.get("source", [])
+        source_id = source_ids[0] if source_ids else None
+        if source_id and source_id not in (pool_registry or {}):
+            msg = f"Source motl '{source_id}' is no longer in the motl pool."
+            return True, msg, True, msg
+        return False, "", False, ""
 

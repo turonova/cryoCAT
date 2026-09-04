@@ -67,6 +67,7 @@ from cryocat.app.suite.pages._pstructure_intersect import (
 )
 from cryocat.app.pageshell import page_shell, sidebar_accordion
 import cryocat.app.pool as _pool
+from cryocat.app.components.customel import customel_graph
 
 
 # ── Dynamically-rendered component IDs (§11.3) ───────────────────────────────
@@ -1206,8 +1207,7 @@ def register_callbacks(app):
                 hits_df = pd.DataFrame(hits)
                 if "distance_nm" in hits_df.columns:
                     fig = visplot.plot_histogram(hits_df[["distance_nm"]], bins=30)
-                    children.append(dcc.Graph(figure=fig,
-                                              style={"height": "320px"}))
+                    children.append(customel_graph("structure", "intersection-hist", dcc.Graph(id={"type": "styled-graph", "owner": "structure", "name": "intersection-hist"}, figure=fig, style={"height": "320px"})))
             except Exception as exc:
                 children.append(html.Div(
                     f"Histogram skipped: {exc}", style=_HINT,

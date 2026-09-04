@@ -1359,17 +1359,17 @@ def _mc_panel() -> html.Div:
                         "Strictest: two groups merge only when all member pairs are close. "
                         "Produces compact, well-separated clusters.",
                         target="sta-mc-lnk-complete", placement="bottom",
-                    ),
+                    ) if _styles.TOOLTIPS_ENABLED else None,
                     dbc.Tooltip(
                         "Merges based on the average pairwise distance between groups. "
                         "Intermediate tightness between complete and single.",
                         target="sta-mc-lnk-average", placement="bottom",
-                    ),
+                    ) if _styles.TOOLTIPS_ENABLED else None,
                     dbc.Tooltip(
                         "Most lenient: merges if any single pair is close enough. "
                         "Can chain distant groups through weak links — use with caution.",
                         target="sta-mc-lnk-single", placement="bottom",
-                    ),
+                    ) if _styles.TOOLTIPS_ENABLED else None,
                 ],
                 id="sta-mc-linkage-wrapper",
                 style=_MC_STYLE_DISABLED,

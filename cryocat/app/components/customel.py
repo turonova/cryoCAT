@@ -57,7 +57,7 @@ def InlineLabeledDropdown(id_, label, default_visibility="flex", tooltip_text=""
                 make_dropdown(id_, options, value, clearable=clearable, **dropdown_kwargs),
                 style=input_style,
             ),
-            dbc.Tooltip(tooltip_text, target=f"{id_}-lbl"),
+            dbc.Tooltip(tooltip_text, target=f"{id_}-lbl") if styles.TOOLTIPS_ENABLED else None,
         ],
         style=styles.FORM_ROW,
         className=class_style,

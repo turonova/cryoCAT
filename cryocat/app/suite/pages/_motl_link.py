@@ -57,16 +57,50 @@ def check_motl_overlap(
     return matched, total, msg
 
 
-def has_source_motl(ref: dict | None) -> bool:
-    """True when *ref* has a non-None ``source_motl_id``.
+def ordered_selection_to_motl_links(
+    selected: list[str] | str | None,
+) -> dict[str, list[str]] | None:
+    """Build motl_links from an ordered selection.
 
-    Distinguishes three cases:
-    * key absent (computed table — no restriction) → True
-    * ``source_motl_id = None`` (loaded without source) → False
-    * ``source_motl_id = "motl_N"`` (loaded with source) → True
+    First id is the query; remaining ids are the neighbours.  A single id is a
+    self-comparison: the same motl in both roles.  Returns None when empty.
     """
+    if not selected:
+        return None
+    if isinstance(selected, str):
+        selected = [selected]
+    neighbours = list(selected[1:]) if len(selected) > 1 else [selected[0]]
+    return {"query": [selected[0]], "neighbour": neighbours}
+
+
+def get_motl_role_id(links: dict | None, role: str) -> str | None:
+    """Return the first id for *role* from *links*, or None.
+
+    Handles both list values (canonical) and bare strings (legacy).
+    """
+    val = (links or {}).get(role)
+    if isinstance(val, list):
+        return val[0] if val else None
+    return val or None
+
+
+def get_motl_role_ids(links: dict | None, role: str) -> list[str]:
+    """Return all ids for *role* from *links* as a list; empty when absent."""
+    val = (links or {}).get(role)
+    if isinstance(val, list):
+        return val
+    return [val] if val else []
+
+
+def get_motl_link(ref: dict | None, role: str) -> str | None:
+    """Return the first motl id for *role* from ``ref["motl_links"]``, or None."""
+    if not isinstance(ref, dict):
+        return None
+    return get_motl_role_id(ref.get("motl_links"), role)
+
+
+def has_source_motl(ref: dict | None) -> bool:
+    """True when *ref* carries at least one motl link in ``motl_links``."""
     if not isinstance(ref, dict):
         return False
-    if "source_motl_id" not in ref:
-        return True
-    return ref["source_motl_id"] is not None
+    return bool(ref.get("motl_links"))

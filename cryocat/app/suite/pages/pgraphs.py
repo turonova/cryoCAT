@@ -132,7 +132,7 @@ def register_callbacks(app):  # noqa: C901
     register_plot_editor_callbacks(
         app, "gr",
         pool_resolve_df=pool_resolve_df,
-        dp_resolve_df=datapool.resolve_df,
+        dp_resolve_df=datapool.resolve_payload_df,
         settings_store_id=ids.GRAPH_PALETTE_SIGNAL,
     )
 
@@ -321,7 +321,7 @@ def register_callbacks(app):  # noqa: C901
                     src_ref = spec.get("source")
                     chart = spec.get("chart")
                     if src_ref and chart:
-                        df = _resolve_df(src_ref, pool_resolve_df, datapool.resolve_df)
+                        df = _resolve_df(src_ref, pool_resolve_df, datapool.resolve_payload_df)
                         if df is None:
                             missing_source_name = (
                                 src_ref.get("motl_id")
@@ -343,7 +343,7 @@ def register_callbacks(app):  # noqa: C901
                                 for trace_cfg in (overlays or []):
                                     try:
                                         _add_overlay(fig, trace_cfg,
-                                                     pool_resolve_df, datapool.resolve_df,
+                                                     pool_resolve_df, datapool.resolve_payload_df,
                                                      roles, chart, settings)
                                     except OverlaySourceMissing as e:
                                         missing_overlays.append(str(e))
@@ -464,7 +464,7 @@ def register_callbacks(app):  # noqa: C901
             _log.debug("_plot early return: src_ref is None/empty")
             return _fail("Select a source.")
 
-        df = _resolve_df(src_ref, pool_resolve_df, datapool.resolve_df)
+        df = _resolve_df(src_ref, pool_resolve_df, datapool.resolve_payload_df)
         if df is None:
             _log.debug("_plot early return: _resolve_df returned None for src_ref=%r", src_ref)
             return _fail("Source has no data.")
@@ -498,7 +498,7 @@ def register_callbacks(app):  # noqa: C901
         missing_overlays: list[str] = []
         for trace_cfg in (overlays or []):
             try:
-                _add_overlay(fig, trace_cfg, pool_resolve_df, datapool.resolve_df,
+                _add_overlay(fig, trace_cfg, pool_resolve_df, datapool.resolve_payload_df,
                              roles, chart, settings)
             except OverlaySourceMissing as e:
                 missing_overlays.append(str(e))
@@ -618,7 +618,7 @@ def register_callbacks(app):  # noqa: C901
                 chart = payload.get("chart")
                 if not src_ref or not chart:
                     continue
-                df = _resolve_df(src_ref, pool_resolve_df, datapool.resolve_df)
+                df = _resolve_df(src_ref, pool_resolve_df, datapool.resolve_payload_df)
                 if df is None:
                     continue
                 roles = payload.get("roles", {})
@@ -633,7 +633,7 @@ def register_callbacks(app):  # noqa: C901
                     continue
                 for trace_cfg in (overlays or []):
                     try:
-                        _add_overlay(fig, trace_cfg, pool_resolve_df, datapool.resolve_df,
+                        _add_overlay(fig, trace_cfg, pool_resolve_df, datapool.resolve_payload_df,
                                      roles, chart, settings)
                     except OverlaySourceMissing:
                         pass

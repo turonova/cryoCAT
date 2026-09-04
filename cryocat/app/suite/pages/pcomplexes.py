@@ -104,7 +104,8 @@ def _get_live_complex(complex_id: str, handle: dict):
     live = cr.registry.get(complex_id)
     if live is not None:
         return live
-    motl = _motl_from_pool(handle.get("source_motl_id"))
+    from cryocat.app.suite.pages._motl_link import get_motl_role_id
+    motl = _motl_from_pool(get_motl_role_id(handle.get("motl_links"), "source"))
     if motl is None:
         return None
     try:
@@ -337,7 +338,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         complex_id = cr.registry.add(cpx)
         var = complex_id.replace("-", "_")
         label = f"{var} ({cls_name})"
-        handle = cr.make_handle(cpx, complex_id, label, motl_id, init_kwargs)
+        handle = cr.make_handle(cpx, complex_id, label, {"source": [motl_id]} if motl_id else {}, init_kwargs)
 
         new_pool = list(pool_data or []) + [handle]
         return new_pool, complex_id, f"Created {label}."
@@ -504,7 +505,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
                 cpx,
                 handle["complex_id"],
                 handle.get("label", handle["complex_id"]),
-                handle.get("source_motl_id", ""),
+                handle.get("motl_links") or {},
                 handle.get("init_kwargs", {}),
             )
             new_pool = [

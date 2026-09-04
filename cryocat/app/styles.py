@@ -4,6 +4,11 @@
 Import from here; never re-type a style dict in a component or page module.
 """
 
+# ── Feature flags ─────────────────────────────────────────────────────────────
+# Set to True to re-enable dbc.Tooltip creation globally.  False while the
+# duplicate-id defect that prompted disabling them is under investigation.
+TOOLTIPS_ENABLED: bool = False
+
 # ── Scalar tokens ─────────────────────────────────────────────────────────────
 # Label column: fixed width so labels align across the whole form regardless of
 # text length.  130 px ≈ 45 % of a ~290 px sidebar (the previous percentage

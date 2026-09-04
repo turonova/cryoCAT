@@ -12,6 +12,7 @@ import os
 
 from dash import html, dcc, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
+from cryocat.app import styles
 from cryocat.utils.ioutils import dimensions_load
 
 from cryocat.app.components.customel import InlineLabeledDropdown, InlineInputForm
@@ -37,7 +38,7 @@ def get_relion_options(prefix: str, *, for_load: bool) -> html.Div:
         dbc.Tooltip(
             "Use the original input particle list entries where possible.",
             target=f"{prefix}-rln-use-original",
-        ),
+        ) if styles.TOOLTIPS_ENABLED else None,
         dbc.Checkbox(
             id=f"{prefix}-rln-use-original",
             label="Use original entries",

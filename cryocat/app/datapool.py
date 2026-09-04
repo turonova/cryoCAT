@@ -23,7 +23,7 @@ the file-pool ``"data-N"`` ids.  Use ``insert`` / ``resolve_df`` /
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import numpy as np
@@ -71,8 +71,8 @@ class DataEntry:
     columns:     list[str] | None  # column names, capped at _MAX_COLUMNS
     shape:       tuple | None      # array / volume shape
     dtype:       str | None        # array dtype string
-    id_column:      str | None = None  # identity column name (for row-level edit operations)
-    source_motl_id: str | None = None  # source motl (for loaded NN/twist tables)
+    id_column:   str | None = None                   # identity column name (for row-level edit operations)
+    motl_links:  dict[str, list[str]] | None = None  # role → list of motl ids
 
 
 # ── Pool state ────────────────────────────────────────────────────────────────
@@ -81,23 +81,38 @@ class DataEntry:
 class DataPoolState:
     """Immutable snapshot of the two browser-side data pool stores.
 
-    ``registry``  — ``{ data_id: asdict(DataEntry) }``
-    ``next_id``   — monotone counter; never reused.
+    ``registry``      — ``{ data_id: asdict(DataEntry) }``
+    ``next_id``       — monotone counter; never reused.
+    ``kind_counters`` — per-kind insertion counters; ``{"nn": 2, "desc": 1}`` means
+                        two NN entries and one descriptor entry have been created.
+                        Stored inside the registry dict under ``"__kind_counters__"``
+                        to avoid a third dcc.Store; stripped out in ``from_stores``
+                        so ``registry`` is always clean (no reserved key visible).
     """
-    registry: dict
-    next_id:  int
+    registry:      dict
+    next_id:       int
+    kind_counters: dict = field(default_factory=dict)
 
     @classmethod
     def from_stores(cls, registry, next_id) -> DataPoolState:
         """Construct from store values.  Accepts ``None`` for empty state."""
+        reg = dict(registry or {})
+        kind_counters = dict(reg.pop("__kind_counters__", None) or {})
         return cls(
-            registry=dict(registry or {}),
+            registry=reg,
             next_id=int(next_id or 0),
+            kind_counters=kind_counters,
         )
 
     def to_stores(self) -> tuple:
-        """Return ``(registry, next_id)`` for unpacking into Dash Outputs."""
-        return self.registry, self.next_id
+        """Return ``(registry, next_id)`` for unpacking into Dash Outputs.
+
+        The kind_counters dict is embedded in the returned registry under the
+        reserved key ``"__kind_counters__"`` so it survives the dcc.Store
+        round-trip without requiring a third store.
+        """
+        reg = {**self.registry, "__kind_counters__": self.kind_counters}
+        return reg, self.next_id
 
 
 # ── Kind detection ────────────────────────────────────────────────────────────
@@ -122,6 +137,7 @@ def _make_entry(
     label: str,
     reader_key: str,
     source_path: str,
+    motl_links: dict[str, list[str]] | None = None,
 ) -> DataEntry:
     """Build a DataEntry handle from a payload.  Pure function; no side effects."""
     kind: str = _detect_kind(payload)
@@ -159,6 +175,7 @@ def _make_entry(
         columns=columns,
         shape=shape,
         dtype=dtype,
+        motl_links=motl_links,
     )
 
 
@@ -171,17 +188,36 @@ def insert_entry(
     label: str,
     reader: str,
     source_path: str,
+    motl_links: dict[str, list[str]] | None = None,
+    data_id: str | None = None,
+    entry_kind: str | None = None,
 ) -> tuple[DataPoolState, str]:
     """Store *payload* server-side; return (new_state, data_id).
 
-    The id is ``f"data_{state.next_id + 1}"`` and is never reused.
+    ID resolution order:
+    1. *data_id* provided → used as-is (legacy / explicit override).
+    2. *entry_kind* provided → ``f"{entry_kind}_{counter}"`` where *counter* is
+       the per-kind count (1-based, never reused).  Example: first ``"nn"`` entry
+       gets ``"nn_1"`` regardless of how many other entries exist.
+    3. Neither → ``f"data_{state.next_id + 1}"`` (global fallback).
+
+    The generic ``next_id`` counter increments unconditionally so future
+    ``data_N`` ids stay unique even when *entry_kind* is used.
     """
-    data_id = f"data_{state.next_id + 1}"
+    kind_counters = dict(state.kind_counters)
+    if data_id is None:
+        if entry_kind is not None:
+            count = kind_counters.get(entry_kind, 0) + 1
+            kind_counters[entry_kind] = count
+            data_id = f"{entry_kind}_{count}"
+        else:
+            data_id = f"data_{state.next_id + 1}"
     _payloads[data_id] = payload
-    entry = _make_entry(payload, data_id, label, reader, source_path)
+    entry = _make_entry(payload, data_id, label, reader, source_path, motl_links)
     return DataPoolState(
         registry={**state.registry, data_id: asdict(entry)},
         next_id=state.next_id + 1,
+        kind_counters=kind_counters,
     ), data_id
 
 
@@ -196,7 +232,34 @@ def remove_entry(state: DataPoolState, data_id: str) -> DataPoolState:
     return DataPoolState(
         registry={k: v for k, v in state.registry.items() if k != data_id},
         next_id=state.next_id,
+        kind_counters=state.kind_counters,
     )
+
+
+def replace_entry(state: DataPoolState, data_id: str, payload: Any) -> DataPoolState:
+    """Replace an entry's payload in-place, re-deriving all computed fields.
+
+    The entry keeps its label, reader, source_path, motl_links, and id_column.
+    ``next_id`` is unchanged so existing slot assignments referencing *data_id*
+    are unaffected.  No-op if *data_id* is not in the registry.
+    """
+    if data_id not in state.registry:
+        return state
+    old = state.registry[data_id]
+    _payloads[data_id] = payload
+    entry = _make_entry(
+        payload, data_id,
+        old["label"], old["reader"], old.get("source_path", ""),
+        old.get("motl_links"),
+    )
+    entry_dict = asdict(entry)
+    entry_dict["id_column"] = old.get("id_column")
+    return DataPoolState(
+        registry={**state.registry, data_id: entry_dict},
+        next_id=state.next_id,
+        kind_counters=state.kind_counters,
+    )
+
 
 
 def get_payload(data_id: str, state: DataPoolState | None = None) -> Any:
@@ -302,6 +365,7 @@ def replace_payload(
     return DataPoolState(
         registry={**state.registry, data_id: old},
         next_id=state.next_id,
+        kind_counters=state.kind_counters,
     )
 
 
@@ -321,7 +385,7 @@ def insert(
     label: str,
     id_column: str | None,
     source: str = "",
-    source_motl_id: str | None = None,
+    motl_links: dict[str, list[str]] | None = None,
 ) -> dict:
     """Store *df* and return a ref dict for dcc.Store."""
     _table_counter[0] += 1
@@ -333,7 +397,7 @@ def insert(
         "id_column": id_column,
         "label": label,
         "source": source,
-        "source_motl_id": source_motl_id,
+        "motl_links": motl_links,
     }
 
 
@@ -345,6 +409,19 @@ def resolve_df(ref: dict | None) -> pd.DataFrame | None:
     if not table_id:
         return None
     return _table_payloads.get(table_id)
+
+
+def resolve_payload_df(ref: dict | None) -> pd.DataFrame | None:
+    """Return the DataFrame for a data-pool ref ``{"data_id": "data_N"}``, or ``None``."""
+    if not isinstance(ref, dict):
+        return None
+    data_id = ref.get("data_id")
+    if not data_id:
+        return None
+    payload = _payloads.get(data_id)
+    if not isinstance(payload, pd.DataFrame):
+        return None
+    return payload
 
 
 def resolve_n_rows(ref: dict | None) -> int:

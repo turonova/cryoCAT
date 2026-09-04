@@ -15,6 +15,8 @@ Computation is decoupled from clustering:
 Contract: exposes ``layout`` and ``register_callbacks(app)``.
 """
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -36,6 +38,13 @@ from cryocat.app.pool import (
     PoolState,
 )
 from cryocat.app.components.poolpicker import get_pool_picker, register_pool_picker_callbacks
+from cryocat.app.components.poolslotlist import (
+    get_pool_slot_list,
+    register_pool_slot_list_callbacks,
+    register_slot_focus_callback,
+    _first_free_slot,
+)
+from cryocat.app.components.customel import customel_graph
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
@@ -50,9 +59,24 @@ DYNAMIC_IDS: list[tuple[str, str]] = [
 
 _MOTL_COL_OPTIONS = [{"label": c, "value": c} for c in Motl.motl_columns]
 
-_nn_counter: list[int] = [0]
+_NN_SLOTS = 5
+_nn_table_refs: dict[str, dict] = {}   # data_id → full table-pool ref (for slot display)
+_nn_xyz_figs: dict[str, Any] = {}      # data_id → styled figure dict (for slot display)
 
 from cryocat.app import datapool as _datapool
+
+
+def _nn_row_extra(data_id: str, entry: dict) -> list:
+    return [
+        dbc.Button(
+            "✕",
+            id={"type": "dp-remove-btn", "data_id": data_id},
+            size="sm",
+            color=styles.BTN_NEUTRAL,
+            n_clicks=0,
+            style={"flexShrink": 0, "padding": "0 4px"},
+        )
+    ]
 
 
 def _nn_csv_save(path, grid_data, used_motls):
@@ -140,13 +164,15 @@ def _postprocess_sidebar_content():
     )
 
 
-def _nn_load_fn(path, source_motl_id=None):
+def _nn_load_fn(path, motl_selection=None):
     """Load an NN table from a CSV file; returns dict with df and column_name."""
     nn = NearestNeighbors.load(file_path=path)
-    result = {"df": nn.df, "column_name": nn.column_name, "source_motl_id": source_motl_id}
-    if source_motl_id:
-        from cryocat.app.suite.pages._motl_link import check_motl_overlap
-        _, _, msg = check_motl_overlap(nn.df, "qp_subtomo_id", source_motl_id)
+    from cryocat.app.suite.pages._motl_link import ordered_selection_to_motl_links, check_motl_overlap
+    motl_links = ordered_selection_to_motl_links(motl_selection)
+    result = {"df": nn.df, "column_name": nn.column_name, "motl_links": motl_links}
+    if motl_selection:
+        query_id = motl_selection[0] if isinstance(motl_selection, list) else motl_selection
+        _, _, msg = check_motl_overlap(nn.df, "qp_subtomo_id", query_id)
         result["status_extra"] = msg
     return result
 
@@ -160,18 +186,19 @@ def _sidebar() -> list:
                         "nn-src",
                         extra_file_children=[
                             formgen.form_row(
-                                "source_motl",
+                                "motl_selection",
                                 formgen.make_dropdown(
-                                    {"type": "nn-src-ts-extra", "param": "source_motl_id"},
+                                    {"type": "nn-src-ts-extra", "param": "motl_selection"},
                                     [],
                                     None,
+                                    multi=True,
                                     clearable=True,
                                     placeholder="None — set after loading",
                                 ),
-                                "Motl whose subtomo_id values match this table's qp_subtomo_id column. "
-                                "Optional: set here or in the Source motl link section after loading.",
-                                label_id="nn-ts-source-motl-lbl",
-                                label_text="Source motl",
+                                "Order matters: first selection is the query motl, rest are neighbours. "
+                                "Optional: set here or in Source motl link after loading.",
+                                label_id="nn-ts-motl-sel-lbl",
+                                label_text="Source motl(s)",
                                 truly_optional=True,
                             ),
                         ],
@@ -220,7 +247,7 @@ def _sidebar() -> list:
                                                 "are simply dropped.",
                                                 target="nn-excl-col-lbl",
                                                 placement="right",
-                                            ),
+                                            ) if styles.TOOLTIPS_ENABLED else None,
                                         ],
                                         style={
                                             "width": "45%", "display": "flex",
@@ -305,33 +332,9 @@ def _sidebar() -> list:
                     item_id="nn-acc-create",
                 ),
                 dbc.AccordionItem(
-                    html.Div([
-                        html.Div(id="nn-src-motl-display", style=styles.HINT),
-                        formgen.form_row(
-                            "source_motl_change",
-                            formgen.make_dropdown(
-                                "nn-src-motl-dd",
-                                [],
-                                None,
-                                clearable=True,
-                                placeholder="Select motl…",
-                            ),
-                            "Motl whose subtomo_id values match this table's qp_subtomo_id column.",
-                            label_id="nn-src-motl-change-lbl",
-                            label_text="Source motl",
-                            truly_optional=True,
-                        ),
-                        dbc.Button(
-                            "Set source motl",
-                            id="nn-src-motl-btn",
-                            color=styles.BTN_SECONDARY,
-                            size="sm",
-                            style={"width": "100%", "marginTop": "0.3rem"},
-                        ),
-                        html.Div(id="nn-src-motl-status", style={**styles.HINT, "marginTop": "0.3rem"}),
-                    ]),
-                    title="Source motl link",
-                    item_id="nn-acc-source",
+                    get_pool_slot_list("nn-pool"),
+                    title="NN results in pool",
+                    item_id="nn-acc-pool",
                 ),
             ],
             active_item=["nn-acc-params"],
@@ -340,8 +343,23 @@ def _sidebar() -> list:
 
 
 def _main() -> list:
+    slot_tabs = [
+        dbc.Tab(
+            label=f"Slot {i + 1}",
+            tab_id=f"nn-slot-{i}",
+            id=f"nn-slot-tab-{i}",
+            disabled=True,
+        )
+        for i in range(_NN_SLOTS)
+    ]
     return [
         dcc.Store(id="nn-out-tabv-global-data-store"),
+        dbc.Tabs(
+            slot_tabs,
+            id="nn-slot-tabs",
+            active_tab="nn-slot-0",
+            style={"marginBottom": "0.5rem"},
+        ),
         get_table_component("nn-out-tabv", show_editor=True),
         html.Hr(style={"margin": "0.5rem 0"}),
         html.Div(id="nn-xyz-graph-area"),
@@ -354,6 +372,9 @@ layout = html.Div(
         # Ordered list of pool motl-ids used in the last NN run, plus is_multi flag.
         dcc.Store(id="nn-used-motls-store"),
         dcc.Store(id="nn-cluster-cols-store", data=[]),
+        dcc.Store(id="nn-pool-registry", data={}),
+        dcc.Store(id="nn-pool-slot-map", data=[None] * _NN_SLOTS),
+        dcc.Store(id="nn-pool-active-id"),
         page_shell(_sidebar(), _main()),
     ],
     style={"margin": "0", "padding": "0"},
@@ -378,6 +399,14 @@ def register_callbacks(app):
     from dash import ALL as _ALL
     formgen.register_form_callbacks(app, "nn-forms-params", {"cls_name": _ALL})
     register_pool_picker_callbacks(app, "nn")
+    register_pool_slot_list_callbacks(
+        app, "nn-pool", "nn-pool-registry", "nn-pool-slot-map", _NN_SLOTS,
+        row_extra_fn=_nn_row_extra,
+        active_id_store_id="nn-pool-active-id",
+    )
+    register_slot_focus_callback(
+        app, "nn-pool-slot-map", "nn-slot-tabs", "nn-slot-", _NN_SLOTS,
+    )
     register_table_to_motl_callbacks(
         app, "nn-ttm",
         source_table_id="nn-out-tabv-grid",
@@ -439,6 +468,7 @@ def register_callbacks(app):
         # allow_duplicate: tableeditor._on_apply also writes DATA_POOL_REGISTRY
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output("nn-pool-slot-map", "data", allow_duplicate=True),
         Input("nn-compute-btn", "n_clicks"),
         State("nn-value", "data"),
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
@@ -451,17 +481,19 @@ def register_callbacks(app):
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
+        State("nn-pool-slot-map", "data"),
         prevent_initial_call=True,
     )
     def compute_nn(n_clicks, selected, param_values, param_ids, angular_on, compute_dist,
-                   dp_registry, dp_next_id, gs_settings, registry, pool_meta, pool_next_id):
+                   dp_registry, dp_next_id, gs_settings, registry, pool_meta, pool_next_id,
+                   slot_map):
         _no = no_update
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
 
         if not selected:
             return (no_update, no_update, "Select at least one motl from the pool.",
-                    no_update, no_update, no_update, no_update)
+                    no_update, no_update, no_update, no_update, no_update)
         if isinstance(selected, str):
             selected = [selected]
 
@@ -474,16 +506,18 @@ def register_callbacks(app):
                 pass
         if not motls:
             return (no_update, no_update, "The selected motls have no data.",
-                    no_update, no_update, no_update, no_update)
+                    no_update, no_update, no_update, no_update, no_update)
 
         pool_state = PoolState.from_stores(registry, pool_meta, pool_next_id)
         nn_kwargs = _kwargs_by_cls(param_ids, param_values, "nn-params", pool_state)
         angular_kwargs = _kwargs_by_cls(param_ids, param_values, "nn-angular", pool_state)
 
-        _nn_counter[0] += 1
-        nn_key = f"nn-{_nn_counter[0]}"
+        from cryocat.app.datapool import DataPoolState as _DPState
         from cryocat.app import provenance as _prov
         from cryocat.app.logger import invoke_operation as _invoke_op
+        _ds = _DPState.from_stores(dp_registry, dp_next_id)
+        _kind_count = _ds.kind_counters.get("nn", 0) + 1
+        nn_key = f"nn-{_kind_count}"
         var = _prov.bind(nn_key)
         try:
             nn_input = motls[0] if len(motls) == 1 else motls
@@ -492,7 +526,7 @@ def register_callbacks(app):
             nn_stats.get_rotated_coord(add_to_df=True)
         except Exception as exc:
             return (no_update, no_update, f"Error: {exc}",
-                    no_update, no_update, no_update, no_update)
+                    no_update, no_update, no_update, no_update, no_update)
 
         status_bits = []
         if nn_kwargs.get("nn_type") == "closest_dist" and "nn_dist" in nn_stats.df:
@@ -532,17 +566,39 @@ def register_callbacks(app):
                 status_bits.append(f"Angular distances skipped: {exc}")
 
         table_data = nn_stats.df.to_dict("records")
-        nn_ref = _datapool.insert(nn_stats.df, label="NN analysis", id_column="qp_subtomo_id")
+        from cryocat.app.suite.pages._motl_link import ordered_selection_to_motl_links
+        nn_motl_links = ordered_selection_to_motl_links(selected)
+        nn_ref = _datapool.insert(
+            nn_stats.df, label=var, id_column="qp_subtomo_id",
+            motl_links=nn_motl_links,
+        )
         from cryocat.app import session as _session
         _prov.record(nn_key, _session.last_seq())
 
-        # Also register in DATA_POOL_REGISTRY so the entry picker can see it.
-        from cryocat.app.datapool import DataPoolState as _DPState
-        _ds = _DPState.from_stores(dp_registry, dp_next_id)
         _ds, _dp_id = _datapool.insert_entry(
-            _ds, nn_stats.df, label="NN analysis", reader="nn", source_path="",
+            _ds, nn_stats.df,
+            label=var,
+            reader="nn",
+            source_path="",
+            motl_links=nn_motl_links,
+            entry_kind="nn",
         )
+        nn_ref = {**nn_ref, "data_id": _dp_id}
         new_dp_reg, new_dp_next = _ds.to_stores()
+
+        # BK1: assign to lowest free slot; report if all full.
+        # Pattern: cryocat/app/suite/motlsidebar.py lines 712–722.
+        sm = list(slot_map or [None] * _NN_SLOTS)
+        while len(sm) < _NN_SLOTS:
+            sm.append(None)
+        free = _first_free_slot(sm, _NN_SLOTS)
+        if free is not None:
+            sm[free] = _dp_id
+            new_slot_map = sm
+            status_bits.append(f"→ slot {free + 1}")
+        else:
+            new_slot_map = no_update
+            status_bits.append(f"→ pool (all {_NN_SLOTS} slots in use)")
 
         nn_df = pd.DataFrame(
             np.column_stack((normalized, nn_stats.df["nn_subtomo_id"].values)),
@@ -552,7 +608,11 @@ def register_callbacks(app):
             nn_df, coord_columns=["x", "y", "z"], hover_column_name="nn_subtomo_id"
         )
         _fig_d = style_figure(_fig, gs_settings or {})
-        xyz_graph = dcc.Graph(figure=go.Figure(_fig_d))
+        xyz_graph = customel_graph("nn", "xyz", dcc.Graph(id={"type": "styled-graph", "owner": "nn", "name": "xyz"}, figure=go.Figure(_fig_d)))
+        _nn_table_refs[_dp_id] = nn_ref
+        _nn_xyz_figs[_dp_id] = _fig_d
+        from cryocat.app.console.vars import register_console_var
+        register_console_var(var, nn_stats.df)
 
         used_motls_store = {
             "names": selected,
@@ -562,7 +622,7 @@ def register_callbacks(app):
 
         return (
             xyz_graph, nn_ref, " | ".join(status_bits), table_data,
-            used_motls_store, new_dp_reg, new_dp_next,
+            used_motls_store, new_dp_reg, new_dp_next, new_slot_map,
         )
 
     # ── Post-processing: enrich existing NN table without recomputing. ────────
@@ -570,6 +630,8 @@ def register_callbacks(app):
         Output("nn-result", "data", allow_duplicate=True),
         Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
         Output("nn-pp-status", "children"),
+        Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
         Input("nn-pp-apply-btn", "n_clicks"),
         State("nn-result", "data"),
         State("nn-used-motls-store", "data"),
@@ -582,17 +644,21 @@ def register_callbacks(app):
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
+        State("nn-out-tabv-global-data-store", "data"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        State(ids.DATA_POOL_NEXT_ID,  "data"),
         prevent_initial_call=True,
     )
     def _apply_postprocessing(
         n_clicks, nn_result, used_motls,
         add_cols, sides, angular_on, param_values, param_ids, dist_on,
         registry, pool_meta, pool_next_id,
+        current_ref, dp_registry, dp_next_id,
     ):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not nn_result:
-            return no_update, no_update, "Run NN analysis first."
+            return no_update, no_update, "Run NN analysis first.", no_update, no_update
 
         df = pd.DataFrame(nn_result)
         status_bits = []
@@ -666,11 +732,24 @@ def register_callbacks(app):
                 status_bits.append(f"NN distances failed: {exc}")
 
         if not status_bits:
-            return no_update, no_update, "Nothing selected."
+            return no_update, no_update, "Nothing selected.", no_update, no_update
 
         new_data = df.to_dict("records")
-        nn_ref = _datapool.insert(df, label="NN analysis", id_column="qp_subtomo_id")
-        return new_data, nn_ref, " | ".join(status_bits)
+        existing_links = (current_ref or {}).get("motl_links")
+        nn_ref = _datapool.insert(
+            df, label="NN analysis", id_column="qp_subtomo_id",
+            motl_links=existing_links,
+        )
+        data_id = (current_ref or {}).get("data_id")
+        nn_ref = {**nn_ref, "data_id": data_id} if data_id else nn_ref
+
+        from cryocat.app.datapool import DataPoolState as _DPState
+        ds = _DPState.from_stores(dp_registry, dp_next_id)
+        if data_id:
+            ds = _datapool.replace_entry(ds, data_id, df)
+        new_dp_reg, new_dp_next = ds.to_stores()
+
+        return new_data, nn_ref, " | ".join(status_bits), new_dp_reg, new_dp_next
 
     # ── Handle NN table loaded from file (via tablesource) ────────────────────
     @app.callback(
@@ -678,18 +757,32 @@ def register_callbacks(app):
         Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
         Output("nn-result", "data", allow_duplicate=True),
         Output("nn-used-motls-store", "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output("nn-pool-slot-map", "data", allow_duplicate=True),
         Input("nn-src-ts-loaded", "data"),
         State("nn-value", "data"),
         State(ids.GRAPH_SETTINGS_STORE, "data"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        State(ids.DATA_POOL_NEXT_ID,  "data"),
+        State("nn-pool-slot-map", "data"),
         prevent_initial_call=True,
     )
-    def _handle_nn_loaded(loaded, selected, gs_settings):
+    def _handle_nn_loaded(loaded, selected, gs_settings, dp_registry, dp_next_id, slot_map):
         if not loaded:
             raise dash.exceptions.PreventUpdate
 
         from io import StringIO
+        from cryocat.app.datapool import DataPoolState as _DPState
+        from cryocat.app import provenance as _prov
+
         df = pd.read_json(StringIO(loaded["df"]), orient="split")
         column_name = loaded.get("column_name", "tomo_id")
+
+        _ds = _DPState.from_stores(dp_registry, dp_next_id)
+        _kind_count = _ds.kind_counters.get("nn", 0) + 1
+        nn_key = f"nn-{_kind_count}"
+        var = _prov.bind(nn_key)
 
         selected_names = []
         motl_list = None
@@ -716,6 +809,7 @@ def register_callbacks(app):
         nn_stats.paired = False
 
         xyz_graph = no_update
+        _fig_d = None
         try:
             normalized = nn_stats.get_normalized_coord(add_to_df=True)
             nn_stats.get_rotated_coord(add_to_df=True)
@@ -727,16 +821,17 @@ def register_callbacks(app):
                 nn_df, coord_columns=["x", "y", "z"], hover_column_name="nn_subtomo_id"
             )
             _fig_d = style_figure(_fig, gs_settings or {})
-            xyz_graph = dcc.Graph(figure=go.Figure(_fig_d))
+            xyz_graph = customel_graph("nn", "xyz", dcc.Graph(id={"type": "styled-graph", "owner": "nn", "name": "xyz"}, figure=go.Figure(_fig_d)))
         except Exception:
             pass
 
         table_data = nn_stats.df.to_dict("records")
+        loaded_links = loaded.get("motl_links")
         nn_ref = _datapool.insert(
             nn_stats.df,
-            label="NN analysis",
+            label=var,
             id_column="qp_subtomo_id",
-            source_motl_id=loaded.get("source_motl_id"),
+            motl_links=loaded_links,
         )
         used_motls_store = {
             "names": selected_names,
@@ -744,15 +839,43 @@ def register_callbacks(app):
             "column_name": column_name,
         }
 
+        _ds, _dp_id = _datapool.insert_entry(
+            _ds, nn_stats.df,
+            label=var,
+            reader="nn",
+            source_path="",
+            motl_links=loaded_links,
+            entry_kind="nn",
+        )
+        nn_ref = {**nn_ref, "data_id": _dp_id}
+        _nn_table_refs[_dp_id] = nn_ref
+        if _fig_d is not None:
+            _nn_xyz_figs[_dp_id] = _fig_d
+        from cryocat.app.console.vars import register_console_var
+        register_console_var(var, nn_stats.df)
+        new_dp_reg, new_dp_next = _ds.to_stores()
+
+        # BK1: assign to lowest free slot; report if all full.
+        # Pattern: cryocat/app/suite/motlsidebar.py lines 712–722.
+        sm = list(slot_map or [None] * _NN_SLOTS)
+        while len(sm) < _NN_SLOTS:
+            sm.append(None)
+        free = _first_free_slot(sm, _NN_SLOTS)
+        if free is not None:
+            sm[free] = _dp_id
+            new_slot_map = sm
+        else:
+            new_slot_map = no_update
+
         return (
             xyz_graph, nn_ref, table_data, used_motls_store,
+            new_dp_reg, new_dp_next, new_slot_map,
         )
 
     # ── W1/W3: Populate source-motl dropdown options from pool registry ───────
 
     @app.callback(
-        Output({"type": "nn-src-ts-extra", "param": "source_motl_id"}, "options"),
-        Output("nn-src-motl-dd", "options"),
+        Output({"type": "nn-src-ts-extra", "param": "motl_selection"}, "options"),
         Input(ids.POOL_REGISTRY, "data"),
     )
     def _populate_nn_source_motl_options(registry):
@@ -760,47 +883,9 @@ def register_callbacks(app):
             {"label": v.get("label", k), "value": k}
             for k, v in (registry or {}).items()
         ]
-        return opts, opts
+        return opts
 
-    # ── W3: Show current source motl in the Source motl link section ──────────
-
-    @app.callback(
-        Output("nn-src-motl-display", "children"),
-        Input("nn-out-tabv-global-data-store", "data"),
-    )
-    def _show_nn_source_motl(ref):
-        if not isinstance(ref, dict) or "source_motl_id" not in ref:
-            return ""
-        mid = ref.get("source_motl_id")
-        if mid is None:
-            return html.Span("Source motl: not set", style=styles.HINT)
-        return html.Span(f"Source motl: {mid}", style=styles.HINT)
-
-    # ── W3: Set or change source motl after loading ───────────────────────────
-
-    @app.callback(
-        Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
-        Output("nn-src-motl-status", "children"),
-        Input("nn-src-motl-btn", "n_clicks"),
-        State("nn-src-motl-dd", "value"),
-        State("nn-out-tabv-global-data-store", "data"),
-        prevent_initial_call=True,
-    )
-    def _set_nn_source_motl(n_clicks, motl_id, ref):
-        if not n_clicks:
-            raise dash.exceptions.PreventUpdate
-        if not isinstance(ref, dict):
-            return no_update, "No NN table loaded."
-        if not motl_id:
-            return {**ref, "source_motl_id": None}, "Source motl cleared."
-        from cryocat.app.suite.pages._motl_link import check_motl_overlap
-        df = _datapool.resolve_df(ref)
-        if df is None:
-            return no_update, "NN data not available — reload the table."
-        _, _, msg = check_motl_overlap(df, "qp_subtomo_id", motl_id)
-        return {**ref, "source_motl_id": motl_id}, msg
-
-    # ── W4: Gate table-to-motl buttons on source_motl_id ─────────────────────
+    # ── W4: Gate table-to-motl buttons on motl_links["query"] ────────────────
 
     @app.callback(
         Output("nn-ttm-ttm-write-btn", "disabled"),
@@ -810,8 +895,80 @@ def register_callbacks(app):
         Input("nn-out-tabv-global-data-store", "data"),
     )
     def _gate_nn_ttm(ref):
-        from cryocat.app.suite.pages._motl_link import has_source_motl
-        if has_source_motl(ref):
-            return False, "", False, ""
-        msg = "Set a source motl in 'Source motl link' to enable motl operations."
+        from cryocat.app.suite.pages._motl_link import get_motl_role_id
+        query_mid = get_motl_role_id((ref or {}).get("motl_links"), "query")
+        if query_mid:
+            return False, f"Targets query motl: {query_mid}", False, f"Targets query motl: {query_mid}"
+        msg = "Load data with a source motl selected to enable motl operations."
         return True, msg, True, msg
+
+    # ── Sync filtered NN registry from the global data pool ──────────────────
+
+    @app.callback(
+        Output("nn-pool-registry", "data"),
+        Input(ids.DATA_POOL_REGISTRY, "data"),
+    )
+    def _sync_nn_pool_registry(dp_registry):
+        return {
+            k: v for k, v in (dp_registry or {}).items()
+            if v.get("reader") == "nn"
+        }
+
+    # ── Slot tab labels follow slot map + pool registry ───────────────────────
+
+    @app.callback(
+        *[Output(f"nn-slot-tab-{i}", "label") for i in range(_NN_SLOTS)],
+        *[Output(f"nn-slot-tab-{i}", "disabled") for i in range(_NN_SLOTS)],
+        Input("nn-pool-slot-map", "data"),
+        State("nn-pool-registry", "data"),
+    )
+    def _update_nn_slot_tabs(slot_map, pool_registry):
+        reg = pool_registry or {}
+        sm = list(slot_map or [None] * _NN_SLOTS)
+        labels, disableds = [], []
+        for i, data_id in enumerate(sm[:_NN_SLOTS]):
+            if data_id and data_id in reg:
+                labels.append(reg[data_id].get("label", data_id))
+                disableds.append(False)
+            else:
+                labels.append(f"Slot {i + 1}")
+                disableds.append(True)
+        return *labels, *disableds
+
+    # ── Tab click → active-id (also fires when slot focus shifts) ─────────────
+
+    @app.callback(
+        Output("nn-pool-active-id", "data", allow_duplicate=True),
+        Input("nn-slot-tabs", "active_tab"),
+        State("nn-pool-slot-map", "data"),
+        prevent_initial_call=True,
+    )
+    def _on_nn_slot_tab_clicked(active_tab, slot_map):
+        if not active_tab:
+            raise dash.exceptions.PreventUpdate
+        try:
+            i = int(active_tab.split("-")[-1])
+        except (IndexError, ValueError):
+            raise dash.exceptions.PreventUpdate
+        data_id = (slot_map or [])[i] if slot_map and i < len(slot_map) else None
+        if not data_id:
+            raise dash.exceptions.PreventUpdate
+        return data_id
+
+    # ── Active-id → load table + xyz from server-side refs ───────────────────
+
+    @app.callback(
+        Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
+        Output("nn-xyz-graph-area", "children", allow_duplicate=True),
+        Input("nn-pool-active-id", "data"),
+        prevent_initial_call=True,
+    )
+    def _on_nn_active_id_change(data_id):
+        if not data_id:
+            raise dash.exceptions.PreventUpdate
+        table_ref = _nn_table_refs.get(data_id)
+        if table_ref is None:
+            raise dash.exceptions.PreventUpdate
+        xyz_fig_dict = _nn_xyz_figs.get(data_id)
+        xyz_child = customel_graph("nn", "xyz", dcc.Graph(id={"type": "styled-graph", "owner": "nn", "name": "xyz"}, figure=go.Figure(xyz_fig_dict))) if xyz_fig_dict else no_update
+        return table_ref, xyz_child
