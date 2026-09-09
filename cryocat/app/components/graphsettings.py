@@ -16,6 +16,12 @@ GRAPH_SETTINGS_DEFAULTS = {
     "continuous_palette": "StarryNight",
     "bg_color": "white",
     "palette_is_user_set": False,
+    "x_showline": False,
+    "x_mirror": False,
+    "x_showgrid": True,
+    "y_showline": False,
+    "y_mirror": False,
+    "y_showgrid": True,
 }
 
 _FONT_FAMILIES = ["Arial", "Helvetica", "Courier New", "Times New Roman", "Verdana"]
@@ -298,6 +304,16 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
                 ax = layout.setdefault(axis_key, {})
                 ax.setdefault("gridcolor", "#444444")
                 ax.setdefault("tickfont", {}).setdefault("color", text_color)
+
+    # Axis line / grid appearance (xaxis.showline, xaxis.mirror, xaxis.showgrid, yaxis.*)
+    for axis_key, sfx in (("xaxis", "x"), ("yaxis", "y")):
+        ax_s: dict = {}
+        for prop in ("showline", "mirror", "showgrid"):
+            k = f"{sfx}_{prop}"
+            if k in settings:
+                ax_s[prop] = bool(settings[k])
+        if ax_s:
+            layout.setdefault(axis_key, {}).update(ax_s)
 
     # W1: palette_is_user_set=True  → clear existing scalar string colours first so the
     #     chosen palette wins over Express-assigned per-trace colours.

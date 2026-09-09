@@ -30,6 +30,7 @@ Contract: exposes :data:`layout` and :func:`register_callbacks(app)`.
 from __future__ import annotations
 
 import inspect
+import math
 from typing import Any, Callable
 
 import numpy as np
@@ -68,6 +69,12 @@ from cryocat.app.suite.pages._pstructure_intersect import (
 from cryocat.app.pageshell import page_shell, sidebar_accordion
 import cryocat.app.pool as _pool
 from cryocat.app.components.customel import customel_graph
+from cryocat.app.components.alphashape import (
+    alpha_tetra_cache as _struct_alpha_cache,
+    compute_tetra as _compute_alpha_tetra,
+    slider_to_alpha as _slider_to_alpha,
+    render_alpha_figure as _render_alpha_figure,
+)
 
 
 # ── Dynamically-rendered component IDs (§11.3) ───────────────────────────────
@@ -116,27 +123,16 @@ def _hrow(label: str, control) -> html.Div:
 # ── Surface resolvers (used by op dispatch) ──────────────────────────────────
 
 
-def _mesh_only(psurf: PleomorphicSurface | None):
-    """Return ``psurf.surface`` iff it's a Mesh, else None."""
-    if psurf is None or not psurf.is_mesh:
+def _alpha_shape_method(psurf):
+    """Wrap from_alpha_shape so it draws coordinates from the selected OPC."""
+    if psurf is None or not psurf.is_point_cloud:
         return None
-    return psurf.surface
+    coords = psurf.surface.vertices
 
+    def _run(alpha):
+        return Mesh.from_alpha_shape(coords, float(alpha))
 
-def _refine_method(psurf):
-    return None if psurf is None else psurf.surface.refine_normals
-
-
-def _oversample_method(psurf):
-    return None if psurf is None else psurf.surface.oversample
-
-
-def _flip_method(psurf):
-    return None if psurf is None else psurf.surface.flip_normals
-
-
-def _save_method(psurf):
-    return None if psurf is None else psurf.surface.save
+    return _run
 
 
 # ── Loading registry ─────────────────────────────────────────────────────────
@@ -158,6 +154,15 @@ LOAD_OPS: dict[str, dict[str, Any]] = {
         "label": "Mesh from MRC (segmentation)",
         "kind": "formgen",
         "method": Mesh.from_mrc,
+        "reg_key": "Mesh.from_mrc",
+        "result": "surface",
+        "exclude": [],
+    },
+    "mesh_read": {
+        "label": "Mesh from file (.ply / .obj / .stl / .off)",
+        "kind": "formgen",
+        "method": Mesh.read,
+        "reg_key": "Mesh.read",
         "result": "surface",
         "exclude": [],
     },
@@ -165,6 +170,7 @@ LOAD_OPS: dict[str, dict[str, Any]] = {
         "label": "Mesh with curvatures from VTP",
         "kind": "formgen",
         "method": Mesh.read_curvatures,
+        "reg_key": "Mesh.read_curvatures",
         "result": "surface",
         "exclude": [],
     },
@@ -172,6 +178,7 @@ LOAD_OPS: dict[str, dict[str, Any]] = {
         "label": "Point cloud from MRC",
         "kind": "formgen",
         "method": OrientedPointCloud.from_mrc,
+        "reg_key": "OrientedPointCloud.from_mrc",
         "result": "surface",
         "exclude": [],
     },
@@ -179,6 +186,7 @@ LOAD_OPS: dict[str, dict[str, Any]] = {
         "label": "Point cloud from motl file (path)",
         "kind": "formgen",
         "method": OrientedPointCloud.from_motl,
+        "reg_key": "OrientedPointCloud.from_motl",
         "result": "surface",
         "exclude": [],
     },
@@ -186,6 +194,7 @@ LOAD_OPS: dict[str, dict[str, Any]] = {
         "label": "Point cloud from pool motl",
         "kind": "motl_pool",
         "method": OrientedPointCloud.from_motl,
+        "reg_key": "OrientedPointCloud.from_motl",
         "motl_kwarg": "input_path",
         "result": "surface",
         # The motl object is supplied from the pool picker, so the method's
@@ -212,17 +221,22 @@ LOAD_OPS: dict[str, dict[str, Any]] = {
 
 # ── Operations registry ──────────────────────────────────────────────────────
 #
-# Each entry binds an op id to:
+# Surface ops (category="mesh") are built from discovery.entries(SURFACE_OP).
+# The op id is the registry key (e.g. "Mesh.cleanup_mesh").
+# method_for is derived from entry.owner in _build_surface_ops().
+# Custom-UI ops (alpha_shape, intersection) and parametric ops are hand-written.
 #
-#   "label"           -- dropdown label.
-#   "category"        -- "mesh" / "parametric" / "intersection".
-#   "kind"            -- "create" / "unary" / "unary-inplace" / "split" /
-#                        "scalar" / "field-source" / "export" / "intersection".
-#   "form_method"     -- for "mesh" / "parametric": the callable formgen
-#                        reads.  None for "intersection" (custom UI).
-#   "exclude"         -- iterable of param names to drop from the form.
-#   "method_for"      -- for "mesh": callable (PleomorphicSurface) -> bound
-#                        method.
+# Per-entry fields:
+#   "label"           -- from entry.label (derived).
+#   "category"        -- "mesh" for all SURFACE_OP entries (derived).
+#   "kind"            -- derived by _derive_kind() from entry.returns + annotation.
+#   "reg_key"         -- the registry key (= op id for surface ops).
+#   "method_for"      -- callable (PleomorphicSurface) -> bound method (overrides).
+#   "needs_selection" -- always True for surface ops (derived default).
+#   "method_name"     -- for "parametric": attribute name on ParametricSurface.
+#   "needs_active_fit"-- for "parametric": True iff the op consumes the active fit.
+#   "result_kind"     -- for "parametric": "motl" or "dataframe".
+#   "extra_pickers"   -- for "parametric": list of extra pool motl picker names.
 #   "needs_selection" -- for "mesh": True iff the op consumes the selected
 #                        surface.
 #   "method_name"     -- for "parametric": attribute name on
@@ -232,99 +246,76 @@ LOAD_OPS: dict[str, dict[str, Any]] = {
 #   "result_kind"     -- for "parametric": "motl" or "dataframe".
 #   "extra_pickers"   -- for "parametric": list of extra pool motl picker names.
 
+def _derive_kind(entry) -> str:
+    """Derive page dispatch kind from a GuiEntry's returns field and annotation."""
+    ret = entry.returns
+    if ret == "surface_pair":
+        return "split"
+    if ret == "surface":
+        return "create"
+    if ret == "field":
+        return "field-source"
+    if ret == "scalar":
+        return "scalar"
+    # export: has an output_path parameter
+    try:
+        import typing
+        sig = inspect.signature(entry.fn)
+        if "output_path" in sig.parameters:
+            return "export"
+        hints = typing.get_type_hints(entry.fn)
+        ann = hints.get("return", inspect.Parameter.empty)
+        if ann is not inspect.Parameter.empty and ann in (bool, int, float, dict):
+            return "scalar"
+    except Exception:
+        pass
+    return "unary-inplace"
+
+
+def _build_surface_ops() -> dict[str, dict[str, Any]]:
+    """Build OPERATIONS entries for all SURFACE_OP registry entries via discovery.
+
+    method_for is derived from the entry's owning class: PleomorphicSurface
+    methods are looked up on the wrapper (psurf); all others on psurf.surface.
+    getattr(..., None) returns None when the surface type does not have the
+    method (e.g. a Mesh-only method called on an OPC), which the dispatch
+    already handles as "No compatible surface selected."
+    """
+    from cryocat.app import discovery
+    from cryocat.utils.classutils import GuiCategory
+    ops: dict[str, dict[str, Any]] = {}
+    for entry in discovery.entries(category=GuiCategory.SURFACE_OP):
+        key = entry.key
+        method_name = entry.fn.__name__
+        on_wrapper = entry.owner.rsplit(".", 1)[-1] == "PleomorphicSurface"
+        if on_wrapper:
+            method_for = (lambda p, mn=method_name: getattr(p, mn, None) if p is not None else None)
+        else:
+            method_for = (lambda p, mn=method_name: getattr(p.surface, mn, None) if p is not None else None)
+        ops[key] = {
+            "label": entry.label,
+            "category": "mesh",
+            "kind": _derive_kind(entry),
+            "reg_key": key,
+            "method_for": method_for,
+            "needs_selection": True,
+        }
+    return ops
+
+
 OPERATIONS: dict[str, dict[str, Any]] = {
-    # ── Mesh ops ────────────────────────────────────────────────────────
-    "cleanup_mesh": {
-        "label": "[Mesh] Cleanup",
-        "category": "mesh",
+    **_build_surface_ops(),
+    # ── Alpha shape (custom widget UI — not a SURFACE_OP registry entry) ─
+    "alpha_shape": {
+        "label": "[OPC→Mesh] Alpha shape",
+        "category": "alpha_shape",
         "kind": "create",
-        "form_method": Mesh.cleanup_mesh,
-        "exclude": [],
-        "method_for": lambda p: (
-            _mesh_only(p).cleanup_mesh if _mesh_only(p) is not None else None
-        ),
         "needs_selection": True,
     },
-    "smooth": {
-        "label": "[Mesh] Smooth",
-        "category": "mesh",
-        "kind": "unary-inplace",
-        "form_method": Mesh.smooth,
-        "exclude": [],
-        "method_for": lambda p: (
-            _mesh_only(p).smooth if _mesh_only(p) is not None else None
-        ),
-        "needs_selection": True,
-    },
-    "compute_curvatures": {
-        "label": "[Mesh] Compute curvatures",
-        "category": "mesh",
-        "kind": "field-source",
-        "form_method": Mesh.compute_curvatures,
-        "exclude": ["force_recompute", "min_triangle_area",
-                    "lstsq_rcond", "n_jobs"],
-        "method_for": lambda p: (
-            _mesh_only(p).compute_curvatures if _mesh_only(p) is not None else None
-        ),
-        "needs_selection": True,
-    },
-    "surface_area": {
-        "label": "[Mesh] Surface area",
-        "category": "mesh",
-        "kind": "scalar",
-        "form_method": Mesh.get_surface_area,
-        "exclude": [],
-        "method_for": lambda p: (
-            _mesh_only(p).get_surface_area if _mesh_only(p) is not None else None
-        ),
-        "needs_selection": True,
-    },
-    "refine_normals": {
-        "label": "[Mesh/OPC] Refine normals",
-        "category": "mesh",
-        "kind": "unary",
-        "form_method": DiscreteSurface.refine_normals,
-        "exclude": ["mask", "logger", "inplace", "batch_size"],
-        "method_for": _refine_method,
-        "needs_selection": True,
-    },
-    "separate_closed": {
-        "label": "[Mesh] Separate closed surface (inner/outer)",
-        "category": "mesh",
-        "kind": "split",
-        "form_method": DiscreteSurface.separate_closed_surface,
-        "exclude": ["reference_point"],
-        "method_for": lambda p: (
-            p.surface.separate_closed_surface if p is not None else None
-        ),
-        "needs_selection": True,
-    },
-    "oversample": {
-        "label": "[Mesh/OPC] Oversample",
-        "category": "mesh",
-        "kind": "unary",
-        "form_method": Mesh.oversample,
-        "exclude": [],
-        "method_for": _oversample_method,
-        "needs_selection": True,
-    },
-    "flip_normals": {
-        "label": "[Mesh/OPC] Flip normals",
-        "category": "mesh",
-        "kind": "unary",
-        "form_method": Mesh.flip_normals,
-        "exclude": ["inplace"],
-        "method_for": _flip_method,
-        "needs_selection": True,
-    },
-    "save": {
-        "label": "[Mesh/OPC] Save to disk",
-        "category": "mesh",
-        "kind": "export",
-        "form_method": Mesh.save,
-        "exclude": [],
-        "method_for": _save_method,
-        "needs_selection": True,
+    # ── Intersection (custom UI) ────────────────────────────────────────
+    "intersection": {
+        "label": "[Intersection] Particle–mesh ray cast",
+        "category": "intersection",
     },
     # ── Parametric ops ──────────────────────────────────────────────────
     "param_distance": {
@@ -399,10 +390,15 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         "result_kind": "motl",
         "extra_pickers": [],
     },
-    # ── Intersection (custom UI) ────────────────────────────────────────
-    "intersection": {
-        "label": "[Intersection] Particle–mesh ray cast",
-        "category": "intersection",
+    "param_write_out": {
+        "label": "[Parametric] Save fit to file",
+        "category": "parametric",
+        "method_name": "write_out",
+        "needs_active_fit": True,
+        "result_kind": "export",
+        "extra_pickers": [],
+        "needs_input_motl": False,
+        "exclude": [],
     },
 }
 
@@ -485,6 +481,175 @@ def _intersection_form() -> html.Div:
     )
 
 
+# ── Declarative widget-override factories ────────────────────────────────────
+#
+# Each factory receives a ``param_spec`` dict  (keys: "op_id", "name") and an
+# optional ``context`` dict (unused at layout-build time; reserved for future
+# use).  It returns a pre-mountable Dash component whose ``id`` follows the
+# predictable scheme ``"surfaces-op-override-{op_id}-{name}"`` so that the
+# live-preview callback builder can reference it without seeing the component.
+
+
+def _alpha_slider(param_spec: dict) -> dcc.Slider:
+    """Log-scaled [0, 1] slider for `alpha` — mapped via `Mesh.suggest_alpha_range`."""
+    return dcc.Slider(
+        id=f"surfaces-op-override-{param_spec['op_id']}-{param_spec['name']}",
+        min=0.0, max=1.0, step=0.001, value=0.5,
+        tooltip={"placement": "bottom", "always_visible": False},
+        marks=None,
+    )
+
+
+def _show_pts_checkbox(param_spec: dict) -> dbc.Checkbox:
+    """Toggle: overlay source points on the preview mesh."""
+    return dbc.Checkbox(
+        id=f"surfaces-op-override-{param_spec['op_id']}-{param_spec['name']}",
+        value=True,
+        label="Show source points",
+        inputStyle={"marginRight": "4px"},
+    )
+
+
+def _render_alpha_preview(
+    psurf: PleomorphicSurface,
+    kwargs: dict,
+    *,
+    selected_id: str,
+    gs: dict,
+) -> tuple:
+    """Live-preview render for alpha_shape.  Called by the builder's callback."""
+    alpha_raw = float(kwargs.get("alpha", 0.5))
+    show_pts = bool(kwargs.get("show_pts", True))
+    coords = psurf.surface.vertices
+    source_key = selected_id
+    # Compute and cache tetra on first call; subsequent calls are fast.
+    if source_key not in _struct_alpha_cache:
+        tetra_info = _compute_alpha_tetra(source_key, coords)
+        if tetra_info is None:
+            from cryocat.app.components.graphsettings import error_figure as _ef
+            return _ef("Fewer than 4 points or coplanar — cannot compute alpha shape."), "", no_update
+    else:
+        lo, hi = Mesh.suggest_alpha_range(coords)
+        tetra_info = {
+            "source_key": source_key,
+            "log_min": math.log10(lo),
+            "log_max": math.log10(hi),
+        }
+    lo = 10 ** tetra_info["log_min"]
+    hi = 10 ** tetra_info["log_max"]
+    marks = {0: f"α≈{lo:.3g}", 1: f"α≈{hi:.3g}"}
+    alpha = _slider_to_alpha(alpha_raw, tetra_info)
+    fig, stats = _render_alpha_figure(alpha, source_key, coords, show_pts, gs)
+    return fig, stats, marks
+
+
+# ── OP_UI — declarative widget overrides and live preview ────────────────────
+#
+# Format:
+#   op_id -> {
+#       "widgets":      {param_name: factory_fn, ...},
+#       "live_preview": {"on": [param_names], "render": render_fn},
+#   }
+#
+# An operation with no entry renders exactly as normal (formgen + Run).
+# An operation with an entry has the listed parameters replaced by the
+# factory's component; formgen still handles the rest.  The presence of
+# "live_preview" causes the builder to register one preview callback.
+
+OP_UI: dict[str, dict] = {
+    "alpha_shape": {
+        "widgets": {
+            "alpha":    _alpha_slider,
+            "show_pts": _show_pts_checkbox,
+        },
+        "live_preview": {
+            "on":     ["alpha", "show_pts"],
+            "render": _render_alpha_preview,
+            "widget_outputs": [
+                ("surfaces-op-override-alpha_shape-alpha", "marks"),
+            ],
+        },
+    },
+}
+
+
+def _op_ui_widgets() -> list[html.Div]:
+    """Build pre-mounted (hidden) widget containers for every OP_UI entry."""
+    containers: list[html.Div] = []
+    for op_id, spec in OP_UI.items():
+        controls: list = [
+            html.Div(
+                id=f"surfaces-op-override-{op_id}-status",
+                style={**_HINT, "marginBottom": "0.3rem"},
+            ),
+        ]
+        for param_name, factory in spec.get("widgets", {}).items():
+            ps = {"op_id": op_id, "name": param_name}
+            controls.append(
+                html.Div(factory(ps), style={"marginBottom": "0.4rem"})
+            )
+        containers.append(html.Div(
+            controls,
+            id=f"surfaces-op-override-area-{op_id}",
+            style={"display": "none", "marginBottom": "0.4rem"},
+        ))
+    return containers
+
+
+def _register_one_preview(app, op_id: str, lp: dict) -> None:
+    """Register the live-preview callback for one OP_UI entry with `live_preview`."""
+    on_params: list[str] = lp["on"]
+    render_fn = lp["render"]
+    widget_outputs: list[tuple[str, str]] = lp.get("widget_outputs", [])
+    override_status_id = f"surfaces-op-override-{op_id}-status"
+    input_list = [
+        Input(f"surfaces-op-override-{op_id}-{p}", "value")
+        for p in on_params
+    ]
+
+    @app.callback(
+        Output({"type": "styled-graph", "owner": "structure",
+                "name": "op-preview"}, "figure", allow_duplicate=True),
+        Output("surfaces-op-preview-stats", "children", allow_duplicate=True),
+        Output(override_status_id, "children"),
+        *[Output(cid, prop, allow_duplicate=True) for cid, prop in widget_outputs],
+        *input_list,
+        State("surfaces-op-select", "value"),
+        State("surfaces-selected", "data"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
+        prevent_initial_call=True,
+    )
+    def _live_preview(*args):
+        n_on = len(on_params)
+        param_vals = args[:n_on]
+        current_op = args[n_on]
+        selected_id = args[n_on + 1]
+        gs = args[n_on + 2]
+        if current_op != op_id or not selected_id:
+            raise dash.exceptions.PreventUpdate
+        psurf = sr.registry.get(selected_id)
+        if psurf is None:
+            raise dash.exceptions.PreventUpdate
+        kwargs = dict(zip(on_params, param_vals))
+        n_widget_noupdate = (no_update,) * len(widget_outputs)
+        try:
+            result = render_fn(psurf, kwargs, selected_id=selected_id, gs=gs or {})
+        except Exception as exc:
+            from cryocat.app.components.graphsettings import error_figure as _ef
+            return _ef(f"Preview error: {exc}"), str(exc), "", *n_widget_noupdate
+        if widget_outputs:
+            fig, stats, *widget_vals = result
+        else:
+            fig, stats = result
+            widget_vals = []
+        n_pts = 0
+        if getattr(psurf, "is_point_cloud", False) and psurf.surface.vertices is not None:
+            n_pts = len(psurf.surface.vertices)
+        return fig, stats, (f"{n_pts:,} points" if n_pts else ""), *widget_vals
+
+    _live_preview.__name__ = f"_live_preview_{op_id}"
+
+
 def _op_panel() -> html.Div:
     return html.Div(
         [
@@ -527,6 +692,8 @@ def _op_panel() -> html.Div:
                 id="surfaces-op-isect-wrapper",
                 style={"display": "none", "marginBottom": "0.4rem"},
             ),
+            # Widget-override containers — one per OP_UI entry, pre-mounted hidden.
+            *_op_ui_widgets(),
             dbc.Button(
                 "Run operation",
                 id="surfaces-op-run-btn",
@@ -615,6 +782,22 @@ def _main() -> list:
                 "to see hits, region summary, and distance histogram.",
                 style=_HINT,
             ),
+        ),
+        # Shared live-preview area for all OP_UI live_preview operations.
+        html.Div(
+            id="surfaces-op-preview-area",
+            style={"display": "none", "marginBottom": "0.5rem"},
+            children=[
+                customel_graph(
+                    "structure", "op-preview",
+                    dcc.Graph(
+                        id={"type": "styled-graph", "owner": "structure",
+                            "name": "op-preview"},
+                        style={"height": "400px"},
+                    ),
+                ),
+                html.Div(id="surfaces-op-preview-stats", style=_HINT),
+            ],
         ),
         # Parametric DataFrame results.
         html.Div(
@@ -832,6 +1015,7 @@ def register_callbacks(app):
             motl = _motl_from_pool_rows(motl_id)
             if motl is None:
                 return no_update, no_update, "Pick a non-empty motl from the pool."
+            motl._pool_motl_id = motl_id
             kwargs[op["motl_kwarg"]] = motl
             source_tag = f"motl:{motl_id}"
         else:
@@ -861,54 +1045,94 @@ def register_callbacks(app):
         )
 
     # ── Operations form rendering ────────────────────────────────────────────
+    def _op_entry(op_id: str):
+        from cryocat.utils.classutils import GUI_REGISTRY
+        return GUI_REGISTRY.get(op_id)
+
     @app.callback(
         Output("surfaces-op-form-wrapper", "children"),
         Output("surfaces-op-input-picker-wrapper", "style"),
         Output("surfaces-op-object-picker-wrapper", "style"),
         Output("surfaces-op-isect-wrapper", "style"),
+        Output("surfaces-op-override-area-alpha_shape", "style"),
+        Output("surfaces-op-preview-area", "style"),
         Input("surfaces-op-select", "value"),
+        Input("surfaces-selected", "data"),
+        State("surfaces-pool", "data"),
     )
-    def _render_op_form(op_id):
+    def _render_op_form(op_id, selected_id, pool):
+        _hidden = {"display": "none"}
+        _show_over = {"display": "block", "marginBottom": "0.4rem"}
+        _show_prev = {"display": "block", "marginBottom": "0.5rem"}
+
+        # All override areas hidden by default; toggled per-category below.
+        _all_hidden = (_hidden,) * len(OP_UI)  # one per OP_UI entry
+
         if not op_id or op_id not in OPERATIONS:
             return (
                 html.Div("Pick an operation to render its form.", style=_HINT),
-                {"display": "none"}, {"display": "none"}, {"display": "none"},
+                _hidden, _hidden, _hidden, *_all_hidden, _hidden,
             )
         op = OPERATIONS[op_id]
+
         if op["category"] == "intersection":
             return (
-                html.Div(),  # intersection's custom UI lives in its own wrapper
-                {"display": "none"}, {"display": "none"},
+                html.Div(),
+                _hidden, _hidden,
                 {"display": "block", "marginBottom": "0.4rem"},
+                *_all_hidden, _hidden,
             )
-        if op["category"] == "mesh":
-            rows = formgen.build_form(
-                op["form_method"],
-                id_type=_OP_ID_TYPE,
-                id_extra={"op": op_id},
-                exclude=op.get("exclude", []),
+
+        if op["category"] == "alpha_shape":
+            opc_ready = (
+                bool(selected_id)
+                and (pool or {}).get(selected_id, {}).get("representation") == "point_cloud"
+            )
+            hint = (
+                "Adjust the slider to preview; click Run to commit the mesh."
+                if opc_ready else
+                "Select a point-cloud (OPC) surface to enable the alpha-shape preview."
             )
             return (
-                html.Div(rows),
-                {"display": "none"}, {"display": "none"}, {"display": "none"},
+                html.Div(hint, style=_HINT),
+                _hidden, _hidden, _hidden,
+                _show_over,
+                _show_prev if opc_ready else _hidden,
             )
+
+        if op["category"] == "mesh":
+            entry = _op_entry(op_id)
+            rows = formgen.build_form(entry, id_type=_OP_ID_TYPE, id_extra={"op": op_id})
+            return (
+                html.Div(rows),
+                _hidden, _hidden, _hidden, *_all_hidden, _hidden,
+            )
+
         # parametric
         method = getattr(ParametricSurface, op["method_name"])
-        exclude = ["input_motl", "output_path"] + list(op.get("extra_pickers", []))
+        if "exclude" in op:
+            exclude = list(op["exclude"]) + list(op.get("extra_pickers", []))
+        else:
+            exclude = ["input_motl", "output_path"] + list(op.get("extra_pickers", []))
         rows = formgen.build_form(
             method,
             id_type=_OP_ID_TYPE,
             id_extra={"op": op_id},
             exclude=exclude,
         )
-        input_style = {"display": "block", "marginBottom": "0.4rem"}
+        input_style = (
+            {"display": "block", "marginBottom": "0.4rem"}
+            if op.get("needs_input_motl", True)
+            else _hidden
+        )
         object_style = (
             {"display": "block", "marginBottom": "0.4rem"}
             if "object_motl" in op.get("extra_pickers", [])
-            else {"display": "none"}
+            else _hidden
         )
         return (
-            html.Div(rows), input_style, object_style, {"display": "none"},
+            html.Div(rows), input_style, object_style,
+            _hidden, *_all_hidden, _hidden,
         )
 
     # ── Operations Run dispatch ──────────────────────────────────────────────
@@ -938,6 +1162,8 @@ def register_callbacks(app):
         State("surfaces-isect-max-dist", "value"),
         State("surfaces-isect-inner-r", "value"),
         State("surfaces-isect-outer-r", "value"),
+        # Alpha-shape override widget.
+        State("surfaces-op-override-alpha_shape-alpha", "value"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
@@ -949,6 +1175,7 @@ def register_callbacks(app):
         in_motl_id, obj_motl_id,
         isect_motl_id, isect_px, isect_rev, isect_oh,
         isect_maxd, isect_inner, isect_outer,
+        alpha_override_val,
         registry, pool_meta, pool_next_id,
     ):
         if not n_clicks:
@@ -990,11 +1217,15 @@ def register_callbacks(app):
             if op["kind"] == "scalar":
                 # Append the (label, value) row to the scalar-result store so
                 # the main-area panel can render the accumulated results.
-                new_scalar = list(scalar_state or []) + [
-                    {"label": op["label"], "value": _fmt_cell(result)}
-                ]
+                # Dict results (e.g. assess_mesh) expand into one row per key.
+                existing = list(scalar_state or [])
+                if isinstance(result, dict):
+                    for k, v in result.items():
+                        existing.append({"label": f"{op['label']} / {k}", "value": _fmt_cell(v)})
+                else:
+                    existing.append({"label": op["label"], "value": _fmt_cell(result)})
                 return (no_update,) * 5 + (
-                    new_scalar,
+                    existing,
                     f"{op['label']} -> see main area.",
                 )
             if op["kind"] == "field-source":
@@ -1004,7 +1235,7 @@ def register_callbacks(app):
                     pool[selected_id] = handle
                 return (pool,) + (no_update,) * 5 + (
                     f"{op['label']} applied; curvature fields populated.",)
-            if op["kind"] in ("unary-inplace", "unary") and (result is None or result is psurf.surface):
+            if op["kind"] in ("unary-inplace", "unary") and (result is None or result is psurf.surface or result is psurf):
                 handle = pool.get(selected_id)
                 if handle is not None and psurf is not None:
                     handle["n_elements"] = (
@@ -1016,6 +1247,9 @@ def register_callbacks(app):
                 return (pool,) + (no_update,) * 5 + (
                     f"{op['label']} applied in place.",)
 
+            if result is None:
+                return (no_update,) * 6 + (
+                    f"{op['label']}: no output (result was empty or all elements masked).",)
             new_entries = _adopt_result(
                 result, parent_id=selected_id, label_root=op["label"],
             )
@@ -1027,11 +1261,14 @@ def register_callbacks(app):
 
         # ── Parametric op ───────────────────────────────────────────────
         if op["category"] == "parametric":
-            in_motl = _motl_from_pool_rows(in_motl_id)
-            if in_motl is None:
-                return (no_update,) * 6 + (
-                    "Pick a non-empty input motl from the pool.",)
-            kwargs: dict = {"input_motl": in_motl}
+            if op.get("needs_input_motl", True):
+                in_motl = _motl_from_pool_rows(in_motl_id)
+                if in_motl is None:
+                    return (no_update,) * 6 + (
+                        "Pick a non-empty input motl from the pool.",)
+                kwargs: dict = {"input_motl": in_motl}
+            else:
+                kwargs: dict = {}
             if "object_motl" in op.get("extra_pickers", []):
                 obj = _motl_from_pool_rows(obj_motl_id)
                 if obj is None:
@@ -1055,6 +1292,9 @@ def register_callbacks(app):
                 result = run_operation(method, kwargs)
             except Exception as exc:
                 return (no_update,) * 6 + (f"{op['label']} failed: {exc}",)
+            if op["result_kind"] == "export":
+                tgt = kwargs.get("output_path", "?")
+                return (no_update,) * 6 + (f"Saved to {tgt}.",)
             if op["result_kind"] == "dataframe":
                 if not isinstance(result, pd.DataFrame):
                     return (no_update,) * 6 + (
@@ -1133,6 +1373,41 @@ def register_callbacks(app):
                     no_update,
                     f"Cast {len(rays)} rays; {n_hits} hits "
                     f"across {len(radii)} radii.")
+
+        # ── Alpha shape ──────────────────────────────────────────────────
+        if op["category"] == "alpha_shape":
+            if not selected_id or selected_id not in pool:
+                return (no_update,) * 6 + ("Select a surface first.",)
+            psurf = sr.registry.get(selected_id)
+            if psurf is None or not psurf.is_point_cloud:
+                return (no_update,) * 6 + (
+                    "Alpha shape requires an OrientedPointCloud surface.",)
+            coords = psurf.surface.vertices
+            source_key = selected_id
+            if source_key not in _struct_alpha_cache:
+                tetra_info = _compute_alpha_tetra(source_key, coords)
+                if tetra_info is None:
+                    return (no_update,) * 6 + (
+                        "Cannot compute alpha shape: fewer than 4 points or coplanar.",)
+            lo, hi = Mesh.suggest_alpha_range(coords)
+            alpha = _slider_to_alpha(
+                float(alpha_override_val or 0.5),
+                {"log_min": math.log10(lo), "log_max": math.log10(hi)},
+            )
+            tetra_pair = _struct_alpha_cache.get(source_key, (None, None))
+            try:
+                mesh = Mesh.from_alpha_shape(coords, alpha, *tetra_pair)
+            except Exception as exc:
+                return (no_update,) * 6 + (f"Alpha shape failed: {exc}",)
+            new_entries = _adopt_result(
+                mesh, parent_id=selected_id, label_root=f"alpha={alpha:.4g}",
+            )
+            pool = dict(pool or {})
+            for sid, h in new_entries:
+                pool[sid] = h
+            return (pool,) + (no_update,) * 5 + (
+                f"Committed alpha={alpha:.4g}: "
+                f"{len(new_entries)} surface(s) added to pool.",)
 
         return (no_update,) * 6 + (f"Unknown op category: {op['category']!r}.",)
 
@@ -1509,3 +1784,9 @@ def register_callbacks(app):
     # parent div exists; the button is conditionally rendered above so we
     # register here at startup -- Dash tolerates the late-mount.
     register_send_to_editor_callbacks(app, "surfaces-send", "surfaces-send-result")
+
+    # ── BY: register one live-preview callback per OP_UI live_preview entry ───
+    for _op_id, _spec in OP_UI.items():
+        _lp = _spec.get("live_preview")
+        if _lp:
+            _register_one_preview(app, _op_id, _lp)

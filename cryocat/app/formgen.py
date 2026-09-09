@@ -219,6 +219,23 @@ def _choice_dropdown(cid, default, required, choices=None, extra=None):
     )
 
 
+def _pool_table_field(cid, default, required, choices=None, extra=None):
+    """Dropdown populated at runtime from DATA_POOL_REGISTRY DataFrame entries.
+
+    Options are filled by a callback registered via
+    :func:`register_pool_table_writeback`; the widget renders empty until the
+    registry is non-empty.
+    """
+    return dcc.Dropdown(
+        id=cid,
+        options=[],
+        value=None,
+        placeholder="Select a data-pool table…",
+        style={"fontSize": "11px"},
+        clearable=True,
+    )
+
+
 def _rotation_field(cid, default, required, choices=None, extra=None):
     # Phase 11 R3: inert widget — the app-level rotation modal owns all callbacks.
     owner = cid.get("owner", "") if isinstance(cid, dict) else ""
@@ -306,16 +323,17 @@ def _listlike_field(cid, default, required, choices=None, extra=None):
 
 
 WIDGET_FACTORIES: dict[str, WidgetFactory] = {
-    "path":     _path_field,
-    "triplet":  _triplet_field,
-    "csv_text": _text_field,
-    "text":     _text_field,
-    "number":   _number_field,
-    "bool":     _bool_dropdown,
-    "dropdown": _choice_dropdown,
-    "rotation": _rotation_field,
-    "tuple":    _tuple_field,
-    "listlike": _listlike_field,
+    "path":       _path_field,
+    "triplet":    _triplet_field,
+    "csv_text":   _text_field,
+    "text":       _text_field,
+    "number":     _number_field,
+    "bool":       _bool_dropdown,
+    "dropdown":   _choice_dropdown,
+    "rotation":   _rotation_field,
+    "tuple":      _tuple_field,
+    "listlike":   _listlike_field,
+    "pool_table": _pool_table_field,
 }
 
 
@@ -378,9 +396,23 @@ def build_form(fn_or_entry, id_type="op-param", id_extra=None, exclude=()):
     # `from __future__ import annotations` (PEP 563) makes all annotations lazy
     # strings. `get_type_hints` evaluates them back to live types so
     # resolve_param_type sees e.g. Optional[float], not the string "Optional[float]".
+    # A failure means every parameter in the form falls back to tag="str" (text
+    # widget, no coercion) — silently broken.  Log a warning so it surfaces.
     try:
-        hints = typing.get_type_hints(fn)
-    except Exception:
+        # For classes, inspect.signature returns __init__'s parameters but
+        # get_type_hints(cls) returns class-level annotations (usually empty).
+        # Use __init__ so PEP-563 lazy strings in __init__ are resolved.
+        _hints_fn = fn.__init__ if inspect.isclass(fn) else fn
+        hints = typing.get_type_hints(_hints_fn)
+    except Exception as _hints_exc:
+        import warnings as _w
+        _fn_name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", repr(fn))
+        _w.warn(
+            f"formgen.build_form: typing.get_type_hints failed for {_fn_name!r}; "
+            f"all parameters will render as untyped text fields. "
+            f"Fix the annotation that causes: {_hints_exc!r}",
+            stacklevel=2,
+        )
         hints = {}
 
     # For classes, parameter descriptions normally live in the *class* docstring
@@ -541,13 +573,50 @@ def register_path_hint_callback(app, id_type: str, id_extra: dict | None = None)
         return ["" if not v or Path(v).exists() else "not found" for v in values]
 
 
+def register_pool_table_writeback(app, id_type: str, id_extra: dict | None = None) -> None:
+    """Register a callback that populates ``DataPoolEntry`` dropdowns from the registry.
+
+    Every ``pool_table``-tagged dropdown built by :func:`build_form` with the
+    given ``(id_type, id_extra)`` combination gets its options refreshed
+    whenever ``DATA_POOL_REGISTRY`` changes.  Options list only DataFrame-kind
+    entries; the value is the ``data_id`` string, resolved to the actual
+    payload by :func:`cryocat.utils.classutils._parse_data_pool_entry` at
+    dispatch time.
+
+    Call once per unique ``(id_type, id_extra)`` combination that may contain
+    ``DataPoolEntry`` parameters.
+    """
+    from dash import Input, Output, ALL as _ALL, no_update
+    from cryocat.app import ids as _ids
+    from cryocat.app.datapool import clean_registry as _clean
+
+    id_extra = id_extra or {}
+
+    @app.callback(
+        Output({"type": id_type, "owner": _ALL, "param": _ALL, "tag": "pool_table", **id_extra}, "options"),
+        Input(_ids.DATA_POOL_REGISTRY, "data"),
+        prevent_initial_call=False,
+    )
+    def _fill_pool_table_options(dp_registry):
+        reg = _clean(dp_registry)
+        opts = [
+            {"label": v.get("label", k), "value": k}
+            for k, v in reg.items()
+            if v.get("kind") in ("dataframe", None)
+        ]
+        from dash import ctx
+        n = len(ctx.outputs_list)
+        return [opts] * n
+
+
 def register_form_callbacks(app, id_type: str, id_extra: dict | None = None) -> None:
     """Register all per-form-type callbacks for a :func:`build_form` form type.
 
     Calls :func:`register_path_writeback`, :func:`register_path_hint_callback`,
-    and :func:`register_var_picker_writeback` unconditionally.  Inert
-    registrations (no matching components) never fire, so the cost of an inert
-    one is nothing and the cost of a forgotten one is a dead field.
+    :func:`register_var_picker_writeback`, and :func:`register_pool_table_writeback`
+    unconditionally.  Inert registrations (no matching components) never fire,
+    so the cost of an inert one is nothing and the cost of a forgotten one is a
+    dead field.
 
     Call once per unique ``(id_type, id_extra)`` combination wherever
     :func:`build_form` is used.
@@ -555,3 +624,4 @@ def register_form_callbacks(app, id_type: str, id_extra: dict | None = None) -> 
     register_path_writeback(app, id_type, id_extra)
     register_path_hint_callback(app, id_type, id_extra)
     register_var_picker_writeback(app, id_type, id_extra)
+    register_pool_table_writeback(app, id_type, id_extra)

@@ -4577,3 +4577,56 @@ def test_write_coords_to_cmm_file_2d(tmp_path, coords):
     assert result.columns.tolist() == ["x","y","z"]
     pd.testing.assert_frame_equal(result, expected)
 
+
+# =============================================================================
+# Warp XML loader tests
+# =============================================================================
+
+WARP_DIR = os.path.join(os.path.dirname(__file__), "test_data", "motl_data", "warp_mapping")
+PRE_DIR = os.path.join(WARP_DIR, "preMA")
+POST_DIR = os.path.join(WARP_DIR, "postMA")
+
+
+class TestWarpXmlLoader:
+    def test_load_pre_has_volume_dims(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(PRE_DIR, "TS_204.xml"))
+        assert ts["volume_dims"] is not None
+        assert ts["image_dims"] is not None
+        assert ts["volume_dims"].shape == (3,)
+        assert ts["image_dims"].shape == (2,)
+
+    def test_load_post_missing_volume_dims_returns_none(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(POST_DIR, "TS_204.xml"))
+        assert ts["volume_dims"] is None
+        assert ts["image_dims"] is None
+
+    def test_load_post_pixel_size(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(POST_DIR, "TS_204.xml"))
+        assert abs(ts["pixel_size"] - 1.971) < 1e-4
+
+    def test_set_volume_geometry_patches_none(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(POST_DIR, "TS_204.xml"))
+        ref = ioutils.read_warp_tilt_xml(os.path.join(PRE_DIR, "TS_204.xml"))
+        ioutils.set_volume_geometry(ts, volume_dims=ref["volume_dims"], image_dims=ref["image_dims"])
+        assert ts["volume_dims"] is not None
+        np.testing.assert_array_almost_equal(ts["volume_dims"], ref["volume_dims"])
+
+    def test_set_volume_geometry_image_dims_defaults_to_xy(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(POST_DIR, "TS_204.xml"))
+        vol = np.array([8000.0, 8000.0, 4000.0])
+        ioutils.set_volume_geometry(ts, volume_dims=vol)
+        np.testing.assert_array_almost_equal(ts["image_dims"], vol[:2])
+
+    def test_check_same_tiltseries_ok(self):
+        old = ioutils.read_warp_tilt_xml(os.path.join(PRE_DIR, "TS_204.xml"))
+        new = ioutils.read_warp_tilt_xml(os.path.join(POST_DIR, "TS_204.xml"))
+        ok, msg = ioutils.check_same_tiltseries(old, new)
+        assert ok, msg
+
+    def test_tilt_matrix_is_orthogonal(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(PRE_DIR, "TS_204.xml"))
+        for t in range(len(ts["tilt_matrices"])):
+            R = ts["tilt_matrices"][t]
+            assert R.shape == (3, 3)
+            np.testing.assert_allclose(R @ R.T, np.eye(3), atol=1e-12)
+

@@ -3207,6 +3207,7 @@ class PleomorphicSurface:
 
         raise TypeError(f"Unsupported surface type: {type(self.surface)}")
 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Convex hull", group="Geometry", order=20, returns="surface")
     def convex_hull(self) -> "PleomorphicSurface":
         """Return the convex hull as a :class:`PleomorphicSurface` wrapping a :class:`Mesh`.
 
@@ -3229,6 +3230,7 @@ class PleomorphicSurface:
         print(f"Computed convex hull with {len(hull_mesh.vertices)} vertices")
         return PleomorphicSurface(hull_mesh)
 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Clean by normals angle", group="Mask", order=30, returns="none")
     def clean_by_normals(self, max_angle_deg: float = 90.0) -> "PleomorphicSurface":
         """Remove points whose normal deviates more than ``max_angle_deg`` from the mean direction.
 
@@ -3256,6 +3258,7 @@ class PleomorphicSurface:
         print("Cleaned by normals (angle vs mean)")
         return self
 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Clean by angle", group="Mask", order=40, returns="none")
     def clean_by_angle(self, max_angle_deg: float, reference_normal: np.ndarray, signed: bool = False) -> "PleomorphicSurface":
         """Remove points whose normal deviates more than ``max_angle_deg`` from a given axis.
 
@@ -3289,6 +3292,7 @@ class PleomorphicSurface:
         print("Cleaned by angle (angle vs given axis)")
         return self
 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Separate surfaces", group="Geometry", order=30, returns="surface_pair")
     def separate_surfaces(
         self,
         surface_type: str = 'closed',
@@ -5058,7 +5062,7 @@ class PolyhedralComplex(SymmetricComplex):
         group="Expansion",
         order=30,
         returns="motl",
-        hide=("shift_vecs",),
+        hide=(),
     )
     def expand(
         self,

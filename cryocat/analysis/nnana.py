@@ -45,6 +45,7 @@ from cryocat._types import (
 )
 from cryocat.core import cryomap, cryomotl
 from cryocat.utils import geom, ioutils
+from cryocat.utils.classutils import gui_exposed
 
 if TYPE_CHECKING:
     # Import the alias lazily to avoid the cryomotl ↔ nnana circular import
@@ -485,7 +486,7 @@ class NearestNeighbors:
 
     def __init__(
         self,
-        input_data: MotlSource | list[MotlSource] | None = None,
+        input_data: cryomotl.MotlSource | list[cryomotl.MotlSource] | None = None,
         column_name: MotlColumn = "tomo_id",
         nn_type: NNType = "closest_dist",
         type_param: float | None = None,
@@ -1042,6 +1043,75 @@ class NearestNeighbors:
                     nn_col_data[mask] = self.df.loc[mask, "nn_subtomo_id"].map(src[col])
                 self.df[f"nn_{col}"] = nn_col_data
         return self
+
+    @gui_exposed(
+        label="Barycentric motl (orientation: query aligned toward centroid)",
+        returns="motl",
+    )
+    def get_barycentric_motl(self, n_neighbors: int = 1) -> "cryomotl.Motl":
+        """Return a Motl with barycentric coordinates for each query particle.
+
+        The output particle's orientation aligns the query's angles toward
+        the centroid of itself and its n_neighbors nearest neighbours.
+        Queries with fewer than n_neighbors neighbours are dropped and counted.
+        The dropped count is stored as ``_nn_dropped_count`` on the returned Motl.
+
+        Parameters
+        ----------
+        n_neighbors : int, default=1
+            Number of nearest neighbours to include per query particle.
+            Queries with fewer neighbours than this are dropped.
+        """
+        if self.df is None or self.df.empty:
+            raise ValueError("NearestNeighbors has no data.")
+        if self.motls is None:
+            raise ValueError(
+                "NearestNeighbors has no motls — barycentric motl requires "
+                "the source motls to be available (compute from pool, not loaded from file)."
+            )
+
+        col_name = self.column_name
+        _m_groups = [
+            dict(m.df.groupby(col_name).indices)
+            for m in self.motls
+        ]
+
+        has_dist = "nn_dist" in self.df.columns
+
+        qp_global_list = []
+        nn_global_rows = []
+        dropped = 0
+
+        for (feat, qp_local), grp in self.df.groupby([col_name, "qp_id"], sort=False):
+            if has_dist:
+                grp = grp.nsmallest(n_neighbors, "nn_dist")
+            else:
+                grp = grp.head(n_neighbors)
+            if len(grp) < n_neighbors:
+                dropped += 1
+                continue
+            feat_qp_rows = _m_groups[0].get(feat)
+            feat_nn_rows = _m_groups[1].get(feat)
+            if feat_qp_rows is None or feat_nn_rows is None:
+                dropped += 1
+                continue
+            global_qp = int(feat_qp_rows[int(qp_local)])
+            global_nns = [int(feat_nn_rows[int(nn_local)]) for nn_local in grp["nn_id"].values]
+            qp_global_list.append(global_qp)
+            nn_global_rows.append(global_nns)
+
+        if not qp_global_list:
+            raise ValueError(
+                f"No queries had {n_neighbors} or more neighbours after filtering. "
+                "Use a smaller n_neighbors or check the NN data."
+            )
+
+        idx = np.array(qp_global_list)
+        nn_idx = np.array(nn_global_rows)  # shape (N, n_neighbors)
+
+        result = self.motls[0].get_barycentric_motl(idx, nn_idx, nn_motl=self.motls[1])
+        result._nn_dropped_count = dropped
+        return result
 
     def get_qp_rotations(self) -> srot:
         """Return the query-particle rotations as a scipy ``Rotation`` object.
@@ -1990,9 +2060,15 @@ def _add_chain_prefix(
     return new_ch_cls
 
 
+@gui_exposed(
+    label="Trace chains",
+    returns="motl",
+    hide=("output_motl",),
+    path_arg="output_motl",
+)
 def trace_chains(
-    motl_entry: MotlSource,
-    motl_exit: MotlSource | None = None,
+    motl_entry: cryomotl.MotlSource,
+    motl_exit: cryomotl.MotlSource | None = None,
     max_distance: float | None = None,
     min_distance: float = 0,
     column_name: MotlColumn = "tomo_id",
@@ -2204,6 +2280,10 @@ def trace_chains(
             traced_motl = pd.concat([traced_motl, nfm_df])
 
     traced_motl = cryomotl.Motl(motl_df=traced_motl)
+    _df = traced_motl.df.sort_values(
+        [column_name, store_idx1, store_idx2]
+    ).reset_index(drop=True)
+    traced_motl = cryomotl.Motl(motl_df=_df)
     if output_motl is not None:
         traced_motl.write_out(output_motl)
     return traced_motl

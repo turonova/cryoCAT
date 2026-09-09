@@ -31,7 +31,7 @@ import pandas as pd
 from dash import html, dcc, Input, Output, State, no_update, ALL, ctx
 import dash_bootstrap_components as dbc
 
-from cryocat.core.cryomotl import Motl, EmMotl, StopgapMotl, RelionMotl, RelionMotlv5, DynamoMotl
+from cryocat.core.cryomotl import Motl, EmMotl, StopgapMotl, RelionMotl, RelionMotlv5, DynamoMotl, _cc_name
 from cryocat.app.pool import get_rows, get_extra
 from cryocat.app.apputils import run_operation, generate_kwargs
 from cryocat.app.components.pathfield import get_path_field
@@ -87,7 +87,42 @@ _RELION_WRITER_EXCLUDE = (
     "subtomo_size",         # handled by relionopts
     "optics_data",          # complex DataFrame; handled internally
     "convert",              # v5 only; handled by relionopts
+    "add_object_id",        # superseded by extra_columns checklist
+    "add_subunit_id",       # superseded by extra_columns checklist
+    "extra_columns",        # built from checklist below, not the writer form
 )
+
+
+# All 20 motl columns with their derived cc names — for the Relion extra-columns checklist.
+_CC_COLUMNS = [(col, _cc_name(col)) for col in Motl.motl_columns]
+
+
+def _extra_cols_checklist(prefix: str) -> html.Div:
+    """Relion-only section: choose motl columns to write as _cc extras."""
+    opts = [{"label": f"{col}  →  {cc}", "value": col} for col, cc in _CC_COLUMNS]
+    return html.Div(
+        [
+            html.Hr(style={"margin": "0.5rem 0"}),
+            html.Label(
+                "Extra _cc columns (Relion only)",
+                style={"fontWeight": 600, "fontSize": styles.FONT_SM, "marginBottom": "0.25rem"},
+            ),
+            html.P(
+                "Selected motl columns are written as ccXxx fields. "
+                "Nothing is written unless at least one box is checked.",
+                style={"fontSize": styles.FONT_XS, "color": styles.COLOR_MUTED, "marginBottom": "0.3rem"},
+            ),
+            dbc.Checklist(
+                id=f"{prefix}-rln-extra-cols",
+                options=opts,
+                value=[],
+                style={"fontSize": styles.FONT_XS, "maxHeight": "12rem", "overflowY": "auto"},
+            ),
+            html.Div(id=f"{prefix}-rln-extra-cols-warn", style={"color": "var(--color9)", "fontSize": styles.FONT_XS}),
+        ],
+        id=f"{prefix}-rln-extra-cols-section",
+        hidden=True,
+    )
 
 
 # ── Writer-form helpers ───────────────────────────────────────────────────────
@@ -379,6 +414,7 @@ def get_save_dialog(prefix: str, *, mode: Literal["single", "batch"] = "single")
             format_row,
             writer_form,
             relion_panel,
+            _extra_cols_checklist(prefix),
             dest_section,
             overwrite_row,
             html.Div(id=f"{prefix}-validation", style={"color": "red", "marginTop": "0.3rem", "whiteSpace": "pre-line"}),
@@ -411,11 +447,12 @@ def register_save_dialog_callbacks(
 
     @app.callback(
         Output(f"{prefix}-writer-form", "children"),
+        Output(f"{prefix}-rln-extra-cols-section", "hidden"),
         Input(f"{prefix}-format", "value"),
         prevent_initial_call=True,
     )
     def _on_format(fmt):
-        return _writer_form_for(fmt or "", prefix)
+        return _writer_form_for(fmt or "", prefix), fmt != "relion"
 
     @app.callback(
         Output(f"{prefix}-format", "value"),
@@ -454,9 +491,10 @@ def register_save_dialog_callbacks(
             State({"type": f"{prefix}-writer-param", "owner": ALL, "param": ALL, "tag": ALL}, "value"),
             State({"type": f"{prefix}-writer-param", "owner": ALL, "param": ALL, "tag": ALL}, "id"),
             State(f"{prefix}-motl-id", "data"),
+            State(f"{prefix}-rln-extra-cols", "value"),
             prevent_initial_call=True,
         )
-        def _save_single(n_clicks, fmt, path, overwrite, rln_value, writer_vals, writer_ids, motl_id):
+        def _save_single(n_clicks, fmt, path, overwrite, rln_value, writer_vals, writer_ids, motl_id, extra_cols):
             if not n_clicks:
                 raise dash.exceptions.PreventUpdate
             probs = validate_save(path, fmt, rln_value, mode="single")
@@ -469,6 +507,8 @@ def register_save_dialog_callbacks(
             if not motl_id:
                 return no_update, "No motl selected for this slot."
             writer_kwargs = generate_kwargs(writer_ids, writer_vals) if writer_ids else {}
+            if fmt == "relion" and extra_cols:
+                writer_kwargs["extra_columns"] = {col: _cc_name(col) for col in extra_cols}
             try:
                 status = execute_save_single(motl_id, path, fmt, rln_value, writer_kwargs)
                 return status, ""

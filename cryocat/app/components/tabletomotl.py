@@ -26,6 +26,53 @@ from cryocat.app.pool import PoolState, insert_motl as _insert_motl, get_rows as
 
 _NU3 = (no_update, no_update, no_update)
 
+_N_PAIRS = 4
+
+
+def _do_write_cols(target_id, pairs, id_column, active_rows, registry, pool_meta, next_id):
+    """Write multiple source→destination column pairs atomically.
+
+    *pairs* is a list of (val_col, dst_col) tuples where both are non-None.
+    All pairs are validated before any write; if one fails, none is applied.
+    """
+    from cryocat.app.pool import replace_motl_rows
+    if not pairs:
+        return "No column pairs specified.", *_NU3
+    try:
+        motl_rows = _get_rows(target_id)
+    except PoolPayloadMissing:
+        return "Target motl not found in pool.", *_NU3
+    src_df = pd.DataFrame(active_rows)
+    if id_column not in src_df.columns:
+        return f"Source table has no column '{id_column}'.", *_NU3
+    motl_df = pd.DataFrame(motl_rows).copy()
+
+    # Validate all pairs first.
+    errors = []
+    for val_col, dst_col in pairs:
+        if val_col not in src_df.columns:
+            errors.append(f"Source has no column '{val_col}'.")
+        if dst_col not in Motl.motl_columns:
+            errors.append(f"'{dst_col}' is not a motl column.")
+    if errors:
+        return "Validation failed — no changes written. " + " ".join(errors), *_NU3
+
+    # Apply all pairs.
+    total_matched = 0
+    for val_col, dst_col in pairs:
+        id_to_val = src_df.drop_duplicates(subset=[id_column]).set_index(id_column)[val_col].dropna().to_dict()
+        motl_df[dst_col] = motl_df["subtomo_id"].map(id_to_val)
+        total_matched += int(motl_df["subtomo_id"].isin(id_to_val).sum())
+
+    pool_state = PoolState.from_stores(registry, pool_meta, next_id)
+    pool_state = replace_motl_rows(pool_state, target_id, motl_df)
+    n_pairs = len(pairs)
+    pair_desc = ", ".join(f"'{s}'→'{d}'" for s, d in pairs)
+    return (
+        f"Wrote {n_pairs} pair(s) ({pair_desc}) — {total_matched // n_pairs} particles matched.",
+        *pool_state.to_stores()
+    )
+
 
 def _do_write_col(target_id, val_col, dst_col, id_column, active_rows, registry, pool_meta, next_id):
     """Write val_col from active_rows into dst_col of target motl."""
@@ -92,20 +139,44 @@ def get_table_to_motl(prefix: str, *, allow_modal: bool = True) -> html.Div:
                 label_id=f"{prefix}-ttm-target-motl-lbl",
                 label_text="Target motl",
             ),
-            formgen.form_row(
-                f"{prefix}_val_col",
-                html.Div(
-                    [
-                        make_dropdown(f"{prefix}-ttm-val-col", [], None, clearable=True, placeholder="Source column…", style={"flex": "1"}),
-                        html.Span("→", style={"padding": "0 0.4rem", "lineHeight": "2"}),
-                        make_dropdown(f"{prefix}-ttm-dst-col", _motl_opts, None, clearable=True, placeholder="Dest column…", style={"flex": "1"}),
+            html.Div(
+                [
+                    html.Label(
+                        "Column pairs (source → dest):",
+                        style={"fontSize": styles.FONT_SM, "fontWeight": 600, "marginBottom": "0.2rem"},
+                    ),
+                    html.P(
+                        "Select source and destination for each pair. Empty rows are skipped. "
+                        "All or none are written.",
+                        style={"fontSize": styles.FONT_SM, "color": styles.COLOR_MUTED, "marginBottom": "0.4rem"},
+                    ),
+                    *[
+                        html.Div(
+                            [
+                                make_dropdown(
+                                    f"{prefix}-ttm-val-col-{i}",
+                                    [],
+                                    None,
+                                    clearable=True,
+                                    placeholder=f"Source {i + 1}…",
+                                    style={"flex": "1"},
+                                ),
+                                html.Span("→", style={"padding": "0 0.4rem", "lineHeight": "2"}),
+                                make_dropdown(
+                                    f"{prefix}-ttm-dst-col-{i}",
+                                    _motl_opts,
+                                    None,
+                                    clearable=True,
+                                    placeholder=f"Dest {i + 1}…",
+                                    style={"flex": "1"},
+                                ),
+                            ],
+                            style={"display": "flex", "gap": "0.25rem", "marginBottom": "0.25rem"},
+                        )
+                        for i in range(_N_PAIRS)
                     ],
-                    style={"display": "flex", "gap": "0.25rem", "marginBottom": styles.SECTION_GAP},
-                ),
-                "Optional: copy a value column from the source table into a motl column",
-                label_id=f"{prefix}-ttm-val-col-lbl",
-                label_text="Copy value column",
-                truly_optional=True,
+                ],
+                style={"marginBottom": styles.SECTION_GAP},
             ),
             html.Hr(style={"margin": "0.4rem 0"}),
             formgen.form_row(
@@ -136,7 +207,7 @@ def get_table_to_motl(prefix: str, *, allow_modal: bool = True) -> html.Div:
             html.Div(
                 [
                     dbc.Button(
-                        "Write column to motl",
+                        "Write columns to motl",
                         id=f"{prefix}-ttm-write-btn",
                         color=styles.BTN_PRIMARY,
                         size="sm",
@@ -188,15 +259,16 @@ def register_table_to_motl_callbacks(
         registry = registry or {}
         return [{"label": v.get("label", k), "value": k} for k, v in registry.items()]
 
-    @app.callback(
-        Output(f"{prefix}-ttm-val-col", "options"),
-        Input(source_table_id, "rowData"),
-        prevent_initial_call=True,
-    )
-    def _populate_val_col(row_data):
-        if not row_data:
-            return []
-        return [{"label": c, "value": c} for c in pd.DataFrame(row_data or []).columns]
+    for i in range(_N_PAIRS):
+        @app.callback(
+            Output(f"{prefix}-ttm-val-col-{i}", "options"),
+            Input(source_table_id, "rowData"),
+            prevent_initial_call=True,
+        )
+        def _populate_val_col_n(row_data, _i=i):
+            if not row_data:
+                return []
+            return [{"label": c, "value": c} for c in pd.DataFrame(row_data or []).columns]
 
     @app.callback(
         Output(f"{prefix}-ttm-status", "children"),
@@ -206,8 +278,8 @@ def register_table_to_motl_callbacks(
         Input(f"{prefix}-ttm-write-btn", "n_clicks"),
         Input(f"{prefix}-ttm-create-btn", "n_clicks"),
         State(f"{prefix}-ttm-target-motl", "value"),
-        State(f"{prefix}-ttm-val-col", "value"),
-        State(f"{prefix}-ttm-dst-col", "value"),
+        *[State(f"{prefix}-ttm-val-col-{i}", "value") for i in range(_N_PAIRS)],
+        *[State(f"{prefix}-ttm-dst-col-{i}", "value") for i in range(_N_PAIRS)],
         State(f"{prefix}-ttm-rows-mode", "value"),
         State(f"{prefix}-ttm-label", "value"),
         State(source_table_id, "rowData"),
@@ -219,17 +291,27 @@ def register_table_to_motl_callbacks(
     )
     def _act(
         _write_click, _create_click,
-        target_id, val_col, dst_col, rows_mode, label,
-        all_rows, selected_rows,
-        registry, pool_meta, next_id,
+        target_id,
+        *rest,
     ):
+        # Unpack the variadic args: N val_cols, N dst_cols, rows_mode, label,
+        # all_rows, selected_rows, registry, pool_meta, next_id
+        n = _N_PAIRS
+        val_cols = list(rest[:n])
+        dst_cols = list(rest[n:2 * n])
+        rows_mode, label, all_rows, selected_rows, registry, pool_meta, next_id = rest[2 * n:]
+
         active = (selected_rows or []) if (rows_mode or "all") == "selected" else (all_rows or [])
         if not active:
             return ("No rows selected." if rows_mode == "selected" else "No rows in table."), *_NU3
         if ctx.triggered_id == f"{prefix}-ttm-write-btn":
-            if not val_col or not dst_col:
-                return "Choose both source and destination column.", *_NU3
-            return _do_write_col(target_id, val_col, dst_col, id_column, active, registry, pool_meta, next_id)
+            pairs = [(vc, dc) for vc, dc in zip(val_cols, dst_cols) if vc and dc]
+            if not pairs:
+                return "Choose at least one source and destination column pair.", *_NU3
+            return _do_write_cols(target_id, pairs, id_column, active, registry, pool_meta, next_id)
         if ctx.triggered_id == f"{prefix}-ttm-create-btn":
+            # Use pair 0's val/dst for the optional column copy in create mode
+            val_col = val_cols[0] if val_cols else None
+            dst_col = dst_cols[0] if dst_cols else None
             return _do_create_motl(target_id, id_column, val_col, dst_col, label, active, registry, pool_meta, next_id)
         return no_update, *_NU3

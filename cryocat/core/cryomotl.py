@@ -19,9 +19,14 @@ from cryocat.utils import imageutils
 from cryocat.utils import ioutils
 from cryocat.analysis import nnana
 from cryocat.utils import imod
+from functools import lru_cache
+from scipy.spatial import cKDTree
+from skimage.measure import intersection_coeff
+
 from cryocat._types import (
     ArrayLike,
     BoundaryType,
+    DataPoolEntry,
     MapSource,
     MotlColumn,
     MotlType,
@@ -395,91 +400,133 @@ class Motl:
             if paired_key in input_df.columns:
                 self.df[em_key] = pd.to_numeric(input_df[paired_key], errors="coerce")
 
-    @gui_exposed(category="Cleaning")
+    @gui_exposed(category="Cleaning", label="Clean by separation radius")
     def clean_by_distance(
         self,
         distance_in_voxels: float,
         column_name: MotlColumn,
         metric_column_name: MotlColumn = "score",
         keep_greater: bool = True,
-        dist_mask: MapSource | None = None,
     ) -> None:
-        """Cleans `df` by removing particles closer than a given distnace threshold (in voxels).
+        """Remove particles closer than *distance_in_voxels* to a better-scoring neighbour.
 
         Parameters
         ----------
         distance_in_voxels : float
-            The distance cutoff in voxels.
-        column_name : str
-            Name of the column by which the particles are grouped before cleaning.
-        metric_column_name : str, default='score'
-            Name of the column whose value decides which particle to keep. Defaults to "score". The particle
-            with the greater value is kept.
+            Suppression radius in voxels: any particle within this distance of a
+            better-scoring one is removed.
+        column_name : MotlColumn
+            Column used to partition particles into independent groups before cleaning.
+        metric_column_name : MotlColumn, default='score'
+            Column whose value decides which particle to keep.  The particle with
+            the greater value is kept by default (see *keep_greater*).
         keep_greater : bool, default=True
-            Whether to keep the particles with greater (True) or lower (False) value. Default is True.
-        dist_mask : MapSource, optional
-            Binary mask/map (ndarray or path to a map file) for directional cleaning. If provided the
-            distance_in_voxels is used to find all points within this radius and then those points in the
-            region where the mask is 1 will be cleaned. Normalized via :func:`cryocat.core.cryomap.read`.
-            Defaults to None.
+            If ``True``, the particle with the higher metric value is kept.
 
         Returns
         -------
         None
-
-        Notes
-        -----
-        This method modifies the `df` attribute of the object.
-
+            Modifies :attr:`df` in place.
         """
+        features = np.unique(self.get_feature(column_name))
+        cleaned_df = pd.DataFrame()
 
-        # Directional path: precompute NN stats and filter once across all features.
-        if dist_mask is not None:
-            nn_stats = nnana.get_nn_stats_within_radius(self, nn_radius=distance_in_voxels, column_name=column_name)
-            nn_stats_filtered = nnana.filter_nn_radial_stats(nn_stats, dist_mask)
+        for f in features:
+            feature_m = self.get_motl_subset(f, column_name=column_name, reset_index=True)
+            temp_keep = nnana.nms_by_distance(
+                coords=feature_m.get_coordinates(),
+                scores=feature_m.df[metric_column_name].values,
+                distance=distance_in_voxels,
+                keep_greater=keep_greater,
+            )
+            cleaned_df = pd.concat((cleaned_df, feature_m.df.iloc[temp_keep, :]), ignore_index=True)
+
+        print(f"Cleaned {self.df.shape[0] - cleaned_df.shape[0]} particles.")
+        self.df = cleaned_df
+
+    @gui_exposed(category="Cleaning", label="Clean by directional distance")
+    def clean_by_directional_distance(
+        self,
+        distance_in_voxels: float,
+        dist_mask: MapSource | None,
+        column_name: MotlColumn,
+        metric_column_name: MotlColumn = "score",
+        keep_greater: bool = True,
+    ) -> None:
+        """Remove particles whose neighbours, within a search radius, fall in a mask region.
+
+        For each particle (processed best-first by *metric_column_name*), any
+        still-active neighbour whose displacement vector — rotated into the
+        query-particle reference frame — lands inside *dist_mask* is suppressed.
+        The pre-computation of neighbour pairs and mask filtering is done once
+        before the per-group loop.
+
+        Parameters
+        ----------
+        distance_in_voxels : float
+            Search radius in voxels: only neighbours within this distance are
+            candidates for suppression.
+        dist_mask : MapSource or None
+            Binary directional mask that defines which neighbour directions trigger
+            suppression.  Values ≥ 0.5 are treated as *inside*.  Passed to
+            :func:`~cryocat.core.cryomap.read` if a path string.
+        column_name : MotlColumn
+            Column used to partition particles into independent groups.
+        metric_column_name : MotlColumn, default='score'
+            Column whose value decides which particle survives when neighbours
+            conflict.
+        keep_greater : bool, default=True
+            If ``True``, the particle with the higher metric value is kept.
+
+        Returns
+        -------
+        None
+            Modifies :attr:`df` in place.
+        """
+        nn_stats = nnana.get_nn_stats_within_radius(
+            self, nn_radius=distance_in_voxels, column_name=column_name
+        )
+        nn_stats_filtered = nnana.filter_nn_radial_stats(nn_stats, dist_mask)
 
         features = np.unique(self.get_feature(column_name))
         cleaned_df = pd.DataFrame()
 
         for f in features:
             feature_m = self.get_motl_subset(f, column_name=column_name, reset_index=True)
+            n_temp_motl = feature_m.df.shape[0]
+            temp_scores = feature_m.df[metric_column_name].values
+            sort_idx = np.argsort(temp_scores)
+            if keep_greater:
+                sort_idx = sort_idx[::-1]
+            temp_keep = np.ones((n_temp_motl,), dtype=bool)
 
-            if dist_mask is None:
-                # Classic radius-based cleaning - delegate to nnana.
-                temp_keep = nnana.nms_by_distance(
-                    coords=feature_m.get_coordinates(),
-                    scores=feature_m.df[metric_column_name].values,
-                    distance=distance_in_voxels,
-                    keep_greater=keep_greater,
-                )
-            else:
-                # Directional cleaning: walk scores in order and suppress only the
-                # neighbors that fall in the mask-1 region (precomputed above).
-                n_temp_motl = feature_m.df.shape[0]
-                temp_scores = feature_m.df[metric_column_name].values
-                sort_idx = np.argsort(temp_scores)
-                if keep_greater:
-                    sort_idx = sort_idx[::-1]
-                temp_keep = np.ones((n_temp_motl,), dtype=bool)
-                for j in sort_idx:
-                    if not temp_keep[j]:
-                        continue
-                    subtomo_id = feature_m.df.loc[j, "subtomo_id"]
-                    filtered_idx = nn_stats_filtered.loc[
-                        nn_stats_filtered["qp_subtomo_id"] == subtomo_id, "nn_motl_idx"
-                    ].values
-                    d_cut_idx = np.isin(np.arange(n_temp_motl), filtered_idx)
-                    d_cut_idx[j] = False
-                    temp_keep[d_cut_idx] = False
+            for j in sort_idx:
+                if not temp_keep[j]:
+                    continue
+                subtomo_id = feature_m.df.loc[j, "subtomo_id"]
+                filtered_idx = nn_stats_filtered.loc[
+                    nn_stats_filtered["qp_subtomo_id"] == subtomo_id, "nn_motl_idx"
+                ].values
+                d_cut_idx = np.isin(np.arange(n_temp_motl), filtered_idx)
+                # Guard against a particle appearing in its own neighbour list
+                # (find_nn_within_self excludes self, but the guard is retained
+                # as a safety net against future changes to the NN computation).
+                d_cut_idx[j] = False
+                temp_keep[d_cut_idx] = False
 
             cleaned_df = pd.concat((cleaned_df, feature_m.df.iloc[temp_keep, :]), ignore_index=True)
 
         print(f"Cleaned {self.df.shape[0] - cleaned_df.shape[0]} particles.")
         self.df = cleaned_df
 
+    @gui_exposed(
+        category="Cleaning",
+        label="Clean by proximity to points",
+        hide=("inplace", "output_path"),
+    )
     def clean_by_distance_to_points(
         self,
-        points: pd.DataFrame,
+        points: DataPoolEntry,
         radius_in_voxels: float,
         column_name: MotlColumn = "tomo_id",
         inplace: bool = True,
@@ -580,7 +627,7 @@ class Motl:
         boundary_type: BoundaryType = "center",
         box_size: int | None = None,
         output_path: PathOrStr | None = None,
-    ) -> "Motl" | None:
+    ) -> Motl | None:
         """Removes particles from the motive list based on provided tomomgram masks.
 
         Parameters
@@ -670,6 +717,207 @@ class Motl:
 
         if inplace:
             self.df = cleaned_motl.df
+            return None
+        return cleaned_motl
+
+    @gui_exposed(
+        category="Cleaning",
+        label="Clean by rotated-mask intersection",
+        hide=("inplace", "output_path", "order", "center"),
+    )
+    def clean_by_mask_overlap(
+        self,
+        base_mask: MapSource,
+        threshold: float,
+        metric_column_name: MotlColumn = "score",
+        keep_greater: bool = True,
+        column_name: MotlColumn | None = "tomo_id",
+        box_size: int = 64,
+        center: np.ndarray | None = None,
+        radius: float | None = None,
+        order: np.ndarray | None = None,
+        inplace: bool = True,
+        output_path: PathOrStr | None = None,
+    ) -> "Motl" | None:
+        """Removes particles whose rotated subtomogram masks physically overlap above a threshold.
+
+        Particles are processed in metric order (best first) within each pool defined
+        by *column_name*.  For each candidate particle, only neighbours within *radius*
+        voxels are checked; if any kept neighbour's rotated mask overlaps the candidate's
+        rotated mask by more than *threshold* (intersection coefficient), the candidate
+        is discarded.
+
+        Parameters
+        ----------
+        base_mask : MapSource
+            Path to the binary subtomogram mask in its unrotated reference orientation,
+            or an ndarray.  Read and binarised via :func:`cryocat.core.cryomap.read`.
+        threshold : float
+            Intersection coefficient above which a particle is considered a duplicate
+            and removed.  The coefficient is ``|A ∩ B| / |A|`` where *A* is the
+            candidate's rotated-mask sub-region within the overlapping window
+            (``skimage.measure.intersection_coeff``).
+        metric_column_name : MotlColumn, default="score"
+            Column used to rank particles.  The particle with the higher (or lower,
+            see *keep_greater*) value is retained.
+        keep_greater : bool, default=True
+            If ``True``, higher metric values are preferred.
+        column_name : MotlColumn or None, default="tomo_id"
+            Column to split by before cleaning.  Each unique value is cleaned
+            independently.  Set to ``None`` to clean all particles as one pool.
+            Raises ``ValueError`` if the column is named but absent from the dataframe.
+        box_size : int, default=64
+            Subtomogram box edge length in voxels.
+        center : ndarray of shape (3,), optional
+            Mask centre in voxels.  Defaults to ``(box_size - 1) / 2`` per axis.
+        radius : float, optional
+            Neighbour search radius in voxels.  Defaults to ``box_size``.
+            Only particles within this distance are checked for overlap.  A
+            mask that reaches the box corners can span up to
+            ``box_size * sqrt(3) / 2`` from the centre, so the default of
+            ``box_size`` covers the common case; increase it if you use a mask
+            that fills the corners of the box.
+        order : ndarray of int, optional
+            Explicit 0-based row indices defining processing order.  Only valid
+            when ``column_name=None``.  When provided *metric_column_name* /
+            *keep_greater* are ignored for ordering.
+        inplace : bool, default=True
+            If ``True``, modifies the motl in place and returns ``None``.
+            If ``False``, returns a new :class:`Motl` and leaves the original untouched.
+        output_path : PathOrStr, optional
+            If provided, write the cleaned motl to this path via :meth:`write_out`.
+
+        Returns
+        -------
+        Motl or None
+            A new :class:`Motl` when *inplace* is ``False``; ``None`` otherwise.
+
+        Raises
+        ------
+        ValueError
+            If *column_name* is set but missing from the dataframe, or if *order*
+            is used together with a non-None *column_name*, or if *order* has the
+            wrong length.
+        """
+        base_mask = cryomap.read(base_mask).astype(bool)
+
+        if radius is None:
+            radius = float(box_size)
+
+        if column_name is not None:
+            if column_name not in self.df.columns:
+                raise ValueError(
+                    f"column_name={column_name!r} is not present in the dataframe. "
+                    f"Available columns: {list(self.df.columns)}"
+                )
+            if order is not None:
+                raise ValueError(
+                    "`order` is not supported in per-group mode (column_name is set). "
+                    "Set column_name=None to use a custom order array."
+                )
+            pools = [
+                self.get_motl_subset(t, column_name=column_name, reset_index=True)
+                for t in self.get_unique_values(column_name)
+            ]
+            pool_order = None
+        else:
+            pools = [self]
+            pool_order = order
+
+        if center is None:
+            c = (box_size - 1) / 2.0
+            center_arr = np.array([c, c, c], dtype=np.float32)
+        else:
+            center_arr = np.asarray(center, dtype=np.float32)
+
+        ones_centered = np.argwhere(base_mask).astype(np.float32) - center_arr[None, :]
+
+        @lru_cache(maxsize=512)
+        def _rotated_mask(a0, a1, a2):
+            pts = rot.from_euler("zxz", [a0, a1, a2], degrees=True).apply(ones_centered) + center_arr[None, :]
+            ijk = np.rint(pts).astype(np.int16)
+            valid = np.all((ijk >= 0) & (ijk < box_size), axis=1)
+            ijk = ijk[valid]
+            m = np.zeros((box_size, box_size, box_size), dtype=bool)
+            m[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = True
+            return m
+
+        def _intersection_for_shift(maskA, maskB, shift_ijk):
+            sx, sy, sz = int(shift_ijk[0]), int(shift_ijk[1]), int(shift_ijk[2])
+
+            def _slices(s):
+                if s >= 0:
+                    return slice(s, box_size), slice(0, box_size - s)
+                return slice(0, box_size + s), slice(-s, box_size)
+
+            ax, bx = _slices(sx)
+            ay, by = _slices(sy)
+            az, bz = _slices(sz)
+
+            if (ax.stop - ax.start) <= 0 or (ay.stop - ay.start) <= 0 or (az.stop - az.start) <= 0:
+                return 0.0
+            return intersection_coeff(maskA[ax, ay, az], maskB[bx, by, bz])
+
+        def _get_rot_mask(i, _ezxz):
+            a0, a1, a2 = map(float, _ezxz[i])
+            return _rotated_mask(a0, a1, a2)
+
+        out_dfs = []
+        for pool in pools:
+            positions = pool.get_coordinates().astype(np.float32)
+            euler_zxz = pool.get_angles().astype(np.float32)
+            N = len(pool.df)
+
+            if pool_order is not None:
+                o = np.asarray(pool_order)
+                if len(o) != N:
+                    raise ValueError("`order` must have the same length as the number of particles.")
+                order_idx = o.astype(np.int32)
+            elif metric_column_name is not None and metric_column_name in pool.df.columns:
+                order_idx = np.argsort(pool.df[metric_column_name].to_numpy(), kind="stable")
+                if keep_greater:
+                    order_idx = order_idx[::-1]
+            else:
+                order_idx = np.arange(N, dtype=np.int32)
+
+            tree = cKDTree(positions)
+            keep_mask = np.zeros(N, dtype=bool)
+
+            for i in order_idx:
+                pos_i = positions[i]
+                candidates = tree.query_ball_point(pos_i, r=radius)
+                already_kept = [j for j in candidates if keep_mask[j]]
+
+                if not already_kept:
+                    keep_mask[i] = True
+                    continue
+
+                mask_i = _get_rot_mask(i, euler_zxz)
+                reject = False
+
+                for j in already_kept:
+                    shift = np.rint(positions[j] - pos_i).astype(np.int32)
+                    if np.any(np.abs(shift) >= box_size):
+                        continue
+                    mask_j = _get_rot_mask(j, euler_zxz)
+                    if _intersection_for_shift(mask_i, mask_j, shift) > threshold:
+                        reject = True
+                        break
+
+                if not reject:
+                    keep_mask[i] = True
+
+            out_dfs.append(pool.df.loc[pool.df.index[keep_mask]].copy())
+
+        cleaned_df = pd.concat(out_dfs, axis=0) if out_dfs else Motl.create_empty_motl_df()
+        cleaned_df = cleaned_df.reset_index(drop=True)
+        cleaned_motl = Motl(cleaned_df)
+
+        if output_path is not None:
+            cleaned_motl.write_out(output_path)
+
+        if inplace:
+            self.df = cleaned_df
             return None
         return cleaned_motl
 
@@ -989,6 +1237,128 @@ class Motl:
                     z_dim = float(dims.loc[dims["tomo_id"] == t, "z"].iloc[0]) + 1
                     self.df.loc[self.df["tomo_id"] == t, "z"] = z_dim - self.df.loc[self.df["tomo_id"] == t, "z"]
 
+    @gui_exposed(category="Processing", label="Remap Warp alignment")
+    def remap_warp_alignment(
+        self,
+        pre_xml_dir: PathOrStr,
+        post_xml_dir: PathOrStr,
+        tomo_format: str,
+        scale: float = 1.0,
+        on_missing: str = "error",
+        inplace: bool = True,
+        output_path: PathOrStr | None = None,
+    ) -> dict:
+        """Remap particle coordinates and orientations from one Warp alignment to another.
+
+        Loads pre-MA and post-MA Warp tilt-series XML files for each tomogram, projects
+        particle positions through the old alignment, triangulates them in the new alignment,
+        and applies the corresponding frame rotation to the orientations.
+
+        All inputs and outputs are in cryoCAT frame; the Relion-convention flip is handled
+        internally by read_warp_tilt_xml (tilt matrices are pre-conjugated by F=diag(1,1,-1)).
+
+        Parameters
+        ----------
+        pre_xml_dir : PathOrStr
+            Directory containing pre-alignment Warp XML files.
+        post_xml_dir : PathOrStr
+            Directory containing post-alignment Warp XML files.
+        tomo_format : str
+            Format string mapping tomo_id to an XML filename. Use ``$x+`` as a placeholder
+            (e.g. ``'TS_$xxx.xml'`` maps tomo_id 204 → ``'TS_204.xml'``).
+        scale : float, default=1.0
+            The motl's binning relative to the XML's pixel size — 1 when they match,
+            2 for a bin-2 motl against bin-1 XMLs.  A motl does not record its pixel
+            size, so this cannot be derived.
+        on_missing : str, default='error'
+            Action when an XML pair is missing. ``'error'`` raises; ``'skip'`` leaves
+            affected particles unchanged.
+        inplace : bool, default=True
+            Modify self in place. When False, return a new Motl.
+        output_path : PathOrStr, optional
+            If given, write the result to this path.
+
+        Returns
+        -------
+        dict
+            Per-tomogram diagnostics: n, rms_px, oob, R_angle, R_spread.
+        """
+        new_df = self.df.copy()
+        diag: dict = {}
+
+        for tomo_id in sorted(self.df["tomo_id"].unique()):
+            tomo_id_int = int(tomo_id)
+            xml_name = ioutils.fileformat_replace_pattern(tomo_format, tomo_id_int, "x")
+            pre_path = os.path.join(str(pre_xml_dir), xml_name)
+            post_path = os.path.join(str(post_xml_dir), xml_name)
+
+            if not (os.path.exists(pre_path) and os.path.exists(post_path)):
+                if on_missing == "error":
+                    raise FileNotFoundError(
+                        f"tomo {tomo_id_int}: XML file {xml_name!r} missing in one or both directories. "
+                        "Pass on_missing='skip' to ignore."
+                    )
+                continue
+
+            old = ioutils.read_warp_tilt_xml(pre_path)
+            new = ioutils.read_warp_tilt_xml(post_path)
+
+            if old["volume_dims"] is None:
+                raise ValueError(f"tomo {tomo_id_int}: VolumeDimensionsAngstrom missing from pre-MA XML")
+            ioutils.set_volume_geometry(new, volume_dims=old["volume_dims"], image_dims=old["image_dims"])
+
+            ok, msg = ioutils.check_same_tiltseries(old, new)
+            if not ok:
+                raise ValueError(f"tomo {tomo_id_int}: pre/post XMLs are not the same tilt series ({msg})")
+
+            mask = self.df["tomo_id"] == tomo_id
+            sub = self.df[mask]
+
+            eff_pos = sub[["x", "y", "z"]].values + sub[["shift_x", "shift_y", "shift_z"]].values
+            coords_ang = eff_pos * (old["pixel_size"] * scale)
+
+            u = geom.project_px(old, coords_ang)
+            q, hist = geom.triangulate(new, u)
+            new_vox = q / (new["pixel_size"] * scale)
+
+            new_df.loc[mask, "x"] = new_vox[:, 0]
+            new_df.loc[mask, "y"] = new_vox[:, 1]
+            new_df.loc[mask, "z"] = new_vox[:, 2]
+            new_df.loc[mask, "shift_x"] = 0.0
+            new_df.loc[mask, "shift_y"] = 0.0
+            new_df.loc[mask, "shift_z"] = 0.0
+
+            R_map, angle, spread = geom.frame_rotation(old, new)
+            angles_zxz = sub[["phi", "theta", "psi"]].values
+            R_old = rot.from_euler("zxz", angles_zxz, degrees=True).as_matrix()
+            R_new_stack = R_map @ R_old
+            new_angles = rot.from_matrix(R_new_stack).as_euler("zxz", degrees=True)
+            new_df.loc[mask, "phi"] = new_angles[:, 0]
+            new_df.loc[mask, "theta"] = new_angles[:, 1]
+            new_df.loc[mask, "psi"] = new_angles[:, 2]
+
+            rms = np.sqrt(((geom.project_px(new, q) - u) ** 2).sum(-1).mean(-1))
+            vol_lim = new["volume_dims"] / (new["pixel_size"] * scale)
+            oob = int(((new_vox < 0) | (new_vox > vol_lim)).any(1).sum())
+            diag[tomo_id_int] = dict(
+                n=len(sub), rms_px=float(rms.mean()), oob=oob, R_angle=angle, R_spread=spread
+            )
+            print(
+                f"  tomo {tomo_id_int}: n={len(sub)} R={angle:.3f}deg "
+                f"rms={rms.mean():.2f}px oob={oob}"
+            )
+
+        if inplace:
+            self.df = new_df
+            if output_path is not None:
+                self.write(output_path)
+            return diag
+        else:
+            result = Motl(new_df)
+            if output_path is not None:
+                result.write(output_path)
+            return result
+
     def get_angles(self, tomo_number: int | None = None) -> np.ndarray:
         """This function takes in a tomo_number and returns the angles of all particles in that
         tomogram. If no tomo_number is given, it will return the angles of all particles.
@@ -1093,7 +1463,7 @@ class Motl:
         converted_angles = rotations.as_euler("zxz", degrees=True)
         self.df[["phi", "theta", "psi"]] = converted_angles
 
-    def get_barycentric_motl(self, idx: ArrayLike, nn_idx: ArrayLike) -> "Motl":
+    def get_barycentric_motl(self, idx: ArrayLike, nn_idx: ArrayLike, nn_motl: "Motl | None" = None) -> "Motl":
         """Returns a new Motl object with coordinates corresponding to the barycentric coordinates of the particles
         (speficied by their indices within idx) and their nearest neigbors (specified by their indices within nn_idx).
 
@@ -1116,14 +1486,15 @@ class Motl:
 
         """
 
-        coords = self.get_coordinates()
-        coord1 = coords[idx, :].astype(np.float32)
+        coords_qp = self.get_coordinates()
+        coord1 = coords_qp[idx, :].astype(np.float32)
         n_vertices = nn_idx.shape[1]
+        coords_nn = coords_qp if nn_motl is None else nn_motl.get_coordinates()
 
         # Barycentric centroid: mean of (particle + N neighbors).
         new_coord = coord1.copy()
         for i in range(n_vertices):
-            new_coord += coords[nn_idx[:, i], :]
+            new_coord += coords_nn[nn_idx[:, i], :]
         new_coord /= n_vertices + 1
 
         direction_vectors = new_coord - coord1
@@ -2053,7 +2424,7 @@ class Motl:
         return feature_motl
 
     @gui_exposed(category="Geometry", hide=("inplace",))
-    def shift_positions(self, shift: ArrayLike, inplace: bool = True) -> "Motl" | None:
+    def shift_positions(self, shift: ArrayLike, inplace: bool = True) -> Motl | None:
         """Shifts the coordinates by the provided shift.
 
         Parameters
@@ -2257,6 +2628,15 @@ class EmMotl(Motl):
         motl_array = motl_array.reshape((1, motl_array.shape[0], motl_array.shape[1])).astype(np.single)
         self.header = {}  # FIXME fails on writing back the header
         emfile.write(output_path, motl_array, self.header, overwrite=True)
+
+
+def _cc_name(motl_col: str) -> str:
+    """Derive a ``cc``-prefixed column name from a motl column name.
+
+    Strips underscores, capitalises each word, and prepends ``cc``:
+    ``geom1`` → ``ccGeom1``, ``subtomo_id`` → ``ccSubtomoId``.
+    """
+    return "cc" + "".join(part.capitalize() for part in motl_col.split("_"))
 
 
 class RelionMotl(Motl):
@@ -3530,6 +3910,7 @@ class RelionMotl(Motl):
         binning=None,
         pixel_size=None,
         adapt_object_attr=False,
+        extra_columns: dict[str, str] | None = None,
     ):
         """This function creates takes the `self.df` attribute and creates a DataFrame that is Relion format.
 
@@ -3614,11 +3995,26 @@ class RelionMotl(Motl):
 
         relion_df["rlnClassNumber"] = self.df["class"].to_numpy()
 
-        if add_object_id:
-            relion_df["ccObjectName"] = self.df["object_id"].to_numpy()
-
-        if add_subunit_id:
-            relion_df["ccSubunitName"] = self.df["geom2"].to_numpy()
+        _extra: dict[str, str] = dict(extra_columns or {})
+        if add_object_id and "object_id" not in _extra:
+            _extra["object_id"] = "ccObjectName"
+        if add_subunit_id and "geom2" not in _extra:
+            _extra["geom2"] = "ccSubunitName"
+        if _extra:
+            _rln_cols = set(
+                self.columns_v3_0 if (version or self.version) < 3.1
+                else self.columns_v4 if (version or self.version) >= 4.0
+                else self.columns_v3_1
+            )
+            for mc, cc in _extra.items():
+                if cc in _rln_cols:
+                    raise ValueError(
+                        f"Extra column target '{cc}' collides with a standard Relion column. "
+                        "Choose a different cc name."
+                    )
+            for mc, cc in _extra.items():
+                if mc in self.df.columns:
+                    relion_df[cc] = self.df[mc].to_numpy()
 
         if binning != 1.0 and version >= 4.0 and version != 5.1:
             for coord in ("X", "Y", "Z"):
@@ -3647,6 +4043,7 @@ class RelionMotl(Motl):
         pixel_size: float | None = None,
         optics_data=None,
         subtomo_size=None,
+        extra_columns: dict[str, str] | None = None,
     ):
         """This function converts `self.df` DataFrame to a DataFrame in Relion format and writes it out as a starfile.
 
@@ -3718,6 +4115,7 @@ class RelionMotl(Motl):
             binning=binning,
             pixel_size=pixel_size,
             adapt_object_attr=False,
+            extra_columns=extra_columns,
         )
 
         if write_optics:
@@ -4444,6 +4842,7 @@ class RelionMotlv5(RelionMotl, Motl):
         pixel_size=None,
         adapt_object_attr=False,
         convert=False,
+        extra_columns: dict[str, str] | None = None,
     ):
         """Build a RELION 5 particles DataFrame from ``self.df``.
 
@@ -4535,11 +4934,22 @@ class RelionMotlv5(RelionMotl, Motl):
         if not self.isWarp:  # only in relion
             relion_df["rlnClassNumber"] = self.df["class"].to_numpy()
 
-        if add_object_id:
-            relion_df["ccObjectName"] = self.df["object_id"].to_numpy()
-
-        if add_subunit_id:
-            relion_df["ccSubunitName"] = self.df["geom2"].to_numpy()
+        _extra: dict[str, str] = dict(extra_columns or {})
+        if add_object_id and "object_id" not in _extra:
+            _extra["object_id"] = "ccObjectName"
+        if add_subunit_id and "geom2" not in _extra:
+            _extra["geom2"] = "ccSubunitName"
+        if _extra:
+            _rln_cols = set(self.columns_v4)
+            for mc, cc in _extra.items():
+                if cc in _rln_cols:
+                    raise ValueError(
+                        f"Extra column target '{cc}' collides with a standard Relion column. "
+                        "Choose a different cc name."
+                    )
+            for mc, cc in _extra.items():
+                if mc in self.df.columns:
+                    relion_df[cc] = self.df[mc].to_numpy()
 
         if binning != 1.0:
             if self.isWarp:
@@ -4579,6 +4989,7 @@ class RelionMotlv5(RelionMotl, Motl):
         optics_data=None,
         subtomo_size=None,
         convert: bool = False,
+        extra_columns: dict[str, str] | None = None,
     ):
         """Write the motl to a RELION 5 ``.star`` file.
 
@@ -4622,6 +5033,7 @@ class RelionMotlv5(RelionMotl, Motl):
             pixel_size=pixel_size,
             adapt_object_attr=False,
             convert=convert,  # if true: check isWarp, convert to opposite
+            extra_columns=extra_columns,
         )
 
         if write_optics:

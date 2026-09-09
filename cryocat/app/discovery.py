@@ -34,6 +34,8 @@ GUI_MODULES: tuple[str, ...] = (
     "cryocat.analysis.structure",
     "cryocat.utils.ioutils",
     "cryocat.core.cryomap",
+    "cryocat.core.surface",
+    "cryocat.analysis.nnana",
 )
 
 _loaded: bool = False

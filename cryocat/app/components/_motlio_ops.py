@@ -100,11 +100,20 @@ def load_motl_from_path(
         for val, kw in (
             (rln_pixelsize, "pixel_size"),
             (rln_binning, "binning"),
-            (rln_tomoformat, "tomo_format"),
-            (rln_subtomoformat, "subtomo_format"),
         ):
             if val:
                 rln_kwargs[kw] = val
+
+        # RelionMotlv5_1.__new__ does not accept tomo_format / subtomo_format —
+        # v5.1 dispatches internally to backends that handle format strings
+        # differently; passing them would raise TypeError.
+        if actual_type != "relion5_1":
+            for val, kw in (
+                (rln_tomoformat, "tomo_format"),
+                (rln_subtomoformat, "subtomo_format"),
+            ):
+                if val:
+                    rln_kwargs[kw] = val
 
         tomo_tmp_path = None
         if actual_type in ("relion5", "relion5_1") and rln_tomos:

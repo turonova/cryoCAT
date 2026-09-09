@@ -47,6 +47,7 @@ from cryocat.app.components.poolslotlist import (
 
 from cryocat.analysis.tango import TwistDescriptor, Descriptor, CustomDescriptor
 from cryocat.utils.classutils import get_class_names_by_parent, get_classes_from_names
+from cryocat.core.surface import Mesh
 
 _descriptors: list[str] = get_class_names_by_parent("Descriptor", "cryocat.analysis.tango")
 _features: list[str] = get_class_names_by_parent("Feature", "cryocat.analysis.tango")
@@ -282,6 +283,18 @@ def _twist_tile() -> list:
             label="Source",
         ),
         html.Div(id="tango-twist-status", style={**_hint, "marginTop": "0.3rem"}),
+        html.Div(
+            dbc.Button(
+                "✕ Close twist",
+                id="tango-reset-twist-btn",
+                color="link",
+                size="sm",
+                n_clicks=0,
+                style={"padding": 0, "marginTop": "0.4rem"},
+            ),
+            id="tango-reset-twist-div",
+            style={"display": "none"},
+        ),
     ]
 
 
@@ -378,6 +391,39 @@ def _desc_pool_row_extra(data_id: str, entry: dict) -> list:
     ]
 
 
+def _helpers_tile() -> list:
+    return [
+        html.P(
+            "Suggest an alpha range for AlphaDescriptor from a pool motl's coordinates. "
+            "The range is registered as a console variable (use @name in the descriptor form).",
+            style={"fontSize": styles.FONT_SM, "color": styles.COLOR_MUTED, "marginBottom": "0.4rem"},
+        ),
+        formgen.form_row(
+            "motl",
+            formgen.make_dropdown(
+                "tango-helpers-motl",
+                [],
+                None,
+                clearable=True,
+                placeholder="Choose motl from pool…",
+            ),
+            "Motl whose coordinates are used to estimate the alpha range",
+            label_text="Motl",
+        ),
+        dbc.Button(
+            "Suggest alpha range",
+            id="tango-helpers-alpha-btn",
+            color="light",
+            size="sm",
+            style={"width": "100%", "marginTop": "0.5rem"},
+        ),
+        html.Div(
+            id="tango-helpers-alpha-status",
+            style={**_hint, "marginTop": "0.3rem"},
+        ),
+    ]
+
+
 def _sidebar() -> list:
     return [
         dbc.Accordion(
@@ -391,6 +437,11 @@ def _sidebar() -> list:
                     _desc_tile(),
                     title="Descriptor",
                     item_id="tango-acc-desc",
+                ),
+                dbc.AccordionItem(
+                    _helpers_tile(),
+                    title="Helpers",
+                    item_id="tango-acc-helpers",
                 ),
                 dbc.AccordionItem(
                     get_pool_slot_list("tango-desc-pool"),
@@ -469,6 +520,7 @@ def register_callbacks(app) -> None:
     register_slot_focus_callback(
         app, "tango-desc-pool-slot-map", "tango-tabs", "tango-tab-desc-", _DESC_SLOTS,
         active_id_store_id="tango-desc-pool-active-id",
+        empty_fallback_tab_id="tango-tab-twist",
     )
 
     register_table_callbacks(
@@ -501,6 +553,49 @@ def register_callbacks(app) -> None:
         )
 
     register_table_to_motl_callbacks(app, "tango-ttm", source_table_id="tango-twist-tabv-grid", id_column="qp_id")
+
+    # ── DB3: Helpers tile callbacks ───────────────────────────────────────────
+
+    @app.callback(
+        Output("tango-helpers-motl", "options"),
+        Input(ids.POOL_REGISTRY, "data"),
+    )
+    def _populate_helpers_motl(registry):
+        return [{"label": v.get("label", k), "value": k} for k, v in (registry or {}).items()]
+
+    @app.callback(
+        Output("tango-helpers-alpha-status", "children"),
+        Input("tango-helpers-alpha-btn", "n_clicks"),
+        State("tango-helpers-motl", "value"),
+        State(ids.POOL_REGISTRY, "data"),
+        prevent_initial_call=True,
+    )
+    def _on_suggest_alpha(n_clicks, motl_id, registry):
+        if not n_clicks or not motl_id:
+            raise PreventUpdate
+        from cryocat.core.cryomotl import Motl as _Motl
+        from cryocat.app.pool import get_rows as _get_rows
+        try:
+            rows = _get_rows(motl_id)
+        except Exception as exc:
+            return f"Error: {exc}"
+        try:
+            m = _Motl(rows)
+            coords = m.get_coordinates()
+        except Exception as exc:
+            return f"Error reading motl coordinates: {exc}"
+        try:
+            lo, hi = Mesh.suggest_alpha_range(coords)
+        except Exception as exc:
+            return f"Error computing range: {exc}"
+        label = (registry or {}).get(motl_id, {}).get("label", motl_id)
+        var_name = "alpha_" + "".join(c if c.isalnum() else "_" for c in label).strip("_")
+        from cryocat.app.console.vars import register_console_var
+        register_console_var(var_name, (lo, hi))
+        return (
+            f"Suggested range: [{lo:.4g}, {hi:.4g}]. "
+            f"Registered as @{var_name} in the console."
+        )
 
     # ── Show/hide C-symmetry value input ─────────────────────────────────────
 
@@ -637,6 +732,7 @@ def register_callbacks(app) -> None:
         State("tango-twist-next-id", "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
         State(ids.DATA_POOL_NEXT_ID,  "data"),
+        State("tango-twist-handle", "data"),
         prevent_initial_call=True,
     )
     def _compute_twist(
@@ -652,6 +748,7 @@ def register_callbacks(app) -> None:
         twist_next_id,
         dp_registry,
         dp_next_id,
+        prev_handle,
     ):
         _no7 = (no_update,) * 7
         from cryocat.app.instrument import snapshot as _snap, reset as _reset, start_trace as _start_trace
@@ -711,8 +808,11 @@ def register_callbacks(app) -> None:
         global_ref = _datapool.insert(_df, label=f"{source_label} twist", id_column="qp_id", motl_links=twist_links)
         from cryocat.app.datapool import DataPoolState as _DPState
         _ds = _DPState.from_stores(dp_registry, dp_next_id)
+        if prev_handle and prev_handle.get("dp_id"):
+            _ds = _datapool.remove_entry(_ds, prev_handle["dp_id"])
         _ds, _dp_id = _datapool.insert_entry(_ds, _df, label=f"{source_label} twist", reader="tango", source_path="", motl_links=twist_links)
         new_dp_reg, new_dp_next = _ds.to_stores()
+        handle["dp_id"] = _dp_id
         status = f"Twist computed: {n:,} pairs."
         _snap("twist")   # D2: _compute_twist wall time (grid update follows async)
         return handle, global_ref, "tango-tab-twist", status, new_twist_id, new_dp_reg, new_dp_next
@@ -731,9 +831,10 @@ def register_callbacks(app) -> None:
         State("tango-twist-next-id", "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
         State(ids.DATA_POOL_NEXT_ID,  "data"),
+        State("tango-twist-handle", "data"),
         prevent_initial_call=True,
     )
-    def _handle_twist_loaded(loaded, twist_next_id, dp_registry, dp_next_id):
+    def _handle_twist_loaded(loaded, twist_next_id, dp_registry, dp_next_id, prev_handle):
         if not loaded:
             raise PreventUpdate
 
@@ -779,8 +880,11 @@ def register_callbacks(app) -> None:
         global_ref = _datapool.insert(_df, label="Loaded twist", id_column="qp_id", motl_links=loaded_links)
         from cryocat.app.datapool import DataPoolState as _DPState
         _ds = _DPState.from_stores(dp_registry, dp_next_id)
+        if prev_handle and prev_handle.get("dp_id"):
+            _ds = _datapool.remove_entry(_ds, prev_handle["dp_id"])
         _ds, _dp_id = _datapool.insert_entry(_ds, _df, label="Loaded twist", reader="tango", source_path="", motl_links=loaded_links)
         new_dp_reg, new_dp_next = _ds.to_stores()
+        handle["dp_id"] = _dp_id
         status = f"Twist loaded: {n:,} pairs. Radius: {radius_note}."
         return handle, global_ref, "tango-tab-twist", status, new_twist_id, new_dp_reg, new_dp_next
 
@@ -978,32 +1082,20 @@ def register_callbacks(app) -> None:
             if v.get("reader") == "tango-desc"
         }
 
-    # ── Clear stale slot-map entries when pool entry is removed ───────────────
-
-    @app.callback(
-        Output("tango-desc-pool-slot-map", "data", allow_duplicate=True),
-        Input("tango-desc-pool-registry", "data"),
-        State("tango-desc-pool-slot-map", "data"),
-        prevent_initial_call=True,
-    )
-    def _clean_desc_slot_map(registry, slot_map):
-        reg = registry or {}
-        sm = list(slot_map or [None] * _DESC_SLOTS)
-        updated = [sid if sid in reg else None for sid in sm]
-        return updated if updated != sm else no_update
-
     # ── Sync per-slot global-data-stores from slot map ────────────────────────
 
     @app.callback(
         *[Output(f"tango-desc-{i}-global-data-store", "data") for i in range(_DESC_SLOTS)],
         Input("tango-desc-pool-slot-map", "data"),
+        *[State(f"tango-desc-{i}-global-data-store", "data") for i in range(_DESC_SLOTS)],
     )
-    def _sync_desc_slot_stores(slot_map):
+    def _sync_desc_slot_stores(slot_map, *current_stores):
         sm = list(slot_map or [None] * _DESC_SLOTS)
         result = []
         for i in range(_DESC_SLOTS):
             data_id = sm[i] if i < len(sm) else None
-            result.append(_desc_table_refs.get(data_id) if data_id else None)
+            new_ref = _desc_table_refs.get(data_id) if data_id else None
+            result.append(no_update if new_ref == current_stores[i] else new_ref)
         return tuple(result)
 
     # ── Update descriptor tab labels and disabled state ───────────────────────
@@ -1102,4 +1194,69 @@ def register_callbacks(app) -> None:
             msg = f"Source motl '{source_id}' is no longer in the motl pool."
             return True, msg, True, msg
         return False, "", False, ""
+
+    # ── DE2: Remove a descriptor entry via its ✕ button ──────────────────────
+
+    @app.callback(
+        Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
+        *[Output(f"tango-desc-{i}-slider-filters-store", "data", allow_duplicate=True) for i in range(_DESC_SLOTS)],
+        *[Output(f"tango-desc-{i}-grid", "filterModel", allow_duplicate=True) for i in range(_DESC_SLOTS)],
+        Input({"type": "dp-remove-btn", "data_id": ALL}, "n_clicks"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        State(ids.DATA_POOL_NEXT_ID, "data"),
+        State("tango-desc-pool-slot-map", "data"),
+        prevent_initial_call=True,
+    )
+    def _on_desc_remove(n_clicks_list, dp_registry, dp_next_id, slot_map):
+        if not ctx.triggered_id or not any(n or 0 for n in (n_clicks_list or [])):
+            raise PreventUpdate
+        data_id = ctx.triggered_id["data_id"]
+        _desc_table_refs.pop(data_id, None)
+        from cryocat.app.datapool import DataPoolState as _DPState
+        _ds = _DPState.from_stores(dp_registry, dp_next_id)
+        _ds = _datapool.remove_entry(_ds, data_id)
+        dp_reg_new, dp_next_new = _ds.to_stores()
+        sm = list(slot_map or [None] * _DESC_SLOTS)
+        slider_clears = [{} if (i < len(sm) and sm[i] == data_id) else no_update for i in range(_DESC_SLOTS)]
+        filter_clears = [{} if (i < len(sm) and sm[i] == data_id) else no_update for i in range(_DESC_SLOTS)]
+        return dp_reg_new, dp_next_new, *slider_clears, *filter_clears
+
+    # ── DE3: Show/hide and handle the "Reset twist" button ───────────────────
+
+    @app.callback(
+        Output("tango-reset-twist-div", "style"),
+        Input("tango-twist-handle", "data"),
+    )
+    def _toggle_reset_btn(handle):
+        return {"display": "block"} if handle else {"display": "none"}
+
+    @app.callback(
+        Output("tango-twist-handle", "data", allow_duplicate=True),
+        Output("tango-twist-tabv-global-data-store", "data", allow_duplicate=True),
+        Output("tango-tabs", "active_tab", allow_duplicate=True),
+        Output("tango-twist-tabv-grid", "filterModel", allow_duplicate=True),
+        Output("tango-twist-tabv-slider-filters-store", "data", allow_duplicate=True),
+        Output("tango-twist-tv-data", "data", allow_duplicate=True),
+        Output("tango-twist-status", "children", allow_duplicate=True),
+        Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Input("tango-reset-twist-btn", "n_clicks"),
+        State("tango-twist-handle", "data"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        State(ids.DATA_POOL_NEXT_ID,  "data"),
+        prevent_initial_call=True,
+    )
+    def _reset_twist(n_clicks, handle, dp_registry, dp_next_id):
+        if not n_clicks:
+            raise PreventUpdate
+        # Cleared: handle, data store, tab (stays), column filters, slider
+        # filters, tomoview data, status line.  Grid rows are cleared by the
+        # _rows callback reacting to the data-store write above.
+        from cryocat.app.datapool import DataPoolState as _DPState
+        _ds = _DPState.from_stores(dp_registry, dp_next_id)
+        if handle and handle.get("dp_id"):
+            _ds = _datapool.remove_entry(_ds, handle["dp_id"])
+        dp_reg_new, dp_next_new = _ds.to_stores()
+        return None, None, "tango-tab-twist", {}, {}, None, "", dp_reg_new, dp_next_new
 

@@ -598,7 +598,9 @@ def register_table_cluster_callbacks(
     )
     def _refresh_screen_on_data_change(data, method):
         show_feat = method in ("K-means", "DBSCAN")
-        if not data or not show_feat:
+        if not data:
+            return None, []  # clear feature rows when data store is cleared
+        if not show_feat:
             raise dash.exceptions.PreventUpdate
         df = _df_from_store(data)
         if df.empty:

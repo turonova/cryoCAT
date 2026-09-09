@@ -23,6 +23,7 @@ from cryocat.core import cryomap
 from cryocat.utils import geom
 from cryocat.core import cryomotl
 from cryocat._types import PathOrStr, MapSource, ArrayLike, MotlColumn
+from cryocat.utils.classutils import gui_exposed
 
 
 def _axis_aligned_bbox_from_input(bbox: o3d.geometry.AxisAlignedBoundingBox | dict[str, Any]) -> o3d.geometry.AxisAlignedBoundingBox:
@@ -290,6 +291,7 @@ class DiscreteSurface(Surface):
         """Crop surface to axis-aligned bounding box."""
         pass
 
+    @gui_exposed(category="surface-op", label="[Mesh] Separate closed surface (inner/outer)", group="Mesh", order=40, returns="surface_pair")
     def separate_closed_surface(self, threshold_angle: float = 90.0, reference_point: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
         """
         Separate inner and outer surfaces of a closed volume based on normal direction.
@@ -330,6 +332,7 @@ class DiscreteSurface(Surface):
 
         return vertex_labels == 0, vertex_labels == 1
 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Separate planar surface", group="Mesh", order=45, returns="surface_pair")
     def separate_planar_surface(self) -> tuple[np.ndarray, np.ndarray]:
         """Separate the two halves of a surface with flat or low-curvature geometry via PCA on normals.
 
@@ -583,6 +586,7 @@ class DiscreteSurface(Surface):
         log("Normal refinement complete.")
         return refined_normals
 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Refine normals", group="Mesh/OPC", order=30, hide=("logger", "inplace", "batch_size"), returns="none")
     def refine_normals(
         self,
         radius_hit: float = 3.0,
@@ -646,7 +650,8 @@ class DiscreteSurface(Surface):
             invalidate()
         return target
 
-    def apply_normals_mask(self, angle_threshold: float = 90.0, reference_normal: np.ndarray | None = None, inplace: bool = False, signed: bool = False) -> "DiscreteSurface" | None:
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Apply normals mask", group="Mask", order=10, hide=("inplace",), returns="surface")
+    def apply_normals_mask(self, angle_threshold: float = 90.0, reference_normal: np.ndarray | None = None, inplace: bool = False, signed: bool = False) -> DiscreteSurface | None:
         """
         Remove vertices/points whose normal deviates more than ``angle_threshold`` degrees
         from the mean (or a supplied reference) normal direction.
@@ -699,7 +704,8 @@ class DiscreteSurface(Surface):
         """Apply a boolean keep-mask to the surface (must be overridden by subclasses)."""
         pass
     
-    def apply_volume_mask(self, mask: MapSource, transpose: bool = True, mask_origin: np.ndarray | None = None, mask_pixel_spacing: float | np.ndarray = 1.0, inplace: bool = False) -> "DiscreteSurface" | None:
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Apply volume mask", group="Mask", order=20, hide=("inplace",), returns="surface")
+    def apply_volume_mask(self, mask: MapSource, transpose: bool = True, mask_origin: np.ndarray | None = None, mask_pixel_spacing: float | np.ndarray = 1.0, inplace: bool = False) -> DiscreteSurface | None:
         """
         Filter vertices/points to those that fall inside a 3D binary mask.
 
@@ -813,6 +819,7 @@ class Mesh(DiscreteSurface):
             self.compute_normals()
         return self.normals
 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Transform (4×4 matrix)", group="Rigid transform", order=10, returns="none")
     def transform(self, transformation_matrix: np.ndarray) -> None:
         """Apply 4x4 transformation matrix to vertices and normals."""
         if transformation_matrix.shape != (4, 4):
@@ -833,13 +840,15 @@ class Mesh(DiscreteSurface):
         # Invalidate cached properties
         self._invalidate_cache()
 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Translate", group="Rigid transform", order=20, returns="none")
     def translate(self, translation_vector: np.ndarray) -> None:
         """Translate vertices by given vector."""
         translation_vector = np.asarray(translation_vector)
         if translation_vector.shape != (3,):
             raise ValueError("Translation vector must be 3D")
         self.vertices += translation_vector
-        
+
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Rotate (3×3 matrix)", group="Rigid transform", order=30, returns="none")
     def rotate(self, rotation_matrix: np.ndarray) -> None:
         """
         Apply 3x3 rotation matrix to vertices and normals in place.
@@ -859,7 +868,8 @@ class Mesh(DiscreteSurface):
         
         return self.transform(T)
 
-    def flip_normals(self, inplace: bool = True, flip_faces: bool = True) -> "Mesh" | None:
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Flip normals", group="Mesh/OPC", order=35, hide=("inplace",), returns="none")
+    def flip_normals(self, inplace: bool = True, flip_faces: bool = True) -> Mesh | None:
         """
         Reverse mesh normal directions.
 
@@ -1429,6 +1439,7 @@ class Mesh(DiscreteSurface):
 
     # ── Connectivity metrics ───────────────────────────────────────────────────
 
+    @gui_exposed(category="surface-op", label="[Mesh] Connected component count", group="Mesh", order=60, returns="none")
     def get_connected_component_count(self) -> int:
         """Return the number of connected triangle components.
 
@@ -1450,6 +1461,7 @@ class Mesh(DiscreteSurface):
         n_comp, _ = _cc(adj, directed=False)
         return int(n_comp)
 
+    @gui_exposed(category="surface-op", label="[Mesh] Is watertight", group="Mesh", order=55, returns="none")
     def is_watertight(self) -> bool:
         """Return True if every edge is shared by exactly two triangles.
 
@@ -1611,6 +1623,7 @@ class Mesh(DiscreteSurface):
             return bytes(item).decode("utf-8", errors="replace")
         return str(item)
     
+    @gui_exposed(category="surface-op", label="[Mesh] Smooth", group="Mesh", order=10, returns="none")
     def smooth(self, iterations: int = 1, recompute_normals: bool = True, repair_nonfinite: bool = True) -> None:
         """Smooth the mesh in place using the Taubin filter (prevents shrinkage vs. Laplacian).
 
@@ -1648,6 +1661,7 @@ class Mesh(DiscreteSurface):
             self.compute_normals()
         self._invalidate_cache()
 
+    @gui_exposed(category="surface-op", label="[Mesh] Assess quality", group="Mesh", order=50, returns="none")
     def assess_mesh(self, verbose: bool = True, check_topology: bool = False) -> dict:
         """
         Assess mesh properties.
@@ -1774,6 +1788,7 @@ class Mesh(DiscreteSurface):
         
         return quality_metrics
 
+    @gui_exposed(category="surface-op", label="[Mesh] Cleanup", group="Mesh", order=5, returns="surface")
     def cleanup_mesh(
         self,
         simplify_mesh: bool = False,
@@ -2048,6 +2063,7 @@ class Mesh(DiscreteSurface):
         vertices_to_keep = np.where(keep_mask)[0]
         self._filter_by_vertex_set(vertices_to_keep)
 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Apply vertex mask", group="Mask", order=5, hide=("inplace",), returns="surface")
     def apply_vertex_mask(self, mask: np.ndarray, inplace: bool = False) -> "Mesh | None":
         """Return a mesh containing only vertices where ``mask`` is True.
 
@@ -2073,7 +2089,8 @@ class Mesh(DiscreteSurface):
         new_mesh._filter_by_vertex_set(vertices_to_keep)
         return new_mesh
 
-    def get_euler_characteristic(self):
+    @gui_exposed(category="surface-op", label="[Mesh] Euler characteristic", group="Mesh", order=65, returns="scalar")
+    def get_euler_characteristic(self) -> int:
         """
         Compute the Euler-Poincaré characteristic (χ = V - E + F).
         
@@ -2195,6 +2212,7 @@ class Mesh(DiscreteSurface):
             'n_neighbors': len(neighbor_ids)
         }
     
+    @gui_exposed(category="surface-op", label="[Mesh] Surface area", group="Mesh", order=70, returns="none")
     def get_surface_area(self) -> float:
         """
         Compute total surface area of the mesh.
@@ -2258,7 +2276,8 @@ class Mesh(DiscreteSurface):
         
         return hull, stats
 
-    def crop(self, bbox, inplace: bool = False, recompute_normals: bool = True) -> "Mesh" | None:
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Crop to bounding box", group="Geometry", order=10, hide=("inplace",), returns="surface")
+    def crop(self, bbox, inplace: bool = False, recompute_normals: bool = True) -> Mesh | None:
         """
         Crop mesh to bounding box.
         
@@ -2359,6 +2378,7 @@ class Mesh(DiscreteSurface):
         
         return self
 
+    @gui_exposed(category="surface-op", label="[Mesh] Sample points (Poisson disk)", group="Sampling", order=20, returns="surface")
     def sample_points_poisson_disk(self, number_of_points: int | None = None, init_factor: int = 1) -> "OrientedPointCloud":
         """
         Sample points from mesh using Poisson disk sampling. Uses triangle centers as initial points by default.
@@ -2414,7 +2434,8 @@ class Mesh(DiscreteSurface):
         print(f"Sampled {len(vertices)} points from mesh using Poisson disk sampling")
         return oriented_pcd
 
-    def oversample(self, oversample_factor: float | None = None, point_spacing: float | None = None, 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Oversample", group="Mesh/OPC", order=20, returns="surface")
+    def oversample(self, oversample_factor: float | None = None, point_spacing: float | None = None,
                             poisson_init_factor: int = 5) -> "OrientedPointCloud":
         """
         Oversample or undersample mesh using subdivision (if needed) and Poisson disk sampling.
@@ -2537,6 +2558,14 @@ class Mesh(DiscreteSurface):
         else:
             self.normals = None
 
+    @classmethod
+    def from_open3d(cls, o3d_mesh) -> Mesh:
+        """Construct a new Mesh from an Open3D TriangleMesh."""
+        m = cls.__new__(cls)
+        m._from_open3d(o3d_mesh)
+        return m
+
+    @gui_exposed(category="surface-op", label="[Mesh] Convert to point cloud", group="Sampling", order=10, returns="surface")
     def to_oriented_points(self) -> "OrientedPointCloud":
         """Convert this mesh to an oriented point cloud.
 
@@ -2549,6 +2578,7 @@ class Mesh(DiscreteSurface):
         """
         return OrientedPointCloud.from_mesh(self)
 
+    @gui_exposed(category="surface-load", label="Mesh with curvatures from VTP", group="Mesh", order=20, returns="surface")
     @classmethod
     def read_curvatures(cls, input_path: PathOrStr, units: str | None = None) -> "Mesh":
         """
@@ -2699,6 +2729,7 @@ class Mesh(DiscreteSurface):
 
         return mesh
 
+    @gui_exposed(category="surface-load", label="Mesh from MRC (segmentation)", group="Mesh", order=10, returns="surface")
     @classmethod
     def from_mrc(cls, input_path: MapSource, transpose: bool = True, labels_dict: dict | None = None, level: float = 0.5, pixel_size: float = 1.0,
                 smooth_sigma: float | None = None, step_size: int = 1) -> "Mesh | dict[str, Mesh]":
@@ -2848,6 +2879,7 @@ class Mesh(DiscreteSurface):
 
         return vertices_world, faces, normals, vertices_pixel
 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Save to disk", group="Mesh/OPC", order=90, returns="none")
     def save(self, output_path: PathOrStr, format: str | None = None, include_curvatures: bool = False):
         """
         Save mesh to file with optional curvature data.
@@ -3272,9 +3304,10 @@ class Mesh(DiscreteSurface):
         else:
             return f"{units}^(-1) (principal/mean), {units}^(-2) (Gaussian)"
 
-    def compute_curvatures(self, force_recompute: bool = False, 
+    @gui_exposed(category="surface-op", label="[Mesh] Compute curvatures", group="Mesh", order=15, hide=("force_recompute", "n_jobs"), returns="field")
+    def compute_curvatures(self, force_recompute: bool = False,
                         min_triangle_area: float = 1e-12, lstsq_rcond: float = 1e-12,
-                        smoothing_iterations: int = 1, smoothing_kernel_rings: int = 1, n_jobs: int | None = None):
+                        smoothing_iterations: int = 1, smoothing_kernel_rings: int = 1, n_jobs: int | None = None) -> None:
         """
         Compute principal curvatures and directions for the mesh.
         
@@ -4737,9 +4770,10 @@ class OrientedPointCloud(DiscreteSurface):
         oriented.inherit_coordinate_metadata(mesh)
         return oriented
 
+    @gui_exposed(category="surface-load", label="Point cloud from motl file", group="OPC", order=30, returns="surface")
     @classmethod
     def from_motl(cls, input_path: PathOrStr, group_by: "MotlColumn | None" = None, recompute_normals: bool = False, knn: int = 30,
-                orient_normals: bool = True, tangent_plane_knn: int = 50, group_by_subtomo_id: bool | None = None) -> "OrientedPointCloud" | dict[str, "OrientedPointCloud"]:
+                orient_normals: bool = True, tangent_plane_knn: int = 50, group_by_subtomo_id: bool | None = None) -> OrientedPointCloud | dict[str, OrientedPointCloud]:
         """
         Load oriented point cloud directly from motl file.
 
@@ -4845,10 +4879,11 @@ class OrientedPointCloud(DiscreteSurface):
             
             return oriented
 
+    @gui_exposed(category="surface-load", label="Point cloud from MRC", group="OPC", order=40, returns="surface")
     @classmethod
     def from_mrc(cls, input_path: MapSource, labels_dict: dict[str, int] | None = None, pixel_size: float | np.ndarray | None = None,
                 compute_normals: bool = True, knn: int = 30, orient_normals: bool = True,
-                tangent_plane_knn: int = 50, transpose: bool = True, smooth_sigma: float | None = None) -> "OrientedPointCloud" | dict[str, "OrientedPointCloud"]:
+                tangent_plane_knn: int = 50, transpose: bool = True, smooth_sigma: float | None = None) -> OrientedPointCloud | dict[str, OrientedPointCloud]:
         """
         Create oriented point cloud from a segmentation source (MRC/EM file or in-memory ndarray).
 
@@ -5242,7 +5277,7 @@ class OrientedPointCloud(DiscreteSurface):
         
         return hull, stats
 
-    def crop(self, bbox, inplace: bool = False) -> "OrientedPointCloud" | None:
+    def crop(self, bbox, inplace: bool = False) -> OrientedPointCloud | None:
         """
         Crop point cloud to bounding box.
         

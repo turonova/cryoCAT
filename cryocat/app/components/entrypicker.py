@@ -28,6 +28,7 @@ from dash import html, dcc, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 
 from cryocat.app import ids, styles, formgen
+from cryocat.app.datapool import clean_registry as _clean_registry
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -54,7 +55,7 @@ def _build_options(pool_registry: dict | None, dp_registry: dict | None) -> list
                 "value": f"motl:{mid}",
             })
 
-    dp = dp_registry or {}
+    dp = _clean_registry(dp_registry)
     df_entries = {k: v for k, v in dp.items() if v.get("kind") in ("dataframe", None)}
     if df_entries:
         opts.append({"label": "── Tables ──", "value": "_sep_tables", "disabled": True})

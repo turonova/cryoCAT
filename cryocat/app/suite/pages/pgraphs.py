@@ -577,11 +577,18 @@ def register_callbacks(app):  # noqa: C901
         State("gr-def-dis-pal-value", "data"),
         State("gr-def-con-pal-value", "data"),
         State("gr-def-bg-color", "value"),
+        State("gr-def-xaxis-showline", "value"),
+        State("gr-def-xaxis-mirror", "value"),
+        State("gr-def-xaxis-showgrid", "value"),
+        State("gr-def-yaxis-showline", "value"),
+        State("gr-def-yaxis-mirror", "value"),
+        State("gr-def-yaxis-showgrid", "value"),
         prevent_initial_call=True,
     )
     def _apply_to_existing(_n, slot_map, registry, active_tab,
                            font_family, font_size, marker_size, line_width, line_dash,
-                           dis_pal, con_pal, bg_color):
+                           dis_pal, con_pal, bg_color,
+                           x_showline, x_mirror, x_showgrid, y_showline, y_mirror, y_showgrid):
         if not _n:
             raise dash.exceptions.PreventUpdate
         import copy
@@ -596,6 +603,12 @@ def register_callbacks(app):  # noqa: C901
             "continuous_palette": con_pal or GRAPH_SETTINGS_DEFAULTS["continuous_palette"],
             "bg_color": bg_color or GRAPH_SETTINGS_DEFAULTS["bg_color"],
             "palette_is_user_set": True,
+            "x_showline": bool(x_showline) if x_showline is not None else GRAPH_SETTINGS_DEFAULTS["x_showline"],
+            "x_mirror": bool(x_mirror) if x_mirror is not None else GRAPH_SETTINGS_DEFAULTS["x_mirror"],
+            "x_showgrid": bool(x_showgrid) if x_showgrid is not None else GRAPH_SETTINGS_DEFAULTS["x_showgrid"],
+            "y_showline": bool(y_showline) if y_showline is not None else GRAPH_SETTINGS_DEFAULTS["y_showline"],
+            "y_mirror": bool(y_mirror) if y_mirror is not None else GRAPH_SETTINGS_DEFAULTS["y_mirror"],
+            "y_showgrid": bool(y_showgrid) if y_showgrid is not None else GRAPH_SETTINGS_DEFAULTS["y_showgrid"],
         }
         sm = list(slot_map or [None] * N_SLOTS)
         while len(sm) < N_SLOTS:

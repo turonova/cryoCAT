@@ -600,6 +600,29 @@ def _layout_panel(prefix: str) -> html.Div:
         form_row("y_log",
                  dbc.Switch(id=f"{prefix}-pe-yaxis-log", value=False, label="Log scale"),
                  "Enable log scale on Y axis."),
+        section_divider("Axis lines & grid"),
+        form_row("x_showline",
+                 dbc.Switch(id=f"{prefix}-pe-xaxis-showline", value=False, label="Show X axis line"),
+                 "Draw a line along the X axis. Writes xaxis.showline.",
+                 truly_optional=True),
+        form_row("x_mirror",
+                 dbc.Switch(id=f"{prefix}-pe-xaxis-mirror", value=False, label="Mirror X axis"),
+                 "Mirror the X axis line on the opposite side. Writes xaxis.mirror.",
+                 truly_optional=True),
+        form_row("x_showgrid",
+                 dbc.Switch(id=f"{prefix}-pe-xaxis-showgrid", value=True, label="X grid"),
+                 "Show the X axis grid lines. Writes xaxis.showgrid."),
+        form_row("y_showline",
+                 dbc.Switch(id=f"{prefix}-pe-yaxis-showline", value=False, label="Show Y axis line"),
+                 "Draw a line along the Y axis. Writes yaxis.showline.",
+                 truly_optional=True),
+        form_row("y_mirror",
+                 dbc.Switch(id=f"{prefix}-pe-yaxis-mirror", value=False, label="Mirror Y axis"),
+                 "Mirror the Y axis line on the opposite side. Writes yaxis.mirror.",
+                 truly_optional=True),
+        form_row("y_showgrid",
+                 dbc.Switch(id=f"{prefix}-pe-yaxis-showgrid", value=True, label="Y grid"),
+                 "Show the Y axis grid lines. Writes yaxis.showgrid."),
         section_divider("Legend"),
         form_row("legend_visible",
                  dbc.Switch(id=f"{prefix}-pe-legend-visible", value=True, label="Visible"),
@@ -748,6 +771,31 @@ def _defaults_panel(prefix: str) -> html.Div:
                                 {"label": "Dark", "value": "#1e1e1e"}],
                                "white", clearable=False),
                  "Default background colour."),
+        section_divider("Axis lines & grid"),
+        form_row("x_showline",
+                 dbc.Switch(id=f"{prefix}-def-xaxis-showline", value=False, label="Show X axis line"),
+                 "Default: draw a line along the X axis. Writes xaxis.showline.",
+                 truly_optional=True, label_id=f"{prefix}-def-lbl-x_showline"),
+        form_row("x_mirror",
+                 dbc.Switch(id=f"{prefix}-def-xaxis-mirror", value=False, label="Mirror X axis"),
+                 "Default: mirror the X axis line. Writes xaxis.mirror.",
+                 truly_optional=True, label_id=f"{prefix}-def-lbl-x_mirror"),
+        form_row("x_showgrid",
+                 dbc.Switch(id=f"{prefix}-def-xaxis-showgrid", value=True, label="X grid"),
+                 "Default: show the X axis grid lines. Writes xaxis.showgrid.",
+                 label_id=f"{prefix}-def-lbl-x_showgrid"),
+        form_row("y_showline",
+                 dbc.Switch(id=f"{prefix}-def-yaxis-showline", value=False, label="Show Y axis line"),
+                 "Default: draw a line along the Y axis. Writes yaxis.showline.",
+                 truly_optional=True, label_id=f"{prefix}-def-lbl-y_showline"),
+        form_row("y_mirror",
+                 dbc.Switch(id=f"{prefix}-def-yaxis-mirror", value=False, label="Mirror Y axis"),
+                 "Default: mirror the Y axis line. Writes yaxis.mirror.",
+                 truly_optional=True, label_id=f"{prefix}-def-lbl-y_mirror"),
+        form_row("y_showgrid",
+                 dbc.Switch(id=f"{prefix}-def-yaxis-showgrid", value=True, label="Y grid"),
+                 "Default: show the Y axis grid lines. Writes yaxis.showgrid.",
+                 label_id=f"{prefix}-def-lbl-y_showgrid"),
         html.Div(style={"marginTop": "0.5rem"}),
         html.Div([
             dbc.Button("Apply from now on", id=f"{prefix}-def-apply-btn",
@@ -928,6 +976,12 @@ def _build_figure(
         xaxis["range"] = [layout_spec.get("xaxis_min"), layout_spec.get("xaxis_max")]
     if layout_spec.get("xaxis_log"):
         xaxis["type"] = "log"
+    if layout_spec.get("xaxis_showline"):
+        xaxis["showline"] = True
+    if layout_spec.get("xaxis_mirror"):
+        xaxis["mirror"] = True
+    if layout_spec.get("xaxis_showgrid") is False:
+        xaxis["showgrid"] = False
     if xaxis:
         eff_layout.setdefault("xaxis", {}).update(xaxis)
     yaxis: dict = {}
@@ -937,6 +991,12 @@ def _build_figure(
         yaxis["range"] = [layout_spec.get("yaxis_min"), layout_spec.get("yaxis_max")]
     if layout_spec.get("yaxis_log"):
         yaxis["type"] = "log"
+    if layout_spec.get("yaxis_showline"):
+        yaxis["showline"] = True
+    if layout_spec.get("yaxis_mirror"):
+        yaxis["mirror"] = True
+    if layout_spec.get("yaxis_showgrid") is False:
+        yaxis["showgrid"] = False
     if yaxis:
         eff_layout.setdefault("yaxis", {}).update(yaxis)
     legend_vis = layout_spec.get("legend_visible", True)
@@ -967,6 +1027,12 @@ def _apply_layout_only(existing_fig: dict, layout_spec: dict, settings: dict,
         xaxis["range"] = [layout_spec.get("xaxis_min"), layout_spec.get("xaxis_max")]
     if layout_spec.get("xaxis_log"):
         xaxis["type"] = "log"
+    if layout_spec.get("xaxis_showline"):
+        xaxis["showline"] = True
+    if layout_spec.get("xaxis_mirror"):
+        xaxis["mirror"] = True
+    if layout_spec.get("xaxis_showgrid") is False:
+        xaxis["showgrid"] = False
     if xaxis:
         eff_layout.setdefault("xaxis", {}).update(xaxis)
     yaxis: dict = {}
@@ -976,6 +1042,12 @@ def _apply_layout_only(existing_fig: dict, layout_spec: dict, settings: dict,
         yaxis["range"] = [layout_spec.get("yaxis_min"), layout_spec.get("yaxis_max")]
     if layout_spec.get("yaxis_log"):
         yaxis["type"] = "log"
+    if layout_spec.get("yaxis_showline"):
+        yaxis["showline"] = True
+    if layout_spec.get("yaxis_mirror"):
+        yaxis["mirror"] = True
+    if layout_spec.get("yaxis_showgrid") is False:
+        yaxis["showgrid"] = False
     if yaxis:
         eff_layout.setdefault("yaxis", {}).update(yaxis)
     legend_vis = layout_spec.get("legend_visible", True)
@@ -1150,10 +1222,18 @@ def register_plot_editor_callbacks(
         Input(f"{prefix}-pe-yaxis-log", "value"),
         Input(f"{prefix}-pe-legend-visible", "value"),
         Input(f"{prefix}-pe-legend-orient", "value"),
+        Input(f"{prefix}-pe-xaxis-showline", "value"),
+        Input(f"{prefix}-pe-xaxis-mirror", "value"),
+        Input(f"{prefix}-pe-xaxis-showgrid", "value"),
+        Input(f"{prefix}-pe-yaxis-showline", "value"),
+        Input(f"{prefix}-pe-yaxis-mirror", "value"),
+        Input(f"{prefix}-pe-yaxis-showgrid", "value"),
         prevent_initial_call=True,
     )
     def _collect_layout(title, xt, xmin, xmax, xlog, yt, ymin, ymax, ylog,
-                        leg_vis, leg_or):
+                        leg_vis, leg_or,
+                        x_showline, x_mirror, x_showgrid,
+                        y_showline, y_mirror, y_showgrid):
         return {
             "title": title or "",
             "xaxis_title": xt or "",
@@ -1166,6 +1246,12 @@ def register_plot_editor_callbacks(
             "yaxis_log": bool(ylog),
             "legend_visible": bool(leg_vis) if leg_vis is not None else True,
             "legend_orient": leg_or or "v",
+            "xaxis_showline": bool(x_showline) if x_showline is not None else False,
+            "xaxis_mirror": bool(x_mirror) if x_mirror is not None else False,
+            "xaxis_showgrid": bool(x_showgrid) if x_showgrid is not None else True,
+            "yaxis_showline": bool(y_showline) if y_showline is not None else False,
+            "yaxis_mirror": bool(y_mirror) if y_mirror is not None else False,
+            "yaxis_showgrid": bool(y_showgrid) if y_showgrid is not None else True,
         }
 
     # ── Export (W10) ───────────────────────────────────────────────────────────
@@ -1267,10 +1353,17 @@ def register_plot_editor_callbacks(
         State(f"{prefix}-def-dis-pal-value", "data"),
         State(f"{prefix}-def-con-pal-value", "data"),
         State(f"{prefix}-def-bg-color", "value"),
+        State(f"{prefix}-def-xaxis-showline", "value"),
+        State(f"{prefix}-def-xaxis-mirror", "value"),
+        State(f"{prefix}-def-xaxis-showgrid", "value"),
+        State(f"{prefix}-def-yaxis-showline", "value"),
+        State(f"{prefix}-def-yaxis-mirror", "value"),
+        State(f"{prefix}-def-yaxis-showgrid", "value"),
         prevent_initial_call=True,
     )
     def _save_defaults(_, font_family, font_size, marker_size, line_width, line_dash,
-                       dis_pal, con_pal, bg_color):
+                       dis_pal, con_pal, bg_color,
+                       x_showline, x_mirror, x_showgrid, y_showline, y_mirror, y_showgrid):
         return {
             "font_family": font_family or GRAPH_SETTINGS_DEFAULTS["font_family"],
             "font_size": font_size or GRAPH_SETTINGS_DEFAULTS["font_size"],
@@ -1281,6 +1374,12 @@ def register_plot_editor_callbacks(
             "continuous_palette": con_pal or GRAPH_SETTINGS_DEFAULTS["continuous_palette"],
             "bg_color": bg_color or GRAPH_SETTINGS_DEFAULTS["bg_color"],
             "palette_is_user_set": True,
+            "x_showline": bool(x_showline) if x_showline is not None else GRAPH_SETTINGS_DEFAULTS["x_showline"],
+            "x_mirror": bool(x_mirror) if x_mirror is not None else GRAPH_SETTINGS_DEFAULTS["x_mirror"],
+            "x_showgrid": bool(x_showgrid) if x_showgrid is not None else GRAPH_SETTINGS_DEFAULTS["x_showgrid"],
+            "y_showline": bool(y_showline) if y_showline is not None else GRAPH_SETTINGS_DEFAULTS["y_showline"],
+            "y_mirror": bool(y_mirror) if y_mirror is not None else GRAPH_SETTINGS_DEFAULTS["y_mirror"],
+            "y_showgrid": bool(y_showgrid) if y_showgrid is not None else GRAPH_SETTINGS_DEFAULTS["y_showgrid"],
         }, "Applied."
 
     # ── Selection round-trip (W7) ──────────────────────────────────────────────

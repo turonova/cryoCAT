@@ -2402,7 +2402,8 @@ def run_single_case(
         "Phi": _phi,
         "Theta": _theta,
         "Psi": _psi,
-        "Output base": "",
+        "Output base": case_name,
+        "Output folder": str(output_dir),
     }
     params_df = build_params_record(params_input, case_results)
     params_df.to_csv(str(write_dir / "params.csv"), index=False)
@@ -3016,14 +3017,16 @@ def _write_case_summary_html(
     str
         Path to the written HTML file.
     """
+    _folder = Path(output_folder)
+
     if output_base:
 
         def _p(suffix: str) -> str | None:
-            path = output_folder + output_base + suffix
-            return path if os.path.isfile(path) else None
+            path = _folder / (output_base + suffix)
+            return str(path) if path.is_file() else None
 
         rot_csv = _p(".csv")
-        html_out = output_folder + output_base + "_summary.html"
+        html_out = str(_folder / (output_base + "_summary.html"))
         title_str = title or f"Summary — {output_base}"
     else:
 
@@ -3031,11 +3034,11 @@ def _write_case_summary_html(
             fname = _SINGLE_CASE_FILE_MAP.get(suffix, "")
             if not fname:
                 return None
-            path = output_folder + fname
-            return path if os.path.isfile(path) else None
+            path = _folder / fname
+            return str(path) if path.is_file() else None
 
         rot_csv = None
-        html_out = output_folder + "summary.html"
+        html_out = str(_folder / "summary.html")
         title_str = title or "Summary"
 
     figs = visualize_results(
@@ -3128,8 +3131,8 @@ def _write_case_summary_html(
         "<!DOCTYPE html>\n<html>\n<head>\n"
         '<meta charset="utf-8">\n'
         f"<title>{title_str}</title>\n"
-        '<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>\n'
         "<style>body{font-family:sans-serif;margin:1rem}h1,h2{text-align:center}</style>\n"
+        '<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>\n'
         "</head>\n<body>\n"
         f"<h1>{title_str}</h1>\n" + "\n".join(html_parts) + "\n" + _RESIZE_SCRIPT + "\n</body>\n</html>"
     )

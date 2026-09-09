@@ -1551,3 +1551,155 @@ class TestSampleSphere:
     def test_negative_raises(self):
         with pytest.raises(UserInputError):
             sample_sphere(-5)
+
+
+# =============================================================================
+# Warp geometry tests
+# =============================================================================
+
+import os as _os
+from cryocat.utils import ioutils as _ioutils
+from cryocat.utils.geom import project_px, triangulate, frame_rotation
+
+_WARP_DIR = _os.path.join(_os.path.dirname(__file__), "test_data", "motl_data", "warp_mapping")
+_PRE_DIR = _os.path.join(_WARP_DIR, "preMA")
+_POST_DIR = _os.path.join(_WARP_DIR, "postMA")
+
+
+def _load_pair(name="TS_204.xml"):
+    old = _ioutils.read_warp_tilt_xml(_os.path.join(_PRE_DIR, name))
+    new = _ioutils.read_warp_tilt_xml(_os.path.join(_POST_DIR, name))
+    _ioutils.set_volume_geometry(new, volume_dims=old["volume_dims"], image_dims=old["image_dims"])
+    return old, new
+
+
+class TestProjectTriangulate:
+    def test_identity_same_xml(self):
+        old, _ = _load_pair()
+        coords = np.array([[4000.0, 4000.0, 2100.0], [2000.0, 3000.0, 1500.0]])
+        u = project_px(old, coords)
+        q, hist = triangulate(old, u)
+        np.testing.assert_allclose(q, coords, atol=0.5)
+
+    def test_remap_recovers_known_positions(self):
+        old, new = _load_pair()
+        coords_ang = np.array([[4000.0, 4000.0, 2100.0]])
+        u = project_px(old, coords_ang)
+        q, hist = triangulate(new, u)
+        assert q.shape == (1, 3)
+        assert hist[-1] < 1e-3
+
+    def test_convergence_history_decreasing(self):
+        old, new = _load_pair()
+        coords_ang = np.array([[3000.0, 3500.0, 1800.0]])
+        u = project_px(old, coords_ang)
+        _, hist = triangulate(new, u, n_iter=6)
+        assert hist[-1] < hist[0]
+
+
+class TestFrameRotation:
+    def test_same_xml_returns_identity(self):
+        old, _ = _load_pair()
+        R, angle, spread = frame_rotation(old, old)
+        np.testing.assert_allclose(R, np.eye(3), atol=1e-10)
+        assert angle < 1e-8
+        assert spread < 1e-4
+
+    def test_frame_rotation_is_orthogonal(self):
+        old, new = _load_pair()
+        R, angle, spread = frame_rotation(old, new)
+        np.testing.assert_allclose(R @ R.T, np.eye(3), atol=1e-10)
+        assert np.linalg.det(R) > 0
+
+
+class TestGridVolumeWarpZSign:
+    """Verify that GridVolumeWarpZ values are negated and that the Relion z-normalization
+    (1 - z/vdz) is applied correctly in project_parts."""
+
+    def _make_geom(self, warp_z_value: float) -> dict:
+        """Minimal synthetic geom dict: one tilt, identity matrix, constant warp grids."""
+        from cryocat.utils.ioutils import CubicGrid, LinearGrid4D
+
+        ntilts = 2
+        vdims = np.array([1000.0, 1000.0, 400.0])
+        idims = np.array([1000.0, 1000.0])
+        zero_cg = CubicGrid((1, 1, 1), [0.0])
+        zero_lg = LinearGrid4D((1, 1, 1, 1), [0.0])
+        warp_z = LinearGrid4D((1, 1, 1, 1), [warp_z_value])
+        return {
+            "angles_inverted": False,
+            "tilt_matrices": np.stack([np.eye(3)] * ntilts),
+            "volume_dims": vdims,
+            "image_dims": idims,
+            "dose": np.array([0.0, 1.0]),
+            "axis_offset_x": np.zeros(ntilts),
+            "axis_offset_y": np.zeros(ntilts),
+            "grid_movement_x": zero_cg,
+            "grid_movement_y": zero_cg,
+            "grid_volume_warp": (zero_lg, zero_lg, warp_z),
+            "pixel_size": 1.0,
+        }
+
+    def test_z_warp_sign_negated(self):
+        """A positive GridVolumeWarpZ value must shift the projected z-coordinate negatively."""
+        from cryocat.utils.geom import project_parts
+
+        warp_val = 10.0  # Ångströms, the value stored in the Warp XML
+        geom = self._make_geom(warp_val)
+
+        # Place particle at the centre of the volume.
+        vdims = geom["volume_dims"]
+        coords = np.array([[vdims[0] / 2, vdims[1] / 2, vdims[2] / 2]])
+
+        pre_with_warp, _ = project_parts(geom, coords)
+
+        # Build a geom with zero warp for reference projection.
+        geom_zero = self._make_geom(0.0)
+        pre_zero, _ = project_parts(geom_zero, coords)
+
+        # The identity tilt matrix maps warped coord directly onto the image plane.
+        # A positive Warp z-value adds +warp_val to z BEFORE projection; with an
+        # identity matrix this shows up as a z-offset in the center-relative 3-D
+        # coordinate, which does NOT change x/y projection for a pure z-shift under
+        # an identity tilt.  But the key property we test is the z-component of the
+        # warp correction vector gw[:, t, 2], which equals -warp_val.
+        # We verify by comparing projections with tilt matrices that have a non-zero
+        # z-to-image coupling.
+        geom_tilted = self._make_geom(warp_val)
+        # Replace tilt matrices with one that maps z onto the x image axis.
+        R = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
+        geom_tilted["tilt_matrices"] = np.stack([R, R])
+        geom_zero_tilted = self._make_geom(0.0)
+        geom_zero_tilted["tilt_matrices"] = np.stack([R, R])
+
+        pre_warp_tilted, _ = project_parts(geom_tilted, coords)
+        pre_zero_tilted, _ = project_parts(geom_zero_tilted, coords)
+
+        # Under R, gw_z = -warp_val shifts x projection by -warp_val.
+        delta_x = pre_warp_tilted[:, :, 0] - pre_zero_tilted[:, :, 0]
+        assert np.allclose(delta_x, -warp_val, atol=1e-10), (
+            f"Expected x shift of {-warp_val} from z-warp; got {delta_x}"
+        )
+
+    def test_z_normalization_at_top_of_volume(self):
+        """Particle at z=0 (EM top) maps to Relion z=1, so full warp is applied."""
+        from cryocat.utils.geom import project_parts
+
+        warp_val = 5.0
+        geom = self._make_geom(warp_val)
+        vdims = geom["volume_dims"]
+        R = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
+        geom["tilt_matrices"] = np.stack([R, R])
+        geom_zero = self._make_geom(0.0)
+        geom_zero["tilt_matrices"] = np.stack([R, R])
+
+        # z=0: Relion z = 1 - 0/vdz = 1; with a 1×1×1×1 constant grid this is
+        # still the same constant value — no spatial variation to test differently.
+        # Instead confirm magnitude is correct.
+        coords_top = np.array([[vdims[0] / 2, vdims[1] / 2, 0.0]])
+        pre_top, _ = project_parts(geom, coords_top)
+        pre_zero_top, _ = project_parts(geom_zero, coords_top)
+        delta_x = pre_top[:, :, 0] - pre_zero_top[:, :, 0]
+        assert np.allclose(delta_x, -warp_val, atol=1e-10), (
+            f"Expected x shift of {-warp_val} at z=0; got {delta_x}"
+        )

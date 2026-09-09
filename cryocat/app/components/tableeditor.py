@@ -640,7 +640,7 @@ def register_table_editor_callbacks(
                 v = f"motl:{mid}"
                 if v != src_key:
                     opts.append({"label": meta.get("label", mid), "value": v})
-            for did, meta in (dp_reg or {}).items():
+            for did, meta in dp_module.clean_registry(dp_reg).items():
                 if meta.get("kind") not in ("dataframe", None):
                     continue
                 v = f"data:{did}"

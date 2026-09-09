@@ -882,9 +882,90 @@ class TestMotl:
         mask[2, 2, 3] = True
 
         motl = Motl(sample_motl_data1.copy())
-        motl.clean_by_distance(distance_in_voxels=2, column_name="tomo_id", metric_column_name="score", dist_mask=mask)
+        motl.clean_by_directional_distance(
+            distance_in_voxels=2, dist_mask=mask,
+            column_name="tomo_id", metric_column_name="score",
+        )
 
         assert motl.df.shape[0] == 5
+
+    # ── EC1 / EC3: clean_by_distance no longer accepts dist_mask ─────────────
+
+    def test_clean_by_distance_no_dist_mask_param(self, sample_motl_data1):
+        """clean_by_distance must not accept dist_mask after the split."""
+        motl = Motl(sample_motl_data1.copy())
+        import inspect
+        sig = inspect.signature(motl.clean_by_distance)
+        assert "dist_mask" not in sig.parameters, (
+            "dist_mask was not removed from clean_by_distance"
+        )
+
+    # ── EC3: clean_by_directional_distance ───────────────────────────────────
+
+    def test_clean_by_directional_distance_suppresses_in_mask_direction(self, sample_motl_data1):
+        """Neighbours whose displacement falls inside the mask are suppressed;
+        those outside are kept."""
+        # All-ones mask: every direction triggers suppression → same as radius cleaning.
+        mask_all = np.ones((100, 100, 100), dtype=np.float32)
+        motl = Motl(sample_motl_data1.copy())
+        n_before = motl.df.shape[0]
+        motl.clean_by_directional_distance(
+            distance_in_voxels=2,
+            dist_mask=mask_all,
+            column_name="tomo_id",
+            metric_column_name="score",
+        )
+        # With radius=2 and an all-ones mask, pairs (10,10,10)↔(11,11,11) and
+        # (30,30,30)↔(31,31,31) overlap; the lower-score particle in each is removed.
+        assert motl.df.shape[0] < n_before
+
+    def test_clean_by_directional_distance_zero_mask_keeps_all(self, sample_motl_data1):
+        """A zero mask means no direction triggers suppression → all particles kept."""
+        mask_none = np.zeros((100, 100, 100), dtype=np.float32)
+        motl = Motl(sample_motl_data1.copy())
+        n_before = motl.df.shape[0]
+        motl.clean_by_directional_distance(
+            distance_in_voxels=50,
+            dist_mask=mask_none,
+            column_name="tomo_id",
+            metric_column_name="score",
+        )
+        assert motl.df.shape[0] == n_before
+
+    def test_clean_by_directional_distance_keep_greater_false(self, sample_motl_data1):
+        """keep_greater=False: lower-score particle survives in each conflicting pair."""
+        mask_all = np.ones((100, 100, 100), dtype=np.float32)
+        motl = Motl(sample_motl_data1.copy())
+        motl.clean_by_directional_distance(
+            distance_in_voxels=2,
+            dist_mask=mask_all,
+            column_name="tomo_id",
+            metric_column_name="score",
+            keep_greater=False,
+        )
+        # Pairs (score 0.9↔0.8 and 0.6↔0.5): lower-score ones survive.
+        # tomo_id=1: 0.8 and 0.7 (0.8 removed because 0.9 is neighbour with keep_greater=False,
+        # 0.7 kept); tomo_id=2: 0.5 and 0.4 survive.
+        # In each pair the lower score is kept:
+        surviving_scores = set(motl.df["score"].tolist())
+        assert 0.9 not in surviving_scores or 0.6 not in surviving_scores, (
+            "Expected at least one high-score particle to be removed with keep_greater=False"
+        )
+
+    def test_clean_by_directional_distance_groups_independently(self, sample_motl_data1):
+        """Particles from different tomo_id groups do not suppress each other."""
+        mask_all = np.ones((100, 100, 100), dtype=np.float32)
+        motl = Motl(sample_motl_data1.copy())
+        motl.clean_by_directional_distance(
+            distance_in_voxels=50,
+            dist_mask=mask_all,
+            column_name="tomo_id",
+            metric_column_name="score",
+        )
+        # With radius=50, ALL particles in each tomo_id group are within range.
+        # Each group reduces to 1 (the highest-score particle).
+        assert motl.df.shape[0] == 2
+        assert set(motl.df["tomo_id"].tolist()) == {1, 2}
 
     def test_clean_by_distance_to_points(self, sample_motl_data1):
         points_data = {
@@ -1440,6 +1521,26 @@ class TestMotl:
         # Test with empty input
         with pytest.raises(IndexError):
             motl.get_barycentric_motl(np.array([]), np.array([]))
+
+    def test_get_barycentric_motl_nn_motl_none_identical(self, sample_motl_data1):
+        motl = Motl(sample_motl_data1.copy())
+        idx = np.array([0, 2])
+        nn_idx = np.array([[1], [3]])
+        result_default = motl.get_barycentric_motl(idx, nn_idx)
+        result_none = motl.get_barycentric_motl(idx, nn_idx, nn_motl=None)
+        assert np.allclose(result_default.get_coordinates(), result_none.get_coordinates())
+
+    def test_get_barycentric_motl_nn_motl_uses_second_motl(self, sample_motl_data1):
+        motl = Motl(sample_motl_data1.copy())
+        nn_motl = Motl(sample_motl_data1.copy())
+        nn_motl.df[["x", "y", "z"]] = nn_motl.df[["x", "y", "z"]].values * 3
+        idx = np.array([0, 2])
+        nn_idx = np.array([[1], [3]])
+        result = motl.get_barycentric_motl(idx, nn_idx, nn_motl=nn_motl)
+        coord_qp = motl.get_coordinates()[idx]
+        coord_nn = nn_motl.get_coordinates()[nn_idx[:, 0]]
+        expected = (coord_qp + coord_nn) / 2
+        assert np.allclose(result.get_coordinates(), expected)
 
     def test_get_motl_subset(self, sample_motl_data1):
         motl = Motl(copy.deepcopy(sample_motl_data1))
@@ -5938,3 +6039,584 @@ class TestRandomizeAngles:
     def test_invalid_selection_raises_value_error(self, motl6):
         with pytest.raises(ValueError, match="Invalid angle selection"):
             motl6.randomize_angles("invalid")
+
+
+# =============================================================================
+# DB5: _cc_name and extra_columns tests
+# =============================================================================
+
+from cryocat.core.cryomotl import _cc_name
+
+
+def test_cc_name_geom1():
+    assert _cc_name("geom1") == "ccGeom1"
+
+
+def test_cc_name_subtomo_id():
+    assert _cc_name("subtomo_id") == "ccSubtomoId"
+
+
+def test_cc_name_class():
+    assert _cc_name("class") == "ccClass"
+
+
+_relion_test_star = str(Path(__file__).parent / "test_data" / "motl_data" / "relion_3.1_optics2.star")
+
+
+def test_relion_extra_columns_writes_named_column():
+    m = RelionMotl(_relion_test_star)
+    rdf = m.create_relion_df(extra_columns={"class": "ccMyClass"})
+    assert "ccMyClass" in rdf.columns
+    assert "ccObjectName" not in rdf.columns
+    assert "ccSubunitName" not in rdf.columns
+
+
+def test_relion_add_object_id_backward_compat():
+    m = RelionMotl(_relion_test_star)
+    rdf = m.create_relion_df(add_object_id=True)
+    assert "ccObjectName" in rdf.columns
+
+
+def test_relion_extra_columns_collision_raises():
+    m = RelionMotl(_relion_test_star)
+    with pytest.raises(ValueError, match="collides"):
+        m.create_relion_df(extra_columns={"class": "rlnClassNumber"})
+
+
+# =============================================================================
+# ED4: clean_by_mask_overlap tests
+# =============================================================================
+
+
+def _make_sphere_mask(box_size: int, radius: float) -> np.ndarray:
+    """Binary sphere mask centred in a cubic box."""
+    c = (box_size - 1) / 2.0
+    zz, yy, xx = np.mgrid[0:box_size, 0:box_size, 0:box_size]
+    return ((xx - c) ** 2 + (yy - c) ** 2 + (zz - c) ** 2 <= radius ** 2).astype(np.float32)
+
+
+def _motl_from_positions(
+    positions: list[tuple[float, float, float]],
+    scores: list[float],
+    tomo_ids: list[int] | None = None,
+) -> Motl:
+    """Build a minimal Motl from xyz positions, scores, and optional tomo_ids."""
+    n = len(positions)
+    df = Motl.create_empty_motl_df()
+    rows = []
+    for i, ((x, y, z), s) in enumerate(zip(positions, scores)):
+        row = {c: 0 for c in Motl.motl_columns}
+        row["subtomo_id"] = i + 1
+        row["x"] = x
+        row["y"] = y
+        row["z"] = z
+        row["score"] = s
+        row["tomo_id"] = tomo_ids[i] if tomo_ids else 1
+        rows.append(row)
+    return Motl(pd.DataFrame(rows, columns=Motl.motl_columns))
+
+
+@pytest.fixture
+def sphere_mask_path(tmp_path):
+    """Write a small sphere mask to disk and return the path."""
+    mask = _make_sphere_mask(box_size=16, radius=5.0)
+    p = tmp_path / "sphere.mrc"
+    with mrcfile.new(str(p), overwrite=True) as mrc:
+        mrc.set_data(mask)
+    return str(p)
+
+
+class TestCleanByMaskOverlap:
+
+    def test_overlapping_keeps_higher_score(self, sphere_mask_path):
+        """Two overlapping particles above threshold: only the one with higher score survives."""
+        motl = _motl_from_positions([(32.0, 32.0, 32.0), (34.0, 32.0, 32.0)], scores=[0.9, 0.5])
+        result = motl.clean_by_mask_overlap(
+            base_mask=sphere_mask_path,
+            threshold=0.1,
+            box_size=16,
+            column_name=None,
+            inplace=False,
+        )
+        assert len(result.df) == 1
+        assert float(result.df["score"].iloc[0]) == pytest.approx(0.9)
+
+    def test_non_overlapping_keeps_both(self, sphere_mask_path):
+        """Two particles far apart (masks don't overlap): both are retained."""
+        motl = _motl_from_positions([(10.0, 10.0, 10.0), (50.0, 50.0, 50.0)], scores=[0.9, 0.5])
+        result = motl.clean_by_mask_overlap(
+            base_mask=sphere_mask_path,
+            threshold=0.1,
+            box_size=16,
+            column_name=None,
+            inplace=False,
+        )
+        assert len(result.df) == 2
+
+    def test_keep_greater_false_keeps_lower_score(self, sphere_mask_path):
+        """keep_greater=False: lower-metric particle is preferred when masks overlap."""
+        motl = _motl_from_positions([(32.0, 32.0, 32.0), (34.0, 32.0, 32.0)], scores=[0.9, 0.2])
+        result = motl.clean_by_mask_overlap(
+            base_mask=sphere_mask_path,
+            threshold=0.1,
+            box_size=16,
+            column_name=None,
+            keep_greater=False,
+            inplace=False,
+        )
+        assert len(result.df) == 1
+        assert float(result.df["score"].iloc[0]) == pytest.approx(0.2)
+
+    def test_column_name_none_treats_as_one_group(self, sphere_mask_path):
+        """column_name=None: particles from different tomo_ids still compete."""
+        motl = _motl_from_positions(
+            [(32.0, 32.0, 32.0), (34.0, 32.0, 32.0)],
+            scores=[0.9, 0.5],
+            tomo_ids=[1, 2],
+        )
+        result = motl.clean_by_mask_overlap(
+            base_mask=sphere_mask_path,
+            threshold=0.1,
+            box_size=16,
+            column_name=None,
+            inplace=False,
+        )
+        assert len(result.df) == 1
+
+    def test_column_name_not_in_df_raises(self, sphere_mask_path):
+        """column_name that is absent from the dataframe must raise ValueError."""
+        motl = _motl_from_positions([(32.0, 32.0, 32.0)], scores=[0.9])
+        with pytest.raises(ValueError, match="column_name"):
+            motl.clean_by_mask_overlap(
+                base_mask=sphere_mask_path,
+                threshold=0.1,
+                box_size=16,
+                column_name="nonexistent_column",
+                inplace=False,
+            )
+
+    def test_inplace_true_modifies_self(self, sphere_mask_path):
+        """inplace=True: the motl's own df is updated; return value is None."""
+        motl = _motl_from_positions([(32.0, 32.0, 32.0), (34.0, 32.0, 32.0)], scores=[0.9, 0.5])
+        ret = motl.clean_by_mask_overlap(
+            base_mask=sphere_mask_path,
+            threshold=0.1,
+            box_size=16,
+            column_name=None,
+            inplace=True,
+        )
+        assert ret is None
+        assert len(motl.df) == 1
+
+    def test_inplace_false_leaves_original_unchanged(self, sphere_mask_path):
+        """inplace=False: returns a new Motl; original is unchanged."""
+        motl = _motl_from_positions([(32.0, 32.0, 32.0), (34.0, 32.0, 32.0)], scores=[0.9, 0.5])
+        original_len = len(motl.df)
+        result = motl.clean_by_mask_overlap(
+            base_mask=sphere_mask_path,
+            threshold=0.1,
+            box_size=16,
+            column_name=None,
+            inplace=False,
+        )
+        assert len(motl.df) == original_len
+        assert len(result.df) == 1
+        assert result is not motl
+
+
+# =============================================================================
+# EE1: data-driven tests against known motl/mask/reference files
+# =============================================================================
+#
+# Test motl: test_data/motl_data/clean_by_mask_test_motl.em
+#   100 particles, single tomo (tomo_id=1)
+#   subtomo_id  1-70  : good particles  (geom1=0)
+#   subtomo_id 71-100 : duplicates      (geom1=1)
+#   geom2 on duplicates: actual rotated intersection_coeff for the pair,
+#                        ranging from ~0.17 to ~0.61
+#
+# Geometry guarantees:
+#   Good particles: min pairwise distance >= 50 vox -> never overlap each other
+#   Duplicate k is 6-20 vox (+x) from its parent good particle
+#   With radius=25: only each duplicate's own parent is found as a neighbour
+
+_MC_MOTL_PATH    = os.path.join(test_data, "motl_data", "clean_by_mask_test_motl.em")
+_MC_MASK_PATH    = os.path.join(test_data, "motl_data", "clean_by_mask_test_mask.mrc")
+_MC_CLEANED_PATH = os.path.join(test_data, "motl_data", "clean_by_mask_test_motl_cleaned_0.1.em")
+
+_MC_BOX_SIZE = 64
+_MC_RADIUS   = 64
+_MC_N_TOTAL  = 100
+_MC_N_GOOD   = 70
+_MC_N_DUPL   = 30
+
+# Thresholds relative to geom2 range [0.17, 0.61]
+_MC_THRESHOLD_REMOVE_ALL = 0.15   # below min geom2 -> all 30 duplicates removed
+_MC_THRESHOLD_KEEP_ALL   = 0.65   # above max geom2 -> no duplicate removed
+_MC_THRESHOLD_PARTIAL    = 0.35   # splits the 30 duplicates into two groups
+
+
+@pytest.fixture(scope="module")
+def mc_motl():
+    return Motl.load(_MC_MOTL_PATH)
+
+
+def _mc_find_pairs(motl_df):
+    """Return list of (parent_row, dup_row) Series pairs."""
+    good_rows = motl_df[motl_df["geom1"] == 0.0]
+    dupl_rows = motl_df[motl_df["geom1"] == 1.0]
+    pairs = []
+    for _, dup in dupl_rows.iterrows():
+        match = good_rows[
+            (np.abs(good_rows["y"] - dup["y"]) < 0.5) &
+            (np.abs(good_rows["z"] - dup["z"]) < 0.5) &
+            (good_rows["x"] < dup["x"]) &
+            ((dup["x"] - good_rows["x"]) <= _MC_RADIUS)
+        ]
+        assert len(match) == 1, (
+            f"Expected exactly 1 parent for dup subtomo_id={dup['subtomo_id']}, "
+            f"found {len(match)}"
+        )
+        pairs.append((match.iloc[0], dup))
+    return pairs
+
+
+def test_mc_natural_order_removes_all_duplicates(mc_motl):
+    """With good particles first and threshold below all geom2 values,
+    all 30 duplicates must be removed and all 70 good particles kept."""
+    natural_order = np.arange(_MC_N_TOTAL, dtype=np.int32)
+
+    result = mc_motl.clean_by_mask_overlap(
+        _MC_MASK_PATH, _MC_THRESHOLD_REMOVE_ALL,
+        column_name=None,
+        box_size=_MC_BOX_SIZE, radius=_MC_RADIUS,
+        order=natural_order,
+        inplace=False,
+    )
+
+    assert len(result.df) == _MC_N_GOOD, (
+        f"Expected {_MC_N_GOOD} particles, got {len(result.df)}"
+    )
+    assert (result.df["geom1"] == 0.0).all(), (
+        "Some duplicate particles (geom1=1) were not removed"
+    )
+
+
+def test_mc_natural_order_keeps_all_duplicates(mc_motl):
+    """With threshold above all geom2 values, no duplicate is removed."""
+    natural_order = np.arange(_MC_N_TOTAL, dtype=np.int32)
+
+    result = mc_motl.clean_by_mask_overlap(
+        _MC_MASK_PATH, _MC_THRESHOLD_KEEP_ALL,
+        column_name=None,
+        box_size=_MC_BOX_SIZE, radius=_MC_RADIUS,
+        order=natural_order,
+        inplace=False,
+    )
+
+    assert len(result.df) == _MC_N_TOTAL, (
+        f"Expected {_MC_N_TOTAL} particles, got {len(result.df)}"
+    )
+
+
+def test_mc_natural_order_partial_removal_matches_geom2(mc_motl):
+    """At a partial threshold, exactly the duplicates with geom2 > threshold
+    are removed when good particles are processed first."""
+    natural_order = np.arange(_MC_N_TOTAL, dtype=np.int32)
+
+    result = mc_motl.clean_by_mask_overlap(
+        _MC_MASK_PATH, _MC_THRESHOLD_PARTIAL,
+        column_name=None,
+        box_size=_MC_BOX_SIZE, radius=_MC_RADIUS,
+        order=natural_order,
+        inplace=False,
+    )
+
+    dupl_mask = mc_motl.df["geom1"] == 1.0
+    expected_dupl_kept = int((mc_motl.df.loc[dupl_mask, "geom2"] <= _MC_THRESHOLD_PARTIAL).sum())
+    actual_dupl_kept   = int((result.df["geom1"] == 1.0).sum())
+
+    assert actual_dupl_kept == expected_dupl_kept, (
+        f"Expected {expected_dupl_kept} surviving duplicates "
+        f"(geom2 <= {_MC_THRESHOLD_PARTIAL}), got {actual_dupl_kept}"
+    )
+    assert int((result.df["geom1"] == 0.0).sum()) == _MC_N_GOOD
+
+
+def test_mc_score_ordering_keeps_higher_score(mc_motl):
+    """With score-based ordering (default), the particle with the higher score
+    is kept for every overlapping pair."""
+    result = mc_motl.clean_by_mask_overlap(
+        _MC_MASK_PATH, _MC_THRESHOLD_REMOVE_ALL,
+        metric_column_name="score", keep_greater=True,
+        column_name=None,
+        box_size=_MC_BOX_SIZE, radius=_MC_RADIUS,
+        inplace=False,
+    )
+
+    df = mc_motl.df.reset_index(drop=True)
+    kept_subtomo_ids = set(result.df["subtomo_id"].tolist())
+
+    for parent, dup in _mc_find_pairs(df):
+        dup_id    = dup["subtomo_id"]
+        par_id    = parent["subtomo_id"]
+        dup_score = dup["score"]
+        par_score = parent["score"]
+
+        dup_kept = dup_id in kept_subtomo_ids
+        par_kept = par_id in kept_subtomo_ids
+
+        if dup_score > par_score:
+            assert dup_kept, (
+                f"Dup {dup_id} (score={dup_score:.3f}) should be kept over "
+                f"parent {par_id} (score={par_score:.3f})"
+            )
+        elif par_score > dup_score:
+            assert par_kept, (
+                f"Parent {par_id} (score={par_score:.3f}) should be kept over "
+                f"dup {dup_id} (score={dup_score:.3f})"
+            )
+
+
+def test_mc_per_tomo_matches_single_pool(mc_motl):
+    """For a single-tomogram Motl, per-tomo and single-pool with identical
+    metric parameters must produce an identical set of kept particles."""
+    shared_kwargs = dict(
+        base_mask=_MC_MASK_PATH,
+        threshold=_MC_THRESHOLD_PARTIAL,
+        metric_column_name="score",
+        keep_greater=True,
+        box_size=_MC_BOX_SIZE,
+        radius=_MC_RADIUS,
+        inplace=False,
+    )
+
+    result_single   = mc_motl.clean_by_mask_overlap(column_name=None,      **shared_kwargs)
+    result_per_tomo = mc_motl.clean_by_mask_overlap(column_name="tomo_id", **shared_kwargs)
+
+    ids_single   = set(result_single.df["subtomo_id"].tolist())
+    ids_per_tomo = set(result_per_tomo.df["subtomo_id"].tolist())
+
+    assert ids_single == ids_per_tomo, (
+        f"Single-pool and per-tomo results differ.\n"
+        f"  Only in single:   {sorted(ids_single   - ids_per_tomo)}\n"
+        f"  Only in per-tomo: {sorted(ids_per_tomo - ids_single)}"
+    )
+
+
+def test_mc_keep_greater_false_keeps_lower_score(mc_motl):
+    """keep_greater=False should keep the lower-score particle in each pair."""
+    result = mc_motl.clean_by_mask_overlap(
+        _MC_MASK_PATH, _MC_THRESHOLD_REMOVE_ALL,
+        metric_column_name="score", keep_greater=False,
+        column_name=None,
+        box_size=_MC_BOX_SIZE, radius=_MC_RADIUS,
+        inplace=False,
+    )
+
+    df = mc_motl.df.reset_index(drop=True)
+    kept_subtomo_ids = set(result.df["subtomo_id"].tolist())
+
+    for parent, dup in _mc_find_pairs(df):
+        dup_score = dup["score"]
+        par_score = parent["score"]
+        dup_kept  = dup["subtomo_id"]    in kept_subtomo_ids
+        par_kept  = parent["subtomo_id"] in kept_subtomo_ids
+
+        if dup_score < par_score:
+            assert dup_kept, (
+                f"Dup (score={dup_score:.3f}) should be kept over "
+                f"parent (score={par_score:.3f}) with keep_greater=False"
+            )
+        elif par_score < dup_score:
+            assert par_kept, (
+                f"Parent (score={par_score:.3f}) should be kept over "
+                f"dup (score={dup_score:.3f}) with keep_greater=False"
+            )
+
+
+def test_mc_output_matches_reference(mc_motl):
+    """Cleaning with threshold=0.1 must produce exactly the set of particles
+    in the pre-computed reference motl clean_by_mask_test_motl_cleaned_0.1.em."""
+    result = mc_motl.clean_by_mask_overlap(
+        _MC_MASK_PATH, 0.1,
+        metric_column_name="score", keep_greater=True,
+        column_name="tomo_id",
+        box_size=_MC_BOX_SIZE, radius=_MC_RADIUS,
+        inplace=False,
+    )
+    reference = Motl.load(_MC_CLEANED_PATH)
+
+    pd.testing.assert_frame_equal(result.df, reference.df)
+
+
+# ---------------------------------------------------------------------------
+# EF2: symmetry test — coeff(A, B, d) == coeff(B, A, -d)
+#
+# Two particles i (candidate) and j (kept) with distinct rotation angles.
+# Computing the overlap with i as candidate and shift = pos_j - pos_i must
+# give the same coefficient as computing with j as candidate and shift = pos_i - pos_j.
+# ---------------------------------------------------------------------------
+
+def test_mask_overlap_coeff_is_symmetric():
+    """coeff(A, B, d) == coeff(B, A, -d): swapping masks and negating shift
+    gives the same coefficient.  Implemented by calling clean_by_mask_overlap
+    on two mirror-image Motls and asserting the same number of survivors."""
+    # Build a 64x64x64 ellipsoidal mask (asymmetric when rotated)
+    import tempfile, mrcfile
+    BOX = 64
+    c = (BOX - 1) / 2.0
+    zz, yy, xx = np.mgrid[0:BOX, 0:BOX, 0:BOX]
+    # Elongated along x so that rotation makes it asymmetric in x
+    mask_arr = ((xx - c) ** 2 / 12.0 ** 2 + (yy - c) ** 2 / 6.0 ** 2 + (zz - c) ** 2 / 6.0 ** 2 <= 1.0).astype(np.float32)
+    with tempfile.NamedTemporaryFile(suffix=".mrc", delete=False) as tf:
+        mask_path = tf.name
+    with mrcfile.new(mask_path, overwrite=True) as mrc:
+        mrc.set_data(mask_arr)
+
+    # Two asymmetrically-rotated particles at a fixed separation d along x
+    d = 14
+    # Particle A at position (100, 100, 100), rotation (30, 45, 15)
+    # Particle B at position (100+d, 100, 100), rotation (60, 20, 80)
+    def make_row(sid, x, y, z, phi, psi, theta, score):
+        row = {c2: 0.0 for c2 in Motl.motl_columns}
+        row["subtomo_id"] = sid
+        row["x"], row["y"], row["z"] = x, y, z
+        row["phi"], row["psi"], row["theta"] = phi, psi, theta
+        row["score"] = score
+        row["tomo_id"] = 1
+        return row
+
+    # Config 1: A at left, B at right — A is "already kept" (order=[0,1]) so B is candidate
+    rows1 = [
+        make_row(1, 100, 100, 100, 30, 45, 15, 1.0),   # A — processed first (kept)
+        make_row(2, 100+d, 100, 100, 60, 20, 80, 0.5),  # B — candidate
+    ]
+    motl1 = Motl(pd.DataFrame(rows1, columns=Motl.motl_columns))
+    order1 = np.array([0, 1], dtype=np.int32)
+
+    # Config 2: same pair but mirrored — B at left, A at right, B processed first
+    rows2 = [
+        make_row(1, 100, 100, 100, 60, 20, 80, 1.0),   # B — processed first (kept)
+        make_row(2, 100+d, 100, 100, 30, 45, 15, 0.5),  # A — candidate
+    ]
+    motl2 = Motl(pd.DataFrame(rows2, columns=Motl.motl_columns))
+    order2 = np.array([0, 1], dtype=np.int32)
+
+    threshold = 0.05  # low enough that asymmetric masks at d=14 may or may not overlap
+
+    result1 = motl1.clean_by_mask_overlap(
+        mask_path, threshold, column_name=None, box_size=BOX, radius=BOX,
+        order=order1, inplace=False,
+    )
+    result2 = motl2.clean_by_mask_overlap(
+        mask_path, threshold, column_name=None, box_size=BOX, radius=BOX,
+        order=order2, inplace=False,
+    )
+
+    assert len(result1.df) == len(result2.df), (
+        f"Symmetry broken: config1 kept {len(result1.df)} particles, "
+        f"config2 kept {len(result2.df)} particles with the same threshold."
+    )
+
+
+# =============================================================================
+# Warp alignment remap integration tests
+# =============================================================================
+
+_WARP_DIR = os.path.join(os.path.dirname(__file__), "test_data", "motl_data", "warp_mapping")
+
+
+class TestRemapWarpAlignment:
+    TOMO_FORMAT = "TS_$xxx.xml"
+
+    def _load_original(self):
+        return Motl.load(os.path.join(_WARP_DIR, "original.em"))
+
+    def _load_remapped(self):
+        return Motl.load(os.path.join(_WARP_DIR, "remapped.em"))
+
+    def test_remap_coordinates_close_to_reference(self):
+        original = self._load_original()
+        expected = self._load_remapped()
+        diag = original.remap_warp_alignment(
+            pre_xml_dir=os.path.join(_WARP_DIR, "preMA"),
+            post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
+            tomo_format=self.TOMO_FORMAT,
+            scale=2.0,
+        )
+        assert isinstance(diag, dict)
+        result_coords = original.get_coordinates()
+        expected_coords = expected.get_coordinates()
+        max_diff = np.abs(result_coords - expected_coords).max()
+        assert max_diff < 2.0, f"Max coordinate difference {max_diff:.4f} voxels exceeds 2"
+
+    def test_remap_angles_close_to_reference(self):
+        original = self._load_original()
+        expected = self._load_remapped()
+        original.remap_warp_alignment(
+            pre_xml_dir=os.path.join(_WARP_DIR, "preMA"),
+            post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
+            tomo_format=self.TOMO_FORMAT,
+        )
+        result_angles = original.df[["phi", "theta", "psi"]].values
+        expected_angles = expected.df[["phi", "theta", "psi"]].values
+        from scipy.spatial.transform import Rotation as _rot
+        R_res = _rot.from_euler("zxz", result_angles, degrees=True)
+        R_exp = _rot.from_euler("zxz", expected_angles, degrees=True)
+        rel = (R_res.inv() * R_exp).magnitude()
+        max_deg = np.degrees(rel.max())
+        assert max_deg < 2.0, f"Max angle difference {max_deg:.4f} deg exceeds 2"
+
+    def test_remap_returns_diagnostics_for_each_tomo(self):
+        original = self._load_original()
+        diag = original.remap_warp_alignment(
+            pre_xml_dir=os.path.join(_WARP_DIR, "preMA"),
+            post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
+            tomo_format=self.TOMO_FORMAT,
+        )
+        assert set(diag.keys()) == {204, 209}
+        for v in diag.values():
+            assert "rms_px" in v and "oob" in v and "R_angle" in v
+
+    def test_remap_inplace_false_returns_new_motl(self):
+        original = self._load_original()
+        orig_x0 = original.df["x"].iloc[0]
+        result = original.remap_warp_alignment(
+            pre_xml_dir=os.path.join(_WARP_DIR, "preMA"),
+            post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
+            tomo_format=self.TOMO_FORMAT,
+            inplace=False,
+        )
+        assert isinstance(result, Motl)
+        assert original.df["x"].iloc[0] == orig_x0, "inplace=False must not modify self"
+
+    def test_identity_remap_same_xml(self):
+        original = self._load_original()
+        coords_before = original.get_coordinates()
+        angles_before = original.df[["phi", "theta", "psi"]].values.copy()
+        original.remap_warp_alignment(
+            pre_xml_dir=os.path.join(_WARP_DIR, "preMA"),
+            post_xml_dir=os.path.join(_WARP_DIR, "preMA"),
+            tomo_format=self.TOMO_FORMAT,
+            scale=2.0,
+        )
+        coords_after = original.get_coordinates()
+        coord_diff = np.abs(coords_after - coords_before)
+        assert coord_diff.max() < 1e-8, (
+            f"Identity remap changed coordinates by {coord_diff.max():.2e} vox"
+        )
+        from scipy.spatial.transform import Rotation as _rot
+        R_before = _rot.from_euler("zxz", angles_before, degrees=True)
+        R_after = _rot.from_euler("zxz", original.df[["phi", "theta", "psi"]].values, degrees=True)
+        rel_deg = np.degrees((R_before.inv() * R_after).magnitude())
+        assert rel_deg.max() < 1e-10, f"Identity remap changed angles by {rel_deg.max():.2e} deg"
+
+    def test_missing_xml_raises(self):
+        original = self._load_original()
+        with pytest.raises(FileNotFoundError):
+            original.remap_warp_alignment(
+                pre_xml_dir="/nonexistent/preMA",
+                post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
+                tomo_format=self.TOMO_FORMAT,
+            )

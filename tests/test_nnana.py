@@ -1099,3 +1099,98 @@ class TestCheckNNColumns:
         result = NearestNeighbors.check_nn_columns(df)
         expected = NearestNeighbors.get_required_columns()
         assert set(result) == set(expected)
+
+
+# =============================================================================
+# DB1b: NearestNeighbors.get_barycentric_motl
+# =============================================================================
+
+
+def _two_tomo_motl(n_per_tomo: int = 5, spacing: float = 10.0) -> cryomotl.Motl:
+    rows = []
+    sid = 1
+    for tomo in [1, 2]:
+        for i in range(n_per_tomo):
+            row = {c: 0.0 for c in cryomotl.Motl.motl_columns}
+            row["tomo_id"] = float(tomo)
+            row["subtomo_id"] = float(sid)
+            row["x"] = float(i) * spacing
+            sid += 1
+            rows.append(row)
+    return cryomotl.Motl(pd.DataFrame(rows))
+
+
+def test_nn_get_barycentric_motl_returns_motl():
+    motl = _two_tomo_motl()
+    nn = NearestNeighbors(input_data=motl, nn_type="closest_dist", type_param=1)
+    result = nn.get_barycentric_motl(n_neighbors=1)
+    assert isinstance(result, cryomotl.Motl)
+    assert len(result.df) > 0
+
+
+def test_nn_get_barycentric_motl_midpoints_in_range():
+    motl = _two_tomo_motl(n_per_tomo=5, spacing=10.0)
+    nn = NearestNeighbors(input_data=motl, nn_type="closest_dist", type_param=1)
+    result = nn.get_barycentric_motl(n_neighbors=1)
+    xs = result.get_coordinates()[:, 0]
+    assert (xs >= 0.0).all() and (xs <= 45.0).all()
+
+
+def test_nn_get_barycentric_motl_dropped_count_attribute():
+    motl = _two_tomo_motl(n_per_tomo=3, spacing=5.0)
+    nn = NearestNeighbors(input_data=motl, nn_type="closest_dist", type_param=1)
+    result = nn.get_barycentric_motl(n_neighbors=1)
+    assert hasattr(result, "_nn_dropped_count")
+    assert isinstance(result._nn_dropped_count, int)
+
+
+def test_nn_get_barycentric_motl_two_motls():
+    m1 = _two_tomo_motl(n_per_tomo=4, spacing=10.0)
+    m2 = cryomotl.Motl(m1.df.copy())
+    # Shift m2 coordinates so centroids differ from m1 particles (avoids zero direction vectors).
+    m2.df["x"] = m2.df["x"].values + 100.0
+    m2.df["y"] = m2.df["y"].values + 100.0
+    m2.df["z"] = m2.df["z"].values + 5.0
+    nn = NearestNeighbors(input_data=[m1, m2], nn_type="closest_dist", type_param=1)
+    result = nn.get_barycentric_motl(n_neighbors=1)
+    assert isinstance(result, cryomotl.Motl)
+    assert len(result.df) > 0
+
+
+# =============================================================================
+# DB2: trace_chains additional tests
+# =============================================================================
+
+
+def _collinear_motl(n: int = 5, step: float = 10.0) -> cryomotl.Motl:
+    rows = []
+    for i in range(n):
+        row = {c: 0.0 for c in cryomotl.Motl.motl_columns}
+        row["tomo_id"] = 1.0
+        row["subtomo_id"] = float(i + 1)
+        row["x"] = float(i) * step
+        rows.append(row)
+    return cryomotl.Motl(pd.DataFrame(rows))
+
+
+def test_trace_chains_collinear_one_chain():
+    motl = _collinear_motl(5, step=10.0)
+    result = nnana.trace_chains(motl, max_distance=15.0)
+    assert isinstance(result, cryomotl.Motl)
+    assert len(result.df) == 5
+    assert result.df["object_id"].nunique() == 1
+
+
+def test_trace_chains_two_separated_groups():
+    rows = []
+    for g in [0, 200]:
+        for i in range(3):
+            row = {c: 0.0 for c in cryomotl.Motl.motl_columns}
+            row["tomo_id"] = 1.0
+            row["subtomo_id"] = float(g + i + 1)
+            row["x"] = float(g + i * 5)
+            rows.append(row)
+    motl = cryomotl.Motl(pd.DataFrame(rows))
+    result = nnana.trace_chains(motl, max_distance=10.0)
+    assert result.df["object_id"].nunique() == 2
+

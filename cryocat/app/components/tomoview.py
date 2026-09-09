@@ -2,7 +2,7 @@ from cryocat.app.logger import dash_logger
 
 import dash
 from dash import html, dcc
-from dash import Input, Output, State, exceptions, callback_context, ctx, ALL
+from dash import Input, Output, State, exceptions, callback_context, ctx, ALL, no_update
 import plotly.graph_objects as go
 import pandas as pd
 import dash_bootstrap_components as dbc
@@ -319,7 +319,7 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
     )
     def update_color_options(data, registry):
         if not data:
-            raise exceptions.PreventUpdate
+            return [], None
         if isinstance(data, dict) and "motl_id" in data:
             entry = (registry or {}).get(data["motl_id"], {})
             opts = color_options_from_handle(entry)
@@ -349,14 +349,14 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
     )
     def update_plot(index, color_col, colorscale, marker_size, data, *rest):
         # rest is (active_tab, settings) when tab guard active, else (settings,)
+        if not data:
+            return go.Figure(), no_update, {"display": "none"}, "Tomo ID"
         if tab_value:
             active_tab, settings = rest[0], rest[1]
             if active_tab != tab_value:
                 raise exceptions.PreventUpdate
         else:
             settings = rest[0]
-        if not data:
-            raise exceptions.PreventUpdate
         effective = colorscale or (settings or {}).get("discrete_palette", "StarryNight")
         return tomo_figure(_motl_df(data), index, color_col, effective, marker_size, hover_info, show_dual_graph)
 
@@ -368,7 +368,7 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
     )
     def populate_tomo_dropdown(data, registry):
         if not data:
-            raise exceptions.PreventUpdate
+            return []
         if isinstance(data, dict) and "motl_id" in data:
             entry = (registry or {}).get(data["motl_id"], {})
             return tomo_items_from_handle(entry, prefix)

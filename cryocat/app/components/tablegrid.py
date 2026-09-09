@@ -309,11 +309,15 @@ def register_tablegrid_callbacks(
     @app.callback(
         Output(f"{prefix}-grid", "getRowsResponse"),
         Input(f"{prefix}-grid", "getRowsRequest"),
-        State(f"{prefix}-global-data-store", "data"),
+        Input(f"{prefix}-global-data-store", "data"),
         State(f"{prefix}-slider-filters-store", "data"),
     )
     def _rows(request, ref, slider_filters):
-        if request is None or not ref:
+        if not ref:
+            # Direct clear: answer any pending request with 0 rows so the grid
+            # empties immediately without a purge-and-refetch round trip.
+            return {"rowData": [], "rowCount": 0} if request is not None else no_update
+        if request is None:
             return no_update
         df = resolve_df(ref)
         if df is None:

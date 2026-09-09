@@ -44,6 +44,8 @@ from cryocat.app.styles import (
     CTRL_LABEL as _LABEL_STYLE,
     CTRL_INPUT as _INPUT_WRAPPER,
     SECTION_HEADER as _SECTION_HEADER,
+    RADIO_INLINE_INPUT as _RADIO_INPUT,
+    RADIO_INLINE_LABEL as _RADIO_LABEL,
 )
 from cryocat.app.apputils import run_operation, generate_kwargs
 from cryocat.app.components.anglesfield import get_angles_field, register_angles_field_callbacks
@@ -169,11 +171,10 @@ def _single_case_form():
                             "the best-peak rotation pre-fills Starting angles.",
                             style={**_HINT, "marginBottom": "0.3rem", "display": "block"},
                         ),
-                        _text("Source tomogram (.em / .mrc)", "ppana-sub-tomo", "path/to/tomogram.em"),
-                        _text("Motl file (.em / .csv)", "ppana-sub-motl", "path/to/motl.em"),
+                        _row("Source tomogram (.em / .mrc)", get_path_field("ppana-sub-tomo", mode="open", kind="map", extensions=(".em", ".mrc"), placeholder="path/to/tomogram.em")),
+                        _row("Motl file (.em / .csv)", get_path_field("ppana-sub-motl", mode="open", kind="motl", extensions=(".em", ".csv"), placeholder="path/to/motl.em")),
                         _number("Box size (voxels)", "ppana-sub-boxsize", step=1, min_=1, placeholder="e.g. 80"),
-                        _text("Output path (optional)", "ppana-sub-output",
-                              "blank → <output dir>/<case name>/subtomogram.em"),
+                        _row("Output path (optional)", get_path_field("ppana-sub-output", mode="save", kind="output", placeholder="blank → <output dir>/<case name>/subtomogram.em")),
                         html.Div(
                             dbc.Button("Extract and use this file", id="ppana-sub-btn",
                                        color="secondary", size="sm", style={"width": "100%", "marginTop": "0.3rem"}),
@@ -195,8 +196,8 @@ def _single_case_form():
                             "Provide pre-computed wedge masks, or generate one via the button below.",
                             style={**_HINT, "marginBottom": "0.3rem", "display": "block"},
                         ),
-                        _text("Wedge mask — target", "ppana-sw-target", "path/to/wedge_mask_target.mrc"),
-                        _text("Wedge mask — template", "ppana-sw-tmpl", "path/to/wedge_mask_tmpl.mrc"),
+                        _row("Wedge mask — target", get_path_field("ppana-sw-target", mode="open", kind="mask", extensions=(".em", ".mrc"), placeholder="path/to/wedge_mask_target.mrc")),
+                        _row("Wedge mask — template", get_path_field("ppana-sw-tmpl", mode="open", kind="mask", extensions=(".em", ".mrc"), placeholder="path/to/wedge_mask_tmpl.mrc")),
                         html.Div(
                             dbc.Button("Generate wedge masks…", id="ppana-wedge-open-btn",
                                        color="secondary", size="sm",
@@ -210,15 +211,15 @@ def _single_case_form():
             ),
             # ─ Map file paths ────────────────────────────────────────────────
             html.Small("Paths to map files", style={**_HINT, "marginBottom": "0.3rem", "display": "block"}),
-            _text("Target map", "ppana-s-tomogram", "path/to/tomo.mrc"),
-            _text("Template", "ppana-s-template", "path/to/template.mrc"),
-            _text("Template mask", "ppana-s-mask", "path/to/mask.mrc"),
-            _text("Tight mask (optional)", "ppana-s-tight-mask", "path/to/tight_mask.mrc"),
+            _row("Target map", get_path_field("ppana-s-tomogram", mode="open", kind="map", extensions=(".em", ".mrc"), placeholder="path/to/tomo.mrc")),
+            _row("Template", get_path_field("ppana-s-template", mode="open", kind="map", extensions=(".em", ".mrc"), placeholder="path/to/template.mrc")),
+            _row("Template mask", get_path_field("ppana-s-mask", mode="open", kind="mask", extensions=(".em", ".mrc"), placeholder="path/to/mask.mrc")),
+            _row("Tight mask (optional)", get_path_field("ppana-s-tight-mask", mode="open", kind="mask", extensions=(".em", ".mrc"), placeholder="path/to/tight_mask.mrc")),
             _row("Angles file", get_angles_field("ppana-angles")),
             html.Hr(style={"margin": "0.4rem 0"}),
             # ─ Output ────────────────────────────────────────────────────────
             html.Small("Output", style={**_HINT, "marginBottom": "0.3rem", "display": "block"}),
-            _text("Output directory", "ppana-s-output-dir", "path/to/output/"),
+            _row("Output directory", get_path_field("ppana-s-output-dir", mode="directory", kind="output", placeholder="path/to/output/")),
             _text("Case name", "ppana-s-case-name", "e.g. ribosome_c1"),
             _dropdown(
                 "If output exists",
@@ -299,7 +300,7 @@ def _visualize_form():
                 "Point to a directory produced by run_single_case (contains scores.em, angles.em, etc.).",
                 style={**_HINT, "marginBottom": "0.3rem", "display": "block"},
             ),
-            _text("Case directory", "ppana-v-case-dir", "path/to/case_name/"),
+            _row("Case directory", get_path_field("ppana-v-case-dir", mode="directory", kind="output", placeholder="path/to/case_name/")),
             _check("Compute distance map (needs angles.em + angles.csv)", "ppana-v-compute-dist", value=False),
             _number("  CC radius (voxels)", "ppana-v-cc-radius", value=10, step=1, min_=1),
             _check("Compute peak stats (needs scores.em)", "ppana-v-compute-peak", value=False),
@@ -316,8 +317,8 @@ def _visualize_form():
                 "This CSV path is also used by Generate script.",
                 style={**_HINT, "marginBottom": "0.3rem", "display": "block"},
             ),
-            _text("Template list CSV", "ppana-v-csv-path", "path/to/template_list.csv"),
-            _text("Parent folder path", "ppana-v-csv-parent", "base directory for structure folders"),
+            _row("Template list CSV", get_path_field("ppana-v-csv-path", mode="open", kind="", extensions=(".csv",), placeholder="path/to/template_list.csv")),
+            _row("Parent folder path", get_path_field("ppana-v-csv-parent", mode="directory", kind="output", placeholder="base directory for structure folders")),
             _row(
                 "If table has data",
                 dbc.RadioItems(
@@ -328,7 +329,9 @@ def _visualize_form():
                     ],
                     value="replace",
                     inline=True,
-                    ),
+                    inputStyle=_RADIO_INPUT,
+                    labelStyle=_RADIO_LABEL,
+                ),
             ),
             dbc.Button("Load to table", id="ppana-v-load-csv-btn", color="secondary", size="sm",
                        style={"width": "100%"}),
@@ -432,6 +435,16 @@ def _sidebar() -> list:
             ],
             active_item=["ppana-acc-single"],
         ),
+        html.Div(
+            id="ppana-status",
+            style={
+                **_HINT,
+                "padding": "0.4rem 0.5rem",
+                "whiteSpace": "pre-wrap",
+                "wordBreak": "break-word",
+                "fontSize": "0.82rem",
+            },
+        ),
     ]
 
 
@@ -492,16 +505,6 @@ def _main() -> list:
                  for i in range(1, _N_SLOTS + 1)]
 
     return [
-        html.Div(
-            id="ppana-status",
-            style={
-                "color": "var(--color9)",
-                "padding": "0.3rem 0.5rem 0",
-                "whiteSpace": "pre-wrap",
-                "wordBreak": "break-word",
-                "minHeight": "1.4rem",
-            },
-        ),
         dbc.Tabs(
             id="ppana-main-tabs",
             active_tab="tab-csv",
@@ -581,7 +584,7 @@ def _make_summary_html(figs: dict, run_params: dict | None = None) -> str:
 
     first = True
     for key, fig in figs.items():
-        include_plotlyjs = "cdn" if first else False
+        include_plotlyjs = True if first else False
         first = False
         fig_html = fig.to_html(
             include_plotlyjs=include_plotlyjs,
@@ -617,15 +620,24 @@ def _load_or_generate_summary_html(
 
     Priority:
     1. ``params.csv`` present → generate via :func:`pana.create_summary_html_from_folder`
-       (writes ``summary.html`` to disk, returns its content).
+       (writes ``summary.html`` to disk, returns its content).  If this produces
+       HTML without any Plotly figures but *figs* was provided, falls back to
+       :func:`_make_summary_html` so in-memory results are always shown.
     2. Pre-existing ``summary.html`` or ``id_*_summary.html`` → read and return.
     3. *figs* provided → fall back to :func:`_make_summary_html`.
     """
     p = Path(case_dir)
     if (p / "params.csv").exists():
-        html_path = pana.create_summary_html_from_folder(case_dir)
-        with open(html_path, encoding="utf-8") as fh:
-            return fh.read()
+        try:
+            html_path = pana.create_summary_html_from_folder(case_dir)
+            with open(html_path, encoding="utf-8") as fh:
+                content = fh.read()
+            # Fall back to in-memory figures when the file-based path produced no plots.
+            if figs and "js-plotly-plot" not in content:
+                return _make_summary_html(figs, run_params)
+            return content
+        except Exception:
+            pass  # fall through to existing HTML or figs fallback
     for cand in [p / "summary.html", *sorted(p.glob("id_*_summary.html"))]:
         if cand.exists():
             with open(cand, encoding="utf-8") as fh:
@@ -680,15 +692,15 @@ def register_callbacks(app):
 
     # ── extract subtomogram → pre-fill target map + starting angles ──────────
     @app.callback(
-        Output("ppana-s-tomogram", "value"),
+        Output({"type": "path-input", "owner": "ppana-s-tomogram"}, "value", allow_duplicate=True),
         Output("ppana-s-starting-angle", "value"),
         Output("ppana-sub-status", "children"),
         Input("ppana-sub-btn", "n_clicks"),
-        State("ppana-sub-tomo", "value"),
-        State("ppana-sub-motl", "value"),
+        State({"type": "path-input", "owner": "ppana-sub-tomo"}, "value"),
+        State({"type": "path-input", "owner": "ppana-sub-motl"}, "value"),
         State("ppana-sub-boxsize", "value"),
-        State("ppana-sub-output", "value"),
-        State("ppana-s-output-dir", "value"),
+        State({"type": "path-input", "owner": "ppana-sub-output"}, "value"),
+        State({"type": "path-input", "owner": "ppana-s-output-dir"}, "value"),
         State("ppana-s-case-name", "value"),
         prevent_initial_call=True,
     )
@@ -801,8 +813,8 @@ def register_callbacks(app):
     # ── wedge mask modal: open / close / use ─────────────────────────────────
     @app.callback(
         Output("ppana-wedge-modal", "is_open"),
-        Output("ppana-sw-target", "value"),
-        Output("ppana-sw-tmpl", "value"),
+        Output({"type": "path-input", "owner": "ppana-sw-target"}, "value"),
+        Output({"type": "path-input", "owner": "ppana-sw-tmpl"}, "value"),
         Input("ppana-wedge-open-btn", "n_clicks"),
         Input("ppana-wedge-close-btn", "n_clicks"),
         Input("ppana-wedge-use-target-btn", "n_clicks"),
@@ -829,7 +841,7 @@ def register_callbacks(app):
     # ── scan case dir for artifacts ──────────────────────────────────────────
     @app.callback(
         Output("ppana-v-artifacts", "children"),
-        Input("ppana-v-case-dir", "value"),
+        Input({"type": "path-input", "owner": "ppana-v-case-dir"}, "value"),
     )
     def _scan_case_dir(case_dir):
         if not case_dir or not os.path.isdir(case_dir):
@@ -838,6 +850,34 @@ def register_callbacks(app):
         if not found:
             return "No recognised artifacts found in this directory."
         return "Found: " + ", ".join(found)
+
+    # ── pre-fill single-case form from params.csv when case dir is set (EA1) ──
+    @app.callback(
+        Output({"type": "path-input", "owner": "ppana-s-tomogram"}, "value", allow_duplicate=True),
+        Output({"type": "path-input", "owner": "ppana-s-template"}, "value", allow_duplicate=True),
+        Output({"type": "path-input", "owner": "ppana-s-mask"}, "value", allow_duplicate=True),
+        Output({"type": "path-input", "owner": "ppana-s-output-dir"}, "value", allow_duplicate=True),
+        Output("ppana-s-case-name", "value", allow_duplicate=True),
+        Input({"type": "path-input", "owner": "ppana-v-case-dir"}, "value"),
+        prevent_initial_call=True,
+    )
+    def _load_params_from_folder(case_dir):
+        if not case_dir or not os.path.isdir(case_dir):
+            return (no_update,) * 5
+        p = Path(case_dir)
+        params_csv = p / "params.csv"
+        if not params_csv.exists():
+            return (no_update,) * 5
+        try:
+            row = pd.read_csv(str(params_csv)).iloc[0]
+        except Exception:
+            return (no_update,) * 5
+        tomo = str(row.get("Target map", "") or "")
+        tmpl = str(row.get("Template", "") or "")
+        mask = str(row.get("Mask", "") or "")
+        outdir = str(row.get("Output folder", str(p.parent)) or str(p.parent))
+        cname = str(row.get("Output base", p.name) or p.name)
+        return tomo, tmpl, mask, outdir, cname
 
     # ── toggle SLURM options ─────────────────────────────────────────────────
     @app.callback(
@@ -863,9 +903,21 @@ def register_callbacks(app):
     def _toggle_gradual_form(checked):
         return bool(checked)
 
+    # ── clear status immediately when any action button is pressed ───────────
+    @app.callback(
+        Output("ppana-status", "children", allow_duplicate=True),
+        Input("ppana-s-run-btn", "n_clicks"),
+        Input("ppana-v-run-btn", "n_clicks"),
+        Input("ppana-v-load-csv-btn", "n_clicks"),
+        Input("ppana-csv-visualize-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _clear_status(*_):
+        return ""
+
     # ── main run dispatch (single case + visualize existing) ─────────────────
     @app.callback(
-        Output("ppana-status", "children"),
+        Output("ppana-status", "children", allow_duplicate=True),
         Output("ppana-slots-store", "data"),
         Output("ppana-csv-rows-store", "data"),
         Output("ppana-next-slot", "data"),
@@ -876,12 +928,12 @@ def register_callbacks(app):
         Input("ppana-s-run-btn", "n_clicks"),
         Input("ppana-v-run-btn", "n_clicks"),
         # single-case states
-        State("ppana-s-tomogram", "value"),
-        State("ppana-s-template", "value"),
-        State("ppana-s-mask", "value"),
-        State("ppana-s-tight-mask", "value"),
+        State({"type": "path-input", "owner": "ppana-s-tomogram"}, "value"),
+        State({"type": "path-input", "owner": "ppana-s-template"}, "value"),
+        State({"type": "path-input", "owner": "ppana-s-mask"}, "value"),
+        State({"type": "path-input", "owner": "ppana-s-tight-mask"}, "value"),
         State("ppana-angles-path", "value"),
-        State("ppana-s-output-dir", "value"),
+        State({"type": "path-input", "owner": "ppana-s-output-dir"}, "value"),
         State("ppana-s-case-name", "value"),
         State("ppana-s-if-exists", "value"),
         State("ppana-s-starting-angle", "value"),
@@ -891,12 +943,12 @@ def register_callbacks(app):
         State("ppana-s-compute-dist", "value"),
         State("ppana-s-compute-peak", "value"),
         State("ppana-s-apply-wedge", "value"),
-        State("ppana-sw-target", "value"),
-        State("ppana-sw-tmpl", "value"),
+        State({"type": "path-input", "owner": "ppana-sw-target"}, "value"),
+        State({"type": "path-input", "owner": "ppana-sw-tmpl"}, "value"),
         State("ppana-s-compute-gradual", "value"),
         State("ppana-s-angular-range", "value"),
         # visualize states
-        State("ppana-v-case-dir", "value"),
+        State({"type": "path-input", "owner": "ppana-v-case-dir"}, "value"),
         State("ppana-v-compute-dist", "value"),
         State("ppana-v-cc-radius", "value"),
         State("ppana-v-compute-peak", "value"),
@@ -988,6 +1040,16 @@ def register_callbacks(app):
         result = run_operation(pana.run_single_case, shared)
         write_dir = str(result.get("write_dir", Path(outdir) / name))
 
+        # Compute figures from in-memory arrays so they render even when the
+        # file-path lookup in create_summary_html_from_folder returns None.
+        _figs = pana.visualize_results(
+            scores=result.get("scores_map"),
+            dist_all_map=result.get("dist_all_map"),
+            dist_normals_map=result.get("dist_normals_map"),
+            dist_inplane_map=result.get("dist_inplane_map"),
+            peak_stats=result.get("peak_stats"),
+        )
+
         if compute_gradual:
             gradual_shared = dict(
                 target_map=tomo,
@@ -1008,7 +1070,8 @@ def register_callbacks(app):
             run_operation(final_df.to_csv, {"path_or_buf": str(p / "gradual_angles_analysis.csv"), "index": False})
             run_operation(hist_df.to_csv, {"path_or_buf": str(p / "gradual_angles_histograms.csv"), "index": False})
 
-        html_content = _load_or_generate_summary_html(write_dir)
+        _run_params = {"Case name": name, "Output dir": write_dir}
+        html_content = _load_or_generate_summary_html(write_dir, _figs or None, _run_params)
 
         new_slots, new_next, active_tab = _assign_slot(slots, next_slot, html_content)
 
@@ -1082,7 +1145,23 @@ def register_callbacks(app):
 
         new_slots, new_next, active_tab = _assign_slot(slots, next_slot, html_content)
 
-        csv_row = _file_row(None, None, None, None, case_dir, Path(case_dir).name, write_dir=case_dir)
+        params_csv = p / "params.csv"
+        if params_csv.exists():
+            try:
+                _pr = pd.read_csv(str(params_csv)).iloc[0]
+                csv_row = _file_row(
+                    _pr.get("Target map", ""),
+                    _pr.get("Template", ""),
+                    _pr.get("Mask", ""),
+                    None,
+                    _pr.get("Output folder", str(p.parent)),
+                    _pr.get("Output base", p.name),
+                    write_dir=case_dir,
+                )
+            except Exception:
+                csv_row = _file_row(None, None, None, None, case_dir, p.name, write_dir=case_dir)
+        else:
+            csv_row = _file_row(None, None, None, None, case_dir, p.name, write_dir=case_dir)
         csv_row["Status"] = "Visualized"
         new_csv_rows = csv_rows + [csv_row]
 
@@ -1134,8 +1213,8 @@ def register_callbacks(app):
         Output("ppana-csv-rows-store", "data", allow_duplicate=True),
         Output("ppana-v-csv-status", "children"),
         Input("ppana-v-load-csv-btn", "n_clicks"),
-        State("ppana-v-csv-path", "value"),
-        State("ppana-v-csv-parent", "value"),
+        State({"type": "path-input", "owner": "ppana-v-csv-path"}, "value"),
+        State({"type": "path-input", "owner": "ppana-v-csv-parent"}, "value"),
         State("ppana-v-csv-mode", "value"),
         State("ppana-csv-rows-store", "data"),
         prevent_initial_call=True,
@@ -1162,22 +1241,34 @@ def register_callbacks(app):
 
         new_rows = []
         for idx, row in df.iterrows():
-            # Construct write_dir using pana path logic if parent is provided
+            structure   = _str(row.get("Structure"))
+            output_base = _str(row.get("Output base"))
+
+            # Batch template-list CSV: use create_output_folder_path when parent provided
             write_dir = ""
             if parent:
                 try:
-                    structure = _str(row.get("Structure"))
                     folder_spec = row.get("Output folder")
                     if folder_spec is not None:
                         write_dir = pana.create_output_folder_path(parent, structure, folder_spec)
                 except Exception:
                     pass
 
+            # Single-case params.csv: Output folder / Output base is the case directory.
+            # This also corrects batch-with-parent when create_output_folder_path returns
+            # the wrong dir because structure is empty.
+            if output_base:
+                _of = _str(row.get("Output folder"))
+                if _of:
+                    _candidate = str(Path(_of) / output_base)
+                    if os.path.isdir(_candidate):
+                        write_dir = _candidate
+
             new_rows.append({
                 "Template":   _fname(row.get("Template")),
                 "Target map": _fname(row.get("Target map")),
                 "Mask":       _fname(row.get("Mask")),
-                "Case name":  _str(row.get("Structure")),
+                "Case name":  structure or output_base,
                 "Output dir": _str(row.get("Output folder")),
                 "Status":     "Done" if row.get("Done") else "Pending",
                 "_write_dir": write_dir,
@@ -1413,8 +1504,8 @@ def register_callbacks(app):
     @app.callback(
         Output("ppana-g-status", "children"),
         Input("ppana-g-generate-btn", "n_clicks"),
-        State("ppana-v-csv-path", "value"),
-        State("ppana-v-csv-parent", "value"),
+        State({"type": "path-input", "owner": "ppana-v-csv-path"}, "value"),
+        State({"type": "path-input", "owner": "ppana-v-csv-parent"}, "value"),
         State("ppana-g-angle-path", "value"),
         State("ppana-g-wedge-path", "value"),
         State("ppana-g-cc-radius", "value"),

@@ -2007,6 +2007,7 @@ def register_motl_editor_sidebar_callbacks(app):
         State(ids.POOL_GROUPS, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
+        State("me-batch-save-rln-extra-cols", "value"),
         prevent_initial_call=True,
     )
     def _batch_save(
@@ -2024,6 +2025,7 @@ def register_motl_editor_sidebar_callbacks(app):
         groups_data,
         pool_meta,
         pool_next_id,
+        extra_cols,
     ):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
@@ -2042,6 +2044,9 @@ def register_motl_editor_sidebar_callbacks(app):
             return no_update, "\n".join(probs)
         pool_state = PoolState.from_stores(registry, pool_meta, pool_next_id)
         writer_kwargs = generate_kwargs(writer_ids, writer_vals, pool_state) if writer_ids else {}
+        if fmt == "relion" and extra_cols:
+            from cryocat.core.cryomotl import _cc_name
+            writer_kwargs["extra_columns"] = {col: _cc_name(col) for col in extra_cols}
         os.makedirs(out_dir, exist_ok=True)
         status, val = execute_batch_save(members, paths, fmt, rln_value, writer_kwargs, registry)
         return status, val

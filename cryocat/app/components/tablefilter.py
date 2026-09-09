@@ -142,10 +142,10 @@ def register_tablefilter_callbacks(app, prefix: str, resolve_df=None) -> None:
     )
     def build_range_sliders(ref, registry):
         if not ref or not isinstance(ref, dict):
-            raise exceptions.PreventUpdate
+            return []  # clear slider DOM when entry is removed
         col_ranges = _pool.get_column_ranges_for_ref(ref, registry, resolve_df)
         if not col_ranges:
-            raise exceptions.PreventUpdate
+            return []
         cols = [_slider_col(s, prefix) for s in slider_specs(col_ranges)]
         return [dbc.Row(cols, className="gx-1 gy-0")]
 

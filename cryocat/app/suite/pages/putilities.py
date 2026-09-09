@@ -68,7 +68,8 @@ _TAB_ORIENT = "util-tab-orient"
 
 # Server-side tetra cache: motl_id → (tetra_mesh, pt_map).  Open3D objects
 # cannot be serialised into dcc.Store; they live here for the process lifetime.
-_alpha_tetra_cache: dict[str, tuple] = {}
+# Aliased from the shared module so the Structure tab uses the same cache.
+from cryocat.app.components.alphashape import alpha_tetra_cache as _alpha_tetra_cache
 
 
 # ── Alpha-shape module-level helpers ──────────────────────────────────────────
@@ -433,14 +434,18 @@ def _sidebar(builders: list[GuiEntry]) -> list:
     return [
         dbc.Accordion(
             items,
-            always_open=True,
-            active_item=[f"util-acc-{b.fn.__name__}" for b in builders],
+            always_open=False,
+            active_item=f"util-acc-{builders[0].fn.__name__}" if builders else None,
             id="util-sidebar-acc",
         ),
     ]
 
 
 def _main(builders: list[GuiEntry]) -> list:
+    _orient_graph = get_orientation_picker_graph(_ORIENT_PREFIX, height="500px")
+    _orient_graph.figure = error_figure(
+        "Use the Orientation Picker controls — the orientation sphere appears here once computed."
+    )
     tabs = dbc.Tabs(
         id="util-tabs",
         active_tab=_TAB_ANGLES,
@@ -451,6 +456,7 @@ def _main(builders: list[GuiEntry]) -> list:
                         "util-angles", "sphere",
                         dcc.Graph(
                             id={"type": "styled-graph", "owner": "util-angles", "name": "sphere"},
+                            figure=error_figure("Cone sampling preview appears here — click Preview in the sidebar."),
                             style={"height": "460px"},
                         ),
                     ), width=6),
@@ -458,6 +464,7 @@ def _main(builders: list[GuiEntry]) -> list:
                         "util-angles", "inplane",
                         dcc.Graph(
                             id={"type": "styled-graph", "owner": "util-angles", "name": "inplane"},
+                            figure=error_figure("In-plane distribution appears here — click Preview in the sidebar."),
                             style={"height": "460px"},
                         ),
                     ), width=6),
@@ -465,44 +472,45 @@ def _main(builders: list[GuiEntry]) -> list:
                 label="Angles",
                 tab_id=_TAB_ANGLES,
                 id=f"{_TAB_ANGLES}-item",
-                disabled=True,
             ),
             dbc.Tab(
                 customel_graph(
                     "util-wedge", "preview",
                     dcc.Graph(
                         id={"type": "styled-graph", "owner": "util-wedge", "name": "preview"},
+                        figure=error_figure("Click Preview in the sidebar — the wedge mask cross-section appears here."),
                         style={"height": "520px", "width": "520px", "maxWidth": "100%"},
                     ),
                 ),
                 label="Wedge Mask",
                 tab_id=_TAB_WEDGE,
                 id=f"{_TAB_WEDGE}-item",
-                disabled=True,
             ),
             dbc.Tab(
                 html.Div([
                     customel_graph(
                         "util-alpha", "shape",
-                        dcc.Graph(id={"type": "styled-graph", "owner": "util-alpha", "name": "shape"}, style={"height": "500px"}),
+                        dcc.Graph(
+                            id={"type": "styled-graph", "owner": "util-alpha", "name": "shape"},
+                            figure=error_figure("Select a motl source and move the alpha slider — the surface mesh appears here."),
+                            style={"height": "500px"},
+                        ),
                     ),
                     html.Div(id=_ALPHA_STATS_ID, style=styles.HINT),
                 ]),
                 label="Alpha Shape",
                 tab_id=_TAB_ALPHA,
                 id=f"{_TAB_ALPHA}-item",
-                disabled=True,
             ),
             dbc.Tab(
-                get_orientation_picker_graph(_ORIENT_PREFIX, height="500px"),
+                _orient_graph,
                 label="Orientation",
                 tab_id=_TAB_ORIENT,
                 id=f"{_TAB_ORIENT}-item",
-                disabled=True,
             ),
         ],
     )
-    return [dcc.Store(id="util-sidebar-prev-active"), tabs]
+    return [tabs]
 
 
 def _build_layout() -> html.Div:
@@ -542,7 +550,6 @@ def _register_alpha_shape_callbacks(app) -> None:
         Output(_ALPHA_GRAPH_ID, "figure"),
         Output(_ALPHA_STATS_ID, "children"),
         Output(f"{p}-display", "value"),
-        Output(f"{_TAB_ALPHA}-item", "disabled"),
         Input(f"{p}-slider", "value"),
         Input(f"{p}-points-sw", "value"),
         State(f"{p}-tetra-info", "data"),
@@ -554,12 +561,11 @@ def _register_alpha_shape_callbacks(app) -> None:
             raise PreventUpdate
         alpha = _slider_to_alpha(float(slider_val or 0.5), tetra_info)
         figure, stats = _render_alpha_shape(alpha, tetra_info, bool(show_pts), gs or {})
-        return figure, stats, round(alpha, 6), False
+        return figure, stats, round(alpha, 6)
 
     @app.callback(
         Output(_ALPHA_GRAPH_ID, "figure", allow_duplicate=True),
         Output(_ALPHA_STATS_ID, "children", allow_duplicate=True),
-        Output(f"{_TAB_ALPHA}-item", "disabled", allow_duplicate=True),
         Input(f"{p}-display", "value"),
         State(f"{p}-points-sw", "value"),
         State(f"{p}-tetra-info", "data"),
@@ -573,7 +579,7 @@ def _register_alpha_shape_callbacks(app) -> None:
         if alpha <= 0:
             raise PreventUpdate
         figure, stats = _render_alpha_shape(alpha, tetra_info, bool(show_pts), gs or {})
-        return figure, stats, False
+        return figure, stats
 
     @app.callback(
         Output(f"{p}-save-status", "children"),
@@ -653,40 +659,21 @@ def register_callbacks(app) -> None:
     register_orientation_picker_callbacks(app, _ORIENT_PREFIX, mode=None, show_structure=True)
 
     @app.callback(
-        Output(f"{_TAB_ORIENT}-item", "disabled"),
-        Input(f"{_ORIENT_PREFIX}-sphere-graph", "figure"),
-        prevent_initial_call=True,
-    )
-    def _enable_orient_tab(fig):
-        return fig is None
-
-    @app.callback(
         Output("util-tabs", "active_tab", allow_duplicate=True),
-        Output("util-sidebar-prev-active", "data"),
         Input("util-sidebar-acc", "active_item"),
-        State("util-sidebar-prev-active", "data"),
-        State(f"{_TAB_ANGLES}-item", "disabled"),
-        State(f"{_TAB_WEDGE}-item", "disabled"),
-        State(f"{_TAB_ALPHA}-item", "disabled"),
-        State(f"{_TAB_ORIENT}-item", "disabled"),
         prevent_initial_call=True,
     )
-    def _sidebar_focus_tab(active_items, prev_active, d_ang, d_wedge, d_alp, d_ori):
-        prev = set(prev_active or [])
-        curr = set(active_items or [])
-        new_prev = list(curr)
-        new_items = curr - prev
+    def _sidebar_focus_tab(active_item):
         _map = {
-            "util-acc-generate_angles":    (_TAB_ANGLES, d_ang),
-            "util-acc-generate_wedge_mask": (_TAB_WEDGE, d_wedge),
-            "util-acc-alpha-shape":        (_TAB_ALPHA, d_alp),
-            "util-acc-orient":             (_TAB_ORIENT, d_ori),
+            "util-acc-generate_angles":     _TAB_ANGLES,
+            "util-acc-generate_wedge_mask": _TAB_WEDGE,
+            "util-acc-alpha-shape":         _TAB_ALPHA,
+            "util-acc-orient":              _TAB_ORIENT,
         }
-        for key in new_items:
-            tab_id, disabled = _map.get(key, (None, True))
-            if tab_id and not disabled:
-                return tab_id, new_prev
-        return no_update, new_prev
+        tab_id = _map.get(active_item or "")
+        if tab_id:
+            return tab_id
+        raise PreventUpdate
 
     for b in discovery.standalone_builders():
         prefix = f"util-{b.fn.__name__}"
@@ -699,7 +686,6 @@ def register_callbacks(app) -> None:
                 Output(f"{prefix}-angles", "data"),
                 Output({"type": "styled-graph", "owner": "util-angles", "name": "sphere"}, "figure"),
                 Output({"type": "styled-graph", "owner": "util-angles", "name": "inplane"}, "figure"),
-                Output(f"{_TAB_ANGLES}-item", "disabled"),
                 Output("util-tabs", "active_tab", allow_duplicate=True),
                 Input(f"{prefix}-preview-btn", "n_clicks"),
                 State({"type": _ANGLES_ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "value"),
@@ -708,7 +694,7 @@ def register_callbacks(app) -> None:
                 prevent_initial_call=True,
             )
             def _preview(n_clicks, values, ids, gs, _prefix=prefix):
-                _NU = (no_update,) * 5
+                _NU = (no_update,) * 4
                 if not n_clicks:
                     raise PreventUpdate
 
@@ -743,7 +729,7 @@ def register_callbacks(app) -> None:
                 except Exception as exc:
                     inplane_fig = error_figure(f"Inplane plot error: {exc}")
 
-                return angles_list, sphere_fig, inplane_fig, False, _TAB_ANGLES
+                return angles_list, sphere_fig, inplane_fig, _TAB_ANGLES
 
         elif b.fn.__name__ == "generate_wedge_mask":
             _register_wedge_mask_callbacks(app, prefix)
@@ -763,31 +749,30 @@ def _register_wedge_mask_callbacks(app, prefix: str) -> None:
     @app.callback(
         Output({"type": "styled-graph", "owner": "util-wedge", "name": "preview"}, "figure"),
         Output(f"{prefix}-status", "children", allow_duplicate=True),
-        Output(f"{_TAB_WEDGE}-item", "disabled"),
         Output("util-tabs", "active_tab", allow_duplicate=True),
         Input(f"{prefix}-preview-btn", "n_clicks"),
         State(f"{prefix}-params", "data"),
         prevent_initial_call=True,
     )
     def _preview(n_clicks, params):
-        _NU = (no_update,) * 4
+        _NU = (no_update,) * 3
         if not n_clicks:
             raise PreventUpdate
         if not params:
-            return no_update, "Preview needs the form filled.", no_update, no_update
+            return no_update, "Preview needs the form filled.", no_update
         required = ["map_size", "wedgelist", "tomo_number"]
         missing = [r for r in required if not params.get(r)]
         if missing:
             msg = f"Missing required fields: {', '.join(missing)}."
-            return no_update, msg, no_update, no_update
+            return no_update, msg, no_update
         try:
             kwargs = {k: v for k, v in params.items() if v is not None and k != "output_path"}
             _wedge_fn = discovery.get("cryowedge.generate_wedge_mask").fn
             result = _wedge_fn(**kwargs)
             mask = result["mask"] if isinstance(result, dict) else result
-            return wedge_xz_figure(mask), f"Preview rendered (mask shape {mask.shape}).", False, _TAB_WEDGE
+            return wedge_xz_figure(mask), f"Preview rendered (mask shape {mask.shape}).", _TAB_WEDGE
         except Exception as exc:
-            return no_update, f"Preview error: {exc}", no_update, no_update
+            return no_update, f"Preview error: {exc}", no_update
 
     @app.callback(
         Output(f"{prefix}-status", "children"),

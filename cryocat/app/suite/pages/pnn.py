@@ -26,9 +26,9 @@ from dash import html, dcc, ctx, Input, Output, State, ALL, no_update
 import dash_bootstrap_components as dbc
 
 from cryocat.core.cryomotl import Motl
-from cryocat.analysis.nnana import NearestNeighbors
+from cryocat.analysis.nnana import NearestNeighbors, trace_chains
 from cryocat.analysis import visplot
-from cryocat.app.apputils import generate_kwargs, run_operation
+from cryocat.app.apputils import generate_kwargs, run_operation, run_operation_to_pool
 from cryocat.app import ids, formgen, styles
 from cryocat.app.formgen import make_dropdown
 from cryocat.app.components.graphsettings import style_figure
@@ -36,6 +36,7 @@ from cryocat.app.pool import (
     get_rows as _get_rows,
     get_motl as _get_motl, PoolPayloadMissing as _PoolPayloadMissing,
     PoolState,
+    insert_motl as _insert_motl,
 )
 from cryocat.app.components.poolpicker import get_pool_picker, register_pool_picker_callbacks
 from cryocat.app.components.poolslotlist import (
@@ -62,6 +63,7 @@ _MOTL_COL_OPTIONS = [{"label": c, "value": c} for c in Motl.motl_columns]
 _NN_SLOTS = 5
 _nn_table_refs: dict[str, dict] = {}   # data_id → full table-pool ref (for slot display)
 _nn_xyz_figs: dict[str, Any] = {}      # data_id → styled figure dict (for slot display)
+_nn_objects: dict[str, "NearestNeighbors"] = {}
 
 from cryocat.app import datapool as _datapool
 
@@ -175,6 +177,94 @@ def _nn_load_fn(path, motl_selection=None):
         _, _, msg = check_motl_overlap(nn.df, "qp_subtomo_id", query_id)
         result["status_extra"] = msg
     return result
+
+
+def _barycentric_sidebar_content() -> list:
+    return [
+        html.P(
+            "Computes the barycentric (centroid) position of each query particle "
+            "and its nearest neighbours. Uses the active NN pool entry.",
+            style={"fontSize": styles.FONT_SM, "color": styles.COLOR_MUTED, "marginBottom": "0.4rem"},
+        ),
+        formgen.form_row(
+            "n_neighbors",
+            dcc.Input(
+                id="nn-bary-n-neighbors",
+                type="number",
+                value=1,
+                min=1,
+                step=1,
+                style=styles.FORM_COMPACT_INPUT,
+            ),
+            "Number of nearest neighbours per query particle. "
+            "Queries with fewer neighbours are dropped.",
+            label_text="N neighbours",
+        ),
+        dbc.Button(
+            "Compute barycentric motl",
+            id="nn-bary-btn",
+            color="primary",
+            size="sm",
+            style={"width": "100%", "marginTop": "0.5rem"},
+        ),
+        html.Div(
+            id="nn-bary-status",
+            style={"color": "var(--color9)", "marginTop": "0.4rem", "wordBreak": "break-word"},
+        ),
+    ]
+
+
+def _trace_chains_sidebar_content() -> list:
+    return [
+        html.P(
+            "Traces chains by linking the exit of particle A to the entry of B. "
+            "The result is added to the motl pool.",
+            style={"fontSize": styles.FONT_SM, "color": styles.COLOR_MUTED, "marginBottom": "0.4rem"},
+        ),
+        formgen.form_row(
+            "motl_entry",
+            make_dropdown(
+                "nn-tc-motl-entry",
+                [],
+                None,
+                clearable=True,
+                placeholder="Entry motl from pool…",
+            ),
+            "Motl representing particle entry points",
+            label_text="Entry motl",
+        ),
+        formgen.form_row(
+            "motl_exit",
+            make_dropdown(
+                "nn-tc-motl-exit",
+                [],
+                None,
+                clearable=True,
+                placeholder="Same as entry (optional)",
+            ),
+            "Exit motl — leave empty to use the entry motl for both sides",
+            label_text="Exit motl",
+            truly_optional=True,
+        ),
+        html.Div(
+            formgen.build_form(
+                trace_chains,
+                id_type="nn-tc-params",
+                exclude=["motl_entry", "motl_exit", "output_motl"],
+            ),
+        ),
+        dbc.Button(
+            "Trace chains",
+            id="nn-tc-btn",
+            color="primary",
+            size="sm",
+            style={"width": "100%", "marginTop": "0.5rem"},
+        ),
+        html.Div(
+            id="nn-tc-status",
+            style={"color": "var(--color9)", "marginTop": "0.4rem", "wordBreak": "break-word"},
+        ),
+    ]
 
 
 def _sidebar() -> list:
@@ -332,6 +422,16 @@ def _sidebar() -> list:
                     item_id="nn-acc-create",
                 ),
                 dbc.AccordionItem(
+                    _barycentric_sidebar_content(),
+                    title="Barycentric motl",
+                    item_id="nn-acc-bary",
+                ),
+                dbc.AccordionItem(
+                    _trace_chains_sidebar_content(),
+                    title="Trace chains",
+                    item_id="nn-acc-tc",
+                ),
+                dbc.AccordionItem(
                     get_pool_slot_list("nn-pool"),
                     title="NN results in pool",
                     item_id="nn-acc-pool",
@@ -406,6 +506,7 @@ def register_callbacks(app):
     )
     register_slot_focus_callback(
         app, "nn-pool-slot-map", "nn-slot-tabs", "nn-slot-", _NN_SLOTS,
+        active_id_store_id="nn-pool-active-id",
     )
     register_table_to_motl_callbacks(
         app, "nn-ttm",
@@ -611,6 +712,7 @@ def register_callbacks(app):
         xyz_graph = customel_graph("nn", "xyz", dcc.Graph(id={"type": "styled-graph", "owner": "nn", "name": "xyz"}, figure=go.Figure(_fig_d)))
         _nn_table_refs[_dp_id] = nn_ref
         _nn_xyz_figs[_dp_id] = _fig_d
+        _nn_objects[_dp_id] = nn_stats
         from cryocat.app.console.vars import register_console_var
         register_console_var(var, nn_stats.df)
 
@@ -851,6 +953,7 @@ def register_callbacks(app):
         _nn_table_refs[_dp_id] = nn_ref
         if _fig_d is not None:
             _nn_xyz_figs[_dp_id] = _fig_d
+        _nn_objects[_dp_id] = nn_stats
         from cryocat.app.console.vars import register_console_var
         register_console_var(var, nn_stats.df)
         new_dp_reg, new_dp_next = _ds.to_stores()
@@ -965,10 +1068,117 @@ def register_callbacks(app):
     )
     def _on_nn_active_id_change(data_id):
         if not data_id:
-            raise dash.exceptions.PreventUpdate
+            return None, []
         table_ref = _nn_table_refs.get(data_id)
         if table_ref is None:
             raise dash.exceptions.PreventUpdate
         xyz_fig_dict = _nn_xyz_figs.get(data_id)
         xyz_child = customel_graph("nn", "xyz", dcc.Graph(id={"type": "styled-graph", "owner": "nn", "name": "xyz"}, figure=go.Figure(xyz_fig_dict))) if xyz_fig_dict else no_update
         return table_ref, xyz_child
+
+    # ── Step G: populate trace-chains motl pickers ────────────────────────────
+
+    @app.callback(
+        Output("nn-tc-motl-entry", "options"),
+        Output("nn-tc-motl-exit", "options"),
+        Input(ids.POOL_REGISTRY, "data"),
+    )
+    def _populate_tc_motl_opts(registry):
+        opts = [{"label": v.get("label", k), "value": k} for k, v in (registry or {}).items()]
+        return opts, opts
+
+    # ── Step H: barycentric motl callback ─────────────────────────────────────
+
+    @app.callback(
+        Output("nn-bary-status", "children"),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        Input("nn-bary-btn", "n_clicks"),
+        State("nn-pool-active-id", "data"),
+        State("nn-bary-n-neighbors", "value"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
+    )
+    def _compute_barycentric(n_clicks, active_data_id, n_neighbors, registry, pool_meta, pool_next_id):
+        _nu3 = (no_update, no_update, no_update)
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        if not active_data_id:
+            return "Select an NN pool entry first (click a slot tab).", *_nu3
+        nn_obj = _nn_objects.get(active_data_id)
+        if nn_obj is None:
+            return "NN object not found — re-run or reload the NN analysis.", *_nu3
+        n = int(n_neighbors or 1)
+        pool_state = PoolState.from_stores(registry, pool_meta, pool_next_id)
+        try:
+            new_state, motl_id, result = run_operation_to_pool(
+                nn_obj.get_barycentric_motl,
+                {"n_neighbors": n},
+                pool_state,
+                label=f"Barycentric motl ({n}nn)",
+            )
+        except Exception as exc:
+            return f"Error: {exc}", *_nu3
+        dropped = getattr(result, "_nn_dropped_count", 0)
+        n_out = len(result.df)
+        msg = f"Created '{motl_id}' with {n_out} particles."
+        if dropped:
+            msg += f" Dropped {dropped} queries (fewer than {n} neighbours)."
+        return msg, *new_state.to_stores()
+
+    # ── Step I: trace chains callback ─────────────────────────────────────────
+
+    formgen.register_form_callbacks(app, "nn-tc-params")
+
+    @app.callback(
+        Output("nn-tc-status", "children"),
+        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.POOL_META, "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+        Input("nn-tc-btn", "n_clicks"),
+        State("nn-tc-motl-entry", "value"),
+        State("nn-tc-motl-exit", "value"),
+        State({"type": "nn-tc-params", "owner": _ALL, "param": _ALL, "tag": _ALL}, "value"),
+        State({"type": "nn-tc-params", "owner": _ALL, "param": _ALL, "tag": _ALL}, "id"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
+    )
+    def _compute_trace_chains(n_clicks, entry_id, exit_id, param_values, param_ids,
+                              registry, pool_meta, pool_next_id):
+        _nu3 = (no_update, no_update, no_update)
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        if not entry_id:
+            return "Select an entry motl first.", *_nu3
+        pool_state = PoolState.from_stores(registry, pool_meta, pool_next_id)
+        try:
+            entry_motl = _get_motl(entry_id)
+        except _PoolPayloadMissing:
+            return "Entry motl not found in pool.", *_nu3
+        exit_motl = None
+        if exit_id and exit_id != entry_id:
+            try:
+                exit_motl = _get_motl(exit_id)
+            except _PoolPayloadMissing:
+                return "Exit motl not found in pool.", *_nu3
+        tc_kwargs = generate_kwargs(param_ids, param_values, pool_state) if param_ids else {}
+        tc_kwargs["motl_entry"] = entry_motl
+        if exit_motl is not None:
+            tc_kwargs["motl_exit"] = exit_motl
+        tc_kwargs.pop("output_motl", None)
+        try:
+            new_state, motl_id, result = run_operation_to_pool(
+                trace_chains,
+                tc_kwargs,
+                pool_state,
+                label="Traced chains",
+            )
+        except Exception as exc:
+            return f"Error: {exc}", *_nu3
+        n_out = len(result.df)
+        return f"Created '{motl_id}' with {n_out} particles (chain id in object_id).", *new_state.to_stores()

@@ -193,7 +193,9 @@ class GuiCategory(StrEnum):
     """Closed set of GUI tiers.  Extend only when a third tier is genuinely needed."""
     MOTL_OP = "motl-op"
     BUILDER  = "builder"
-    READER   = "reader"   # file-reading callables surfaced in the data pool
+    READER      = "reader"       # file-reading callables surfaced in the data pool
+    SURFACE_OP  = "surface-op"   # operations on existing Mesh / OPC surfaces
+    SURFACE_LOAD = "surface-load" # loaders that create a new surface from disk / motl
 
 
 @dataclass(frozen=True)
@@ -394,6 +396,12 @@ def gui_exposed(
         elif category == "reader":
             gui_category = GuiCategory.READER
             gui_group = group
+        elif category == "surface-op":
+            gui_category = GuiCategory.SURFACE_OP
+            gui_group = group
+        elif category == "surface-load":
+            gui_category = GuiCategory.SURFACE_LOAD
+            gui_group = group
         else:
             gui_category = GuiCategory.MOTL_OP
             gui_group = group or (category or "")
@@ -471,7 +479,7 @@ def gui_exposed(
 
 # PEP-695 ``type X = ...`` aliases handled directly by tag (== alias name).
 _ALIAS_TAGS = {
-    "MapSource", "DataSource", "TiltStack", "TomoList", "TomoDimensions",
+    "MapSource", "DataSource", "DataPoolEntry", "TiltStack", "TomoList", "TomoDimensions",
     "TripletLike", "EulerAngles", "ListLike", "Symmetry", "ArrayLike",
     "RotationLike", "PathOrStr",
 }
@@ -691,6 +699,21 @@ def _parse_str(v: Any) -> str | None:
     return str(v)
 
 
+def _parse_data_pool_entry(value: Any):
+    """Pool-table picker value (data_id string) -> server-side DataFrame payload.
+
+    The lazy import means this function is only reachable after the GUI app has
+    started; calling it from a pure-library context returns None.
+    """
+    if not value:
+        return None
+    try:
+        from cryocat.app.datapool import get_payload as _get_payload
+        return _get_payload(str(value))
+    except Exception:
+        return None
+
+
 def _arg_bool(s: str) -> bool:
     return _parse_bool(s)
 
@@ -712,8 +735,9 @@ def _arg_listlike(s: str) -> Any:
 # drift.
 TYPE_HANDLERS = {
     # tag             widget        parse (GUI value -> py)   argparse spec
-    "MapSource":      {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
-    "DataSource":     {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
+    "MapSource":      {"widget": "path",       "parse": _parse_path,            "argparse": {"type": str}},
+    "DataSource":     {"widget": "path",       "parse": _parse_path,            "argparse": {"type": str}},
+    "DataPoolEntry":  {"widget": "pool_table", "parse": _parse_data_pool_entry, "argparse": {"type": str}},
     "TiltStack":      {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
     "TomoDimensions": {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
     "TomoList":       {"widget": "text",     "parse": _parse_listlike, "argparse": {"type": _arg_listlike}},

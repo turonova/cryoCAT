@@ -266,7 +266,7 @@ def register_callbacks(app):
     )
     def connect_results(data, label):
         if not data:
-            raise dash.exceptions.PreventUpdate
+            return True, None, None, "Results", no_update
         display_label = label or "Results"
         return False, data, data, display_label, "me-tab-results"
 

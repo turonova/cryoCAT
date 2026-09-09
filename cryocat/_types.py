@@ -268,6 +268,15 @@ path string. Normalize at the boundary with the relevant loader
 (ioutils.df_load for tabular, np.asarray for arrays, etc.).
 """
 
+type DataPoolEntry = pd.DataFrame
+"""A DataFrame that must come from the GUI data pool.
+
+Annotate parameters typed this way so the form renders a pool-table picker
+(a dropdown populated from DATA_POOL_REGISTRY) rather than a plain text field.
+The parse function resolves the selected data_id to the actual server-side
+DataFrame payload.
+"""
+
 type DictSource = PathOrStr | dict
 """Generic dict/JSON input.
 

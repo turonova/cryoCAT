@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import os
 import math
 from scipy.interpolate import InterpolatedUnivariateSpline
-from scipy.interpolate import splprep, splev
+from scipy.interpolate import splprep, splev, make_interp_spline, BSpline
 from scipy.optimize import fsolve
 
 from cryocat._types import RotationLike, Symmetry, TripletLike, EulerAngles, ArrayLike, PathOrStr
@@ -4298,4 +4298,148 @@ def as_triplet(
         raise ValueError("Either input_size or referene_size have to be specified")
 
     return size_correct_format
+
+
+# =============================================================================
+# Warp tilt-series geometry — projection, triangulation, frame rotation
+# =============================================================================
+
+def project_parts(geom: dict, coords_ang: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Project 3-D positions (Ångströms, cryoCAT frame) through all tilts.
+
+    Returns (pre, mov) both shape (N, ntilts, 2) in Ångströms.
+    Tilt matrices in geom['tilt_matrices'] are already in cryoCAT frame;
+    no coordinate flip is applied here or anywhere in the call path.
+    """
+    if geom["angles_inverted"]:
+        raise NotImplementedError("AreAnglesInverted=True is not supported.")
+    coords = np.atleast_2d(np.asarray(coords_ang, float))
+    tilt_mats = geom["tilt_matrices"]
+    N, tN = coords.shape[0], len(tilt_mats)
+    vol_c = geom["volume_dims"] / 2.0
+    img_c = geom["image_dims"] / 2.0
+    vdims = geom["volume_dims"]
+    gw = np.zeros((N, tN, 3))
+    vwarp = geom["grid_volume_warp"]
+    if not all(g.is_const and g.data.flat[0] == 0 for g in vwarp):
+        dose = geom["dose"]
+        span = dose.max() - dose.min()
+        for t in range(tN):
+            w = np.full(N, (dose[t] - dose.min()) / span if span else 0.0)
+            # Grid is indexed by Relion-normalized z (1 - z_em/vdz); z-shift flips sign.
+            nz = 1.0 - coords[:, 2] / vdims[2]
+            for k, g in enumerate(vwarp):
+                val = g.interp(coords[:, 0] / vdims[0], coords[:, 1] / vdims[1], nz, w)
+                gw[:, t, k] = -val if k == 2 else val
+    pre = np.empty((N, tN, 2))
+    mov = np.zeros((N, tN, 2))
+    centered0 = coords - vol_c
+    aox, aoy = geom["axis_offset_x"], geom["axis_offset_y"]
+    gmx, gmy = geom["grid_movement_x"], geom["grid_movement_y"]
+    img_dims = geom["image_dims"]
+    grid_step = 1.0 / (tN - 1)
+    for t in range(tN):
+        tr = (centered0 + gw[:, t, :]) @ tilt_mats[t].T
+        x = tr[:, 0] + aox[t] + img_c[0]
+        y = tr[:, 1] + aoy[t] + img_c[1]
+        pre[:, t, 0], pre[:, t, 1] = x, y
+        gx = x / img_dims[0]
+        gy = y / img_dims[1]
+        gz = t * grid_step
+        mov[:, t, 0] = gmx.interp(gx, gy, gz)
+        mov[:, t, 1] = gmy.interp(gx, gy, gz)
+    return pre, mov
+
+
+def project(geom: dict, coords_ang: np.ndarray) -> np.ndarray:
+    """Project positions (Ångströms) → motion-corrected detector positions (Ångströms)."""
+    pre, mov = project_parts(geom, coords_ang)
+    return pre - mov
+
+
+def project_px(geom: dict, coords_ang: np.ndarray) -> np.ndarray:
+    """Project positions (Ångströms) → detector pixel coordinates."""
+    return project(geom, coords_ang) / geom["pixel_size"]
+
+
+def triangulate(
+    geom: dict,
+    target_px: np.ndarray,
+    n_iter: int = 12,
+    tol: float = 1e-4,
+) -> tuple[np.ndarray, list[float]]:
+    """Back-project detector pixel positions to 3-D Ångström coordinates (cryoCAT frame).
+
+    Parameters
+    ----------
+    geom : dict
+        Warp geometry dict from read_warp_tilt_xml (tilt matrices in cryoCAT frame).
+    target_px : ndarray, shape (N, ntilts, 2)
+        Detector pixel positions (from project_px of a different geometry dict).
+    n_iter : int
+        Maximum Newton iterations.
+    tol : float
+        Convergence threshold (max absolute change in Ångströms).
+
+    Returns
+    -------
+    q : ndarray, shape (N, 3)
+        3-D positions in Ångströms, cryoCAT frame.
+    history : list[float]
+        Per-iteration max change (for diagnostics).
+    """
+    tilt_mats = geom["tilt_matrices"]
+    tN = len(tilt_mats)
+    p = target_px.shape[0]
+    vol_c = geom["volume_dims"] / 2.0
+    img_c = geom["image_dims"] / 2.0
+    A = np.empty((2 * tN, 3))
+    off = np.empty((2 * tN, 1))
+    for t in range(tN):
+        R = tilt_mats[t]
+        A[2 * t], A[2 * t + 1] = R[0], R[1]
+        off[2 * t, 0] = geom["axis_offset_x"][t] + img_c[0]
+        off[2 * t + 1, 0] = geom["axis_offset_y"][t] + img_c[1]
+    A_pinv = np.linalg.pinv(A)
+    tgt_ang = (target_px * geom["pixel_size"]).transpose(1, 2, 0).reshape(2 * tN, p)
+    mov = np.zeros((p, tN, 2))
+    q = None
+    history: list[float] = []
+    for _ in range(n_iter):
+        b = tgt_ang - off + mov.transpose(1, 2, 0).reshape(2 * tN, p)
+        q_new = (A_pinv @ b).T + vol_c
+        history.append(np.inf if q is None else float(np.abs(q_new - q).max()))
+        q = q_new
+        _, mov = project_parts(geom, q)
+        if history[-1] < tol:
+            break
+    return q, history
+
+
+def frame_rotation(old_geom: dict, new_geom: dict) -> tuple[np.ndarray, float, float]:
+    """Polar part of mean_t(R_new[t].T @ R_old[t]): rotation mapping old→new orientations.
+
+    Returns
+    -------
+    R_map : ndarray (3, 3)
+        Orthogonal rotation matrix. Apply as ``R_new = R_map @ R_old``.
+    angle : float
+        Magnitude of R_map in degrees.
+    spread : float
+        Max deviation of per-tilt products from R_map in degrees.
+    """
+    old_mats = old_geom["tilt_matrices"]
+    new_mats = new_geom["tilt_matrices"]
+    ntilts = len(old_mats)
+    Rs = np.stack([new_mats[t].T @ old_mats[t] for t in range(ntilts)])
+    U, S, Vt = np.linalg.svd(Rs.mean(0))
+    R = U @ Vt
+    if np.linalg.det(R) < 0:
+        Vt[-1] *= -1
+        R = U @ Vt
+    spread = max(
+        np.degrees(np.arccos(np.clip((np.trace(R.T @ Ri) - 1) / 2, -1.0, 1.0))) for Ri in Rs
+    )
+    angle = np.degrees(np.arccos(np.clip((np.trace(R) - 1) / 2, -1.0, 1.0)))
+    return R, angle, spread
 

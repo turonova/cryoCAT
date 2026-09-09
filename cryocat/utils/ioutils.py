@@ -27,6 +27,7 @@ from cryocat.core import mdoc
 from cryocat.utils import starfileio as sf, starfileio
 from cryocat.utils.exceptions import UserInputError
 from cryocat.utils import geom
+from scipy.interpolate import make_interp_spline, BSpline
 
 
 def get_file_encoding(input_path: PathOrStr) -> str:
@@ -1941,3 +1942,244 @@ def write_coords_to_cmm_file(coords: np.ndarray | pd.DataFrame | TripletLike, ou
         idx+=1
     tree = ET.ElementTree(root)
     tree.write(output_path, encoding="utf-8", xml_declaration=False)
+
+
+# =============================================================================
+# Warp XML geometry — grid classes and read_warp_tilt_xml
+# =============================================================================
+
+_DEG = np.pi / 180.0
+
+
+def _rot_x(a: float) -> np.ndarray:
+    c, s = np.cos(a), np.sin(a)
+    return np.array([[1, 0, 0], [0, c, -s], [0, s, c]], float)
+
+
+def _warp_euler(r: float, t: float, p: float) -> np.ndarray:
+    """Warp Matrix3.Euler: intrinsic ZYZ rotation matrix, angles in radians."""
+    ca, cb, cg = np.cos(r), np.cos(t), np.cos(p)
+    sa, sb, sg = np.sin(r), np.sin(t), np.sin(p)
+    cc, cs, sc, ss = cb * ca, cb * sa, sb * ca, sb * sa
+    return np.array(
+        [
+            [cg * cc - sg * sa, cg * cs + sg * ca, -cg * sb],
+            [-sg * cc - cg * sa, -sg * cs + cg * ca, sg * sb],
+            [sc, ss, cb],
+        ],
+        float,
+    )
+
+
+class CubicGrid:
+    """Separable cubic-spline interpolation grid loaded from a Warp XML node."""
+
+    def __init__(self, dims_xyz, values_flat, margins=(0.0, 0.0, 0.0)):
+        self.dims = tuple(int(d) for d in dims_xyz)
+        self.margins = tuple(float(m) for m in margins)
+        nx, ny, nz = self.dims
+        self.data = np.asarray(values_flat, float).reshape(nz, ny, nx)
+        self.active = [i for i, d in enumerate(self.dims) if d > 1]
+        self.is_const = len(self.active) == 0
+        if not self.is_const:
+            c = self.data
+            self.knots: dict = {}
+            for ai in self.active:
+                n, m = self.dims[ai], self.margins[ai]
+                grid = np.linspace(m, 1.0 - m, n)
+                arr_axis = {0: 2, 1: 1, 2: 0}[ai]
+                d = np.moveaxis(c, arr_axis, 0)
+                spl = make_interp_spline(grid, d, k=3, bc_type="natural")
+                self.knots[ai] = spl.t
+                c = np.moveaxis(spl.c, 0, arr_axis)
+            self.coeffs = c
+
+    def interp(self, x, y, z) -> np.ndarray:
+        x, y, z = (np.atleast_1d(np.asarray(v, float)) for v in (x, y, z))
+        n = max(x.size, y.size, z.size)
+        if self.is_const:
+            return np.full(n, self.data.flat[0])
+        q = {0: x, 1: y, 2: z}
+        bases: dict = {}
+        for ai in (0, 1, 2):
+            if ai not in self.active:
+                bases[ai] = np.ones((n, 1))
+                continue
+            lo, hi = self.margins[ai], 1.0 - self.margins[ai]
+            v = np.broadcast_to(q[ai], (n,))
+            bases[ai] = BSpline.design_matrix(np.clip(v, lo, hi), self.knots[ai], 3).toarray()
+        return np.einsum("pz,py,px,zyx->p", bases[2], bases[1], bases[0], self.coeffs, optimize=True)
+
+
+class LinearGrid4D:
+    """4-D trilinear interpolation grid (x/y/z/dose) loaded from a Warp XML node."""
+
+    def __init__(self, dims_xyzw, values_flat):
+        self.dims = tuple(int(d) for d in dims_xyzw)
+        nx, ny, nz, nw = self.dims
+        self.data = np.asarray(values_flat, float).reshape(nw, nz, ny, nx)
+        self.is_const = all(d == 1 for d in self.dims)
+
+    def interp(self, x, y, z, w) -> np.ndarray:
+        x, y, z, w = (np.atleast_1d(np.asarray(v, float)) for v in (x, y, z, w))
+        n = max(v.size for v in (x, y, z, w))
+        if self.is_const:
+            return np.full(n, self.data.flat[0])
+        coords = [np.broadcast_to(v, (n,)) * (d - 1) for v, d in zip((x, y, z, w), self.dims)]
+        p0 = [np.clip(c.astype(int), 0, d - 1) for c, d in zip(coords, self.dims)]
+        p1 = [np.minimum(p + 1, d - 1) for p, d in zip(p0, self.dims)]
+        f = [c - p for c, p in zip(coords, p0)]
+        out = np.zeros(n)
+        for iw in (0, 1):
+            for iz in (0, 1):
+                for iy in (0, 1):
+                    for ix in (0, 1):
+                        wgt = (
+                            (f[3] if iw else 1 - f[3])
+                            * (f[2] if iz else 1 - f[2])
+                            * (f[1] if iy else 1 - f[1])
+                            * (f[0] if ix else 1 - f[0])
+                        )
+                        out += wgt * self.data[
+                            (p1 if iw else p0)[3],
+                            (p1 if iz else p0)[2],
+                            (p1 if iy else p0)[1],
+                            (p1 if ix else p0)[0],
+                        ]
+        return out
+
+
+def load_xml_root(path: PathOrStr):
+    """Parse a Warp XML file, handling UTF-16, UTF-8-BOM, and plain UTF-8 encodings."""
+    raw = open(path, "rb").read()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        txt = raw.decode("utf-16")
+    elif raw[:3] == b"\xef\xbb\xbf":
+        txt = raw.decode("utf-8-sig")
+    else:
+        txt = raw.decode("utf-8")
+    return ET.fromstring(re.sub(r"^\s*<\?xml[^>]*\?>", "", txt, count=1))
+
+
+def _floats(root, tag: str) -> np.ndarray | None:
+    node = root.find(tag)
+    return None if node is None else np.array([float(v) for v in node.text.split()])
+
+
+def _attr_float_list(root, name: str) -> np.ndarray | None:
+    v = root.get(name)
+    return None if v is None else np.array([float(s) for s in v.split(",")])
+
+
+def _cubic(root, tag: str) -> CubicGrid:
+    node = root.find(tag)
+    dims = (int(node.get("Width")), int(node.get("Height")), int(node.get("Depth")))
+    margins = (
+        float(node.get("MarginX", 0)),
+        float(node.get("MarginY", 0)),
+        float(node.get("MarginZ", 0)),
+    )
+    vals = np.zeros(dims[0] * dims[1] * dims[2])
+    for nd in node:
+        x, y, z = int(nd.get("X")), int(nd.get("Y")), int(nd.get("Z"))
+        vals[(z * dims[1] + y) * dims[0] + x] = float(nd.get("Value"))
+    return CubicGrid(dims, vals, margins)
+
+
+def _linear4(root, tag: str) -> LinearGrid4D:
+    node = root.find(tag)
+    dims = (
+        int(node.get("Width")),
+        int(node.get("Height")),
+        int(node.get("Depth")),
+        int(node.get("Duration")),
+    )
+    vals = np.zeros(int(np.prod(dims)))
+    for nd in node:
+        x, y, z, w = int(nd.get("X")), int(nd.get("Y")), int(nd.get("Z")), int(nd.get("W"))
+        vals[((w * dims[2] + z) * dims[1] + y) * dims[0] + x] = float(nd.get("Value"))
+    return LinearGrid4D(dims, vals)
+
+
+def read_warp_tilt_xml(path: PathOrStr) -> dict:
+    """Load per-tilt geometry from a Warp XML file, in cryoCAT frame.
+
+    FG1 conjugation: Warp builds tilt matrices in Relion convention (z flipped).
+    Conjugating by F = diag(1,1,-1) converts them to cryoCAT convention:
+      F Rz(0) Ry(θ) Rz(φ) Rx(a) F  =  Rz(0) Ry(−θ) Rz(φ) Rx(−a).
+    Effect: tilt angle and levelAngleX are negated; axis angle (z-rotation) is unchanged.
+    Matrices are pre-built once here; no coordinate flip is needed in the call path.
+
+    Returns a dict with keys:
+        pixel_size, angles, dose, axis_offset_x, axis_offset_y, tilt_matrices,
+        grid_movement_x, grid_movement_y, grid_volume_warp, movie_paths,
+        use_tilt, angles_inverted, image_dims, volume_dims.
+    """
+    r = load_xml_root(path)
+    ctf = r.find("CTF")
+    pixel_size = float(
+        [p for p in ctf.findall("Param") if p.get("Name") == "PixelSize"][0].get("Value")
+    )
+    angles = _floats(r, "Angles")
+    axis_angles = _floats(r, "AxisAngle")
+    level_angle_y = float(r.get("LevelAngleY", 0))
+    lax_rad = -float(r.get("LevelAngleX", 0)) * _DEG  # negated levelAngleX for conjugation
+    tilt_matrices = np.stack(
+        [
+            _warp_euler(0.0, -(angles[t] + level_angle_y) * _DEG, -axis_angles[t] * _DEG)
+            @ _rot_x(lax_rad)
+            for t in range(len(angles))
+        ]
+    )
+    return {
+        "pixel_size": pixel_size,
+        "angles": angles,
+        "dose": _floats(r, "Dose"),
+        "axis_offset_x": _floats(r, "AxisOffsetX"),
+        "axis_offset_y": _floats(r, "AxisOffsetY"),
+        "tilt_matrices": tilt_matrices,
+        "grid_movement_x": _cubic(r, "GridMovementX"),
+        "grid_movement_y": _cubic(r, "GridMovementY"),
+        "grid_volume_warp": (
+            _linear4(r, "GridVolumeWarpX"),
+            _linear4(r, "GridVolumeWarpY"),
+            _linear4(r, "GridVolumeWarpZ"),
+        ),
+        "movie_paths": r.find("MoviePath").text.split(),
+        "use_tilt": np.array([v == "True" for v in r.find("UseTilt").text.split()]),
+        "angles_inverted": r.get("AreAnglesInverted", "False") == "True",
+        "image_dims": _attr_float_list(r, "ImageDimensionsAngstrom"),
+        "volume_dims": _attr_float_list(r, "VolumeDimensionsAngstrom"),
+    }
+
+
+def check_same_tiltseries(a: dict, b: dict) -> tuple[bool, str]:
+    """Return (ok, message). Checks that per-tilt correspondence a[t] ↔ b[t] is valid."""
+    ma = [os.path.basename(p) for p in a["movie_paths"]]
+    mb = [os.path.basename(p) for p in b["movie_paths"]]
+    if ma != mb:
+        return False, "movie lists differ"
+    if not (a["use_tilt"].all() and b["use_tilt"].all()):
+        return False, "some tilts deselected"
+    if not np.allclose(a["dose"], b["dose"], atol=0.05):
+        return False, "dose sequences differ"
+    return True, "ok"
+
+
+def set_volume_geometry(
+    geom: dict,
+    volume_dims: np.ndarray | None = None,
+    image_dims: np.ndarray | None = None,
+) -> None:
+    """Patch missing volume_dims / image_dims in a Warp geometry dict.
+
+    When image_dims is omitted, defaults to volume_dims[:2].
+    """
+    if geom["volume_dims"] is None:
+        if volume_dims is None:
+            raise ValueError("volume_dims must be provided when not present in the XML")
+        geom["volume_dims"] = np.asarray(volume_dims, float)
+    if geom["image_dims"] is None:
+        geom["image_dims"] = (
+            np.asarray(image_dims, float) if image_dims is not None else geom["volume_dims"][:2]
+        )

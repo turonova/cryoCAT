@@ -360,6 +360,11 @@ select.form-select {
     margin-bottom: 0.15rem !important;
     padding-left: 0 !important;
 }
+.form-check-inline {
+    display: inline-flex !important;
+    margin-right: 1rem !important;
+    margin-bottom: 0 !important;
+}
 
 /* ── Dash 4.x dcc.RadioItems / dcc.Checklist — inner item alignment ── */
 /* Each option is inline-flex with default align-items: stretch, which can

@@ -115,6 +115,19 @@ class DataPoolState:
         return reg, self.next_id
 
 
+def clean_registry(raw: dict | None) -> dict:
+    """Return a copy of *raw* with the ``__kind_counters__`` sentinel removed.
+
+    For consumers that read DATA_POOL_REGISTRY directly without going through
+    ``DataPoolState.from_stores`` and need a plain dict of real entries only.
+    """
+    if not raw:
+        return {}
+    result = dict(raw)
+    result.pop("__kind_counters__", None)
+    return result
+
+
 # ── Kind detection ────────────────────────────────────────────────────────────
 
 def _detect_kind(payload: Any) -> str:

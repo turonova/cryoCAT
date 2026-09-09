@@ -252,6 +252,24 @@ def register_pool_slot_list_callbacks(
 
     register_slot_change_callback(app, prefix, slot_map_id, n_slots)
 
+    @app.callback(
+        Output(slot_map_id, "data", allow_duplicate=True),
+        Input(pool_registry_id, "data"),
+        State(slot_map_id, "data"),
+        prevent_initial_call=True,
+    )
+    def _clean_stale_slots(registry, slot_map):
+        """Nullify any slot whose entry id is no longer in the pool registry.
+
+        Fires whenever an entry is removed from the pool, ensuring the slot map
+        is cleared immediately rather than requiring a second user interaction.
+        Idempotent: returns no_update when nothing has changed.
+        """
+        reg = registry or {}
+        sm = list(slot_map or [None] * n_slots)
+        updated = [sid if sid in reg else None for sid in sm]
+        return updated if updated != sm else no_update
+
 
 def register_slot_focus_callback(
     app,
@@ -261,20 +279,23 @@ def register_slot_focus_callback(
     n_slots: int,
     *,
     active_id_store_id: str | None = None,
+    empty_fallback_tab_id: str | None = None,
 ) -> None:
     """Register a callback that keeps the tab strip on an occupied slot.
 
     Fires whenever the slot map changes.  If the currently active tab now maps
     to an empty slot it moves focus to the lowest-numbered occupied slot; when
-    no slot is occupied it falls back to slot 0 so the user is never left on a
-    disabled tab.
+    no slot is occupied it redirects to *empty_fallback_tab_id* (if given) or
+    slot 0 so the user is never left on a disabled tab.
 
     active_id_store_id : str | None
         When given, also outputs to this store: writes the new focused slot's
         entry id (the raw slot_map value, a string), or None when no slot is
-        occupied.  This keeps one active-id store in sync without a second
-        callback.  Callers that store the id in a different format (e.g. a
-        dict) should omit this and add a page-specific sync callback instead.
+        occupied.
+
+    empty_fallback_tab_id : str | None
+        Tab id to redirect to when all slots are empty (e.g. "tango-tab-twist").
+        Defaults to the first slot tab when None.
 
     One shared implementation — call once per strip (graphs, motls, …).
     """
@@ -292,9 +313,10 @@ def register_slot_focus_callback(
         for i, sid in enumerate(sm):
             if sid:
                 return f"{tab_prefix}{i}", sid, True
-        fallback = f"{tab_prefix}0"
+        # No slots occupied — redirect away from the slot strip
+        fallback = empty_fallback_tab_id or f"{tab_prefix}0"
         new_tab = None if current_tab == fallback else fallback
-        return new_tab, None, True  # no slots occupied
+        return new_tab, None, True
 
     if active_id_store_id:
         @app.callback(

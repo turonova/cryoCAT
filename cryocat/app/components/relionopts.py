@@ -209,13 +209,17 @@ def register_relion_options_callbacks(
             Output(f"{prefix}-rln-tomos-row", "className", allow_duplicate=True),
             Output(f"{prefix}-rln-pixelsize-topdiv", "className"),
             Output(f"{prefix}-rln-binning", "placeholder"),
+            Output(f"{prefix}-rln-tomoformat-topdiv", "className"),
+            Output(f"{prefix}-rln-subtomoformat-topdiv", "className"),
             Input(f"{prefix}-rln-version", "value"),
             prevent_initial_call=True,
         )
         def _on_version(version):
             pxsize_cls = "hidden" if version == 3.0 else "flex"
             binning_ph = "Required" if version in (4.0, 5.0) else "Binning"
-            return "flex" if version == 5.0 else "hidden", pxsize_cls, binning_ph
+            # v5.1 delegates internally; tomo_format/subtomo_format do not apply.
+            fmt_cls = "hidden" if version == 5.1 else "flex"
+            return "flex" if version == 5.0 else "hidden", pxsize_cls, binning_ph, fmt_cls, fmt_cls
 
     elif connected_motl_prefix is not None:
         @app.callback(
