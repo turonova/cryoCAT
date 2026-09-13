@@ -6620,3 +6620,142 @@ class TestRemapWarpAlignment:
                 post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
                 tomo_format=self.TOMO_FORMAT,
             )
+
+
+# ── GO2/GP tests: geometry and pixel-size overrides ───────────────────────────
+#
+# Values from preMA/TS_204.xml and preMA/TS_209.xml:
+#   VolumeDimensionsAngstrom = 8073.21582, 8073.21582, 4336.2002
+#   ImageDimensionsAngstrom  = 8073.21582, 8073.21582
+#   PixelSize                = 1.971
+_WARP_VOL_DIMS  = np.array([8073.21582, 8073.21582, 4336.2002])
+_WARP_IMG_DIMS  = np.array([8073.21582, 8073.21582])
+_WARP_PIXEL_SIZE = 1.971
+_WARP_TOMO_FMT  = "TS_$xxx.xml"
+
+
+def _xml_strip_geometry(src_path: str, dst_path: str) -> None:
+    """Copy *src_path* XML to *dst_path* with VolumeDimensionsAngstrom and
+    ImageDimensionsAngstrom attributes removed from the root element."""
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(src_path)
+    root = tree.getroot()
+    root.attrib.pop("VolumeDimensionsAngstrom", None)
+    root.attrib.pop("ImageDimensionsAngstrom", None)
+    tree.write(dst_path, encoding="unicode", xml_declaration=True)
+
+
+def test_remap_explicit_geometry_matches_file():
+    """All six overrides with the file's own values must give a bit-identical result to reading from the XML.
+
+    The override path and the file-reading path use the same float values
+    (Python float literals equal float() of the same decimal string), so no
+    rounding difference should exist.
+    """
+    _kw = dict(
+        pre_xml_dir=os.path.join(_WARP_DIR, "preMA"),
+        post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
+        tomo_format=_WARP_TOMO_FMT,
+        scale=2.0,
+    )
+
+    # Reference: read everything from the XML files.
+    ref = Motl.load(os.path.join(_WARP_DIR, "original.em"))
+    ref.remap_warp_alignment(**_kw)
+
+    # Override path: supply the exact values the files carry.
+    ov = Motl.load(os.path.join(_WARP_DIR, "original.em"))
+    ov.remap_warp_alignment(
+        **_kw,
+        pre_volume_dims_angst=_WARP_VOL_DIMS,
+        pre_image_dims_angst=_WARP_IMG_DIMS,
+        pre_pixel_size=_WARP_PIXEL_SIZE,
+        post_volume_dims_angst=_WARP_VOL_DIMS,
+        post_image_dims_angst=_WARP_IMG_DIMS,
+        post_pixel_size=_WARP_PIXEL_SIZE,
+    )
+
+    _COLS = ["x", "y", "z", "phi", "theta", "psi"]
+    assert np.array_equal(ref.df[_COLS].values, ov.df[_COLS].values), (
+        "Override path with file-identical values must be bit-for-bit equal to the "
+        f"file-reading path; max diff = "
+        f"{np.abs(ref.df[_COLS].values - ov.df[_COLS].values).max():.3e}"
+    )
+
+
+def test_remap_stripped_pre_xml_missing_field_raises(tmp_path):
+    """A pre-MA XML without VolumeDimensionsAngstrom and no override raises, naming the file and field."""
+    pre_stripped = tmp_path / "preMA"
+    pre_stripped.mkdir()
+    for fname in ["TS_204.xml", "TS_209.xml"]:
+        _xml_strip_geometry(
+            os.path.join(_WARP_DIR, "preMA", fname),
+            str(pre_stripped / fname),
+        )
+
+    original = Motl.load(os.path.join(_WARP_DIR, "original.em"))
+    with pytest.raises(ValueError, match="volume_dims") as exc_info:
+        original.remap_warp_alignment(
+            pre_xml_dir=str(pre_stripped),
+            post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
+            tomo_format=_WARP_TOMO_FMT,
+            scale=2.0,
+        )
+    msg = str(exc_info.value)
+    assert "pre-MA" in msg
+    assert "TS_" in msg
+
+
+def test_remap_override_silently_wins():
+    """A supplied value wins over the XML silently — no error even when it differs from the file value."""
+    original = Motl.load(os.path.join(_WARP_DIR, "original.em"))
+    wrong_dims = _WARP_VOL_DIMS + 500.0  # deliberately differs from XML
+
+    # Must not raise; the supplied value is used without complaint.
+    original.remap_warp_alignment(
+        pre_xml_dir=os.path.join(_WARP_DIR, "preMA"),
+        post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
+        tomo_format=_WARP_TOMO_FMT,
+        scale=2.0,
+        pre_volume_dims_angst=wrong_dims,
+    )
+
+    # With a different volume_dims the result must differ from the no-override path.
+    ref = Motl.load(os.path.join(_WARP_DIR, "original.em"))
+    ref.remap_warp_alignment(
+        pre_xml_dir=os.path.join(_WARP_DIR, "preMA"),
+        post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
+        tomo_format=_WARP_TOMO_FMT,
+        scale=2.0,
+    )
+    diff = np.abs(original.get_coordinates() - ref.get_coordinates()).max()
+    assert diff > 0.0, "Supplying a different volume_dims must change the result"
+
+
+def test_remap_pixel_size_change_shifts_coordinates():
+    """Overriding pre_pixel_size with a wrong value changes the output coordinates.
+
+    A 50 % larger pixel size causes each motl voxel to map to a physically
+    larger displacement.  The off-centre terms in the projection do not scale
+    proportionally, so the reprojected detector positions differ from those
+    produced by the correct pixel size, and the triangulated output voxels shift
+    accordingly.
+    """
+    _kw = dict(
+        pre_xml_dir=os.path.join(_WARP_DIR, "preMA"),
+        post_xml_dir=os.path.join(_WARP_DIR, "postMA"),
+        tomo_format=_WARP_TOMO_FMT,
+        scale=2.0,
+    )
+
+    ref = Motl.load(os.path.join(_WARP_DIR, "original.em"))
+    ref.remap_warp_alignment(**_kw)
+
+    wrong_px = _WARP_PIXEL_SIZE * 1.5
+    altered = Motl.load(os.path.join(_WARP_DIR, "original.em"))
+    altered.remap_warp_alignment(**_kw, pre_pixel_size=wrong_px)
+
+    diff = np.abs(altered.get_coordinates() - ref.get_coordinates())
+    assert diff.max() > 0.1, (
+        f"A 50 % pre_pixel_size error must shift coordinates; max shift = {diff.max():.4f} vox"
+    )

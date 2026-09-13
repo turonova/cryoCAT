@@ -201,22 +201,33 @@ def register_callbacks(app):  # noqa: C901
     # ── Active-slot kind note / unslotted note (H3) ────────────────────────────
 
     @app.callback(
-        Output("gr-pe-slot-kind-note", "children"),
+        Output("gr-pe-slot-kind-note",      "children"),
+        Output("gr-pe-frozen-data-note",    "children"),
+        Output("gr-pe-add-overlay-btn",     "disabled"),
         Input("gr-active-id", "data"),
         Input(ids.GRAPH_POOL_REGISTRY, "data"),
         Input("gr-slot-map", "data"),
     )
     def _update_slot_kind_note(active_id, registry, slot_map):
         if not active_id:
-            return ""
+            return "", "", False
         entry = (registry or {}).get(active_id, {})
         sm = list(slot_map or [None] * N_SLOTS)
         in_slot = any(gid == active_id for gid in sm)
         if entry.get("kind") == "frozen":
-            return "[frozen — layout only]"
+            layout_note = "[frozen — layout only]"
+            data_note = (
+                "Data settings do not apply to frozen figures. "
+                "Use the Layout panel to restyle."
+            )
+            return layout_note, data_note, True
+        data_note = ""
+        overlay_disabled = False
         if not in_slot:
-            return "[not displayed — assign to a slot to see edits live]"
-        return ""
+            layout_note = "[not displayed — assign to a slot to see edits live]"
+        else:
+            layout_note = ""
+        return layout_note, data_note, overlay_disabled
 
     # ── Remove pool entry ──────────────────────────────────────────────────────
 
@@ -569,6 +580,7 @@ def register_callbacks(app):  # noqa: C901
         State("gr-slot-map", "data"),
         State(ids.GRAPH_POOL_REGISTRY, "data"),
         State("gr-tabs", "active_tab"),
+        State("gr-pe-layout-store", "data"),
         State("gr-def-font-family", "value"),
         State("gr-def-font-size", "value"),
         State("gr-def-marker-size", "value"),
@@ -585,7 +597,7 @@ def register_callbacks(app):  # noqa: C901
         State("gr-def-yaxis-showgrid", "value"),
         prevent_initial_call=True,
     )
-    def _apply_to_existing(_n, slot_map, registry, active_tab,
+    def _apply_to_existing(_n, slot_map, registry, active_tab, layout_spec,
                            font_family, font_size, marker_size, line_width, line_dash,
                            dis_pal, con_pal, bg_color,
                            x_showline, x_mirror, x_showgrid, y_showline, y_mirror, y_showgrid):
@@ -625,7 +637,9 @@ def register_callbacks(app):  # noqa: C901
             except Exception:
                 continue
             if kind == "frozen":
-                slot_figs[i] = apply_settings_to_figure(copy.deepcopy(payload), settings)
+                slot_figs[i] = _apply_layout_only(
+                    copy.deepcopy(payload), layout_spec or {}, settings, None, None
+                )
             elif kind == "spec":
                 src_ref = payload.get("source")
                 chart = payload.get("chart")
@@ -635,12 +649,12 @@ def register_callbacks(app):  # noqa: C901
                 if df is None:
                     continue
                 roles = payload.get("roles", {})
-                layout_spec = payload.get("layout", {})
+                entry_layout_spec = payload.get("layout", {})
                 chart_opts = payload.get("chart_opts", {})
                 overlays = payload.get("traces", [])
                 id_col = _detect_id_column(df)
                 fig = _build_figure(chart, df, roles, chart_opts, id_col,
-                                    settings, layout_spec, None, None,
+                                    settings, entry_layout_spec, None, None,
                                     cluster_cols=payload.get("cluster_cols") or None)
                 if fig is None:
                     continue

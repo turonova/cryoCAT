@@ -31,6 +31,7 @@ from typing import Any
 
 import plotly.express as px
 import plotly.graph_objects as go
+import dash
 from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 
@@ -508,6 +509,10 @@ def _role_row(role: str, prefix: str) -> html.Div:
 
 def _data_panel(prefix: str) -> html.Div:
     return html.Div([
+        html.Div(
+            id=f"{prefix}-pe-frozen-data-note",
+            style={**styles.HINT_SM, "marginBottom": styles.FORM_ROW_GAP},
+        ),
         entrypicker.get_entry_picker(f"{prefix}-pe-src"),
         html.Div(style={"marginBottom": styles.FORM_ROW_GAP}),
         form_row(
@@ -1059,6 +1064,49 @@ def _apply_layout_only(existing_fig: dict, layout_spec: dict, settings: dict,
     return fig_dict
 
 
+# ── Overlay row builder ───────────────────────────────────────────────────────
+
+def _overlay_row(i: int, trace: dict, prefix: str, src_options: list[dict]) -> html.Div:
+    """Build one overlay trace row: label, source picker, remove button."""
+    src_val = None
+    src = trace.get("source")
+    if isinstance(src, dict):
+        if "motl_id" in src:
+            src_val = f"motl:{src['motl_id']}"
+        elif "data_id" in src:
+            src_val = f"data:{src['data_id']}"
+    return html.Div([
+        html.Div([
+            html.Span(
+                trace.get("label", f"Trace {i + 2}"),
+                style={"fontWeight": 600, "fontSize": styles.FONT_SM},
+            ),
+            dbc.Button(
+                "✕",
+                id={"type": f"{prefix}-pe-ov-remove-btn", "ov_idx": i},
+                size="sm",
+                color=styles.BTN_NEUTRAL,
+                n_clicks=0,
+                style={"padding": "0 4px", "lineHeight": 1},
+            ),
+        ], style={"display": "flex", "justifyContent": "space-between",
+                  "alignItems": "center", "marginBottom": "0.2rem"}),
+        dcc.Dropdown(
+            id={"type": f"{prefix}-pe-ov-src-dd", "ov_idx": i},
+            options=src_options,
+            value=src_val,
+            placeholder="Select overlay source…",
+            clearable=True,
+            style={"fontSize": styles.FONT_SM},
+        ),
+    ], style={
+        "border": "1px solid var(--bs-border-color)",
+        "borderRadius": "4px",
+        "padding": "0.35rem 0.5rem",
+        "marginBottom": "0.4rem",
+    })
+
+
 # ── Callback registration ─────────────────────────────────────────────────────
 
 def register_plot_editor_callbacks(
@@ -1407,20 +1455,75 @@ def register_plot_editor_callbacks(
         Output(f"{prefix}-pe-overlays-list", "children"),
         Input(f"{prefix}-pe-add-overlay-btn", "n_clicks"),
         State(f"{prefix}-pe-overlays-store", "data"),
+        State(ids.POOL_REGISTRY,              "data"),
+        State(ids.DATA_POOL_REGISTRY,         "data"),
         prevent_initial_call=True,
     )
-    def _add_overlay_trace(_n, overlays):
+    def _add_overlay_trace(_n, overlays, pool_reg, dp_reg):
         overlays = list(overlays or [])
         idx = len(overlays)
         overlays.append({"source": None, "label": f"Trace {idx + 2}", "color": None})
-        items = [
-            html.Div(
-                f"Trace {i + 2}: {t.get('label', '?')} (source not yet set)",
-                style=styles.HINT,
-            )
-            for i, t in enumerate(overlays)
-        ]
+        src_opts = entrypicker._build_options(pool_reg, dp_reg)
+        items = [_overlay_row(i, t, prefix, src_opts) for i, t in enumerate(overlays)]
         return overlays, items or [html.Div("No overlay traces.", style=styles.HINT)]
+
+    # ── Overlay source change ──────────────────────────────────────────────────
+
+    @app.callback(
+        Output(f"{prefix}-pe-overlays-store", "data", allow_duplicate=True),
+        Input({"type": f"{prefix}-pe-ov-src-dd", "ov_idx": ALL}, "value"),
+        State(f"{prefix}-pe-overlays-store", "data"),
+        prevent_initial_call=True,
+    )
+    def _on_overlay_src_change(values, overlays):
+        overlays = list(overlays or [])
+        if not ctx.triggered_id:
+            raise dash.exceptions.PreventUpdate
+        idx = ctx.triggered_id.get("ov_idx", 0)
+        new_val = ctx.triggered[0]["value"]
+        if idx >= len(overlays):
+            raise dash.exceptions.PreventUpdate
+        ref = entrypicker.decode_value(new_val) if new_val else None
+        overlays[idx] = {**overlays[idx], "source": ref}
+        return overlays
+
+    # ── Overlay trace remove ───────────────────────────────────────────────────
+
+    @app.callback(
+        Output(f"{prefix}-pe-overlays-store", "data", allow_duplicate=True),
+        Output(f"{prefix}-pe-overlays-list", "children", allow_duplicate=True),
+        Input({"type": f"{prefix}-pe-ov-remove-btn", "ov_idx": ALL}, "n_clicks"),
+        State(f"{prefix}-pe-overlays-store", "data"),
+        State(ids.POOL_REGISTRY,              "data"),
+        State(ids.DATA_POOL_REGISTRY,         "data"),
+        prevent_initial_call=True,
+    )
+    def _on_overlay_remove(n_list, overlays, pool_reg, dp_reg):
+        if not any(n for n in (n_list or []) if n):
+            raise dash.exceptions.PreventUpdate
+        overlays = list(overlays or [])
+        idx = ctx.triggered_id.get("ov_idx", 0)
+        if idx < len(overlays):
+            overlays.pop(idx)
+        # Re-label remaining traces to keep numbering contiguous
+        for i, t in enumerate(overlays):
+            t["label"] = f"Trace {i + 2}"
+        src_opts = entrypicker._build_options(pool_reg, dp_reg)
+        items = [_overlay_row(i, t, prefix, src_opts) for i, t in enumerate(overlays)]
+        return overlays, items or [html.Div("No overlay traces.", style=styles.HINT)]
+
+    # ── Refresh overlay source dropdown options when pool changes ─────────────
+
+    @app.callback(
+        Output({"type": f"{prefix}-pe-ov-src-dd", "ov_idx": ALL}, "options"),
+        Input(ids.POOL_REGISTRY,      "data"),
+        Input(ids.DATA_POOL_REGISTRY, "data"),
+        State({"type": f"{prefix}-pe-ov-src-dd", "ov_idx": ALL}, "options"),
+        prevent_initial_call=True,
+    )
+    def _update_ov_src_opts(pool_reg, dp_reg, existing_opts):
+        opts = entrypicker._build_options(pool_reg, dp_reg)
+        return [opts] * len(existing_opts)
 
 
 # ── Overlay helper (called from _plot) ───────────────────────────────────────

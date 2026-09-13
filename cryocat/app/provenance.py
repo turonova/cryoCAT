@@ -26,6 +26,26 @@ _producers: dict[str, int] = {}
 # counter for descriptor variable names ("desc-0", "desc-1", …)
 _desc_counter: int = 0
 
+# id(obj)  →  script variable name for locally-produced intermediates
+# (numpy arrays, dicts, etc. that are not pool entries but are assigned a name
+# by invoke_operation's assign_to parameter so the next call can reference them)
+_intermediate_vars: dict[int, str] = {}
+
+
+def register_intermediate(obj: object, var_name: str) -> None:
+    """Register a locally-produced value under *var_name*.
+
+    Call after ``invoke_operation(..., assign_to=var_name)`` so that the next
+    ``invoke_operation`` call can resolve the same object back to *var_name*
+    via :func:`var_for_obj` and avoid emitting a placeholder.
+    """
+    _intermediate_vars[id(obj)] = var_name
+
+
+def var_for_obj(obj: object) -> str | None:
+    """Return the script variable name registered for *obj*, or ``None``."""
+    return _intermediate_vars.get(id(obj))
+
 
 def next_desc_id() -> str:
     """Allocate the next unique descriptor id (``'desc-0'``, ``'desc-1'``, …)."""
@@ -79,4 +99,5 @@ def clear() -> None:
     """Reset all provenance state (called on session close or test teardown)."""
     global _desc_counter
     _producers.clear()
+    _intermediate_vars.clear()
     _desc_counter = 0

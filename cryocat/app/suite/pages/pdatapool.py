@@ -38,8 +38,15 @@ from cryocat.app.pool import (
     resolve_df as pool_resolve_df,
     resolve_n_rows as pool_resolve_n_rows,
     replace_motl_rows,
+    insert_motl as _pool_insert_motl,
     PoolState,
 )
+from cryocat.app.components.poolslotlist import (
+    get_pool_slot_list,
+    register_pool_slot_list_callbacks,
+    _first_free_slot,
+)
+from cryocat.core.cryomotl import Motl
 from cryocat.app.apputils import run_operation
 from cryocat.app.components.customel import customel_graph
 
@@ -247,16 +254,105 @@ def _dict_text(data_id: str | None) -> str:
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
+_N_SLOTS = 5
+
+
 def _make_stores() -> list:
     return [
-        dcc.Store(id="dp-selected-id", data=None),
-        dcc.Store(id="dp-view-rev",    data=0),
+        dcc.Store(id="dp-selected-id",                data=None),
+        dcc.Store(id="dp-view-rev",                   data=0),
         dcc.Store(id="dp-view-tabv-global-data-store", data=None),
+        dcc.Store(id="dp-slot-map",                   data=[None] * _N_SLOTS),
+        dcc.Store(id="dp-active-id",                  data=None),
     ]
 
 
+_MOTL_COL_GROUPS: list[tuple[str, list[str]]] = [
+    ("Coordinates (required)", ["x", "y", "z"]),
+    ("Shifts",    ["shift_x", "shift_y", "shift_z"]),
+    ("Angles",    ["phi", "psi", "theta"]),
+    ("IDs",       ["subtomo_id", "tomo_id", "object_id"]),
+    ("Class",     ["class", "score", "subtomo_mean"]),
+    ("Geometry",  ["geom1", "geom2", "geom3", "geom4", "geom5"]),
+]
+
+
+def _build_motl_builder_section() -> html.Div:
+    """Return the Build Motl accordion content."""
+    col_rows = []
+    for group_label, cols in _MOTL_COL_GROUPS:
+        col_rows.append(formgen.section_divider(group_label))
+        for mc in cols:
+            is_req = mc in ("x", "y", "z")
+            tip = f"Motl column '{mc}'" + (" (required)" if is_req else " — leave blank for default (0.0).")
+            col_rows.append(
+                formgen.form_row(
+                    mc,
+                    formgen.make_dropdown(
+                        f"dp-mb-col-{mc}",
+                        options=[],
+                        value=None,
+                        clearable=True,
+                        placeholder="table column…" if not is_req else "required",
+                    ),
+                    tip,
+                    truly_optional=not is_req,
+                    label_id=f"dp-mb-col-{mc}-lbl",
+                    label_text=mc,
+                )
+            )
+    return html.Div([
+        html.Div(
+            "Map table columns to motl columns. x, y, z are required. "
+            "subtomo_id is auto-generated (1…N) when not mapped.",
+            style={**styles.HINT, "marginBottom": styles.FORM_ROW_GAP},
+        ),
+        formgen.form_row(
+            "motl_label",
+            dbc.Input(id="dp-mb-label", type="text", placeholder="auto"),
+            "Label for the new motl entry.",
+            truly_optional=True,
+            label_id="dp-mb-label-lbl",
+            label_text="Label",
+        ),
+        *col_rows,
+        html.Div(style={"marginTop": styles.SECTION_GAP}),
+        dbc.Button(
+            "Build motl",
+            id="dp-mb-build-btn",
+            color=styles.BTN_PRIMARY,
+            size="sm",
+        ),
+        html.Div(
+            id="dp-mb-status",
+            style={**styles.HINT, "marginTop": styles.FORM_ROW_GAP},
+        ),
+    ])
+
+
 def _sidebar() -> list:
+    from cryocat.app.pageshell import sidebar_accordion
     return [
+        # Table slot list (GL2) — active-table slot mechanism
+        sidebar_accordion([
+            dbc.AccordionItem(
+                [
+                    get_pool_slot_list("dp"),
+                    html.Div(
+                        id="dp-slot-status",
+                        style={**styles.HINT, "marginTop": styles.FORM_ROW_GAP},
+                    ),
+                ],
+                title="Tables",
+                item_id="dp-tables",
+            ),
+            dbc.AccordionItem(
+                _build_motl_builder_section(),
+                title="Build Motl",
+                item_id="dp-build-motl",
+            ),
+        ], active_item=["dp-tables"]),
+        html.Hr(style={"margin": f"{styles.SECTION_GAP} 0"}),
         # Primary: entry picker + operations (working-copy mode — W1)
         tableeditor.get_table_editor("dp-edit", multi_source=True, working_copy_mode=True),
         html.Hr(style={"margin": f"{styles.SECTION_GAP} 0"}),
@@ -634,4 +730,202 @@ def register_callbacks(app):  # noqa: C901
 
     # ── Table editor callbacks (W1–W7) — sidebar mount (working-copy mode) ──────
     tableeditor.register_table_editor_callbacks(app, "dp-edit", multi_source=True, working_copy_mode=True)
+
+    # ── GL2: Data pool slot machinery ─────────────────────────────────────────
+
+    def _dp_remove_btn(data_id, entry):
+        return [dbc.Button(
+            "✕",
+            id={"type": "dp-psl-remove-btn", "data_id": data_id},
+            size="sm",
+            color=styles.BTN_NEUTRAL,
+            n_clicks=0,
+            style={"flexShrink": 0, "padding": "0 4px"},
+        )]
+
+    register_pool_slot_list_callbacks(
+        app, "dp",
+        pool_registry_id=ids.DATA_POOL_REGISTRY,
+        slot_map_id="dp-slot-map",
+        n_slots=_N_SLOTS,
+        row_extra_fn=_dp_remove_btn,
+        active_id_store_id="dp-active-id",
+    )
+
+    # Auto-assign newly inserted pool entries to the lowest free slot
+    @app.callback(
+        Output("dp-slot-map", "data", allow_duplicate=True),
+        Input(ids.DATA_POOL_REGISTRY, "data"),
+        State("dp-slot-map",          "data"),
+        prevent_initial_call=True,
+    )
+    def _auto_assign_to_slot(registry, slot_map):
+        sm = list(slot_map or [None] * _N_SLOTS)
+        while len(sm) < _N_SLOTS:
+            sm.append(None)
+        assigned = {sid for sid in sm if sid}
+        changed = False
+        for did in (registry or {}):
+            if did not in assigned:
+                free = _first_free_slot(sm, _N_SLOTS)
+                if free is not None:
+                    sm[free] = did
+                    assigned.add(did)
+                    changed = True
+        return sm if changed else no_update
+
+    # Sync focused slot → tableeditor picker
+    @app.callback(
+        Output("dp-edit-src-dd", "value", allow_duplicate=True),
+        Input("dp-active-id", "data"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        prevent_initial_call=True,
+    )
+    def _sync_active_to_picker(active_id, dp_reg):
+        if not active_id:
+            return no_update
+        if active_id not in (dp_reg or {}):
+            return no_update
+        return f"data:{active_id}"
+
+    # Remove entry from pool via slot list's remove button
+    @app.callback(
+        Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Input({"type": "dp-psl-remove-btn", "data_id": ALL}, "n_clicks"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        State(ids.DATA_POOL_NEXT_ID,  "data"),
+        prevent_initial_call=True,
+    )
+    def _psl_remove_entry(n_list, registry, next_id):
+        if not any(n for n in (n_list or []) if n):
+            raise PreventUpdate
+        data_id = ctx.triggered_id["data_id"]
+        state, _ = _do_remove(data_id, registry, next_id, None)
+        return state.to_stores()
+
+    # ── GL1: Build motl from active table ─────────────────────────────────────
+
+    # Populate motl-column dropdowns from the active table's columns
+    @app.callback(
+        *[Output(f"dp-mb-col-{mc}", "options") for group in _MOTL_COL_GROUPS for mc in group[1]],
+        Input("dp-active-id",         "data"),
+        Input(ids.DATA_POOL_REGISTRY, "data"),
+        prevent_initial_call=False,
+    )
+    def _populate_mb_cols(active_id, dp_reg):
+        _all_motl_cols = [mc for g in _MOTL_COL_GROUPS for mc in g[1]]
+        n = len(_all_motl_cols)
+        if not active_id or active_id not in (dp_reg or {}):
+            return [[] for _ in range(n)]
+        try:
+            df = datapool.get_payload(active_id)
+            import pandas as _pd
+            if not isinstance(df, _pd.DataFrame):
+                return [[] for _ in range(n)]
+            opts = [{"label": c, "value": c} for c in df.columns]
+            return [opts] * n
+        except Exception:
+            return [[] for _ in range(n)]
+
+    # Pre-fill dropdown values when a table is focused
+    @app.callback(
+        *[Output(f"dp-mb-col-{mc}", "value") for group in _MOTL_COL_GROUPS for mc in group[1]],
+        Input("dp-active-id",         "data"),
+        Input(ids.DATA_POOL_REGISTRY, "data"),
+        prevent_initial_call=False,
+    )
+    def _prefill_mb_cols(active_id, dp_reg):
+        _all_motl_cols = [mc for g in _MOTL_COL_GROUPS for mc in g[1]]
+        if not active_id or active_id not in (dp_reg or {}):
+            return [None] * len(_all_motl_cols)
+        try:
+            df = datapool.get_payload(active_id)
+            import pandas as _pd
+            if not isinstance(df, _pd.DataFrame):
+                return [None] * len(_all_motl_cols)
+            return [mc if mc in df.columns else None for mc in _all_motl_cols]
+        except Exception:
+            return [None] * len(_all_motl_cols)
+
+    # Build motl from table
+    @app.callback(
+        Output(ids.POOL_REGISTRY,  "data", allow_duplicate=True),
+        Output(ids.POOL_META,      "data", allow_duplicate=True),
+        Output(ids.POOL_NEXT_ID,   "data", allow_duplicate=True),
+        Output("dp-mb-status",     "children"),
+        Input("dp-mb-build-btn",   "n_clicks"),
+        State("dp-active-id",      "data"),
+        *[State(f"dp-mb-col-{mc}", "value") for group in _MOTL_COL_GROUPS for mc in group[1]],
+        State("dp-mb-label",           "value"),
+        State(ids.POOL_REGISTRY,       "data"),
+        State(ids.POOL_META,           "data"),
+        State(ids.POOL_NEXT_ID,        "data"),
+        State(ids.DATA_POOL_REGISTRY,  "data"),
+        prevent_initial_call=True,
+    )
+    def _build_motl_from_table(_n, active_id, *args):
+        import pandas as _pd
+        import numpy as _np
+        _all_motl_cols = [mc for g in _MOTL_COL_GROUPS for mc in g[1]]
+        n_cols = len(_all_motl_cols)
+        col_values = list(args[:n_cols])
+        label_val   = args[n_cols]
+        pool_reg    = args[n_cols + 1]
+        pool_meta   = args[n_cols + 2]
+        pool_next   = args[n_cols + 3]
+        dp_reg      = args[n_cols + 4]
+
+        _no = no_update
+        _fail = (_no, _no, _no)
+
+        if not _n:
+            raise PreventUpdate
+        if not active_id:
+            return *_fail, "Select an active table from the slot list first."
+        try:
+            src_df = datapool.get_payload(active_id)
+        except Exception as exc:
+            return *_fail, f"Cannot load table: {exc}"
+        if not isinstance(src_df, _pd.DataFrame):
+            return *_fail, "Active entry is not a DataFrame."
+
+        mapping = dict(zip(_all_motl_cols, col_values))
+        # Validate required columns
+        required = ["x", "y", "z"]
+        missing_req = [r for r in required if not mapping.get(r)]
+        if missing_req:
+            return *_fail, f"Required column(s) not mapped: {', '.join(missing_req)}."
+
+        # Build zeroed motl df with correct columns
+        n = len(src_df)
+        motl_df = _pd.DataFrame(
+            _np.zeros((n, len(Motl.motl_columns))),
+            columns=Motl.motl_columns,
+        )
+
+        errors = []
+        for mc, src_col in mapping.items():
+            if not src_col:
+                continue  # leave default (0.0)
+            if src_col not in src_df.columns:
+                errors.append(f"'{mc}': column '{src_col}' not found in table.")
+                continue
+            try:
+                motl_df[mc] = src_df[src_col].reset_index(drop=True).astype(float)
+            except (ValueError, TypeError):
+                errors.append(f"'{mc}': cannot convert '{src_col}' to float.")
+
+        if errors:
+            return *_fail, "Errors: " + "  ".join(errors)
+
+        # Auto-generate subtomo_id if not mapped
+        if not mapping.get("subtomo_id"):
+            motl_df["subtomo_id"] = _np.arange(1, n + 1, dtype=float)
+
+        pool_state = PoolState.from_stores(pool_reg, pool_meta, pool_next)
+        entry_label = (dp_reg or {}).get(active_id, {}).get("label") or active_id
+        lbl = (label_val or "").strip() or f"motl from {entry_label}"
+        pool_state, new_motl_id = _pool_insert_motl(pool_state, motl_df, label=lbl)
+        return (*pool_state.to_stores(), f"Created '{lbl}' with {n:,} particles ({new_motl_id}).")
 

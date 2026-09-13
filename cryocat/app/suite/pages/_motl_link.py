@@ -92,13 +92,6 @@ def get_motl_role_ids(links: dict | None, role: str) -> list[str]:
     return [val] if val else []
 
 
-def get_motl_link(ref: dict | None, role: str) -> str | None:
-    """Return the first motl id for *role* from ``ref["motl_links"]``, or None."""
-    if not isinstance(ref, dict):
-        return None
-    return get_motl_role_id(ref.get("motl_links"), role)
-
-
 def has_source_motl(ref: dict | None) -> bool:
     """True when *ref* carries at least one motl link in ``motl_links``."""
     if not isinstance(ref, dict):

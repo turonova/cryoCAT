@@ -417,6 +417,11 @@ def insert(
 def resolve_df(ref: dict | None) -> pd.DataFrame | None:
     """Return the DataFrame for a table-pool ref, or ``None``."""
     if not isinstance(ref, dict):
+        if ref is not None:
+            print(
+                f"[datapool.resolve_df] WARN: expected dict ref, got {type(ref).__name__}: "
+                f"{repr(ref)[:120]} — store was likely overwritten with raw records"
+            )
         return None
     table_id = ref.get("table_id")
     if not table_id:
@@ -449,3 +454,20 @@ def id_column_for(ref: dict | None) -> str | None:
     if not isinstance(ref, dict):
         return None
     return ref.get("id_column")
+
+
+def replace_df(ref: dict | None, df: pd.DataFrame) -> dict | None:
+    """Update the DataFrame for an existing table-pool ref in place.
+
+    Mutates ``_table_payloads`` so that subsequent ``resolve_df`` calls
+    return the new DataFrame.  Returns a new ref dict (same table_id,
+    updated n_rows) so the dcc.Store value changes and dependent callbacks
+    fire.  Returns ``None`` if *ref* is not a valid table-pool ref.
+    """
+    if not isinstance(ref, dict):
+        return None
+    table_id = ref.get("table_id")
+    if not table_id or table_id not in _table_payloads:
+        return None
+    _table_payloads[table_id] = df.copy()
+    return {**ref, "n_rows": len(df)}

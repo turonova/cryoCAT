@@ -811,6 +811,29 @@ def test_rotations_to_z_normals_custom_radius():
     np.testing.assert_allclose(np.linalg.norm(pts, axis=1), 3.0, atol=1e-6)
 
 
+def test_euler_angles_to_normals_agrees_with_inline_rotation():
+    """euler_angles_to_normals must agree element-wise with the inline pattern
+    srot.from_euler('zxz', angles, degrees=True).apply([0,0,1]).
+
+    This locks the library function to the exact same convention used in the
+    app before the inline was replaced, so any future drift is caught here.
+    """
+    from cryocat.utils import geom as _geom
+    from scipy.spatial.transform import Rotation as srot
+
+    angles = np.array([
+        [0.0,    0.0,   0.0],
+        [30.0,  45.0,  10.0],
+        [120.0, 90.0,   0.0],
+        [200.0, 15.0, 350.0],
+        [359.9, 89.9, 180.0],
+    ])
+    library = _geom.euler_angles_to_normals(angles)
+    inline  = srot.from_euler("zxz", angles, degrees=True).apply([0.0, 0.0, 1.0])
+    np.testing.assert_allclose(library, inline, atol=1e-6,
+        err_msg="euler_angles_to_normals diverged from the reference inline rotation")
+
+
 # ── apply_starting_and_offset ─────────────────────────────────────────────────
 
 class TestApplyStartingAndOffset:

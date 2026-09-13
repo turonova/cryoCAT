@@ -237,6 +237,24 @@ def register_console_callbacks(app, prefix: str) -> None:
             cmd = _parse.parse(raw)
         except (_parse.ConsoleSyntaxError, _parse.ConsoleRejected) as exc:
             history.append({"cmd": raw, "summary": str(exc), "ok": False})
+            # Log the rejection to the session record so the timeline is complete.
+            # A parse failure is still an attempt — omitting it would leave a gap
+            # between what the user typed and what the script shows.
+            import traceback as _tb
+            from cryocat.app import session as _session
+            from cryocat.app.event import call_event as _call_event
+            _session.emit(_call_event(
+                "console.eval",
+                {"_expr_": repr(raw)},
+                status="error",
+                source="console",
+                command_src=raw,
+                error={
+                    "type": type(exc).__name__,
+                    "msg": str(exc),
+                    "traceback": _tb.format_exc(),
+                },
+            ))
             return no_update, no_update, no_update, history, ""
 
         # -- Execute -----------------------------------------------------------

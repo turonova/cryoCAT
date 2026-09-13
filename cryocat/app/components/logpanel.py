@@ -100,10 +100,17 @@ def _render_call_row(ev: dict):
     dur = ev.get("duration_s")
     assign_to = ev.get("assign_to")
 
-    # Summary line: always visible — icon + script line + duration
+    # Summary line: always visible — icon + script line + duration.
+    # command_src (set on synthetic wrap events like PleomorphicSurface()) is
+    # already a full assignment expression and takes priority over reconstruction.
     icon = "✓" if status == "ok" else "✗"
     icon_style = _STATUS_STYLE.get(status, _STATUS_STYLE["ok"])
-    script_line = f"{assign_to} = {call_expr(ev)}" if assign_to else call_expr(ev)
+    if ev.get("command_src"):
+        script_line = ev["command_src"]
+    elif assign_to:
+        script_line = f"{assign_to} = {call_expr(ev)}"
+    else:
+        script_line = call_expr(ev)
     summary_children = [
         html.Span(f"{icon} ", style=icon_style),
         html.Span(script_line, style={"fontFamily": "monospace"}),

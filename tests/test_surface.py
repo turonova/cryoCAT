@@ -918,3 +918,168 @@ class TestConnectivityMetrics:
         lo, _ = Mesh.suggest_alpha_range(pts)
         mesh = Mesh.from_alpha_shape(pts, alpha=lo * 2)
         assert mesh.get_connected_component_count() > 1
+
+
+# =============================================================================
+# Mesh.from_ordered_path — tube constructor
+# =============================================================================
+
+class TestFromOrderedPath:
+    _AXIS = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 50.0], [0.0, 0.0, 100.0]])
+    _R = 5.0
+
+    def _straight_tube(self, radius=None):
+        return Mesh.from_ordered_path(self._AXIS, radius=radius if radius is not None else self._R)
+
+    def test_returns_mesh_with_vertices_and_faces(self):
+        m = self._straight_tube()
+        assert m.vertices is not None and m.faces is not None
+        assert m.vertices.shape[1] == 3
+        assert m.faces.shape[1] == 3
+
+    def test_bounding_box_matches_axis_and_radius(self):
+        m = self._straight_tube()
+        v = m.vertices
+        # z must span 0..100
+        assert v[:, 2].min() == pytest.approx(0.0, abs=0.1)
+        assert v[:, 2].max() == pytest.approx(100.0, abs=0.1)
+        # x and y must not exceed the radius
+        assert abs(v[:, 0].min()) == pytest.approx(self._R, abs=0.1)
+        assert abs(v[:, 0].max()) == pytest.approx(self._R, abs=0.1)
+
+    def test_all_vertices_within_radius_of_axis(self):
+        m = self._straight_tube()
+        radial = np.sqrt(m.vertices[:, 0] ** 2 + m.vertices[:, 1] ** 2)
+        # End caps add vertices on the axis itself (radial ~ 0); lateral band at ~R.
+        assert radial.max() == pytest.approx(self._R, abs=0.1)
+
+    def test_per_point_radius_wider_at_midpoint(self):
+        radii = np.array([self._R, 15.0, self._R])  # bulge at z=50
+        m = Mesh.from_ordered_path(self._AXIS, radius=radii)
+        v = m.vertices
+        # Near the midpoint (z ≈ 50) the tube should be wider than at the ends.
+        near_mid = v[np.abs(v[:, 2] - 50.0) < 5.0]
+        near_end = v[v[:, 2] < 5.0]
+        radial_mid = np.sqrt(near_mid[:, 0] ** 2 + near_mid[:, 1] ** 2).max()
+        radial_end = np.sqrt(near_end[:, 0] ** 2 + near_end[:, 1] ** 2).max()
+        assert radial_mid > radial_end + 5.0
+
+    def test_two_points_works(self):
+        pts = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 100.0]])
+        m = Mesh.from_ordered_path(pts, radius=self._R)
+        assert len(m.vertices) > 0
+
+    def test_one_point_raises_with_count(self):
+        with pytest.raises(ValueError, match="1"):
+            Mesh.from_ordered_path(np.array([[0.0, 0.0, 0.0]]), radius=self._R)
+
+
+# =============================================================================
+# Mesh.from_motl_filaments — tubes from a motl
+# =============================================================================
+
+def _make_filament_motl(tmp_path):
+    """Two-chain motl (chain 1: 3 pts, chain 2: 2 pts) plus a single-point chain 3."""
+    import pandas as pd
+    from cryocat.core import cryomotl
+
+    cols = [
+        "phi", "theta", "psi", "x", "y", "z",
+        "shift_x", "shift_y", "shift_z",
+        "tomo_id", "object_id", "subtomo_id", "class", "score",
+        "geom1", "geom2", "geom3", "geom4", "geom5", "subtomo_mean",
+    ]
+    df = pd.DataFrame(0.0, index=range(6), columns=cols)
+    df["tomo_id"] = 1
+    df["object_id"] = [1, 1, 1, 2, 2, 3]   # chain id
+    df["geom2"]    = [1, 2, 3, 1, 2, 1]     # position within chain
+    df["x"] = [0, 0, 0, 50, 50, 200]
+    df["y"] = [0, 0, 0, 50, 50, 200]
+    df["z"] = [0, 10, 20, 0, 10, 0]
+    motl = cryomotl.Motl(df)
+    path = str(tmp_path / "filaments.em")
+    motl.write_out(path)
+    return path
+
+
+class TestFromMotlFilaments:
+    def test_two_chains_two_tubes(self, tmp_path):
+        path = _make_filament_motl(tmp_path)
+        tubes = Mesh.from_motl_filaments(path, radius=5.0)
+        assert len(tubes) == 2
+
+    def test_keys_match_chain_ids(self, tmp_path):
+        path = _make_filament_motl(tmp_path)
+        tubes = Mesh.from_motl_filaments(path, radius=5.0)
+        assert set(tubes.keys()) == {"1.0", "2.0"}
+
+    def test_single_point_chain_skipped_with_warning(self, tmp_path):
+        import warnings
+        path = _make_filament_motl(tmp_path)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            tubes = Mesh.from_motl_filaments(path, radius=5.0)
+        assert "3.0" not in tubes
+        assert any("skipped" in str(x.message).lower() for x in w)
+
+    def test_each_tube_is_a_mesh(self, tmp_path):
+        path = _make_filament_motl(tmp_path)
+        tubes = Mesh.from_motl_filaments(path, radius=5.0)
+        for t in tubes.values():
+            assert isinstance(t, Mesh)
+            assert t.vertices is not None and t.faces is not None
+
+
+# =============================================================================
+# Mesh.to_segmentation — binary volume from mesh
+# =============================================================================
+
+class TestToSegmentation:
+    _R = 8.0
+    # Tube centred at (15,15) in x/y, from z=2..18, pixel_size=2 -> 30x30x15 vox.
+    _AXIS = np.array([[15.0, 15.0, 2.0], [15.0, 15.0, 18.0]])
+    _PS = 2.0
+    _VDIMS = (15, 15, 12)  # covers 30x30x24 in world units
+
+    @pytest.fixture
+    def tube_seg(self):
+        tube = Mesh.from_ordered_path(self._AXIS, radius=self._R, n_spline_points=80)
+        return tube, tube.to_segmentation(self._VDIMS, pixel_size=self._PS)
+
+    def test_shape_matches_volume_dims(self, tube_seg):
+        _, seg = tube_seg
+        assert seg.shape == self._VDIMS
+
+    def test_dtype_is_bool(self, tube_seg):
+        _, seg = tube_seg
+        assert seg.dtype == bool
+
+    def test_axis_voxel_inside(self, tube_seg):
+        _, seg = tube_seg
+        # Axis midpoint in world: x=15, y=15, z=10 → voxel (7, 7, 5)
+        assert seg[7, 7, 5]
+
+    def test_far_outside_radius_excluded(self, tube_seg):
+        _, seg = tube_seg
+        # World (0, 0, 10) is 15√2 ≈ 21 units from axis centre — well outside R=8
+        assert not seg[0, 0, 5]
+
+    def test_round_trip_stable(self, tmp_path):
+        """Tube → segmentation → from_mrc gives surface within one voxel of original."""
+        import os
+        from cryocat.core import cryomap
+
+        tube = Mesh.from_ordered_path(self._AXIS, radius=self._R, n_spline_points=80)
+        seg = tube.to_segmentation(self._VDIMS, pixel_size=self._PS)
+
+        mrc_path = str(tmp_path / "tube_seg.mrc")
+        cryomap.write(seg.astype(np.float32), mrc_path, pixel_size=self._PS)
+        recovered = Mesh.from_mrc(mrc_path, pixel_size=self._PS)
+
+        # x/y extent of recovered mesh should match the original within one pixel.
+        tol = self._PS + 0.5
+        orig_xmax = tube.vertices[:, 0].max()
+        rec_xmax = recovered.vertices[:, 0].max()
+        assert abs(rec_xmax - orig_xmax) < tol, (
+            f"x extent mismatch: original {orig_xmax:.1f}, recovered {rec_xmax:.1f}"
+        )

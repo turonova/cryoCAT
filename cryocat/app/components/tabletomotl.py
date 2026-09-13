@@ -11,9 +11,12 @@ motl from the current filter/selection.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pandas as pd
 
 from dash import html, dcc, ctx, Input, Output, State, no_update
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
 from cryocat.core.cryomotl import Motl
@@ -57,19 +60,23 @@ def _do_write_cols(target_id, pairs, id_column, active_rows, registry, pool_meta
     if errors:
         return "Validation failed — no changes written. " + " ".join(errors), *_NU3
 
-    # Apply all pairs.
+    # Apply all pairs; unmatched rows receive -2 so no particle is left as NaN.
+    _UNMATCHED = -2
     total_matched = 0
     for val_col, dst_col in pairs:
         id_to_val = src_df.drop_duplicates(subset=[id_column]).set_index(id_column)[val_col].dropna().to_dict()
-        motl_df[dst_col] = motl_df["subtomo_id"].map(id_to_val)
+        motl_df[dst_col] = motl_df["subtomo_id"].map(id_to_val).fillna(_UNMATCHED)
         total_matched += int(motl_df["subtomo_id"].isin(id_to_val).sum())
 
     pool_state = PoolState.from_stores(registry, pool_meta, next_id)
     pool_state = replace_motl_rows(pool_state, target_id, motl_df)
     n_pairs = len(pairs)
     pair_desc = ", ".join(f"'{s}'→'{d}'" for s, d in pairs)
+    matched_per_pair = total_matched // n_pairs
+    unmatched = len(motl_df) - matched_per_pair
+    rest_note = f", {unmatched} set to {_UNMATCHED}" if unmatched > 0 else ""
     return (
-        f"Wrote {n_pairs} pair(s) ({pair_desc}) — {total_matched // n_pairs} particles matched.",
+        f"Wrote {n_pairs} pair(s) ({pair_desc}) — {matched_per_pair} particles matched{rest_note}.",
         *pool_state.to_stores()
     )
 
@@ -117,6 +124,42 @@ def _do_create_motl(target_id, id_column, val_col, dst_col, label, active_rows, 
     return f"Created '{display_label}' with {matched} particles (matched {matched}/{len(motl_df)}).", *pool_state.to_stores()
 
 
+def _do_create_table_entry(target_id, val_cols, id_column, active_rows, dp_registry, dp_next_id):
+    """Create a data pool table entry containing motl rows plus selected source columns.
+
+    The motl itself is not modified.  The new entry can hold any columns.
+    """
+    from cryocat.app.datapool import DataPoolState as _DPState
+    from cryocat.app import datapool as _datapool
+    try:
+        motl_rows = _get_rows(target_id)
+    except PoolPayloadMissing:
+        return "Target motl not found in pool.", no_update, no_update
+    src_df = pd.DataFrame(active_rows)
+    motl_df = pd.DataFrame(motl_rows).copy()
+    src_cols = [c for c in val_cols if c and c in src_df.columns]
+    if not src_cols:
+        return "Select at least one source column.", no_update, no_update
+    if id_column not in src_df.columns:
+        return f"Source table has no column '{id_column}'.", no_update, no_update
+    merge_cols = [id_column] + [c for c in src_cols if c != id_column]
+    merge_src = src_df[merge_cols].drop_duplicates(subset=[id_column])
+    result = motl_df.merge(merge_src, left_on="subtomo_id", right_on=id_column, how="left")
+    if id_column != "subtomo_id" and id_column in result.columns:
+        result = result.drop(columns=[id_column])
+    ds = _DPState.from_stores(dp_registry, dp_next_id)
+    ds, new_id = _datapool.insert_entry(
+        ds, result, label=f"table from {target_id}", reader="table-from-motl", source_path="",
+    )
+    new_dp_reg, new_dp_next = ds.to_stores()
+    n_added = len(src_cols)
+    return (
+        f"Created table entry '{new_id}' ({len(result):,} rows, {n_added} new column(s)). Motl unchanged.",
+        new_dp_reg,
+        new_dp_next,
+    )
+
+
 def get_table_to_motl(prefix: str, *, allow_modal: bool = True) -> html.Div:
     """Return sidebar content for table→motl operations.
 
@@ -131,7 +174,6 @@ def get_table_to_motl(prefix: str, *, allow_modal: bool = True) -> html.Div:
     _motl_opts = [{"label": c, "value": c} for c in Motl.motl_columns]
     return html.Div(
         [
-            html.Div(id=f"{prefix}-ttm-status", style={"fontSize": styles.FONT_SM, "color": styles.COLOR_MUTED, "marginBottom": "0.4rem"}),
             formgen.form_row(
                 f"{prefix}_target_motl",
                 make_dropdown(f"{prefix}-ttm-target-motl", [], None, clearable=True, placeholder="Choose motl from pool…"),
@@ -218,9 +260,35 @@ def get_table_to_motl(prefix: str, *, allow_modal: bool = True) -> html.Div:
                         id=f"{prefix}-ttm-create-btn",
                         color=styles.BTN_SECONDARY,
                         size="sm",
+                        style={"width": "100%", "marginBottom": "0.3rem"},
+                    ),
+                    dbc.Button(
+                        "Create table entry instead",
+                        id=f"{prefix}-ttm-create-te-btn",
+                        color=styles.BTN_SECONDARY,
+                        size="sm",
                         style={"width": "100%"},
                     ),
                 ]
+            ),
+            html.Div(id=f"{prefix}-ttm-status", style={"fontSize": styles.FONT_SM, "color": styles.COLOR_MUTED, "marginTop": "0.4rem"}),
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(dbc.ModalTitle("Create table entry")),
+                    dbc.ModalBody(
+                        "A motl cannot hold a new column. "
+                        "The motl's rows plus the selected source columns will be saved as a new table entry. "
+                        "The motl itself is unchanged. Continue?"
+                    ),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button("Create", id=f"{prefix}-ttm-te-confirm", color="primary", size="sm"),
+                            dbc.Button("Cancel", id=f"{prefix}-ttm-te-cancel", color="secondary", size="sm", className="ms-2"),
+                        ]
+                    ),
+                ],
+                id=f"{prefix}-ttm-te-modal",
+                is_open=False,
             ),
         ],
         style={"padding": "0.5rem 0"},
@@ -233,6 +301,8 @@ def register_table_to_motl_callbacks(
     *,
     source_table_id: str,
     id_column: str = "qp_id",
+    source_store_id: str | None = None,
+    resolve_df: Callable | None = None,
 ) -> None:
     """Register all callbacks for a table→motl component instance.
 
@@ -243,12 +313,24 @@ def register_table_to_motl_callbacks(
     prefix:
         Must match the prefix passed to :func:`get_table_to_motl`.
     source_table_id:
-        Id of the ``AgGrid`` component whose ``rowData`` / ``selectedRows``
-        supply the source rows.
+        Id of the ``AgGrid`` component whose ``selectedRows`` supply selected
+        source rows.  ``rowData`` is read for columns only when *source_store_id*
+        is not provided (plain list-model grids).
     id_column:
         Column in the source table whose values are matched against
         ``subtomo_id`` in the target motl.  Defaults to ``"qp_id"``.
+    source_store_id:
+        Optional id of a ``dcc.Store`` holding the table's data reference.
+        When provided the column-list callbacks watch this store instead of
+        ``source_table_id.rowData`` (which is never populated in the
+        infinite/server-side row model used by :mod:`tablegrid`).
+    resolve_df:
+        Callable ``(store_data) -> pd.DataFrame | None`` used when
+        *source_store_id* is provided.  Must match the resolver used by the
+        table (e.g. ``datapool.resolve_df``).
     """
+
+    _has_store = source_store_id is not None and resolve_df is not None
 
     @app.callback(
         Output(f"{prefix}-ttm-target-motl", "options"),
@@ -259,16 +341,37 @@ def register_table_to_motl_callbacks(
         registry = registry or {}
         return [{"label": v.get("label", k), "value": k} for k, v in registry.items()]
 
-    for i in range(_N_PAIRS):
-        @app.callback(
-            Output(f"{prefix}-ttm-val-col-{i}", "options"),
-            Input(source_table_id, "rowData"),
-            prevent_initial_call=True,
-        )
-        def _populate_val_col_n(row_data, _i=i):
-            if not row_data:
-                return []
-            return [{"label": c, "value": c} for c in pd.DataFrame(row_data or []).columns]
+    if _has_store:
+        for i in range(_N_PAIRS):
+            @app.callback(
+                Output(f"{prefix}-ttm-val-col-{i}", "options"),
+                Input(source_store_id, "data"),
+                prevent_initial_call=True,
+            )
+            def _populate_val_col_n(ref, _i=i):
+                df = resolve_df(ref)
+                _cols = list(df.columns) if df is not None and not df.empty else []
+                print(f"[tabletomotl] {prefix} col-{_i}: store={source_store_id!r} ref_type={type(ref).__name__} "
+                      f"resolve_df={resolve_df.__name__ if hasattr(resolve_df, '__name__') else resolve_df!r} "
+                      f"→ {'None' if df is None else f'{len(df)} rows, cols={_cols[:5]}'}")
+                if df is None or df.empty:
+                    return []
+                return [{"label": c, "value": c} for c in df.columns]
+    else:
+        for i in range(_N_PAIRS):
+            @app.callback(
+                Output(f"{prefix}-ttm-val-col-{i}", "options"),
+                Input(source_table_id, "rowData"),
+                prevent_initial_call=True,
+            )
+            def _populate_val_col_n(row_data, _i=i):
+                print(f"[tabletomotl] {prefix} col-{_i}: rowData path (no store) — "
+                      f"row_data type={type(row_data).__name__} len={len(row_data) if row_data else 0}")
+                if not row_data:
+                    return []
+                return [{"label": c, "value": c} for c in pd.DataFrame(row_data or []).columns]
+
+    _act_extra = [State(source_store_id, "data")] if _has_store else [State(source_table_id, "rowData")]
 
     @app.callback(
         Output(f"{prefix}-ttm-status", "children"),
@@ -282,7 +385,7 @@ def register_table_to_motl_callbacks(
         *[State(f"{prefix}-ttm-dst-col-{i}", "value") for i in range(_N_PAIRS)],
         State(f"{prefix}-ttm-rows-mode", "value"),
         State(f"{prefix}-ttm-label", "value"),
-        State(source_table_id, "rowData"),
+        *_act_extra,
         State(source_table_id, "selectedRows"),
         State(_ids.POOL_REGISTRY, "data"),
         State(_ids.POOL_META, "data"),
@@ -294,14 +397,20 @@ def register_table_to_motl_callbacks(
         target_id,
         *rest,
     ):
-        # Unpack the variadic args: N val_cols, N dst_cols, rows_mode, label,
-        # all_rows, selected_rows, registry, pool_meta, next_id
+        # Unpack: N val_cols, N dst_cols, rows_mode, label, raw_data, selected_rows,
+        # registry, pool_meta, next_id
         n = _N_PAIRS
         val_cols = list(rest[:n])
         dst_cols = list(rest[n:2 * n])
-        rows_mode, label, all_rows, selected_rows, registry, pool_meta, next_id = rest[2 * n:]
+        rows_mode, label, raw_data, selected_rows, registry, pool_meta, next_id = rest[2 * n:]
 
-        active = (selected_rows or []) if (rows_mode or "all") == "selected" else (all_rows or [])
+        if _has_store:
+            df = resolve_df(raw_data)
+            all_rows = df.to_dict("records") if df is not None else []
+        else:
+            all_rows = raw_data or []
+
+        active = (selected_rows or []) if (rows_mode or "all") == "selected" else all_rows
         if not active:
             return ("No rows selected." if rows_mode == "selected" else "No rows in table."), *_NU3
         if ctx.triggered_id == f"{prefix}-ttm-write-btn":
@@ -310,8 +419,53 @@ def register_table_to_motl_callbacks(
                 return "Choose at least one source and destination column pair.", *_NU3
             return _do_write_cols(target_id, pairs, id_column, active, registry, pool_meta, next_id)
         if ctx.triggered_id == f"{prefix}-ttm-create-btn":
-            # Use pair 0's val/dst for the optional column copy in create mode
             val_col = val_cols[0] if val_cols else None
             dst_col = dst_cols[0] if dst_cols else None
             return _do_create_motl(target_id, id_column, val_col, dst_col, label, active, registry, pool_meta, next_id)
         return no_update, *_NU3
+
+    _te_extra = [State(source_store_id, "data")] if _has_store else [State(source_table_id, "rowData")]
+
+    @app.callback(
+        Output(f"{prefix}-ttm-te-modal", "is_open"),
+        Output(f"{prefix}-ttm-status", "children", allow_duplicate=True),
+        Output(_ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(_ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
+        Input(f"{prefix}-ttm-create-te-btn", "n_clicks"),
+        Input(f"{prefix}-ttm-te-confirm", "n_clicks"),
+        Input(f"{prefix}-ttm-te-cancel", "n_clicks"),
+        State(f"{prefix}-ttm-target-motl", "value"),
+        *[State(f"{prefix}-ttm-val-col-{i}", "value") for i in range(_N_PAIRS)],
+        State(f"{prefix}-ttm-rows-mode", "value"),
+        State(source_table_id, "selectedRows"),
+        *_te_extra,
+        State(_ids.DATA_POOL_REGISTRY, "data"),
+        State(_ids.DATA_POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
+    )
+    def _handle_te_modal(_open_n, _confirm_n, _cancel_n, target_id, *rest):
+        n = _N_PAIRS
+        val_cols = list(rest[:n])
+        rows_mode = rest[n]
+        selected_rows = rest[n + 1]
+        raw_data = rest[n + 2]
+        dp_registry = rest[n + 3]
+        dp_next_id = rest[n + 4]
+
+        tid = ctx.triggered_id
+        if tid == f"{prefix}-ttm-create-te-btn":
+            return True, no_update, no_update, no_update
+        if tid == f"{prefix}-ttm-te-cancel":
+            return False, no_update, no_update, no_update
+        if tid == f"{prefix}-ttm-te-confirm":
+            if _has_store:
+                df = resolve_df(raw_data)
+                all_rows = df.to_dict("records") if df is not None else []
+            else:
+                all_rows = raw_data or []
+            active = (selected_rows or []) if (rows_mode or "all") == "selected" else all_rows
+            status, new_dp_reg, new_dp_next = _do_create_table_entry(
+                target_id, val_cols, id_column, active, dp_registry, dp_next_id,
+            )
+            return False, status, new_dp_reg, new_dp_next
+        raise PreventUpdate

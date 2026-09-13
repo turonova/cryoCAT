@@ -41,6 +41,7 @@ class SurfaceHandle:
     parent_id: str | None
     visible: bool
     has_curvatures: bool
+    has_hit_counts: bool = False
 
 
 def _mesh_has_curvatures(mesh) -> bool:
@@ -51,6 +52,11 @@ def _mesh_has_curvatures(mesh) -> bool:
     attributes; we check the cheaper of the two.
     """
     return getattr(mesh, "_mean_curvature", None) is not None
+
+
+def _has_hit_counts(surface) -> bool:
+    """True iff a per-vertex hit-count field has been attached to *surface*."""
+    return getattr(surface, "_hit_counts", None) is not None
 
 
 def make_handle(
@@ -95,4 +101,5 @@ def make_handle(
         parent_id=parent_id,
         visible=bool(visible),
         has_curvatures=bool(has_curvatures),
+        has_hit_counts=bool(_has_hit_counts(surface.surface)),
     ))

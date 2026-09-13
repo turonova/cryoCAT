@@ -6,9 +6,6 @@ lifetime and are never reused (counter never decrements).
 """
 from __future__ import annotations
 
-from itertools import count
-
-
 class Registry[T]:
     """Server-side store for live objects too heavy for a dcc.Store.
 
@@ -25,7 +22,16 @@ class Registry[T]:
         self._prefix = prefix
         self._max_items = max_items
         self._store: dict[str, T] = {}
-        self._counter = count(start)
+        self._next_n = start
+
+    def peek_next_key(self) -> str:
+        """Return the key that the next :meth:`add` call would generate.
+
+        Does not advance the counter or modify the store.  Used by callers
+        that need the future key before the object is registered — e.g. to
+        pass ``assign_to`` to ``invoke_operation`` before ``add`` is called.
+        """
+        return f"{self._prefix}-{self._next_n}"
 
     def add(self, obj: T) -> str:
         """Store *obj* and return a fresh, stable key."""
@@ -33,7 +39,8 @@ class Registry[T]:
             while len(self._store) >= self._max_items:
                 oldest = next(iter(self._store))
                 del self._store[oldest]
-        key = f"{self._prefix}-{next(self._counter)}"
+        key = f"{self._prefix}-{self._next_n}"
+        self._next_n += 1
         self._store[key] = obj
         return key
 

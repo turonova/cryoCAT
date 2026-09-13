@@ -281,6 +281,25 @@ def replace_motl_rows(
     )
 
 
+def replace_motl_df(ref: dict | None, df: pd.DataFrame) -> dict | None:
+    """Update MOTL pool payload in-place; return a new ref with bumped rev.
+
+    2-arg ``commit_fn`` counterpart to :func:`cryocat.app.datapool.replace_df`
+    for stores that hold MOTL pool refs (``{"motl_id": ..., "rev": ...}``).
+    The POOL_REGISTRY Dash store is NOT updated — call this only for in-place
+    edits (e.g. cluster column writes) where schema/metadata don't change.
+    Returns ``None`` if *ref* is invalid or the entry is no longer in the pool.
+    """
+    if not isinstance(ref, dict) or "motl_id" not in ref:
+        return None
+    motl_id = ref["motl_id"]
+    if motl_id not in _payloads:
+        return None
+    existing = _payloads[motl_id]
+    _payloads[motl_id] = PoolPayload(rows=df.copy(), extra=existing.extra)
+    return {**ref, "rev": ref.get("rev", 0) + 1}
+
+
 def get_rows(motl_id: str, *, state: PoolState | None = None) -> pd.DataFrame:
     """Return the :class:`~pandas.DataFrame` for *motl_id*.
 

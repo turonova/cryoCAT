@@ -363,6 +363,80 @@ def get_relevant_features(desc_name, all_features):
     return avail_features
 
 
+# ── Result-adoption utilities ─────────────────────────────────────────────────
+
+def flatten_result_dict(raw: dict) -> pd.DataFrame | None:
+    """Convert a dict of equal-length arrays into a flat DataFrame.
+
+    Returns ``None`` when *raw* is not a dict whose values are all scalars,
+    1-D arrays, or (N, M≤3) arrays sharing the same leading dimension.
+    Scalar values (0-D) are broadcast into repeated columns of length N so
+    that mixed dicts (e.g. ``distance_to_points`` output with ``n_total``,
+    ``n_inside`` alongside ``distances``) adopt without pre-filtering.
+
+    Naming rule for vector fields (shape N×M where M > 1 and M ≤ 3):
+    the full key name is kept and ``_x`` / ``_y`` / ``_z`` are appended
+    for columns 0–2.  No suffix stripping is performed; stripping would
+    cause collisions when two keys share a prefix (e.g. ``primitive_normals``
+    and ``primitive_directions`` would both strip to ``primitive``).
+
+    Examples from :meth:`~cryocat.analysis.structure.PleomorphicSurface.ray_intersections`:
+    * ``hit_points`` → ``hit_points_x``, ``hit_points_y``, ``hit_points_z``
+    * ``primitive_normals`` → ``primitive_normals_x``, ``primitive_normals_y``, ``primitive_normals_z``
+    * ``ray_directions`` → ``ray_directions_x``, ``ray_directions_y``, ``ray_directions_z``
+    * ``surface_orientations`` → ``surface_orientations_x``, ``surface_orientations_y``, ``surface_orientations_z``
+
+    A ``hit`` boolean column is added when ``t_hit`` (finite → hit) or
+    ``primitive_ids`` (≥ 0 → hit) is present.  Row *i* corresponds to
+    input ray *i*; misses are included so the table row count matches the
+    ray count and results can be joined back to the input motl by position.
+
+    A second caller imports this function and passes the operation's return
+    value directly::
+
+        from cryocat.app.apputils import flatten_result_dict
+        df = flatten_result_dict(result)
+        if df is not None:
+            # adopt df into the data pool
+    """
+    if not isinstance(raw, dict):
+        return None
+    scalars: dict[str, np.ndarray] = {}
+    arrays: dict[str, np.ndarray] = {}
+    for k, v in raw.items():
+        arr = np.asarray(v)
+        if arr.ndim == 0:
+            scalars[k] = arr
+        elif arr.ndim in (1, 2):
+            arrays[k] = arr
+        else:
+            return None
+    if not arrays:
+        return None
+    lengths = {a.shape[0] for a in arrays.values()}
+    if len(lengths) != 1:
+        return None
+    n = next(iter(lengths))
+    for k, s in scalars.items():
+        arrays[k] = np.full(n, s.item())
+
+    cols: dict[str, np.ndarray] = {}
+    suffixes = ("_x", "_y", "_z")
+    for k, arr in arrays.items():
+        if arr.ndim == 1:
+            cols[k] = arr
+        else:
+            for i in range(min(arr.shape[1], 3)):
+                cols[f"{k}{suffixes[i]}"] = arr[:, i]
+
+    df = pd.DataFrame(cols)
+    if "t_hit" in cols:
+        df["hit"] = np.isfinite(cols["t_hit"])
+    elif "primitive_ids" in cols:
+        df["hit"] = cols["primitive_ids"] != -1
+    return df
+
+
 # ── Dispatch helpers ──────────────────────────────────────────────────────────
 
 def run_operation(fn, kwargs: dict):

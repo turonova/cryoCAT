@@ -93,6 +93,86 @@ def merge_tables(
     return pd.merge(left, right, on=on, how=how)
 
 
+def positional_merge(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
+    """Join two tables side-by-side by row order (no key columns).
+
+    Raises
+    ------
+    ValueError
+        When row counts differ, or when there are overlapping column names
+        that cannot be resolved (both would rename to the same _right suffix).
+    """
+    if len(left) != len(right):
+        raise ValueError(
+            f"Positional merge requires equal row counts "
+            f"(left has {len(left):,}, right has {len(right):,})."
+        )
+    left_r = left.reset_index(drop=True)
+    right_r = right.reset_index(drop=True)
+    clashes = set(left_r.columns) & set(right_r.columns)
+    if clashes:
+        all_cols = set(left_r.columns) | set(right_r.columns)
+        rename_map: dict[str, str] = {}
+        for c in clashes:
+            candidate = f"{c}_right"
+            n = 1
+            while candidate in all_cols or candidate in rename_map.values():
+                candidate = f"{c}_right_{n}"
+                n += 1
+            rename_map[c] = candidate
+            all_cols.add(candidate)
+        right_r = right_r.rename(columns=rename_map)
+    return pd.concat([left_r, right_r], axis=1)
+
+
+def assign_column(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    src_col: str,
+    dst_col: str,
+    match_mode: str,
+    key_col: str | None = None,
+) -> pd.DataFrame:
+    """Assign one column from *right* into *left*, returning a new DataFrame.
+
+    Parameters
+    ----------
+    src_col
+        Column in *right* whose values are copied.
+    dst_col
+        Name of the new (or replaced) column in the result.
+    match_mode
+        ``'positional'`` — assign by row order; equal row counts required.
+        ``'key'`` — left-join on *key_col*; *key_col* must be in both tables.
+    key_col
+        Required when *match_mode* is ``'key'``.
+
+    Raises
+    ------
+    ValueError
+        When preconditions are not met (missing column, unequal count, etc.).
+    """
+    if src_col not in right.columns:
+        raise ValueError(f"Source column {src_col!r} not found in the right table.")
+    if match_mode == "positional":
+        if len(left) != len(right):
+            raise ValueError(
+                f"Positional assign requires equal row counts "
+                f"(left has {len(left):,}, right has {len(right):,})."
+            )
+        return left.assign(**{dst_col: right[src_col].reset_index(drop=True).values})
+    if match_mode == "key":
+        if not key_col:
+            raise ValueError("Key column must be specified for key-based assignment.")
+        if key_col not in left.columns:
+            raise ValueError(f"Key column {key_col!r} not found in the left table.")
+        if key_col not in right.columns:
+            raise ValueError(f"Key column {key_col!r} not found in the right table.")
+        mapping = right.drop_duplicates(subset=[key_col]).set_index(key_col)[src_col]
+        return left.assign(**{dst_col: left[key_col].map(mapping)})
+    raise ValueError(f"Unknown match mode {match_mode!r} (expected 'positional' or 'key').")
+
+
 def concat_tables(
     frames: list[pd.DataFrame],
     labels: list[str],

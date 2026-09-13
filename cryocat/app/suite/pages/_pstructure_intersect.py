@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 
 from cryocat.core.cryomotl import Motl
-from cryocat.utils import geom
 
 
 def motl_from_rows(rows: list[dict]) -> Motl:
@@ -41,54 +40,6 @@ def motl_from_rows(rows: list[dict]) -> Motl:
     if not rows:
         raise ValueError("Cannot build a Motl from empty rows.")
     return Motl(pd.DataFrame(rows))
-
-
-def motl_rows_to_rays(
-    rows: list[dict] | pd.DataFrame,
-    pixel_size: float,
-    reverse_direction: bool = False,
-    ray_length: float | None = None,
-) -> np.ndarray:
-    """Build an ``(N, 6)`` ray array from motl data.
-
-    Accepts either a :class:`~pandas.DataFrame` (from :func:`pool.get_rows`)
-    or a ``list[dict]`` (legacy / test path).  Coordinates are scaled by
-    ``pixel_size`` (pool rows are stored in voxel units; the surface is
-    typically in nm).  Per-particle z-normals come from applying the stored
-    rotations to ``[0, 0, 1]`` -- the same convention as the
-    ``mesh_points_intersections`` tutorial.
-
-    Parameters
-    ----------
-    rows : pd.DataFrame or list of dict
-        Motl data from the suite pool.
-    pixel_size : float
-        Voxel-to-physical-units scale factor (e.g. nm/voxel).
-    reverse_direction : bool, default=False
-        When True, rays fly *away from* the surface (particles -> +z normal).
-        When False (default for the tutorial), normals are reversed so rays
-        fly *toward* the surface (particles -> -z normal). Forwarded to
-        :func:`cryocat.utils.geom.construct_rays`.
-    ray_length : float, optional
-        Forwarded to :func:`cryocat.utils.geom.construct_rays`.
-
-    Returns
-    -------
-    numpy.ndarray
-        Shape ``(N, 6)``; columns ``[ox, oy, oz, dx, dy, dz]``.
-    """
-    if isinstance(rows, pd.DataFrame):
-        motl = Motl(rows)
-    else:
-        motl = motl_from_rows(rows)
-    coords = motl.get_coordinates() * float(pixel_size)
-    normals = motl.get_rotations().apply([0.0, 0.0, 1.0])
-    return geom.construct_rays(
-        points=coords,
-        normals=normals,
-        reverse_direction=bool(reverse_direction),
-        ray_length=ray_length,
-    )
 
 
 def subset_motl_rows(rows: list[dict], particle_indices) -> list[dict]:

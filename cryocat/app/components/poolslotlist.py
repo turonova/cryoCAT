@@ -213,20 +213,31 @@ def register_pool_slot_list_callbacks(
         store, and registers a click callback that writes the clicked item_id
         back to the same store.
     """
-    if active_id_store_id:
-        @app.callback(
-            Output(f"{prefix}-psl-list", "children"),
-            Input(pool_registry_id, "data"),
-            Input(slot_map_id, "data"),
-            Input(active_id_store_id, "data"),
-        )
-        def _render(registry, slot_map, active_id):
-            reg = registry or {}
-            sm = list(slot_map or [None] * n_slots)
-            while len(sm) < n_slots:
-                sm.append(None)
-            return _build_rows(reg, sm, n_slots, active_id, prefix, row_extra_fn)
+    _has_active = active_id_store_id is not None
+    _all_inputs = [
+        Input(pool_registry_id, "data"),
+        Input(slot_map_id, "data"),
+        *([] if not _has_active else [Input(active_id_store_id, "data")]),
+    ]
 
+    # One registration. To add a new optional store: add its id parameter
+    # above, append Input(...) to _all_inputs when it is not None, add a
+    # _has_<name> flag, and read args[_i] in _render. No new @app.callback block.
+    @app.callback(
+        Output(f"{prefix}-psl-list", "children"),
+        *_all_inputs,
+    )
+    def _render(*args):
+        registry = args[0]
+        slot_map = args[1]
+        active_id = args[2] if _has_active else None
+        reg = registry or {}
+        sm = list(slot_map or [None] * n_slots)
+        while len(sm) < n_slots:
+            sm.append(None)
+        return _build_rows(reg, sm, n_slots, active_id, prefix, row_extra_fn)
+
+    if active_id_store_id:
         @app.callback(
             Output(active_id_store_id, "data", allow_duplicate=True),
             Input({"type": f"{prefix}-psl-item", "item_id": ALL}, "n_clicks"),
@@ -236,19 +247,6 @@ def register_pool_slot_list_callbacks(
             if not ctx.triggered_id or not any(n or 0 for n in (n_clicks or [])):
                 raise dash.exceptions.PreventUpdate
             return ctx.triggered_id["item_id"]
-
-    else:
-        @app.callback(
-            Output(f"{prefix}-psl-list", "children"),
-            Input(pool_registry_id, "data"),
-            Input(slot_map_id, "data"),
-        )
-        def _render(registry, slot_map):
-            reg = registry or {}
-            sm = list(slot_map or [None] * n_slots)
-            while len(sm) < n_slots:
-                sm.append(None)
-            return _build_rows(reg, sm, n_slots, None, prefix, row_extra_fn)
 
     register_slot_change_callback(app, prefix, slot_map_id, n_slots)
 
@@ -318,29 +316,25 @@ def register_slot_focus_callback(
         new_tab = None if current_tab == fallback else fallback
         return new_tab, None, True
 
-    if active_id_store_id:
-        @app.callback(
-            Output(tabs_id, "active_tab", allow_duplicate=True),
-            Output(active_id_store_id, "data", allow_duplicate=True),
-            Input(slot_map_id, "data"),
-            State(tabs_id, "active_tab"),
-            prevent_initial_call=True,
-        )
-        def _focus_on_slot_change(slot_map, current_tab):
-            new_tab, new_id, changed = _compute(slot_map, current_tab)
-            if not changed:
-                return no_update, no_update
-            return (new_tab if new_tab is not None else no_update), new_id
+    _has_active = active_id_store_id is not None
+    _all_outputs = [
+        Output(tabs_id, "active_tab", allow_duplicate=True),
+        *([] if not _has_active else [Output(active_id_store_id, "data", allow_duplicate=True)]),
+    ]
 
-    else:
-        @app.callback(
-            Output(tabs_id, "active_tab", allow_duplicate=True),
-            Input(slot_map_id, "data"),
-            State(tabs_id, "active_tab"),
-            prevent_initial_call=True,
-        )
-        def _focus_on_slot_change(slot_map, current_tab):
-            new_tab, _id, changed = _compute(slot_map, current_tab)
-            if not changed:
-                return no_update
-            return new_tab if new_tab is not None else no_update
+    # One registration. To add a new optional store: add its id parameter
+    # above, append Output(...) to _all_outputs when it is not None, add a
+    # _has_<name> flag, and extend the return tuple in _focus_on_slot_change.
+    # No new @app.callback block.
+    @app.callback(
+        *_all_outputs,
+        Input(slot_map_id, "data"),
+        State(tabs_id, "active_tab"),
+        prevent_initial_call=True,
+    )
+    def _focus_on_slot_change(slot_map, current_tab):
+        new_tab, new_id, changed = _compute(slot_map, current_tab)
+        tab_val = (new_tab if new_tab is not None else no_update) if changed else no_update
+        if _has_active:
+            return tab_val, (new_id if changed else no_update)
+        return tab_val

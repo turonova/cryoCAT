@@ -96,7 +96,7 @@ def _discrete_swatch(colors: list) -> html.Div:
         })
         for c in colors
     ]
-    return html.Div(boxes, style={"display": "flex", "flexWrap": "wrap", "gap": "0"})
+    return html.Div(boxes, style={"display": "flex", "flexWrap": "nowrap", "gap": "0"})
 
 
 def _continuous_swatch(palette_val: str) -> html.Div:
@@ -149,6 +149,7 @@ def get_palette_loader(
     mode: str = "discrete",
     default: str | None = None,
     allow_auto: bool = False,
+    swatch_inline: bool = False,
 ) -> html.Div:
     """Palette selector: preset dropdown + swatch preview.
 
@@ -180,6 +181,30 @@ def get_palette_loader(
         initial = default if (default and default in presets) else (presets[0] if presets else "")
         initial_swatch = _make_swatch(initial, mode) if initial else []
 
+    if swatch_inline:
+        return html.Div(
+            [
+                html.Div(
+                    [
+                        make_dropdown(
+                            f"{prefix}-preset",
+                            options,
+                            initial,
+                            clearable=False,
+                        ),
+                        html.Div(
+                            id=f"{prefix}-swatch",
+                            children=initial_swatch,
+                            style={"marginLeft": "0.4rem", "minWidth": "60px", "alignSelf": "center"},
+                        ),
+                    ],
+                    style={"display": "flex", "alignItems": "center"},
+                ),
+                html.Div(id=f"{prefix}-status", style=styles.HINT_SM),
+                dcc.Store(id=f"{prefix}-value", data=initial),
+            ],
+            style={"flexShrink": 0},
+        )
     return html.Div(
         [
             make_dropdown(
@@ -218,30 +243,26 @@ def register_palette_loader_callbacks(
         Pass this for every Auto-capable loader (``allow_auto=True``).
     """
     _auto_key = "discrete_palette" if mode == "discrete" else "continuous_palette"
+    _has_settings = settings_store_id is not None
+    _all_inputs = [
+        Input(f"{prefix}-preset", "value"),
+        *([] if not _has_settings else [Input(settings_store_id, "data")]),
+    ]
 
-    if settings_store_id:
-        @app.callback(
-            Output(f"{prefix}-value", "data"),
-            Output(f"{prefix}-swatch", "children"),
-            Output(f"{prefix}-status", "children"),
-            Input(f"{prefix}-preset", "value"),
-            Input(settings_store_id, "data"),
-            prevent_initial_call=True,
-        )
-        def _update(preset, settings):
-            if not preset:  # Auto — show the current effective default
-                auto_pal = (settings or {}).get(_auto_key) or _AUTO_DEFAULT_PAL
-                return "", _make_swatch(auto_pal, mode), ""
-            return preset, _make_swatch(preset, mode), ""
-    else:
-        @app.callback(
-            Output(f"{prefix}-value", "data"),
-            Output(f"{prefix}-swatch", "children"),
-            Output(f"{prefix}-status", "children"),
-            Input(f"{prefix}-preset", "value"),
-            prevent_initial_call=True,
-        )
-        def _update(preset):
-            if not preset:
-                return "", [], ""
-            return preset, _make_swatch(preset, mode), ""
+    # One registration. To add a new optional store: add its id parameter
+    # above, append Input(...) to _all_inputs when it is not None, add a
+    # _has_<name> flag, and read args[_i] in _update. No new @app.callback block.
+    @app.callback(
+        Output(f"{prefix}-value", "data"),
+        Output(f"{prefix}-swatch", "children"),
+        Output(f"{prefix}-status", "children"),
+        *_all_inputs,
+        prevent_initial_call=True,
+    )
+    def _update(*args):
+        preset = args[0]
+        settings = args[1] if _has_settings else None
+        if not preset:
+            auto_pal = (settings or {}).get(_auto_key) or _AUTO_DEFAULT_PAL
+            return "", _make_swatch(auto_pal, mode), ""
+        return preset, _make_swatch(preset, mode), ""

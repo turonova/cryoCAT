@@ -118,7 +118,7 @@ def _render_value(
     # ndarray / large array → placeholder
     if hasattr(v, "shape"):
         shape = tuple(getattr(v, "shape", ()))
-        return f"None  # <array shape {shape}: supply input>", []
+        return f"...  # ndarray shape {shape}: value passed, not representable as source", []
     # dict / other → compact repr fallback
     try:
         r = repr(v)
@@ -126,7 +126,7 @@ def _render_value(
         r = f"<{type(v).__name__}>"
     if len(r) <= 120:
         return r, []
-    return f"None  # {type(v).__name__}: {r[:80]}...", []
+    return f"...  # {type(v).__name__}: value passed, not representable as source", []
 
 
 def _render_python_line(
@@ -157,8 +157,16 @@ def _render_python_line(
             imports = [(short, stmt)] + imports
             return f"{short}.{fn.__qualname__}({arg_str})", imports, kwargs_src
         recv_expr, recv_imps = _render_value(fn.__self__, obj_to_var=obj_to_var)
-        recv_src = recv_expr or "None"
-        imports = recv_imps + imports
+        # recv_expr is None for unresolvable Motl-like objects; starts with "..." for
+        # any other complex instance that has no variable mapping.  Both cases are
+        # unresolvable: render the line as None.<method>(...) and let invoke_operation
+        # emit a message_event via the "<self>" sentinel in kwargs_src.
+        if recv_expr is None or (recv_expr and recv_expr.startswith("...")):
+            kwargs_src["<self>"] = None
+            recv_src = "None"
+        else:
+            recv_src = recv_expr
+            imports = recv_imps + imports
         ctor_kwargs = getattr(fn.__self__, "_ctor_kwargs", None)
         if ctor_kwargs:
             cls_name = type(fn.__self__).__name__
@@ -229,21 +237,33 @@ def invoke_operation(
     obj_to_var: dict[int, str] = {}
 
     # Check the receiver (fn.__self__ for bound instance methods).
+    # Pool-stamped objects carry _pool_motl_id (Motl) or _pool_surface_id (surface);
+    # locally-produced intermediates registered via assign_to are in _intermediate_vars.
     self_obj = getattr(fn, "__self__", None)
     if self_obj is not None and not inspect.isclass(self_obj):
-        mid = getattr(self_obj, "_pool_motl_id", None)
-        if mid is not None:
-            var = _prov.var_for(mid)
-            if var:
-                obj_to_var[id(self_obj)] = var
+        _self_var: str | None = None
+        for _attr in ("_pool_motl_id", "_pool_surface_id"):
+            _pool_id = getattr(self_obj, _attr, None)
+            if _pool_id is not None:
+                _self_var = _prov.var_for(_pool_id)
+                break
+        if _self_var is None:
+            _self_var = _prov.var_for_obj(self_obj)
+        if _self_var:
+            obj_to_var[id(self_obj)] = _self_var
 
-    # Check kwargs for Motl arguments stamped with _pool_motl_id.
+    # Check kwargs for pool-stamped objects and locally-produced intermediates.
     for v in kwargs.values():
-        mid = getattr(v, "_pool_motl_id", None)
-        if mid is not None:
-            var = _prov.var_for(mid)
-            if var:
-                obj_to_var[id(v)] = var
+        _kw_var: str | None = None
+        for _attr in ("_pool_motl_id", "_pool_surface_id"):
+            _pool_id = getattr(v, _attr, None)
+            if _pool_id is not None:
+                _kw_var = _prov.var_for(_pool_id)
+                break
+        if _kw_var is None:
+            _kw_var = _prov.var_for_obj(v)
+        if _kw_var:
+            obj_to_var[id(v)] = _kw_var
 
     # Derive the receiver variable name for the call event.
     derived_receiver: str | None = (
@@ -257,14 +277,20 @@ def invoke_operation(
     line, imports_needed, kwargs_src = _render_python_line(fn, kwargs, obj_to_var=obj_to_var)
     imports_json = [[s, stmt] for s, stmt in imports_needed]
 
-    # Warn once per unresolvable Motl argument.
+    # Warn once per unresolvable argument or receiver.
     for k, expr in kwargs_src.items():
         if expr is None:
-            _session.emit(message_event(
-                f"Argument {k!r} of {fn_name} could not be resolved to a variable "
-                "— pool provenance missing. Load the motl through the pool first.",
-                level="error",
-            ))
+            if k == "<self>":
+                msg = (
+                    f"Receiver of {fn_name} could not be resolved to a variable "
+                    "— load the surface through the pool first."
+                )
+            else:
+                msg = (
+                    f"Argument {k!r} of {fn_name} could not be resolved to a variable "
+                    "— pool provenance missing. Load the motl through the pool first."
+                )
+            _session.emit(message_event(msg, level="error"))
 
     # Capture receiver's row count before the call for delta computation.
     before: dict | None = None
@@ -299,6 +325,9 @@ def invoke_operation(
 
     duration = _time.monotonic() - t0
     dash_logger.write(f"✓ {pane_name}", source="cryocat")
+
+    if assign_to and result is not None:
+        _prov.register_intermediate(result, assign_to)
 
     result_summary = describe(result, pool_id=pool_id, label=label, source=source, before=before)
     try:

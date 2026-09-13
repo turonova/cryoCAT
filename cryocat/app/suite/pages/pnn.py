@@ -512,6 +512,8 @@ def register_callbacks(app):
         app, "nn-ttm",
         source_table_id="nn-out-tabv-grid",
         id_column="qp_subtomo_id",
+        source_store_id="nn-out-tabv-global-data-store",
+        resolve_df=_datapool.resolve_df,
     )
     register_table_source_callbacks(
         app, "nn-src",
@@ -536,6 +538,7 @@ def register_callbacks(app):
         table_grid_id="nn-out-tabv-grid",
         cluster_cols_store_id="nn-cluster-cols-store",
         resolve_df=_datapool.resolve_df,
+        commit_fn=_datapool.replace_df,
     )
 
     @app.callback(

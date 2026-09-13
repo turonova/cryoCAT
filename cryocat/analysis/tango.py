@@ -32,6 +32,48 @@ from typing import Literal
 from cryocat.analysis import visplot
 
 
+def _check_numeric_param(
+    value: int | float | np.integer | np.floating | None,
+    name: str,
+    return_int: bool = True,
+) -> int | float | None:
+    """Validate that *value* is a numeric scalar and return it, optionally as ``int``.
+
+    Parameters
+    ----------
+    value : int, float, np.integer, np.floating, or None
+        The value to validate.  ``None`` is accepted and returned unchanged.
+    name : str
+        Parameter name inserted into the ``TypeError`` message.
+    return_int : bool, default True
+        When ``True``, return ``int(value)``; when ``False``, return *value*
+        unchanged.
+
+        .. note::
+            ``float('nan')`` passes the type check (it is a ``float``) but
+            ``int(float('nan'))`` raises ``ValueError``.  NaN with
+            ``return_int=False`` is returned as-is; with ``return_int=True``
+            it raises ``ValueError`` from the cast, not ``TypeError`` from
+            this function.
+
+    Returns
+    -------
+    int or float or None
+        Validated *value*.
+
+    Raises
+    ------
+    TypeError
+        If *value* is not ``None`` and not one of ``int``, ``float``,
+        ``numpy.integer``, or ``numpy.floating``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return int(value) if return_int else value
+    raise TypeError(f"A param {name} has to be a float or an int.")
+
+
 class Particle:
     """Single rigid-body particle with rotation, position, and optional identifiers.
 
@@ -99,43 +141,9 @@ class Particle:
 
         self.position = position.reshape(3)
 
-        def check_type(input_param, param_desc, return_int=True):
-            """
-            Check if the input parameter is of type int or float and return it as an int or float.
-
-            Parameters
-            ----------
-            input_param : int, float, None
-                The input parameter to check.
-            param_desc : str
-                A description of the parameter for error messages.
-            return_int : bool, default=True
-                If True, integer is returned. Defaults to True.
-
-            Raises
-            ------
-            TypeError
-                If the input parameter is not of type int or float.
-
-            Returns
-            -------
-            int or float or None
-            """
-
-            if input_param is not None:
-                if isinstance(input_param, (int, float)):
-                    if return_int:
-                        return int(input_param)
-                    else:
-                        return input_param
-                else:
-                    raise TypeError(f"A param {param_desc} has to be a float or an int.")
-            else:
-                return None
-
-        self.tomo_id = check_type(tomo_id, "tomo_id")
+        self.tomo_id = _check_numeric_param(tomo_id, "tomo_id")
         self.motl_fid = motl_fid
-        self.id = check_type(particle_id, "particle_id")
+        self.id = _check_numeric_param(particle_id, "particle_id")
 
     def __str__(self):
         """Return a string representation showing the rotation-translation matrix, tomo_id, and motl_fid.
@@ -257,7 +265,7 @@ class Particle:
         If overwrite == False, Particle is returned.
         """
 
-        if isinstance(scaling_factor, (int, float)):
+        if isinstance(scaling_factor, (int, float, np.integer, np.floating)):
 
             scaled_position = scaling_factor * self.position
 
@@ -611,7 +619,7 @@ class SymmParticle(Particle):
                 self.category = int(re.findall(r"\d+", symm)[-1])
                 vertices = geom.n_gon_points(self.category)
 
-        elif isinstance(symm, (int, float)):
+        elif isinstance(symm, (int, float, np.integer, np.floating)):
             self.category = int(symm)
             vertices = geom.n_gon_points(symm)  # vertices lie in plane
 
@@ -1276,7 +1284,7 @@ class TwistDescriptor(Descriptor):
                 except Exception:
                     self.nn_radius = None
                     self.radius_source = "unknown"
-        elif input_motl is not None and isinstance(nn_radius, (float, int)):
+        elif input_motl is not None and isinstance(nn_radius, (float, int, np.floating, np.integer)):
             self.df = TwistDescriptor.get_nn_twist_stats_within_radius(
                 input_motl, nn_radius, column_name, symm, remove_qp=remove_qp, remove_duplicates=remove_duplicates
             )
@@ -1806,7 +1814,7 @@ class TwistDescriptor(Descriptor):
         This function assumes that `twist_df` contains a column named "qp_id" for particle IDs and "tomo_id" for tomography IDs.
         """
 
-        if isinstance(query_particle, (int, float)) or isinstance(query_particle, Particle):
+        if isinstance(query_particle, (int, float, np.integer, np.floating)) or isinstance(query_particle, Particle):
 
             if isinstance(query_particle, Particle):
                 ind = query_particle.id
@@ -1931,7 +1939,7 @@ class TwistDescriptor(Descriptor):
 
         if c_range is None:
             c_range = range(2, 10)
-        elif isinstance(c_range, (int, float)):
+        elif isinstance(c_range, (int, float, np.integer, np.floating)):
             c_range = range(2, int(c_range))
 
         symmetries_dict = {}

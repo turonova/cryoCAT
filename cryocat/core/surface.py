@@ -10,7 +10,7 @@ import logging
 import warnings
 from tqdm import tqdm
 import multiprocessing as mp
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import skimage.measure
 import scipy.ndimage
@@ -178,13 +178,33 @@ class DiscreteSurface(Surface):
     def ray_hit_orientations(
         surface,
         intersection_result: dict[str, Any],
-        target_orientation: str | Callable,
+        target_orientation: Literal["normal", "principal_1", "principal_2"] | Callable,
     ) -> np.ndarray | None:
         """
         Orientation vectors at ray hit sites (subset of rays with finite t_hit).
 
         Supports Mesh (primitive normals / curvature) and OrientedPointCloud (hit normals).
+
+        Parameters
+        ----------
+        surface : DiscreteSurface
+            The surface that was ray-cast.
+        intersection_result : dict
+            Output of ``surface.ray_intersections(...)``.
+        target_orientation : {'normal', 'principal_1', 'principal_2'} or callable
+            Orientation to extract.  ``'principal_1'`` and ``'principal_2'`` are
+            Mesh-only; passing them for an :class:`OrientedPointCloud` raises
+            :class:`~cryocat.utils.exceptions.UserInputError`.  A callable receives
+            ``(surface, primitive_ids[hit_mask], hit_points[hit_mask])`` and must
+            return an ``(N, 3)`` array.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            Shape ``(N_hits, 3)`` orientation vectors, or None when no data available.
         """
+        from cryocat.utils.exceptions import UserInputError
+
         hit_mask = np.isfinite(intersection_result["t_hit"])
         n_hits = int(hit_mask.sum())
 
@@ -215,7 +235,17 @@ class DiscreteSurface(Surface):
                 hit_normals = intersection_result.get("hit_normals", None)
                 if hit_normals is not None:
                     return hit_normals[hit_mask]
-            return None
+                return None
+            if target_orientation in ("principal_1", "principal_2"):
+                raise UserInputError(
+                    f"target_orientation='{target_orientation}' is not supported for "
+                    "OrientedPointCloud — principal curvature directions are a Mesh-only "
+                    "concept. Use 'normal' or a callable instead."
+                )
+            raise UserInputError(
+                f"Unknown target_orientation '{target_orientation}' for OrientedPointCloud. "
+                "Use 'normal' or a callable."
+            )
 
         if isinstance(surface, Mesh):
             if target_orientation == "normal":
@@ -226,8 +256,9 @@ class DiscreteSurface(Surface):
 
             if target_orientation in ("principal_1", "principal_2"):
                 if surface._principal_directions is None:
-                    raise ValueError(
-                        "Principal curvature directions not computed. Call mesh.compute_curvatures() first."
+                    raise UserInputError(
+                        "Principal curvature directions not computed. "
+                        "Call mesh.compute_curvatures() first."
                     )
                 primitive_ids = intersection_result.get("primitive_ids", None)
                 if primitive_ids is None:
@@ -239,9 +270,9 @@ class DiscreteSurface(Surface):
                     return surface._principal_directions[vertex_ids, :, 0]
                 return surface._principal_directions[vertex_ids, :, 1]
 
-            raise ValueError(
+            raise UserInputError(
                 f"Unknown target_orientation '{target_orientation}' for Mesh. "
-                "Use 'normal', 'principal_1', 'principal_2', or a callable."
+                "Valid values: 'normal', 'principal_1', 'principal_2', or a callable."
             )
 
         return None
@@ -1381,26 +1412,28 @@ class Mesh(DiscreteSurface):
         return output
 
     @classmethod
-    def read(cls, input_path: PathOrStr, units: str | None = None) -> "Mesh":
+    def read(
+        cls,
+        input_path: PathOrStr,
+        units: Literal["angstrom", "A", "nanometer", "nm", "pixel", "pix"] | None = None,
+    ) -> "Mesh":
         """
         Load triangle mesh directly from file (ply, obj, stl, off).
-        
+
         Parameters
         ----------
         input_path : str or Path
-            Path to triangle mesh file
-        units : str, optional
-            Coordinate units for the mesh. Common values:
-            - 'angstrom' or 'A': Angstroms
-            - 'nanometer' or 'nm': nanometers
-            - 'pixel' or 'pix': pixels
-            If None, units remain unspecified (you should set them later!)
-            
+            Path to triangle mesh file.
+        units : {'angstrom', 'A', 'nanometer', 'nm', 'pixel', 'pix'}, optional
+            Coordinate units for the mesh vertices.  The value is stored on
+            ``mesh.units`` and governs curvature-unit reporting and MRC export
+            conversions.  Matching is case-insensitive.  If ``None``, units
+            remain unspecified and a reminder is printed.
+
         Returns
         -------
         Mesh
-            Loaded triangle mesh instance
-
+            Loaded triangle mesh instance.
         """
         input_path = str(input_path)  # Convert Path objects to string
 
@@ -1612,6 +1645,169 @@ class Mesh(DiscreteSurface):
         mesh.vertices = np.asarray(o3d_mesh.vertices)
         mesh.faces = np.asarray(o3d_mesh.triangles)
         return mesh
+
+    @gui_exposed(category="surface-load", label="Tube from ordered path", group="Mesh", order=30, returns="surface")
+    @classmethod
+    def from_ordered_path(
+        cls,
+        points: ArrayLike,
+        radius: float | ArrayLike,
+        n_spline_points: int = 200,
+        n_sides: int = 16,
+    ) -> "Mesh":
+        """Build a closed tube mesh by sweeping a circle along an ordered path.
+
+        Uses ``pyvista.Spline(...).tube(...)`` to fit a spline through *points*
+        and build the swept surface with a rotation-minimising frame, which
+        avoids the twist artefacts of a naive per-point-normal approach and the
+        degenerate Frenet frame on straight segments.
+
+        Parameters
+        ----------
+        points : ArrayLike, shape (N, 3)
+            Ordered axis points.  Requires N ≥ 2; two points give a straight
+            tube.
+        radius : float or ArrayLike of shape (N,)
+            Tube radius in the same units as *points*.  A scalar broadcasts to a
+            constant-radius tube; per-point values give a varying-thickness tube.
+            Both cases use a single code path.
+        n_spline_points : int, default=200
+            Points sampled along the fitted spline before the tube filter.
+        n_sides : int, default=16
+            Polygon sides for the tube cross-section.
+
+        Returns
+        -------
+        Mesh
+            Closed (end-capped) triangulated tube mesh.
+
+        Raises
+        ------
+        ValueError
+            If fewer than 2 points are supplied (error message names the count).
+
+        Notes
+        -----
+        pyvista call: ``pv.Spline(pts, n_points=n_spline_points).tube(
+        scalars='_tube_radius', n_sides=n_sides, capping=True, absolute=True
+        ).triangulate()``.  ``capping=True`` explicitly closes both end discs;
+        ``absolute=True`` treats the scalar values as world-unit radii rather
+        than scale factors.
+        """
+        import pyvista as pv
+
+        pts = np.asarray(points, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError(f"points must have shape (N, 3); got {pts.shape}.")
+        n = len(pts)
+        if n < 2:
+            raise ValueError(
+                f"from_ordered_path requires at least 2 points; got {n}."
+            )
+
+        r_arr = np.broadcast_to(np.asarray(radius, dtype=float).ravel(), (n,)).copy()
+
+        spline = pv.Spline(pts, n_points=n_spline_points)
+        spline["_tube_radius"] = np.interp(
+            np.linspace(0.0, 1.0, spline.n_points),
+            np.linspace(0.0, 1.0, n),
+            r_arr,
+        )
+        poly = spline.tube(
+            scalars="_tube_radius",
+            n_sides=n_sides,
+            capping=True,
+            absolute=True,
+        ).triangulate()
+
+        mesh = cls()
+        mesh.vertices = poly.points.astype(np.float64)
+        mesh.faces = poly.faces.reshape(-1, 4)[:, 1:]
+        return mesh
+
+    @gui_exposed(category="surface-load", label="Tubes from motl filaments", group="Mesh", order=35, returns="surface")
+    @classmethod
+    def from_motl_filaments(
+        cls,
+        motl_path: PathOrStr,
+        radius: "float | MotlColumn",
+        chain_column: MotlColumn = "object_id",
+        order_column: MotlColumn = "geom2",
+        n_spline_points: int = 200,
+        n_sides: int = 16,
+    ) -> "dict[str, Mesh]":
+        """Build one tube mesh per filament chain from a motl file.
+
+        Reads chain and ordering information as written by ``trace_chains``
+        (defaults match its output columns: ``store_idx1='object_id'``,
+        ``store_idx2='geom2'``).
+
+        Parameters
+        ----------
+        motl_path : PathOrStr
+            Path to the motl file.
+        radius : float or MotlColumn
+            Tube radius.  A scalar applies the same radius to every chain.
+            A column name (e.g. ``'geom3'``) reads per-particle values from
+            the motl — this is the same ``MotlColumn`` union used throughout
+            the surface module and renders as a combined text/dropdown widget
+            in the GUI.
+        chain_column : MotlColumn, default='object_id'
+            Column that identifies each chain (``trace_chains`` default
+            ``store_idx1``).
+        order_column : MotlColumn, default='geom2'
+            Column that gives the position within each chain (``trace_chains``
+            default ``store_idx2``).
+        n_spline_points : int, default=200
+            Passed through to :meth:`from_ordered_path`.
+        n_sides : int, default=16
+            Passed through to :meth:`from_ordered_path`.
+
+        Returns
+        -------
+        dict[str, Mesh]
+            One entry per chain keyed by the string-cast chain id — the same
+            ``dict[str, Surface]`` form returned by
+            :meth:`~cryocat.core.surface.OrientedPointCloud.from_motl`, so
+            callers can pass the result directly to the surface pool.
+            Chains with a single point cannot form a tube and are silently
+            skipped; the count is emitted as a :class:`UserWarning`.
+        """
+        import warnings
+
+        motl = cryomotl.Motl.load(motl_path)
+        df = motl.df.reset_index(drop=True)
+        all_coords = motl.get_coordinates()
+
+        use_column_radius = isinstance(radius, str)
+        chain_ids = np.sort(df[chain_column].unique())
+
+        tubes: dict[str, "Mesh"] = {}
+        skipped = 0
+
+        for chain_id in chain_ids:
+            mask = (df[chain_column] == chain_id).values
+            sub = df.loc[mask].sort_values(order_column)
+            pos_idx = sub.index.values
+
+            if len(pos_idx) < 2:
+                skipped += 1
+                continue
+
+            pts = all_coords[pos_idx]
+            r: float | np.ndarray = sub[radius].values.astype(float) if use_column_radius else float(radius)
+
+            tubes[str(chain_id)] = cls.from_ordered_path(
+                pts, r, n_spline_points=n_spline_points, n_sides=n_sides
+            )
+
+        if skipped:
+            warnings.warn(
+                f"{skipped} chain(s) with a single point were skipped and produced no tube.",
+                stacklevel=2,
+            )
+
+        return tubes
 
     @staticmethod
     def _decode_field_scalar(field_array):
@@ -2580,7 +2776,11 @@ class Mesh(DiscreteSurface):
 
     @gui_exposed(category="surface-load", label="Mesh with curvatures from VTP", group="Mesh", order=20, returns="surface")
     @classmethod
-    def read_curvatures(cls, input_path: PathOrStr, units: str | None = None) -> "Mesh":
+    def read_curvatures(
+        cls,
+        input_path: PathOrStr,
+        units: Literal["angstrom", "A", "nanometer", "nm", "pixel", "pix"] | None = None,
+    ) -> "Mesh":
         """
         Load triangle mesh from a VTK/PolyData file including curvature point data.
 
@@ -2593,10 +2793,10 @@ class Mesh(DiscreteSurface):
         Parameters
         ----------
         input_path : str or Path
-            Path to ``.vtp`` or compatible VTK polydata file
-        units : str, optional
-            Coordinate units for the mesh. If None, ``coordinate_units`` field data
-            from the file is used when present.
+            Path to ``.vtp`` or compatible VTK polydata file.
+        units : {'angstrom', 'A', 'nanometer', 'nm', 'pixel', 'pix'}, optional
+            Coordinate units for the mesh.  If None, ``coordinate_units`` field data
+            from the file is used when present; matching is case-insensitive.
 
         Returns
         -------
@@ -2880,26 +3080,25 @@ class Mesh(DiscreteSurface):
         return vertices_world, faces, normals, vertices_pixel
 
     @gui_exposed(category="surface-op", label="[Mesh/OPC] Save to disk", group="Mesh/OPC", order=90, returns="none")
-    def save(self, output_path: PathOrStr, format: str | None = None, include_curvatures: bool = False):
+    def save(self, output_path: PathOrStr, format: Literal["ply", "vtp"] | None = None, include_curvatures: bool = False):
         """
         Save mesh to file with optional curvature data.
-        
+
         Supports multiple output formats with optional per-vertex curvature properties.
         Curvature export is supported only via VTP (requires pyvista). Use ``format='vtp'``.
-        
+
         Parameters
         ----------
         output_path : str or Path
-            Output file path
-        format : str, optional
-            Output format:
-            - 'ply': PLY format (geometry only; use ``include_curvatures=False``)
-            - 'vtp': VTK PolyData format (requires pyvista); use for curvature export
-            If None, inferred from ``output_path`` suffix and defaults to 'ply' when missing.
+            Output file path.
+        format : {'ply', 'vtp'}, optional
+            Output format.  ``'ply'`` — PLY geometry only.  ``'vtp'`` — VTK PolyData
+            (requires pyvista); use for curvature export.  If None, inferred from
+            ``output_path`` suffix and defaults to ``'ply'`` when missing.
         include_curvatures : bool, default=False
             If True, include curvature data as vertex properties.
             Requires curvatures to be computed first via compute_curvatures().
-            
+
             Curvature fields saved:
             - Scalars: mean_curvature, gaussian_curvature, k1, k2, curvature_anisotropy,
               shape_index, curvedness, shape_category
@@ -2942,7 +3141,7 @@ class Mesh(DiscreteSurface):
                     f"Unsupported format '{format}' for curvature export. Use 'vtp'."
                 )
 
-    def _save_mesh(self, output_path: PathOrStr, format: str = 'ply'):
+    def _save_mesh(self, output_path: PathOrStr, format: Literal["ply", "vtp"] = 'ply'):
         """Save mesh without curvature using Open3D or pyvista (for VTP)."""
         output_path = Path(output_path)
         
@@ -3177,6 +3376,51 @@ class Mesh(DiscreteSurface):
 
         return indices_int
 
+    def to_segmentation(
+        self,
+        volume_dims: tuple[int, int, int],
+        pixel_size: float = 1.0,
+    ) -> np.ndarray:
+        """Rasterise this mesh into a binary volume via ray-cast occupancy.
+
+        Uses the same Open3D ``RaycastingScene`` infrastructure as
+        :meth:`distance_to_points`.  Each voxel centre is classified as inside
+        or outside the closed mesh by ray-casting; no mesh-specific assumptions
+        are made, so the method works on any watertight ``Mesh``.
+
+        For tubes built by :meth:`from_ordered_path` the distance-to-polyline
+        approach would be more robust on tight bends and self-intersecting
+        sweeps, but this method is general-purpose.
+
+        Parameters
+        ----------
+        volume_dims : tuple[int, int, int]
+            Volume shape ``(nx, ny, nz)``.
+        pixel_size : float, default=1.0
+            Voxel spacing in the same units as the mesh vertices.
+
+        Returns
+        -------
+        np.ndarray, shape (nx, ny, nz), dtype bool
+            True for voxels whose centre lies inside the mesh.
+
+        Notes
+        -----
+        Round-trip stability (tube → ``to_segmentation`` → ``Mesh.from_mrc``):
+        the recovered surface approximates the original tube within roughly one
+        voxel, subject to Marching Cubes discretisation.
+        """
+        nx, ny, nz = int(volume_dims[0]), int(volume_dims[1]), int(volume_dims[2])
+        xi = np.arange(nx, dtype=np.float32) * pixel_size
+        yi = np.arange(ny, dtype=np.float32) * pixel_size
+        zi = np.arange(nz, dtype=np.float32) * pixel_size
+        gx, gy, gz = np.meshgrid(xi, yi, zi, indexing="ij")
+        query = np.stack([gx.ravel(), gy.ravel(), gz.ravel()], axis=1)
+
+        rs = self._get_raycasting_scene()
+        occ = rs.compute_occupancy(query).numpy().reshape(nx, ny, nz)
+        return occ > 0.5
+
     def _pixel_grid_to_angstrom(self) -> np.ndarray:
         """
         Convert ``pixel_size`` to angstrom spacing for MRC export.
@@ -3201,7 +3445,11 @@ class Mesh(DiscreteSurface):
         if unit in ["pixel", "pix"]:
             return np.array([1.0, 1.0, 1.0], dtype=float)
 
-        raise ValueError(f"Unrecognized mesh.units='{self.units}'")
+        from cryocat.utils.exceptions import UserInputError
+        raise UserInputError(
+            f"Unrecognized mesh.units='{self.units}'. "
+            "Valid values: 'angstrom', 'A', 'nanometer', 'nm', 'pixel', 'pix' (case-insensitive)."
+        )
 
     def save_vertices_csv(self, output_path: PathOrStr, include_normals: bool = True):
         """
@@ -5069,7 +5317,7 @@ class OrientedPointCloud(DiscreteSurface):
     def save(
         self,
         output_path: PathOrStr,
-        format: str | None = None,
+        format: Literal["ply", "motl", "em"] | None = None,
         *,
         write_ascii: bool = False,
         input_dict: dict[str, Any] | None = None,
@@ -5083,10 +5331,10 @@ class OrientedPointCloud(DiscreteSurface):
         ----------
         output_path : str or Path
             Output path.
-        format : str, optional
-            Output format. If None, inferred from the file suffix. Supported values:
-            - 'ply': point cloud geometry (with normals when present)
-            - 'motl' or 'em': motive list using normals as orientations
+        format : {'ply', 'motl', 'em'}, optional
+            Output format.  If None, inferred from the file suffix.  ``'ply'`` —
+            point cloud geometry with normals when present.  ``'motl'``/``'em'``
+            — motive list using normals as orientations.
         write_ascii : bool, default=False
             *PLY only* — write ASCII rather than binary PLY. Ignored for motl/em.
         input_dict : dict, optional
@@ -5451,7 +5699,7 @@ class OrientedPointCloud(DiscreteSurface):
     def distance_to_pointcloud(
         self,
         target: "OrientedPointCloud",
-        method: str = "nn_unoriented",
+        method: Literal["nn_unoriented", "nn", "nearest", "nn_oriented", "ray"] = "nn_unoriented",
         max_distance: float | None = None,
         ray_length: float | None = None,
         reverse_normals: bool = False,

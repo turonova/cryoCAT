@@ -1948,3 +1948,43 @@ class TestDnComplex:
         assert len(stats) == 1
         assert "ring_spacing" in stats.columns
         assert "inter_ring_twist" in stats.columns
+
+
+# ---------------------------------------------------------------------------
+# rays_from_motl — geometry
+# ---------------------------------------------------------------------------
+
+def _toy_motl(n: int = 4) -> cryomotl.Motl:
+    """Minimal Motl with identity orientations and sequential x positions."""
+    rows = []
+    for i in range(n):
+        rows.append({
+            "score": 1.0, "geom1": 0.0, "geom2": 0.0,
+            "subtomo_id": i + 1, "tomo_id": 1, "object_id": 1,
+            "subtomo_mean": 0.0,
+            "x": float(i), "y": 0.0, "z": 0.0,
+            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+            "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+            "phi": 0.0, "psi": 0.0, "theta": 0.0,
+            "class": 1,
+        })
+    return cryomotl.Motl(pd.DataFrame(rows))
+
+
+def test_rays_from_motl_shape_and_origins():
+    """Output shape is (N, 6); origin x coords are scaled by pixel_size; identity
+    rotation produces dx=dy=0, dz>0 for reverse_direction=False."""
+    motl = _toy_motl(n=3)
+    rays = structure.rays_from_motl(motl, pixel_size=2.0, reverse_direction=False)
+    assert rays.shape == (3, 6)
+    np.testing.assert_array_almost_equal(rays[:, 0], np.arange(3) * 2.0)
+    assert np.all(rays[:, 5] > 0)
+    np.testing.assert_array_almost_equal(rays[:, 3], 0.0)
+    np.testing.assert_array_almost_equal(rays[:, 4], 0.0)
+
+
+def test_rays_from_motl_reverse_direction_flips_z():
+    """reverse_direction=True negates the z component of the direction."""
+    motl = _toy_motl(n=2)
+    rays = structure.rays_from_motl(motl, pixel_size=1.0, reverse_direction=True)
+    assert np.all(rays[:, 5] < 0)

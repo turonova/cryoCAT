@@ -284,6 +284,16 @@ def register_tablegrid_callbacks(
     def _cols(ref):
         df = resolve_df(ref)
         if df is None:
+            if ref is not None:
+                return [], {
+                    **_BASE_GRID_OPTIONS,
+                    "overlayNoRowsTemplate": (
+                        "<span style='padding:8px;color:var(--bs-warning,orange)'>"
+                        "Table reference is stale — this can happen after a server "
+                        "restart or an interrupted save. Please reload the data."
+                        "</span>"
+                    ),
+                }
             return no_update, no_update
         return col_defs_from_df(df), {**_BASE_GRID_OPTIONS, "infiniteInitialRowCount": len(df)}
 

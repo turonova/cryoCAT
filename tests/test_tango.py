@@ -18,7 +18,77 @@ from cryocat.analysis.tango import (
     SHOTDescriptor,
     AlphaComplexDescriptor,
     PLComplexDescriptor,
+    _check_numeric_param,
 )
+
+# ===========================================================================
+# _check_numeric_param (module-level helper, was untestable as a closure)
+# ===========================================================================
+
+
+class TestCheckNumericParam:
+    """Direct tests for _check_numeric_param.
+
+    None of these tests would have failed *before this refactor* (the move from
+    closure to module level): after the GQ2 numpy fix the logic was already
+    correct for all tested inputs.  The value here is testability — the closure
+    could not be imported or called directly — and eliminating the per-particle
+    reconstruction cost.
+    """
+
+    # ── return_int=True (default) ──────────────────────────────────────────
+
+    def test_python_int_returns_int(self):
+        assert _check_numeric_param(3, "x") == 3
+        assert isinstance(_check_numeric_param(3, "x"), int)
+
+    def test_python_float_truncates_to_int(self):
+        assert _check_numeric_param(3.7, "x") == 3
+        assert isinstance(_check_numeric_param(3.7, "x"), int)
+
+    @pytest.mark.parametrize("dtype", [np.int32, np.int64])
+    def test_numpy_integer_returns_int(self, dtype):
+        result = _check_numeric_param(dtype(5), "x")
+        assert result == 5
+        assert isinstance(result, int)
+
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    def test_numpy_float_casts_to_int(self, dtype):
+        result = _check_numeric_param(dtype(7.9), "x")
+        assert result == 7
+        assert isinstance(result, int)
+
+    # ── return_int=False ───────────────────────────────────────────────────
+
+    def test_python_float_returned_unchanged(self):
+        result = _check_numeric_param(2.5, "x", return_int=False)
+        assert result == pytest.approx(2.5)
+
+    def test_numpy_float32_returned_as_is(self):
+        val = np.float32(1.5)
+        result = _check_numeric_param(val, "x", return_int=False)
+        assert result == pytest.approx(1.5)
+
+    # ── None ───────────────────────────────────────────────────────────────
+
+    def test_none_returns_none(self):
+        assert _check_numeric_param(None, "x") is None
+        assert _check_numeric_param(None, "x", return_int=False) is None
+
+    # ── invalid types raise TypeError ──────────────────────────────────────
+
+    def test_string_raises_type_error(self):
+        with pytest.raises(TypeError, match="has to be a float or an int"):
+            _check_numeric_param("bad", "myfield")
+
+    def test_list_raises_type_error(self):
+        with pytest.raises(TypeError):
+            _check_numeric_param([1, 2], "x")
+
+    def test_error_message_contains_name(self):
+        with pytest.raises(TypeError, match="tomo_id"):
+            _check_numeric_param("bad", "tomo_id")
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -108,6 +178,20 @@ class TestParticleInit:
     def test_particle_id_wrong_type_raises(self):
         with pytest.raises(TypeError):
             Particle(np.eye(3), np.zeros(3), particle_id="bad")
+
+    @pytest.mark.parametrize("dtype", [np.int32, np.int64, np.float32])
+    def test_tomo_id_numpy_scalar_accepted(self, dtype):
+        val = dtype(42)
+        p = Particle(np.eye(3), np.zeros(3), tomo_id=val)
+        assert p.tomo_id == 42
+        assert isinstance(p.tomo_id, int)
+
+    @pytest.mark.parametrize("dtype", [np.int32, np.int64, np.float32])
+    def test_particle_id_numpy_scalar_accepted(self, dtype):
+        val = dtype(7)
+        p = Particle(np.eye(3), np.zeros(3), particle_id=val)
+        assert p.id == 7
+        assert isinstance(p.id, int)
 
 
 # ===========================================================================
@@ -875,3 +959,29 @@ def test_integration_twist_descriptor_from_input():
     desc = TwistDescriptor(input_twist=GT_TWIST_DF)
     gt_twist_desc = pd.read_csv(Path(__file__).parent / "test_data" / "tango" / "gt_twist_desc.csv")
     np.testing.assert_allclose(desc.desc.to_numpy(), gt_twist_desc.to_numpy(), atol=1e-10)
+
+
+def test_integration_twist_symm_with_integer_tomo_id():
+    """TwistDescriptor with symm=3 must not raise when tomo_id dtype is int64.
+
+    The bug: check_type inside Particle.__init__ used isinstance(x, (int, float)),
+    which rejects np.int64 and np.float32.  SymmParticle paths (symm != None)
+    call convert_to_particle_list → SymmParticle → check_type; the non-symm path
+    creates Particle objects directly and hits the same check, so both paths are
+    covered by the fix.
+    """
+    motl = cryomotl.Motl.load(Path(__file__).parent / "test_data" / "tango" / "motl_cone.em")
+    motl.df["tomo_id"] = motl.df["tomo_id"].astype(np.int64)
+
+    twist = TwistDescriptor(
+        input_motl=motl,
+        nn_radius=5,
+        column_name="tomo_id",
+        symm=3,
+        remove_qp=False,
+        remove_duplicates=False,
+        build_unique_desc=False,
+    )
+
+    assert len(twist.df) == 3604
+    assert "angular_score" in twist.df.columns

@@ -23,8 +23,9 @@ def render_script(
         Flat list of event dicts as returned by ``session.events()``.
     mode:
         ``"successful"`` (default) — only successful calls, the clean
-        replayable recipe.  ``"verbatim"`` — every call in order; failed
-        calls appear as real uncommented code with the error comment above.
+        replayable recipe; appends a summary comment when failures were omitted.
+        ``"verbatim"`` — every call in order; failed calls are commented out
+        with their error inline so the script remains runnable.
     lineage_of:
         Pool id (e.g. ``"motl_3"``). When given, only the transitive
         producers of that entry are included.
@@ -38,10 +39,21 @@ def render_script(
         seqs = _lineage_seqs(events, lineage_of)
         call_events = [ev for ev in call_events if ev.get("seq") in seqs]
 
+    # Directives (clear, vars, history, help) are console-only housekeeping —
+    # not Python and have no effect on pool state.  Exclude from all script output.
+    scriptable = [ev for ev in call_events if ev.get("fn") != "console.directive"]
+
     output_events = (
-        [ev for ev in call_events if ev.get("status") == "ok"]
+        [ev for ev in scriptable if ev.get("status") == "ok"]
         if mode == "successful"
-        else call_events
+        else scriptable
+    )
+
+    # In successful mode, count omitted failures so the script can disclose them.
+    n_failed = (
+        sum(1 for ev in scriptable if ev.get("status") == "error")
+        if mode == "successful"
+        else 0
     )
 
     # Collect imports from non-console events that appear in the output.
@@ -71,13 +83,16 @@ def render_script(
         res_str = format_result(ev.get("result")) if status == "ok" else ""
         comment = f"  # -> {res_str}" if res_str else ""
 
-        # Console events: use command_src verbatim (it is already valid Python).
-        if ev.get("source") == "console" and ev.get("command_src"):
+        # Use command_src verbatim whenever present (console or gui wrapping events).
+        if ev.get("command_src"):
             command_src = ev["command_src"]
             if mode == "verbatim" and status != "ok":
                 err = ev.get("error") or {}
-                parts.append(f"# ERROR {err.get('type', 'Error')}: {err.get('msg', '')}")
-                parts.append(command_src)
+                err_line = err.get("msg", "").replace("\n", " ").replace("\r", "")
+                # Comment out the failed line so the script runs past it.
+                parts.append(
+                    f"# {command_src}  # ERROR {err.get('type', 'Error')}: {err_line}"
+                )
             else:
                 parts.append(f"{command_src}{comment}")
             continue
@@ -88,11 +103,17 @@ def render_script(
         if mode == "verbatim" and status != "ok":
             err = ev.get("error") or {}
             err_type = err.get("type", "Error")
-            err_msg = err.get("msg", "")
-            parts.append(f"# ERROR {err_type}: {err_msg}")
-            parts.append(f"{assign} = {expr}" if assign else expr)
+            err_line = err.get("msg", "").replace("\n", " ").replace("\r", "")
+            line = f"{assign} = {expr}" if assign else expr
+            # Comment out the failed line so the script runs past it.
+            parts.append(f"# {line}  # ERROR {err_type}: {err_line}")
         else:
             parts.append(f"{assign} = {expr}{comment}" if assign else f"{expr}{comment}")
+
+    if n_failed:
+        parts.append(
+            f"# {n_failed} statement(s) failed during this session and are omitted."
+        )
 
     text = "\n".join(parts)
     return text.rstrip("\n") + "\n" if text.strip() else ""

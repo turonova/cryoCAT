@@ -28,7 +28,11 @@ from dash import html, dcc, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 
 from cryocat.app import ids
-from cryocat.app.pool import resolve_df as pool_resolve_df, resolve_n_rows as pool_resolve_n_rows
+from cryocat.app.pool import (
+    resolve_df as pool_resolve_df,
+    resolve_n_rows as pool_resolve_n_rows,
+    replace_motl_df,
+)
 from cryocat.app.components.tableview import get_table_component, register_table_callbacks
 from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
@@ -196,6 +200,7 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
             f"{prefix}-src-tabv-global-data-store",
             table_grid_id=f"{prefix}-src-tabv-grid",
             resolve_df=pool_resolve_df,
+            commit_fn=replace_motl_df,
         )
 
 

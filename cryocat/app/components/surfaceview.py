@@ -31,14 +31,17 @@ from typing import Iterable
 
 import numpy as np
 import plotly.graph_objects as go
+import dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output, State
 
 from cryocat.app import ids
+import cryocat.app.datapool as _datapool
 from cryocat.app.components.surface_registry import registry as _surface_registry, _mesh_has_curvatures
 from cryocat.app.components.graphsettings import styled_figure
 from cryocat.app.components.customel import customel_graph
-from cryocat.analysis.visplot import resolve_palette as _resolve_palette
+from cryocat.analysis.visplot import resolve_palette as _resolve_palette, resolve_colorscale as _resolve_colorscale
 from cryocat.app.formgen import make_dropdown
+from cryocat.app.components.paletteloader import get_palette_loader, register_palette_loader_callbacks
 
 
 # Curvature color-by options. Values match
@@ -51,6 +54,7 @@ COLOR_BY_OPTIONS = [
     {"label": "k1 (principal #1)", "value": "k1"},
     {"label": "k2 (principal #2)", "value": "k2"},
     {"label": "Curvature anisotropy", "value": "curvature_anisotropy"},
+    {"label": "Hit counts", "value": "hit_counts"},
 ]
 
 
@@ -75,7 +79,12 @@ def _vertex_field(psurf, color_by: str) -> np.ndarray | None:
     numpy.ndarray or None
         Shape ``(N,)`` per-vertex field, or ``None`` when unavailable.
     """
-    if color_by in (None, "none") or not psurf.is_mesh:
+    if color_by in (None, "none"):
+        return None
+    if color_by == "hit_counts":
+        counts = getattr(psurf.surface, "_hit_counts", None)
+        return np.asarray(counts, dtype=np.float32) if counts is not None else None
+    if not psurf.is_mesh:
         return None
     if not _mesh_has_curvatures(psurf.surface):
         return None
@@ -99,6 +108,7 @@ def _vertex_field(psurf, color_by: str) -> np.ndarray | None:
 def _mesh_traces(
     surface, color: str, name: str, selected: bool,
     *, intensity: np.ndarray | None = None, colorscale: str = "RdBu_r",
+    opacity: float = 0.5,
 ) -> list:
     """Build the Plotly traces for a Mesh-backed :class:`PleomorphicSurface`.
 
@@ -132,7 +142,7 @@ def _mesh_traces(
     kw: dict = dict(
         x=v[:, 0].tolist(), y=v[:, 1].tolist(), z=v[:, 2].tolist(),
         i=f[:, 0].tolist(), j=f[:, 1].tolist(), k=f[:, 2].tolist(),
-        opacity=0.85 if selected else 0.55,
+        opacity=opacity,
         name=name,
         hoverinfo="name",
         flatshading=True,
@@ -164,6 +174,7 @@ def _point_cloud_traces(
     surface, color: str, name: str, selected: bool,
     *, show_normals: bool = True, normal_scale: float = 5.0,
     max_normal_arrows: int = 2000, marker_size: int = 3,
+    opacity: float = 0.5,
 ) -> list:
     """Build the Plotly traces for an :class:`OrientedPointCloud`-backed surface.
 
@@ -183,7 +194,7 @@ def _point_cloud_traces(
         go.Scatter3d(
             x=pts[:, 0].tolist(), y=pts[:, 1].tolist(), z=pts[:, 2].tolist(),
             mode="markers",
-            marker=dict(size=marker_size, color=color, opacity=0.95 if selected else 0.75),
+            marker=dict(size=marker_size, color=color, opacity=opacity),
             name=name,
             hoverinfo="name",
         )
@@ -223,6 +234,13 @@ def _build_figure(
     selected_id: str | None,
     gs: dict | None,
     color_by: str | None = None,
+    isect_df: "pd.DataFrame | None" = None,
+    surface_opacity: float = 0.5,
+    hit_color_by: str = "t_hit",
+    hit_marker_size: int = 5,
+    hit_coord_prefix: str = "hit_points",
+    surf_palette: str = "",
+    hit_colorscale: str = "",
 ) -> go.Figure:
     """Assemble the combined figure for every visible handle in ``handles``.
 
@@ -244,17 +262,47 @@ def _build_figure(
         no color-by). Applies only to the selected surface, and only when it
         is a mesh with curvatures populated. Other surfaces continue to use
         flat palette colors.
+    isect_df : pandas.DataFrame, optional
+        Full per-ray DataFrame from the data pool (one row per ray, hits and
+        misses, with a ``hit`` boolean column).  When present, hit rows are
+        drawn as a ``go.Scatter3d`` layer on top of all surfaces.  Miss count
+        is derived from ``(~df["hit"]).sum()``.
+    surface_opacity : float, default 0.5
+        Opacity applied to every surface trace (mesh or point cloud).
+    hit_color_by : str, default "t_hit"
+        Column from *isect_df* used to colour the hit-point scatter.  Falls
+        back to ``"t_hit"`` when the column is absent.
+    hit_marker_size : int, default 5
+        Marker size for the hit-point scatter.
+    hit_coord_prefix : str, default "hit_points"
+        Prefix for the three coordinate columns (``{prefix}_x/y/z``) in
+        *isect_df*.  Use ``"hit_points"`` for ray-cast results and
+        ``"closest_points"`` for distance-to-points results.
     """
-    # W3: early-return an empty figure when nothing is visible.
-    # Trigger: pool_store_id fires at page mount (prevent_initial_call=False) with
-    # surfaces-pool={} — the structure page has no surfaces during a motl load.
-    # Without this guard, styled_figure + palette resolution runs for 125 ms on
-    # every load even though there is nothing to draw.
+    import pandas as _pd
     handles = handles or {}
-    if not any(h.get("visible", True) for h in handles.values()):
-        return go.Figure()
+    has_visible = any(h.get("visible", True) for h in handles.values())
+    _coord_x = f"{hit_coord_prefix}_x"
+    has_hits = (
+        isect_df is not None
+        and not isect_df.empty
+        and _coord_x in isect_df.columns
+        and "hit" in isect_df.columns
+        and isect_df["hit"].any()
+    ) if isect_df is not None else False
 
-    palette = _resolve_palette((gs or {}).get("discrete_palette"))
+    if not has_visible and not has_hits:
+        fig = go.Figure()
+        fig.update_layout(
+            annotations=[{
+                "text": "No visible surfaces", "showarrow": False,
+                "xref": "paper", "yref": "paper", "x": 0.5, "y": 0.5,
+                "font": {"size": 14},
+            }]
+        )
+        return fig
+
+    palette = _resolve_palette(surf_palette or (gs or {}).get("discrete_palette"))
     traces: list = []
     for i, (sid, h) in enumerate(handles.items()):
         if not h.get("visible", True):
@@ -269,12 +317,46 @@ def _build_figure(
         if rep == "mesh":
             # Color-by only applies to the selected mesh with curvatures.
             intensity = None
-            if is_sel and color_by and color_by != "none" and h.get("has_curvatures"):
+            if is_sel and color_by and color_by != "none" and (
+                h.get("has_curvatures") or h.get("has_hit_counts")
+            ):
                 intensity = _vertex_field(psurf, color_by)
-            traces.extend(_mesh_traces(psurf, color, label, is_sel, intensity=intensity))
+            surf_opacity = min(1.0, surface_opacity + 0.30) if is_sel else surface_opacity
+            traces.extend(_mesh_traces(psurf, color, label, is_sel, intensity=intensity,
+                                       opacity=surf_opacity))
         elif rep == "point_cloud":
-            traces.extend(_point_cloud_traces(psurf, color, label, is_sel))
+            surf_opacity = min(1.0, surface_opacity + 0.30) if is_sel else surface_opacity
+            traces.extend(_point_cloud_traces(psurf, color, label, is_sel,
+                                              opacity=surf_opacity))
         # Unknown representations are skipped (handle is informational only).
+
+    if has_hits:
+        hit_rows = isect_df[isect_df["hit"]]
+        n_hits = len(hit_rows)
+        n_miss = int((~isect_df["hit"]).sum())
+        miss_str = f", {n_miss} misses" if n_miss else ""
+        _col = hit_color_by if hit_color_by in hit_rows.columns else "t_hit"
+        _color_vals = hit_rows[_col].tolist() if _col in hit_rows.columns else None
+        _cs_raw = hit_colorscale or (gs or {}).get("continuous_palette") or "Viridis"
+        try:
+            _cs = [[p, c] for p, c in _resolve_colorscale(_cs_raw)]
+        except Exception:
+            _cs = "Viridis"
+        traces.append(go.Scatter3d(
+            x=hit_rows[f"{hit_coord_prefix}_x"].tolist(),
+            y=hit_rows[f"{hit_coord_prefix}_y"].tolist(),
+            z=hit_rows[f"{hit_coord_prefix}_z"].tolist(),
+            mode="markers",
+            marker=dict(
+                size=int(hit_marker_size) if hit_marker_size else 5,
+                color=_color_vals,
+                colorscale=_cs,
+                showscale=True,
+                colorbar=dict(title=_col, thickness=12, len=0.6),
+                opacity=0.9,
+            ),
+            name=f"Hit points ({n_hits}{miss_str})",
+        ))
 
     fig = go.Figure(data=traces)
     return styled_figure(
@@ -308,30 +390,78 @@ def get_surface_view(prefix: str):
         A ``Div`` wrapping the color-by selector + a single ``dcc.Graph``.
         Embed it in the page's main column.
     """
+    _row = {"display": "flex", "alignItems": "center", "gap": "0.5rem", "marginBottom": "0.4rem", "flexWrap": "wrap"}
     return html.Div(
         [
             html.Div(
                 [
-                    html.Label(
-                        "Color by",
-                        style={"marginRight": "0.5rem"},
-                    ),
+                    html.Label("Color by", style={"marginRight": "0.25rem", "flexShrink": 0}),
                     make_dropdown(
                         f"{prefix}-color-by",
                         COLOR_BY_OPTIONS,
                         "none",
                         clearable=False,
-                        style={"width": "260px"},
+                        style={"width": "200px"},
+                    ),
+                    html.Label("Opacity", style={"marginLeft": "0.75rem", "marginRight": "0.25rem", "flexShrink": 0}),
+                    html.Div(
+                        dcc.Slider(
+                            id=f"{prefix}-surface-opacity",
+                            min=0.0, max=1.0, step=0.05, value=0.5,
+                            marks={},
+                            tooltip={"placement": "bottom", "always_visible": False},
+                        ),
+                        style={"width": "180px"},
+                    ),
+                    html.Label("Surface palette", style={"marginLeft": "0.75rem", "marginRight": "0.25rem", "flexShrink": 0}),
+                    get_palette_loader(f"{prefix}-surf-pal", mode="discrete", allow_auto=True, swatch_inline=True),
+                    dbc.Button(
+                        "Update graph",
+                        id=f"{prefix}-update-surf-btn",
+                        size="sm",
+                        color="primary",
+                        style={"flexShrink": 0, "marginLeft": "0.25rem"},
                     ),
                 ],
-                style={**{"display": "flex", "alignItems": "center", "gap": "0.5rem"}, "marginBottom": "0.4rem"},
+                style=_row,
             ),
-            customel_graph(prefix, "graph",
-                dcc.Graph(
-                    id={"type": "styled-graph", "owner": prefix, "name": "graph"},
-                    style={"height": "620px"},
-                    config={"scrollZoom": True},
-                )),
+            html.Div(
+                [
+                    html.Label("Hit colour by", style={"marginRight": "0.25rem", "flexShrink": 0}),
+                    make_dropdown(
+                        f"{prefix}-hit-color-by",
+                        [{"label": "t_hit (distance)", "value": "t_hit"}],
+                        "t_hit",
+                        clearable=False,
+                        style={"width": "180px"},
+                    ),
+                    html.Label("Marker size", style={"marginLeft": "0.75rem", "marginRight": "0.25rem", "flexShrink": 0}),
+                    dcc.Input(
+                        id=f"{prefix}-hit-marker-size",
+                        type="number", value=5, min=1, max=20, step=1,
+                        debounce=True,
+                        style={"width": "60px"},
+                    ),
+                    html.Label("Hit palette", style={"marginLeft": "0.75rem", "marginRight": "0.25rem", "flexShrink": 0}),
+                    get_palette_loader(f"{prefix}-hit-pal", mode="continuous", allow_auto=True, swatch_inline=True),
+                    dbc.Button(
+                        "Update graph",
+                        id=f"{prefix}-update-hit-btn",
+                        size="sm",
+                        color="primary",
+                        style={"flexShrink": 0, "marginLeft": "0.25rem"},
+                    ),
+                ],
+                style=_row,
+            ),
+            dbc.Spinner(
+                customel_graph(prefix, "graph",
+                    dcc.Graph(
+                        id={"type": "styled-graph", "owner": prefix, "name": "graph"},
+                        style={"height": "620px"},
+                        config={"scrollZoom": True},
+                    )),
+            ),
         ]
     )
 
@@ -342,6 +472,8 @@ def register_surface_view_callbacks(
     pool_store_id: str,
     *,
     selected_store_id: str | None = None,
+    isect_pool_id_store_id: str | None = None,
+    isect_coord_prefix_store_id: str | None = None,
 ):
     """Register the redraw callback.
 
@@ -365,28 +497,127 @@ def register_surface_view_callbacks(
         Id of an optional ``dcc.Store`` carrying the selected ``surface_id``
         (a scalar string). When provided, the selected surface renders more
         prominently.
+    isect_pool_id_store_id : str, optional
+        Id of a ``dcc.Store`` carrying the data pool entry id (a short string
+        like ``"isect_1"``) written by the page's adoption callback after a
+        ``ray_intersections`` run.  When provided, the viewer fetches the full
+        per-ray DataFrame from :mod:`cryocat.app.datapool` server-side and
+        draws hit points as a ``Scatter3d`` layer coloured by ``t_hit``.
+        Misses (``hit == False``) are excluded from the trace but counted.
     """
 
     color_by_id = f"{prefix}-color-by"
+    surface_opacity_id = f"{prefix}-surface-opacity"
+    hit_color_by_id = f"{prefix}-hit-color-by"
+    hit_marker_size_id = f"{prefix}-hit-marker-size"
+    surf_pal_id = f"{prefix}-surf-pal-value"
+    hit_pal_id = f"{prefix}-hit-pal-value"
 
-    if selected_store_id is None:
+    register_palette_loader_callbacks(app, f"{prefix}-surf-pal", mode="discrete",
+                                      settings_store_id=ids.GRAPH_SETTINGS_STORE)
+    register_palette_loader_callbacks(app, f"{prefix}-hit-pal", mode="continuous",
+                                      settings_store_id=ids.GRAPH_SETTINGS_STORE)
+
+    def _resolve_isect_df(pool_data_id: str | None):
+        if not pool_data_id:
+            return None
+        try:
+            return _datapool.get_payload(pool_data_id)
+        except Exception:
+            return None
+
+    _button_inputs = [
+        Input(f"{prefix}-update-surf-btn", "n_clicks"),
+        Input(f"{prefix}-update-hit-btn", "n_clicks"),
+    ]
+    _setting_states = [
+        State(color_by_id, "value"),
+        State(surface_opacity_id, "value"),
+        State(hit_color_by_id, "value"),
+        State(hit_marker_size_id, "value"),
+        State(surf_pal_id, "data"),
+        State(hit_pal_id, "data"),
+    ]
+
+    extra_state = []
+    if isect_pool_id_store_id is not None:
+        extra_state.append(State(isect_pool_id_store_id, "data"))
+    if isect_coord_prefix_store_id is not None:
+        extra_state.append(State(isect_coord_prefix_store_id, "data"))
+
+    if isect_pool_id_store_id is not None:
+        # Populate hit-colour-by dropdown options from the intersection DataFrame columns.
         @app.callback(
-            Output({"type": "styled-graph", "owner": prefix, "name": "graph"}, "figure"),
-            Input(pool_store_id, "data"),
-            Input(color_by_id, "value"),
-            State(ids.GRAPH_SETTINGS_STORE, "data"),
-            prevent_initial_call=False,
+            Output(hit_color_by_id, "options"),
+            Input(isect_pool_id_store_id, "data"),
+            prevent_initial_call=True,
         )
-        def _draw(handles, color_by, gs):
-            return _build_figure(handles, None, gs, color_by=color_by)
-    else:
-        @app.callback(
-            Output({"type": "styled-graph", "owner": prefix, "name": "graph"}, "figure"),
-            Input(pool_store_id, "data"),
-            Input(selected_store_id, "data"),
-            Input(color_by_id, "value"),
-            State(ids.GRAPH_SETTINGS_STORE, "data"),
-            prevent_initial_call=False,
+        def _update_hit_color_options(pool_data_id):
+            df = _resolve_isect_df(pool_data_id)
+            if df is None or df.empty:
+                return [{"label": "t_hit (distance)", "value": "t_hit"}]
+            _coord_cols = {c for c in df.columns if c.endswith(("_x", "_y", "_z"))}
+            _exclude = {"hit", "primitive_ids"} | _coord_cols
+            options = []
+            for c in df.columns:
+                if c in _exclude:
+                    continue
+                if df[c].dtype.kind not in "fiuc":
+                    continue
+                label = "t_hit (distance)" if c == "t_hit" else c
+                options.append({"label": label, "value": c})
+            return options or [{"label": "t_hit (distance)", "value": "t_hit"}]
+
+    _has_selected = selected_store_id is not None
+    _has_pool = isect_pool_id_store_id is not None
+    _has_prefix = isect_coord_prefix_store_id is not None
+
+    def _build_kw(surface_opacity, hit_color_by, hit_marker_size, surf_palette, hit_colorscale, pool_data_id=None, coord_prefix=None):
+        return dict(
+            surface_opacity=float(surface_opacity) if surface_opacity is not None else 0.5,
+            hit_color_by=hit_color_by or "t_hit",
+            hit_marker_size=int(hit_marker_size) if hit_marker_size else 5,
+            surf_palette=surf_palette or "",
+            hit_colorscale=hit_colorscale or "",
+            isect_df=_resolve_isect_df(pool_data_id),
+            hit_coord_prefix=coord_prefix or "hit_points",
         )
-        def _draw(handles, selected_id, color_by, gs):
-            return _build_figure(handles, selected_id, gs, color_by=color_by)
+
+    # One registration. Settings are States so they only apply when the user
+    # clicks "Update graph" or when the pool/selected store changes.
+    # To add a new optional store: add its id parameter above, append
+    # State(...) to extra_state when not None, add a _has_<name> flag, and
+    # read args[_i] in _draw. No new @app.callback block.
+    _all_inputs = [
+        Input(pool_store_id, "data"),
+        *([] if not _has_selected else [Input(selected_store_id, "data")]),
+        *_button_inputs,
+        *_setting_states,
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
+        *extra_state,
+    ]
+
+    @app.callback(
+        Output({"type": "styled-graph", "owner": prefix, "name": "graph"}, "figure"),
+        *_all_inputs,
+        prevent_initial_call=False,
+    )
+    def _draw(*args):
+        _i = 0
+        handles = args[_i]; _i += 1
+        selected_id = args[_i] if _has_selected else None
+        if _has_selected: _i += 1
+        _i += 2  # skip update-surf-btn and update-hit-btn n_clicks
+        color_by = args[_i]; _i += 1
+        surface_opacity = args[_i]; _i += 1
+        hit_color_by = args[_i]; _i += 1
+        hit_marker_size = args[_i]; _i += 1
+        surf_palette = args[_i]; _i += 1
+        hit_colorscale = args[_i]; _i += 1
+        gs = args[_i]; _i += 1
+        pool_data_id = args[_i] if _has_pool else None
+        if _has_pool: _i += 1
+        coord_prefix = args[_i] if _has_prefix else None
+        return _build_figure(handles, selected_id, gs, color_by=color_by,
+                             **_build_kw(surface_opacity, hit_color_by, hit_marker_size,
+                                         surf_palette, hit_colorscale, pool_data_id, coord_prefix))

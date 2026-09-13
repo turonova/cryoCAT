@@ -414,20 +414,34 @@ def get_table_cluster_component(prefix: str) -> html.Div:
                     label_text="Select mode",
                 ),
                 html.Hr(style={"margin": "0.3rem 0"}),
-                # E2: pick a cluster label (including -1 shown as "noise") and select those rows
+                # E2: pick cluster labels (including -1 shown as "noise") and select those rows
                 formgen.form_row(
                     "cluster_label",
-                    make_dropdown(
-                        f"{prefix}-cluster-label-dd",
-                        [],
-                        None,
-                        clearable=True,
-                        placeholder="Pick cluster…",
+                    html.Div(
+                        [
+                            make_dropdown(
+                                f"{prefix}-cluster-label-dd",
+                                [],
+                                None,
+                                multi=True,
+                                clearable=True,
+                                placeholder="Pick cluster(s)…",
+                                style={"flex": "1 1 auto"},
+                            ),
+                            dbc.Button(
+                                "All",
+                                id=f"{prefix}-cluster-label-all-btn",
+                                size="sm",
+                                color=styles.BTN_NEUTRAL,
+                                style={"flexShrink": 0, "padding": "1px 7px"},
+                            ),
+                        ],
+                        style={"display": "flex", "gap": "0.25rem", "alignItems": "center"},
                     ),
-                    "Select a cluster label to highlight those rows in the table. "
-                    "Label -1 is shown as 'noise' and is selectable like any cluster.",
+                    "Select cluster labels to highlight rows in the table and control which clusters are saved. "
+                    "Label -1 is shown as 'noise'. All labels are selected by default after clustering.",
                     label_id=f"{prefix}-cluster-label-lbl",
-                    label_text="Select cluster",
+                    label_text="Select clusters",
                 ),
             ],
         ),
@@ -472,6 +486,7 @@ def register_table_cluster_callbacks(
     cluster_cols_store_id: str | None = None,
     pool_aware: bool = False,
     resolve_df: Callable | None = None,
+    commit_fn: Callable | None = None,
     default_feature_columns_fn: Callable | None = None,
 ) -> None:
     """Register all clustering callbacks for one instance.
@@ -497,6 +512,14 @@ def register_table_cluster_callbacks(
         meaningful features for the data type in this panel.  Falls back to all
         numeric columns excluding common id columns when not supplied.
     """
+
+    if not pool_aware and resolve_df is not None and commit_fn is None:
+        raise TypeError(
+            f"register_table_cluster_callbacks: commit_fn is required when "
+            f"pool_aware=False and resolve_df is provided (prefix={prefix!r}). "
+            f"Pass a 2-arg commit_fn(ref, df) -> dict | None that persists the "
+            f"DataFrame in-place and returns the updated ref dict."
+        )
 
     def _df_from_store(data) -> pd.DataFrame:
         if resolve_df is not None:
@@ -756,6 +779,7 @@ def register_table_cluster_callbacks(
         Output(f"{prefix}-cluster-status",       "children"),
         Output(f"{prefix}-cluster-save-wrap",    "style"),
         Output(f"{prefix}-cluster-label-dd",     "options"),
+        Output(f"{prefix}-cluster-label-dd",     "value"),
         Input(f"{prefix}-cluster-run-btn", "n_clicks"),
         State(f"{prefix}-cluster-type-dropdown", "value"),
         State({"type": "cluster-feat-row",     "owner": prefix, "col": ALL}, "value"),
@@ -771,7 +795,7 @@ def register_table_cluster_callbacks(
             raise dash.exceptions.PreventUpdate
         features = _get_checked_features(feat_values)
         if not features:
-            return hide, no_update, no_update, no_update, "Select at least one feature.", hide, no_update
+            return hide, no_update, no_update, no_update, "Select at least one feature.", hide, no_update, no_update
         df = _df_from_store(data)
         try:
             from cryocat.app.apputils import generate_kwargs, run_operation
@@ -820,7 +844,7 @@ def register_table_cluster_callbacks(
         except dash.exceptions.PreventUpdate:
             raise
         except Exception as exc:
-            return hide, no_update, no_update, no_update, f"Error: {exc}", hide, no_update
+            return hide, no_update, no_update, no_update, f"Error: {exc}", hide, no_update, no_update
 
         # Map back original row indices via qp_id (if available) or positional
         if "qp_id" in result_df.columns and "qp_id" in df.columns:
@@ -835,13 +859,13 @@ def register_table_cluster_callbacks(
         feat_cols = [c for c in result_df.columns if c not in {"cluster", "__row_idx__", "qp_id"}]
         axis_opts = [{"label": c, "value": c} for c in feat_cols]
 
-        # E2: populate cluster-label dropdown; -1 shown as "noise"
+        # E2: populate cluster-label dropdown; all selected by default
         unique_labels = sorted(set(int(v) for v in labels))
         label_opts = [
             {"label": "noise" if lbl == -1 else str(lbl), "value": lbl}
             for lbl in unique_labels
         ]
-        return show, axis_opts, axis_opts, _cluster_df_to_store(result_df), status, show, label_opts
+        return show, axis_opts, axis_opts, _cluster_df_to_store(result_df), status, show, label_opts, unique_labels
 
     # ── Scatter (re-renders when axes or result data changes) ─────────────────
 
@@ -873,6 +897,7 @@ def register_table_cluster_callbacks(
         Output(f"{prefix}-cluster-yaxis",        "options",   allow_duplicate=True),
         Output(f"{prefix}-cluster-save-wrap",    "style",     allow_duplicate=True),
         Output(f"{prefix}-cluster-label-dd",     "options",   allow_duplicate=True),
+        Output(f"{prefix}-cluster-label-dd",     "value",     allow_duplicate=True),
         Input(f"{prefix}-cluster-prox-run-btn", "n_clicks"),
         State(f"{prefix}-cluster-prox-qp-col",    "value"),
         State(f"{prefix}-cluster-prox-nn-col",    "value"),
@@ -887,10 +912,10 @@ def register_table_cluster_callbacks(
         if not n_clicks or not data:
             raise dash.exceptions.PreventUpdate
         if not qp_col or not nn_col:
-            return ("Select query ID and neighbor ID columns.",) + (no_update,) * 6
+            return ("Select query ID and neighbor ID columns.",) + (no_update,) * 7
         df = _df_from_store(data)
         if qp_col not in df.columns or nn_col not in df.columns:
-            return (f"Columns '{qp_col}' / '{nn_col}' not found in data.",) + (no_update,) * 6
+            return (f"Columns '{qp_col}' / '{nn_col}' not found in data.",) + (no_update,) * 7
 
         use_min_size = int(min_size or 0) > 0
         try:
@@ -900,7 +925,7 @@ def register_table_cluster_callbacks(
                 min_size=int(min_size) if use_min_size else None,
             )
         except Exception as exc:
-            return (f"Proximity clustering failed: {exc}",) + (no_update,) * 6
+            return (f"Proximity clustering failed: {exc}",) + (no_update,) * 7
 
         # Map node → component label (0-based); rows not in any component get -1.
         node_to_label: dict = {}
@@ -936,6 +961,7 @@ def register_table_cluster_callbacks(
             show, axis_opts, axis_opts,
             show,
             label_opts,
+            unique_labels,
         )
 
     # ── Save cluster assignments to table ─────────────────────────────────────
@@ -960,6 +986,7 @@ def register_table_cluster_callbacks(
         State(f"{prefix}-cluster-data-store",    "data"),
         State(connected_store_id,                "data"),
         State(f"{prefix}-cluster-save-colname",  "value"),
+        State(f"{prefix}-cluster-label-dd",      "value"),
     ]
     if cluster_cols_store_id:
         _save_states.append(State(cluster_cols_store_id, "data"))
@@ -977,7 +1004,7 @@ def register_table_cluster_callbacks(
         *_save_states,
         prevent_initial_call=True,
     )
-    def _save_cluster(n_clicks, cluster_data, main_data, col_name, *extra):
+    def _save_cluster(n_clicks, cluster_data, main_data, col_name, selected_labels, *extra):
         if pool_aware:
             if cluster_cols_store_id:
                 existing_cols, registry, pool_meta, next_id = extra
@@ -1003,10 +1030,15 @@ def register_table_cluster_callbacks(
         df = _df_from_store(main_data).copy()
         cluster_df = _cluster_store_to_df(cluster_data)
         df[col_name] = np.nan
+        # Write only rows whose cluster label is in the selected set; others stay NaN
+        active_labels = set(int(v) for v in selected_labels) if selected_labels else None
         for rec in cluster_df.to_dict("records"):
+            lbl = int(rec["cluster"])
+            if active_labels is not None and lbl not in active_labels:
+                continue
             idx = int(rec.get("__row_idx__", -1))
             if 0 <= idx < len(df):
-                df.iloc[idx, df.columns.get_loc(col_name)] = int(rec["cluster"])
+                df.iloc[idx, df.columns.get_loc(col_name)] = lbl
 
         status = f"Saved cluster assignments to column '{col_name}'."
 
@@ -1035,7 +1067,20 @@ def register_table_cluster_callbacks(
                 result.append(cols)
             return tuple(result)
 
-        new_data = _cluster_df_to_store(df)
+        if commit_fn is not None:
+            committed = commit_fn(main_data, df)
+            print(f"[tablecluster] {prefix} save: commit_fn returned "
+                  f"{'new ref dict' if committed is not None else 'None (invalid ref)'}")
+            if committed is None:
+                status = "Save failed: store ref is invalid or expired — reload the table and try again."
+                nu = [no_update] * n_pool_out + [no_update, status]
+                if cluster_cols_store_id:
+                    nu.append(no_update)
+                return tuple(nu) if n_out > 1 else nu[0]
+            new_data = committed
+        else:
+            new_data = _cluster_df_to_store(df)
+            print(f"[tablecluster] {prefix} save: no commit_fn — wrote {len(new_data)} raw records to store")
         if cluster_cols_store_id:
             cols = list(existing_cols or [])
             if col_name not in cols:
@@ -1043,11 +1088,24 @@ def register_table_cluster_callbacks(
             return new_data, status, cols
         return new_data, status
 
+    # ── Select-all button (always registered; button is always in layout) ────────
+
+    @app.callback(
+        Output(f"{prefix}-cluster-label-dd", "value", allow_duplicate=True),
+        Input(f"{prefix}-cluster-label-all-btn", "n_clicks"),
+        State(f"{prefix}-cluster-label-dd", "options"),
+        prevent_initial_call=True,
+    )
+    def _select_all_clusters(n_clicks, options):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        return [o["value"] for o in (options or [])]
+
     # ── Table-grid interactions (optional) ───────────────────────────────────
 
     if table_grid_id is not None:
 
-        # E2: select rows of a chosen cluster label (including -1 = noise)
+        # E2: select rows of chosen cluster labels (multi-select; including -1 = noise)
         @app.callback(
             Output(table_grid_id, "selectedRows", allow_duplicate=True),
             Input(f"{prefix}-cluster-label-dd", "value"),
@@ -1055,14 +1113,15 @@ def register_table_cluster_callbacks(
             State(connected_store_id, "data"),
             prevent_initial_call=True,
         )
-        def _select_by_cluster_label(cluster_label, cluster_data, store_data):
-            if cluster_label is None or not cluster_data:
+        def _select_by_cluster_label(cluster_labels, cluster_data, store_data):
+            if not cluster_labels or not cluster_data:
                 raise dash.exceptions.PreventUpdate
+            label_set = set(int(v) for v in cluster_labels)
             cluster_df = _cluster_store_to_df(cluster_data)
             row_records = _df_from_store(store_data).to_dict("records")
             selected = []
             for rec in cluster_df.to_dict("records"):
-                if int(rec.get("cluster", -999)) == int(cluster_label):
+                if int(rec.get("cluster", -999)) in label_set:
                     idx = int(rec.get("__row_idx__", -1))
                     if 0 <= idx < len(row_records):
                         selected.append(row_records[idx])

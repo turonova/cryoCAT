@@ -51,11 +51,16 @@ _OPS_SINGLE: list[dict] = [
 ]
 
 _OPS_MULTI: list[dict] = _OPS_SINGLE + [
-    {"label": "Merge tables",  "value": "merge"},
-    {"label": "Concat tables", "value": "concat"},
+    {"label": "Merge tables",      "value": "merge"},
+    {"label": "Concat tables",     "value": "concat"},
+    {"label": "Positional merge",  "value": "positional_merge"},
+    {"label": "Assign column",     "value": "assign_column"},
 ]
 
-_ALL_SECTIONS: list[str] = ["derive", "rename", "drop", "reorder", "cast", "merge", "concat"]
+_ALL_SECTIONS: list[str] = [
+    "derive", "rename", "drop", "reorder", "cast",
+    "merge", "concat", "positional_merge", "assign_column",
+]
 
 
 # ── Layout ─────────────────────────────────────────────────────────────────────
@@ -278,6 +283,86 @@ def get_table_editor(
         ],
     )
 
+    # ── Positional merge ─────────────────────────────────────────────────
+    positional_merge_section = html.Div(
+        id=f"{prefix}-positional-merge-section",
+        style={"display": "none"},
+        children=[
+            html.Div(
+                "⚠ Positional merge joins row N of the left table with row N of the right "
+                "table by index — only valid when both tables share the same row order and "
+                "have not been sorted or filtered independently.",
+                style={**styles.HINT, "marginBottom": styles.FORM_ROW_GAP},
+            ),
+            formgen.form_row(
+                "right_table",
+                formgen.make_dropdown(f"{prefix}-pos-merge-right-dd", [], None),
+                "Table to place side-by-side with the selected entry (same row count required).",
+                label_id=f"{prefix}-pos-merge-right-lbl",
+                label_text="Right table",
+            ),
+            html.Div(id=f"{prefix}-pos-merge-report",
+                     style={**styles.HINT, "marginTop": styles.FORM_ROW_GAP}),
+        ],
+    )
+
+    # ── Assign column ────────────────────────────────────────────────────
+    assign_column_section = html.Div(
+        id=f"{prefix}-assign-column-section",
+        style={"display": "none"},
+        children=[
+            html.Div(
+                "⚠ Positional matching is only valid when both tables share the same row "
+                "order and have not been sorted or filtered independently.",
+                style={**styles.HINT, "marginBottom": styles.FORM_ROW_GAP},
+            ),
+            formgen.form_row(
+                "source_table",
+                formgen.make_dropdown(f"{prefix}-assign-right-dd", [], None),
+                "Table from which a column is copied.",
+                label_id=f"{prefix}-assign-right-lbl",
+                label_text="Source table",
+            ),
+            formgen.form_row(
+                "source_column",
+                formgen.make_dropdown(f"{prefix}-assign-src-col-dd", [], None),
+                "Column to copy from the source table.",
+                label_id=f"{prefix}-assign-src-col-lbl",
+                label_text="Source column",
+            ),
+            formgen.form_row(
+                "dest_column_name",
+                dbc.Input(id=f"{prefix}-assign-dst-name", type="text",
+                          placeholder="new_column_name"),
+                "Name for the column in the result table (blank → uses source column name).",
+                label_id=f"{prefix}-assign-dst-lbl",
+                label_text="Destination name",
+                truly_optional=True,
+            ),
+            formgen.form_row(
+                "match_mode",
+                formgen.make_dropdown(
+                    f"{prefix}-assign-mode-dd",
+                    [{"label": "Positional (same row order)", "value": "positional"},
+                     {"label": "Key-based (match on column)", "value": "key"}],
+                    "positional",
+                    clearable=False,
+                ),
+                "How to match rows: positional uses row order; key-based matches on a shared column.",
+                label_id=f"{prefix}-assign-mode-lbl",
+                label_text="Match mode",
+            ),
+            formgen.form_row(
+                "key_column",
+                formgen.make_dropdown(f"{prefix}-assign-key-dd", [], None),
+                "Column in both tables to join on (key-based only).",
+                label_id=f"{prefix}-assign-key-lbl",
+                label_text="Key column",
+                truly_optional=True,
+            ),
+        ],
+    )
+
     # ── Footer ───────────────────────────────────────────────────────────
     if working_copy_mode:
         # In working-copy mode the Apply button previews the op on the copy;
@@ -339,6 +424,8 @@ def get_table_editor(
         cast_section,
         merge_section,
         concat_section,
+        positional_merge_section,
+        assign_column_section,
         html.Hr(style={"margin": f"{styles.SECTION_GAP} 0"}),
         footer,
     ])
@@ -408,6 +495,12 @@ def _execute_operation(
     merge_how: "str | None" = None,
     concat_extra_vals: "list | None" = None,
     concat_label_col: "str | None" = None,
+    pos_merge_right_val: "str | None" = None,
+    assign_right_val: "str | None" = None,
+    assign_src_col: "str | None" = None,
+    assign_dst_name: "str | None" = None,
+    assign_mode: "str | None" = None,
+    assign_key_col: "str | None" = None,
 ) -> "tuple[pd.DataFrame | None, str | None, str]":
     """Apply a table operation; return (result_df, extra_msg, error).
 
@@ -489,6 +582,47 @@ def _execute_operation(
             )
             extra_msg = ops.concat_nan_report(result_df, len(all_frames))
             return result_df, extra_msg, ""
+        elif op == "positional_merge":
+            if not pos_merge_right_val:
+                return None, None, "Select a right table."
+            right_ref = entrypicker.decode_value(pos_merge_right_val)
+            try:
+                right_df = _fetch_df(right_ref)
+            except Exception as exc:
+                return None, None, f"Cannot load right table: {exc}"
+            result_df = _run(
+                ops.positional_merge,
+                {"left": src_df, "right": right_df},
+            )
+            extra_msg = (
+                f"Merged {len(src_df):,} rows × {len(src_df.columns)} cols + "
+                f"{len(right_df.columns)} cols → {len(result_df.columns)} cols total."
+            )
+            return result_df, extra_msg, ""
+        elif op == "assign_column":
+            if not assign_right_val:
+                return None, None, "Select a source table."
+            if not assign_src_col:
+                return None, None, "Select a source column."
+            right_ref = entrypicker.decode_value(assign_right_val)
+            try:
+                right_df = _fetch_df(right_ref)
+            except Exception as exc:
+                return None, None, f"Cannot load source table: {exc}"
+            dst = (assign_dst_name or "").strip() or assign_src_col
+            mode = assign_mode or "positional"
+            result_df = _run(
+                ops.assign_column,
+                {"left": src_df, "right": right_df,
+                 "src_col": assign_src_col, "dst_col": dst,
+                 "match_mode": mode, "key_col": assign_key_col or None},
+            )
+            assign_msg = f"Assigned '{assign_src_col}' as '{dst}' ({mode})."
+            if mode == "key":
+                nan_count = int(result_df[dst].isna().sum())
+                if nan_count:
+                    assign_msg += f"  ⚠ {nan_count:,} row(s) received NaN (key had no match)."
+            return result_df, assign_msg, ""
         else:
             return None, None, f"Unknown operation: {op!r}."
     except Exception as exc:
@@ -506,6 +640,8 @@ def _apply_wc_op(
     cast_col, cast_dtype,
     merge_right_val, merge_keys, merge_how,
     concat_extra_vals, concat_label_col,
+    pos_merge_right_val,
+    assign_right_val, assign_src_col, assign_dst_name, assign_mode, assign_key_col,
     src_ref, pool_reg, dp_reg,
 ):
     """Working-copy apply logic — extracted for thin-callback compliance."""
@@ -533,6 +669,10 @@ def _apply_wc_op(
         merge_right_val=merge_right_val, merge_keys=merge_keys,
         merge_how=merge_how, concat_extra_vals=concat_extra_vals,
         concat_label_col=concat_label_col,
+        pos_merge_right_val=pos_merge_right_val,
+        assign_right_val=assign_right_val, assign_src_col=assign_src_col,
+        assign_dst_name=assign_dst_name, assign_mode=assign_mode,
+        assign_key_col=assign_key_col,
     )
     if err:
         return _no, err
@@ -679,6 +819,85 @@ def register_table_editor_callbacks(
             )
             return opts, msg
 
+    # ── 3b. Populate positional-merge / assign-column right-table pickers ───
+    if multi_source:
+        @app.callback(
+            Output(f"{prefix}-pos-merge-right-dd", "options"),
+            Output(f"{prefix}-assign-right-dd",    "options"),
+            Input(ids.POOL_REGISTRY,      "data"),
+            Input(ids.DATA_POOL_REGISTRY, "data"),
+            State(f"{prefix}-src-ref",    "data"),
+            prevent_initial_call=False,
+        )
+        def _on_registry_change_pos(pool_reg, dp_reg, src_ref):
+            src_key = None
+            if src_ref:
+                if "motl_id" in src_ref:
+                    src_key = f"motl:{src_ref['motl_id']}"
+                elif "data_id" in src_ref:
+                    src_key = f"data:{src_ref['data_id']}"
+            opts: list[dict] = []
+            for mid, meta in (pool_reg or {}).items():
+                v = f"motl:{mid}"
+                if v != src_key:
+                    opts.append({"label": meta.get("label", mid), "value": v})
+            for did, meta in dp_module.clean_registry(dp_reg).items():
+                if meta.get("kind") not in ("dataframe", None):
+                    continue
+                v = f"data:{did}"
+                if v != src_key:
+                    opts.append({"label": meta.get("label", did), "value": v})
+            return opts, opts
+
+        @app.callback(
+            Output(f"{prefix}-assign-src-col-dd", "options"),
+            Output(f"{prefix}-assign-key-dd",     "options"),
+            Input(f"{prefix}-assign-right-dd",    "value"),
+            State(f"{prefix}-src-ref",             "data"),
+            prevent_initial_call=True,
+        )
+        def _on_assign_right_change(right_val, src_ref):
+            if not right_val:
+                return [], []
+            right_ref = entrypicker.decode_value(right_val)
+            try:
+                right_df = _fetch_df(right_ref)
+            except Exception:
+                return [], []
+            r_opts = [{"label": c, "value": c} for c in right_df.columns]
+            # key column = columns present in both tables
+            key_opts: list[dict] = []
+            if src_ref:
+                try:
+                    src_df = _fetch_df(src_ref)
+                    common = sorted(set(src_df.columns) & set(right_df.columns))
+                    key_opts = [{"label": c, "value": c} for c in common]
+                except Exception:
+                    pass
+            return r_opts, key_opts
+
+        @app.callback(
+            Output(f"{prefix}-pos-merge-report", "children"),
+            Input(f"{prefix}-pos-merge-right-dd", "value"),
+            State(f"{prefix}-src-ref",             "data"),
+            prevent_initial_call=True,
+        )
+        def _on_pos_merge_right_change(right_val, src_ref):
+            if not right_val or not src_ref:
+                return ""
+            right_ref = entrypicker.decode_value(right_val)
+            try:
+                src_df   = _fetch_df(src_ref)
+                right_df = _fetch_df(right_ref)
+            except Exception as exc:
+                return str(exc)
+            if len(src_df) != len(right_df):
+                return (
+                    f"⚠ Row count mismatch: left has {len(src_df):,} rows, "
+                    f"right has {len(right_df):,} rows. Positional merge requires equal counts."
+                )
+            return f"Left: {len(src_df):,} rows · right: {len(right_df.columns)} cols → {len(src_df.columns) + len(right_df.columns)} cols total."
+
     # ── 4a. Apply — working-copy path (Tables tab) ───────────────────────
     if working_copy_mode:
         @app.callback(
@@ -686,23 +905,29 @@ def register_table_editor_callbacks(
             Output(f"{prefix}-wc-changed", "data", allow_duplicate=True),
             Output(f"{prefix}-status", "children"),
             Input(f"{prefix}-apply-btn", "n_clicks"),
-            State(f"{prefix}-op-dd",           "value"),
-            State(f"{prefix}-label",           "value"),
-            State(f"{prefix}-derive-name",     "value"),
-            State(f"{prefix}-derive-expr",     "value"),
-            State(f"{prefix}-rename-map",      "value"),
-            State(f"{prefix}-drop-dd",         "value"),
-            State(f"{prefix}-reorder-dd",      "value"),
-            State(f"{prefix}-cast-col-dd",     "value"),
-            State(f"{prefix}-cast-dtype-dd",   "value"),
-            State(f"{prefix}-merge-right-dd",  "value"),
-            State(f"{prefix}-merge-keys-dd",   "value"),
-            State(f"{prefix}-merge-how-dd",    "value"),
-            State(f"{prefix}-concat-dd",       "value"),
-            State(f"{prefix}-concat-label-col","value"),
-            State(f"{prefix}-src-ref",         "data"),
-            State(ids.POOL_REGISTRY,           "data"),
-            State(ids.DATA_POOL_REGISTRY,      "data"),
+            State(f"{prefix}-op-dd",              "value"),
+            State(f"{prefix}-label",              "value"),
+            State(f"{prefix}-derive-name",        "value"),
+            State(f"{prefix}-derive-expr",        "value"),
+            State(f"{prefix}-rename-map",         "value"),
+            State(f"{prefix}-drop-dd",            "value"),
+            State(f"{prefix}-reorder-dd",         "value"),
+            State(f"{prefix}-cast-col-dd",        "value"),
+            State(f"{prefix}-cast-dtype-dd",      "value"),
+            State(f"{prefix}-merge-right-dd",     "value"),
+            State(f"{prefix}-merge-keys-dd",      "value"),
+            State(f"{prefix}-merge-how-dd",       "value"),
+            State(f"{prefix}-concat-dd",          "value"),
+            State(f"{prefix}-concat-label-col",   "value"),
+            State(f"{prefix}-pos-merge-right-dd", "value"),
+            State(f"{prefix}-assign-right-dd",    "value"),
+            State(f"{prefix}-assign-src-col-dd",  "value"),
+            State(f"{prefix}-assign-dst-name",    "value"),
+            State(f"{prefix}-assign-mode-dd",     "value"),
+            State(f"{prefix}-assign-key-dd",      "value"),
+            State(f"{prefix}-src-ref",            "data"),
+            State(ids.POOL_REGISTRY,              "data"),
+            State(ids.DATA_POOL_REGISTRY,         "data"),
             prevent_initial_call=True,
         )
         def _on_apply_wc(
@@ -712,6 +937,8 @@ def register_table_editor_callbacks(
             cast_col, cast_dtype,
             merge_right_val, merge_keys, merge_how,
             concat_extra_vals, concat_label_col,
+            pos_merge_right_val,
+            assign_right_val, assign_src_col, assign_dst_name, assign_mode, assign_key_col,
             src_ref, pool_reg, dp_reg,
         ):
             _no = no_update
@@ -723,7 +950,10 @@ def register_table_editor_callbacks(
                 op, label_val, derive_name, derive_expr,
                 rename_map_text, drop_cols, reorder_cols,
                 cast_col, cast_dtype, merge_right_val, merge_keys, merge_how,
-                concat_extra_vals, concat_label_col, src_ref, pool_reg, dp_reg,
+                concat_extra_vals, concat_label_col,
+                pos_merge_right_val,
+                assign_right_val, assign_src_col, assign_dst_name, assign_mode, assign_key_col,
+                src_ref, pool_reg, dp_reg,
             )
 
         return  # ── working-copy mode: no pool-writing Apply registered ──
@@ -755,11 +985,17 @@ def register_table_editor_callbacks(
         State(f"{prefix}-reorder-dd",       "value"),
         State(f"{prefix}-cast-col-dd",      "value"),
         State(f"{prefix}-cast-dtype-dd",    "value"),
-        State(f"{prefix}-merge-right-dd",   "value"),
-        State(f"{prefix}-merge-keys-dd",    "value"),
-        State(f"{prefix}-merge-how-dd",     "value"),
-        State(f"{prefix}-concat-dd",        "value"),
-        State(f"{prefix}-concat-label-col", "value"),
+        State(f"{prefix}-merge-right-dd",    "value"),
+        State(f"{prefix}-merge-keys-dd",     "value"),
+        State(f"{prefix}-merge-how-dd",      "value"),
+        State(f"{prefix}-concat-dd",         "value"),
+        State(f"{prefix}-concat-label-col",  "value"),
+        State(f"{prefix}-pos-merge-right-dd","value"),
+        State(f"{prefix}-assign-right-dd",   "value"),
+        State(f"{prefix}-assign-src-col-dd", "value"),
+        State(f"{prefix}-assign-dst-name",   "value"),
+        State(f"{prefix}-assign-mode-dd",    "value"),
+        State(f"{prefix}-assign-key-dd",     "value"),
         # ── pool states ──
         State(f"{prefix}-create-new",     "value"),
         State(f"{prefix}-add-as-motl",    "value"),
@@ -781,6 +1017,8 @@ def register_table_editor_callbacks(
         cast_col, cast_dtype,
         merge_right_val, merge_keys, merge_how,
         concat_extra_vals, concat_label_col,
+        pos_merge_right_val,
+        assign_right_val, assign_src_col, assign_dst_name, assign_mode, assign_key_col,
         create_new_val,
         add_as_motl_val,
         src_ref,
@@ -817,6 +1055,10 @@ def register_table_editor_callbacks(
             reorder_cols=reorder_cols, cast_col=cast_col, cast_dtype=cast_dtype,
             merge_right_val=merge_right_val, merge_keys=merge_keys,
             merge_how=merge_how, concat_extra_vals=concat_extra_vals,
+            pos_merge_right_val=pos_merge_right_val,
+            assign_right_val=assign_right_val, assign_src_col=assign_src_col,
+            assign_dst_name=assign_dst_name, assign_mode=assign_mode,
+            assign_key_col=assign_key_col,
             concat_label_col=concat_label_col,
         )
         if err:

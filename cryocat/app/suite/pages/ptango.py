@@ -364,6 +364,7 @@ def _make_stores() -> list:
         dcc.Store(id="tango-desc-pool-slot-map", data=[None] * _DESC_SLOTS),
         dcc.Store(id="tango-desc-pool-active-id"),
         *[dcc.Store(id=f"tango-desc-{i}-global-data-store") for i in range(_DESC_SLOTS)],
+        dcc.Store(id="tango-ttm-src-ref"),
     ]
 
 
@@ -535,6 +536,7 @@ def register_callbacks(app) -> None:
     register_table_cluster_callbacks(
         app, "tango-twist-tabv-table-cluster", "tango-twist-tabv-global-data-store",
         table_grid_id="tango-twist-tabv-grid", resolve_df=_datapool.resolve_df,
+        commit_fn=_datapool.replace_df,
     )
 
     for _i in range(_DESC_SLOTS):
@@ -550,9 +552,30 @@ def register_callbacks(app) -> None:
         register_table_cluster_callbacks(
             app, f"tango-desc-{_i}-table-cluster", f"tango-desc-{_i}-global-data-store",
             table_grid_id=f"tango-desc-{_i}-grid", resolve_df=_datapool.resolve_df,
+            commit_fn=_datapool.replace_df,
         )
 
-    register_table_to_motl_callbacks(app, "tango-ttm", source_table_id="tango-twist-tabv-grid", id_column="qp_id")
+    register_table_to_motl_callbacks(
+        app, "tango-ttm",
+        source_table_id="tango-twist-tabv-grid",
+        id_column="qp_id",
+        source_store_id="tango-ttm-src-ref",
+        resolve_df=_datapool.resolve_df,
+    )
+
+    @app.callback(
+        Output("tango-ttm-src-ref", "data"),
+        Input("tango-tabs", "active_tab"),
+        Input("tango-twist-tabv-global-data-store", "data"),
+        *[Input(f"tango-desc-{i}-global-data-store", "data") for i in range(_DESC_SLOTS)],
+    )
+    def _sync_ttm_source(active_tab, twist_ref, *desc_refs):
+        if active_tab == "tango-tab-twist" or not active_tab:
+            return twist_ref
+        for i in range(_DESC_SLOTS):
+            if active_tab == f"tango-tab-desc-{i}":
+                return desc_refs[i]
+        return twist_ref
 
     # ── DB3: Helpers tile callbacks ───────────────────────────────────────────
 

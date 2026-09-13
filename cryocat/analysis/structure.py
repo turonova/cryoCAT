@@ -2665,7 +2665,15 @@ class PleomorphicSurface:
         )
 
     @classmethod
-    def read(cls, input_path: PathOrStr, method: str = "mesh", **kwargs: Any) -> "PleomorphicSurface":
+    def read(
+        cls,
+        input_path: PathOrStr,
+        method: Literal[
+            "mesh", "mesh_curvatures", "mesh_from_mrc",
+            "point_cloud", "point_cloud_from_mrc", "point_cloud_from_motl",
+        ] = "mesh",
+        **kwargs: Any,
+    ) -> "PleomorphicSurface":
         """
         Create a wrapped surface from common on-disk inputs.
 
@@ -2673,7 +2681,8 @@ class PleomorphicSurface:
         ----------
         input_path : str or Path
             Input file path.
-        method : str, default="mesh"
+        method : {'mesh', 'mesh_curvatures', 'mesh_from_mrc', 'point_cloud', \
+'point_cloud_from_mrc', 'point_cloud_from_motl'}, default='mesh'
             Loader to use:
             - "mesh": geometry-only triangle mesh via :meth:`Mesh.read`
             - "mesh_curvatures": VTP triangle mesh with curvature fields via
@@ -2769,9 +2778,10 @@ class PleomorphicSurface:
             if isinstance(surface, dict):
                 return {gid: cls(pcd) for gid, pcd in surface.items()}
         else:
-            raise ValueError(
-                f"Unknown read method '{method}'. Use 'mesh', 'mesh_curvatures', "
-                "'mesh_from_mrc', 'point_cloud', 'point_cloud_from_mrc', or "
+            from cryocat.utils.exceptions import UserInputError
+            raise UserInputError(
+                f"Unknown read method '{method}'. Valid values: 'mesh', 'mesh_curvatures', "
+                "'mesh_from_mrc', 'point_cloud', 'point_cloud_from_mrc', "
                 "'point_cloud_from_motl'."
             )
 
@@ -2914,7 +2924,7 @@ class PleomorphicSurface:
             )
         return self.surface.get_surface_area()
 
-    def save(self, output_path: PathOrStr, format: str | None = None, **kwargs: Any) -> None:
+    def save(self, output_path: PathOrStr, format: Literal["ply", "vtp", "motl", "em"] | None = None, **kwargs: Any) -> None:
         """
         Save the wrapped surface.
 
@@ -2924,10 +2934,10 @@ class PleomorphicSurface:
         Parameters
         ----------
         output_path : PathOrStr
-            Destination file path.
-        format : str, optional
-            Output format (e.g. ``'ply'``, ``'vtp'``, ``'motl'``, ``'em'``).
-            If None, inferred from the file suffix.
+            Output file path.
+        format : {'ply', 'vtp', 'motl', 'em'}, optional
+            File format.  ``'ply'`` and ``'vtp'`` are Mesh formats; ``'motl'``/``'em'``
+            are OrientedPointCloud formats.  If None, inferred from the file suffix.
         **kwargs
             Forwarded to the concrete save method. Accepted keywords depend on ``format``:
 
@@ -3295,7 +3305,7 @@ class PleomorphicSurface:
     @gui_exposed(category="surface-op", label="[Mesh/OPC] Separate surfaces", group="Geometry", order=30, returns="surface_pair")
     def separate_surfaces(
         self,
-        surface_type: str = 'closed',
+        surface_type: Literal["closed", "planar"] = 'closed',
         threshold_angle: float = 90.0,
         reference_point: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -3304,7 +3314,7 @@ class PleomorphicSurface:
 
         Parameters
         ----------
-        surface_type : str, default='closed'
+        surface_type : {'closed', 'planar'}, default='closed'
             Strategy for separation:
 
             ``'closed'``
@@ -3382,7 +3392,8 @@ class PleomorphicSurface:
             return None
         return PleomorphicSurface(filtered_surface)
 
-    def distance_to_points(self, target: np.ndarray, compute_occupancy: bool = True, compute_signed: bool = False, 
+    @gui_exposed(category="surface-op", label="[Mesh/OPC] Distance to points", group="Analysis", order=50)
+    def distance_to_points(self, target: np.ndarray, compute_occupancy: bool = True, compute_signed: bool = False,
                                     return_closest_points: bool = False) -> dict:
         """
         Compute distance from a point to a Mesh or an OrientedPointCloud surface.
@@ -3490,18 +3501,17 @@ class PleomorphicSurface:
         
         return result
 
-    def get_neighboring_triangles(self, triangle_id: int, method: str = 'edge-connected', **kwargs: Any) -> set | dict:
+    def get_neighboring_triangles(self, triangle_id: int, method: Literal["edge-connected", "radius"] = 'edge-connected', **kwargs: Any) -> set | dict:
         """
         Get neighboring triangles (Mesh only).
-        
+
         Parameters
         ----------
         triangle_id : int
-            ID of the seed triangle
-        method : str, default='edge-connected'
-            Method to use:
-            - 'edge-connected': edge-connected triangles
-            - 'radius': distance-based 
+            ID of the seed triangle.
+        method : {'edge-connected', 'radius'}, default='edge-connected'
+            Traversal strategy.  ``'edge-connected'`` — topological edge walk.
+            ``'radius'`` — distance-based search (requires ``radius`` kwarg).
         **kwargs
             Additional parameters:
             - For 'q': max_hops (int, default=1)
@@ -3725,9 +3735,9 @@ class PleomorphicSurface:
             self.surface._invalidate_cache()
             self.surface._invalidate_neighbor_cache()
 
-    def distance_to_pointcloud(self, 
+    def distance_to_pointcloud(self,
                                     target: 'PleomorphicSurface' | OrientedPointCloud,
-                                    method: str = 'nn_unoriented',
+                                    method: Literal["nn_unoriented", "nn", "nearest", "nn_oriented", "ray"] = 'nn_unoriented',
                                     max_distance: float | None = None,
                                     ray_length: float | None = None,
                                     reverse_normals: bool = False,
@@ -3739,16 +3749,16 @@ class PleomorphicSurface:
         Compute distance from this surface to another point cloud surface.
         - If source is Mesh: always uses raycasting
         - If source is OrientedPointCloud search nearest neighbours (unoriented or along normals)
-        
+
         Parameters
         ----------
         target : PleomorphicSurface or OrientedPointCloud
             Target surface. Wrapped targets are unwrapped internally; the concrete
             target must be an OrientedPointCloud.
-        method : str, default='nn_unoriented'
-            Distance computation method (only used if source is OrientedPointCloud):
-            - 'nn_unoriented': Nearest neighbor KDTree search
-            - 'nn_oriented': Cast rays along normals from source point cloud
+        method : {'nn_unoriented', 'nn', 'nearest', 'nn_oriented', 'ray'}, default='nn_unoriented'
+            Distance computation method (only used if source is OrientedPointCloud).
+            ``'nn_unoriented'`` (aliases ``'nn'``, ``'nearest'``) — KDTree nearest
+            neighbour.  ``'nn_oriented'`` (alias ``'ray'``) — ray cast along normals.
         max_distance : float, optional
             Maximum distance threshold. Points beyond this distance are excluded.
         ray_length : float, optional
@@ -5286,4 +5296,50 @@ class IcosahedralComplex(PolyhedralComplex):
 
     _solid = geom.Icosahedron
     _symmetry = "I"
+
+
+# =============================================================================
+# Module-level helpers for the ray-intersection workflow
+# =============================================================================
+
+def rays_from_motl(
+    motl: "cryomotl.Motl",
+    pixel_size: float,
+    reverse_direction: bool = False,
+    ray_length: float | None = None,
+) -> np.ndarray:
+    """Build a ray array from a Motl's particle positions and orientations.
+
+    Coordinates are scaled by *pixel_size* to convert from voxels to physical
+    units (e.g. nm) **without modifying the input Motl**. Normal vectors are
+    derived from the particles' Euler angles via
+    :func:`~cryocat.utils.geom.euler_angles_to_normals` (zxz convention,
+    z-axis as the particle's forward axis).
+
+    Parameters
+    ----------
+    motl : cryomotl.Motl
+        Particle list. Coordinates must be in voxels.
+    pixel_size : float
+        Physical units per voxel (e.g. nm/voxel).
+    reverse_direction : bool, default=False
+        When ``True``, negate the normals before building ray directions so
+        rays fly away from the surface rather than toward it.
+    ray_length : float, optional
+        Forwarded to :func:`~cryocat.utils.geom.construct_rays`. ``None``
+        gives effectively infinite rays (magnitude 1e10).
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape ``(N, 6)``; columns ``[ox, oy, oz, dx, dy, dz]``.
+    """
+    coords = motl.get_coordinates() * float(pixel_size)
+    normals = geom.euler_angles_to_normals(motl.get_angles())
+    return geom.construct_rays(
+        points=coords,
+        normals=normals,
+        reverse_direction=bool(reverse_direction),
+        ray_length=ray_length,
+    )
 

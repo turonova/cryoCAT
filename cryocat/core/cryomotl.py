@@ -1247,6 +1247,12 @@ class Motl:
         on_missing: str = "error",
         inplace: bool = True,
         output_path: PathOrStr | None = None,
+        pre_volume_dims_angst: np.ndarray | None = None,
+        pre_image_dims_angst: np.ndarray | None = None,
+        pre_pixel_size: float | None = None,
+        post_volume_dims_angst: np.ndarray | None = None,
+        post_image_dims_angst: np.ndarray | None = None,
+        post_pixel_size: float | None = None,
     ) -> dict:
         """Remap particle coordinates and orientations from one Warp alignment to another.
 
@@ -1267,9 +1273,11 @@ class Motl:
             Format string mapping tomo_id to an XML filename. Use ``$x+`` as a placeholder
             (e.g. ``'TS_$xxx.xml'`` maps tomo_id 204 → ``'TS_204.xml'``).
         scale : float, default=1.0
-            The motl's binning relative to the XML's pixel size — 1 when they match,
-            2 for a bin-2 motl against bin-1 XMLs.  A motl does not record its pixel
-            size, so this cannot be derived.
+            The motl's binning relative to the **effective** pixel size — 1 when they
+            match, 2 for a bin-2 motl against bin-1 XMLs.  The effective pixel size is
+            the overridden value when ``pre_pixel_size`` / ``post_pixel_size`` is
+            supplied, otherwise the value read from the XML.  A motl does not record its
+            own pixel size, so this cannot be derived.
         on_missing : str, default='error'
             Action when an XML pair is missing. ``'error'`` raises; ``'skip'`` leaves
             affected particles unchanged.
@@ -1277,12 +1285,68 @@ class Motl:
             Modify self in place. When False, return a new Motl.
         output_path : PathOrStr, optional
             If given, write the result to this path.
+        pre_volume_dims_angst : array-like of shape (3,), optional
+            Volume dimensions for the **pre-MA** alignment, in Ångströms (x, y, z).
+            When supplied, the supplied value is used unconditionally — the purpose is
+            to correct or supply a value the file lacks or states incorrectly.  When
+            absent and the XML carries a value, the XML value is used.  When absent and
+            the XML also lacks it, raises naming the alignment, field and file.
+        pre_image_dims_angst : array-like of shape (2,), optional
+            Image (detector) dimensions for the **pre-MA** alignment, in Ångströms (x, y).
+            Same override semantics as ``pre_volume_dims_angst``.  When absent from both
+            the argument and the XML, defaults to the xy portion of the volume dimensions.
+        pre_pixel_size : float, optional
+            Pixel size for the **pre-MA** alignment, in Ångströms.  When supplied, the
+            supplied value is used unconditionally.  When absent, the value is read from
+            the XML (PixelSize in the CTF block; always present in a valid Warp XML).
+        post_volume_dims_angst : array-like of shape (3,), optional
+            Volume dimensions for the **post-MA** alignment, in Ångströms (x, y, z).
+            Same override semantics as ``pre_volume_dims_angst``.
+
+            **Resolution order**: supplied override → post-MA XML → pre-MA XML → raise.
+
+            The pre-MA XML fallback is a deliberate compatibility rule: post-MA Warp
+            reconstructions commonly omit ``VolumeDimensionsAngstrom`` from the XML,
+            and in the typical workflow the post-MA box matches the pre-MA box, so
+            borrowing the pre-MA XML value produces correct results without requiring
+            new arguments for existing datasets.
+
+            If the post-MA reconstruction box *differs* from the pre-MA box, supply
+            ``post_volume_dims_angst`` explicitly — the fallback will otherwise produce
+            silently wrong coordinates.  A ``UserWarning`` is issued for every tomogram
+            where the fallback is used, naming the tomo id, the field, and the borrowed
+            value.
+        post_image_dims_angst : array-like of shape (2,), optional
+            Image (detector) dimensions for the **post-MA** alignment, in Ångströms (x, y).
+            Same override semantics as ``pre_image_dims_angst``.  Same resolution order
+            and fallback rule as ``post_volume_dims_angst``.
+        post_pixel_size : float, optional
+            Pixel size for the **post-MA** alignment, in Ångströms.  Same override
+            semantics as ``pre_pixel_size``.
 
         Returns
         -------
         dict
             Per-tomogram diagnostics: n, rms_px, oob, R_angle, R_spread.
         """
+        def _resolve_dims(
+            geom_dict: dict,
+            field: str,
+            supplied: np.ndarray | None,
+            xml_path: str,
+            label: str,
+        ) -> np.ndarray:
+            """Return the resolved array for *field*, or raise clearly."""
+            if supplied is not None:
+                return np.asarray(supplied, dtype=float)
+            from_xml = geom_dict[field]
+            if from_xml is not None:
+                return from_xml
+            raise ValueError(
+                f"{label} {field!r} is missing from {xml_path!r} and was not supplied. "
+                "Pass the corresponding parameter to remap_warp_alignment."
+            )
+
         new_df = self.df.copy()
         diag: dict = {}
 
@@ -1303,9 +1367,65 @@ class Motl:
             old = ioutils.read_warp_tilt_xml(pre_path)
             new = ioutils.read_warp_tilt_xml(post_path)
 
-            if old["volume_dims"] is None:
-                raise ValueError(f"tomo {tomo_id_int}: VolumeDimensionsAngstrom missing from pre-MA XML")
-            ioutils.set_volume_geometry(new, volume_dims=old["volume_dims"], image_dims=old["image_dims"])
+            # Resolve pre-MA geometry.  Save raw XML values before patching so the
+            # post-MA fallback (below) is not influenced by the pre-MA overrides.
+            _old_vol_xml = old["volume_dims"]
+            _old_img_xml = old["image_dims"]
+
+            old["volume_dims"] = _resolve_dims(
+                old, "volume_dims", pre_volume_dims_angst, pre_path, f"tomo {tomo_id_int} pre-MA"
+            )
+            old["image_dims"] = (
+                _resolve_dims(old, "image_dims", pre_image_dims_angst, pre_path,
+                               f"tomo {tomo_id_int} pre-MA")
+                if (old["image_dims"] is not None or pre_image_dims_angst is not None)
+                else old["volume_dims"][:2]
+            )
+            old["pixel_size"] = float(pre_pixel_size) if pre_pixel_size is not None else old["pixel_size"]
+
+            # Resolve post-MA geometry.  Each field is resolved independently from
+            # the post XML and its own override.  When the post XML lacks a geometry
+            # field and no override is supplied, the pre XML value (not the resolved
+            # pre value) is used as a backward-compatible fallback so that post-MA
+            # files that omit geometry continue to work without new arguments.
+            _post_vd_fallback = (
+                post_volume_dims_angst is None and new["volume_dims"] is None and _old_vol_xml is not None
+            )
+            _post_id_fallback = (
+                post_image_dims_angst is None and new["image_dims"] is None and _old_img_xml is not None
+            )
+            if _post_vd_fallback:
+                warnings.warn(
+                    f"tomo {tomo_id_int}: post-MA XML {post_path!r} has no 'VolumeDimensionsAngstrom'. "
+                    f"Borrowing pre-MA XML value {_old_vol_xml}. "
+                    "If the post-MA reconstruction box differs, supply post_volume_dims_angst explicitly.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            if _post_id_fallback:
+                warnings.warn(
+                    f"tomo {tomo_id_int}: post-MA XML {post_path!r} has no 'ImageDimensionsAngstrom'. "
+                    f"Borrowing pre-MA XML value {_old_img_xml}. "
+                    "If the post-MA detector dimensions differ, supply post_image_dims_angst explicitly.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            _post_vd = post_volume_dims_angst if post_volume_dims_angst is not None else (
+                _old_vol_xml if new["volume_dims"] is None else None
+            )
+            _post_id = post_image_dims_angst if post_image_dims_angst is not None else (
+                _old_img_xml if new["image_dims"] is None else None
+            )
+            new["volume_dims"] = _resolve_dims(
+                new, "volume_dims", _post_vd, post_path, f"tomo {tomo_id_int} post-MA"
+            )
+            new["image_dims"] = (
+                _resolve_dims(new, "image_dims", _post_id, post_path,
+                               f"tomo {tomo_id_int} post-MA")
+                if (new["image_dims"] is not None or _post_id is not None)
+                else new["volume_dims"][:2]
+            )
+            new["pixel_size"] = float(post_pixel_size) if post_pixel_size is not None else new["pixel_size"]
 
             ok, msg = ioutils.check_same_tiltseries(old, new)
             if not ok:
@@ -1341,7 +1461,15 @@ class Motl:
             vol_lim = new["volume_dims"] / (new["pixel_size"] * scale)
             oob = int(((new_vox < 0) | (new_vox > vol_lim)).any(1).sum())
             diag[tomo_id_int] = dict(
-                n=len(sub), rms_px=float(rms.mean()), oob=oob, R_angle=angle, R_spread=spread
+                n=len(sub), rms_px=float(rms.mean()), oob=oob, R_angle=angle, R_spread=spread,
+                post_volume_dims_source="pre_xml_fallback" if _post_vd_fallback else (
+                    "override" if post_volume_dims_angst is not None else "xml"
+                ),
+                post_image_dims_source="pre_xml_fallback" if _post_id_fallback else (
+                    "override" if post_image_dims_angst is not None else (
+                        "volume_dims_xy" if (new["image_dims"] is None and _post_id is None) else "xml"
+                    )
+                ),
             )
             print(
                 f"  tomo {tomo_id_int}: n={len(sub)} R={angle:.3f}deg "
