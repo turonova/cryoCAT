@@ -479,7 +479,7 @@ def gui_exposed(
 
 # PEP-695 ``type X = ...`` aliases handled directly by tag (== alias name).
 _ALIAS_TAGS = {
-    "MapSource", "DataSource", "DataPoolEntry", "TiltStack", "TomoList", "TomoDimensions",
+    "MapSource", "DataSource", "DataPoolEntry", "MotlSource", "TiltStack", "TomoList", "TomoDimensions",
     "TripletLike", "EulerAngles", "ListLike", "Symmetry", "ArrayLike",
     "RotationLike", "PathOrStr",
 }
@@ -699,6 +699,20 @@ def _parse_str(v: Any) -> str | None:
     return str(v)
 
 
+def _parse_symmetry(v: Any) -> str | int | None:
+    """GUI text field -> Symmetry (int or str).
+    Int-coercible inputs (e.g. '1', 5) return as int; otherwise kept as str."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, int):
+        return v
+    s = str(v).strip()
+    try:
+        return int(s)
+    except ValueError:
+        return s
+
+
 def _parse_data_pool_entry(value: Any):
     """Pool-table picker value (data_id string) -> server-side DataFrame payload.
 
@@ -710,6 +724,22 @@ def _parse_data_pool_entry(value: Any):
     try:
         from cryocat.app.datapool import get_payload as _get_payload
         return _get_payload(str(value))
+    except Exception:
+        return None
+
+
+def _parse_motl_source(value: Any):
+    """Pool-motl picker value (motl_id string) -> server-side Motl instance.
+
+    The lazy import means this function is only reachable after the GUI app has
+    started; calling it from a pure-library context returns None.
+    """
+    if not value:
+        return None
+    try:
+        from cryocat.app.pool import get_rows as _get_rows
+        from cryocat.core.cryomotl import EmMotl
+        return EmMotl(_get_rows(str(value)))
     except Exception:
         return None
 
@@ -738,6 +768,7 @@ TYPE_HANDLERS = {
     "MapSource":      {"widget": "path",       "parse": _parse_path,            "argparse": {"type": str}},
     "DataSource":     {"widget": "path",       "parse": _parse_path,            "argparse": {"type": str}},
     "DataPoolEntry":  {"widget": "pool_table", "parse": _parse_data_pool_entry, "argparse": {"type": str}},
+    "MotlSource":     {"widget": "pool_motl",  "parse": _parse_motl_source,     "argparse": {"type": str}},
     "TiltStack":      {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
     "TomoDimensions": {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
     "TomoList":       {"widget": "text",     "parse": _parse_listlike, "argparse": {"type": _arg_listlike}},
@@ -748,7 +779,7 @@ TYPE_HANDLERS = {
     "PathOrStr":      {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
     # Normalized tag used by formgen.build_form for all path-widget params.
     "path":           {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
-    "Symmetry":       {"widget": "text",     "parse": _parse_str,      "argparse": {"type": str}},
+    "Symmetry":       {"widget": "text",     "parse": _parse_symmetry, "argparse": {"type": str}},
     "RotationLike":   {"widget": "rotation", "parse": _parse_str,      "argparse": {"type": str}},
     "Literal":        {"widget": "dropdown", "parse": _parse_literal,  "argparse": {"type": str}},
     "Tuple":          {"widget": "tuple",    "parse": _parse_tuple,    "argparse": {"type": _arg_listlike}},

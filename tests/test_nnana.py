@@ -1194,3 +1194,261 @@ def test_trace_chains_two_separated_groups():
     result = nnana.trace_chains(motl, max_distance=10.0)
     assert result.df["object_id"].nunique() == 2
 
+
+# ---------------------------------------------------------------------------
+# GW2 — NearestNeighbors sequential mode tests
+# ---------------------------------------------------------------------------
+
+def _make_seq_motl(chains: dict[int, list[tuple[float, float, float, float, float, float]]]) -> cryomotl.Motl:
+    """Build a minimal Motl for sequential-mode tests.
+
+    chains: {chain_id: [(order, x, y, z, phi_psi_theta_placeholder), ...]}
+    Each entry: (order_val, x, y, z, phi, psi, theta)
+    tomo_id is always 1; object_id encodes chain_id; geom1 encodes order.
+    """
+    rows = []
+    sid = 1
+    for chain_id, particles in chains.items():
+        for order, x, y, z, phi, psi, theta in particles:
+            row = {c: 0.0 for c in cryomotl.Motl.motl_columns}
+            row["tomo_id"] = 1.0
+            row["subtomo_id"] = float(sid)
+            row["object_id"] = float(chain_id)
+            row["geom1"] = float(order)
+            row["x"] = float(x)
+            row["y"] = float(y)
+            row["z"] = float(z)
+            row["phi"] = float(phi)
+            row["psi"] = float(psi)
+            row["theta"] = float(theta)
+            rows.append(row)
+            sid += 1
+    return cryomotl.Motl(pd.DataFrame(rows))
+
+
+def test_sequential_two_chains_no_boundary_pair():
+    """ordered_pairs must not span chain boundaries.
+
+    Two chains of 3 particles each → 2 pairs per chain = 4 total pairs.
+    No pair should have qp_id and nn_id from different chains.
+    """
+    motl = _make_seq_motl({
+        1: [(1, 0, 0, 0, 0, 0, 0), (2, 1, 0, 0, 0, 0, 0), (3, 2, 0, 0, 0, 0, 0)],
+        2: [(1, 100, 0, 0, 0, 0, 0), (2, 101, 0, 0, 0, 0, 0), (3, 102, 0, 0, 0, 0, 0)],
+    })
+    nn = NearestNeighbors.ordered_pairs(motl, "object_id", "geom1")
+    assert len(nn.df) == 4, f"Expected 4 pairs (2 per chain), got {len(nn.df)}"
+    # Each qp_id must pair with exactly qp_id+1 — no boundary crossing
+    assert (nn.df["nn_id"].values == nn.df["qp_id"].values + 1).all()
+
+
+def test_sequential_shuffled_order_same_as_sorted():
+    """Shuffled row order must give the same pairs and distances as sorted."""
+    particles = [
+        (1, 0.0, 0.0, 0.0, 0, 0, 0),
+        (2, 1.0, 0.0, 0.0, 0, 0, 0),
+        (3, 2.0, 0.0, 0.0, 0, 0, 0),
+        (4, 3.0, 0.0, 0.0, 0, 0, 0),
+    ]
+    motl_sorted  = _make_seq_motl({1: particles})
+    motl_shuffled = _make_seq_motl({1: [particles[2], particles[0], particles[3], particles[1]]})
+
+    nn_sorted   = NearestNeighbors.ordered_pairs(motl_sorted,   "object_id", "geom1")
+    nn_shuffled = NearestNeighbors.ordered_pairs(motl_shuffled, "object_id", "geom1")
+
+    assert len(nn_sorted.df) == len(nn_shuffled.df) == 3
+    np.testing.assert_allclose(
+        sorted(nn_sorted.df["nn_dist"].tolist()),
+        sorted(nn_shuffled.df["nn_dist"].tolist()),
+        atol=1e-5,
+    )
+
+
+def test_sequential_three_steps_four_particles():
+    """Four particles in one chain → 3 consecutive pairs (the GW1 n=3 case).
+
+    Before GW1a+GW1b, computing angular_distances on n=3 pairs could raise
+    ValueError because the (3,3) Euler array was misread as a rotation matrix.
+    After the fix this must complete without error.
+    """
+    motl = _make_seq_motl({
+        1: [
+            (1, 0, 0, 0, 10, 0, 20),
+            (2, 1, 0, 0, 20, 0, 30),
+            (3, 2, 0, 0, 30, 0, 40),
+            (4, 3, 0, 0, 40, 0, 50),
+        ],
+    })
+    nn = NearestNeighbors.ordered_pairs(motl, "object_id", "geom1")
+    assert len(nn.df) == 3, f"Expected 3 pairs, got {len(nn.df)}"
+    # Angular distances on n=3 pairs must not raise
+    ang_dists = nn.get_angular_distances(rotation_type="all")
+    assert len(ang_dists[0]) == 3
+
+
+# ---------------------------------------------------------------------------
+# HA — NearestNeighbors.ordered_pairs tests
+# ---------------------------------------------------------------------------
+
+def _make_op_motl(chains: dict) -> "cryomotl.Motl":
+    """Build a minimal Motl for ordered_pairs tests.
+
+    chains: {chain_id: [(order, x, y, z), ...]}
+    tomo_id=1, object_id=chain_id, geom1=order, angles=0.
+    """
+    rows = []
+    sid = 1
+    for chain_id, particles in chains.items():
+        for order, x, y, z in particles:
+            row = {c: 0.0 for c in cryomotl.Motl.motl_columns}
+            row["tomo_id"] = 1.0
+            row["subtomo_id"] = float(sid)
+            row["object_id"] = float(chain_id)
+            row["geom1"] = float(order)
+            row["x"] = float(x)
+            row["y"] = float(y)
+            row["z"] = float(z)
+            rows.append(row)
+            sid += 1
+    return cryomotl.Motl(pd.DataFrame(rows))
+
+
+def test_ordered_pairs_linear_step1_no_reversed_duplicate():
+    """Chain of n, linear step 1: n-1 rows, each pair appears exactly once.
+
+    The reported bug was that the old sequential mode produced both (a,b) and
+    (b,a) for each consecutive pair.  ordered_pairs must not do that.
+    """
+    n = 5
+    motl = _make_op_motl({1: [(i, float(i), 0, 0) for i in range(1, n + 1)]})
+    result = NearestNeighbors.ordered_pairs(motl, "object_id", "geom1")
+    assert len(result.df) == n - 1
+    # No reversed duplicate: (qp_subtomo_id, nn_subtomo_id) and its swap must not both appear
+    pairs = set(zip(result.df["qp_subtomo_id"], result.df["nn_subtomo_id"]))
+    reversed_pairs = {(b, a) for a, b in pairs}
+    assert pairs.isdisjoint(reversed_pairs), "reversed duplicate pairs found"
+
+
+def test_ordered_pairs_linear_step2():
+    """Linear step 2: n-2 rows."""
+    n = 6
+    motl = _make_op_motl({1: [(i, float(i), 0, 0) for i in range(1, n + 1)]})
+    result = NearestNeighbors.ordered_pairs(motl, "object_id", "geom1", step=2)
+    assert len(result.df) == n - 2
+
+
+def test_ordered_pairs_circular_step1_wrap_pair():
+    """Circular step 1, n members: n rows including the wrap pair."""
+    n = 6
+    motl = _make_op_motl({1: [(i, float(i), 0, 0) for i in range(1, n + 1)]})
+    result = NearestNeighbors.ordered_pairs(
+        motl, "object_id", "geom1", topology="circular", ring_size=n
+    )
+    assert len(result.df) == n
+    # Wrap pair: qp with highest order (n) pairs with lowest (1)
+    qp_sub = result.df["qp_subtomo_id"].values
+    nn_sub = result.df["nn_subtomo_id"].values
+    # The particle with geom1==n should pair with geom1==1
+    wrap_rows = result.df[result.df["qp_subtomo_id"] == n]
+    assert len(wrap_rows) == 1
+    assert int(wrap_rows["nn_subtomo_id"].iloc[0]) == 1
+
+
+def test_ordered_pairs_circular_step4_ring8_four_pairs():
+    """Circular step 4, ring of 8: four opposite-subunit pairs, each once."""
+    motl = _make_op_motl({1: [(i, float(i), 0, 0) for i in range(1, 9)]})
+    result = NearestNeighbors.ordered_pairs(
+        motl, "object_id", "geom1", step=4, topology="circular", ring_size=8
+    )
+    assert len(result.df) == 4
+    pairs = set(zip(result.df["qp_subtomo_id"].tolist(), result.df["nn_subtomo_id"].tolist()))
+    reversed_pairs = {(b, a) for a, b in pairs}
+    assert pairs.isdisjoint(reversed_pairs), "reversed duplicate pairs found"
+
+
+def test_ordered_pairs_two_groups_no_cross_boundary():
+    """Two groups: no pair spans the group boundary."""
+    motl = _make_op_motl({
+        1: [(1, 0, 0, 0), (2, 1, 0, 0), (3, 2, 0, 0)],
+        2: [(1, 10, 0, 0), (2, 11, 0, 0), (3, 12, 0, 0)],
+    })
+    result = NearestNeighbors.ordered_pairs(motl, "object_id", "geom1")
+    assert len(result.df) == 4  # 2 pairs per group
+    g1_sids = set(
+        motl.df[motl.df["object_id"] == 1]["subtomo_id"].astype(int).tolist()
+    )
+    g2_sids = set(
+        motl.df[motl.df["object_id"] == 2]["subtomo_id"].astype(int).tolist()
+    )
+    for _, row in result.df.iterrows():
+        qp = int(row["qp_subtomo_id"])
+        nn = int(row["nn_subtomo_id"])
+        assert (qp in g1_sids) == (nn in g1_sids), "pair spans group boundary"
+
+
+def test_ordered_pairs_shuffled_same_as_sorted():
+    """Shuffled row order with sort_first=True gives same pairs as sorted."""
+    particles = [(i, float(i), 0, 0) for i in range(1, 6)]
+    shuffled = [particles[3], particles[0], particles[4], particles[1], particles[2]]
+    motl_sorted   = _make_op_motl({1: particles})
+    motl_shuffled = _make_op_motl({1: shuffled})
+    r_sorted   = NearestNeighbors.ordered_pairs(motl_sorted,   "object_id", "geom1")
+    r_shuffled = NearestNeighbors.ordered_pairs(motl_shuffled, "object_id", "geom1")
+    assert len(r_sorted.df) == len(r_shuffled.df)
+    np.testing.assert_allclose(
+        sorted(r_sorted.df["nn_dist"].tolist()),
+        sorted(r_shuffled.df["nn_dist"].tolist()),
+        atol=1e-5,
+    )
+
+
+def test_ordered_pairs_full_gap_no_pair_across_gap():
+    """Full mode: the particle before a gap gets no row; holey pairs across it."""
+    # Particles at order 1, 3, 4 — order 2 is missing
+    motl = _make_op_motl({1: [(1, 0, 0, 0), (3, 1, 0, 0), (4, 2, 0, 0)]})
+    full  = NearestNeighbors.ordered_pairs(motl, "object_id", "geom1", gaps="full")
+    holey = NearestNeighbors.ordered_pairs(motl, "object_id", "geom1", gaps="holey")
+    # Full: order 1 → 2 absent within range (genuine gap); order 4 → 5 beyond max (terminal)
+    assert len(full.df) == 1
+    assert full.unpaired_count == 1    # order 1: target 2 ≤ max_o 4, absent — genuine gap
+    assert full.terminal_count == 1    # order 4: target 5 > max_o 4 — structural terminal
+    # Holey: order 1 → next present ≥ 2 = order 3; order 3 → order 4 (two pairs)
+    assert len(holey.df) == 2
+
+
+def test_ordered_pairs_sort_first_false_already_sorted():
+    """sort_first=False on already-sorted rows gives the same result."""
+    particles = [(i, float(i), 0, 0) for i in range(1, 5)]
+    motl = _make_op_motl({1: particles})
+    r_true  = NearestNeighbors.ordered_pairs(motl, "object_id", "geom1", sort_first=True)
+    r_false = NearestNeighbors.ordered_pairs(motl, "object_id", "geom1", sort_first=False)
+    assert len(r_true.df) == len(r_false.df)
+    np.testing.assert_allclose(
+        r_true.df["nn_dist"].values, r_false.df["nn_dist"].values, atol=1e-5
+    )
+
+
+def test_ordered_pairs_circular_ring_size_larger_than_members():
+    """Circular ring_size > member count wraps on ring_size, not members."""
+    # 6 particles in a ring of 8 (positions 1-6 present, 7 and 8 missing)
+    motl = _make_op_motl({1: [(i, float(i), 0, 0) for i in range(1, 7)]})
+    result = NearestNeighbors.ordered_pairs(
+        motl, "object_id", "geom1", topology="circular", ring_size=8
+    )
+    # With ring_size=8, particle at order 6 looks for (6-1+1)%8+1 = 7,
+    # which is absent → no wrap pair; particle at 5 looks for 6 (present)
+    # Also particle at order 1 is the target of some wrap — but since 7 and 8
+    # are absent, no particle will have wrap target 1.
+    # So: pairs 1→2, 2→3, 3→4, 4→5, 5→6 (5 pairs); 6→7 absent.
+    assert len(result.df) == 5
+    assert result.unpaired_count == 1  # particle at order 6
+
+
+def test_ordered_pairs_circular_requires_ring_size():
+    """Circular topology without ring_size raises ValueError."""
+    motl = _make_op_motl({1: [(i, float(i), 0, 0) for i in range(1, 5)]})
+    with pytest.raises(ValueError, match="ring_size is required"):
+        NearestNeighbors.ordered_pairs(
+            motl, "object_id", "geom1", topology="circular"
+        )
+

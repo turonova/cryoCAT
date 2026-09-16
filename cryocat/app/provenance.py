@@ -26,6 +26,9 @@ _producers: dict[str, int] = {}
 # counter for descriptor variable names ("desc-0", "desc-1", …)
 _desc_counter: int = 0
 
+# counter for scalar-result variable names ("result-0", "result-1", …)
+_result_counter: int = 0
+
 # id(obj)  →  script variable name for locally-produced intermediates
 # (numpy arrays, dicts, etc. that are not pool entries but are assigned a name
 # by invoke_operation's assign_to parameter so the next call can reference them)
@@ -53,6 +56,14 @@ def next_desc_id() -> str:
     desc_id = f"desc-{_desc_counter}"
     _desc_counter += 1
     return desc_id
+
+
+def next_result_id() -> str:
+    """Allocate the next unique scalar-result id (``'result-0'``, ``'result-1'``, …)."""
+    global _result_counter
+    rid = f"result-{_result_counter}"
+    _result_counter += 1
+    return rid
 
 
 def bind(motl_id: str) -> str:
@@ -97,7 +108,8 @@ def forget(motl_id: str) -> None:
 
 def clear() -> None:
     """Reset all provenance state (called on session close or test teardown)."""
-    global _desc_counter
+    global _desc_counter, _result_counter
     _producers.clear()
     _intermediate_vars.clear()
     _desc_counter = 0
+    _result_counter = 0

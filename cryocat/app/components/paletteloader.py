@@ -186,16 +186,19 @@ def get_palette_loader(
             [
                 html.Div(
                     [
-                        make_dropdown(
-                            f"{prefix}-preset",
-                            options,
-                            initial,
-                            clearable=False,
+                        html.Div(
+                            make_dropdown(
+                                f"{prefix}-preset",
+                                options,
+                                initial,
+                                clearable=False,
+                            ),
+                            style={"width": "150px", "flexShrink": 0},
                         ),
                         html.Div(
                             id=f"{prefix}-swatch",
                             children=initial_swatch,
-                            style={"marginLeft": "0.4rem", "minWidth": "60px", "alignSelf": "center"},
+                            style={"marginLeft": "0.4rem", "minWidth": "80px", "flex": "1", "alignSelf": "center"},
                         ),
                     ],
                     style={"display": "flex", "alignItems": "center"},

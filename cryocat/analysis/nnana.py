@@ -366,9 +366,9 @@ def angular_distances(
     -------
     numpy.ndarray (or tuple of three for ``rotation_type='all'``)
     """
-    return geom.compare_rotations(
-        qp_angles_per_pair, nn_angles_per_pair, rotation_type=rotation_type
-    )
+    qp = srot.from_euler("zxz", np.asarray(qp_angles_per_pair, dtype=float), degrees=True)
+    nn = srot.from_euler("zxz", np.asarray(nn_angles_per_pair, dtype=float), degrees=True)
+    return geom.compare_rotations(qp, nn, rotation_type=rotation_type)
 
 
 def relative_rotations(
@@ -596,7 +596,8 @@ class NearestNeighbors:
                     )
                 else:
                     raise ValueError(
-                        f"The type {nn_type} is not supported, choose between 'closest_dist' and 'radius'."
+                        f"The type {nn_type} is not supported, choose between 'closest_dist' and 'radius'. "
+                        "For ordered pairing use NearestNeighbors.ordered_pairs()."
                     )
 
                 if stacked is not None:
@@ -624,6 +625,278 @@ class NearestNeighbors:
             self.df = self.drop_symmetric_duplicates()
         self.features = features
         self.motls = motl_list
+
+    @staticmethod
+    def ordered_pairs(
+        motl: "cryomotl.MotlSource",
+        group_column: "MotlColumn",
+        order_column: "MotlColumn",
+        *,
+        step: int = 1,
+        topology: str = "linear",
+        ring_size: int | None = None,
+        gaps: str = "full",
+        sort_first: bool = True,
+    ) -> "NearestNeighbors":
+        """Pair ordered particles within each group without any neighbour search.
+
+        Within each group (identified by *group_column*), particles are sorted
+        by *order_column* and each particle is paired with the one *step*
+        positions further along.  Pairs are one-directional (*i* → *i + step*);
+        reciprocal duplicates are impossible by construction for linear topology,
+        and are suppressed for circular topology when they arise.
+
+        Parameters
+        ----------
+        motl : MotlSource
+            The particle list to pair.
+        group_column : MotlColumn
+            Column identifying the group (e.g. chain, object or ring id).
+            **Required** — there is no default.
+        order_column : MotlColumn
+            Column encoding the position along the sequence (e.g. ``"geom1"``).
+            **Required** — there is no default.
+        step : int, default=1
+            How far along the sequence the partner lies.
+        topology : {'linear', 'circular'}, default='linear'
+            ``"linear"`` — the last *step* particles in each group have no
+            partner and are dropped; the count is in ``result.unpaired_count``.
+            ``"circular"`` — the sequence wraps: the particle with the highest
+            order value pairs toward the lowest, using *ring_size* to determine
+            the wrap.  A ring of *n* at step 1 gives *n* pairs including the
+            wrap pair; at step *n*/2 gives *n*/2 pairs (duplicates suppressed).
+        ring_size : int or None, default=None
+            Number of positions in the full ring.  **Required** for
+            *topology* == ``"circular"``; raises :exc:`ValueError` otherwise.
+            Do not infer from the member count — a ring missing a subunit would
+            then wrap the wrong particles.
+        gaps : {'full', 'holey'}, default='full'
+            ``"full"`` (default) — a particle pairs only with the one whose
+            *order_column* value is exactly ``order + step`` (linear) or
+            ``(order - min_order + step) % ring_size + min_order`` (circular).
+            If that value is absent there is no pair; the count of left-unpaired
+            particles is in ``result.unpaired_count``.  Full is the default
+            because pairing across a gap changes what *step* means — 1→3 looks
+            identical to 1→2 in the output; holey is opt-in.
+            ``"holey"`` — pairs are formed by sorted position: position *i*
+            pairs with position *i + step* (linear) or *(i + step) % n*
+            (circular), regardless of order-value gaps.  No gap-size column is
+            added; the output does not distinguish a gapped pair from a
+            contiguous one.
+        sort_first : bool, default=True
+            Sort by *group_column* then *order_column* before pairing.  Set to
+            ``False`` only when the data is guaranteed to be already sorted —
+            this is a performance option and **silently produces wrong pairs**
+            if the data is not actually sorted.
+
+        Returns
+        -------
+        NearestNeighbors
+            Instance with ``.df`` in the same column shape as
+            ``"closest_dist"`` output (including ``nn_dist`` as Euclidean
+            distance between paired particles).  Nothing filters on ``nn_dist``.
+            ``result.unpaired_count`` holds the number of particles that had no
+            partner (always 0 for holey and circular-full when all ring
+            positions are present).
+
+        Raises
+        ------
+        ValueError
+            If *topology* == ``"circular"`` and *ring_size* is ``None``.
+        ValueError
+            If a group contains duplicate *order_column* values.
+
+        Notes
+        -----
+        ``ordered_pairs`` is **not** ``@gui_exposed`` — it is a static method
+        and does not fit the GUI motl-source pattern.  Expose it via a
+        module-level wrapper if GUI access is needed.
+
+        Duplicate order values within a group raise :exc:`ValueError` because
+        the target lookup is ambiguous.
+        """
+        if topology == "circular" and ring_size is None:
+            raise ValueError(
+                "ring_size is required for topology='circular'. "
+                "Do not infer it from the member count — a ring missing a "
+                "subunit has fewer members than positions and would wrap wrong."
+            )
+
+        motl_obj = cryomotl.Motl.load(motl)
+        n_total = len(motl_obj.df)
+
+        coords_all   = motl_obj.get_coordinates()
+        angles_all   = motl_obj.get_angles()
+        subtomos_all = motl_obj.df["subtomo_id"].values
+        grp_all      = motl_obj.df[group_column].values
+        ord_all      = motl_obj.df[order_column].values
+
+        if sort_first:
+            sorted_pos = np.lexsort((ord_all, grp_all))
+        else:
+            sorted_pos = np.arange(n_total)
+
+        coords   = coords_all[sorted_pos]
+        angles   = angles_all[sorted_pos]
+        subtomos = subtomos_all[sorted_pos]
+        grp      = grp_all[sorted_pos]
+        ord_     = ord_all[sorted_pos]
+
+        columns = [
+            "motl_id", group_column,
+            "qp_id", "qp_subtomo_id",
+            "nn_id", "nn_subtomo_id",
+            *NearestNeighbors._QP_ANGLE_COLS, *NearestNeighbors._QP_COORD_COLS,
+            *NearestNeighbors._NN_ANGLE_COLS, *NearestNeighbors._NN_COORD_COLS,
+            "nn_dist",
+        ]
+
+        results: list[dict] = []
+        unpaired_count = 0
+        terminal_count = 0
+
+        g_unique, g_starts = np.unique(grp, return_index=True)
+        g_ends = np.append(g_starts[1:], n_total)
+
+        for g_val, g_start, g_end in zip(g_unique, g_starts, g_ends):
+            n_g  = int(g_end - g_start)
+            gc   = coords[g_start:g_end]
+            ga   = angles[g_start:g_end]
+            gs   = subtomos[g_start:g_end]
+            go   = ord_[g_start:g_end]
+
+            if len(np.unique(go)) < n_g:
+                raise ValueError(
+                    f"Group {g_val!r} has duplicate '{order_column}' values. "
+                    "Ordered pairing is ambiguous with duplicate order values."
+                )
+
+            pi_list: list[int] = []
+            pj_list: list[int] = []
+            order_to_local = {float(o): i for i, o in enumerate(go)}
+
+            if gaps == "full":
+                if topology == "linear":
+                    max_o = float(go.max())
+                    for i, o in enumerate(go):
+                        target = float(o) + step
+                        if target in order_to_local:
+                            pi_list.append(i)
+                            pj_list.append(order_to_local[target])
+                        elif target > max_o:
+                            terminal_count += 1  # structural end of chain, not a gap
+                        else:
+                            unpaired_count += 1  # genuine gap: target absent within range
+
+                else:  # circular full: all absent targets are genuine gaps (no terminals)
+                    min_o = float(go.min())
+                    needs_dedup = (2 * step) % ring_size == 0
+                    for i, o in enumerate(go):
+                        o_norm = float(o) - min_o
+                        t_norm = (o_norm + step) % ring_size
+                        target = t_norm + min_o
+                        if target not in order_to_local:
+                            unpaired_count += 1
+                            continue
+                        if needs_dedup and o_norm > t_norm:
+                            continue  # reverse already included
+                        pi_list.append(i)
+                        pj_list.append(order_to_local[target])
+
+            else:  # holey — value-based lookup; missing target → advance to next present
+                sorted_go = np.sort(go.astype(float))
+
+                if topology == "linear":
+                    for i, o in enumerate(go):
+                        target = float(o) + step
+                        idx = np.searchsorted(sorted_go, target)
+                        if idx < len(sorted_go):
+                            pi_list.append(i)
+                            pj_list.append(order_to_local[float(sorted_go[idx])])
+                        else:
+                            terminal_count += 1  # no present value at or beyond target
+
+                else:  # circular holey: value-based with ring_size wrap + seen-pair dedup
+                    min_o = float(go.min())
+                    seen: set[tuple[int, int]] = set()
+                    for i, o in enumerate(go):
+                        o_norm = float(o) - min_o
+                        t_norm_init = (o_norm + step) % ring_size
+                        eff_t_norm = None
+                        for k in range(ring_size):
+                            cand_norm = (t_norm_init + k) % ring_size
+                            if cand_norm == o_norm:
+                                break  # wrapped to self — no partner
+                            if float(cand_norm + min_o) in order_to_local:
+                                eff_t_norm = cand_norm
+                                break
+                        if eff_t_norm is None:
+                            continue
+                        j = order_to_local[float(eff_t_norm + min_o)]
+                        pair_key = (min(i, j), max(i, j))
+                        if pair_key in seen:
+                            continue
+                        seen.add(pair_key)
+                        pi_list.append(i)
+                        pj_list.append(j)
+
+            if not pi_list:
+                continue
+
+            pi_arr = np.array(pi_list, dtype=np.intp)
+            pj_arr = np.array(pj_list, dtype=np.intp)
+            n_pairs = len(pi_arr)
+            diffs = gc[pj_arr] - gc[pi_arr]
+
+            results.append({
+                "motl_id":         np.ones(n_pairs, dtype=np.int32),
+                group_column:      np.full(n_pairs, g_val),
+                "qp_id":           (g_start + pi_arr).astype(np.int32),
+                "qp_subtomo_id":   gs[pi_arr],
+                "nn_id":           (g_start + pj_arr).astype(np.int32),
+                "nn_subtomo_id":   gs[pj_arr],
+                "qp_angles_phi":   ga[pi_arr, 0],
+                "qp_angles_theta": ga[pi_arr, 1],
+                "qp_angles_psi":   ga[pi_arr, 2],
+                "qp_coord_x":      gc[pi_arr, 0],
+                "qp_coord_y":      gc[pi_arr, 1],
+                "qp_coord_z":      gc[pi_arr, 2],
+                "nn_angles_phi":   ga[pj_arr, 0],
+                "nn_angles_theta": ga[pj_arr, 1],
+                "nn_angles_psi":   ga[pj_arr, 2],
+                "nn_coord_x":      gc[pj_arr, 0],
+                "nn_coord_y":      gc[pj_arr, 1],
+                "nn_coord_z":      gc[pj_arr, 2],
+                "nn_dist":         np.linalg.norm(diffs, axis=1),
+            })
+
+        obj = NearestNeighbors.__new__(NearestNeighbors)
+        obj.column_name       = group_column
+        obj.paired            = False
+        obj.exclude_column_name = None
+        obj.motls             = [motl_obj, motl_obj]
+        obj.features          = g_unique
+        obj.unpaired_count    = unpaired_count
+        obj.terminal_count    = terminal_count
+
+        if not results:
+            obj.df = pd.DataFrame(columns=columns)
+        else:
+            merged = {col: np.concatenate([r[col] for r in results]) for col in columns}
+            obj.df = pd.DataFrame(merged, columns=columns)
+
+        int_cols   = ["motl_id", group_column, "qp_id", "qp_subtomo_id", "nn_id", "nn_subtomo_id"]
+        float_cols = [
+            *NearestNeighbors._QP_ANGLE_COLS, *NearestNeighbors._QP_COORD_COLS,
+            *NearestNeighbors._NN_ANGLE_COLS, *NearestNeighbors._NN_COORD_COLS,
+            "nn_dist",
+        ]
+        if not obj.df.empty:
+            obj.df = obj.df.astype(
+                {**{c: np.int32 for c in int_cols}, **{c: np.float32 for c in float_cols}}
+            )
+
+        return obj
 
     @staticmethod
     def _stack_nn_results(

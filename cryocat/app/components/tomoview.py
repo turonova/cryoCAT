@@ -331,7 +331,9 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         default = "score" if "score" in values else (values[0] if values else None)
         return opts, default
 
-    _tab_state = [State(tabs_id, "active_tab")] if (tabs_id and tab_value) else []
+    # Tab guard: Input (not State) so that switching to the tab re-fires the
+    # callback when the slot's data was updated while a different tab was active.
+    _tab_input = [Input(tabs_id, "active_tab")] if (tabs_id and tab_value) else []
 
     @app.callback(
         Output(f"{prefix}-graph", "figure"),
@@ -343,7 +345,7 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         Input(f"{prefix}-colorscale-dropdown", "value"),
         Input(f"{prefix}-marker-size", "value"),
         Input(f"{prefix}-data", "data"),
-        *_tab_state,
+        *_tab_input,
         State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )

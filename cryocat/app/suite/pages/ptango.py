@@ -409,6 +409,7 @@ def _helpers_tile() -> list:
                 placeholder="Choose motl from pool…",
             ),
             "Motl whose coordinates are used to estimate the alpha range",
+            label_id="tango-helpers-motl-lbl",
             label_text="Motl",
         ),
         dbc.Button(
@@ -504,9 +505,11 @@ layout = html.Div(
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
 def register_callbacks(app) -> None:
-    formgen.register_form_callbacks(app, "tango-support-params")
-    formgen.register_form_callbacks(app, "tango-desc-params")
-    formgen.register_form_callbacks(app, "tango-feat-params")
+    # cls_name is in every tango form id (id_extra={"cls_name": ...} in build_form);
+    # writeback patterns must include it or they target a 4-key id that never exists.
+    formgen.register_form_callbacks(app, "tango-support-params", id_extra={"cls_name": ALL})
+    formgen.register_form_callbacks(app, "tango-desc-params",    id_extra={"cls_name": ALL})
+    formgen.register_form_callbacks(app, "tango-feat-params",    id_extra={"cls_name": ALL})
     register_motl_input_callbacks(app, "tango-mi")
     register_table_source_callbacks(
         app, "tango-twist-src",

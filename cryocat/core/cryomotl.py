@@ -531,7 +531,7 @@ class Motl:
         column_name: MotlColumn = "tomo_id",
         inplace: bool = True,
         output_path: PathOrStr | None = None,
-    ) -> "Motl" | None:
+    ) -> Motl | None:
         """Cleans the motl by removing points that are within a specified radius of any point in a the provided dataframe
         with points.
 
@@ -738,7 +738,7 @@ class Motl:
         order: np.ndarray | None = None,
         inplace: bool = True,
         output_path: PathOrStr | None = None,
-    ) -> "Motl" | None:
+    ) -> Motl | None:
         """Removes particles whose rotated subtomogram masks physically overlap above a threshold.
 
         Particles are processed in metric order (best first) within each pool defined
@@ -1237,7 +1237,7 @@ class Motl:
                     z_dim = float(dims.loc[dims["tomo_id"] == t, "z"].iloc[0]) + 1
                     self.df.loc[self.df["tomo_id"] == t, "z"] = z_dim - self.df.loc[self.df["tomo_id"] == t, "z"]
 
-    @gui_exposed(category="Processing", label="Remap Warp alignment")
+    @gui_exposed(category="Utility", label="Remap Warp alignment")
     def remap_warp_alignment(
         self,
         pre_xml_dir: PathOrStr,
@@ -1792,37 +1792,41 @@ class Motl:
         return cls(s1.reset_index(drop=True))
 
     @gui_exposed(category="Subsets", label="Renumber objects sequentially")
-    def renumber_objects_sequentially(self, starting_number: int = 1) -> None:
+    def renumber_objects_sequentially(
+        self, starting_number: int = 1, sort_by_object_id: bool = False
+    ) -> None:
         """Renumber objects sequentially, starting with 1 or provided number.
+
+        Each distinct ``(tomo_id, object_id)`` pair is mapped to a unique integer
+        in sorted ``(tomo_id, object_id)`` order, so objects from tomo 1 are
+        numbered before objects from tomo 2, and so on.  Rows that share the same
+        pair (duplicate object ids within a tomogram) receive the same new id,
+        preserving the many-to-one mapping.  All columns — including ``tomo_id``
+        — are retained unchanged.
 
         Parameters
         ----------
         starting_number : int, default=1
             The starting number for renumbering objects. The default is 1.
+        sort_by_object_id : bool, default=False
+            When ``True``, rows are sorted by the new ``object_id`` after
+            renumbering.  When ``False`` (the default) the row order is
+            unchanged.
 
         Notes
         -----
-        This method modifies the `df` attribute of the object.
+        This method modifies the ``df`` attribute of the object.
 
         Returns
         -------
         None
 
         """
-        start_number = starting_number
-
-        def assign_new_object_id(group):
-            # If there are duplicate 'object_id' values within the group, keep the first occurrence
-            nonlocal start_number
-            group["object_id"] = group["object_id"].factorize()[0] + start_number
-            start_number = group["object_id"].max() + 1
-            return group
-
-        # Resetting the index before applying the function
-        df_reset = self.df.reset_index(drop=True)
-
-        # Apply the custom function to each group
-        self.df = df_reset.groupby("tomo_id", group_keys=False).apply(assign_new_object_id)
+        df = self.df.reset_index(drop=True)
+        df["object_id"] = df.groupby(["tomo_id", "object_id"], sort=True).ngroup() + starting_number
+        if sort_by_object_id:
+            df = df.sort_values("object_id").reset_index(drop=True)
+        self.df = df
 
     def get_relative_position(self, idx: ArrayLike, nn_idx: ArrayLike) -> tuple["Motl", np.ndarray]:
         """Returns a new Motl object with coordinates corresponding to the center between the particles

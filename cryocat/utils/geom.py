@@ -1105,6 +1105,59 @@ def n_gon_points(n: int) -> np.ndarray:
     return np.vstack(coordinates)
 
 
+def cn_site_vectors(
+    n: int,
+    length: float,
+    azimuth: float = 0.0,
+    elevation: float = 0.0,
+) -> np.ndarray:
+    """Return n evenly-spaced site vectors for a C_n-symmetric building block.
+
+    All n sites lie at the same radial distance *length* from the block
+    origin, equally spaced in azimuth (Δφ = 360°/n), starting at *azimuth*,
+    and tilted *elevation* degrees below the block's xy-plane (towards −z).
+
+    Parameters
+    ----------
+    n : int
+        Number of sites.  Must be ≥ 1.
+    length : float
+        Distance from the block origin to each site in voxels.  Must be > 0.
+    azimuth : float, default=0.0
+        Angular offset of the first site, in degrees, measured from the +x axis
+        counter-clockwise in the block's xy-plane.
+    elevation : float, default=0.0
+        Elevation of all sites above the block's xy-plane, in degrees.
+        Positive values tilt the sites *below* the xy-plane (towards −z).
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of shape ``(n, 3)`` containing the site vectors in the block
+        frame, in voxels.
+
+    Raises
+    ------
+    ValueError
+        If ``n < 1`` or ``length <= 0``.
+
+    Examples
+    --------
+    >>> cn_site_vectors(3, 5.0)          # C3 symmetry, 5 voxel arms, equatorial
+    >>> cn_site_vectors(6, 3.0, azimuth=30.0, elevation=10.0)
+    """
+    if n < 1:
+        raise ValueError(f"n must be >= 1, got {n}")
+    if length <= 0:
+        raise ValueError(f"length must be > 0, got {length}")
+    angles = np.radians(azimuth + 360.0 * np.arange(n) / n)
+    e = np.radians(elevation)
+    vx = length * np.cos(e) * np.cos(angles)
+    vy = length * np.cos(e) * np.sin(angles)
+    vz = np.full(n, -length * np.sin(e))
+    return np.column_stack([vx, vy, vz])
+
+
 def great_circle_distance(p1: np.ndarray, p2: np.ndarray) -> float:
     """Great-circle (geodesic) distance between two unit-sphere points.
 
@@ -2836,7 +2889,19 @@ def rotate_points_rodrigues(
 
     # Calculate the axis of rotation (k) and angle (theta)
     k = np.cross(n0, n1)
-    k = k / np.linalg.norm(k)
+    k_norm = np.linalg.norm(k)
+    if k_norm < 1e-10:
+        if np.dot(n0, n1) > 0:
+            # Parallel: identity rotation
+            return P
+        # Antiparallel: 180° around any perpendicular axis
+        perp = np.cross(n0, [1, 0, 0])
+        if np.linalg.norm(perp) < 1e-10:
+            perp = np.cross(n0, [0, 1, 0])
+        perp = perp / np.linalg.norm(perp)
+        r = srot.from_rotvec(np.pi * perp)
+        return r.apply(P)
+    k = k / k_norm
     theta = np.arccos(np.clip(np.dot(n0, n1), -1.0, 1.0))  # clip to avoid floating point errors
 
     # Create the scipy rotation object
@@ -3062,33 +3127,29 @@ def fit_circle_3d_pratt(coord: np.ndarray) -> tuple[np.ndarray, float, int]:
     >>> print(center, radius, conf)
     """
 
-    # Projection of coordinates on 2D plane
-    coord_proj, U = project_3d_points_on_2d_plane_variance_based(coord)
+    # Project onto ring plane aligned with z-axis; centers internally
+    coord_proj, coord_mean, normal = project_3d_points_on_2d_plane_normal_aligned(coord)
+
+    x = coord_proj[:, 0]
+    y = coord_proj[:, 1]
+
+    # Collinear/degenerate input: raise so the caller can fall back gracefully
+    if np.std(y) < 1e-3 * max(float(np.std(x)), 1.0):
+        raise ValueError("Points appear collinear; circle fit is degenerate.")
 
     # Pratt method
-    x = coord_proj[0, :]
-    y = coord_proj[1, :]
     a = np.linalg.lstsq(np.vstack([x, y, np.ones_like(x)]).T, -(x**2 + y**2), rcond=None)[0]
     xc = -a[0]
     yc = -a[1]
 
-    center_2d = np.array([xc, yc])
+    # 3D center: rotate [cx, cy, 0] from XY-frame back to ring normal, then restore mean
+    circle_center = rotate_points_rodrigues(
+        np.array([xc / 2.0, yc / 2.0, 0.0]), [0, 0, 1], normal
+    ).flatten() + coord_mean
 
-    # 3d center
-    c_si = np.concatenate([center_2d, [0]])
-    circle_center = np.matmul(U, c_si) / 2.0
-
-    # Compute a radius
-    coord = coord.T
-    center_coord = np.tile(circle_center, (coord.shape[0], 1))
-    euc_dist = np.sqrt(np.sum((coord - center_coord) ** 2, axis=0))
-    circle_radius = np.mean(euc_dist)
-
-    # confidence
-    if np.all(center_coord == 0):
-        confidence = -1
-    else:
-        confidence = 1
+    dists = np.linalg.norm(coord - circle_center, axis=1)
+    circle_radius = float(np.mean(dists))
+    confidence = -1 if np.all(circle_center == 0) else 1
 
     return circle_center, circle_radius, confidence
 
@@ -4054,7 +4115,8 @@ def as_rotation(
         * :class:`scipy.spatial.transform.Rotation` -- returned as-is
         * Shape ``(3,)`` -- Euler angles (single rotation)
         * Shape ``(N, 3)`` -- stack of Euler angles
-        * Shape ``(3, 3)`` -- rotation matrix
+        * Shape ``(3, 3)`` -- rotation matrix **if** the array is orthogonal
+          with det = +1 (tolerance 1e-6); otherwise treated as 3 Euler triples
         * Shape ``(N, 3, 3)`` -- stack of rotation matrices
         * Shape ``(4,)`` -- quaternion (xyzw)
         * Shape ``(N, 4)`` -- stack of quaternions
@@ -4091,9 +4153,14 @@ def as_rotation(
     # 1-D shape (4,): single quaternion
     if arr.ndim == 1 and arr.shape[0] == 4:
         return srot.from_quat(arr)
-    # 2-D shape (3, 3): single rotation matrix
+    # 2-D shape (3, 3): rotation matrix if orthogonal (R R^T ≈ I) and det ≈ +1;
+    # otherwise treat as 3 stacked Euler triples.
     if arr.shape == (3, 3):
-        return srot.from_matrix(arr)
+        eye_err = np.max(np.abs(arr @ arr.T - np.eye(3)))
+        det_err = abs(np.linalg.det(arr) - 1.0)
+        if eye_err < 1e-6 and det_err < 1e-6:
+            return srot.from_matrix(arr)
+        return srot.from_euler(euler_order, arr, degrees=degrees)
     # 2-D shape (N, 3): stack of Euler triples
     if arr.ndim == 2 and arr.shape[1] == 3:
         return srot.from_euler(euler_order, arr, degrees=degrees)

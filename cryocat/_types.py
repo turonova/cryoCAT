@@ -334,6 +334,9 @@ type NNType = Literal["closest_dist", "radius"]
 
 * ``"closest_dist"`` -- take the K closest neighbors (``type_param`` = K, default 1).
 * ``"radius"`` -- take every neighbor within a radius (``type_param`` = radius in voxels).
+
+For ordered pairing along a sequence see
+:meth:`~cryocat.analysis.nnana.NearestNeighbors.ordered_pairs`.
 """
 
 type RotationDistanceType = Literal[

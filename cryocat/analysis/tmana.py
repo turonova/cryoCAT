@@ -996,7 +996,11 @@ def create_angular_distance_maps(
     map_shape = angles_map.shape
 
     zero_rotations = np.tile(angles[0, :], (angles.shape[0], 1))
-    dist_all, dist_normals, dist_inplane = geom.compare_rotations(zero_rotations, angles, cyclic_symmetry)
+    dist_all, dist_normals, dist_inplane = geom.compare_rotations(
+        geom.as_rotation(zero_rotations, euler_order="zxz"),
+        geom.as_rotation(angles, euler_order="zxz"),
+        cyclic_symmetry,
+    )
 
     # angles_map stores 0-based indices; -1 marks voxels with no valid angle.
     idx_flat = angles_map.flatten()

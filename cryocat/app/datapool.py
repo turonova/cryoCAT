@@ -81,13 +81,13 @@ class DataEntry:
 class DataPoolState:
     """Immutable snapshot of the two browser-side data pool stores.
 
-    ``registry``      — ``{ data_id: asdict(DataEntry) }``
+    ``registry``      — ``{ data_id: asdict(DataEntry) }``  (always clean; no sentinel)
     ``next_id``       — monotone counter; never reused.
     ``kind_counters`` — per-kind insertion counters; ``{"nn": 2, "desc": 1}`` means
                         two NN entries and one descriptor entry have been created.
-                        Stored inside the registry dict under ``"__kind_counters__"``
-                        to avoid a third dcc.Store; stripped out in ``from_stores``
-                        so ``registry`` is always clean (no reserved key visible).
+                        Stored in the DATA_POOL_NEXT_ID store payload as
+                        ``{"n": next_id, "kc": kind_counters}`` so DATA_POOL_REGISTRY
+                        contains only real entries and never needs stripping.
     """
     registry:      dict
     next_id:       int
@@ -95,37 +95,47 @@ class DataPoolState:
 
     @classmethod
     def from_stores(cls, registry, next_id) -> DataPoolState:
-        """Construct from store values.  Accepts ``None`` for empty state."""
-        reg = dict(registry or {})
-        kind_counters = dict(reg.pop("__kind_counters__", None) or {})
+        """Construct from store values.  Accepts ``None`` for empty state.
+
+        ``next_id`` may be a plain ``int`` (initial/legacy value) or a dict
+        ``{"n": int, "kc": dict}`` (written by ``to_stores``).
+        ``registry`` is always clean — no sentinel stripping needed.
+        """
+        if isinstance(next_id, dict):
+            nid = int(next_id.get("n", 0))
+            kind_counters = dict(next_id.get("kc", None) or {})
+        else:
+            nid = int(next_id or 0)
+            kind_counters = {}
         return cls(
-            registry=reg,
-            next_id=int(next_id or 0),
+            registry=dict(registry or {}),
+            next_id=nid,
             kind_counters=kind_counters,
         )
 
     def to_stores(self) -> tuple:
-        """Return ``(registry, next_id)`` for unpacking into Dash Outputs.
+        """Return ``(registry, next_id_payload)`` for unpacking into Dash Outputs.
 
-        The kind_counters dict is embedded in the returned registry under the
-        reserved key ``"__kind_counters__"`` so it survives the dcc.Store
-        round-trip without requiring a third store.
+        ``registry`` is the clean entry dict (no sentinel).
+        ``next_id_payload`` is ``{"n": next_id, "kc": kind_counters}`` — both
+        counters travel together in the DATA_POOL_NEXT_ID store so
+        DATA_POOL_REGISTRY cannot be contaminated under any circumstance.
         """
-        reg = {**self.registry, "__kind_counters__": self.kind_counters}
-        return reg, self.next_id
+        return self.registry, {"n": self.next_id, "kc": self.kind_counters}
 
 
 def clean_registry(raw: dict | None) -> dict:
-    """Return a copy of *raw* with the ``__kind_counters__`` sentinel removed.
+    """Return a copy of *raw*.
 
-    For consumers that read DATA_POOL_REGISTRY directly without going through
-    ``DataPoolState.from_stores`` and need a plain dict of real entries only.
+    ``__kind_counters__`` is no longer embedded in DATA_POOL_REGISTRY —
+    kind_counters now lives inside the DATA_POOL_NEXT_ID store payload.
+    A raw read of the registry cannot contain the sentinel under any
+    circumstance, so this function is now an identity copy kept only for
+    API stability.  All existing call sites remain correct.
     """
     if not raw:
         return {}
-    result = dict(raw)
-    result.pop("__kind_counters__", None)
-    return result
+    return dict(raw)
 
 
 # ── Kind detection ────────────────────────────────────────────────────────────

@@ -109,6 +109,8 @@ def _mesh_traces(
     surface, color: str, name: str, selected: bool,
     *, intensity: np.ndarray | None = None, colorscale: str = "RdBu_r",
     opacity: float = 0.5,
+    cmin: float | None = None,
+    cmax: float | None = None,
 ) -> list:
     """Build the Plotly traces for a Mesh-backed :class:`PleomorphicSurface`.
 
@@ -150,8 +152,14 @@ def _mesh_traces(
     if intensity is not None and len(intensity) == v.shape[0]:
         finite = np.isfinite(intensity)
         if finite.any():
-            vmin = float(np.percentile(intensity[finite], 2))
-            vmax = float(np.percentile(intensity[finite], 98))
+            if cmin is None:
+                vmin = float(np.percentile(intensity[finite], 2))
+            else:
+                vmin = float(cmin)
+            if cmax is None:
+                vmax = float(np.percentile(intensity[finite], 98))
+            else:
+                vmax = float(cmax)
             if vmin == vmax:
                 vmax = vmin + 1.0
             kw.update(
@@ -241,6 +249,8 @@ def _build_figure(
     hit_coord_prefix: str = "hit_points",
     surf_palette: str = "",
     hit_colorscale: str = "",
+    cmin: float | None = None,
+    cmax: float | None = None,
 ) -> go.Figure:
     """Assemble the combined figure for every visible handle in ``handles``.
 
@@ -323,7 +333,7 @@ def _build_figure(
                 intensity = _vertex_field(psurf, color_by)
             surf_opacity = min(1.0, surface_opacity + 0.30) if is_sel else surface_opacity
             traces.extend(_mesh_traces(psurf, color, label, is_sel, intensity=intensity,
-                                       opacity=surf_opacity))
+                                       opacity=surf_opacity, cmin=cmin, cmax=cmax))
         elif rep == "point_cloud":
             surf_opacity = min(1.0, surface_opacity + 0.30) if is_sel else surface_opacity
             traces.extend(_point_cloud_traces(psurf, color, label, is_sel,
@@ -335,7 +345,10 @@ def _build_figure(
         n_hits = len(hit_rows)
         n_miss = int((~isect_df["hit"]).sum())
         miss_str = f", {n_miss} misses" if n_miss else ""
-        _col = hit_color_by if hit_color_by in hit_rows.columns else "t_hit"
+        _col = hit_color_by if hit_color_by in hit_rows.columns else next(
+            (c for c in hit_rows.columns if hit_rows[c].dtype.kind in "fiu" and c not in ("hit",)),
+            hit_color_by,
+        )
         _color_vals = hit_rows[_col].tolist() if _col in hit_rows.columns else None
         _cs_raw = hit_colorscale or (gs or {}).get("continuous_palette") or "Viridis"
         try:
@@ -391,6 +404,7 @@ def get_surface_view(prefix: str):
         Embed it in the page's main column.
     """
     _row = {"display": "flex", "alignItems": "center", "gap": "0.5rem", "marginBottom": "0.4rem", "flexWrap": "wrap"}
+    _num_style = {"width": "6rem"}
     return html.Div(
         [
             html.Div(
@@ -403,13 +417,43 @@ def get_surface_view(prefix: str):
                         clearable=False,
                         style={"width": "200px"},
                     ),
+                    html.Label("cmin", style={"marginLeft": "0.5rem", "marginRight": "0.25rem", "flexShrink": 0}),
+                    dbc.Input(
+                        id=f"{prefix}-cmin",
+                        type="number",
+                        placeholder="auto",
+                        debounce=True,
+                        size="sm",
+                        style=_num_style,
+                    ),
+                    html.Label("cmax", style={"marginLeft": "0.25rem", "marginRight": "0.25rem", "flexShrink": 0}),
+                    dbc.Input(
+                        id=f"{prefix}-cmax",
+                        type="number",
+                        placeholder="auto",
+                        debounce=True,
+                        size="sm",
+                        style=_num_style,
+                    ),
+                    dbc.Button(
+                        "Widest range",
+                        id=f"{prefix}-widest-range-btn",
+                        size="sm",
+                        color="secondary",
+                        style={"flexShrink": 0},
+                    ),
+                    html.Span(
+                        "",
+                        id=f"{prefix}-color-range-display",
+                        style={"fontSize": "0.8rem", "color": "#888", "marginLeft": "0.25rem"},
+                    ),
                     html.Label("Opacity", style={"marginLeft": "0.75rem", "marginRight": "0.25rem", "flexShrink": 0}),
                     html.Div(
                         dcc.Slider(
                             id=f"{prefix}-surface-opacity",
                             min=0.0, max=1.0, step=0.05, value=0.5,
-                            marks={},
-                            tooltip={"placement": "bottom", "always_visible": False},
+                            marks=None,
+                            tooltip=None,
                         ),
                         style={"width": "180px"},
                     ),
@@ -436,11 +480,12 @@ def get_surface_view(prefix: str):
                         style={"width": "180px"},
                     ),
                     html.Label("Marker size", style={"marginLeft": "0.75rem", "marginRight": "0.25rem", "flexShrink": 0}),
-                    dcc.Input(
+                    dbc.Input(
                         id=f"{prefix}-hit-marker-size",
                         type="number", value=5, min=1, max=20, step=1,
                         debounce=True,
-                        style={"width": "60px"},
+                        size="sm",
+                        style={"width": "4rem"},
                     ),
                     html.Label("Hit palette", style={"marginLeft": "0.75rem", "marginRight": "0.25rem", "flexShrink": 0}),
                     get_palette_loader(f"{prefix}-hit-pal", mode="continuous", allow_auto=True, swatch_inline=True),
@@ -512,6 +557,9 @@ def register_surface_view_callbacks(
     hit_marker_size_id = f"{prefix}-hit-marker-size"
     surf_pal_id = f"{prefix}-surf-pal-value"
     hit_pal_id = f"{prefix}-hit-pal-value"
+    cmin_id = f"{prefix}-cmin"
+    cmax_id = f"{prefix}-cmax"
+    range_display_id = f"{prefix}-color-range-display"
 
     register_palette_loader_callbacks(app, f"{prefix}-surf-pal", mode="discrete",
                                       settings_store_id=ids.GRAPH_SETTINGS_STORE)
@@ -537,27 +585,35 @@ def register_surface_view_callbacks(
         State(hit_marker_size_id, "value"),
         State(surf_pal_id, "data"),
         State(hit_pal_id, "data"),
+        State(cmin_id, "value"),
+        State(cmax_id, "value"),
     ]
 
+    # isect_pool_id_store_id is an Input so the graph redraws automatically when
+    # a computation completes (without the user having to press "Update graph").
+    extra_inputs = []
     extra_state = []
     if isect_pool_id_store_id is not None:
-        extra_state.append(State(isect_pool_id_store_id, "data"))
+        extra_inputs.append(Input(isect_pool_id_store_id, "data"))
     if isect_coord_prefix_store_id is not None:
         extra_state.append(State(isect_coord_prefix_store_id, "data"))
 
     if isect_pool_id_store_id is not None:
-        # Populate hit-colour-by dropdown options from the intersection DataFrame columns.
+        # Populate hit-colour-by dropdown options from the intersection DataFrame columns,
+        # and auto-select the first valid column so the scatter uses meaningful coloring.
         @app.callback(
             Output(hit_color_by_id, "options"),
+            Output(hit_color_by_id, "value"),
             Input(isect_pool_id_store_id, "data"),
             prevent_initial_call=True,
         )
         def _update_hit_color_options(pool_data_id):
             df = _resolve_isect_df(pool_data_id)
+            fallback = [{"label": "t_hit (distance)", "value": "t_hit"}]
             if df is None or df.empty:
-                return [{"label": "t_hit (distance)", "value": "t_hit"}]
+                return fallback, "t_hit"
             _coord_cols = {c for c in df.columns if c.endswith(("_x", "_y", "_z"))}
-            _exclude = {"hit", "primitive_ids"} | _coord_cols
+            _exclude = {"hit", "primitive_ids", "geometry_ids"} | _coord_cols
             options = []
             for c in df.columns:
                 if c in _exclude:
@@ -566,13 +622,15 @@ def register_surface_view_callbacks(
                     continue
                 label = "t_hit (distance)" if c == "t_hit" else c
                 options.append({"label": label, "value": c})
-            return options or [{"label": "t_hit (distance)", "value": "t_hit"}]
+            if not options:
+                return fallback, "t_hit"
+            return options, options[0]["value"]
 
     _has_selected = selected_store_id is not None
     _has_pool = isect_pool_id_store_id is not None
     _has_prefix = isect_coord_prefix_store_id is not None
 
-    def _build_kw(surface_opacity, hit_color_by, hit_marker_size, surf_palette, hit_colorscale, pool_data_id=None, coord_prefix=None):
+    def _build_kw(surface_opacity, hit_color_by, hit_marker_size, surf_palette, hit_colorscale, cmin_val=None, cmax_val=None, pool_data_id=None, coord_prefix=None):
         return dict(
             surface_opacity=float(surface_opacity) if surface_opacity is not None else 0.5,
             hit_color_by=hit_color_by or "t_hit",
@@ -581,6 +639,8 @@ def register_surface_view_callbacks(
             hit_colorscale=hit_colorscale or "",
             isect_df=_resolve_isect_df(pool_data_id),
             hit_coord_prefix=coord_prefix or "hit_points",
+            cmin=float(cmin_val) if cmin_val is not None else None,
+            cmax=float(cmax_val) if cmax_val is not None else None,
         )
 
     # One registration. Settings are States so they only apply when the user
@@ -594,8 +654,44 @@ def register_surface_view_callbacks(
         *_button_inputs,
         *_setting_states,
         State(ids.GRAPH_SETTINGS_STORE, "data"),
+        *extra_inputs,
         *extra_state,
     ]
+
+    # "Widest range" button: compute global min/max of the current color-by
+    # field across all visible mesh surfaces and populate cmin/cmax inputs.
+    @app.callback(
+        Output(cmin_id, "value"),
+        Output(cmax_id, "value"),
+        Output(range_display_id, "children"),
+        Input(f"{prefix}-widest-range-btn", "n_clicks"),
+        State(pool_store_id, "data"),
+        State(color_by_id, "value"),
+        prevent_initial_call=True,
+    )
+    def _widest_range(_, handles, color_by):
+        handles = handles or {}
+        all_vals: list[np.ndarray] = []
+        for sid, h in handles.items():
+            if not h.get("visible", True):
+                continue
+            if h.get("representation") != "mesh":
+                continue
+            psurf = _surface_registry.get(sid)
+            if psurf is None:
+                continue
+            field = _vertex_field(psurf, color_by)
+            if field is not None:
+                finite = field[np.isfinite(field)]
+                if len(finite):
+                    all_vals.append(finite)
+        if not all_vals:
+            return None, None, ""
+        combined = np.concatenate(all_vals)
+        lo = float(combined.min())
+        hi = float(combined.max())
+        txt = f"range [{lo:.3g}, {hi:.3g}]"
+        return lo, hi, txt
 
     @app.callback(
         Output({"type": "styled-graph", "owner": prefix, "name": "graph"}, "figure"),
@@ -614,10 +710,13 @@ def register_surface_view_callbacks(
         hit_marker_size = args[_i]; _i += 1
         surf_palette = args[_i]; _i += 1
         hit_colorscale = args[_i]; _i += 1
+        cmin_val = args[_i]; _i += 1
+        cmax_val = args[_i]; _i += 1
         gs = args[_i]; _i += 1
         pool_data_id = args[_i] if _has_pool else None
         if _has_pool: _i += 1
         coord_prefix = args[_i] if _has_prefix else None
         return _build_figure(handles, selected_id, gs, color_by=color_by,
                              **_build_kw(surface_opacity, hit_color_by, hit_marker_size,
-                                         surf_palette, hit_colorscale, pool_data_id, coord_prefix))
+                                         surf_palette, hit_colorscale, cmin_val, cmax_val,
+                                         pool_data_id, coord_prefix))

@@ -190,3 +190,87 @@ class TestGenerateKwargsRoundTrip:
         ]
         result = generate_kwargs(ids, ["test", 5], _PS)
         assert result == {"name": "test", "count": 5}
+
+
+# ── T5e: writeback tag ↔ cid_tag cross-table consistency ─────────────────────
+
+def _is_dash_wildcard(v) -> bool:
+    """True if *v* is a Dash wildcard sentinel (ALL, MATCH, ALLSMALLER) in any
+    form — Python object or JSON-serialised list."""
+    if isinstance(v, list) and v in (["ALL"], ["MATCH"], ["ALLSMALLER"]):
+        return True
+    try:
+        from dash import ALL, MATCH, ALLSMALLER
+        return v in {ALL, MATCH, ALLSMALLER}
+    except (ImportError, TypeError):
+        return False
+
+
+class TestWritebackTagConsistency:
+    """For every non-path alias in TYPE_HANDLERS that has a pool-widget, the
+    writeback Output tag must equal the alias name — not the widget name.
+
+    build_form rule:
+        cid_tag = "path" if handler["widget"] == "path" else alias_name
+
+    A writeback that encodes the widget name in its Output tag (e.g.
+    ``"tag": "pool_table"`` instead of ``"tag": "DataPoolEntry"``) targets a
+    cid that no component ever carries — the callback is permanently dead.
+    """
+
+    # Aliases whose widget key starts with "pool_" — these have dedicated
+    # writeback registrations and the rule applies directly.
+    _POOL_ALIASES: dict[str, str] = {
+        alias: alias  # expected Output tag = alias name
+        for alias, h in TYPE_HANDLERS.items()
+        if h["widget"].startswith("pool_")
+    }
+
+    def _observed_tags(self) -> dict[str, str]:
+        """Register all form callbacks on a scratch Dash app; return the fixed
+        tag values found in Output patterns that target ``"test-type"``.
+
+        Returns {tag_value: callback_fn_name} for all non-wildcard tag strings.
+        """
+        import dash
+
+        app = dash.Dash("_test_writeback_tags", suppress_callback_exceptions=True)
+        formgen.register_form_callbacks(app, "test-type")
+
+        result: dict[str, str] = {}
+        for entry in app.callback_map.values():
+            out = entry.get("output")
+            fn_name = getattr(entry.get("callback"), "__name__", "?")
+            for o in (out if isinstance(out, list) else [out]):
+                cid = getattr(o, "component_id", None)
+                if not isinstance(cid, dict):
+                    continue
+                if cid.get("type") != "test-type":
+                    continue
+                tag_val = cid.get("tag")
+                if tag_val is not None and not _is_dash_wildcard(tag_val):
+                    result[tag_val] = fn_name
+        return result
+
+    def test_pool_alias_tags_match_alias_names(self):
+        """Every pool-widget alias's writeback Output tag == alias name."""
+        if not self._POOL_ALIASES:
+            pytest.skip("No pool-widget aliases in TYPE_HANDLERS")
+
+        observed = self._observed_tags()
+
+        failures: list[str] = []
+        for alias, expected_tag in sorted(self._POOL_ALIASES.items()):
+            widget = TYPE_HANDLERS[alias]["widget"]
+            if expected_tag not in observed:
+                failures.append(
+                    f"  TYPE_HANDLERS[{alias!r}] widget={widget!r}: "
+                    f"expected Output tag={expected_tag!r} (alias name); "
+                    f"not found in observed tags {sorted(observed)!r}. "
+                    f"The writeback must use the alias name, not the widget name."
+                )
+
+        assert not failures, (
+            "writeback Output tag(s) do not match the cid_tag build_form emits:\n"
+            + "\n".join(failures)
+        )

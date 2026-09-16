@@ -4,15 +4,22 @@ Two mounts (W3) — one component body, two containers:
     modal    per-table; fixed source; full selection round-trip.
     tab      workbench; entry picker across both pools.
 
-Spec shape (W1):
+Spec shape (W1, GU2 — new format):
     {
-        "chart":      "scatter",
-        "source":     {"motl_id": "…"} | {"data_id": "…"} | None,
-        "roles":      {"x": "score", "y": "z", "color": "class"},
-        "traces":     [{"source": …, "label": "…", "color": "#…"}],
-        "layout":     {"title": …, "xaxis": {"title": …}, …},
-        "chart_opts": {"trendline": "ols", "opacity": 0.7, …},
+        "traces": [
+            {
+                "source":     {"motl_id": "…"} | {"data_id": "…"} | None,
+                "chart":      "scatter",
+                "roles":      {"x": "score", "y": "z", "color": "class"},
+                "chart_opts": {"trendline": "ols", "opacity": 0.7, …},
+                "cluster_cols": [],
+                "label":      "Trace 1",
+            },
+            …
+        ],
+        "layout": {"title": …, "xaxis": {"title": …}, …},
     }
+Old flat format (pre-GU2) is automatically migrated by normalize_spec().
 
 Styling levels (W5):
     defaults  ids.GRAPH_SETTINGS_STORE          (global; Graph Settings panel)
@@ -32,7 +39,7 @@ from typing import Any
 import plotly.express as px
 import plotly.graph_objects as go
 import dash
-from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
+from dash import html, dcc, Input, Output, State, no_update, ctx, ALL, MATCH
 import dash_bootstrap_components as dbc
 
 from cryocat.app import ids, styles
@@ -56,12 +63,8 @@ _log = logging.getLogger(__name__)
 # ── Spec ─────────────────────────────────────────────────────────────────────
 
 SPEC_DEFAULTS: dict = {
-    "chart": None,
-    "source": None,
-    "roles": {},
     "traces": [],
     "layout": {},
-    "chart_opts": {},
 }
 
 
@@ -70,21 +73,55 @@ def build_spec(
     source: dict | None,
     roles: dict,
     *,
-    traces: list | None = None,
     layout: dict | None = None,
     chart_opts: dict | None = None,
     cluster_cols: list[str] | None = None,
 ) -> dict:
-    """Return a fully-populated spec dict (W1)."""
-    return {
-        "chart": chart,
+    """Return a spec dict with the new traces-list format (GU2)."""
+    primary = {
         "source": source,
+        "chart": chart,
         "roles": {k: v for k, v in roles.items() if v},
-        "traces": traces or [],
-        "layout": layout or {},
         "chart_opts": chart_opts or {},
         "cluster_cols": list(cluster_cols) if cluster_cols else [],
+        "label": "Trace 1",
     }
+    return {
+        "traces": [primary],
+        "layout": layout or {},
+    }
+
+
+def normalize_spec(spec: dict | None) -> dict:
+    """Convert old flat spec format to new traces-list format (backward compat, GU2).
+
+    Old: {chart, source, roles, traces: [...overlay dicts...], layout, chart_opts, cluster_cols}
+    New: {traces: [{source, chart, roles, chart_opts, cluster_cols, label}, ...], layout: {}}
+    """
+    if not spec:
+        return {"traces": [], "layout": {}}
+    if "chart" in spec or "source" in spec:
+        primary_chart = spec.get("chart") or ""
+        primary = {
+            "source": spec.get("source"),
+            "chart": primary_chart,
+            "roles": dict(spec.get("roles") or {}),
+            "chart_opts": dict(spec.get("chart_opts") or {}),
+            "cluster_cols": list(spec.get("cluster_cols") or []),
+            "label": "Trace 1",
+        }
+        extra: list[dict] = []
+        for ov in (spec.get("traces") or []):
+            extra.append({
+                "source": ov.get("source"),
+                "chart": ov.get("chart") or primary_chart,
+                "roles": dict(ov.get("roles") or {}),
+                "chart_opts": {},
+                "cluster_cols": [],
+                "label": ov.get("label", "Trace"),
+            })
+        return {"traces": [primary] + extra, "layout": dict(spec.get("layout") or {})}
+    return spec
 
 
 # ── Chart configuration (W2) ─────────────────────────────────────────────────
@@ -543,11 +580,6 @@ def _data_panel(prefix: str) -> html.Div:
                 for chart_key in _CHART_CONFIG
             ],
         ]),
-        section_divider("Overlays"),
-        html.Div(
-            id=f"{prefix}-pe-overlays-list",
-            children=[html.Div("No overlay traces.", style=styles.HINT)],
-        ),
         html.Div(style={"marginTop": "0.5rem"}),
         html.Div([
             dbc.Button("Plot", id=f"{prefix}-pe-plot-btn",
@@ -560,10 +592,15 @@ def _data_panel(prefix: str) -> html.Div:
                        "marginLeft": "0.5rem"},
             ),
         ], style={"display": "flex", "alignItems": "center", "marginBottom": "0.25rem"}),
+        html.Div([
+            dbc.Button("Add trace", id=f"{prefix}-pe-add-trace-btn",
+                       color=styles.BTN_SECONDARY, size="sm", className="me-1",
+                       n_clicks=0, disabled=True),
+            dbc.Button("Update trace", id=f"{prefix}-pe-update-trace-btn",
+                       color=styles.BTN_SECONDARY, size="sm",
+                       n_clicks=0, disabled=True),
+        ], style={"marginBottom": "0.25rem"}),
         html.Div(id=f"{prefix}-pe-selection-note", style={"display": "none"}),
-        dbc.Button("Add overlay trace", id=f"{prefix}-pe-add-overlay-btn",
-                   color=styles.BTN_SECONDARY, size="sm"),
-        dcc.Store(id=f"{prefix}-pe-overlays-store", data=[]),
     ])
 
 
@@ -1064,47 +1101,6 @@ def _apply_layout_only(existing_fig: dict, layout_spec: dict, settings: dict,
     return fig_dict
 
 
-# ── Overlay row builder ───────────────────────────────────────────────────────
-
-def _overlay_row(i: int, trace: dict, prefix: str, src_options: list[dict]) -> html.Div:
-    """Build one overlay trace row: label, source picker, remove button."""
-    src_val = None
-    src = trace.get("source")
-    if isinstance(src, dict):
-        if "motl_id" in src:
-            src_val = f"motl:{src['motl_id']}"
-        elif "data_id" in src:
-            src_val = f"data:{src['data_id']}"
-    return html.Div([
-        html.Div([
-            html.Span(
-                trace.get("label", f"Trace {i + 2}"),
-                style={"fontWeight": 600, "fontSize": styles.FONT_SM},
-            ),
-            dbc.Button(
-                "✕",
-                id={"type": f"{prefix}-pe-ov-remove-btn", "ov_idx": i},
-                size="sm",
-                color=styles.BTN_NEUTRAL,
-                n_clicks=0,
-                style={"padding": "0 4px", "lineHeight": 1},
-            ),
-        ], style={"display": "flex", "justifyContent": "space-between",
-                  "alignItems": "center", "marginBottom": "0.2rem"}),
-        dcc.Dropdown(
-            id={"type": f"{prefix}-pe-ov-src-dd", "ov_idx": i},
-            options=src_options,
-            value=src_val,
-            placeholder="Select overlay source…",
-            clearable=True,
-            style={"fontSize": styles.FONT_SM},
-        ),
-    ], style={
-        "border": "1px solid var(--bs-border-color)",
-        "borderRadius": "4px",
-        "padding": "0.35rem 0.5rem",
-        "marginBottom": "0.4rem",
-    })
 
 
 # ── Callback registration ─────────────────────────────────────────────────────
@@ -1159,9 +1155,10 @@ def register_plot_editor_callbacks(
         *[Output(f"{prefix}-pe-role-{r}", "options") for r in _ALL_ROLES],
         *[Output(f"{prefix}-pe-role-{r}", "value") for r in _ALL_ROLES],
         Input(src_store, "data"),
+        *[State(f"{prefix}-pe-role-{r}", "value") for r in _ALL_ROLES],
         prevent_initial_call=True,
     )
-    def _populate_columns(src_ref):
+    def _populate_columns(src_ref, *current_values):
         n = len(_ALL_ROLES)
         df = _resolve_df(src_ref, pool_resolve_df, dp_resolve_df)
         if df is None:
@@ -1169,8 +1166,17 @@ def register_plot_editor_callbacks(
         import pandas as pd
         if not isinstance(df, pd.DataFrame) or df.empty:
             return [[] for _ in _ALL_ROLES] + [None] * n
-        cols = [{"label": c, "value": c} for c in df.columns]
-        return [cols for _ in _ALL_ROLES] + [None] * n
+        cols_set = set(df.columns)
+        opts = [{"label": c, "value": c} for c in df.columns]
+        def _keep_valid(val):
+            if val is None:
+                return None
+            if isinstance(val, list):
+                kept = [v for v in val if v in cols_set]
+                return kept if kept else None
+            return val if val in cols_set else None
+        new_vals = [_keep_valid(v) for v in current_values]
+        return [opts for _ in _ALL_ROLES] + new_vals
 
     # ── Role show/hide ─────────────────────────────────────────────────────────
 
@@ -1448,82 +1454,6 @@ def register_plot_editor_callbacks(
                 ids_list.append(cd[0] if isinstance(cd, (list, tuple)) else cd)
         return ids_list
 
-    # ── Overlay trace add (W4) ─────────────────────────────────────────────────
-
-    @app.callback(
-        Output(f"{prefix}-pe-overlays-store", "data"),
-        Output(f"{prefix}-pe-overlays-list", "children"),
-        Input(f"{prefix}-pe-add-overlay-btn", "n_clicks"),
-        State(f"{prefix}-pe-overlays-store", "data"),
-        State(ids.POOL_REGISTRY,              "data"),
-        State(ids.DATA_POOL_REGISTRY,         "data"),
-        prevent_initial_call=True,
-    )
-    def _add_overlay_trace(_n, overlays, pool_reg, dp_reg):
-        overlays = list(overlays or [])
-        idx = len(overlays)
-        overlays.append({"source": None, "label": f"Trace {idx + 2}", "color": None})
-        src_opts = entrypicker._build_options(pool_reg, dp_reg)
-        items = [_overlay_row(i, t, prefix, src_opts) for i, t in enumerate(overlays)]
-        return overlays, items or [html.Div("No overlay traces.", style=styles.HINT)]
-
-    # ── Overlay source change ──────────────────────────────────────────────────
-
-    @app.callback(
-        Output(f"{prefix}-pe-overlays-store", "data", allow_duplicate=True),
-        Input({"type": f"{prefix}-pe-ov-src-dd", "ov_idx": ALL}, "value"),
-        State(f"{prefix}-pe-overlays-store", "data"),
-        prevent_initial_call=True,
-    )
-    def _on_overlay_src_change(values, overlays):
-        overlays = list(overlays or [])
-        if not ctx.triggered_id:
-            raise dash.exceptions.PreventUpdate
-        idx = ctx.triggered_id.get("ov_idx", 0)
-        new_val = ctx.triggered[0]["value"]
-        if idx >= len(overlays):
-            raise dash.exceptions.PreventUpdate
-        ref = entrypicker.decode_value(new_val) if new_val else None
-        overlays[idx] = {**overlays[idx], "source": ref}
-        return overlays
-
-    # ── Overlay trace remove ───────────────────────────────────────────────────
-
-    @app.callback(
-        Output(f"{prefix}-pe-overlays-store", "data", allow_duplicate=True),
-        Output(f"{prefix}-pe-overlays-list", "children", allow_duplicate=True),
-        Input({"type": f"{prefix}-pe-ov-remove-btn", "ov_idx": ALL}, "n_clicks"),
-        State(f"{prefix}-pe-overlays-store", "data"),
-        State(ids.POOL_REGISTRY,              "data"),
-        State(ids.DATA_POOL_REGISTRY,         "data"),
-        prevent_initial_call=True,
-    )
-    def _on_overlay_remove(n_list, overlays, pool_reg, dp_reg):
-        if not any(n for n in (n_list or []) if n):
-            raise dash.exceptions.PreventUpdate
-        overlays = list(overlays or [])
-        idx = ctx.triggered_id.get("ov_idx", 0)
-        if idx < len(overlays):
-            overlays.pop(idx)
-        # Re-label remaining traces to keep numbering contiguous
-        for i, t in enumerate(overlays):
-            t["label"] = f"Trace {i + 2}"
-        src_opts = entrypicker._build_options(pool_reg, dp_reg)
-        items = [_overlay_row(i, t, prefix, src_opts) for i, t in enumerate(overlays)]
-        return overlays, items or [html.Div("No overlay traces.", style=styles.HINT)]
-
-    # ── Refresh overlay source dropdown options when pool changes ─────────────
-
-    @app.callback(
-        Output({"type": f"{prefix}-pe-ov-src-dd", "ov_idx": ALL}, "options"),
-        Input(ids.POOL_REGISTRY,      "data"),
-        Input(ids.DATA_POOL_REGISTRY, "data"),
-        State({"type": f"{prefix}-pe-ov-src-dd", "ov_idx": ALL}, "options"),
-        prevent_initial_call=True,
-    )
-    def _update_ov_src_opts(pool_reg, dp_reg, existing_opts):
-        opts = entrypicker._build_options(pool_reg, dp_reg)
-        return [opts] * len(existing_opts)
 
 
 # ── Overlay helper (called from _plot) ───────────────────────────────────────
@@ -1544,25 +1474,42 @@ def _add_overlay(
     primary_roles: dict,
     chart: str,
     settings: dict,
-) -> None:
-    """Add one overlay trace to *fig* in-place (W4).
+) -> list[str]:
+    """Add one overlay trace to *fig* in-place (W4). Returns warning strings.
 
     Raises OverlaySourceMissing when the source ref is set but the source
     cannot be resolved.  Any other exception indicates a bug and is not caught.
+    Warnings are returned for each role whose named column is absent from the source.
     """
     src_ref = trace_cfg.get("source")
     label = trace_cfg.get("label", "Overlay")
     color = trace_cfg.get("color")
+    warnings: list[str] = []
 
     df = _resolve_df(src_ref, pool_resolve_df, dp_resolve_df)
     if df is None:
         if src_ref is None:
-            return  # no source configured yet — skip silently
+            return []  # no source configured yet — skip silently
         raise OverlaySourceMissing(src_ref)
-    cfg = _CHART_CONFIG.get(chart)
+    ov_chart = trace_cfg.get("chart") or chart
+    ov_roles = trace_cfg.get("roles") or primary_roles
+    cfg = _CHART_CONFIG.get(ov_chart)
     if not cfg:
-        return
-    clean_roles = {k: v for k, v in primary_roles.items() if v and v in df.columns}
+        if not ov_chart:
+            return [f"Trace '{label}': no chart type set, trace skipped."]
+        return [f"Trace '{label}': unknown chart type '{ov_chart}', trace skipped."]
+    clean_roles: dict = {}
+    for k, v in ov_roles.items():
+        if isinstance(v, list):
+            valid = [c for c in v if c in df.columns]
+            if valid:
+                clean_roles[k] = valid[0] if (len(valid) == 1 and k in {"x", "y"}) else valid
+            elif v:
+                warnings.append(f"Trace '{label}': column(s) {v!r} not in source, role '{k}' skipped.")
+        elif v and isinstance(v, str) and v in df.columns:
+            clean_roles[k] = v
+        elif v:
+            warnings.append(f"Trace '{label}': column '{v}' not in source, role '{k}' skipped.")
     overlay_fig = cfg["fn"](df, **clean_roles)  # bugs surface, not swallowed
     for trace in overlay_fig.data:
         trace.name = label
@@ -1572,3 +1519,4 @@ def _add_overlay(
             except Exception:
                 pass
         fig.add_trace(trace)
+    return warnings

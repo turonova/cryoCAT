@@ -1083,3 +1083,201 @@ class TestToSegmentation:
         assert abs(rec_xmax - orig_xmax) < tol, (
             f"x extent mismatch: original {orig_xmax:.1f}, recovered {rec_xmax:.1f}"
         )
+
+
+# =============================================================================
+# HH2c — from_ball_pivoting, triangle_sizes, filter_triangles
+# =============================================================================
+
+def _sphere_point_cloud(n_pts=800, radius=5.0):
+    """Return (points, normals) on a sphere with outward normals."""
+    rng = np.random.default_rng(42)
+    pts = rng.standard_normal((n_pts, 3))
+    pts /= np.linalg.norm(pts, axis=1, keepdims=True)
+    pts *= radius
+    nrm = pts / radius
+    return pts, nrm
+
+
+def _hemisphere_point_cloud(n_pts=400, radius=5.0):
+    """Return (points, normals) on the upper hemisphere (z >= 0)."""
+    pts, nrm = _sphere_point_cloud(n_pts * 3, radius)
+    mask = pts[:, 2] >= 0
+    return pts[mask][:n_pts], nrm[mask][:n_pts]
+
+
+class TestFromBallPivoting:
+    def test_full_sphere_produces_mesh(self):
+        pts, nrm = _sphere_point_cloud(n_pts=1000, radius=5.0)
+        mesh = Mesh.from_ball_pivoting(pts, normals=nrm)
+        assert mesh.vertices is not None and len(mesh.vertices) > 0
+        assert mesh.faces is not None and len(mesh.faces) > 0
+
+    def test_hemisphere_not_watertight(self):
+        pts, nrm = _hemisphere_point_cloud(n_pts=500, radius=5.0)
+        mesh = Mesh.from_ball_pivoting(pts, normals=nrm)
+        assert mesh.vertices is not None
+        assert len(mesh.faces) > 0
+        assert not mesh.is_watertight(), "hemisphere should have boundary edges (not watertight)"
+
+    def test_accepts_oriented_point_cloud(self):
+        pts, nrm = _sphere_point_cloud(n_pts=800, radius=5.0)
+        opc = OrientedPointCloud()
+        opc.vertices = pts
+        opc.normals = nrm
+        mesh = Mesh.from_ball_pivoting(opc)
+        assert len(mesh.faces) > 0
+
+    def test_raises_without_normals(self):
+        pts, _ = _sphere_point_cloud(n_pts=100)
+        with pytest.raises(ValueError, match="normals"):
+            Mesh.from_ball_pivoting(pts)
+
+    def test_custom_radii(self):
+        pts, nrm = _sphere_point_cloud(n_pts=800, radius=5.0)
+        mesh = Mesh.from_ball_pivoting(pts, normals=nrm, radii=[0.5, 1.0, 2.0])
+        assert len(mesh.faces) > 0
+
+
+class TestTriangleSizes:
+    @pytest.fixture
+    def simple_mesh(self):
+        v = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [10, 0, 0]], dtype=float)
+        f = np.array([[0, 1, 2], [0, 3, 2]])
+        m = Mesh()
+        m.vertices = v
+        m.faces = f
+        return m
+
+    def test_returns_dataframe_with_correct_columns(self, simple_mesh):
+        df = simple_mesh.triangle_sizes()
+        assert set(df.columns) == {"triangle_index", "longest_edge", "area"}
+
+    def test_row_count_equals_face_count(self, simple_mesh):
+        df = simple_mesh.triangle_sizes()
+        assert len(df) == len(simple_mesh.faces)
+
+    def test_small_triangle_edge_and_area(self, simple_mesh):
+        df = simple_mesh.triangle_sizes()
+        row = df[df["triangle_index"] == 0].iloc[0]
+        # triangle [0,0,0],[1,0,0],[0,1,0]: hypotenuse = sqrt(2), area = 0.5
+        np.testing.assert_allclose(row["longest_edge"], np.sqrt(2), atol=1e-9)
+        np.testing.assert_allclose(row["area"], 0.5, atol=1e-9)
+
+    def test_large_triangle_has_bigger_longest_edge(self, simple_mesh):
+        df = simple_mesh.triangle_sizes()
+        assert df.loc[df["triangle_index"] == 1, "longest_edge"].iloc[0] > \
+               df.loc[df["triangle_index"] == 0, "longest_edge"].iloc[0]
+
+    def test_raises_on_empty_mesh(self):
+        m = Mesh()
+        with pytest.raises(ValueError):
+            m.triangle_sizes()
+
+
+class TestFilterTriangles:
+    @pytest.fixture
+    def two_triangle_mesh(self):
+        v = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [10, 0, 0]], dtype=float)
+        f = np.array([[0, 1, 2], [0, 3, 2]])
+        m = Mesh()
+        m.vertices = v
+        m.faces = f
+        return m
+
+    def test_removes_large_triangle_by_edge(self, two_triangle_mesh):
+        result = two_triangle_mesh.filter_triangles(max_edge=2.0)
+        assert len(result.faces) == 1
+
+    def test_removes_large_triangle_by_area(self, two_triangle_mesh):
+        result = two_triangle_mesh.filter_triangles(max_area=1.0)
+        assert len(result.faces) == 1
+
+    def test_threshold_above_all_keeps_all(self, two_triangle_mesh):
+        result = two_triangle_mesh.filter_triangles(max_edge=100.0)
+        assert len(result.faces) == len(two_triangle_mesh.faces)
+
+    def test_no_criteria_keeps_all(self, two_triangle_mesh):
+        result = two_triangle_mesh.filter_triangles()
+        assert len(result.faces) == len(two_triangle_mesh.faces)
+
+    def test_isolated_vertices_removed(self, two_triangle_mesh):
+        result = two_triangle_mesh.filter_triangles(max_edge=2.0)
+        used_vertices = np.unique(result.faces)
+        # vertex at index 3 (the [10,0,0] point) must be gone
+        assert len(result.vertices) == len(used_vertices)
+
+    def test_raises_on_empty_mesh(self):
+        m = Mesh()
+        with pytest.raises(ValueError):
+            m.filter_triangles(max_edge=1.0)
+
+    def test_returns_new_mesh_not_in_place(self, two_triangle_mesh):
+        result = two_triangle_mesh.filter_triangles(max_edge=2.0)
+        assert result is not two_triangle_mesh
+        assert len(two_triangle_mesh.faces) == 2  # original unchanged
+
+
+# =============================================================================
+# HI3 — get_curvature_table
+# =============================================================================
+
+@pytest.fixture(scope="module")
+def sphere_mesh_with_curvatures():
+    """Unit sphere mesh with curvatures computed."""
+    pts = _sphere_points(n=800, radius=5.0, seed=7)
+    lo, hi = Mesh.suggest_alpha_range(pts)
+    m = Mesh.from_alpha_shape(pts, alpha=(lo + hi) / 2)
+    m.compute_curvatures()
+    return m
+
+
+class TestGetCurvatureTable:
+    EXPECTED_COLUMNS = {
+        "index", "x", "y", "z",
+        "mean_curvature", "gaussian_curvature", "k1", "k2",
+        "curvature_anisotropy", "shape_index", "curvedness",
+        "shape_category", "shape_category_label",
+    }
+
+    def test_raises_without_curvatures(self):
+        pts = _sphere_points(n=100, radius=3.0, seed=0)
+        lo, hi = Mesh.suggest_alpha_range(pts)
+        m = Mesh.from_alpha_shape(pts, alpha=(lo + hi) / 2)
+        # curvatures NOT computed
+        with pytest.raises(ValueError, match="compute_curvatures"):
+            m.get_curvature_table()
+
+    def test_invalid_element_raises(self, sphere_mesh_with_curvatures):
+        with pytest.raises(ValueError, match="element"):
+            sphere_mesh_with_curvatures.get_curvature_table(element="edge")
+
+    def test_vertex_mode_row_count(self, sphere_mesh_with_curvatures):
+        m = sphere_mesh_with_curvatures
+        df = m.get_curvature_table(element="vertex")
+        assert len(df) == len(m.vertices)
+
+    def test_triangle_mode_row_count(self, sphere_mesh_with_curvatures):
+        m = sphere_mesh_with_curvatures
+        df = m.get_curvature_table(element="triangle")
+        assert len(df) == len(m.faces)
+
+    def test_all_columns_present_vertex(self, sphere_mesh_with_curvatures):
+        df = sphere_mesh_with_curvatures.get_curvature_table(element="vertex")
+        assert self.EXPECTED_COLUMNS <= set(df.columns)
+
+    def test_all_columns_present_triangle(self, sphere_mesh_with_curvatures):
+        df = sphere_mesh_with_curvatures.get_curvature_table(element="triangle")
+        assert self.EXPECTED_COLUMNS <= set(df.columns)
+
+    def test_shape_category_label_is_string(self, sphere_mesh_with_curvatures):
+        df = sphere_mesh_with_curvatures.get_curvature_table(element="vertex")
+        # dtype may be 'object' or pandas StringDtype; check element type
+        assert isinstance(df["shape_category_label"].iloc[0], str)
+        valid_labels = set(Mesh.SURFACE_TYPE_LABELS.values())
+        assert set(df["shape_category_label"].unique()).issubset(valid_labels)
+
+    def test_curvature_anisotropy_equals_abs_k1_minus_k2(self, sphere_mesh_with_curvatures):
+        df = sphere_mesh_with_curvatures.get_curvature_table(element="vertex")
+        expected = np.abs(df["k1"].values - df["k2"].values)
+        np.testing.assert_allclose(df["curvature_anisotropy"].values, expected, atol=1e-10)

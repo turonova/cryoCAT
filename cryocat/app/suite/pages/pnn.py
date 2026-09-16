@@ -171,7 +171,7 @@ def _nn_load_fn(path, motl_selection=None):
     nn = NearestNeighbors.load(file_path=path)
     from cryocat.app.suite.pages._motl_link import ordered_selection_to_motl_links, check_motl_overlap
     motl_links = ordered_selection_to_motl_links(motl_selection)
-    result = {"df": nn.df, "column_name": nn.column_name, "motl_links": motl_links}
+    result = {"df": nn.df, "column_name": nn.column_name, "motl_links": motl_links, "path": path}
     if motl_selection:
         query_id = motl_selection[0] if isinstance(motl_selection, list) else motl_selection
         _, _, msg = check_motl_overlap(nn.df, "qp_subtomo_id", query_id)
@@ -209,6 +209,101 @@ def _barycentric_sidebar_content() -> list:
         ),
         html.Div(
             id="nn-bary-status",
+            style={"color": "var(--color9)", "marginTop": "0.4rem", "wordBreak": "break-word"},
+        ),
+    ]
+
+
+def _ordered_pairs_sidebar_content() -> list:
+    return [
+        html.P(
+            "Pairs ordered particles within each group by position, without a "
+            "distance search. Each particle is linked to the one *step* positions "
+            "further along. The result enters the pool as an NN table (nn_N).",
+            style={"fontSize": styles.FONT_SM, "color": styles.COLOR_MUTED, "marginBottom": "0.4rem"},
+        ),
+        formgen.form_row(
+            "motl",
+            make_dropdown("nn-op-motl", [], None, clearable=True, placeholder="Motl from pool…"),
+            "Source particle list",
+            label_id="nn-op-motl-lbl",
+            label_text="Motl",
+        ),
+        formgen.form_row(
+            "group_column",
+            make_dropdown("nn-op-group-col", _MOTL_COL_OPTIONS, "tomo_id", clearable=False),
+            "Column identifying the group (chain, object or ring id). "
+            "All particles with the same value are paired within one sequence.",
+            label_text="Group column",
+        ),
+        formgen.form_row(
+            "order_column",
+            make_dropdown("nn-op-order-col", _MOTL_COL_OPTIONS, "geom1", clearable=False),
+            "Column encoding the position along the sequence (e.g. geom1 for subunit index).",
+            label_text="Order column",
+        ),
+        formgen.form_row(
+            "step",
+            dcc.Input(id="nn-op-step", type="number", value=1, min=1, step=1,
+                      style=styles.FORM_COMPACT_INPUT),
+            "Number of positions ahead to pair with. 1 = consecutive neighbours.",
+            label_text="Step",
+        ),
+        formgen.form_row(
+            "topology",
+            make_dropdown(
+                "nn-op-topology",
+                [{"label": "Linear", "value": "linear"},
+                 {"label": "Circular", "value": "circular"}],
+                "linear",
+                clearable=False,
+            ),
+            "Linear: last step particles are chain-end terminals and are dropped. "
+            "Circular: the sequence wraps using ring_size.",
+            label_text="Topology",
+        ),
+        html.Div(
+            formgen.form_row(
+                "ring_size",
+                dcc.Input(id="nn-op-ring-size", type="number", value=None, min=2, step=1,
+                          style=styles.FORM_COMPACT_INPUT),
+                "Number of positions in the full ring. Required for circular topology — "
+                "do not infer from member count; a ring missing a subunit would wrap wrong.",
+                label_text="Ring size",
+            ),
+            id="nn-op-ring-size-wrap",
+            style={"display": "none"},
+        ),
+        formgen.form_row(
+            "gaps",
+            make_dropdown(
+                "nn-op-gaps",
+                [{"label": "Full — exact order+step match only", "value": "full"},
+                 {"label": "Holey — advance to nearest present", "value": "holey"}],
+                "full",
+                clearable=False,
+            ),
+            "Full: pair only when the exact target order value is present; absent targets "
+            "add to unpaired_count. Holey: advance to the nearest present position; "
+            "gaps are invisible in the output.",
+            label_text="Gaps",
+        ),
+        dbc.Checklist(
+            id="nn-op-sort-first",
+            options=[{"label": "Sort by group then order before pairing", "value": "on"}],
+            value=["on"],
+            inline=True,
+            style={"marginBottom": "0.4rem"},
+        ),
+        dbc.Button(
+            "Compute ordered pairs",
+            id="nn-op-btn",
+            color="primary",
+            size="sm",
+            style={"width": "100%", "marginTop": "0.5rem"},
+        ),
+        html.Div(
+            id="nn-op-status",
             style={"color": "var(--color9)", "marginTop": "0.4rem", "wordBreak": "break-word"},
         ),
     ]
@@ -430,6 +525,11 @@ def _sidebar() -> list:
                     _trace_chains_sidebar_content(),
                     title="Trace chains",
                     item_id="nn-acc-tc",
+                ),
+                dbc.AccordionItem(
+                    _ordered_pairs_sidebar_content(),
+                    title="Ordered pairs",
+                    item_id="nn-acc-op",
                 ),
                 dbc.AccordionItem(
                     get_pool_slot_list("nn-pool"),
@@ -678,6 +778,7 @@ def register_callbacks(app):
         )
         from cryocat.app import session as _session
         _prov.record(nn_key, _session.last_seq())
+        nn_stats._pool_nn_id = nn_key
 
         _ds, _dp_id = _datapool.insert_entry(
             _ds, nn_stats.df,
@@ -716,6 +817,7 @@ def register_callbacks(app):
         _nn_table_refs[_dp_id] = nn_ref
         _nn_xyz_figs[_dp_id] = _fig_d
         _nn_objects[_dp_id] = nn_stats
+        nn_stats._pool_nn_id = nn_key
         from cryocat.app.console.vars import register_console_var
         register_console_var(var, nn_stats.df)
 
@@ -907,11 +1009,25 @@ def register_callbacks(app):
                 is_multi = len(selected_names) > 1
                 motl_list = motl_objs if is_multi else [motl_objs[0], motl_objs[0]]
 
-        nn_stats = NearestNeighbors(input_data=None)
-        nn_stats.df = df
-        nn_stats.column_name = column_name
-        nn_stats.motls = motl_list
-        nn_stats.paired = False
+        from cryocat.app.logger import invoke_operation as _invoke_op
+        from cryocat.app import session as _session
+        path = loaded.get("path")
+        if path:
+            nn_stats = _invoke_op(
+                NearestNeighbors.load,
+                {"file_path": path},
+                assign_to=var,
+                pool_id=nn_key,
+            )
+            _prov.record(nn_key, _session.last_seq())
+            nn_stats.column_name = column_name
+            nn_stats.motls = motl_list
+        else:
+            nn_stats = NearestNeighbors(input_data=None)
+            nn_stats.df = df
+            nn_stats.column_name = column_name
+            nn_stats.motls = motl_list
+            nn_stats.paired = False
 
         xyz_graph = no_update
         _fig_d = None
@@ -957,6 +1073,7 @@ def register_callbacks(app):
         if _fig_d is not None:
             _nn_xyz_figs[_dp_id] = _fig_d
         _nn_objects[_dp_id] = nn_stats
+        nn_stats._pool_nn_id = nn_key
         from cryocat.app.console.vars import register_console_var
         register_console_var(var, nn_stats.df)
         new_dp_reg, new_dp_next = _ds.to_stores()
@@ -1185,3 +1302,173 @@ def register_callbacks(app):
             return f"Error: {exc}", *_nu3
         n_out = len(result.df)
         return f"Created '{motl_id}' with {n_out} particles (chain id in object_id).", *new_state.to_stores()
+
+    # ── Step J: ordered pairs — motl picker options ───────────────────────────
+
+    @app.callback(
+        Output("nn-op-motl", "options"),
+        Input(ids.POOL_REGISTRY, "data"),
+    )
+    def _populate_op_motl_opts(registry):
+        return [{"label": v.get("label", k), "value": k} for k, v in (registry or {}).items()]
+
+    # ── Step K: ordered pairs — show ring_size only when topology=circular ────
+
+    @app.callback(
+        Output("nn-op-ring-size-wrap", "style"),
+        Input("nn-op-topology", "value"),
+    )
+    def _toggle_op_ring_size(topology):
+        return {"display": "block"} if topology == "circular" else {"display": "none"}
+
+    # ── Step L: ordered pairs — compute and insert into data pool ─────────────
+
+    @app.callback(
+        Output("nn-xyz-graph-area", "children", allow_duplicate=True),
+        Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
+        Output("nn-op-status", "children"),
+        Output("nn-result", "data", allow_duplicate=True),
+        Output("nn-used-motls-store", "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output("nn-pool-slot-map", "data", allow_duplicate=True),
+        Input("nn-op-btn", "n_clicks"),
+        State("nn-op-motl", "value"),
+        State("nn-op-group-col", "value"),
+        State("nn-op-order-col", "value"),
+        State("nn-op-step", "value"),
+        State("nn-op-topology", "value"),
+        State("nn-op-ring-size", "value"),
+        State("nn-op-gaps", "value"),
+        State("nn-op-sort-first", "value"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        State(ids.DATA_POOL_NEXT_ID,  "data"),
+        State(ids.GRAPH_SETTINGS_STORE, "data"),
+        State("nn-pool-slot-map", "data"),
+        prevent_initial_call=True,
+    )
+    def _compute_ordered_pairs(n_clicks, motl_id, group_col, order_col, step, topology,
+                               ring_size, gaps, sort_first_val,
+                               dp_registry, dp_next_id, gs_settings, slot_map):
+        def _err(msg):
+            return (no_update, no_update, msg,
+                    no_update, no_update, no_update, no_update, no_update)
+
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        if not motl_id:
+            return _err("Select a motl from the pool.")
+        if not group_col:
+            return _err("Select a group column.")
+        if not order_col:
+            return _err("Select an order column.")
+        if topology == "circular" and not ring_size:
+            return _err("Ring size is required for circular topology.")
+
+        try:
+            motl_obj = _get_motl(motl_id)
+        except _PoolPayloadMissing:
+            return _err("Motl not found in pool.")
+
+        from cryocat.app.datapool import DataPoolState as _DPState
+        from cryocat.app import provenance as _prov
+        _ds = _DPState.from_stores(dp_registry, dp_next_id)
+        _kind_count = _ds.kind_counters.get("nn", 0) + 1
+        nn_key = f"nn-{_kind_count}"
+        var = _prov.bind(nn_key)
+
+        op_kwargs: dict = {
+            "step": int(step or 1),
+            "topology": topology or "linear",
+            "gaps": gaps or "full",
+            "sort_first": bool(sort_first_val),
+        }
+        if topology == "circular":
+            op_kwargs["ring_size"] = int(ring_size)
+
+        from cryocat.app.logger import invoke_operation as _invoke_op
+        try:
+            nn_stats = _invoke_op(
+                NearestNeighbors.ordered_pairs,
+                {"motl": motl_obj, "group_column": group_col, "order_column": order_col,
+                 **op_kwargs},
+                assign_to=var,
+                pool_id=nn_key,
+            )
+            normalized = nn_stats.get_normalized_coord(add_to_df=True)
+            nn_stats.get_rotated_coord(add_to_df=True)
+        except Exception as exc:
+            return _err(f"Error: {exc}")
+
+        status_bits = [f"{len(nn_stats.df)} pairs"]
+        unpaired = getattr(nn_stats, "unpaired_count", 0)
+        terminal = getattr(nn_stats, "terminal_count", 0)
+        if unpaired:
+            status_bits.append(f"⚠ {unpaired} unpaired (genuine gaps — missing order values)")
+        if terminal:
+            status_bits.append(f"{terminal} terminals (structural chain ends, not gaps)")
+
+        from cryocat.app.suite.pages._motl_link import ordered_selection_to_motl_links
+        from cryocat.app import session as _session
+        nn_motl_links = ordered_selection_to_motl_links([motl_id])
+        nn_ref = _datapool.insert(
+            nn_stats.df, label=var, id_column="qp_subtomo_id",
+            motl_links=nn_motl_links,
+        )
+        _prov.record(nn_key, _session.last_seq())
+        nn_stats._pool_nn_id = nn_key
+
+        _ds, _dp_id = _datapool.insert_entry(
+            _ds, nn_stats.df,
+            label=var,
+            reader="nn",
+            source_path="",
+            motl_links=nn_motl_links,
+            entry_kind="nn",
+        )
+        nn_ref = {**nn_ref, "data_id": _dp_id}
+        new_dp_reg, new_dp_next = _ds.to_stores()
+
+        sm = list(slot_map or [None] * _NN_SLOTS)
+        while len(sm) < _NN_SLOTS:
+            sm.append(None)
+        free = _first_free_slot(sm, _NN_SLOTS)
+        if free is not None:
+            sm[free] = _dp_id
+            new_slot_map = sm
+            status_bits.append(f"→ slot {free + 1}")
+        else:
+            new_slot_map = no_update
+            status_bits.append(f"→ pool (all {_NN_SLOTS} slots in use)")
+
+        nn_df = pd.DataFrame(
+            np.column_stack((normalized, nn_stats.df["nn_subtomo_id"].values)),
+            columns=["x", "y", "z", "nn_subtomo_id"],
+        )
+        _fig = visplot.plot_scatter_xyz_panels(
+            nn_df, coord_columns=["x", "y", "z"], hover_column_name="nn_subtomo_id"
+        )
+        _fig_d = style_figure(_fig, gs_settings or {})
+        xyz_graph = customel_graph(
+            "nn", "xyz",
+            dcc.Graph(id={"type": "styled-graph", "owner": "nn", "name": "xyz"},
+                      figure=go.Figure(_fig_d)),
+        )
+        _nn_table_refs[_dp_id] = nn_ref
+        _nn_xyz_figs[_dp_id] = _fig_d
+        _nn_objects[_dp_id] = nn_stats
+        nn_stats._pool_nn_id = nn_key
+        from cryocat.app.console.vars import register_console_var
+        register_console_var(var, nn_stats.df)
+
+        table_data = nn_stats.df.to_dict("records")
+        used_motls_store = {
+            "names": [motl_id],
+            "is_multi": False,
+            "column_name": group_col,
+        }
+
+        return (
+            xyz_graph, nn_ref, " | ".join(status_bits), table_data,
+            used_motls_store, new_dp_reg, new_dp_next, new_slot_map,
+        )

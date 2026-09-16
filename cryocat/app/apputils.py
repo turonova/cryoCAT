@@ -12,6 +12,7 @@
 #
 # Never log plot calls or diagnostic queries.
 
+from collections import Counter
 from cryocat.app.logger import dash_logger, print_dash
 
 import numpy as np
@@ -407,16 +408,17 @@ def flatten_result_dict(raw: dict) -> pd.DataFrame | None:
         arr = np.asarray(v)
         if arr.ndim == 0:
             scalars[k] = arr
-        elif arr.ndim in (1, 2):
+        elif arr.ndim == 1 or arr.ndim == 2:
             arrays[k] = arr
-        else:
-            return None
+        # ndim > 2: skip — not a per-ray column
     if not arrays:
         return None
-    lengths = {a.shape[0] for a in arrays.values()}
-    if len(lengths) != 1:
-        return None
-    n = next(iter(lengths))
+    # Find the consensus length: the most common shape[0] among all arrays.
+    # Keys whose length differs (e.g. shortest_indices from one_hit_per_target)
+    # are dropped rather than aborting the whole flattening.
+    _len_counts = Counter(a.shape[0] for a in arrays.values())
+    n, _ = _len_counts.most_common(1)[0]
+    arrays = {k: a for k, a in arrays.items() if a.shape[0] == n}
     for k, s in scalars.items():
         arrays[k] = np.full(n, s.item())
 

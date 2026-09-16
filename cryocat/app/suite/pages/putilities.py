@@ -118,7 +118,7 @@ def _slider_to_alpha(slider_val: float, tetra_info: dict) -> float:
 
 
 def _render_alpha_shape(
-    alpha: float, tetra_info: dict, show_pts: bool, gs: dict
+    alpha: float, tetra_info: dict, show_pts: bool, gs: dict, opacity: float = 0.7
 ) -> tuple[go.Figure, str]:
     """Build the Mesh3d figure and stats string for the given alpha.
 
@@ -147,7 +147,7 @@ def _render_alpha_shape(
         traces.append(go.Mesh3d(
             x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
             i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
-            opacity=0.7, color="lightblue", name="Alpha shape",
+            opacity=opacity, color="lightblue", name="Alpha shape",
         ))
     if show_pts:
         n = len(coords)
@@ -243,6 +243,17 @@ def _alpha_shape_sidebar_content() -> html.Div:
             dbc.Switch(id=f"{p}-points-sw", value=True, label=""),
             "Overlay the input point cloud on the surface to show where alpha is too small.",
             label_text="Show points",
+        ),
+        formgen.form_row(
+            "opacity",
+            dcc.Slider(
+                id=f"{p}-opacity-slider",
+                min=0.0, max=1.0, step=0.05, value=0.7,
+                tooltip={"placement": "bottom", "always_visible": False},
+                marks={0: "0", 0.5: "0.5", 1: "1"},
+            ),
+            "Surface opacity (0 = fully transparent, 1 = fully opaque).",
+            label_text="Opacity",
         ),
         html.Hr(style={"margin": "0.5rem 0"}),
         formgen.form_row(
@@ -552,15 +563,17 @@ def _register_alpha_shape_callbacks(app) -> None:
         Output(f"{p}-display", "value"),
         Input(f"{p}-slider", "value"),
         Input(f"{p}-points-sw", "value"),
+        Input(f"{p}-opacity-slider", "value"),
         State(f"{p}-tetra-info", "data"),
         State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
-    def _on_slider(slider_val, show_pts, tetra_info, gs):
+    def _on_slider(slider_val, show_pts, opacity_val, tetra_info, gs):
         if not tetra_info:
             raise PreventUpdate
         alpha = _slider_to_alpha(float(slider_val or 0.5), tetra_info)
-        figure, stats = _render_alpha_shape(alpha, tetra_info, bool(show_pts), gs or {})
+        opacity = float(opacity_val) if opacity_val is not None else 0.7
+        figure, stats = _render_alpha_shape(alpha, tetra_info, bool(show_pts), gs or {}, opacity)
         return figure, stats, round(alpha, 6)
 
     @app.callback(
@@ -568,17 +581,19 @@ def _register_alpha_shape_callbacks(app) -> None:
         Output(_ALPHA_STATS_ID, "children", allow_duplicate=True),
         Input(f"{p}-display", "value"),
         State(f"{p}-points-sw", "value"),
+        State(f"{p}-opacity-slider", "value"),
         State(f"{p}-tetra-info", "data"),
         State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
-    def _on_display_typed(display_val, show_pts, tetra_info, gs):
+    def _on_display_typed(display_val, show_pts, opacity_val, tetra_info, gs):
         if display_val is None or not tetra_info:
             raise PreventUpdate
         alpha = float(display_val)
         if alpha <= 0:
             raise PreventUpdate
-        figure, stats = _render_alpha_shape(alpha, tetra_info, bool(show_pts), gs or {})
+        opacity = float(opacity_val) if opacity_val is not None else 0.7
+        figure, stats = _render_alpha_shape(alpha, tetra_info, bool(show_pts), gs or {}, opacity)
         return figure, stats
 
     @app.callback(

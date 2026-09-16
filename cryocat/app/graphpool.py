@@ -60,6 +60,11 @@ def duplicate_graph_entry(state: GraphPoolState, graph_id: str) -> tuple[GraphPo
     return insert_graph_entry(state, payload, label=label, kind=kind)
 
 
+def update_graph_payload(graph_id: str, payload: dict) -> None:
+    """Replace the server-side payload for an existing graph entry in-place."""
+    _graph_payloads[graph_id] = copy.deepcopy(payload)
+
+
 def rename_graph_entry(state: GraphPoolState, graph_id: str, new_label: str) -> GraphPoolState:
     if graph_id not in state.registry:
         return state

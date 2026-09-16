@@ -405,7 +405,7 @@ def cut_the_best_subtomo(
     return subvolume_sh, angles
 
 
-@gui_exposed(label="Extract best subtomogram", category="Peak Analysis", output="map", hide=("output_path",))
+@gui_exposed(label="Extract best subtomogram", category="Analysis", output="map", hide=("output_path",))
 def extract_best_subtomogram(
     tomogram: MapSource,
     motl: MotlSource,
@@ -549,7 +549,7 @@ def sharp_mask_overlap(mask: np.ndarray, rotations: list) -> np.ndarray:
 
 @gui_exposed(
     label="Compute sharp mask overlap (single case)",
-    category="Peak Analysis",
+    category="Analysis",
     output="dataframe",
 )
 def compute_sharp_mask_overlap_single(
@@ -596,7 +596,7 @@ def compute_sharp_mask_overlap_single(
 
 @gui_exposed(
     label="Compute shape stats (single case)",
-    category="Peak Analysis",
+    category="Analysis",
     output="dataframe",
 )
 def compute_shape_stats_single(
@@ -1295,7 +1295,11 @@ def analyze_rotations(
     starting_angles = np.tile(_sa, (angles.shape[0], 1))
 
     # calculates angular/cone/inplane distances
-    ang_dist, cone, inplane = geom.compare_rotations(starting_angles, angles, cyclic_symmetry=cyclic_symmetry)
+    ang_dist, cone, inplane = geom.compare_rotations(
+        srot.from_euler("zxz", starting_angles, degrees=True),
+        srot.from_euler("zxz", angles, degrees=True),
+        cyclic_symmetry=cyclic_symmetry,
+    )
 
     res_table = pd.DataFrame(
         columns=[
@@ -1632,7 +1636,7 @@ def _resolve_write_dir(
 
 @gui_exposed(
     label="Compute angular distance maps",
-    category="Peak Analysis",
+    category="Analysis",
     output="dataframe",
     hide=("output_dir", "scores_map", "degrees", "morph_footprint"),
 )
@@ -1717,7 +1721,9 @@ def compute_distance_map(
 
     ref_angles = np.tile(ref_triple, (len(angles_arr), 1))
     dist_all, dist_normals, dist_inplane = geom.compare_rotations(
-        ref_angles, angles_arr, cyclic_symmetry=cyclic_symmetry
+        srot.from_euler("zxz", ref_angles, degrees=True),
+        srot.from_euler("zxz", angles_arr, degrees=True),
+        cyclic_symmetry=cyclic_symmetry,
     )
 
     map_shape = angles_map_arr.shape
@@ -1788,7 +1794,7 @@ def compute_distance_map(
 
 @gui_exposed(
     label="Compute peak statistics",
-    category="Peak Analysis",
+    category="Analysis",
     output="dataframe",
     hide=("output_dir",),
 )
@@ -2019,7 +2025,7 @@ def _make_slice_figure(
 
 @gui_exposed(
     label="Visualize peak-analysis results",
-    category="Peak Analysis",
+    category="Analysis",
     output="figures",
 )
 def visualize_results(
@@ -2192,7 +2198,7 @@ def visualize_results(
 
 @gui_exposed(
     label="Analyze rotations (single case)",
-    category="Peak Analysis",
+    category="Analysis",
     output="dataframe",
     hide=("output_path",),
 )

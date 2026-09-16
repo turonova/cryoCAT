@@ -1516,6 +1516,106 @@ class Mesh(DiscreteSurface):
         _, counts = np.unique(edges, axis=0, return_counts=True)
         return bool(np.all(counts == 2))
 
+    @gui_exposed(category="surface-op", label="[Mesh] Triangle sizes", group="Mesh", order=58, returns="dataframe")
+    def triangle_sizes(self) -> "pd.DataFrame":
+        """Return a DataFrame with per-triangle longest edge length and area.
+
+        Columns
+        -------
+        triangle_index : int
+            Zero-based triangle index.
+        longest_edge : float
+            Length of the longest edge of the triangle.
+        area : float
+            Area of the triangle.
+
+        Raises
+        ------
+        ValueError
+            If the mesh has no faces.
+        """
+        import pandas as pd
+
+        if self.faces is None or len(self.faces) == 0:
+            raise ValueError("triangle_sizes requires a mesh with faces.")
+
+        v = self.vertices
+        f = self.faces
+        e0 = np.linalg.norm(v[f[:, 1]] - v[f[:, 0]], axis=1)
+        e1 = np.linalg.norm(v[f[:, 2]] - v[f[:, 1]], axis=1)
+        e2 = np.linalg.norm(v[f[:, 0]] - v[f[:, 2]], axis=1)
+        longest = np.maximum(e0, np.maximum(e1, e2))
+        cross = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
+        areas = 0.5 * np.linalg.norm(cross, axis=1)
+        return pd.DataFrame(
+            {
+                "triangle_index": np.arange(len(f)),
+                "longest_edge": longest,
+                "area": areas,
+            }
+        )
+
+    @gui_exposed(category="surface-op", label="[Mesh] Filter triangles", group="Mesh", order=59, returns="surface")
+    def filter_triangles(
+        self,
+        max_edge: float | None = None,
+        max_area: float | None = None,
+    ) -> "Mesh":
+        """Remove triangles whose longest edge or area exceeds a threshold.
+
+        Isolated vertices left after removal are discarded.
+
+        Parameters
+        ----------
+        max_edge : float, optional
+            Remove triangles with longest edge > *max_edge*.
+        max_area : float, optional
+            Remove triangles with area > *max_area*.
+
+        Returns
+        -------
+        Mesh
+            New mesh with oversized triangles and isolated vertices removed.
+
+        Raises
+        ------
+        ValueError
+            If the mesh has no faces.
+        """
+        if self.faces is None or len(self.faces) == 0:
+            raise ValueError("filter_triangles requires a mesh with faces.")
+
+        v = self.vertices
+        f = self.faces
+
+        keep = np.ones(len(f), dtype=bool)
+
+        if max_edge is not None:
+            e0 = np.linalg.norm(v[f[:, 1]] - v[f[:, 0]], axis=1)
+            e1 = np.linalg.norm(v[f[:, 2]] - v[f[:, 1]], axis=1)
+            e2 = np.linalg.norm(v[f[:, 0]] - v[f[:, 2]], axis=1)
+            longest = np.maximum(e0, np.maximum(e1, e2))
+            keep &= longest <= max_edge
+
+        if max_area is not None:
+            cross = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
+            areas = 0.5 * np.linalg.norm(cross, axis=1)
+            keep &= areas <= max_area
+
+        new_faces = f[keep]
+
+        # Remove isolated vertices
+        used = np.unique(new_faces)
+        idx_map = np.full(len(v), -1, dtype=np.intp)
+        idx_map[used] = np.arange(len(used))
+        new_vertices = v[used]
+        remapped_faces = idx_map[new_faces]
+
+        result = Mesh()
+        result.vertices = new_vertices
+        result.faces = remapped_faces
+        return result
+
     # ── Alpha-shape constructors ───────────────────────────────────────────────
 
     @staticmethod
@@ -1640,6 +1740,79 @@ class Mesh(DiscreteSurface):
             tetra_mesh, pt_map = o3d.geometry.TetraMesh.create_from_point_cloud(pcd)
         o3d_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(
             pcd, alpha, tetra_mesh, pt_map
+        )
+        mesh = cls()
+        mesh.vertices = np.asarray(o3d_mesh.vertices)
+        mesh.faces = np.asarray(o3d_mesh.triangles)
+        return mesh
+
+    @gui_exposed(category="surface-load", label="Mesh from ball pivoting", group="Mesh", order=25, returns="surface")
+    @classmethod
+    def from_ball_pivoting(
+        cls,
+        points: ArrayLike,
+        normals: ArrayLike | None = None,
+        radii: list[float] | None = None,
+    ) -> "Mesh":
+        """Build a mesh from a point cloud using ball-pivoting reconstruction.
+
+        Parameters
+        ----------
+        points : ArrayLike, shape (N, 3) or OrientedPointCloud
+            3D point coordinates.  Pass an :class:`OrientedPointCloud` to reuse
+            its stored normals.
+        normals : ArrayLike, shape (N, 3), optional
+            Per-point normals.  Required if *points* is a plain array without
+            embedded normals; ignored when *points* is an
+            :class:`OrientedPointCloud` (its normals are used).
+        radii : list[float], optional
+            Ball radii to try.  Larger radii fill gaps; smaller ones capture
+            fine detail.  Default: ``[r, 2*r]`` where *r* is the mean
+            nearest-neighbour distance of the point cloud.
+
+        Returns
+        -------
+        Mesh
+            Ball-pivoting triangle mesh.
+
+        Raises
+        ------
+        ValueError
+            If no normals are provided.
+        """
+        from sklearn.neighbors import KDTree  # available via scipy if sklearn missing
+
+        if isinstance(points, OrientedPointCloud):
+            pts = np.asarray(points.vertices, dtype=np.float64)
+            nrm = np.asarray(points.normals, dtype=np.float64)
+        else:
+            pts = np.asarray(points, dtype=np.float64)
+            if normals is None:
+                raise ValueError(
+                    "from_ball_pivoting requires normals when points is not an "
+                    "OrientedPointCloud.  Pass normals= or use an OrientedPointCloud."
+                )
+            nrm = np.asarray(normals, dtype=np.float64)
+
+        if radii is None:
+            # Estimate mean nearest-neighbour distance
+            try:
+                from sklearn.neighbors import KDTree as _KDT
+                tree = _KDT(pts)
+                dists, _ = tree.query(pts, k=2)
+                r = float(np.mean(dists[:, 1]))
+            except ImportError:
+                from scipy.spatial import KDTree as _KDT  # type: ignore
+                tree = _KDT(pts)
+                dists, _ = tree.query(pts, k=2)
+                r = float(np.mean(dists[:, 1]))
+            radii = [r, 2.0 * r]
+
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pts)
+        pcd.normals = o3d.utility.Vector3dVector(nrm)
+        o3d_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
+            pcd, o3d.utility.DoubleVector(radii)
         )
         mesh = cls()
         mesh.vertices = np.asarray(o3d_mesh.vertices)
@@ -3667,7 +3840,108 @@ class Mesh(DiscreteSurface):
         if self._curvature_tensors is None:
             self.compute_curvatures()
         return self._curvature_tensors
-    
+
+    @gui_exposed(category="surface-op", label="[Mesh] Curvature table", group="Mesh", order=17, returns="dataframe")
+    def get_curvature_table(self, element: str = "vertex") -> "pd.DataFrame":
+        """Return curvature data as a DataFrame.
+
+        Parameters
+        ----------
+        element : {"vertex", "triangle"}, default "vertex"
+            Granularity of the returned table.
+
+            * ``"vertex"`` — one row per vertex; curvature fields are the raw
+              per-vertex values.
+            * ``"triangle"`` — one row per triangle; curvature fields are
+              averaged over the triangle's three vertices; coordinates are the
+              triangle centroid.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: ``index``, ``x``, ``y``, ``z``, ``mean_curvature``,
+            ``gaussian_curvature``, ``k1``, ``k2``, ``curvature_anisotropy``,
+            ``shape_index``, ``curvedness``, ``shape_category``,
+            ``shape_category_label``.
+
+        Raises
+        ------
+        ValueError
+            If curvatures have not been computed yet, or if *element* is not
+            ``"vertex"`` or ``"triangle"``.
+        """
+        import pandas as pd
+
+        if self._principal_curvatures is None:
+            raise ValueError(
+                "Curvatures not computed. Call compute_curvatures() first."
+            )
+        if element not in ("vertex", "triangle"):
+            raise ValueError(f"element must be 'vertex' or 'triangle'; got {element!r}.")
+
+        k1 = self._principal_curvatures[:, 0]
+        k2 = self._principal_curvatures[:, 1]
+        H = self._mean_curvature
+        K = self._gaussian_curvature
+        aniso = np.abs(k1 - k2)
+        si = self._shape_index
+        cv = self._curvedness
+        st = self._surface_type
+        labels = np.array([Mesh.SURFACE_TYPE_LABELS[int(c)] for c in st])
+
+        if element == "vertex":
+            coords = self.vertices
+            return pd.DataFrame(
+                {
+                    "index": np.arange(len(coords)),
+                    "x": coords[:, 0],
+                    "y": coords[:, 1],
+                    "z": coords[:, 2],
+                    "mean_curvature": H,
+                    "gaussian_curvature": K,
+                    "k1": k1,
+                    "k2": k2,
+                    "curvature_anisotropy": aniso,
+                    "shape_index": si,
+                    "curvedness": cv,
+                    "shape_category": st,
+                    "shape_category_label": labels,
+                }
+            )
+
+        # triangle mode: average vertex fields, centroid coords
+        f = self.faces
+        def _tri_mean(arr):
+            return (arr[f[:, 0]] + arr[f[:, 1]] + arr[f[:, 2]]) / 3.0
+
+        centroids = (self.vertices[f[:, 0]] + self.vertices[f[:, 1]] + self.vertices[f[:, 2]]) / 3.0
+        tri_k1 = _tri_mean(k1)
+        tri_k2 = _tri_mean(k2)
+        tri_H = _tri_mean(H)
+        tri_K = _tri_mean(K)
+        tri_aniso = np.abs(tri_k1 - tri_k2)
+        tri_si = _tri_mean(si)
+        tri_cv = _tri_mean(cv)
+        tri_st = np.round(_tri_mean(st.astype(float))).astype(np.int64)
+        tri_labels = np.array([Mesh.SURFACE_TYPE_LABELS[int(c)] for c in tri_st])
+        return pd.DataFrame(
+            {
+                "index": np.arange(len(f)),
+                "x": centroids[:, 0],
+                "y": centroids[:, 1],
+                "z": centroids[:, 2],
+                "mean_curvature": tri_H,
+                "gaussian_curvature": tri_K,
+                "k1": tri_k1,
+                "k2": tri_k2,
+                "curvature_anisotropy": tri_aniso,
+                "shape_index": tri_si,
+                "curvedness": tri_cv,
+                "shape_category": tri_st,
+                "shape_category_label": tri_labels,
+            }
+        )
+
     def compute_mesh_properties(self):
         """Commonly used geometric properties."""
         if self._edge_vectors is not None:

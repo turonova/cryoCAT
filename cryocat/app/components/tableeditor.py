@@ -285,7 +285,7 @@ def get_table_editor(
 
     # ── Positional merge ─────────────────────────────────────────────────
     positional_merge_section = html.Div(
-        id=f"{prefix}-positional-merge-section",
+        id=f"{prefix}-positional_merge-section",
         style={"display": "none"},
         children=[
             html.Div(
@@ -308,7 +308,7 @@ def get_table_editor(
 
     # ── Assign column ────────────────────────────────────────────────────
     assign_column_section = html.Div(
-        id=f"{prefix}-assign-column-section",
+        id=f"{prefix}-assign_column-section",
         style={"display": "none"},
         children=[
             html.Div(

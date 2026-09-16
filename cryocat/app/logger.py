@@ -237,16 +237,24 @@ def invoke_operation(
     obj_to_var: dict[int, str] = {}
 
     # Check the receiver (fn.__self__ for bound instance methods).
-    # Pool-stamped objects carry _pool_motl_id (Motl) or _pool_surface_id (surface);
-    # locally-produced intermediates registered via assign_to are in _intermediate_vars.
+    # Pool-stamped objects carry _pool_motl_id (Motl), _pool_surface_id (PleomorphicSurface),
+    # _pool_complex_id, or _pool_nn_id.  The inner Mesh of a PleomorphicSurface carries
+    # _pool_surface_inner_id so methods dispatched on it render as "surface_2.surface.method()".
+    # Locally-produced intermediates registered via assign_to are in _intermediate_vars.
     self_obj = getattr(fn, "__self__", None)
     if self_obj is not None and not inspect.isclass(self_obj):
         _self_var: str | None = None
-        for _attr in ("_pool_motl_id", "_pool_surface_id"):
+        for _attr in ("_pool_motl_id", "_pool_surface_id", "_pool_complex_id", "_pool_nn_id"):
             _pool_id = getattr(self_obj, _attr, None)
             if _pool_id is not None:
                 _self_var = _prov.var_for(_pool_id)
                 break
+        if _self_var is None:
+            _inner_sid = getattr(self_obj, "_pool_surface_inner_id", None)
+            if _inner_sid is not None:
+                _outer = _prov.var_for(_inner_sid)
+                if _outer:
+                    _self_var = f"{_outer}.surface"
         if _self_var is None:
             _self_var = _prov.var_for_obj(self_obj)
         if _self_var:
@@ -255,11 +263,17 @@ def invoke_operation(
     # Check kwargs for pool-stamped objects and locally-produced intermediates.
     for v in kwargs.values():
         _kw_var: str | None = None
-        for _attr in ("_pool_motl_id", "_pool_surface_id"):
+        for _attr in ("_pool_motl_id", "_pool_surface_id", "_pool_complex_id", "_pool_nn_id"):
             _pool_id = getattr(v, _attr, None)
             if _pool_id is not None:
                 _kw_var = _prov.var_for(_pool_id)
                 break
+        if _kw_var is None:
+            _inner_sid = getattr(v, "_pool_surface_inner_id", None)
+            if _inner_sid is not None:
+                _outer = _prov.var_for(_inner_sid)
+                if _outer:
+                    _kw_var = f"{_outer}.surface"
         if _kw_var is None:
             _kw_var = _prov.var_for_obj(v)
         if _kw_var:
@@ -281,14 +295,17 @@ def invoke_operation(
     for k, expr in kwargs_src.items():
         if expr is None:
             if k == "<self>":
+                _kind = type(self_obj).__name__
                 msg = (
                     f"Receiver of {fn_name} could not be resolved to a variable "
-                    "— load the surface through the pool first."
+                    f"— load the {_kind} through the pool first."
                 )
             else:
+                _arg = kwargs.get(k)
+                _kind = type(_arg).__name__ if _arg is not None else "argument"
                 msg = (
                     f"Argument {k!r} of {fn_name} could not be resolved to a variable "
-                    "— pool provenance missing. Load the motl through the pool first."
+                    f"— pool provenance missing. Load the {_kind} through the pool first."
                 )
             _session.emit(message_event(msg, level="error"))
 

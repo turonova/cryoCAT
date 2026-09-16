@@ -119,7 +119,7 @@ class TestSurfaceHandleSchema:
         from cryocat.app.components.surface_registry import SurfaceHandle
         assert {f.name for f in fields(SurfaceHandle)} == {
             "label", "representation", "n_elements",
-            "parent_id", "visible", "has_curvatures",
+            "parent_id", "visible", "has_curvatures", "has_hit_counts",
         }
 
 

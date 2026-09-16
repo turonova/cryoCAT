@@ -236,6 +236,23 @@ def _pool_table_field(cid, default, required, choices=None, extra=None):
     )
 
 
+def _pool_motl_field(cid, default, required, choices=None, extra=None):
+    """Dropdown populated at runtime from POOL_REGISTRY motl entries.
+
+    Options are filled by a callback registered via
+    :func:`register_pool_motl_writeback`; the widget renders empty until the
+    motl pool is non-empty.
+    """
+    return dcc.Dropdown(
+        id=cid,
+        options=[],
+        value=None,
+        placeholder="Select a motl from pool…",
+        style={"fontSize": "11px"},
+        clearable=True,
+    )
+
+
 def _rotation_field(cid, default, required, choices=None, extra=None):
     # Phase 11 R3: inert widget — the app-level rotation modal owns all callbacks.
     owner = cid.get("owner", "") if isinstance(cid, dict) else ""
@@ -334,6 +351,7 @@ WIDGET_FACTORIES: dict[str, WidgetFactory] = {
     "tuple":      _tuple_field,
     "listlike":   _listlike_field,
     "pool_table": _pool_table_field,
+    "pool_motl":  _pool_motl_field,
 }
 
 
@@ -440,8 +458,11 @@ def build_form(fn_or_entry, id_type="op-param", id_extra=None, exclude=()):
         choices = extra.get("choices", [])
 
         handler = TYPE_HANDLERS[tag]
-        # Normalise all path-widget aliases (MapSource, PathOrStr, …) to the
-        # literal tag "path" so register_path_writeback's pattern matches them.
+        # Tag convention (must stay consistent with writeback registrations):
+        #   path-widget aliases → "path"  (one register_path_writeback covers all)
+        #   every other alias  → alias name  (each writeback matches its alias name,
+        #                                     NOT its widget name)
+        # TestWritebackTagConsistency in test_formgen.py enforces this mechanically.
         cid_tag = "path" if handler["widget"] == "path" else tag
         cid = _mk_id(id_type, name, cid_tag, id_extra)
         # Composite widgets (Tuple) need length/elem from `extra`; pass it
@@ -536,14 +557,11 @@ def register_path_writeback(app, id_type: str, id_extra: dict | None = None) -> 
             raise __import__("dash").exceptions.PreventUpdate
         target_owner = result.get("owner", "")
         final_value = result.get("value", "")
-        updates = []
-        for e in ctx.outputs_list:
-            if _json.dumps(dict(sorted(e["id"].items()))) == target_owner:
-                _log.debug("path writeback: matched %s → %r", e["id"], final_value)
-                updates.append(final_value)
-            else:
-                updates.append(no_update)
-        return updates
+        return [
+            final_value if _json.dumps(dict(sorted(e["id"].items()))) == target_owner
+            else no_update
+            for e in ctx.outputs_list
+        ]
 
 
 def register_path_hint_callback(app, id_type: str, id_extra: dict | None = None) -> None:
@@ -576,7 +594,7 @@ def register_path_hint_callback(app, id_type: str, id_extra: dict | None = None)
 def register_pool_table_writeback(app, id_type: str, id_extra: dict | None = None) -> None:
     """Register a callback that populates ``DataPoolEntry`` dropdowns from the registry.
 
-    Every ``pool_table``-tagged dropdown built by :func:`build_form` with the
+    Every ``DataPoolEntry``-tagged dropdown built by :func:`build_form` with the
     given ``(id_type, id_extra)`` combination gets its options refreshed
     whenever ``DATA_POOL_REGISTRY`` changes.  Options list only DataFrame-kind
     entries; the value is the ``data_id`` string, resolved to the actual
@@ -593,7 +611,10 @@ def register_pool_table_writeback(app, id_type: str, id_extra: dict | None = Non
     id_extra = id_extra or {}
 
     @app.callback(
-        Output({"type": id_type, "owner": _ALL, "param": _ALL, "tag": "pool_table", **id_extra}, "options"),
+        # "DataPoolEntry" is the alias name, not the widget name ("pool_table").
+        # build_form sets cid_tag = alias_name for non-path aliases; the Output
+        # pattern must match that, or the callback is permanently dead.
+        Output({"type": id_type, "owner": _ALL, "param": _ALL, "tag": "DataPoolEntry", **id_extra}, "options"),
         Input(_ids.DATA_POOL_REGISTRY, "data"),
         prevent_initial_call=False,
     )
@@ -609,14 +630,49 @@ def register_pool_table_writeback(app, id_type: str, id_extra: dict | None = Non
         return [opts] * n
 
 
+def register_pool_motl_writeback(app, id_type: str, id_extra: dict | None = None) -> None:
+    """Register a callback that populates ``MotlSource`` dropdowns from the motl pool.
+
+    Every ``MotlSource``-tagged dropdown built by :func:`build_form` with the
+    given ``(id_type, id_extra)`` combination gets its options refreshed
+    whenever ``POOL_REGISTRY`` changes.  The value is the ``motl_id`` string,
+    resolved to an actual :class:`~cryocat.core.cryomotl.Motl` instance by
+    :func:`cryocat.utils.classutils._parse_motl_source` at dispatch time.
+
+    Call once per unique ``(id_type, id_extra)`` combination that may contain
+    ``MotlSource`` parameters.
+    """
+    from dash import Input, Output, ALL as _ALL
+    from cryocat.app import ids as _ids
+
+    id_extra = id_extra or {}
+
+    @app.callback(
+        # "MotlSource" is the alias name, not the widget name ("pool_motl").
+        # build_form sets cid_tag = alias_name for non-path aliases.
+        Output({"type": id_type, "owner": _ALL, "param": _ALL, "tag": "MotlSource", **id_extra}, "options"),
+        Input(_ids.POOL_REGISTRY, "data"),
+        prevent_initial_call=False,
+    )
+    def _fill_pool_motl_options(registry):
+        reg = registry or {}
+        opts = [
+            {"label": v.get("label", k), "value": k}
+            for k, v in reg.items()
+        ]
+        from dash import ctx
+        n = len(ctx.outputs_list)
+        return [opts] * n
+
+
 def register_form_callbacks(app, id_type: str, id_extra: dict | None = None) -> None:
     """Register all per-form-type callbacks for a :func:`build_form` form type.
 
     Calls :func:`register_path_writeback`, :func:`register_path_hint_callback`,
-    :func:`register_var_picker_writeback`, and :func:`register_pool_table_writeback`
-    unconditionally.  Inert registrations (no matching components) never fire,
-    so the cost of an inert one is nothing and the cost of a forgotten one is a
-    dead field.
+    :func:`register_var_picker_writeback`, :func:`register_pool_table_writeback`,
+    and :func:`register_pool_motl_writeback` unconditionally.  Inert
+    registrations (no matching components) never fire, so the cost of an inert
+    one is nothing and the cost of a forgotten one is a dead field.
 
     Call once per unique ``(id_type, id_extra)`` combination wherever
     :func:`build_form` is used.
@@ -625,3 +681,4 @@ def register_form_callbacks(app, id_type: str, id_extra: dict | None = None) -> 
     register_path_hint_callback(app, id_type, id_extra)
     register_var_picker_writeback(app, id_type, id_extra)
     register_pool_table_writeback(app, id_type, id_extra)
+    register_pool_motl_writeback(app, id_type, id_extra)

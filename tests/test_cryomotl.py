@@ -1712,6 +1712,49 @@ class TestMotl:
         expected_object_ids_duplicate_object_ids = pd.Series([1, 1, 2, 3, 3, 4])
         assert motl5.df["object_id"].equals(expected_object_ids_duplicate_object_ids)
 
+    def test_renumber_objects_sequentially_tomo_id_preserved(self):
+        # Regression: groupby("tomo_id").apply used to drop the tomo_id column.
+        # Two tomos each with objects 1 and 2 must yield ids 1,2,3,4 AND keep tomo_id intact.
+        cols = Motl.motl_columns
+        data = {c: [0] * 4 for c in cols}
+        data["subtomo_id"] = [1, 2, 3, 4]
+        data["tomo_id"] = [1, 1, 2, 2]
+        data["object_id"] = [1, 2, 1, 2]
+        motl = Motl(pd.DataFrame(data)[cols])
+        motl.renumber_objects_sequentially()
+        assert "tomo_id" in motl.df.columns, "tomo_id column must not be dropped"
+        assert list(motl.df["tomo_id"]) == [1, 1, 2, 2], "tomo_id values must be unchanged"
+        assert list(motl.df["object_id"]) == [1, 2, 3, 4]
+
+    def test_renumber_objects_sequentially_sort_by_object_id(self):
+        # Rows in reverse-tomo order so renumbering leaves object_id out of row order.
+        cols = Motl.motl_columns
+        data = {c: [0] * 4 for c in cols}
+        data["subtomo_id"] = [1, 2, 3, 4]
+        data["tomo_id"] = [2, 2, 1, 1]
+        data["object_id"] = [1, 2, 1, 2]
+        # ngroup sorted (tomo_id, object_id): (1,1)=0, (1,2)=1, (2,1)=2, (2,2)=3
+        # Row order: (2,1)→3, (2,2)→4, (1,1)→1, (1,2)→2
+        df_base = pd.DataFrame(data)[cols]
+
+        motl_default = Motl(df_base.copy())
+        motl_default.renumber_objects_sequentially()
+        assert list(motl_default.df["object_id"]) == [3, 4, 1, 2], (
+            "default must not reorder rows — original row order preserved"
+        )
+        assert list(motl_default.df["tomo_id"]) == [2, 2, 1, 1], (
+            "tomo_id order must follow the original row order"
+        )
+
+        motl_sorted = Motl(df_base.copy())
+        motl_sorted.renumber_objects_sequentially(sort_by_object_id=True)
+        assert list(motl_sorted.df["object_id"]) == [1, 2, 3, 4], (
+            "sort_by_object_id=True must sort rows by new object_id"
+        )
+        assert list(motl_sorted.df["tomo_id"]) == [1, 1, 2, 2], (
+            "tomo_id values after sort must correspond to sorted object order"
+        )
+
     @pytest.fixture
     def sample_relative_position_df(self):
         """Create a sample motl DataFrame for testing relative positions."""

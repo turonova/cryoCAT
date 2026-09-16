@@ -14,16 +14,25 @@ Public API
 from __future__ import annotations
 
 import importlib
+import inspect
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from cryocat.app.components.registry import Registry
+from cryocat.analysis.structure import PleomorphicSurface as _PS
 
 if TYPE_CHECKING:
     from cryocat.analysis.structure import SymmetricComplex
 
 # 1-based ids match the motl pool convention.
 registry: Registry = Registry("complex", start=1)
+
+# Maps class → builder callable; the first parameter of the builder receives
+# the pool motl.  Classes absent from this dict use themselves as builder.
+COMPLEX_BUILDERS: dict[type, Callable] = {
+    _PS: _PS.from_blocks,
+}
 
 
 @dataclass
@@ -74,7 +83,48 @@ def make_handle(
     init_kwargs:
         Extra constructor keyword arguments (beyond ``motl``), JSON-serialisable.
     """
+    from cryocat.analysis.structure import PleomorphicSurface as _PS
     cls_name = type(cpx).__name__
+
+    if isinstance(cpx, _PS):
+        bd = cpx.block_definition
+        if bd is None:
+            symmetry_str = "custom"
+        elif isinstance(bd, dict):
+            folds = sorted({
+                f"C{defn.fold}" if defn.fold is not None else "custom"
+                for defn in bd.values()
+            })
+            symmetry_str = "/".join(folds) if all(f != "custom" for f in folds) else "custom"
+        else:
+            symmetry_str = f"C{bd.fold}" if bd.fold is not None else "custom"
+
+        if bd is None:
+            n_subunits = 0
+        elif isinstance(bd, dict):
+            n_subunits = max(d.n_sites for d in bd.values())
+        else:
+            n_subunits = bd.n_sites
+
+        n_objects = len(cpx.blocks.df) if cpx.blocks is not None else 0
+
+        handle = ComplexHandle(
+            complex_id=complex_id,
+            label=label,
+            cls=cls_name,
+            symmetry=symmetry_str,
+            n_subunits=n_subunits,
+            n_objects=n_objects,
+            motl_links=motl_links,
+            affiliation_column="",
+            order_column="",
+            tomo_id_column=getattr(cpx, "tomo_id_column", "tomo_id") or "tomo_id",
+            geometry_fitted=False,
+            radius=None,
+            init_kwargs=init_kwargs,
+        )
+        return handle.to_dict()
+
     symmetry = getattr(cpx, "fold", "") or ""
     group = getattr(cpx, "group", "")
     if group and symmetry:
@@ -132,16 +182,23 @@ def reconstruct(handle_dict: dict, motl: Any) -> Any:
     handle = ComplexHandle.from_dict(handle_dict)
     mod = importlib.import_module("cryocat.analysis.structure")
     cls = getattr(mod, handle.cls)
-    kwargs: dict[str, Any] = {
-        "affiliation_column": handle.affiliation_column,
-        "order_column": handle.order_column,
-        "tomo_id_column": handle.tomo_id_column,
-        **handle.init_kwargs,
-    }
-    # PolyhedralComplex subclasses do not accept a symmetry argument.
-    if handle.symmetry:
-        base_names = {"PolyhedralComplex", "TetrahedralComplex",
-                      "OctahedralComplex", "IcosahedralComplex"}
-        if handle.cls not in base_names:
-            kwargs["symmetry"] = handle.symmetry
-    return cls(motl, **kwargs)
+    builder = COMPLEX_BUILDERS.get(cls, cls)
+    first = next(iter(inspect.signature(builder).parameters))
+    if builder is cls:
+        kwargs: dict[str, Any] = {
+            "affiliation_column": handle.affiliation_column,
+            "order_column": handle.order_column,
+            "tomo_id_column": handle.tomo_id_column,
+            **handle.init_kwargs,
+        }
+        # PolyhedralComplex subclasses and NPC do not accept a symmetry argument.
+        if handle.symmetry:
+            base_names = {"PolyhedralComplex", "TetrahedralComplex",
+                          "OctahedralComplex", "IcosahedralComplex", "NPC"}
+            if handle.cls not in base_names:
+                kwargs["symmetry"] = handle.symmetry
+    else:
+        # Custom builder (e.g. PleomorphicSurface.from_blocks): stored
+        # init_kwargs already contain all parameters except the first (motl).
+        kwargs = dict(handle.init_kwargs)
+    return builder(**{first: motl}, **kwargs)

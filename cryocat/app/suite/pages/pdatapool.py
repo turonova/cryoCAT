@@ -44,6 +44,7 @@ from cryocat.app.pool import (
 from cryocat.app.components.poolslotlist import (
     get_pool_slot_list,
     register_pool_slot_list_callbacks,
+    register_slot_focus_callback,
     _first_free_slot,
 )
 from cryocat.core.cryomotl import Motl
@@ -257,6 +258,25 @@ def _dict_text(data_id: str | None) -> str:
 _N_SLOTS = 5
 
 
+def _tab_to_idx(active_tab: str | None) -> int | None:
+    if not active_tab or not active_tab.startswith("dp-slot-"):
+        return None
+    try:
+        return int(active_tab.rsplit("-", 1)[-1])
+    except ValueError:
+        return None
+
+
+def _slot_tab(i: int) -> dbc.Tab:
+    return dbc.Tab(
+        "",
+        id=f"dp-tab-{i}",
+        tab_id=f"dp-slot-{i}",
+        label=f"Slot {i + 1}",
+        disabled=True,
+    )
+
+
 def _make_stores() -> list:
     return [
         dcc.Store(id="dp-selected-id",                data=None),
@@ -347,15 +367,17 @@ def _sidebar() -> list:
                 item_id="dp-tables",
             ),
             dbc.AccordionItem(
+                # Primary: entry picker + operations (working-copy mode — W1)
+                tableeditor.get_table_editor("dp-edit", multi_source=True, working_copy_mode=True),
+                title="Edit",
+                item_id="dp-edit-tab",
+            ),
+            dbc.AccordionItem(
                 _build_motl_builder_section(),
                 title="Build Motl",
                 item_id="dp-build-motl",
             ),
         ], active_item=["dp-tables"]),
-        html.Hr(style={"margin": f"{styles.SECTION_GAP} 0"}),
-        # Primary: entry picker + operations (working-copy mode — W1)
-        tableeditor.get_table_editor("dp-edit", multi_source=True, working_copy_mode=True),
-        html.Hr(style={"margin": f"{styles.SECTION_GAP} 0"}),
         # Working-copy commit section (W5: below operations, clearly separated)
         html.Div(
             id="dp-wc-section",
@@ -401,6 +423,12 @@ def _sidebar() -> list:
 
 def _main() -> list:
     return [
+        dbc.Tabs(
+            [_slot_tab(i) for i in range(_N_SLOTS)],
+            id="dp-tabs",
+            active_tab="dp-slot-0",
+            style={"marginBottom": styles.SECTION_GAP},
+        ),
         html.Div(
             get_table_component("dp-view-tabv", show_create_from_selected=True),
             id="dp-panel-table",
@@ -434,7 +462,7 @@ def _main() -> list:
             style=_HIDE,
         ),
         html.Div(
-            "Select an entry from the picker to view it.",
+            "Select a slot above or assign an entry from the Tables panel.",
             id="dp-panel-empty",
             style={**styles.HINT, "padding": "1rem"},
         ),
@@ -752,6 +780,70 @@ def register_callbacks(app):  # noqa: C901
         active_id_store_id="dp-active-id",
     )
 
+    # ── Slot tab strip: labels, active-id sync, slot_focus cleanup ───────────────
+
+    @app.callback(
+        *[Output(f"dp-tab-{i}", "label") for i in range(_N_SLOTS)],
+        *[Output(f"dp-tab-{i}", "disabled") for i in range(_N_SLOTS)],
+        Input("dp-slot-map", "data"),
+        Input(ids.DATA_POOL_REGISTRY, "data"),
+    )
+    def _update_tab_labels(slot_map, registry):
+        sm = list(slot_map or [None] * _N_SLOTS)
+        while len(sm) < _N_SLOTS:
+            sm.append(None)
+        reg = datapool.clean_registry(registry)
+        labels, disabled_flags = [], []
+        for i, did in enumerate(sm):
+            if did and did in reg:
+                labels.append(reg[did].get("label", did))
+                disabled_flags.append(False)
+            else:
+                labels.append(f"Slot {i + 1}")
+                disabled_flags.append(True)
+        return (*labels, *disabled_flags)
+
+    @app.callback(
+        Output("dp-active-id", "data", allow_duplicate=True),
+        Input("dp-tabs", "active_tab"),
+        State("dp-slot-map", "data"),
+        State("dp-active-id", "data"),
+        prevent_initial_call=True,
+    )
+    def _sync_tab_to_active_id(active_tab, slot_map, current_active):
+        idx = _tab_to_idx(active_tab)
+        if idx is None:
+            return no_update
+        sm = list(slot_map or [None] * _N_SLOTS)
+        did = sm[idx] if idx < len(sm) else None
+        if not did or did == current_active:
+            return no_update
+        return did
+
+    @app.callback(
+        Output("dp-tabs", "active_tab", allow_duplicate=True),
+        Input("dp-active-id", "data"),
+        State("dp-slot-map", "data"),
+        State("dp-tabs", "active_tab"),
+        prevent_initial_call=True,
+    )
+    def _sync_active_id_to_tab(active_id, slot_map, current_tab):
+        if not active_id:
+            return no_update
+        sm = list(slot_map or [None] * _N_SLOTS)
+        for i, did in enumerate(sm):
+            if did == active_id:
+                new_tab = f"dp-slot-{i}"
+                if new_tab == current_tab:
+                    return no_update
+                return new_tab
+        return no_update
+
+    register_slot_focus_callback(
+        app, "dp-slot-map", "dp-tabs", "dp-slot-", _N_SLOTS,
+        active_id_store_id="dp-active-id",
+    )
+
     # Auto-assign newly inserted pool entries to the lowest free slot
     @app.callback(
         Output("dp-slot-map", "data", allow_duplicate=True),
@@ -765,7 +857,7 @@ def register_callbacks(app):  # noqa: C901
             sm.append(None)
         assigned = {sid for sid in sm if sid}
         changed = False
-        for did in (registry or {}):
+        for did in datapool.clean_registry(registry):
             if did not in assigned:
                 free = _first_free_slot(sm, _N_SLOTS)
                 if free is not None:

@@ -1726,3 +1726,45 @@ class TestGridVolumeWarpZSign:
         assert np.allclose(delta_x, -warp_val, atol=1e-10), (
             f"Expected x shift of {-warp_val} at z=0; got {delta_x}"
         )
+
+
+# ---------------------------------------------------------------------------
+# GW1 — as_rotation (3,3) shape-disambiguation tests
+# ---------------------------------------------------------------------------
+
+class TestAsRotation33:
+    """as_rotation must validate (3,3) arrays before calling srot.from_matrix.
+
+    Before GW1b the (3,3) branch always called srot.from_matrix regardless of
+    whether the array was a valid rotation matrix.  Three Euler triples stacked
+    into (3,3) are NOT a rotation matrix and were silently misread (or raised
+    ValueError for zero-det cases like all-zero angles).
+    """
+
+    def test_genuine_rotation_matrix_accepted(self):
+        """A proper (3,3) rotation matrix round-trips through as_rotation."""
+        R = srot.from_euler("zxz", [30, 45, 60], degrees=True).as_matrix()
+        result = as_rotation(R)
+        assert np.allclose(result.as_matrix(), R, atol=1e-10)
+
+    def test_three_different_euler_triplets_interpreted_as_euler(self):
+        """Three distinct Euler triples in a (3,3) array must NOT be read as a rotation matrix."""
+        euler_arr = np.array([[10.0, 20.0, 30.0],
+                              [40.0, 50.0, 60.0],
+                              [70.0, 80.0, 90.0]])
+        result = as_rotation(euler_arr)
+        expected = srot.from_euler("zxz", euler_arr, degrees=True)
+        assert np.allclose(result.as_matrix(), expected.as_matrix(), atol=1e-10)
+
+    def test_three_identical_euler_triplets_interpreted_as_euler(self):
+        """Three identical (non-zero) Euler triples in (3,3) must NOT raise and must decode correctly.
+
+        Before GW1b this raised ValueError: Non-positive determinant because
+        a matrix of three identical rows has determinant 0.
+        """
+        euler_arr = np.array([[30.0, 45.0, 60.0],
+                              [30.0, 45.0, 60.0],
+                              [30.0, 45.0, 60.0]])
+        result = as_rotation(euler_arr)
+        expected = srot.from_euler("zxz", euler_arr, degrees=True)
+        assert np.allclose(result.as_matrix(), expected.as_matrix(), atol=1e-10)
