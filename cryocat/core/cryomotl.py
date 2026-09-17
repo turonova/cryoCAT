@@ -3987,7 +3987,7 @@ class RelionMotl(Motl):
 
         return pd.DataFrame(optics_default, index=[0])
 
-    def create_final_output(self, relion_df, optics_df=None):
+    def create_final_output(self, relion_df, optics_df=None, use_original_entries=False):
         """Creates the final output frames and specifiers based on the given input dataframes.
 
         Parameters
@@ -3996,6 +3996,11 @@ class RelionMotl(Motl):
             The dataframe containing the relion data.
         optics_df : pandas.DataFrame, optional
             The dataframe containing the optics data. Defaults to None.
+        use_original_entries : bool, default=False
+            Whether `relion_df` was built from the originally loaded entries. If True, the
+            `rlnOpticsGroup` values already present in `relion_df` are left untouched. If False,
+            `rlnOpticsGroup` (when present in both `relion_df` and `optics_df`) is synced to the
+            group defined in `optics_df`, since freshly built particle data has no group assigned.
 
         Returns
         -------
@@ -4016,6 +4021,19 @@ class RelionMotl(Motl):
         optics_df and relion_df (with duplicates removed) and self.data_spec.
 
         """
+
+        if (
+            not use_original_entries
+            and optics_df is not None
+            and "rlnOpticsGroup" in relion_df.columns
+            and "rlnOpticsGroup" in optics_df.columns
+        ):
+            unique_groups = optics_df["rlnOpticsGroup"].unique()
+            # A single optics group unambiguously applies to every particle. With more than one
+            # group there is no per-particle mapping to infer, so the existing (per-particle)
+            # rlnOpticsGroup values, if any, are left untouched rather than guessed at.
+            if len(unique_groups) == 1:
+                relion_df["rlnOpticsGroup"] = unique_groups[0]
 
         if optics_df is None:
             frames = [relion_df]
@@ -4257,7 +4275,7 @@ class RelionMotl(Motl):
         else:
             optics_df = None
 
-        frames, specifiers = self.create_final_output(relion_df, optics_df)
+        frames, specifiers = self.create_final_output(relion_df, optics_df, use_original_entries=use_original_entries)
 
         starfileio.Starfile.write(frames, output_path, specifiers=specifiers)
 
@@ -5173,7 +5191,7 @@ class RelionMotlv5(RelionMotl, Motl):
         else:
             optics_df = None
 
-        frames, specifiers = self.create_final_output(relion_df, optics_df)
+        frames, specifiers = self.create_final_output(relion_df, optics_df, use_original_entries=use_original_entries)
 
         starfileio.Starfile.write(frames, output_path, specifiers=specifiers)
 

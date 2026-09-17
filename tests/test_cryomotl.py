@@ -4090,6 +4090,35 @@ class TestRelionMotl:
         pd.testing.assert_frame_equal(frames_dup[0].sort_index(axis=1), expected_combined_df_dup.sort_index(axis=1))
         assert specifiers_dup == ["combined_data"]
 
+    def test_create_final_output_syncs_optics_group_single_group(self):
+        relion_motl = RelionMotl()
+        relion_motl.version = 3.1
+        relion_motl.data_spec = "particle_data"
+        sample_optics_df = pd.DataFrame({"rlnOpticsGroup": [3]})
+        sample_relion_df = pd.DataFrame({"particleId": [1, 2, 3], "rlnOpticsGroup": [0, 0, 0]})
+        frames, _ = relion_motl.create_final_output(sample_relion_df, optics_df=sample_optics_df)
+        assert (frames[1]["rlnOpticsGroup"] == 3).all()
+
+    def test_create_final_output_leaves_optics_group_with_multiple_groups(self):
+        relion_motl = RelionMotl()
+        relion_motl.version = 3.1
+        relion_motl.data_spec = "particle_data"
+        sample_optics_df = pd.DataFrame({"rlnOpticsGroup": [1, 2]})
+        sample_relion_df = pd.DataFrame({"particleId": [1, 2], "rlnOpticsGroup": [0, 0]})
+        frames, _ = relion_motl.create_final_output(sample_relion_df, optics_df=sample_optics_df)
+        assert (frames[1]["rlnOpticsGroup"] == 0).all()
+
+    def test_create_final_output_use_original_entries_preserves_optics_group(self):
+        relion_motl = RelionMotl()
+        relion_motl.version = 3.1
+        relion_motl.data_spec = "particle_data"
+        sample_optics_df = pd.DataFrame({"rlnOpticsGroup": [3]})
+        sample_relion_df = pd.DataFrame({"particleId": [1, 2], "rlnOpticsGroup": [1, 1]})
+        frames, _ = relion_motl.create_final_output(
+            sample_relion_df, optics_df=sample_optics_df, use_original_entries=True
+        )
+        assert (frames[1]["rlnOpticsGroup"] == 1).all()
+
     def test_create_relion_df_default_v30(self, relion_paths):
         # Load the relion_3.0.star file using RelionMotl
         motl = RelionMotl(input_motl=relion_paths["relion30_path"], version=3.0)
