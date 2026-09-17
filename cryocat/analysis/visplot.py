@@ -338,6 +338,11 @@ register_palette("Klimt", ["#466AA1", "#DFE0DF", "#EAAE47", "#C1554D"])
 register_palette("Hokusai", ["#0c1f45", "#466AA1", "#7D9DD8", "#E1F5F3", "#75C6C0", "#3D908B"])
 register_colorscale("Hokusai", ["#0c1f45", "#466AA1", "#7D9DD8", "#E1F5F3", "#75C6C0", "#3D908B"])
 
+# Matisse: full-spectrum brand categorical palette (logo blue -> teal -> gold ->
+# coral -> red -> mauve). Bold, high-contrast, six well-separated hues — good default
+# for categorical plots needing more classes than Klimt.
+register_palette("Matisse", ["#466AA1", "#75C6C0", "#EAAE47", "#E09990", "#C1554D", "#8C697A"])
+
 
 def set_defaults(**kwargs: Any) -> None:
     """Update global DEFAULTS. Nested 'extra_layout' is merged (shallow)."""
