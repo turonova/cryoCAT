@@ -766,8 +766,11 @@ class NearestNeighbors:
             go   = ord_[g_start:g_end]
 
             if len(np.unique(go)) < n_g:
+                _u_go, _u_cnt = np.unique(go, return_counts=True)
+                _dupes = sorted(_u_go[_u_cnt > 1].tolist())
                 raise ValueError(
-                    f"Group {g_val!r} has duplicate '{order_column}' values. "
+                    f"Group {g_val!r} (column {group_column!r}) has duplicate "
+                    f"'{order_column}' values: {_dupes}. "
                     "Ordered pairing is ambiguous with duplicate order values."
                 )
 

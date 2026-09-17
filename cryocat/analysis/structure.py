@@ -1846,18 +1846,18 @@ class CnComplex(SymmetricComplex):
     @gui_exposed(label="Central angles", group="Geometry", order=35, returns="dataframe")
     def central_angles(
         self,
-        gaps: str = "holey",
+        gaps: Literal["holey", "full"] = "holey",
         inward_axis: np.ndarray | None = None,
     ) -> pd.DataFrame:
         """Compute central angles between neighbouring subunit pairs.
 
         For each ring group two methods are evaluated for every consecutive
-        pair (query particle → nearest in ring order):
+        pair (query particle -> nearest in ring order):
 
-        * **Positional** (HC1): ``|atan2(n · (u × v), u · v)|`` where
-          ``u = S1 − C`` and ``v = S2 − C``, with *C* the fitted ring centre
+        * **Positional**: ``|atan2(n * (u x v), u * v)|`` where
+          ``u = S1 - C`` and ``v = S2 - C``, with *C* the fitted ring centre
           and *n* the ring normal from SVD of displacement vectors.
-        * **Orientational** (HC1b): same formula applied to the inward-axis
+        * **Orientational**: same formula applied to the inward-axis
           vectors obtained by rotating *inward_axis* by each subunit's stored
           orientation.  Does not depend on the accuracy of the circle fit for
           the centre position.
@@ -1873,11 +1873,9 @@ class CnComplex(SymmetricComplex):
         Parameters
         ----------
         gaps : {'holey', 'full'}, default='holey'
-            Pairing mode forwarded to
-            :meth:`~nnana.NearestNeighbors.ordered_pairs`.
-            ``'holey'`` pairs every present subunit with the next present one
-            (skipping absent indices); ``'full'`` skips pairs whose target
-            index is absent.
+            Pairing mode.  ``'holey'`` pairs every present subunit with the
+            next present one (by sorted position); ``'full'`` skips pairs
+            whose target index (order + 1 mod n) is absent from the ring.
         inward_axis : array-like of shape (3,) or None, default=None
             Local axis pointing toward the ring centre in the particle frame.
             ``None`` uses ``[-1, 0, 0]``, the convention in
@@ -1898,13 +1896,13 @@ class CnComplex(SymmetricComplex):
 
             All *angle_** and *dev_** columns are in **degrees**.
             ``angle_pos`` and ``angle_ori`` are non-negative (magnitudes).
-            ``angle_diff = |angle_pos − angle_ori|`` (unsigned disagreement).
+            ``angle_diff = |angle_pos - angle_ori|`` (unsigned disagreement).
             ``dev_pos`` and ``dev_ori`` are signed deviations from the ideal
-            ``idx_diff × central_angle`` (positive = wider than ideal,
+            ``idx_diff x central_angle`` (positive = wider than ideal,
             negative = narrower).
             ``angle_pos_signed`` / ``angle_ori_signed`` retain the sign from
             ``atan2``; their sign depends on the SVD normal orientation and is
-            arbitrary between rings — use only for within-ring consistency
+            arbitrary between rings -- use only for within-ring consistency
             checks, never for cross-ring comparison.
 
         Raises
@@ -1913,6 +1911,8 @@ class CnComplex(SymmetricComplex):
             If ``affiliation_column`` is absent from ``self.motl.df``.
         ValueError
             If ``order_column`` is absent from ``self.motl.df``.
+        ValueError
+            If a ring group has duplicate ``order_column`` values.
         """
         self._require_affiliation()
         if self.order_column not in self.motl.df.columns:
@@ -1928,125 +1928,97 @@ class CnComplex(SymmetricComplex):
         for keys, group in self.motl.df.groupby(self._ring_group_columns):
             tomo_id = keys[0]
             object_id = keys[1]
-            om = cryomotl.Motl(group.reset_index(drop=True))
 
-            if len(om.df) < 2:
+            if len(group) < 2:
                 continue
 
-            # Centre and ring normal
+            grp = group.sort_values(self.order_column)
+            order_vals = grp[self.order_column].to_numpy(dtype=float)
+
+            u_vals, u_counts = np.unique(order_vals, return_counts=True)
+            if np.any(u_counts > 1):
+                dupes = sorted(u_vals[u_counts > 1].tolist())
+                raise ValueError(
+                    f"Tomo {tomo_id!r}, object {object_id!r}: duplicate "
+                    f"'{self.order_column}' values {dupes}. "
+                    "Ordered pairing is ambiguous with duplicate order values."
+                )
+
+            coords = (
+                grp[["x", "y", "z"]].to_numpy(dtype=float)
+                + grp[["shift_x", "shift_y", "shift_z"]].to_numpy(dtype=float)
+            )
+            angles_euler = grp[["phi", "theta", "psi"]].to_numpy(dtype=float)
+            subtomo_ids = grp["subtomo_id"].to_numpy(dtype=float)
+            n_present = len(grp)
+
+            om = cryomotl.Motl(grp.reset_index(drop=True))
             center, _ = self._compute_object_center(om)
-            su_coord = om.get_coordinates()
-            vectors = su_coord - np.tile(center, (su_coord.shape[0], 1))
+            vectors = coords - center[np.newaxis, :]
             _, _, Vt = np.linalg.svd(vectors, full_matrices=True)
             ring_normal = Vt[-1]
 
-            # Ordered pairs for this group
-            nn_result = nnana.NearestNeighbors.ordered_pairs(
-                om,
-                group_column=self.affiliation_column,
-                order_column=self.order_column,
-                step=1,
-                topology="circular",
-                ring_size=self.n,
-                gaps=gaps,
-            )
+            if gaps == "holey":
+                qi = np.arange(n_present, dtype=np.intp)
+                ni = (qi + 1) % n_present
+            else:
+                min_o = order_vals.min()
+                o_norm = order_vals - min_o
+                targets = ((o_norm + 1) % self.n) + min_o
+                order_to_pos = {float(o): int(i) for i, o in enumerate(order_vals)}
+                valid = np.array([float(t) in order_to_pos for t in targets])
+                qi = np.where(valid)[0].astype(np.intp)
+                if len(qi) == 0:
+                    continue
+                ni = np.array([order_to_pos[float(targets[j])] for j in qi], dtype=np.intp)
 
-            if nn_result.df.empty:
-                continue
+            u_vecs = coords[qi] - center
+            v_vecs = coords[ni] - center
+            cross_pos = np.cross(u_vecs, v_vecs)
+            signed_pos = np.degrees(np.arctan2(
+                np.einsum("ij,j->i", cross_pos, ring_normal),
+                np.einsum("ij,ij->i", u_vecs, v_vecs),
+            ))
+            angle_pos = np.abs(signed_pos)
 
-            # subtomo_id → order index
-            sid_to_idx: dict[float, int] = {
-                float(r["subtomo_id"]): int(r[self.order_column]) for _, r in group.iterrows()
-            }
+            rots_qi = srot.from_euler("zxz", angles_euler[qi], degrees=True)
+            rots_ni = srot.from_euler("zxz", angles_euler[ni], degrees=True)
+            qp_inward = rots_qi.apply(ia)
+            nn_inward = rots_ni.apply(ia)
+            cross_ori = np.cross(qp_inward, nn_inward)
+            signed_ori = np.degrees(np.arctan2(
+                np.einsum("ij,j->i", cross_ori, ring_normal),
+                np.einsum("ij,ij->i", qp_inward, nn_inward),
+            ))
+            angle_ori = np.abs(signed_ori)
 
-            for _, pair in nn_result.df.iterrows():
-                qp_sub = float(pair["qp_subtomo_id"])
-                nn_sub = float(pair["nn_subtomo_id"])
-                qp_coord = np.array(
-                    [
-                        float(pair["qp_coord_x"]),
-                        float(pair["qp_coord_y"]),
-                        float(pair["qp_coord_z"]),
-                    ],
-                    dtype=float,
-                )
-                nn_coord = np.array(
-                    [
-                        float(pair["nn_coord_x"]),
-                        float(pair["nn_coord_y"]),
-                        float(pair["nn_coord_z"]),
-                    ],
-                    dtype=float,
-                )
+            raw_diff = order_vals[ni] - order_vals[qi]
+            idx_diff = np.where(raw_diff > 0, raw_diff, raw_diff + self.n)
+            ideal = idx_diff * self.central_angle
+            angle_pos_per_pos = angle_pos / idx_diff
+            angle_ori_per_pos = angle_ori / idx_diff
+            dev_pos = angle_pos - ideal
+            dev_ori = angle_ori - ideal
 
-                # Positional angle — signed for diagnostics, absolute for output (HC1)
-                u = qp_coord - center
-                v = nn_coord - center
-                signed_pos = np.degrees(geom.vector_angular_distance_signed(u, v, ring_normal))
-                angle_pos = abs(signed_pos)
-
-                # Orientational angle — same treatment (HC1b)
-                qp_rot = srot.from_euler(
-                    "zxz",
-                    [
-                        float(pair["qp_angles_phi"]),
-                        float(pair["qp_angles_theta"]),
-                        float(pair["qp_angles_psi"]),
-                    ],
-                    degrees=True,
-                )
-                nn_rot = srot.from_euler(
-                    "zxz",
-                    [
-                        float(pair["nn_angles_phi"]),
-                        float(pair["nn_angles_theta"]),
-                        float(pair["nn_angles_psi"]),
-                    ],
-                    degrees=True,
-                )
-                qp_inward = qp_rot.apply(ia)
-                nn_inward = nn_rot.apply(ia)
-                signed_ori = np.degrees(geom.vector_angular_distance_signed(qp_inward, nn_inward, ring_normal))
-                angle_ori = abs(signed_ori)
-
-                # Index difference (circular, 1 ≤ idx_diff ≤ n-1 normally)
-                qp_idx: int | None = sid_to_idx.get(qp_sub)
-                nn_idx: int | None = sid_to_idx.get(nn_sub)
-
-                if qp_idx is not None and nn_idx is not None:
-                    raw_diff = nn_idx - qp_idx
-                    idx_diff_val: int = raw_diff if raw_diff > 0 else raw_diff + self.n
-                    ideal = idx_diff_val * self.central_angle
-                    angle_pos_per_pos = angle_pos / idx_diff_val
-                    angle_ori_per_pos = angle_ori / idx_diff_val
-                    dev_pos = angle_pos - ideal  # signed: positive = wider, negative = narrower
-                    dev_ori = angle_ori - ideal
-                else:
-                    idx_diff_val = None
-                    ideal = float("nan")
-                    angle_pos_per_pos = float("nan")
-                    angle_ori_per_pos = float("nan")
-                    dev_pos = float("nan")
-                    dev_ori = float("nan")
-
+            for k in range(len(qi)):
                 rows.append(
                     {
                         "tomo_id": float(tomo_id),
                         "object_id": float(object_id),
-                        "qp_subtomo_id": qp_sub,
-                        "nn_subtomo_id": nn_sub,
-                        "qp_idx": float(qp_idx) if qp_idx is not None else float("nan"),
-                        "nn_idx": float(nn_idx) if nn_idx is not None else float("nan"),
-                        "idx_diff": float(idx_diff_val) if idx_diff_val is not None else float("nan"),
-                        "angle_pos": angle_pos,
-                        "angle_ori": angle_ori,
-                        "angle_diff": abs(angle_pos - angle_ori),
-                        "angle_pos_per_pos": angle_pos_per_pos,
-                        "angle_ori_per_pos": angle_ori_per_pos,
-                        "dev_pos": dev_pos,
-                        "dev_ori": dev_ori,
-                        "angle_pos_signed": signed_pos,
-                        "angle_ori_signed": signed_ori,
+                        "qp_subtomo_id": subtomo_ids[qi[k]],
+                        "nn_subtomo_id": subtomo_ids[ni[k]],
+                        "qp_idx": order_vals[qi[k]],
+                        "nn_idx": order_vals[ni[k]],
+                        "idx_diff": float(idx_diff[k]),
+                        "angle_pos": float(angle_pos[k]),
+                        "angle_ori": float(angle_ori[k]),
+                        "angle_diff": float(abs(angle_pos[k] - angle_ori[k])),
+                        "angle_pos_per_pos": float(angle_pos_per_pos[k]),
+                        "angle_ori_per_pos": float(angle_ori_per_pos[k]),
+                        "dev_pos": float(dev_pos[k]),
+                        "dev_ori": float(dev_ori[k]),
+                        "angle_pos_signed": float(signed_pos[k]),
+                        "angle_ori_signed": float(signed_ori[k]),
                     }
                 )
 
@@ -3751,9 +3723,7 @@ class PleomorphicSurface:
         """
         shift = geom.as_triplet(site_shift)
         if symmetry_column is None:
-            block_def: BlockDefinition | dict[float, BlockDefinition] = BlockDefinition.cyclic(
-                symmetry, shift
-            )
+            block_def: BlockDefinition | dict[float, BlockDefinition] = BlockDefinition.cyclic(symmetry, shift)
             return cls(
                 blocks=blocks,
                 block_definition=block_def,

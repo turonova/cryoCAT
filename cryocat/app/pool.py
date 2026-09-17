@@ -384,7 +384,7 @@ def restore_snapshot(motl_id: str) -> "pd.DataFrame | None":
     return _snapshots.pop(motl_id, None)
 
 
-_CACHE_BLOCK_SIZE = 100  # must match dashGridOptions.cacheBlockSize in tablegrid.get_grid()
+_CACHE_BLOCK_SIZE = 1000  # must match dashGridOptions.cacheBlockSize in tablegrid.get_grid()
 
 
 def block_to_records(df: pd.DataFrame, *, max_rows: int | None = None) -> list[dict]:

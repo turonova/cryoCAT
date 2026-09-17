@@ -1919,6 +1919,120 @@ def _make_dn_motl(
     return m
 
 
+# ---------------------------------------------------------------------------
+# Helpers for central_angles tests (HP7)
+# ---------------------------------------------------------------------------
+
+
+def _make_ordered_ring(
+    n: int = 8,
+    radius: float = 50.0,
+    center: tuple[float, float, float] = (100.0, 100.0, 100.0),
+    tomo_id: float = 1.0,
+    object_id: float = 1.0,
+) -> cryomotl.Motl:
+    """Ring with geom1 already populated with 1-based order (no assign_subunit_order needed)."""
+    m = _make_synthetic_ring(n=n, radius=radius, center=center, tomo_id=tomo_id, object_id=object_id)
+    m.df["geom1"] = m.df["geom2"].values  # geom2 = i+1 (1-based)
+    return m
+
+
+def _drop_order(motl: cryomotl.Motl, order_val: int) -> cryomotl.Motl:
+    """Return a copy of *motl* with the row whose geom1 == order_val removed."""
+    out = cryomotl.Motl()
+    out.df = motl.df[motl.df["geom1"] != float(order_val)].reset_index(drop=True)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# HP7 — central_angles tests
+# ---------------------------------------------------------------------------
+
+
+class TestCnComplexCentralAngles:
+    def test_complete_ring_angle_pos_equals_central_angle(self):
+        """angle_pos approx 360/n for every pair in a complete regular ring."""
+        n = 8
+        m = _make_ordered_ring(n=n)
+        cs = structure.CnComplex(m, n, center_method="barycentric")
+        df = cs.central_angles(gaps="holey")
+        assert len(df) == n
+        np.testing.assert_allclose(df["angle_pos"].values, 360.0 / n, atol=1e-6)
+
+    def test_complete_ring_dev_pos_near_zero(self):
+        """dev_pos approx 0 for every pair in a complete regular ring."""
+        n = 8
+        m = _make_ordered_ring(n=n)
+        cs = structure.CnComplex(m, n, center_method="barycentric")
+        df = cs.central_angles(gaps="holey")
+        np.testing.assert_allclose(df["dev_pos"].values, 0.0, atol=1e-6)
+
+    def test_gap_ring_holey_spanning_pair_has_idx_diff_2(self):
+        """Holey ring with one missing subunit: the spanning pair has idx_diff == 2."""
+        n = 8
+        missing = 4
+        m = _drop_order(_make_ordered_ring(n=n), missing)
+        cs = structure.CnComplex(m, n, center_method="barycentric")
+        df = cs.central_angles(gaps="holey")
+        assert len(df) == n - 1  # all present subunits paired
+        spanning = df[df["qp_idx"] == float(missing - 1)]
+        assert len(spanning) == 1
+        assert spanning["idx_diff"].iloc[0] == pytest.approx(2.0)
+        assert spanning["nn_idx"].iloc[0] == pytest.approx(float(missing + 1))
+
+    def test_gap_ring_full_spanning_pair_absent(self):
+        """Full mode: the pair whose target is missing is skipped."""
+        n = 8
+        missing = 4
+        m = _drop_order(_make_ordered_ring(n=n), missing)
+        cs = structure.CnComplex(m, n, center_method="barycentric")
+        df = cs.central_angles(gaps="full")
+        assert len(df) == n - 2  # two pairs skipped: (3->4) and (4->5)
+        assert len(df[df["qp_idx"] == float(missing - 1)]) == 0
+
+    def test_duplicate_order_raises_naming_tomo_and_object(self):
+        """Duplicate order values raise ValueError naming tomo_id and object_id."""
+        m = _make_ordered_ring(n=8)
+        m.df.loc[2, "geom1"] = 1.0  # force duplicate: two rows with order 1
+        cs = structure.CnComplex(m, 8, center_method="barycentric")
+        with pytest.raises(ValueError, match=r"Tomo.*object"):
+            cs.central_angles()
+
+    def test_duplicate_order_message_names_duplicated_values(self):
+        """Duplicate error message includes the duplicated values."""
+        m = _make_ordered_ring(n=8)
+        m.df.loc[2, "geom1"] = 1.0
+        cs = structure.CnComplex(m, 8, center_method="barycentric")
+        with pytest.raises(ValueError, match=r"1\.0"):
+            cs.central_angles()
+
+    def test_equivalence_complete_ring(self):
+        """New implementation gives angle_pos == 360/n for all n pairs (mathematical ground truth)."""
+        for n in (6, 8, 10):
+            m = _make_ordered_ring(n=n)
+            cs = structure.CnComplex(m, n, center_method="barycentric")
+            df = cs.central_angles(gaps="holey")
+            assert len(df) == n, f"n={n}: expected {n} pairs, got {len(df)}"
+            np.testing.assert_allclose(
+                df["angle_pos"].values, 360.0 / n, atol=1e-6,
+                err_msg=f"n={n}: angle_pos not equal to 360/n",
+            )
+
+    def test_holey_full_same_for_complete_ring(self):
+        """Holey and full give identical results on a complete ring."""
+        n = 8
+        m = _make_ordered_ring(n=n)
+        cs = structure.CnComplex(m, n, center_method="barycentric")
+        df_holey = cs.central_angles(gaps="holey")
+        df_full = cs.central_angles(gaps="full")
+        assert len(df_holey) == len(df_full) == n
+        np.testing.assert_allclose(
+            df_holey.sort_values("qp_idx")["angle_pos"].values,
+            df_full.sort_values("qp_idx")["angle_pos"].values,
+            atol=1e-10,
+        )
+
+
 class TestDnComplex:
     def test_n_subunits_is_2n(self):
         """DnComplex('D6').n_subunits == 12, .n == 6."""

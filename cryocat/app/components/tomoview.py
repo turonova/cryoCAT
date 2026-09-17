@@ -360,7 +360,10 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         else:
             settings = rest[0]
         effective = colorscale or (settings or {}).get("discrete_palette", "StarryNight")
-        return tomo_figure(_motl_df(data), index, color_col, effective, marker_size, hover_info, show_dual_graph)
+        df = _motl_df(data)
+        if df.empty:
+            return go.Figure(), no_update, {"display": "none"}, "Tomo ID"
+        return tomo_figure(df, index, color_col, effective, marker_size, hover_info, show_dual_graph)
 
     @app.callback(
         Output(f"{prefix}-tomo-selector", "children"),

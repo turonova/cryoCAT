@@ -9,7 +9,7 @@ Usage:
 
 The server binds to 127.0.0.1 (localhost) only.  Do NOT expose it on 0.0.0.0
 or through a multi-worker process manager: the GUI console allows arbitrary
-Python execution as the current user (§12 of GUI_CONVENTIONS.md).
+Python execution as the current user.
 """
 
 from werkzeug.serving import run_simple

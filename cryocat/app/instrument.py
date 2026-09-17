@@ -1,6 +1,13 @@
-"""Temporary diagnostic: count and time every callback, per instance."""
+"""Temporary diagnostic: count and time every callback, per instance.
 
-import atexit, collections, datetime, functools, time
+Set the environment variable ``CRYOCAT_TRACE=1`` to enable continuous
+ENTER/EXIT tracing from the very first callback, regardless of whether the
+app is running with ``debug=True`` or ``debug=False``.  When the variable is
+not set the trace is controlled programmatically via :func:`start_trace` and
+:func:`reset` (the existing per-operation windows in motlio / ptango).
+"""
+
+import atexit, collections, datetime, functools, os, time
 import dash
 from dash import ctx
 
@@ -10,6 +17,11 @@ WRAPPED = []
 TRACE: list = []        # (timestamp_float, event, key) when _tracing is True
 _tracing: bool = False
 _snap_t0: float = 0.0
+
+# True when CRYOCAT_TRACE is set in the environment.  Per-operation callbacks
+# (load_motl, NN compute) check this flag and skip their reset()/start_trace()
+# so they do not wipe the continuous trace mid-run.
+env_tracing: bool = bool(os.environ.get("CRYOCAT_TRACE"))
 
 
 def reset() -> None:
@@ -27,6 +39,12 @@ def start_trace() -> None:
     global _tracing
     TRACE.clear()
     _tracing = True
+
+
+# Activate immediately when CRYOCAT_TRACE is in the environment so the trace
+# covers every callback from the first request, not just after a user action.
+if env_tracing:
+    start_trace()
 
 
 def _ts(t: float) -> str:
@@ -86,6 +104,13 @@ def _instance_key(default):
     return f"{default}  ->  {first}"
 
 
+def _emit(event: str, key: str, ts: float) -> None:
+    """Write one ENTER/EXIT line to stdout immediately (env_tracing mode)."""
+    parts = key.split(".")
+    short = ".".join(parts[-2:]) if len(parts) >= 2 else key
+    print(f"  {_ts(ts)}  {event:5s}  {short}", flush=True)
+
+
 def _wrap(fn):
     name = f"{fn.__module__}.{fn.__name__}"
     WRAPPED.append(name)
@@ -94,7 +119,11 @@ def _wrap(fn):
     def inner(*args, **kwargs):
         t0 = time.perf_counter()
         if _tracing:
-            TRACE.append((time.time(), "ENTER", _instance_key(name)))
+            ts = time.time()
+            key_enter = _instance_key(name)
+            TRACE.append((ts, "ENTER", key_enter))
+            if env_tracing:
+                _emit("ENTER", key_enter, ts)
         try:
             return fn(*args, **kwargs)
         finally:
@@ -102,7 +131,10 @@ def _wrap(fn):
             COUNTS[key] += 1
             TIMES[key] += time.perf_counter() - t0
             if _tracing:
-                TRACE.append((time.time(), "EXIT ", key))
+                ts = time.time()
+                TRACE.append((ts, "EXIT ", key))
+                if env_tracing:
+                    _emit("EXIT ", key, ts)
 
     return inner
 
@@ -128,6 +160,8 @@ def instrument(app=None):
 
 @atexit.register
 def report():
+    if env_tracing:
+        print_trace("env-final")
     print(f"\n=== callback report ({len(WRAPPED)} wrapped) ===")
     for key, ms in TIMES.most_common(40):
         print(f"{COUNTS[key]:7d} calls {ms * 1000:10.1f} ms total  {key}")

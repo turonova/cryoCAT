@@ -1069,8 +1069,6 @@ def register_table_cluster_callbacks(
 
         if commit_fn is not None:
             committed = commit_fn(main_data, df)
-            print(f"[tablecluster] {prefix} save: commit_fn returned "
-                  f"{'new ref dict' if committed is not None else 'None (invalid ref)'}")
             if committed is None:
                 status = "Save failed: store ref is invalid or expired — reload the table and try again."
                 nu = [no_update] * n_pool_out + [no_update, status]
@@ -1080,7 +1078,6 @@ def register_table_cluster_callbacks(
             new_data = committed
         else:
             new_data = _cluster_df_to_store(df)
-            print(f"[tablecluster] {prefix} save: no commit_fn — wrote {len(new_data)} raw records to store")
         if cluster_cols_store_id:
             cols = list(existing_cols or [])
             if col_name not in cols:

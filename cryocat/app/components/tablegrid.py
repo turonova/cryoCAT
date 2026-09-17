@@ -2,7 +2,7 @@
 
 The grid never receives the full DataFrame. On each scroll or filter event
 AG Grid sends getRowsRequest; the _rows callback applies sort + filter to the
-server-side pool entry and returns one 100-row block via getRowsResponse.
+server-side pool entry and returns one 1000-row block via getRowsResponse.
 
 Pure functions (apply_sort_model, apply_filter_model, slice_block,
 resolve_select_all_ids) are testable without Dash. Block serialisation goes
@@ -20,7 +20,7 @@ from cryocat.app.pool import _CACHE_BLOCK_SIZE, block_to_records
 
 CACHE_BLOCK_SIZE = _CACHE_BLOCK_SIZE  # re-exported so test can import from here
 
-_BASE_GRID_OPTIONS = {"cacheBlockSize": CACHE_BLOCK_SIZE, "maxBlocksInCache": 4, "rowSelection": "multiple"}
+_BASE_GRID_OPTIONS = {"cacheBlockSize": CACHE_BLOCK_SIZE, "maxBlocksInCache": 20, "rowSelection": {"mode": "multiRow"}}
 
 
 # ── Pure functions ─────────────────────────────────────────────────────────────
@@ -221,6 +221,7 @@ def get_grid_container(prefix: str) -> html.Div:
         [
             html.Div(id=f"{prefix}-purge-sink", style={"display": "none"}),
             dcc.Store(id=f"{prefix}-slider-filters-store", data={}),
+            dcc.Store(id=f"{prefix}-col-ref-store"),
             get_grid(prefix),
         ],
         id=f"{prefix}-grid-container",
@@ -239,7 +240,7 @@ def get_grid(prefix: str) -> dag.AgGrid:
         rowModelType="infinite",
         dashGridOptions={
             "cacheBlockSize": CACHE_BLOCK_SIZE,
-            "maxBlocksInCache": 4,
+            "maxBlocksInCache": 20,
         },
         defaultColDef=_DEFAULT_COL_DEF,
         style=_GRID_STYLE,
@@ -279,12 +280,20 @@ def register_tablegrid_callbacks(
     @app.callback(
         Output(f"{prefix}-grid", "columnDefs"),
         Output(f"{prefix}-grid", "dashGridOptions"),
+        Output(f"{prefix}-col-ref-store", "data"),
         Input(f"{prefix}-global-data-store", "data"),
+        State(f"{prefix}-col-ref-store", "data"),
     )
-    def _cols(ref):
+    def _cols(ref, stored):
+        stored = stored or {}
+        prev_ref = stored.get("ref")
+        prev_fields = stored.get("fields", [])
+        if ref == prev_ref:
+            raise exceptions.PreventUpdate
         df = resolve_df(ref)
         if df is None:
             if ref is not None:
+                new_stored = {"ref": ref, "fields": []}
                 return [], {
                     **_BASE_GRID_OPTIONS,
                     "overlayNoRowsTemplate": (
@@ -293,17 +302,25 @@ def register_tablegrid_callbacks(
                         "restart or an interrupted save. Please reload the data."
                         "</span>"
                     ),
-                }
-            return no_update, no_update
-        return col_defs_from_df(df), {**_BASE_GRID_OPTIONS, "infiniteInitialRowCount": len(df)}
+                }, new_stored
+            # ref is None — trigger purge to clear grid, leave columnDefs
+            return no_update, no_update, {"ref": None, "fields": []}
+        new_cols = col_defs_from_df(df)
+        new_fields = [c["field"] for c in new_cols]
+        new_stored = {"ref": ref, "fields": new_fields}
+        new_options = {**_BASE_GRID_OPTIONS, "infiniteInitialRowCount": len(df)}
+        if new_fields == prev_fields:
+            # same schema, different data — purge only, no column re-render
+            return no_update, no_update, new_stored
+        return new_cols, new_options, new_stored
 
     app.clientside_callback(
-        "function(c){if(!c||!c.length)return window.dash_clientside.no_update;"
+        "function(c){if(c===undefined||c===null)return window.dash_clientside.no_update;"
         f'window.dash_ag_grid.getApiAsync("{prefix}-grid")'
         ".then(function(a){if(a)a.purgeInfiniteCache()});"
         "return window.dash_clientside.no_update;}",
         Output(f"{prefix}-purge-sink", "children"),
-        Input(f"{prefix}-grid", "columnDefs"),
+        Input(f"{prefix}-col-ref-store", "data"),
     )
 
     app.clientside_callback(
@@ -319,13 +336,11 @@ def register_tablegrid_callbacks(
     @app.callback(
         Output(f"{prefix}-grid", "getRowsResponse"),
         Input(f"{prefix}-grid", "getRowsRequest"),
-        Input(f"{prefix}-global-data-store", "data"),
+        State(f"{prefix}-global-data-store", "data"),
         State(f"{prefix}-slider-filters-store", "data"),
     )
     def _rows(request, ref, slider_filters):
         if not ref:
-            # Direct clear: answer any pending request with 0 rows so the grid
-            # empties immediately without a purge-and-refetch round trip.
             return {"rowData": [], "rowCount": 0} if request is not None else no_update
         if request is None:
             return no_update

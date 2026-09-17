@@ -27,7 +27,7 @@ _first_free_slot(slot_map, n_slots)
 from __future__ import annotations
 
 import dash
-from dash import html, Input, Output, State, no_update, ctx, ALL
+from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 
 from cryocat.app import styles
@@ -65,10 +65,13 @@ def _slot_options(item_id: str, slot_map: list, n_slots: int) -> list[dict]:
 
 def get_pool_slot_list(prefix: str) -> html.Div:
     """Return the container div; register_pool_slot_list_callbacks populates it."""
-    return html.Div(
-        id=f"{prefix}-psl-list",
-        children=[html.Div("No entries.", style=styles.HINT)],
-    )
+    return html.Div([
+        dcc.Store(id=f"{prefix}-psl-seq", data=0),
+        html.Div(
+            id=f"{prefix}-psl-list",
+            children=[html.Div("No entries.", style=styles.HINT)],
+        ),
+    ])
 
 
 def _build_rows(reg, sm, n_slots, active_id, prefix, row_extra_fn):
@@ -166,7 +169,7 @@ def register_slot_change_callback(
     """
 
     @app.callback(
-        Output(slot_map_id, "data", allow_duplicate=True),
+        Output(slot_map_id, "data"),
         Input({"type": f"{prefix}-psl-slot", "item_id": ALL}, "value"),
         State(slot_map_id, "data"),
         prevent_initial_call=True,
@@ -214,8 +217,13 @@ def register_pool_slot_list_callbacks(
         back to the same store.
     """
     _has_active = active_id_store_id is not None
+    # psl-seq fires _render whenever the pool registry changes (via
+    # _clean_stale_slots) without making pool_registry_id a direct Input.
+    # This prevents _render from reading a stale slot_map concurrently with
+    # _on_slot_change when threaded=True in the server.
     _all_inputs = [
-        Input(pool_registry_id, "data"),
+        Input(f"{prefix}-psl-seq", "data"),
+        State(pool_registry_id, "data"),
         Input(slot_map_id, "data"),
         *([] if not _has_active else [Input(active_id_store_id, "data")]),
     ]
@@ -228,9 +236,10 @@ def register_pool_slot_list_callbacks(
         *_all_inputs,
     )
     def _render(*args):
-        registry = args[0]
-        slot_map = args[1]
-        active_id = args[2] if _has_active else None
+        _seq = args[0]  # trigger only
+        registry = args[1]
+        slot_map = args[2]
+        active_id = args[3] if _has_active else None
         reg = registry or {}
         sm = list(slot_map or [None] * n_slots)
         while len(sm) < n_slots:
@@ -252,21 +261,29 @@ def register_pool_slot_list_callbacks(
 
     @app.callback(
         Output(slot_map_id, "data", allow_duplicate=True),
+        Output(f"{prefix}-psl-seq", "data"),
         Input(pool_registry_id, "data"),
         State(slot_map_id, "data"),
+        State(f"{prefix}-psl-seq", "data"),
         prevent_initial_call=True,
     )
-    def _clean_stale_slots(registry, slot_map):
-        """Nullify any slot whose entry id is no longer in the pool registry.
+    def _clean_stale_slots(registry, slot_map, seq):
+        """Nullify stale slots and bump psl-seq to retrigger _render.
 
-        Fires whenever an entry is removed from the pool, ensuring the slot map
-        is cleared immediately rather than requiring a second user interaction.
-        Idempotent: returns no_update when nothing has changed.
+        Fires whenever the pool registry changes.  Removing a stale entry
+        writes an updated slot_map; a registry-only add (no stale slots)
+        skips the slot_map write but always increments psl-seq so _render
+        still fires to show the new entry.  _render reads pool_registry_id
+        as State rather than Input, which means it never fires concurrently
+        with _on_slot_change — eliminating the slot-revert race.
         """
         reg = registry or {}
         sm = list(slot_map or [None] * n_slots)
         updated = [sid if sid in reg else None for sid in sm]
-        return updated if updated != sm else no_update
+        new_seq = (seq or 0) + 1
+        if updated == sm:
+            return no_update, new_seq
+        return updated, new_seq
 
 
 def register_slot_focus_callback(

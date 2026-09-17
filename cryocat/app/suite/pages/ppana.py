@@ -813,8 +813,8 @@ def register_callbacks(app):
     # ── wedge mask modal: open / close / use ─────────────────────────────────
     @app.callback(
         Output("ppana-wedge-modal", "is_open"),
-        Output({"type": "path-input", "owner": "ppana-sw-target"}, "value"),
-        Output({"type": "path-input", "owner": "ppana-sw-tmpl"}, "value"),
+        Output({"type": "path-input", "owner": "ppana-sw-target"}, "value", allow_duplicate=True),
+        Output({"type": "path-input", "owner": "ppana-sw-tmpl"}, "value", allow_duplicate=True),
         Input("ppana-wedge-open-btn", "n_clicks"),
         Input("ppana-wedge-close-btn", "n_clicks"),
         Input("ppana-wedge-use-target-btn", "n_clicks"),

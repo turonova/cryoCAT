@@ -342,34 +342,24 @@ def register_table_to_motl_callbacks(
         return [{"label": v.get("label", k), "value": k} for k, v in registry.items()]
 
     if _has_store:
-        for i in range(_N_PAIRS):
-            @app.callback(
-                Output(f"{prefix}-ttm-val-col-{i}", "options"),
-                Input(source_store_id, "data"),
-                prevent_initial_call=True,
-            )
-            def _populate_val_col_n(ref, _i=i):
-                df = resolve_df(ref)
-                _cols = list(df.columns) if df is not None and not df.empty else []
-                print(f"[tabletomotl] {prefix} col-{_i}: store={source_store_id!r} ref_type={type(ref).__name__} "
-                      f"resolve_df={resolve_df.__name__ if hasattr(resolve_df, '__name__') else resolve_df!r} "
-                      f"→ {'None' if df is None else f'{len(df)} rows, cols={_cols[:5]}'}")
-                if df is None or df.empty:
-                    return []
-                return [{"label": c, "value": c} for c in df.columns]
+        @app.callback(
+            *[Output(f"{prefix}-ttm-val-col-{i}", "options") for i in range(_N_PAIRS)],
+            Input(source_store_id, "data"),
+            prevent_initial_call=True,
+        )
+        def _populate_val_cols(ref):
+            df = resolve_df(ref)
+            cols = [{"label": c, "value": c} for c in df.columns] if df is not None and not df.empty else []
+            return tuple(cols for _ in range(_N_PAIRS))
     else:
-        for i in range(_N_PAIRS):
-            @app.callback(
-                Output(f"{prefix}-ttm-val-col-{i}", "options"),
-                Input(source_table_id, "rowData"),
-                prevent_initial_call=True,
-            )
-            def _populate_val_col_n(row_data, _i=i):
-                print(f"[tabletomotl] {prefix} col-{_i}: rowData path (no store) — "
-                      f"row_data type={type(row_data).__name__} len={len(row_data) if row_data else 0}")
-                if not row_data:
-                    return []
-                return [{"label": c, "value": c} for c in pd.DataFrame(row_data or []).columns]
+        @app.callback(
+            *[Output(f"{prefix}-ttm-val-col-{i}", "options") for i in range(_N_PAIRS)],
+            Input(source_table_id, "rowData"),
+            prevent_initial_call=True,
+        )
+        def _populate_val_cols(row_data):
+            cols = [{"label": c, "value": c} for c in pd.DataFrame(row_data or []).columns] if row_data else []
+            return tuple(cols for _ in range(_N_PAIRS))
 
     _act_extra = [State(source_store_id, "data")] if _has_store else [State(source_table_id, "rowData")]
 

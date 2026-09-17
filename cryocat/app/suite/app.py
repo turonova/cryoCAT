@@ -19,6 +19,10 @@ from cryocat.app import session as _session
 
 _session.start_session()
 
+from cryocat.app import discovery as _discovery
+
+_discovery.load_registry()
+
 import dash
 from dash import html, dcc, Input, Output
 import dash_bootstrap_components as dbc

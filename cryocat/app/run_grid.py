@@ -83,7 +83,6 @@ def _cols(which):
     State("active-store", "data"),
 )
 def _rows(request, which):
-    print(f"REQUEST {request}")
     if request is None:
         return no_update
     df = FRAMES.get(which or "a")

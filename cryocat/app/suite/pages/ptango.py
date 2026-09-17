@@ -777,13 +777,14 @@ def register_callbacks(app) -> None:
         prev_handle,
     ):
         _no7 = (no_update,) * 7
-        from cryocat.app.instrument import snapshot as _snap, reset as _reset, start_trace as _start_trace
+        from cryocat.app.instrument import snapshot as _snap, reset as _reset, start_trace as _start_trace, env_tracing as _env_tracing
         if not n_clicks:
             raise PreventUpdate
         if not motl_ids:
             return *_no7[:3], "Select a motl first.", *_no7[4:]
-        _snap("load+select")   # D1/D4: everything since load_motl reset() — also prints trace
-        _start_trace()         # D3: begin twist trace
+        if not _env_tracing:
+            _snap("load+select")   # D1/D4: everything since load_motl reset() — also prints trace
+            _start_trace()         # D3: begin twist trace
         motl_id = motl_ids[0]
         if nn_radius is None or nn_radius <= 0:
             return *_no7[:3], "NN radius is required.", *_no7[4:]

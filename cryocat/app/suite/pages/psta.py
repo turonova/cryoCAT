@@ -404,7 +404,7 @@ def _sep_range_modal(group: str, title: str, col_defs: list) -> dbc.Modal:
                         dashGridOptions={
                             "singleClickEdit": True,
                             "stopEditingWhenCellsLoseFocus": True,
-                            "rowSelection": "single",
+                            "rowSelection": {"mode": "singleRow"},
                             "suppressMovableColumns": True,
                         },
                         style={"height": "220px", "width": "100%"},

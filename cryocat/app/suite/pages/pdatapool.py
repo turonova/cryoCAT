@@ -45,7 +45,6 @@ from cryocat.app.components.poolslotlist import (
     get_pool_slot_list,
     register_pool_slot_list_callbacks,
     register_slot_focus_callback,
-    _first_free_slot,
 )
 from cryocat.core.cryomotl import Motl
 from cryocat.app.apputils import run_operation
@@ -55,13 +54,32 @@ from cryocat.app.components.customel import customel_graph
 # ── Dynamic IDs for the suite app router ──────────────────────────────────────
 
 DYNAMIC_IDS: list[tuple[str, str]] = [
-    ("dp-view-tabv-grid-container", "dp-view-tabv-grid"),
+    (f"dp-view-{i}-tabv-grid-container", f"dp-view-{i}-tabv-grid")
+    for i in range(5)
 ]
 
 # ── Panel visibility helpers ──────────────────────────────────────────────────
 
 _SHOW: dict = {"display": "block"}
 _HIDE: dict = {"display": "none"}
+
+
+def dp_resolve_df(ref: dict | None):
+    """Resolve a data-pool ref to a DataFrame.
+
+    For refs that carry ``data_id``, fetches directly from the data pool without
+    going through the shared ``dp-view`` bridge — each per-slot grid can resolve
+    its own entry independently.  Refs without ``data_id`` (WC-preview bridge refs
+    and motl refs) delegate to ``pool_resolve_df``.
+    """
+    if ref is None:
+        return None
+    if isinstance(ref, dict) and "data_id" in ref:
+        try:
+            return datapool.get_payload(ref["data_id"])
+        except Exception:
+            return None
+    return pool_resolve_df(ref)
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
@@ -129,37 +147,24 @@ def _do_remove(
     return state, new_sel
 
 
-def _do_select(
+def _dp_slot_ref(
     data_id: str | None,
     registry: dict,
-    rev: int,
-) -> tuple:
-    """Compute panel visibility and tablegrid reference for the selected entry.
-
-    Returns
-    -------
-    (new_rev, tabv_store_data, table_style, graph_style, dict_style, empty_style)
-    """
+    entry_revs: dict,
+) -> dict | None:
+    """Return the per-slot store ref for *data_id*, or None for non-grid kinds."""
     reg = registry or {}
     if not data_id or data_id not in reg:
-        datapool.clear_view_df()
-        return rev, None, _HIDE, _HIDE, _HIDE, _SHOW
-
-    kind    = reg[data_id].get("kind", "dataframe")
-    state   = DataPoolState.from_stores(reg, 0)
-    new_rev = (rev or 0) + 1
-
-    if kind in ("dataframe", "array"):
-        datapool.set_view_df(data_id, state)
-        ref = {"motl_id": "dp-view", "rev": new_rev}
-        return new_rev, ref, _SHOW, _HIDE, _HIDE, _HIDE
-
-    datapool.clear_view_df()
-    if kind == "volume":
-        return new_rev, None, _HIDE, _SHOW, _HIDE, _HIDE
-    if kind == "dict":
-        return new_rev, None, _HIDE, _HIDE, _SHOW, _HIDE
-    return new_rev, None, _HIDE, _HIDE, _HIDE, _SHOW
+        return None
+    kind = reg[data_id].get("kind", "dataframe")
+    if kind not in ("dataframe", "array"):
+        return None
+    entry_rev = (entry_revs or {}).get(data_id, 0)
+    ref: dict = {"motl_id": "dp-view", "data_id": data_id, "rev": entry_rev}
+    n_rows = reg[data_id].get("n_rows")
+    if n_rows is not None:
+        ref["n_rows"] = n_rows
+    return ref
 
 
 def _do_publish(data_id: str | None, name: str | None, registry: dict) -> str:
@@ -269,7 +274,10 @@ def _tab_to_idx(active_tab: str | None) -> int | None:
 
 def _slot_tab(i: int) -> dbc.Tab:
     return dbc.Tab(
-        "",
+        html.Div(
+            get_table_component(f"dp-view-{i}-tabv", show_create_from_selected=True),
+            style={"padding": "0.5rem"},
+        ),
         id=f"dp-tab-{i}",
         tab_id=f"dp-slot-{i}",
         label=f"Slot {i + 1}",
@@ -278,12 +286,17 @@ def _slot_tab(i: int) -> dbc.Tab:
 
 
 def _make_stores() -> list:
+    per_slot = [
+        dcc.Store(id=f"dp-view-{i}-tabv-global-data-store", data=None)
+        for i in range(_N_SLOTS)
+    ]
     return [
-        dcc.Store(id="dp-selected-id",                data=None),
-        dcc.Store(id="dp-view-rev",                   data=0),
-        dcc.Store(id="dp-view-tabv-global-data-store", data=None),
-        dcc.Store(id="dp-slot-map",                   data=[None] * _N_SLOTS),
-        dcc.Store(id="dp-active-id",                  data=None),
+        dcc.Store(id="dp-selected-id",  data=None),
+        dcc.Store(id="dp-view-rev",     data=0),
+        dcc.Store(id="dp-entry-revs",   data={}),
+        dcc.Store(id="dp-slot-map",     data=[None] * _N_SLOTS),
+        dcc.Store(id="dp-active-id",    data=None),
+        *per_slot,
     ]
 
 
@@ -430,11 +443,6 @@ def _main() -> list:
             style={"marginBottom": styles.SECTION_GAP},
         ),
         html.Div(
-            get_table_component("dp-view-tabv", show_create_from_selected=True),
-            id="dp-panel-table",
-            style=_HIDE,
-        ),
-        html.Div(
             [
                 customel_graph("dp", "view", dcc.Graph(
                     id={"type": "styled-graph", "owner": "dp", "name": "view"},
@@ -500,12 +508,12 @@ def _wc_ui_update_op(wc_signal, src_ref):
     return ind, False, "Apply the working copy back to the original entry (recorded).", _SHOW
 
 
-def _apply_to_original_op(src_ref, pool_reg, pool_meta_data, pool_next_id, dp_reg, dp_next_id):
+def _apply_to_original_op(src_ref, pool_reg, pool_meta_data, pool_next_id, dp_reg, dp_next_id, entry_revs):
     from cryocat.app.suite.pages._wcopy import (
         get_copy, get_meta, validate_for_apply, source_changed, clear, source_id_for_ref,
     )
     _no = no_update
-    _fail = (_no, _no, _no, _no, _no, _no)
+    _fail = (_no, _no, _no, _no, _no, _no, _no)
     source_id = source_id_for_ref(src_ref)
     wc_df = get_copy(source_id)
     if wc_df is None:
@@ -523,7 +531,7 @@ def _apply_to_original_op(src_ref, pool_reg, pool_meta_data, pool_next_id, dp_re
         p = PoolState.from_stores(pool_reg, pool_meta_data, pool_next_id)
         p = run_operation(replace_motl_rows, {"state": p, "motl_id": motl_id, "rows": wc_df})
         clear(source_id)
-        return *p.to_stores(), _no, _no, None, f"Applied to {motl_id} (revision bumped).{warn}"
+        return *p.to_stores(), _no, _no, None, f"Applied to {motl_id} (revision bumped).{warn}", _no
     if "data_id" in src_ref:
         data_id = src_ref["data_id"]
         current_n = (dp_reg or {}).get(data_id, {}).get("n_rows")
@@ -533,7 +541,9 @@ def _apply_to_original_op(src_ref, pool_reg, pool_meta_data, pool_next_id, dp_re
         ds = DataPoolState.from_stores(dp_reg, dp_next_id)
         ds = run_operation(datapool.replace_payload, {"state": ds, "data_id": data_id, "df": wc_df})
         clear(source_id)
-        return _no, _no, _no, *ds.to_stores(), None, f"Applied to {data_id}.{warn}"
+        rm = dict(entry_revs or {})
+        rm[data_id] = rm.get(data_id, 0) + 1
+        return _no, _no, _no, *ds.to_stores(), None, f"Applied to {data_id}.{warn}", rm
     return *_fail, "Unknown source type."
 
 
@@ -577,41 +587,78 @@ def register_callbacks(app):  # noqa: C901
 
     # ── Select entry / refresh working-copy view ───────────────────────────────
     @app.callback(
-        Output("dp-view-rev",                    "data"),
-        Output("dp-view-tabv-global-data-store", "data"),
-        Output("dp-panel-table",  "style"),
-        Output("dp-panel-graph",  "style"),
-        Output("dp-panel-dict",   "style"),
-        Output("dp-panel-empty",  "style"),
-        Input("dp-edit-src-ref",          "data"),
-        Input("dp-edit-wc-changed",       "data"),  # fires on wc op or commit
-        State(ids.DATA_POOL_REGISTRY,     "data"),
-        State("dp-view-rev",              "data"),
+        Output("dp-view-rev", "data"),
+        *[Output(f"dp-view-{_i}-tabv-global-data-store", "data") for _i in range(_N_SLOTS)],
+        Input("dp-edit-src-ref",      "data"),
+        Input("dp-edit-wc-changed",   "data"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        State("dp-view-rev",          "data"),
+        State("dp-slot-map",          "data"),
+        State("dp-active-id",         "data"),
+        State("dp-entry-revs",        "data"),
     )
-    def _select_entry(src_ref, wc_signal, dp_registry, rev):
+    def _select_entry(src_ref, wc_signal, dp_registry, rev, slot_map, active_id, entry_revs):
         from cryocat.app.suite.pages._wcopy import get_copy, source_id_for_ref
-        # When working copy is active for the current source, show it
+        sm = list(slot_map or [None] * _N_SLOTS)
+        store_outs: list = [no_update] * _N_SLOTS
+        try:
+            slot_idx = sm.index(active_id) if active_id else -1
+        except ValueError:
+            slot_idx = -1
+
+        # WC-preview path: working copy is active for current source
         if src_ref and wc_signal:
             signal_source_id = wc_signal.get("source_id") if isinstance(wc_signal, dict) else None
             current_source_id = source_id_for_ref(src_ref)
             if signal_source_id and signal_source_id == current_source_id:
                 wc_df = get_copy(current_source_id)
-                if wc_df is not None:
+                if wc_df is not None and slot_idx >= 0:
                     datapool.set_view_df_direct(wc_df)
                     new_rev = (rev or 0) + 1
-                    return new_rev, {"motl_id": "dp-view", "rev": new_rev}, _SHOW, _HIDE, _HIDE, _HIDE
-        # Normal routing (wc cleared or different source selected)
+                    store_outs[slot_idx] = {"motl_id": "dp-view", "rev": new_rev}
+                    return new_rev, *store_outs
+
+        # Normal routing (wc cleared, committed, or different source selected)
+        if slot_idx < 0:
+            return rev, *store_outs
+
         if not src_ref:
             datapool.clear_view_df()
-            return rev, None, _HIDE, _HIDE, _HIDE, _SHOW
-        if "motl_id" in src_ref:
+            store_outs[slot_idx] = None
+            return rev, *store_outs
+
+        if "motl_id" in src_ref and "data_id" not in src_ref:
             new_rev = (rev or 0) + 1
-            ref = {"motl_id": src_ref["motl_id"], "rev": new_rev}
-            return new_rev, ref, _SHOW, _HIDE, _HIDE, _HIDE
+            store_outs[slot_idx] = {"motl_id": src_ref["motl_id"], "rev": new_rev}
+            return new_rev, *store_outs
+
         if "data_id" in src_ref:
-            return _do_select(src_ref["data_id"], dp_registry, rev)
+            store_outs[slot_idx] = _dp_slot_ref(src_ref["data_id"], dp_registry, entry_revs)
+            return rev, *store_outs
+
         datapool.clear_view_df()
-        return rev, None, _HIDE, _HIDE, _HIDE, _SHOW
+        store_outs[slot_idx] = None
+        return rev, *store_outs
+
+    # ── Panel visibility (graph, dict, empty) — driven by active slot kind ─────
+    @app.callback(
+        Output("dp-panel-graph", "style"),
+        Output("dp-panel-dict",  "style"),
+        Output("dp-panel-empty", "style"),
+        Input("dp-active-id",         "data"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+    )
+    def _update_panels(active_id, dp_reg):
+        if not active_id or active_id not in (dp_reg or {}):
+            return _HIDE, _HIDE, _SHOW
+        kind = (dp_reg or {}).get(active_id, {}).get("kind", "dataframe")
+        if kind in ("dataframe", "array"):
+            return _HIDE, _HIDE, _HIDE
+        if kind == "volume":
+            return _SHOW, _HIDE, _HIDE
+        if kind == "dict":
+            return _HIDE, _SHOW, _HIDE
+        return _HIDE, _HIDE, _SHOW
 
     # ── Sync dp-selected-id (written by tableeditor Apply) → picker ────────────
     @app.callback(
@@ -645,37 +692,51 @@ def register_callbacks(app):  # noqa: C901
                 return None
         return no_update
 
-    # ── Graph viewer ───────────────────────────────────────────────────────────
+    # ── Graph viewer — fires once per slot switch via dp-active-id ────────────
     @app.callback(
         Output({"type": "styled-graph", "owner": "dp", "name": "view"}, "figure"),
-        Input("dp-edit-src-ref",         "data"),
+        Input("dp-active-id",            "data"),
         State(ids.DATA_POOL_REGISTRY,    "data"),
         State(ids.GRAPH_SETTINGS_STORE,  "data"),
     )
-    def _render_graph_viewer(src_ref, registry, gs):
-        data_id = (src_ref or {}).get("data_id")
-        return _vol_or_arr_figure(data_id, 0.5, registry, gs)
+    def _render_graph_viewer(active_id, registry, gs):
+        if not active_id:
+            return styled_figure(go.Figure(), gs or {}, uirevision="dp-empty")
+        kind = (registry or {}).get(active_id, {}).get("kind", "")
+        if kind not in ("volume", "array"):
+            return no_update
+        return _vol_or_arr_figure(active_id, 0.5, registry, gs)
 
-    # ── Dict viewer ────────────────────────────────────────────────────────────
+    # ── Dict viewer — fires once per slot switch via dp-active-id ─────────────
     @app.callback(
         Output("dp-view-dict", "children"),
-        Input("dp-edit-src-ref", "data"),
+        Input("dp-active-id",            "data"),
+        State(ids.DATA_POOL_REGISTRY,    "data"),
     )
-    def _render_dict_viewer(src_ref):
-        data_id = (src_ref or {}).get("data_id")
-        return _dict_text(data_id)
+    def _render_dict_viewer(active_id, dp_reg):
+        if not active_id:
+            return ""
+        kind = (dp_reg or {}).get(active_id, {}).get("kind", "")
+        if kind != "dict":
+            return no_update
+        return _dict_text(active_id)
 
-    # ── Table sub-component callbacks ──────────────────────────────────────────
-    register_table_callbacks(
-        app, "dp-view-tabv",
-        resolve_df=pool_resolve_df, resolve_n_rows=pool_resolve_n_rows,
-    )
-    register_table_plot_callbacks(
-        app, "dp-view-tabv-table-plot", "dp-view-tabv-global-data-store", resolve_df=pool_resolve_df,
-    )
-    register_table_cluster_callbacks(
-        app, "dp-view-tabv-table-cluster", "dp-view-tabv-global-data-store", pool_aware=True, resolve_df=pool_resolve_df,
-    )
+    # ── Per-slot table sub-component callbacks ─────────────────────────────────
+    for _i in range(_N_SLOTS):
+        register_table_callbacks(
+            app, f"dp-view-{_i}-tabv",
+            resolve_df=dp_resolve_df, resolve_n_rows=pool_resolve_n_rows,
+        )
+        register_table_plot_callbacks(
+            app, f"dp-view-{_i}-tabv-table-plot",
+            f"dp-view-{_i}-tabv-global-data-store",
+            resolve_df=dp_resolve_df,
+        )
+        register_table_cluster_callbacks(
+            app, f"dp-view-{_i}-tabv-table-cluster",
+            f"dp-view-{_i}-tabv-global-data-store",
+            pool_aware=True, resolve_df=dp_resolve_df,
+        )
 
     # ── Working-copy UI: indicator + Apply button disabled state ──────────────
     @app.callback(
@@ -701,6 +762,7 @@ def register_callbacks(app):  # noqa: C901
         Output("dp-edit-wc-changed",   "data", allow_duplicate=True),
         # allow_duplicate: _on_save_as_new and _on_discard also write this
         Output("dp-wc-commit-status",  "children", allow_duplicate=True),
+        Output("dp-entry-revs",        "data", allow_duplicate=True),
         Input("dp-wc-apply-btn",       "n_clicks"),
         State("dp-edit-src-ref",      "data"),
         State(ids.POOL_REGISTRY,      "data"),
@@ -708,14 +770,15 @@ def register_callbacks(app):  # noqa: C901
         State(ids.POOL_NEXT_ID,       "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
         State(ids.DATA_POOL_NEXT_ID,  "data"),
+        State("dp-entry-revs",        "data"),
         prevent_initial_call=True,
     )
     def _on_apply_to_original(
-        n_clicks, src_ref, pool_reg, pool_meta_data, pool_next_id, dp_reg, dp_next_id,
+        n_clicks, src_ref, pool_reg, pool_meta_data, pool_next_id, dp_reg, dp_next_id, entry_revs,
     ):
         if not n_clicks or not src_ref:
             raise PreventUpdate
-        return _apply_to_original_op(src_ref, pool_reg, pool_meta_data, pool_next_id, dp_reg, dp_next_id)
+        return _apply_to_original_op(src_ref, pool_reg, pool_meta_data, pool_next_id, dp_reg, dp_next_id, entry_revs)
 
     # ── Working-copy commit: Save as new table ─────────────────────────────────
     @app.callback(
@@ -844,41 +907,45 @@ def register_callbacks(app):  # noqa: C901
         active_id_store_id="dp-active-id",
     )
 
-    # Auto-assign newly inserted pool entries to the lowest free slot
+    # Sync slot-map + entry-revs → per-slot global-data-stores
     @app.callback(
-        Output("dp-slot-map", "data", allow_duplicate=True),
-        Input(ids.DATA_POOL_REGISTRY, "data"),
-        State("dp-slot-map",          "data"),
+        *[Output(f"dp-view-{_i}-tabv-global-data-store", "data", allow_duplicate=True) for _i in range(_N_SLOTS)],
+        Input("dp-slot-map",          "data"),
+        Input("dp-entry-revs",        "data"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        *[State(f"dp-view-{_i}-tabv-global-data-store", "data") for _i in range(_N_SLOTS)],
         prevent_initial_call=True,
     )
-    def _auto_assign_to_slot(registry, slot_map):
+    def _sync_pool_to_dp_slots(slot_map, entry_revs, dp_registry, *current_refs):
         sm = list(slot_map or [None] * _N_SLOTS)
-        while len(sm) < _N_SLOTS:
-            sm.append(None)
-        assigned = {sid for sid in sm if sid}
-        changed = False
-        for did in datapool.clean_registry(registry):
-            if did not in assigned:
-                free = _first_free_slot(sm, _N_SLOTS)
-                if free is not None:
-                    sm[free] = did
-                    assigned.add(did)
-                    changed = True
-        return sm if changed else no_update
+        reg = dp_registry or {}
+        rm = entry_revs or {}
+        outs = []
+        for i in range(_N_SLOTS):
+            data_id = sm[i] if i < len(sm) else None
+            current = current_refs[i] if i < len(current_refs) else None
+            if not data_id or data_id not in reg:
+                outs.append(None if current is not None else no_update)
+                continue
+            new_ref = _dp_slot_ref(data_id, reg, rm)
+            outs.append(new_ref if new_ref != current else no_update)
+        return tuple(outs)
 
     # Sync focused slot → tableeditor picker
     @app.callback(
         Output("dp-edit-src-dd", "value", allow_duplicate=True),
-        Input("dp-active-id", "data"),
+        Input("dp-active-id",     "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
+        State("dp-edit-src-dd",   "value"),
         prevent_initial_call=True,
     )
-    def _sync_active_to_picker(active_id, dp_reg):
-        if not active_id:
+    def _sync_active_to_picker(active_id, dp_reg, current_val):
+        if not active_id or active_id not in (dp_reg or {}):
             return no_update
-        if active_id not in (dp_reg or {}):
+        expected = f"data:{active_id}"
+        if current_val == expected:
             return no_update
-        return f"data:{active_id}"
+        return expected
 
     # Remove entry from pool via slot list's remove button
     @app.callback(
