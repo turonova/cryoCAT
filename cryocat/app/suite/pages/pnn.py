@@ -54,7 +54,7 @@ from cryocat.app.components.tablesource import get_table_source, register_table_
 from cryocat.app.components.tabletomotl import get_table_to_motl, register_table_to_motl_callbacks
 
 DYNAMIC_IDS: list[tuple[str, str]] = [
-    ("nn-out-tabv-grid-container", "nn-out-tabv-grid"),
+    *[(f"nn-slot-{i}-tabv-grid-container", f"nn-slot-{i}-tabv-grid") for i in range(5)],
 ]
 
 
@@ -512,11 +512,6 @@ def _sidebar() -> list:
                     item_id="nn-acc-postprocess",
                 ),
                 dbc.AccordionItem(
-                    get_table_to_motl("nn-ttm"),
-                    title="Create motl from NN table",
-                    item_id="nn-acc-create",
-                ),
-                dbc.AccordionItem(
                     _barycentric_sidebar_content(),
                     title="Barycentric motl",
                     item_id="nn-acc-bary",
@@ -536,33 +531,42 @@ def _sidebar() -> list:
                     title="NN results in pool",
                     item_id="nn-acc-pool",
                 ),
+                dbc.AccordionItem(
+                    get_table_to_motl("nn-ttm"),
+                    title="Send to motl editor",
+                    item_id="nn-acc-ttm",
+                ),
             ],
             active_item=["nn-acc-params"],
         ),
     ]
 
 
+def _slot_tab_content(i: int) -> html.Div:
+    return html.Div([
+        get_table_component(f"nn-slot-{i}-tabv", show_editor=True),
+        html.Hr(style={"margin": "0.5rem 0"}),
+        html.Div(id=f"nn-slot-{i}-xyz-graph-area"),
+    ])
+
+
 def _main() -> list:
-    slot_tabs = [
-        dbc.Tab(
-            label=f"Slot {i + 1}",
-            tab_id=f"nn-slot-{i}",
-            id=f"nn-slot-tab-{i}",
-            disabled=True,
-        )
-        for i in range(_NN_SLOTS)
-    ]
     return [
-        dcc.Store(id="nn-out-tabv-global-data-store"),
         dbc.Tabs(
-            slot_tabs,
             id="nn-slot-tabs",
             active_tab="nn-slot-0",
             style={"marginBottom": "0.5rem"},
+            children=[
+                dbc.Tab(
+                    _slot_tab_content(i),
+                    label=f"Slot {i + 1}",
+                    tab_id=f"nn-slot-{i}",
+                    id=f"nn-slot-tab-{i}",
+                    disabled=True,
+                )
+                for i in range(_NN_SLOTS)
+            ],
         ),
-        get_table_component("nn-out-tabv", show_editor=True),
-        html.Hr(style={"margin": "0.5rem 0"}),
-        html.Div(id="nn-xyz-graph-area"),
     ]
 
 
@@ -575,6 +579,9 @@ layout = html.Div(
         dcc.Store(id="nn-pool-registry", data={}),
         dcc.Store(id="nn-pool-slot-map", data=[None] * _NN_SLOTS),
         dcc.Store(id="nn-pool-active-id"),
+        dcc.Store(id="nn-ttm-active-data-store"),
+        dcc.Store(id="nn-ttm-active-sel", data=[]),
+        *[dcc.Store(id=f"nn-slot-{i}-tabv-global-data-store") for i in range(_NN_SLOTS)],
         page_shell(_sidebar(), _main()),
     ],
     style={"margin": "0", "padding": "0"},
@@ -608,38 +615,77 @@ def register_callbacks(app):
         app, "nn-pool-slot-map", "nn-slot-tabs", "nn-slot-", _NN_SLOTS,
         active_id_store_id="nn-pool-active-id",
     )
-    register_table_to_motl_callbacks(
-        app, "nn-ttm",
-        source_table_id="nn-out-tabv-grid",
-        id_column="qp_subtomo_id",
-        source_store_id="nn-out-tabv-global-data-store",
-        resolve_df=_datapool.resolve_df,
-    )
     register_table_source_callbacks(
         app, "nn-src",
         check_fn=NearestNeighbors.check_nn_columns,
         load_fn=_nn_load_fn,
     )
-    register_table_callbacks(
-        app, "nn-out-tabv",
-        resolve_df=_datapool.resolve_df, resolve_n_rows=_datapool.resolve_n_rows,
-        extra_csv_states=[State("nn-used-motls-store", "data")],
-        custom_csv_save_fn=_nn_csv_save,
-        show_editor=True,
-    )
-    register_table_plot_callbacks(
-        app, "nn-out-tabv-table-plot", "nn-out-tabv-global-data-store",
-        special_graphs=["Orientational distribution", "Polar NN distances"],
-        table_grid_id="nn-out-tabv-grid",
+    for _i in range(_NN_SLOTS):
+        register_table_callbacks(
+            app, f"nn-slot-{_i}-tabv",
+            resolve_df=_datapool.resolve_df, resolve_n_rows=_datapool.resolve_n_rows,
+            extra_csv_states=[State("nn-used-motls-store", "data")],
+            custom_csv_save_fn=_nn_csv_save,
+            show_editor=True,
+            data_pool=True,
+        )
+        register_table_plot_callbacks(
+            app, f"nn-slot-{_i}-tabv-table-plot", f"nn-slot-{_i}-tabv-global-data-store",
+            special_graphs=["Orientational distribution", "Polar NN distances"],
+            table_grid_id=f"nn-slot-{_i}-tabv-grid",
+            resolve_df=_datapool.resolve_df,
+        )
+        register_table_cluster_callbacks(
+            app, f"nn-slot-{_i}-tabv-table-cluster", f"nn-slot-{_i}-tabv-global-data-store",
+            table_grid_id=f"nn-slot-{_i}-tabv-grid",
+            cluster_cols_store_id="nn-cluster-cols-store",
+            resolve_df=_datapool.resolve_df,
+            commit_fn=_datapool.replace_df,
+            revs_store_id=ids.DATA_POOL_REVS,
+        )
+    # One shared TTM panel in the sidebar, fed by relay stores for the active slot.
+    register_table_to_motl_callbacks(
+        app, "nn-ttm",
+        source_table_id="nn-slot-0-tabv-grid",
+        id_column="qp_subtomo_id",
+        source_store_id="nn-ttm-active-data-store",
+        source_sel_store_id="nn-ttm-active-sel",
         resolve_df=_datapool.resolve_df,
     )
-    register_table_cluster_callbacks(
-        app, "nn-out-tabv-table-cluster", "nn-out-tabv-global-data-store",
-        table_grid_id="nn-out-tabv-grid",
-        cluster_cols_store_id="nn-cluster-cols-store",
-        resolve_df=_datapool.resolve_df,
-        commit_fn=_datapool.replace_df,
+
+    @app.callback(
+        Output("nn-ttm-active-data-store", "data"),
+        Input("nn-pool-active-id", "data"),
+        *[Input(f"nn-slot-{i}-tabv-global-data-store", "data") for i in range(_NN_SLOTS)],
+        State("nn-pool-slot-map", "data"),
+        prevent_initial_call=True,
     )
+    def _relay_ttm_data(active_id, *args):
+        data_stores = args[:_NN_SLOTS]
+        slot_map = list(args[_NN_SLOTS] or [])
+        if not active_id:
+            raise dash.exceptions.PreventUpdate
+        for i, mid in enumerate(slot_map):
+            if mid == active_id:
+                return data_stores[i]
+        raise dash.exceptions.PreventUpdate
+
+    @app.callback(
+        Output("nn-ttm-active-sel", "data"),
+        Input("nn-pool-active-id", "data"),
+        *[Input(f"nn-slot-{i}-tabv-grid", "selectedRows") for i in range(_NN_SLOTS)],
+        State("nn-pool-slot-map", "data"),
+        prevent_initial_call=True,
+    )
+    def _relay_ttm_sel(active_id, *args):
+        sel_rows = args[:_NN_SLOTS]
+        slot_map = list(args[_NN_SLOTS] or [])
+        if not active_id:
+            raise dash.exceptions.PreventUpdate
+        for i, mid in enumerate(slot_map):
+            if mid == active_id:
+                return sel_rows[i] or []
+        raise dash.exceptions.PreventUpdate
 
     @app.callback(
         Output("nn-dist-toggle-wrap", "style"),
@@ -664,8 +710,6 @@ def register_callbacks(app):
 
     # ── Compute NN: fills the table and the xyz panel. ────────────────────────
     @app.callback(
-        Output("nn-xyz-graph-area", "children"),
-        Output("nn-out-tabv-global-data-store", "data"),
         Output("nn-stats-text", "children"),
         Output("nn-result", "data"),
         Output("nn-used-motls-store", "data"),
@@ -673,6 +717,8 @@ def register_callbacks(app):
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
         Output("nn-pool-slot-map", "data", allow_duplicate=True),
+        Output("nn-slot-tabs", "active_tab", allow_duplicate=True),
+        *[Output(f"nn-slot-{i}-xyz-graph-area", "children", allow_duplicate=True) for i in range(_NN_SLOTS)],
         Input("nn-compute-btn", "n_clicks"),
         State("nn-value", "data"),
         State({"type": "nn-forms-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
@@ -696,8 +742,7 @@ def register_callbacks(app):
             raise dash.exceptions.PreventUpdate
 
         if not selected:
-            return (no_update, no_update, "Select at least one motl from the pool.",
-                    no_update, no_update, no_update, no_update, no_update)
+            return ("Select at least one motl from the pool.",) + (no_update,) * 11
         if isinstance(selected, str):
             selected = [selected]
 
@@ -709,8 +754,7 @@ def register_callbacks(app):
             except _PoolPayloadMissing:
                 pass
         if not motls:
-            return (no_update, no_update, "The selected motls have no data.",
-                    no_update, no_update, no_update, no_update, no_update)
+            return ("The selected motls have no data.",) + (no_update,) * 11
 
         pool_state = PoolState.from_stores(registry, pool_meta, pool_next_id)
         nn_kwargs = _kwargs_by_cls(param_ids, param_values, "nn-params", pool_state)
@@ -729,8 +773,7 @@ def register_callbacks(app):
             normalized = nn_stats.get_normalized_coord(add_to_df=True)
             nn_stats.get_rotated_coord(add_to_df=True)
         except Exception as exc:
-            return (no_update, no_update, f"Error: {exc}",
-                    no_update, no_update, no_update, no_update, no_update)
+            return (f"Error: {exc}",) + (no_update,) * 11
 
         status_bits = []
         if nn_kwargs.get("nn_type") == "closest_dist" and "nn_dist" in nn_stats.df:
@@ -813,7 +856,8 @@ def register_callbacks(app):
             nn_df, coord_columns=["x", "y", "z"], hover_column_name="nn_subtomo_id"
         )
         _fig_d = style_figure(_fig, gs_settings or {})
-        xyz_graph = customel_graph("nn", "xyz", dcc.Graph(id={"type": "styled-graph", "owner": "nn", "name": "xyz"}, figure=go.Figure(_fig_d)))
+        _slot_owner = f"nn-slot-{free}" if free is not None else "nn-slot-x"
+        xyz_graph = customel_graph(_slot_owner, "xyz", dcc.Graph(id={"type": "styled-graph", "owner": _slot_owner, "name": "xyz"}, figure=go.Figure(_fig_d)))
         _nn_table_refs[_dp_id] = nn_ref
         _nn_xyz_figs[_dp_id] = _fig_d
         _nn_objects[_dp_id] = nn_stats
@@ -827,15 +871,20 @@ def register_callbacks(app):
             "column_name": nn_stats.column_name,
         }
 
+        active_tab = f"nn-slot-{free}" if free is not None else no_update
+        xyz_areas = [no_update] * _NN_SLOTS
+        if free is not None:
+            xyz_areas[free] = xyz_graph
         return (
-            xyz_graph, nn_ref, " | ".join(status_bits), table_data,
-            used_motls_store, new_dp_reg, new_dp_next, new_slot_map,
+            " | ".join(status_bits), table_data,
+            used_motls_store, new_dp_reg, new_dp_next, new_slot_map, active_tab,
+            *xyz_areas,
         )
 
     # ── Post-processing: enrich existing NN table without recomputing. ────────
     @app.callback(
         Output("nn-result", "data", allow_duplicate=True),
-        Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
+        *[Output(f"nn-slot-{i}-tabv-global-data-store", "data", allow_duplicate=True) for i in range(_NN_SLOTS)],
         Output("nn-pp-status", "children"),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
@@ -851,7 +900,8 @@ def register_callbacks(app):
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
-        State("nn-out-tabv-global-data-store", "data"),
+        State("nn-pool-active-id", "data"),
+        State("nn-slot-tabs", "active_tab"),
         State(ids.DATA_POOL_REGISTRY, "data"),
         State(ids.DATA_POOL_NEXT_ID,  "data"),
         prevent_initial_call=True,
@@ -860,12 +910,12 @@ def register_callbacks(app):
         n_clicks, nn_result, used_motls,
         add_cols, sides, angular_on, param_values, param_ids, dist_on,
         registry, pool_meta, pool_next_id,
-        current_ref, dp_registry, dp_next_id,
+        active_id, active_tab, dp_registry, dp_next_id,
     ):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not nn_result:
-            return no_update, no_update, "Run NN analysis first.", no_update, no_update
+            return (no_update, *([no_update] * _NN_SLOTS), "Run NN analysis first.", no_update, no_update)
 
         df = pd.DataFrame(nn_result)
         status_bits = []
@@ -939,16 +989,19 @@ def register_callbacks(app):
                 status_bits.append(f"NN distances failed: {exc}")
 
         if not status_bits:
-            return no_update, no_update, "Nothing selected.", no_update, no_update
+            return (no_update, *([no_update] * _NN_SLOTS), "Nothing selected.", no_update, no_update)
 
+        data_id = active_id
+        current_ref = _nn_table_refs.get(data_id) if data_id else None
         new_data = df.to_dict("records")
         existing_links = (current_ref or {}).get("motl_links")
         nn_ref = _datapool.insert(
             df, label="NN analysis", id_column="qp_subtomo_id",
             motl_links=existing_links,
         )
-        data_id = (current_ref or {}).get("data_id")
         nn_ref = {**nn_ref, "data_id": data_id} if data_id else nn_ref
+        if data_id:
+            _nn_table_refs[data_id] = nn_ref
 
         from cryocat.app.datapool import DataPoolState as _DPState
         ds = _DPState.from_stores(dp_registry, dp_next_id)
@@ -956,17 +1009,24 @@ def register_callbacks(app):
             ds = _datapool.replace_entry(ds, data_id, df)
         new_dp_reg, new_dp_next = ds.to_stores()
 
-        return new_data, nn_ref, " | ".join(status_bits), new_dp_reg, new_dp_next
+        try:
+            active_slot = int(active_tab.split("-")[-1]) if active_tab else -1
+        except (IndexError, ValueError):
+            active_slot = -1
+        slot_updates = [no_update] * _NN_SLOTS
+        if 0 <= active_slot < _NN_SLOTS:
+            slot_updates[active_slot] = nn_ref
+        return (new_data, *slot_updates, " | ".join(status_bits), new_dp_reg, new_dp_next)
 
     # ── Handle NN table loaded from file (via tablesource) ────────────────────
     @app.callback(
-        Output("nn-xyz-graph-area", "children", allow_duplicate=True),
-        Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
+        *[Output(f"nn-slot-{i}-xyz-graph-area", "children", allow_duplicate=True) for i in range(_NN_SLOTS)],
         Output("nn-result", "data", allow_duplicate=True),
         Output("nn-used-motls-store", "data", allow_duplicate=True),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
         Output("nn-pool-slot-map", "data", allow_duplicate=True),
+        Output("nn-slot-tabs", "active_tab", allow_duplicate=True),
         Input("nn-src-ts-loaded", "data"),
         State("nn-value", "data"),
         State(ids.GRAPH_SETTINGS_STORE, "data"),
@@ -1042,7 +1102,6 @@ def register_callbacks(app):
                 nn_df, coord_columns=["x", "y", "z"], hover_column_name="nn_subtomo_id"
             )
             _fig_d = style_figure(_fig, gs_settings or {})
-            xyz_graph = customel_graph("nn", "xyz", dcc.Graph(id={"type": "styled-graph", "owner": "nn", "name": "xyz"}, figure=go.Figure(_fig_d)))
         except Exception:
             pass
 
@@ -1090,9 +1149,15 @@ def register_callbacks(app):
         else:
             new_slot_map = no_update
 
+        active_tab = f"nn-slot-{free}" if free is not None else no_update
+        xyz_areas = [no_update] * _NN_SLOTS
+        if free is not None and _fig_d is not None:
+            _slot_owner_ld = f"nn-slot-{free}"
+            xyz_graph = customel_graph(_slot_owner_ld, "xyz", dcc.Graph(id={"type": "styled-graph", "owner": _slot_owner_ld, "name": "xyz"}, figure=go.Figure(_fig_d)))
+            xyz_areas[free] = xyz_graph
         return (
-            xyz_graph, nn_ref, table_data, used_motls_store,
-            new_dp_reg, new_dp_next, new_slot_map,
+            *xyz_areas, table_data, used_motls_store,
+            new_dp_reg, new_dp_next, new_slot_map, active_tab,
         )
 
     # ── W1/W3: Populate source-motl dropdown options from pool registry ───────
@@ -1108,22 +1173,26 @@ def register_callbacks(app):
         ]
         return opts
 
-    # ── W4: Gate table-to-motl buttons on motl_links["query"] ────────────────
+    # ── W4: Gate table-to-motl buttons per slot ──────────────────────────────
 
-    @app.callback(
-        Output("nn-ttm-ttm-write-btn", "disabled"),
-        Output("nn-ttm-ttm-write-btn", "title"),
-        Output("nn-ttm-ttm-create-btn", "disabled"),
-        Output("nn-ttm-ttm-create-btn", "title"),
-        Input("nn-out-tabv-global-data-store", "data"),
-    )
-    def _gate_nn_ttm(ref):
-        from cryocat.app.suite.pages._motl_link import get_motl_role_id
-        query_mid = get_motl_role_id((ref or {}).get("motl_links"), "query")
-        if query_mid:
-            return False, f"Targets query motl: {query_mid}", False, f"Targets query motl: {query_mid}"
-        msg = "Load data with a source motl selected to enable motl operations."
-        return True, msg, True, msg
+    def _make_ttm_gate(_slot):
+        @app.callback(
+            Output(f"nn-slot-{_slot}-ttm-ttm-write-btn", "disabled"),
+            Output(f"nn-slot-{_slot}-ttm-ttm-write-btn", "title"),
+            Output(f"nn-slot-{_slot}-ttm-ttm-create-btn", "disabled"),
+            Output(f"nn-slot-{_slot}-ttm-ttm-create-btn", "title"),
+            Input(f"nn-slot-{_slot}-tabv-global-data-store", "data"),
+        )
+        def _gate(ref):
+            from cryocat.app.suite.pages._motl_link import get_motl_role_id
+            query_mid = get_motl_role_id((ref or {}).get("motl_links"), "query")
+            if query_mid:
+                return False, f"Targets query motl: {query_mid}", False, f"Targets query motl: {query_mid}"
+            msg = "Load data with a source motl selected to enable motl operations."
+            return True, msg, True, msg
+
+    for _slot_idx in range(_NN_SLOTS):
+        _make_ttm_gate(_slot_idx)
 
     # ── Sync filtered NN registry from the global data pool ──────────────────
 
@@ -1178,23 +1247,30 @@ def register_callbacks(app):
             raise dash.exceptions.PreventUpdate
         return data_id
 
-    # ── Active-id → load table + xyz from server-side refs ───────────────────
+    # ── Sync per-slot stores when slot map changes ────────────────────────────
 
     @app.callback(
-        Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
-        Output("nn-xyz-graph-area", "children", allow_duplicate=True),
-        Input("nn-pool-active-id", "data"),
+        *[Output(f"nn-slot-{i}-tabv-global-data-store", "data") for i in range(_NN_SLOTS)],
+        Input("nn-pool-slot-map", "data"),
+        *[State(f"nn-slot-{i}-tabv-global-data-store", "data") for i in range(_NN_SLOTS)],
+    )
+    def _sync_nn_slot_stores(slot_map, *current_stores):
+        sm = list(slot_map or [None] * _NN_SLOTS)
+        result = []
+        for i in range(_NN_SLOTS):
+            data_id = sm[i] if i < len(sm) else None
+            new_ref = _nn_table_refs.get(data_id) if data_id else None
+            result.append(no_update if new_ref == current_stores[i] else new_ref)
+        return tuple(result)
+
+    @app.callback(
+        *[Output(f"nn-slot-{i}-xyz-graph-area", "children", allow_duplicate=True) for i in range(_NN_SLOTS)],
+        Input("nn-pool-slot-map", "data"),
         prevent_initial_call=True,
     )
-    def _on_nn_active_id_change(data_id):
-        if not data_id:
-            return None, []
-        table_ref = _nn_table_refs.get(data_id)
-        if table_ref is None:
-            raise dash.exceptions.PreventUpdate
-        xyz_fig_dict = _nn_xyz_figs.get(data_id)
-        xyz_child = customel_graph("nn", "xyz", dcc.Graph(id={"type": "styled-graph", "owner": "nn", "name": "xyz"}, figure=go.Figure(xyz_fig_dict))) if xyz_fig_dict else no_update
-        return table_ref, xyz_child
+    def _clear_empty_slot_xyz(slot_map):
+        sm = list(slot_map or [None] * _NN_SLOTS)
+        return tuple(None if sm[i] is None else no_update for i in range(_NN_SLOTS))
 
     # ── Step G: populate trace-chains motl pickers ────────────────────────────
 
@@ -1324,14 +1400,14 @@ def register_callbacks(app):
     # ── Step L: ordered pairs — compute and insert into data pool ─────────────
 
     @app.callback(
-        Output("nn-xyz-graph-area", "children", allow_duplicate=True),
-        Output("nn-out-tabv-global-data-store", "data", allow_duplicate=True),
         Output("nn-op-status", "children"),
         Output("nn-result", "data", allow_duplicate=True),
         Output("nn-used-motls-store", "data", allow_duplicate=True),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
         Output("nn-pool-slot-map", "data", allow_duplicate=True),
+        Output("nn-slot-tabs", "active_tab", allow_duplicate=True),
+        *[Output(f"nn-slot-{i}-xyz-graph-area", "children", allow_duplicate=True) for i in range(_NN_SLOTS)],
         Input("nn-op-btn", "n_clicks"),
         State("nn-op-motl", "value"),
         State("nn-op-group-col", "value"),
@@ -1351,8 +1427,7 @@ def register_callbacks(app):
                                ring_size, gaps, sort_first_val,
                                dp_registry, dp_next_id, gs_settings, slot_map):
         def _err(msg):
-            return (no_update, no_update, msg,
-                    no_update, no_update, no_update, no_update, no_update)
+            return (msg,) + (no_update,) * (6 + _NN_SLOTS)
 
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
@@ -1449,9 +1524,10 @@ def register_callbacks(app):
             nn_df, coord_columns=["x", "y", "z"], hover_column_name="nn_subtomo_id"
         )
         _fig_d = style_figure(_fig, gs_settings or {})
+        _slot_owner_op = f"nn-slot-{free}" if free is not None else "nn-slot-x"
         xyz_graph = customel_graph(
-            "nn", "xyz",
-            dcc.Graph(id={"type": "styled-graph", "owner": "nn", "name": "xyz"},
+            _slot_owner_op, "xyz",
+            dcc.Graph(id={"type": "styled-graph", "owner": _slot_owner_op, "name": "xyz"},
                       figure=go.Figure(_fig_d)),
         )
         _nn_table_refs[_dp_id] = nn_ref
@@ -1468,7 +1544,12 @@ def register_callbacks(app):
             "column_name": group_col,
         }
 
+        active_tab = f"nn-slot-{free}" if free is not None else no_update
+        xyz_areas = [no_update] * _NN_SLOTS
+        if free is not None:
+            xyz_areas[free] = xyz_graph
         return (
-            xyz_graph, nn_ref, " | ".join(status_bits), table_data,
-            used_motls_store, new_dp_reg, new_dp_next, new_slot_map,
+            " | ".join(status_bits), table_data,
+            used_motls_store, new_dp_reg, new_dp_next, new_slot_map, active_tab,
+            *xyz_areas,
         )

@@ -25,6 +25,7 @@ from cryocat.analysis.structure import (
     CnComplex, DnComplex, NPC,
     TetrahedralComplex, OctahedralComplex, IcosahedralComplex,
     PleomorphicSurface,
+    BlockDefinition,
 )
 from cryocat.app import ids, formgen, discovery
 from cryocat.utils.classutils import GuiCategory
@@ -83,8 +84,18 @@ _CPX_RES_MOTL = "cpx-result-motl"       # list[dict] | None — motl rows (send-
 _CPX_RESULTS  = "cpx-results-store"     # dict[str, list[dict]] — sections per complex_id
 
 # Form id-type strings (must not collide with any other page)
-_INIT = "cpx-init-param"
-_METH = "cpx-meth-param"
+_INIT     = "cpx-init-param"
+_METH     = "cpx-meth-param"
+_BDEF_ID  = "cpx-bdef-param"
+
+# Block-definition creators exposed in the GUI.
+_BLOCK_DEF_CREATORS: dict[str, tuple[str, Any]] = {
+    "cyclic":      ("Block definition – cyclic",      BlockDefinition.cyclic),
+    "microtubule": ("Block definition – microtubule", BlockDefinition.microtubule),
+}
+
+# Single current block definition — replaced on each creation, never accumulated.
+_current_bdef: BlockDefinition | None = None
 
 _HINT = {"color": "var(--color9)", "margin": "0.3rem 0"}
 _HDR  = {"fontWeight": 600, "margin": "0.4rem 0 0.2rem"}
@@ -270,10 +281,35 @@ def _ops_section() -> dbc.AccordionItem:
     )
 
 
+def _build_bdef_section() -> dbc.AccordionItem:
+    creator_opts = [{"label": lbl, "value": k} for k, (lbl, _) in _BLOCK_DEF_CREATORS.items()]
+    return dbc.AccordionItem(
+        [
+            html.Div("Creator", style=_HDR),
+            make_dropdown("cpx-bdef-creator-dd", creator_opts, None,
+                          placeholder="Select creator…"),
+            html.Div(id="cpx-bdef-form", style={"marginTop": "0.4rem"}),
+            dbc.Button(
+                "Create definition",
+                id="cpx-bdef-create-btn",
+                color="secondary",
+                size="sm",
+                style={"width": "100%", "marginTop": "0.5rem"},
+                disabled=True,
+            ),
+            html.Div(id="cpx-bdef-status", style={**_HINT, "wordBreak": "break-word"}),
+            html.Hr(style={"margin": "0.4rem 0"}),
+            html.Div(id="cpx-bdef-list"),
+        ],
+        title="Block definitions",
+        item_id="cpx-bdef-item",
+    )
+
+
 def _sidebar() -> list:
     return [
         dbc.Accordion(
-            [_build_section(), _handles_section(), _ops_section()],
+            [_build_section(), _handles_section(), _ops_section(), _build_bdef_section()],
             always_open=True,
             active_item=["cpx-build-item"],
         ),
@@ -307,8 +343,55 @@ layout: Any = html.Div(
 def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
     formgen.register_form_callbacks(app, _INIT)
     formgen.register_form_callbacks(app, _METH)
+    formgen.register_form_callbacks(app, _BDEF_ID)
     register_motl_source_callbacks(app, "cpx-build")
     register_send_to_editor_callbacks(app, "cpx-export", _CPX_RES_MOTL)
+
+    # ── Block-definition panel ────────────────────────────────────────────────
+
+    @app.callback(
+        Output("cpx-bdef-form", "children"),
+        Output("cpx-bdef-create-btn", "disabled"),
+        Input("cpx-bdef-creator-dd", "value"),
+    )
+    def _render_bdef_form(creator_key: str | None):
+        if not creator_key or creator_key not in _BLOCK_DEF_CREATORS:
+            return [], True
+        _, method = _BLOCK_DEF_CREATORS[creator_key]
+        rows = formgen.build_form(method, id_type=_BDEF_ID, id_extra={"op": creator_key}, exclude=[])
+        return rows, False
+
+    @app.callback(
+        Output("cpx-bdef-status", "children"),
+        Output("cpx-bdef-list", "children"),
+        Input("cpx-bdef-create-btn", "n_clicks"),
+        State("cpx-bdef-creator-dd", "value"),
+        State({"type": _BDEF_ID, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "value"),
+        State({"type": _BDEF_ID, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "id"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
+    )
+    def _create_block_def(_, creator_key, bdef_vals, bdef_ids, registry, pool_meta, pool_next_id):
+        global _current_bdef
+        if not creator_key or creator_key not in _BLOCK_DEF_CREATORS:
+            raise PreventUpdate
+        _, method = _BLOCK_DEF_CREATORS[creator_key]
+        pool_state = _pool.PoolState.from_stores(registry, pool_meta, pool_next_id)
+        kwargs = generate_kwargs(bdef_ids, bdef_vals, pool_state) if (bdef_ids and bdef_vals) else {}
+        kwargs = {k: v for k, v in kwargs.items() if v not in (None, "", [])}
+        try:
+            block_def = method(**kwargs)
+        except Exception as exc:
+            return f"Failed: {exc}", no_update
+        _current_bdef = block_def
+        param_str = (
+            ", ".join(f"{k}={v}" for k, v in sorted(kwargs.items())) or "defaults"
+        )
+        label = f"{creator_key} ({param_str})"
+        panel = html.Small(f"Current: {label}", style=_HINT)
+        return f"Created {label}.", panel
 
     # 1. Rebuild init form and toggle Create button when class changes
     @app.callback(
@@ -325,7 +408,12 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         builder = COMPLEX_BUILDERS.get(cls, cls)
         first_param = next(iter(inspect.signature(builder).parameters))
         # NPC has fixed C8 symmetry; hide the symmetry param from the form.
-        exclude = [first_param, "symmetry"] if cls_name == "NPC" else [first_param]
+        if cls_name == "NPC":
+            exclude = [first_param, "symmetry"]
+        elif cls_name == "Pleomorphic assembly":
+            exclude = [first_param, "block_definition"]
+        else:
+            exclude = [first_param]
         rows = formgen.build_form(builder, id_type=_INIT, id_extra={}, exclude=exclude)
         return rows, False
 
@@ -362,14 +450,34 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         init_kwargs = generate_kwargs(init_ids, init_vals, pool_state) if (init_ids and init_vals) else {}
         init_kwargs = {k: v for k, v in init_kwargs.items() if v not in (None, "", [])}
 
-        builder = COMPLEX_BUILDERS.get(cls, cls)
-        first_param = next(iter(inspect.signature(builder).parameters))
-        next_complex_id = cr.registry.peek_next_key()
-        cpx_var = _prov.bind(next_complex_id)
-        try:
-            cpx = _invoke_op(builder, {first_param: motl, **init_kwargs}, assign_to=cpx_var)
-        except Exception as exc:
-            return no_update, no_update, f"Init failed: {exc}", no_update
+        if cls is PleomorphicSurface:
+            if _current_bdef is None:
+                return (no_update, no_update,
+                        "No block definition created — use the Block definitions panel first.",
+                        no_update)
+            block_def = _current_bdef
+            next_complex_id = cr.registry.peek_next_key()
+            cpx_var = _prov.bind(next_complex_id)
+            ps_kwargs = {k: v for k, v in init_kwargs.items()
+                         if k in ("pixel_size", "tomo_id_column", "block_type_column",
+                                  "ideal_degree", "ideal_face_size")}
+            try:
+                cpx = _invoke_op(
+                    PleomorphicSurface,
+                    {"blocks": motl, "block_definition": block_def, **ps_kwargs},
+                    assign_to=cpx_var,
+                )
+            except Exception as exc:
+                return no_update, no_update, f"Init failed: {exc}", no_update
+        else:
+            builder = COMPLEX_BUILDERS.get(cls, cls)
+            first_param = next(iter(inspect.signature(builder).parameters))
+            next_complex_id = cr.registry.peek_next_key()
+            cpx_var = _prov.bind(next_complex_id)
+            try:
+                cpx = _invoke_op(builder, {first_param: motl, **init_kwargs}, assign_to=cpx_var)
+            except Exception as exc:
+                return no_update, no_update, f"Init failed: {exc}", no_update
 
         complex_id = cr.registry.add(cpx)
         cpx._pool_complex_id = complex_id
@@ -455,9 +563,12 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         cls = _cls_for_handle(handle)
         if cls is None:
             return [], None, ""
+        allowed_cats = {GuiCategory.MOTL_OP}
+        if cls is PleomorphicSurface:
+            allowed_cats.add(GuiCategory.PLEOMORPHIC_OP)
         entries = [
             e for e in discovery.entries_for_class(cls)
-            if e.category == GuiCategory.MOTL_OP
+            if e.category in allowed_cats
         ]
         geometry_fitted = handle.get("geometry_fitted", False)
 

@@ -211,7 +211,7 @@ def get_log_panel(prefix: str):
         dcc.Store(id=f"{prefix}-index", data=0),        # buffer index for error detection
         dcc.Store(id=f"{prefix}-last-seq", data=-1),    # last rendered event seq
         dcc.Store(id=f"{prefix}-save-path-store"),
-        dcc.Interval(id=f"{prefix}-poll", interval=3000, n_intervals=0),
+        dcc.Interval(id=f"{prefix}-poll", interval=30000, n_intervals=0),
         dbc.Offcanvas(
             [
                 # ── Toolbar ───────────────────────────────────────────────────

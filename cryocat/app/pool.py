@@ -229,11 +229,7 @@ def set_active(state: PoolState, motl_id: str, active: bool) -> PoolState:
     """Toggle the active flag for one entry. No-op if the id is unknown."""
     if motl_id not in state.registry:
         return state
-    entry = {
-        **state.registry[motl_id],
-        "active": active,
-        "revision": state.registry[motl_id].get("revision", 0) + 1,
-    }
+    entry = {**state.registry[motl_id], "active": active}
     return PoolState(
         registry={**state.registry, motl_id: entry},
         meta=state.meta,
@@ -408,14 +404,10 @@ def active_ids(state: PoolState) -> list[str]:
 
 
 def set_has_tab(state: PoolState, motl_id: str, has_tab: bool) -> PoolState:
-    """Toggle the has_tab flag for one entry and bump revision. No-op if id unknown."""
+    """Toggle the has_tab flag for one entry. No-op if id unknown."""
     if motl_id not in state.registry:
         return state
-    entry = {
-        **state.registry[motl_id],
-        "has_tab": has_tab,
-        "revision": state.registry[motl_id].get("revision", 0) + 1,
-    }
+    entry = {**state.registry[motl_id], "has_tab": has_tab}
     return PoolState(
         registry={**state.registry, motl_id: entry},
         meta=state.meta,

@@ -299,9 +299,10 @@ def register_table_to_motl_callbacks(
     app,
     prefix: str,
     *,
-    source_table_id: str,
+    source_table_id: str = "",
     id_column: str = "qp_id",
     source_store_id: str | None = None,
+    source_sel_store_id: str | None = None,
     resolve_df: Callable | None = None,
 ) -> None:
     """Register all callbacks for a table→motl component instance.
@@ -315,7 +316,8 @@ def register_table_to_motl_callbacks(
     source_table_id:
         Id of the ``AgGrid`` component whose ``selectedRows`` supply selected
         source rows.  ``rowData`` is read for columns only when *source_store_id*
-        is not provided (plain list-model grids).
+        is not provided (plain list-model grids).  Unused when both
+        *source_store_id* and *source_sel_store_id* are provided.
     id_column:
         Column in the source table whose values are matched against
         ``subtomo_id`` in the target motl.  Defaults to ``"qp_id"``.
@@ -324,6 +326,11 @@ def register_table_to_motl_callbacks(
         When provided the column-list callbacks watch this store instead of
         ``source_table_id.rowData`` (which is never populated in the
         infinite/server-side row model used by :mod:`tablegrid`).
+    source_sel_store_id:
+        Optional id of a ``dcc.Store`` whose ``data`` holds the selected rows
+        list.  When provided, replaces ``State(source_table_id, "selectedRows")``
+        in all action callbacks.  Use this for sidebar panels that serve
+        multiple grids via a relay store.
     resolve_df:
         Callable ``(store_data) -> pd.DataFrame | None`` used when
         *source_store_id* is provided.  Must match the resolver used by the
@@ -331,15 +338,19 @@ def register_table_to_motl_callbacks(
     """
 
     _has_store = source_store_id is not None and resolve_df is not None
+    _has_sel_store = source_sel_store_id is not None
 
-    @app.callback(
+    app.clientside_callback(
+        """function(registry) {
+            var reg = registry || {};
+            return Object.keys(reg).map(function(k) {
+                return {label: (reg[k].label || k), value: k};
+            });
+        }""",
         Output(f"{prefix}-ttm-target-motl", "options"),
         Input(_ids.POOL_REGISTRY, "data"),
         prevent_initial_call=True,
     )
-    def _populate_target(registry):
-        registry = registry or {}
-        return [{"label": v.get("label", k), "value": k} for k, v in registry.items()]
 
     if _has_store:
         @app.callback(
@@ -362,6 +373,7 @@ def register_table_to_motl_callbacks(
             return tuple(cols for _ in range(_N_PAIRS))
 
     _act_extra = [State(source_store_id, "data")] if _has_store else [State(source_table_id, "rowData")]
+    _sel_state = State(source_sel_store_id, "data") if _has_sel_store else State(source_table_id, "selectedRows")
 
     @app.callback(
         Output(f"{prefix}-ttm-status", "children"),
@@ -376,7 +388,7 @@ def register_table_to_motl_callbacks(
         State(f"{prefix}-ttm-rows-mode", "value"),
         State(f"{prefix}-ttm-label", "value"),
         *_act_extra,
-        State(source_table_id, "selectedRows"),
+        _sel_state,
         State(_ids.POOL_REGISTRY, "data"),
         State(_ids.POOL_META, "data"),
         State(_ids.POOL_NEXT_ID, "data"),
@@ -427,7 +439,7 @@ def register_table_to_motl_callbacks(
         State(f"{prefix}-ttm-target-motl", "value"),
         *[State(f"{prefix}-ttm-val-col-{i}", "value") for i in range(_N_PAIRS)],
         State(f"{prefix}-ttm-rows-mode", "value"),
-        State(source_table_id, "selectedRows"),
+        _sel_state,
         *_te_extra,
         State(_ids.DATA_POOL_REGISTRY, "data"),
         State(_ids.DATA_POOL_NEXT_ID, "data"),

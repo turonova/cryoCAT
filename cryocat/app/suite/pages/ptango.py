@@ -531,6 +531,7 @@ def register_callbacks(app) -> None:
         app, "tango-twist-tabv",
         resolve_df=_datapool.resolve_df, resolve_n_rows=_datapool.resolve_n_rows,
         tabs_id="tango-tabs", tab_value="tango-tab-twist",
+        data_pool=True,
     )
     register_table_plot_callbacks(
         app, "tango-twist-tabv-table-plot", "tango-twist-tabv-global-data-store",
@@ -539,7 +540,7 @@ def register_callbacks(app) -> None:
     register_table_cluster_callbacks(
         app, "tango-twist-tabv-table-cluster", "tango-twist-tabv-global-data-store",
         table_grid_id="tango-twist-tabv-grid", resolve_df=_datapool.resolve_df,
-        commit_fn=_datapool.replace_df,
+        commit_fn=_datapool.replace_df, revs_store_id=ids.DATA_POOL_REVS,
     )
 
     for _i in range(_DESC_SLOTS):
@@ -547,6 +548,7 @@ def register_callbacks(app) -> None:
             app, f"tango-desc-{_i}",
             resolve_df=_datapool.resolve_df, resolve_n_rows=_datapool.resolve_n_rows,
             tabs_id="tango-tabs", tab_value=f"tango-tab-desc-{_i}",
+            data_pool=True,
         )
         register_table_plot_callbacks(
             app, f"tango-desc-{_i}-table-plot", f"tango-desc-{_i}-global-data-store",
@@ -555,7 +557,7 @@ def register_callbacks(app) -> None:
         register_table_cluster_callbacks(
             app, f"tango-desc-{_i}-table-cluster", f"tango-desc-{_i}-global-data-store",
             table_grid_id=f"tango-desc-{_i}-grid", resolve_df=_datapool.resolve_df,
-            commit_fn=_datapool.replace_df,
+            commit_fn=_datapool.replace_df, revs_store_id=ids.DATA_POOL_REVS,
         )
 
     register_table_to_motl_callbacks(

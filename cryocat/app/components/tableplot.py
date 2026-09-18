@@ -752,6 +752,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
     @app.callback(
         Output(f"{prefix}-clear-graph-btn", "disabled"),
         Input(f"{prefix}-graph-area", "children"),
+        prevent_initial_call=True,
     )
     def toggle_clear_button(graph_area):
         if len(graph_area) == 0:
@@ -763,6 +764,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         Output(f"{prefix}-plot-separately", "disabled"),
         Input(f"{prefix}-plot-column-options-x-dropdown", "value"),
         State(f"{prefix}-graph-options-dropdown", "value"),
+        prevent_initial_call=True,
     )
     def toggle_plot_separately(x_values, graph_type):
 
@@ -1063,6 +1065,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         Output(f"{prefix}-modal-main", "is_open"),
         Input(f"{prefix}-modal-main-close", "n_clicks"),
         Input(f"{prefix}-modal-text-area", "children"),
+        prevent_initial_call=True,
     )
     def close_warning_window(_, modal_content):
 
@@ -1083,6 +1086,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
     @app.callback(
         Output(f"{prefix}-export-scale-dropdown", "disabled"),
         Input(f"{prefix}-export-format-dropdown", "value"),
+        prevent_initial_call=True,
     )
     def _export_scale_enable(fmt):
         return fmt == "svg"
@@ -1114,6 +1118,7 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         Input(f"{prefix}-export-format-dropdown", "value"),
         Input(f"{prefix}-export-scale-dropdown", "value"),
         State({"type": "styled-graph", "owner": prefix, "name": ALL}, "id"),
+        prevent_initial_call=True,
     )
     def _update_graph_config(fmt, scale, graph_ids):
         n = len(graph_ids)

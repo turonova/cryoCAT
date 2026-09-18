@@ -3296,6 +3296,7 @@ class BlockDefinition:
         if self.fold is not None and self.fold != self.n_sites:
             raise ValueError(f"fold={self.fold} must equal n_sites={self.n_sites} when set.")
 
+    @gui_exposed(category="builder", label="Block definition – cyclic", returns="block_def")
     @classmethod
     def cyclic(
         cls,
@@ -3346,6 +3347,7 @@ class BlockDefinition:
         )
         return cls(sites=sites, pairing=((site_type, site_type),), fold=n)
 
+    @gui_exposed(category="builder", label="Block definition – microtubule", returns="block_def")
     @classmethod
     def microtubule(
         cls,
@@ -3523,27 +3525,34 @@ class PleomorphicSurface:
         building a new assembly.
         """
         self._surface: Mesh | OrientedPointCloud | None = None
+        # --- Block layer defaults ---
         self.blocks: cryomotl.Motl | None = None
-        self.block_definition: "BlockDefinition | dict[float, BlockDefinition] | None" = None
-        self.block_type_column: MotlColumn = block_type_column
-        self.pixel_size: float = pixel_size
-        self.ideal_degree: int | None = ideal_degree
-        self.ideal_face_size: int | None = ideal_face_size
-        self.tomo_id_column: MotlColumn = tomo_id_column
+        self.block_definition: BlockDefinition | dict[float, BlockDefinition] | None = None
+        self.block_type_column: MotlColumn = "class"
+        self.pixel_size: float = 1.0
+        self.ideal_degree: int | None = None
+        self.ideal_face_size: int | None = None
+        self.tomo_id_column: MotlColumn = "tomo_id"
         self._site_table: pd.DataFrame | None = None
-        self._faces: np.ndarray | None = None
+        self._faces: list[dict] | None = None
+        self.site_type_codes: dict[str, int] = {}
+        self._allowed_pairs: set[frozenset] = set()
 
         # --- Envelope ---
         if isinstance(surface, PleomorphicSurface):
             self._surface = surface._surface
             if blocks is None:
                 self.blocks = copy.deepcopy(surface.blocks)
-                self.block_definition = surface.block_definition
+                self.block_definition = copy.deepcopy(surface.block_definition)
                 self.block_type_column = surface.block_type_column
                 self.pixel_size = surface.pixel_size
                 self.ideal_degree = surface.ideal_degree
                 self.ideal_face_size = surface.ideal_face_size
                 self.tomo_id_column = surface.tomo_id_column
+                self._site_table = copy.deepcopy(surface._site_table)
+                self._faces = copy.deepcopy(surface._faces)
+                self.site_type_codes = copy.deepcopy(surface.site_type_codes)
+                self._allowed_pairs = copy.deepcopy(surface._allowed_pairs)
         elif surface is not None:
             if not isinstance(surface, (Mesh, OrientedPointCloud)):
                 raise TypeError(
@@ -3552,33 +3561,40 @@ class PleomorphicSurface:
                 )
             self._surface = surface
 
-        if self._surface is None and blocks is None and self.blocks is None:
+        if self._surface is None and self.blocks is None and blocks is None:
             raise TypeError(
                 "PleomorphicSurface requires at least a surface (Mesh or " "OrientedPointCloud) or a blocks motl."
             )
 
-        # --- Ideal lattice check ---
-        if (self.ideal_degree is None) != (self.ideal_face_size is None):
-            raise ValueError("ideal_degree and ideal_face_size must both be None or both set.")
-        if self.ideal_degree is not None:
-            check = 1.0 / self.ideal_degree + 1.0 / self.ideal_face_size
-            if abs(check - 0.5) > 1e-9:
-                raise ValueError(f"1/ideal_degree + 1/ideal_face_size must equal 1/2, " f"got {check:.10f}.")
-
         # --- Blocks ---
         if blocks is not None:
-            if block_definition is None:
-                raise ValueError("block_definition is required when blocks is provided.")
-            loaded = cryomotl.Motl.load(blocks)
-            if loaded.df["subtomo_id"].duplicated().any():
-                raise ValueError("subtomo_id must be unique in the blocks motl.")
-            self.blocks = loaded
-            self.block_definition = block_definition
             self.block_type_column = block_type_column
             self.pixel_size = pixel_size
             self.ideal_degree = ideal_degree
             self.ideal_face_size = ideal_face_size
             self.tomo_id_column = tomo_id_column
+            self._site_table = None
+            self._faces = None
+
+            # --- Ideal lattice check ---
+            if (ideal_degree is None) != (ideal_face_size is None):
+                raise ValueError("ideal_degree and ideal_face_size must both be None or both set.")
+            if ideal_degree is not None:
+                check = 1.0 / ideal_degree + 1.0 / ideal_face_size
+                if abs(check - 0.5) > 1e-9:
+                    raise ValueError(
+                        f"1/ideal_degree + 1/ideal_face_size must equal 1/2, "
+                        f"got {check:.10f}."
+                    )
+
+            # --- Load blocks ---
+            if block_definition is None:
+                raise ValueError("block_definition is required.")
+            loaded = cryomotl.Motl.load(blocks)
+            if loaded.df["subtomo_id"].duplicated().any():
+                raise ValueError("subtomo_id must be unique in the blocks motl.")
+            self.blocks = loaded
+            self.block_definition = block_definition
             if isinstance(block_definition, dict):
                 cls_vals = set(self.blocks.df[block_type_column].unique())
                 missing = cls_vals - set(block_definition.keys())
@@ -3588,34 +3604,30 @@ class PleomorphicSurface:
                         f"without a BlockDefinition: {sorted(missing)}."
                     )
 
-        # --- Default ideal lattice derivation (both None + block_definition present) ---
-        if self.block_definition is not None and self.ideal_degree is None and self.ideal_face_size is None:
-            _defs = (
-                list(self.block_definition.values())
-                if isinstance(self.block_definition, dict)
-                else [self.block_definition]
-            )
-            _d = max(defn.n_sites for defn in _defs)
-            if _d in (3, 4, 6):
-                self.ideal_degree = _d
-                self.ideal_face_size = 2 * _d // (_d - 2)
+            # --- Default ideal lattice derivation ---
+            if self.ideal_degree is None and self.ideal_face_size is None:
+                _defs = (
+                    list(block_definition.values())
+                    if isinstance(block_definition, dict)
+                    else [block_definition]
+                )
+                _d = max(defn.n_sites for defn in _defs)
+                if _d in (3, 4, 6):
+                    self.ideal_degree = _d
+                    self.ideal_face_size = 2 * _d // (_d - 2)
 
-        # --- Site type codes and allowed pairs ---
-        if self.block_definition is not None:
+            # --- Site type codes and allowed pairs ---
             defs_list = (
-                list(self.block_definition.values())
-                if isinstance(self.block_definition, dict)
-                else [self.block_definition]
+                list(block_definition.values())
+                if isinstance(block_definition, dict)
+                else [block_definition]
             )
             all_types = sorted({st for d in defs_list for st in d.site_types})
-            self.site_type_codes: dict[str, int] = {t: i + 1 for i, t in enumerate(all_types)}
-            self._allowed_pairs: set[frozenset] = set()
+            self.site_type_codes = {t: i + 1 for i, t in enumerate(all_types)}
+            self._allowed_pairs = set()
             for d in defs_list:
                 for a, b in d.pairing:
                     self._allowed_pairs.add(frozenset({a, b}))
-        else:
-            self.site_type_codes: dict[str, int] = {}
-            self._allowed_pairs: set[frozenset] = set()
 
     @property
     def surface(self) -> Mesh | OrientedPointCloud:
@@ -3644,7 +3656,7 @@ class PleomorphicSurface:
 
     @property
     def has_blocks(self) -> bool:
-        """True when a block motl layer is present."""
+        """True when a block layer is present."""
         return self.blocks is not None
 
     @classmethod
@@ -3766,7 +3778,7 @@ class PleomorphicSurface:
     # Block-assembly methods
     # ------------------------------------------------------------------
 
-    @gui_exposed(label="Sites as motl", group="Lattice setup", order=40, returns="motl")
+    @gui_exposed(label="Sites as motl", group="Lattice setup", order=40, returns="motl", category="pleomorphic-op")
     def get_sites_as_motl(self) -> "cryomotl.Motl":
         """Return a particle list with one row per contact site of every block.
 
@@ -3869,11 +3881,13 @@ class PleomorphicSurface:
         a = a_unnorm / np.linalg.norm(a_unnorm)
         return srot.from_rotvec(np.pi * a)
 
-    @gui_exposed(label="Unify polarity", group="Lattice setup", order=20, returns="none")
+    @gui_exposed(label="Unify polarity", group="Lattice setup", order=20, returns="none", category="pleomorphic-op")
     def unify_polarity(
         self,
         max_block_distance: float | None = None,
         reference: Literal["neighbours", "centroid", "envelope"] = "neighbours",
+        *,
+        _annotate_fn: Callable | None = None,
     ) -> int:
         """Align block polarities so neighbours point the same way.
 
@@ -3887,22 +3901,8 @@ class PleomorphicSurface:
         aligned so that its blocks point outward from the component centroid
         (``Σ z · (c − g) > 0``).
 
-        For ``reference='envelope'``, the attached envelope surface
-        (``self.surface``) must be present before calling; :meth:`has_envelope`
-        must be ``True``.  Every block whose ``normal_angle > 90°``
-        (block z-axis opposes the envelope face normal at the closest triangle)
-        is flipped.  No BFS walk is needed; *max_block_distance* may be
-        ``None``.  The envelope surface is never created or replaced by this
-        call.
-
-        The envelope must be **independent** of the block orientations — do not
-        pass back the mesh produced by :meth:`envelope_from_faces` on the same
-        instance without first fixing the block orientations.  The recommended
-        pattern is to build a clean (unflipped) instance, call
-        :meth:`envelope_from_faces` on it to get a reference mesh, then
-        construct a separate :class:`PleomorphicSurface` with that mesh and
-        the potentially flipped blocks, and finally call
-        ``unify_polarity(reference='envelope')`` on the new instance.
+        For ``reference='envelope'``, an envelope surface must be attached
+        (via ``ps.surface = ...``).  *max_block_distance* may be ``None``.
 
         Parameters
         ----------
@@ -3912,6 +3912,10 @@ class PleomorphicSurface:
             ``'centroid'``; ignored for ``'envelope'``.
         reference : {"neighbours", "centroid", "envelope"}, default="neighbours"
             Alignment reference.
+        _annotate_fn : Callable or None, default=None
+            Private override for the envelope annotation callable.  When
+            ``None`` and ``reference='envelope'``, falls back to
+            :meth:`annotate_with_envelope`.
 
         Returns
         -------
@@ -3923,18 +3927,7 @@ class PleomorphicSurface:
         ValueError
             If no block layer is present, *reference* is invalid,
             *max_block_distance* is None for a BFS-based reference, or
-            ``reference='envelope'`` is requested but no envelope surface
-            is attached.
-
-        Notes
-        -----
-        The input motl is never modified (it was copied on construction).
-        :meth:`unify_polarity` writes the updated angles into
-        :attr:`blocks`, changing only the ``phi``, ``theta`` and ``psi``
-        columns of the flipped rows; row order and index are kept.  Use
-        :meth:`get_blocks_as_motl` to obtain the unified angles as a new
-        :class:`~cryocat.core.cryomotl.Motl` ready for averaging or for
-        initialising a new assembly.
+            ``reference='envelope'`` is requested but no envelope is attached.
         """
         if self.blocks is None:
             raise ValueError("unify_polarity requires a block layer (blocks=...).")
@@ -3942,11 +3935,13 @@ class PleomorphicSurface:
             raise ValueError(f"reference must be 'neighbours', 'centroid', or 'envelope'; got {reference!r}.")
         if reference != "envelope" and max_block_distance is None:
             raise ValueError(f"max_block_distance is required for reference='{reference}'.")
-        if reference == "envelope" and not self.has_envelope:
-            raise ValueError(
-                "unify_polarity(reference='envelope') requires an envelope surface "
-                "(attach one via ps.surface = ... or pass a mesh to PleomorphicSurface)."
-            )
+        if reference == "envelope" and _annotate_fn is None:
+            if not self.has_envelope:
+                raise ValueError(
+                    "unify_polarity(reference='envelope') requires an envelope surface "
+                    "(attach one via ps.surface = ... or pass a mesh to PleomorphicSurface)."
+                )
+            _annotate_fn = self.annotate_with_envelope
 
         N = len(self.blocks.df)
 
@@ -3965,7 +3960,7 @@ class PleomorphicSurface:
                 continue
 
             if reference == "envelope":
-                annot = self.annotate_with_envelope(tomo_id=float(tomo_val))
+                annot = _annotate_fn(tomo_id=float(tomo_val))
                 bid_to_global: dict[float, int] = {float(self.blocks.df.iloc[i]["subtomo_id"]): i for i in tomo_pos}
                 for _, arow in annot.iterrows():
                     if float(arow["normal_angle"]) > 90.0:
@@ -4043,7 +4038,7 @@ class PleomorphicSurface:
     # Contact graph
     # ------------------------------------------------------------------
 
-    @gui_exposed(label="Connect", group="Lattice setup", order=30, returns="none")
+    @gui_exposed(label="Connect", group="Lattice setup", order=30, returns="none", category="pleomorphic-op")
     def connect(
         self,
         max_distance: float,
@@ -4157,6 +4152,7 @@ class PleomorphicSurface:
         # Precompute unit site-direction vectors: u[h] = (P_h - c_h) / |...|
         p_arr = site_table[["x", "y", "z"]].values
         c_arr = np.column_stack([cx_arr, cy_arr, cz_arr])[site_table.index]  # after sort
+
         # Recompute from sorted table
         p_arr = site_table[["x", "y", "z"]].values
         c_arr_sorted = site_table[["cx", "cy", "cz"]].values
@@ -4331,7 +4327,7 @@ class PleomorphicSurface:
     # Statistics getters
     # ------------------------------------------------------------------
 
-    @gui_exposed(label="Contact stats", group="Lattice statistics", order=10, returns="dataframe")
+    @gui_exposed(label="Contact stats", group="Lattice statistics", order=10, returns="dataframe", category="pleomorphic-op")
     def get_contact_stats(self) -> pd.DataFrame:
         """Return one row per matched half-edge (each contact appears twice).
 
@@ -4436,7 +4432,7 @@ class PleomorphicSurface:
             )
         return pd.DataFrame(rows)
 
-    @gui_exposed(label="Face stats", group="Lattice statistics", order=20, returns="dataframe")
+    @gui_exposed(label="Face stats", group="Lattice statistics", order=20, returns="dataframe", category="pleomorphic-op")
     def get_face_stats(self) -> pd.DataFrame:
         """Return one row per closed face.
 
@@ -4509,7 +4505,7 @@ class PleomorphicSurface:
             )
         return pd.DataFrame(rows)
 
-    @gui_exposed(label="Block stats", group="Lattice statistics", order=30, returns="dataframe")
+    @gui_exposed(label="Block stats", group="Lattice statistics", order=30, returns="dataframe", category="pleomorphic-op")
     def get_block_stats(self) -> pd.DataFrame:
         """Return one row per block.
 
@@ -4602,7 +4598,7 @@ class PleomorphicSurface:
             )
         return pd.DataFrame(rows)
 
-    @gui_exposed(label="Assembly stats", group="Lattice statistics", order=40, returns="dataframe")
+    @gui_exposed(label="Assembly stats", group="Lattice statistics", order=40, returns="dataframe", category="pleomorphic-op")
     def get_assembly_stats(self) -> pd.DataFrame:
         """Return one row per (tomo_id, assembly_id).
 
@@ -4709,14 +4705,6 @@ class PleomorphicSurface:
         ValueError
             If a requested column is non-numeric (e.g. ``face_signature``)
             or not a recognised :meth:`get_block_stats` column.
-
-        Notes
-        -----
-        The input motl is never modified (it was copied on construction).
-        Only the requested destination columns of :attr:`blocks` are
-        written; no other column, no row, and the DataFrame index are
-        changed.  Use :meth:`get_blocks_as_motl` to retrieve the updated
-        state.
         """
         self._require_connect()
         _NON_NUMERIC = {"face_signature", "block_type"}
@@ -4733,7 +4721,7 @@ class PleomorphicSurface:
 
     _BLOCK_STAT_CHOICES = ("n_sites", "degree", "complete", "assembly_id", "angle_sum", "angle_deficit")
 
-    @gui_exposed(label="Store block stat", group="Lattice statistics", order=50, returns="motl")
+    @gui_exposed(label="Store block stat", group="Lattice statistics", order=50, returns="motl", category="pleomorphic-op")
     def store_block_stat(
         self,
         stat: Literal["n_sites", "degree", "complete", "assembly_id", "angle_sum", "angle_deficit"],
@@ -4745,7 +4733,6 @@ class PleomorphicSurface:
         ----------
         stat : {"n_sites", "degree", "complete", "assembly_id", "angle_sum", "angle_deficit"}
             Name of the :meth:`get_block_stats` column to store.
-            ``complete`` is written as ``0`` / ``1``.
         column : MotlColumn
             Motl column to write the values into.
 
@@ -4758,29 +4745,17 @@ class PleomorphicSurface:
         ------
         ValueError
             If *stat* is not one of the accepted column names.
-
-        Notes
-        -----
-        The input motl is never modified (it was copied on construction).
-        The requested *column* of :attr:`blocks` is written in place; the
-        returned motl is an independent deep copy via
-        :meth:`get_blocks_as_motl`.
         """
         if stat not in self._BLOCK_STAT_CHOICES:
             raise ValueError(f"Unknown stat {stat!r}. Must be one of {self._BLOCK_STAT_CHOICES}.")
         self.store_block_stats({stat: column})
         return copy.deepcopy(self.blocks)
 
-    @gui_exposed(label="Blocks as motl", group="Lattice setup", order=50, returns="motl")
+    @gui_exposed(label="Blocks as motl", group="Lattice setup", order=50, returns="motl", category="pleomorphic-op")
     def get_blocks_as_motl(self) -> "cryomotl.Motl":
         """Return the current block layer as an independent :class:`~cryocat.core.cryomotl.Motl`.
 
-        Returns a deep copy of :attr:`blocks`, capturing whatever state it
-        is in at call time — original angles, post-:meth:`unify_polarity`
-        angles, and any columns written by :meth:`store_block_stats` or
-        :meth:`store_block_stat`.
-
-        Does not require :meth:`connect` to have been called first.
+        Returns a deep copy of :attr:`blocks`.
 
         Returns
         -------
@@ -4791,33 +4766,14 @@ class PleomorphicSurface:
         ------
         ValueError
             If no block layer is present.
-
-        Notes
-        -----
-        *blocks* is loaded with :func:`~cryocat.core.cryomotl.Motl.load`,
-        which copies a :class:`~cryocat.core.cryomotl.Motl` instance; the
-        input is never modified.  :meth:`unify_polarity`,
-        :meth:`store_block_stats` and :meth:`store_block_stat` change only
-        this object's copy (angles, or the requested columns; row order and
-        index are kept).  Use this method to obtain the current state,
-        e.g. unified orientations for averaging or for building a new
-        assembly.
         """
         if self.blocks is None:
             raise ValueError("get_blocks_as_motl requires a block layer (blocks=...).")
         return copy.deepcopy(self.blocks)
 
-    @gui_exposed(label="Faces as motl", group="Lattice motls", order=10, returns="motl")
+    @gui_exposed(label="Faces as motl", group="Lattice motls", order=10, returns="motl", category="pleomorphic-op")
     def get_faces_as_motl(self) -> "cryomotl.Motl":
         """Return a :class:`~cryocat.core.cryomotl.Motl` with one row per closed face.
-
-        Columns set on the motl:
-        - position (x/y/z): face centroid
-        - orientation (phi/theta/psi): Euler angles from face normal
-        - tomo_id: from the assembly
-        - object_id: face_id
-        - class: face size (polygon vertex count)
-        - geom1: assembly_id
 
         Returns
         -------
@@ -4847,21 +4803,13 @@ class PleomorphicSurface:
         motl.renumber_particles()
         return motl
 
-    @gui_exposed(label="Gaps as motl", group="Lattice motls", order=20, returns="motl")
+    @gui_exposed(label="Gaps as motl", group="Lattice motls", order=20, returns="motl", category="pleomorphic-op")
     def get_gaps_as_motl(
         self,
         cluster_radius: float,
         min_blocks: int | None = None,
     ) -> "cryomotl.Motl":
         """Predict missing-block positions from unmatched contact sites.
-
-        For each unmatched half-edge h on block b with site position P_h and
-        block centre c_b, the predicted gap position is
-        ``g_h = c_b + 2 * (P_h - c_b)``.
-
-        Gap points are clustered (by centre-to-centre distance ≤ *cluster_radius*)
-        and only clusters with at least *min_blocks* distinct source blocks are
-        kept.
 
         Parameters
         ----------
@@ -4874,8 +4822,7 @@ class PleomorphicSurface:
         Returns
         -------
         cryomotl.Motl
-            One row per kept cluster: position = mean of gap points;
-            orientation from mean block z-axis; ``geom1`` = n_distinct_blocks.
+            One row per kept cluster.
         """
         self._require_connect()
         import networkx as _nx
@@ -4956,18 +4903,13 @@ class PleomorphicSurface:
             motl.renumber_particles()
         return motl
 
-    @gui_exposed(label="Envelope from faces", group="Lattice envelope", order=10, returns="surface")
+    @gui_exposed(label="Envelope from faces", group="Lattice envelope", order=10, returns="surface", category="pleomorphic-op")
     def envelope_from_faces(
         self,
         assembly_id: int | None = None,
         tomo_id: float | None = None,
     ) -> Mesh:
         """Build a triangulated mesh envelope from the face polygon network.
-
-        Vertices are the block centres (× pixel_size) and face centroids
-        (× pixel_size).  Each face polygon of size n contributes n triangles
-        of the form (centroid, b_i, b_{i+1}).  Winding is chosen so that each
-        triangle normal points in the same direction as the face normal.
 
         Parameters
         ----------
@@ -5029,8 +4971,6 @@ class PleomorphicSurface:
             if fn_norm > 1e-15:
                 face_normal = face_normal / fn_norm
 
-            # Winding check: reverse all triangles in this face if the first
-            # triangle's geometric normal opposes the face's mean block z-axis.
             b0 = block_id_to_vx[block_ids_walk[0]]
             b1 = block_id_to_vx[block_ids_walk[1]]
             v_m = vertices[m_idx]

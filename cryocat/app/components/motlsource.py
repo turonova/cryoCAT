@@ -153,7 +153,57 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
       inspect-table callbacks.
     """
 
-    @app.callback(
+    _multi_js = "true" if multi else "false"
+    app.clientside_callback(
+        f"""
+        function(registry, groups_data, current) {{
+            var multi = {_multi_js};
+            var reg = registry || {{}};
+            var groups = (groups_data || {{}}).groups || {{}};
+            var all_grouped = {{}};
+            Object.values(groups).forEach(function(g) {{
+                (g.members || []).forEach(function(m) {{ all_grouped[m] = true; }});
+            }});
+            var options = [];
+            Object.entries(groups).forEach(function(kv) {{
+                var gid = kv[0], g = kv[1];
+                var members = g.members || [];
+                if (!members.length) return;
+                var glabel = g.label || gid;
+                options.push({{label: "── " + glabel + " (" + members.length + ") ──", value: "__group__" + gid, disabled: true}});
+                members.forEach(function(mid) {{
+                    if (reg[mid]) {{
+                        var mlabel = reg[mid].label || mid;
+                        options.push({{label: "  " + mlabel + " (" + mid.replace(/-/g, "_") + ")", value: mid}});
+                    }}
+                }});
+            }});
+            Object.entries(reg).forEach(function(kv) {{
+                var mid = kv[0], meta = kv[1];
+                if (meta.active === false) return;
+                if (all_grouped[mid]) return;
+                options.push({{label: (meta.label || mid) + " (" + mid.replace(/-/g, "_") + ")", value: mid}});
+            }});
+            var selectable = options.filter(function(o) {{ return !o.disabled; }}).map(function(o) {{ return o.value; }});
+            if (!selectable.length) {{
+                return [options.length ? options : [], multi ? [] : null, "Pool is empty — load a motl in the editor."];
+            }}
+            var n_motls = Object.values(reg).filter(function(m) {{ return m.active !== false; }}).length;
+            var n_groups = Object.keys(groups).length;
+            var status = n_motls + " motl(s)";
+            if (n_groups) {{
+                status += ", " + n_groups + " group(s) in the pool.";
+            }} else {{
+                status += " in the pool.";
+            }}
+            if (multi) {{
+                var kept = (current || []).filter(function(v) {{ return selectable.indexOf(v) >= 0; }});
+                return [options, kept.length ? kept : selectable, status];
+            }}
+            var value = selectable.indexOf(current) >= 0 ? current : selectable[0];
+            return [options, value, status];
+        }}
+        """,
         Output(f"{prefix}-motl-select", "options"),
         Output(f"{prefix}-motl-select", "value"),
         Output(f"{prefix}-motl-source-status", "children"),
@@ -161,10 +211,6 @@ def register_motl_source_callbacks(app, prefix, multi=False, show_table=False):
         Input(ids.POOL_GROUPS, "data"),
         State(f"{prefix}-motl-select", "value"),
     )
-    def _populate(registry, groups_data, current):
-        from cryocat.app.pool import GroupState
-        groups = GroupState.from_store(groups_data).groups
-        return picker_options(registry, current, multi, groups=groups)
 
     if show_table:
 

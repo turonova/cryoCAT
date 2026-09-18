@@ -129,13 +129,47 @@ def get_entry_picker(prefix: str) -> html.Div:
 def register_entry_picker_callbacks(app, prefix: str) -> None:
     """Populate picker from both pools and decode value to ref dict."""
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(pool_reg, dp_reg) {
+            var pool = pool_reg || {};
+            var opts = [];
+            if (Object.keys(pool).length > 0) {
+                opts.push({label: "── Motls ──", value: "_sep_motl", disabled: true});
+                Object.entries(pool).forEach(function(kv) {
+                    var mid = kv[0], meta = kv[1];
+                    var label = meta.label || mid;
+                    var n_rows = meta.n_rows;
+                    opts.push({
+                        label: (typeof n_rows === "number") ? label + "  [" + n_rows.toLocaleString() + " rows]" : label,
+                        value: "motl:" + mid
+                    });
+                });
+            }
+            var dp = dp_reg || {};
+            var df_entries = Object.entries(dp).filter(function(kv) {
+                var kind = kv[1].kind;
+                return kind === "dataframe" || kind === null || kind === undefined;
+            });
+            if (df_entries.length > 0) {
+                opts.push({label: "── Tables ──", value: "_sep_tables", disabled: true});
+                df_entries.forEach(function(kv) {
+                    var did = kv[0], meta = kv[1];
+                    var label = meta.label || String(did);
+                    var n_rows = meta.n_rows;
+                    opts.push({
+                        label: (typeof n_rows === "number") ? label + "  [" + n_rows.toLocaleString() + " rows]" : label,
+                        value: "data:" + did
+                    });
+                });
+            }
+            return opts;
+        }
+        """,
         Output(f"{prefix}-dd", "options"),
         Input(ids.POOL_REGISTRY,      "data"),
         Input(ids.DATA_POOL_REGISTRY, "data"),
     )
-    def _populate_opts(pool_reg, dp_reg):
-        return _build_options(pool_reg, dp_reg)
 
     @app.callback(
         Output(f"{prefix}-ref", "data"),

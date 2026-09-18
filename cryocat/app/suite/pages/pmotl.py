@@ -107,6 +107,7 @@ def _slot_tab_content(i):
                     show_create_from_selected=True,
                     save_dialog_prefix=f"me-{i}-save",
                     show_editor=True,
+                    motl_table=True,
                 ),
                 html.Hr(style={"margin": "0.5rem 0"}),
                 get_viewer_component(f"me-{i}-tv"),
@@ -185,6 +186,7 @@ def register_callbacks(app):
             tabs_id="me-tabs",
             tab_value=f"me-tab-{_i}",
             show_editor=True,
+            motl_table=True,
         )
         register_table_save_callbacks(
             app,
@@ -493,10 +495,12 @@ def _register_slot_connectors(app, slot_idx):
         prevent_initial_call=True,
     )
     def _connect_table_to_viewer(global_data, _s=slot_idx):
-        # Only fires on pool-reference changes (not on grid rowData changes).
-        # This collapses the 2× viewer-callback firing that occurred because
-        # load_data_to_grid also wrote rowData which re-triggered the chain. (W3)
-        if not global_data or not isinstance(global_data, dict) or "motl_id" not in global_data:
+        # Pass None through so closing a slot clears the tomoview.
+        # Raise PreventUpdate only for intermediate non-reference values
+        # (prevents double-firing when load_data_to_grid writes rowData — W3).
+        if global_data is None:
+            return None
+        if not isinstance(global_data, dict) or "motl_id" not in global_data:
             raise dash.exceptions.PreventUpdate
         return global_data
 

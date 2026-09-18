@@ -259,6 +259,8 @@ def _derive_kind(entry) -> str:
         return "field-source"
     if ret == "scalar":
         return "scalar"
+    if ret == "dataframe":
+        return "dataframe"
     # export: has an output_path parameter
     try:
         import typing
@@ -318,6 +320,13 @@ OPERATIONS: dict[str, dict[str, Any]] = {
     "alpha_shape": {
         "label": "[OPC→Mesh] Alpha shape",
         "category": "alpha_shape",
+        "kind": "create",
+        "needs_selection": True,
+    },
+    # ── Ball pivoting (OPC → Mesh, formgen radii, custom category handler) ─
+    "ball_pivoting": {
+        "label": "[OPC→Mesh] Ball pivoting",
+        "category": "ball_pivoting",
         "kind": "create",
         "needs_selection": True,
     },
@@ -1171,12 +1180,13 @@ def register_callbacks(app):
         State({"type": _LOAD_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "id"),
         State("surfaces-load-motl-motl-select", "value"),
         State("surfaces-pool", "data"),
+        State("surfaces-selected", "data"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def _run_loader(n_clicks, load_id, load_mode, values, ids, motl_id, pool, registry, pool_meta, pool_next_id):
+    def _run_loader(n_clicks, load_id, load_mode, values, ids, motl_id, pool, selected_id, registry, pool_meta, pool_next_id):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not load_id:
@@ -1202,6 +1212,15 @@ def register_callbacks(app):
             motl._pool_motl_id = motl_id
             kwargs[op["motl_kwarg"]] = motl
             source_tag = f"motl:{motl_id}"
+        elif op["kind"] == "pool_opc":
+            psurf = sr.registry.get(selected_id) if selected_id else None
+            if psurf is None:
+                return no_update, no_update, no_update, "Select a surface from the list first."
+            opc = psurf.surface if psurf is not None else None
+            if not isinstance(opc, OrientedPointCloud):
+                return no_update, no_update, no_update, "Selected surface must be an oriented point cloud."
+            kwargs[op.get("opc_kwarg", "points")] = opc
+            source_tag = f"surface:{selected_id}"
         else:
             source_tag = f"path:{kwargs.get('path', kwargs.get('input_path', '?'))}"
 
@@ -1286,6 +1305,30 @@ def register_callbacks(app):
                 _show_prev if opc_ready else _hidden,
             )
 
+        if op["category"] == "ball_pivoting":
+            opc_ready = (
+                bool(selected_id)
+                and (pool or {}).get(selected_id, {}).get("representation") == "point_cloud"
+            )
+            if not opc_ready:
+                return (
+                    html.Div(
+                        "Select a point-cloud (OPC) surface to enable ball pivoting.",
+                        style=_HINT,
+                    ),
+                    _hidden, _hidden, _hidden, *_all_hidden, _hidden,
+                )
+            rows = formgen.build_form(
+                Mesh.from_ball_pivoting,
+                id_type=_OP_ID_TYPE,
+                id_extra={"op": op_id},
+                exclude=["points", "normals"],
+            )
+            return (
+                html.Div(rows),
+                _hidden, _hidden, _hidden, *_all_hidden, _hidden,
+            )
+
         if op["category"] == "mesh":
             entry = _op_entry(op_id)
             rows = formgen.build_form(entry, id_type=_OP_ID_TYPE, id_extra={"op": op_id})
@@ -1331,6 +1374,8 @@ def register_callbacks(app):
         Output("surfaces-scalar-result", "data", allow_duplicate=True),
         Output("surfaces-main-tabs", "active_tab", allow_duplicate=True),
         Output("surfaces-op-status", "children"),
+        Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("surfaces-op-run-btn", "n_clicks"),
         State("surfaces-op-select", "value"),
         State({"type": _OP_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "value"),
@@ -1356,6 +1401,8 @@ def register_callbacks(app):
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
+        State(ids.DATA_POOL_REGISTRY, "data"),
+        State(ids.DATA_POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
     def _run_operation(
@@ -1366,11 +1413,12 @@ def register_callbacks(app):
         isect_curv, isect_mode,
         alpha_override_val,
         registry, pool_meta, pool_next_id,
+        dp_registry, dp_next_id,
     ):
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not op_id:
-            return (no_update,) * 7 + ("Pick an operation first.",)
+            return (no_update,) * 7 + ("Pick an operation first.", no_update, no_update)
         op = OPERATIONS[op_id]
         pool = dict(pool or {})
         pool_state = _pool.PoolState.from_stores(registry, pool_meta, pool_next_id)
@@ -1384,16 +1432,16 @@ def register_callbacks(app):
             if op.get("needs_selection"):
                 if not selected_id or selected_id not in pool:
                     return (no_update,) * 7 + (
-                        "Select a surface from the list first.",)
+                        "Select a surface from the list first.", no_update, no_update)
                 psurf = sr.registry.get(selected_id)
                 if psurf is None:
                     return (no_update,) * 7 + (
-                        f"Surface {selected_id} is no longer in the registry.",)
+                        f"Surface {selected_id} is no longer in the registry.", no_update, no_update)
 
             method = op["method_for"](psurf)
             if method is None:
                 return (no_update,) * 7 + (
-                    "This operation is not available for the selected surface.",)
+                    "This operation is not available for the selected surface.", no_update, no_update)
             kwargs = _filter_kwargs_to_signature(method, kwargs)
             _scalar_var: str | None = None
             if op["kind"] == "scalar":
@@ -1401,14 +1449,19 @@ def register_callbacks(app):
             _op_raw_var: str | None = None
             if op["kind"] in ("create", "split"):
                 _op_raw_var = "_" + _prov.bind(sr.registry.peek_next_key())
+            _df_var: str | None = None
+            if op["kind"] == "dataframe":
+                _pre_dp = _datapool.DataPoolState.from_stores(dp_registry, dp_next_id)
+                _pre_count = _pre_dp.kind_counters.get("surf", 0) + 1
+                _df_var = _prov.bind(f"surf_{_pre_count}")
             try:
-                result = _invoke_op(method, kwargs, assign_to=_scalar_var or _op_raw_var)
+                result = _invoke_op(method, kwargs, assign_to=_scalar_var or _op_raw_var or _df_var)
             except Exception as exc:
-                return (no_update,) * 7 + (f"Error: {exc}",)
+                return (no_update,) * 7 + (f"Error: {exc}", no_update, no_update)
 
             if op["kind"] == "export":
                 tgt = kwargs.get("output_path") or "(unspecified path)"
-                return (no_update,) * 7 + (f"Saved to {tgt}.",)
+                return (no_update,) * 7 + (f"Saved to {tgt}.", no_update, no_update)
             if op["kind"] == "scalar":
                 rows: list[dict] = []
                 if isinstance(result, dict):
@@ -1418,14 +1471,14 @@ def register_callbacks(app):
                     rows.append({"label": op["label"], "value": _fmt_cell(result)})
                 return (no_update, None, None, None, None, rows,
                         no_update,
-                        f"{op['label']} -> see Results.")
+                        f"{op['label']} -> see Results.", no_update, no_update)
             if op["kind"] == "field-source":
                 handle = pool.get(selected_id)
                 if handle is not None and psurf is not None:
                     handle["has_curvatures"] = sr._mesh_has_curvatures(psurf.surface)
                     pool[selected_id] = handle
                 return (pool, None, None, None, None, None, no_update,
-                        f"{op['label']} applied; curvature fields populated.")
+                        f"{op['label']} applied; curvature fields populated.", no_update, no_update)
             if op["kind"] in ("unary-inplace", "unary") and (result is None or result is psurf.surface or result is psurf):
                 handle = pool.get(selected_id)
                 if handle is not None and psurf is not None:
@@ -1436,11 +1489,28 @@ def register_callbacks(app):
                     )
                     pool[selected_id] = handle
                 return (pool, None, None, None, None, None, no_update,
-                        f"{op['label']} applied in place.")
+                        f"{op['label']} applied in place.", no_update, no_update)
+
+            if op["kind"] == "dataframe":
+                if not isinstance(result, pd.DataFrame):
+                    return (no_update,) * 7 + (f"{op['label']} did not return a DataFrame.", no_update, no_update)
+                records = result.to_dict("records")
+                _dp_state = _datapool.DataPoolState.from_stores(dp_registry, dp_next_id)
+                _dp_state, _entry_id = _datapool.insert_entry(
+                    _dp_state, result,
+                    label=f"{op['label']} (surface op)",
+                    reader=op.get("reg_key", ""),
+                    source_path="",
+                    entry_kind="surf",
+                )
+                _new_dp_reg, _new_dp_next = _dp_state.to_stores()
+                return (no_update, None, records, None, None, None, no_update,
+                        f"{op['label']} → {len(records)} rows; table entry {_entry_id}.",
+                        _new_dp_reg, _new_dp_next)
 
             if result is None:
                 return (no_update,) * 7 + (
-                    f"{op['label']}: no output (result was empty or all elements masked).",)
+                    f"{op['label']}: no output (result was empty or all elements masked).", no_update, no_update)
             new_entries = _adopt_result(
                 result, parent_id=selected_id, label_root=op["label"],
             )
@@ -1448,7 +1518,7 @@ def register_callbacks(app):
                 pool[sid] = h
             return (pool, None, None, None, None, None, no_update,
                     f"Created {len(new_entries)} new surface(s): "
-                    + ", ".join(s for s, _ in new_entries) + ".")
+                    + ", ".join(s for s, _ in new_entries) + ".", no_update, no_update)
 
         # ── Parametric op ───────────────────────────────────────────────
         if op["category"] == "parametric":
@@ -1456,7 +1526,7 @@ def register_callbacks(app):
                 in_motl = _motl_from_pool_rows(in_motl_id)
                 if in_motl is None:
                     return (no_update,) * 7 + (
-                        "Pick a non-empty input motl from the pool.",)
+                        "Pick a non-empty input motl from the pool.", no_update, no_update)
                 kwargs: dict = {"input_motl": in_motl}
             else:
                 kwargs: dict = {}
@@ -1464,7 +1534,7 @@ def register_callbacks(app):
                 obj = _motl_from_pool_rows(obj_motl_id)
                 if obj is None:
                     return (no_update,) * 7 + (
-                        "Pick a non-empty motl for 'object_motl'.",)
+                        "Pick a non-empty motl for 'object_motl'.", no_update, no_update)
                 kwargs["object_motl"] = obj
             scalar_kwargs = generate_kwargs(ids, values, pool_state) if (ids and values) else {}
             scalar_kwargs = {k: v for k, v in scalar_kwargs.items()
@@ -1475,52 +1545,52 @@ def register_callbacks(app):
                 psurf = pr.registry.get(_pkeys[0]) if _pkeys else None
                 if psurf is None:
                     return (no_update,) * 7 + (
-                        "No active fit -- load a parametric surface first.",)
+                        "No active fit -- load a parametric surface first.", no_update, no_update)
                 method = getattr(psurf, op["method_name"])
             else:
                 method = getattr(ParametricSurface, op["method_name"])
             try:
                 result = run_operation(method, kwargs)
             except Exception as exc:
-                return (no_update,) * 7 + (f"{op['label']} failed: {exc}",)
+                return (no_update,) * 7 + (f"{op['label']} failed: {exc}", no_update, no_update)
             if op["result_kind"] == "export":
                 tgt = kwargs.get("output_path", "?")
-                return (no_update,) * 7 + (f"Saved to {tgt}.",)
+                return (no_update,) * 7 + (f"Saved to {tgt}.", no_update, no_update)
             if op["result_kind"] == "dataframe":
                 if not isinstance(result, pd.DataFrame):
                     return (no_update,) * 7 + (
-                        f"{op['label']} did not return a DataFrame.",)
+                        f"{op['label']} did not return a DataFrame.", no_update, no_update)
                 records = result.to_dict("records")
                 return (no_update, None, records, None, None, None,
                         no_update,
                         f"{op['label']} -> {len(records)} rows; "
-                        "see results table.")
+                        "see results table.", no_update, no_update)
             if not isinstance(result, Motl):
                 return (no_update,) * 7 + (
                     f"{op['label']} did not return a Motl "
-                    f"({type(result).__name__}).",)
+                    f"({type(result).__name__}).", no_update, no_update)
             rows = result.df.to_dict("records")
             return (no_update, rows, None, None, None, None,
                     no_update,
                     f"{op['label']} -> {len(rows)} particles, "
-                    "ready to send to editor.")
+                    "ready to send to editor.", no_update, no_update)
 
         # ── Intersection (custom flow) ───────────────────────────────────
         if op["category"] == "intersection":
             if not selected_id:
-                return (no_update,) * 7 + ("Select a mesh surface first.",)
+                return (no_update,) * 7 + ("Select a mesh surface first.", no_update, no_update)
             psurf = sr.registry.get(selected_id)
             if psurf is None or not psurf.is_mesh:
-                return (no_update,) * 7 + ("Selected surface must be a mesh.",)
+                return (no_update,) * 7 + ("Selected surface must be a mesh.", no_update, no_update)
             if not isect_motl_id:
-                return (no_update,) * 7 + ("Pick a motl from the pool.",)
+                return (no_update,) * 7 + ("Pick a motl from the pool.", no_update, no_update)
             try:
                 isect_df = _pool.get_rows(isect_motl_id)
             except _pool.PoolPayloadMissing:
                 isect_df = None
             if isect_df is None or isect_df.empty:
                 return (no_update,) * 7 + (
-                    f"Motl '{isect_motl_id}' has no data.",)
+                    f"Motl '{isect_motl_id}' has no data.", no_update, no_update)
             isect_motl = Motl(isect_df)
             isect_motl._pool_motl_id = isect_motl_id
             motl_rows = isect_df.to_dict("records")
@@ -1545,7 +1615,7 @@ def register_callbacks(app):
                     _tb_str = _tb.format_exc()
                     print(_tb_str, flush=True)
                     dash_logger.write(f"TRACEBACK (distance_to_points):\n{_tb_str}", source="error")
-                    return (no_update,) * 7 + (f"distance_to_points failed: {exc!r}",)
+                    return (no_update,) * 7 + (f"distance_to_points failed: {exc!r}", no_update, no_update)
                 n_pts = target.shape[0]
                 op_label = f"distance_to_points:{selected_id}"
                 # Add hit=True for all points — every target has a closest point.
@@ -1557,7 +1627,7 @@ def register_callbacks(app):
                 store_value["hit_coord_prefix"] = "closest_points"
                 return (no_update, None, None, store_value, motl_rows,
                         None, no_update,
-                        f"Computed distances for {n_pts} particles.")
+                        f"Computed distances for {n_pts} particles.", no_update, no_update)
 
             # ── Ray-cast mode (uses particle orientations) ────────────────
             _rays_kwargs = {
@@ -1581,7 +1651,7 @@ def register_callbacks(app):
                 _tb_str = _tb.format_exc()
                 print(_tb_str, flush=True)
                 dash_logger.write(f"TRACEBACK (rays_from_motl):\n{_tb_str}", source="error")
-                return (no_update,) * 7 + (f"Ray construction failed: {exc!r}",)
+                return (no_update,) * 7 + (f"Ray construction failed: {exc!r}", no_update, no_update)
             dash_logger.write(
                 f"DEBUG ray_intersections kwargs: rays.shape={rays.shape!r}, "
                 f"one_hit_per_target={bool(isect_oh)!r}",
@@ -1603,7 +1673,7 @@ def register_callbacks(app):
                 print(_tb_str, flush=True)
                 dash_logger.write(f"TRACEBACK (ray_intersections):\n{_tb_str}", source="error")
                 return (no_update,) * 7 + (
-                    f"ray_intersections failed: {exc!r}",)
+                    f"ray_intersections failed: {exc!r}", no_update, no_update)
             # Add hit boolean so the surface viewer can draw the scatter layer.
             raw = dict(raw)
             raw["hit"] = np.isfinite(np.asarray(raw.get("t_hit", []))).astype(bool)
@@ -1637,7 +1707,7 @@ def register_callbacks(app):
                 print(_tb_str, flush=True)
                 dash_logger.write(f"TRACEBACK (intersection_data):\n{_tb_str}", source="error")
                 return (no_update,) * 7 + (
-                    f"intersection_data failed: {exc!r}",)
+                    f"intersection_data failed: {exc!r}", no_update, no_update)
             hits_df = data.get("hits")
             if isinstance(hits_df, pd.DataFrame) and "source_id" in hits_df.columns:
                 seen = sorted({int(x) for x in hits_df["source_id"].tolist()})
@@ -1654,23 +1724,23 @@ def register_callbacks(app):
             return (pool, None, None, store_value, motl_rows,
                     None, no_update,
                     f"Cast {n_rays} rays; {n_hits} hits ({pct:.0f}%), "
-                    f"{n_miss} misses.")
+                    f"{n_miss} misses.", no_update, no_update)
 
         # ── Alpha shape ──────────────────────────────────────────────────
         if op["category"] == "alpha_shape":
             if not selected_id or selected_id not in pool:
-                return (no_update,) * 7 + ("Select a surface first.",)
+                return (no_update,) * 7 + ("Select a surface first.", no_update, no_update)
             psurf = sr.registry.get(selected_id)
             if psurf is None or not psurf.is_point_cloud:
                 return (no_update,) * 7 + (
-                    "Alpha shape requires an OrientedPointCloud surface.",)
+                    "Alpha shape requires an OrientedPointCloud surface.", no_update, no_update)
             coords = psurf.surface.vertices
             source_key = selected_id
             if source_key not in _struct_alpha_cache:
                 tetra_info = _compute_alpha_tetra(source_key, coords)
                 if tetra_info is None:
                     return (no_update,) * 7 + (
-                        "Cannot compute alpha shape: fewer than 4 points or coplanar.",)
+                        "Cannot compute alpha shape: fewer than 4 points or coplanar.", no_update, no_update)
             lo, hi = Mesh.suggest_alpha_range(coords)
             alpha = _slider_to_alpha(
                 float(alpha_override_val or 0.5),
@@ -1686,7 +1756,7 @@ def register_callbacks(app):
                     assign_to=_raw_var,
                 )
             except Exception as exc:
-                return (no_update,) * 7 + (f"Alpha shape failed: {exc}",)
+                return (no_update,) * 7 + (f"Alpha shape failed: {exc}", no_update, no_update)
             new_entries = _adopt_result(
                 mesh, parent_id=selected_id, label_root=f"alpha={alpha:.4g}",
             )
@@ -1695,9 +1765,36 @@ def register_callbacks(app):
                 pool[sid] = h
             return (pool,) + (no_update,) * 6 + (
                 f"Committed alpha={alpha:.4g}: "
-                f"{len(new_entries)} surface(s) added to pool.",)
+                f"{len(new_entries)} surface(s) added to pool.", no_update, no_update)
 
-        return (no_update,) * 7 + (f"Unknown op category: {op['category']!r}.",)
+        # ── Ball pivoting ────────────────────────────────────────────────
+        if op["category"] == "ball_pivoting":
+            if not selected_id or selected_id not in pool:
+                return (no_update,) * 7 + ("Select a surface first.", no_update, no_update)
+            psurf = sr.registry.get(selected_id)
+            if psurf is None or not psurf.is_point_cloud:
+                return (no_update,) * 7 + (
+                    "Ball pivoting requires an OrientedPointCloud surface.", no_update, no_update)
+            _raw_kw = generate_kwargs(ids, values, pool_state) if (ids and values) else {}
+            _raw_kw = {k: v for k, v in _raw_kw.items() if v not in (None, "", [])}
+            _raw_kw = _filter_kwargs_to_signature(Mesh.from_ball_pivoting, _raw_kw)
+            _bp_var = "_" + _prov.bind(sr.registry.peek_next_key())
+            try:
+                mesh = _invoke_op(
+                    Mesh.from_ball_pivoting,
+                    {"points": psurf.surface, **_raw_kw},
+                    assign_to=_bp_var,
+                )
+            except Exception as exc:
+                return (no_update,) * 7 + (f"Ball pivoting failed: {exc}", no_update, no_update)
+            new_entries = _adopt_result(mesh, parent_id=selected_id, label_root="ball pivoting")
+            pool = dict(pool or {})
+            for sid, h in new_entries:
+                pool[sid] = h
+            return (pool,) + (no_update,) * 6 + (
+                f"Ball pivoting: {len(new_entries)} surface(s) added to pool.", no_update, no_update)
+
+        return (no_update,) * 7 + (f"Unknown op category: {op['category']!r}.", no_update, no_update)
 
     # ── Fix 8: track and display the label of the most-recently-run operation ──
     @app.callback(

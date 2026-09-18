@@ -196,6 +196,7 @@ class GuiCategory(StrEnum):
     READER      = "reader"       # file-reading callables surfaced in the data pool
     SURFACE_OP  = "surface-op"   # operations on existing Mesh / OPC surfaces
     SURFACE_LOAD = "surface-load" # loaders that create a new surface from disk / motl
+    PLEOMORPHIC_OP = "pleomorphic-op"  # operations on PleomorphicSurface assemblies
 
 
 @dataclass(frozen=True)

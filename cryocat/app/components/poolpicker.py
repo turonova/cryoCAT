@@ -261,26 +261,59 @@ def register_pool_picker_callbacks(app, prefix: str) -> None:
     """Wire the pool-picker component to the suite pool."""
     import dash
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(registry, groups_data, current) {
+            var grps = (groups_data || {}).groups || {};
+            var reg = registry || {};
+            var grouped = {};
+            Object.values(grps).forEach(function(g) {
+                (g.members || []).forEach(function(m) { grouped[m] = true; });
+            });
+            var opts = [];
+            Object.entries(grps).forEach(function(kv) {
+                var gid = kv[0], g = kv[1];
+                if (g.members && g.members.length > 0) {
+                    opts.push({label: "[group]  " + (g.label || gid) + "  (" + g.members.length + ")", value: "__group__" + gid});
+                }
+            });
+            Object.entries(reg).forEach(function(kv) {
+                var mid = kv[0], meta = kv[1];
+                if (!grouped[mid]) {
+                    opts.push({label: meta.label || mid, value: mid});
+                }
+            });
+            var valid = {};
+            opts.forEach(function(o) { valid[o.value] = true; });
+            var clean = (current || []).filter(function(v) { return valid[v]; });
+            return [opts, clean];
+        }
+        """,
         Output(f"{prefix}-pp-dropdown", "options"),
         Output(f"{prefix}-pp-dropdown", "value"),
         Input(ids.POOL_REGISTRY, "data"),
         Input(ids.POOL_GROUPS, "data"),
         State(f"{prefix}-pp-dropdown", "value"),
     )
-    def _populate(registry, groups_data, current):
-        from cryocat.app.pool import GroupState
-        groups = GroupState.from_store(groups_data).groups
-        opts = _picker_opts(registry, groups)
-        return opts, _clean_value(current, opts)
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(dropdown_val, current_order) {
+            var dv_set = {};
+            (dropdown_val || []).forEach(function(v) { dv_set[v] = true; });
+            var kept = (current_order || []).filter(function(v) { return dv_set[v]; });
+            var appended = {};
+            kept.forEach(function(v) { appended[v] = true; });
+            (dropdown_val || []).forEach(function(v) {
+                if (!appended[v]) { kept.push(v); appended[v] = true; }
+            });
+            return kept;
+        }
+        """,
         Output(f"{prefix}-pp-order", "data"),
         Input(f"{prefix}-pp-dropdown", "value"),
         State(f"{prefix}-pp-order", "data"),
     )
-    def _sync_order(dropdown_val, current_order):
-        return _sync_order_list(dropdown_val, current_order)
 
     @app.callback(
         Output(f"{prefix}-pp-list", "children"),
@@ -355,13 +388,29 @@ def register_pool_picker_callbacks(app, prefix: str) -> None:
             raise dash.exceptions.PreventUpdate
         return _reorder_list(order or [], "down", ctx.triggered_id["val"])
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(order, excluded, groups_data) {
+            var groups = (groups_data || {}).groups || {};
+            var excl = {};
+            (excluded || []).forEach(function(v) { excl[v] = true; });
+            var seen = {};
+            var result = [];
+            (order || []).forEach(function(v) {
+                if (typeof v === "string" && v.startsWith("__group__")) {
+                    var gid = v.slice("__group__".length);
+                    ((groups[gid] || {}).members || []).forEach(function(m) {
+                        if (!excl[m] && !seen[m]) { seen[m] = true; result.push(m); }
+                    });
+                } else if (!excl[v] && !seen[v]) {
+                    seen[v] = true; result.push(v);
+                }
+            });
+            return result;
+        }
+        """,
         Output(f"{prefix}-value", "data"),
         Input(f"{prefix}-pp-order", "data"),
         Input(f"{prefix}-pp-excluded", "data"),
         Input(ids.POOL_GROUPS, "data"),
     )
-    def _update_value(order, excluded, groups_data):
-        from cryocat.app.pool import GroupState
-        groups = GroupState.from_store(groups_data).groups
-        return _resolve_value(order, excluded, groups)

@@ -595,7 +595,7 @@ def register_callbacks(app):  # noqa: C901
         State("dp-view-rev",          "data"),
         State("dp-slot-map",          "data"),
         State("dp-active-id",         "data"),
-        State("dp-entry-revs",        "data"),
+        State(ids.DATA_POOL_REVS,     "data"),
     )
     def _select_entry(src_ref, wc_signal, dp_registry, rev, slot_map, active_id, entry_revs):
         from cryocat.app.suite.pages._wcopy import get_copy, source_id_for_ref
@@ -726,6 +726,7 @@ def register_callbacks(app):  # noqa: C901
         register_table_callbacks(
             app, f"dp-view-{_i}-tabv",
             resolve_df=dp_resolve_df, resolve_n_rows=pool_resolve_n_rows,
+            data_pool=True,
         )
         register_table_plot_callbacks(
             app, f"dp-view-{_i}-tabv-table-plot",
@@ -762,7 +763,7 @@ def register_callbacks(app):  # noqa: C901
         Output("dp-edit-wc-changed",   "data", allow_duplicate=True),
         # allow_duplicate: _on_save_as_new and _on_discard also write this
         Output("dp-wc-commit-status",  "children", allow_duplicate=True),
-        Output("dp-entry-revs",        "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_REVS,      "data", allow_duplicate=True),
         Input("dp-wc-apply-btn",       "n_clicks"),
         State("dp-edit-src-ref",      "data"),
         State(ids.POOL_REGISTRY,      "data"),
@@ -770,7 +771,7 @@ def register_callbacks(app):  # noqa: C901
         State(ids.POOL_NEXT_ID,       "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
         State(ids.DATA_POOL_NEXT_ID,  "data"),
-        State("dp-entry-revs",        "data"),
+        State(ids.DATA_POOL_REVS,     "data"),
         prevent_initial_call=True,
     )
     def _on_apply_to_original(
@@ -911,7 +912,7 @@ def register_callbacks(app):  # noqa: C901
     @app.callback(
         *[Output(f"dp-view-{_i}-tabv-global-data-store", "data", allow_duplicate=True) for _i in range(_N_SLOTS)],
         Input("dp-slot-map",          "data"),
-        Input("dp-entry-revs",        "data"),
+        State(ids.DATA_POOL_REVS,     "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
         *[State(f"dp-view-{_i}-tabv-global-data-store", "data") for _i in range(_N_SLOTS)],
         prevent_initial_call=True,

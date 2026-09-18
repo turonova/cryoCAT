@@ -241,6 +241,7 @@ def get_viewer_component(prefix: str):
                 ],
                 id=f"{prefix}-graph-row",
             ),
+            dcc.Store(id=f"{prefix}-tv-tab-trigger", data=0),
         ],
     )
 
@@ -263,23 +264,32 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         detailed_table = f"{prefix}-data"
 
     if tabs_id is not None:
-        @app.callback(
+        _vot_js = "[" + ", ".join(f'"{t}"' for t in visible_on_tabs) + "]"
+        app.clientside_callback(
+            f"""
+            function(active_tab, current_style) {{
+                var style = Object.assign({{}}, current_style || {{}});
+                style.display = {_vot_js}.includes(active_tab) ? "flex" : "none";
+                return style;
+            }}
+            """,
             Output(f"{prefix}-graph-menu", "style"),
             Input(tabs_id, "active_tab"),
             State(f"{prefix}-graph-menu", "style"),
         )
-        def toggle_visibility(active_tab, current_style):
-            if current_style is None:
-                current_style = {}
 
-            updated_style = current_style.copy()
-
-            if active_tab in visible_on_tabs:
-                updated_style["display"] = "flex"
-            else:
-                updated_style["display"] = "none"
-
-            return updated_style
+    if tabs_id is not None and tab_value is not None:
+        app.clientside_callback(
+            f"""
+            function(active_tab, current_n) {{
+                if (active_tab === "{tab_value}") return (current_n || 0) + 1;
+                return window.dash_clientside.no_update;
+            }}
+            """,
+            Output(f"{prefix}-tv-tab-trigger", "data"),
+            Input(tabs_id, "active_tab"),
+            State(f"{prefix}-tv-tab-trigger", "data"),
+        )
 
     @app.callback(
         Output(f"{prefix}-index", "data"),
@@ -331,9 +341,10 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         default = "score" if "score" in values else (values[0] if values else None)
         return opts, default
 
-    # Tab guard: Input (not State) so that switching to the tab re-fires the
-    # callback when the slot's data was updated while a different tab was active.
-    _tab_input = [Input(tabs_id, "active_tab")] if (tabs_id and tab_value) else []
+    # Tab guard: fire from a per-slot trigger store (written clientside only for
+    # the matching tab) so switching tabs does not fan out to all five slots.
+    _tab_input = [Input(f"{prefix}-tv-tab-trigger", "data")] if (tabs_id and tab_value) else []
+    _tab_state = [State(tabs_id, "active_tab")] if (tabs_id and tab_value) else []
 
     @app.callback(
         Output(f"{prefix}-graph", "figure"),
@@ -347,14 +358,15 @@ def register_viewer_callbacks(app, prefix: str, show_dual_graph=False, hover_inf
         Input(f"{prefix}-data", "data"),
         *_tab_input,
         State(ids.GRAPH_SETTINGS_STORE, "data"),
+        *_tab_state,
         prevent_initial_call=True,
     )
     def update_plot(index, color_col, colorscale, marker_size, data, *rest):
-        # rest is (active_tab, settings) when tab guard active, else (settings,)
+        # rest is (tab_trigger, settings, active_tab) when tab guard active, else (settings,)
         if not data:
             return go.Figure(), no_update, {"display": "none"}, "Tomo ID"
         if tab_value:
-            active_tab, settings = rest[0], rest[1]
+            _tab_trigger, settings, active_tab = rest[0], rest[1], rest[2]
             if active_tab != tab_value:
                 raise exceptions.PreventUpdate
         else:

@@ -271,11 +271,17 @@ def get_motl_editor_sidebar():
                                             ),
                                             style={"marginTop": "0.5rem"},
                                         ),
+                                        dbc.Checklist(
+                                            id="me-open-after-load",
+                                            options=[{"label": "Open after loading", "value": "open"}],
+                                            value=["open"],
+                                            style={"marginTop": "0.4rem", "marginBottom": "0.2rem"},
+                                        ),
                                         dbc.Button(
                                             "Load",
                                             id="me-load-motl-load-btn",
                                             color="primary",
-                                            style={"width": "100%", "marginTop": "0.4rem"},
+                                            style={"width": "100%", "marginTop": "0.2rem"},
                                         ),
                                     ],
                                 ),
@@ -624,6 +630,7 @@ def register_motl_editor_sidebar_callbacks(app):
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
         State("me-slot-map", "data"),
+        State("me-open-after-load", "value"),
         prevent_initial_call=True,
     )
     def route_motl(
@@ -639,6 +646,7 @@ def register_motl_editor_sidebar_callbacks(app):
         pool_meta,
         next_id,
         slot_map,
+        open_after_load,
     ):
         import os as _os
         from cryocat.app.components.filesystem import resolve_input as _resolve
@@ -651,6 +659,7 @@ def register_motl_editor_sidebar_callbacks(app):
             slot_map.append(None)
         # Drop stale slot references from a previous session if the pool restarted.
         _live_ids = set((registry or {}).keys())
+        _original_slot_map = list(slot_map)
         slot_map = [m if (m and m in _live_ids) else None for m in slot_map]
 
         _nid = next_id or 0
@@ -710,18 +719,27 @@ def register_motl_editor_sidebar_callbacks(app):
             return (no_update, no_update, no_update, slot_map, no_update, f"Load failed: {exc}")
 
         free = _first_free_slot(slot_map, N_SLOTS)
-        if free is not None:
+        should_open = bool(open_after_load)  # ["open"] → True; [] / None → False
+        if free is not None and should_open:
             slot_map[free] = mid
             active_tab = f"me-tab-{free}"
             status = f"Loaded: {label} ({len(motl_data)} particles) → slot {free + 1}"
         else:
             active_tab = no_update
-            status = (
-                f"Loaded: {label} ({len(motl_data)} particles) → pool "
-                f"(all {N_SLOTS} slots in use; use the slot dropdown in the pool list)"
-            )
+            if free is None:
+                status = (
+                    f"Loaded: {label} ({len(motl_data)} particles) → pool "
+                    f"(all {N_SLOTS} slots in use; use the slot dropdown in the pool list)"
+                )
+            else:
+                status = (
+                    f"Loaded: {label} ({len(motl_data)} particles) → pool "
+                    f"(assign a slot from the pool list to view)"
+                )
         status += _relion_params_summary(relion_params)
-        return (*pool_state.to_stores(), slot_map, active_tab, status)
+        _assigned = free is not None and should_open
+        _slot_map_out = slot_map if (_assigned or slot_map != _original_slot_map) else no_update
+        return (*pool_state.to_stores(), _slot_map_out, active_tab, status)
 
     # ── Pool motl list ─────────────────────────────────────────────────────────
     @app.callback(
@@ -852,7 +870,7 @@ def register_motl_editor_sidebar_callbacks(app):
                 continue  # R2: grouped motls appear only under their group
             label = meta.get("label", mid)
             is_active_motl = at_type == "motl" and at_id == mid
-            motl_row_style = {"display": "flex", "alignItems": "center", "padding": "4px 8px", "cursor": "pointer"}
+            motl_row_style = {"display": "flex", "alignItems": "center", "padding": "4px 8px"}
             if is_active_motl:
                 motl_row_style["backgroundColor"] = "var(--bs-primary-bg-subtle)"
             # Build per-motl slot dropdown
@@ -869,11 +887,14 @@ def register_motl_editor_sidebar_callbacks(app):
                     [
                         html.Span(
                             f"{label} (id: {mid.replace('-', '_')})",
+                            id={"type": "me-motl-list-item", "mid": mid},
+                            n_clicks=0,
                             style={
                                 "flex": "1",
                                 "overflow": "hidden",
                                 "textOverflow": "ellipsis",
                                 "whiteSpace": "nowrap",
+                                "cursor": "pointer",
                             },
                         ),
                         html.Div(
@@ -893,9 +914,6 @@ def register_motl_editor_sidebar_callbacks(app):
                             style={"padding": "0 6px", "color": "var(--color9)", "lineHeight": "1"},
                         ),
                     ],
-                    id={"type": "me-motl-list-item", "mid": mid},
-                    action=True,
-                    n_clicks=0,
                     style=motl_row_style,
                 )
             )

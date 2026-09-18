@@ -104,11 +104,29 @@ def _render_value(
     # Primitives
     if isinstance(v, (str, int, float, bool)) or v is None:
         return repr(v), []
-    # Small list/tuple of scalars — verbatim
-    if isinstance(v, (list, tuple)) and len(v) <= 32 and all(
-        isinstance(x, (str, int, float, bool)) for x in v
-    ):
-        return repr(list(v)), []
+    # List/tuple: recurse so embedded Motls resolve to variable names
+    if isinstance(v, (list, tuple)):
+        parts: list[str] = []
+        extra_imports: list = []
+        for item in v:
+            item_expr, item_imports = _render_value(item, obj_to_var=obj_to_var)
+            if item_expr is None:
+                return None, []
+            parts.append(item_expr)
+            extra_imports.extend(item_imports)
+        return "[" + ", ".join(parts) + "]", extra_imports
+    # Dict: recurse into values so embedded Motls resolve
+    if isinstance(v, dict):
+        parts_d: list[str] = []
+        extra_imports_d: list = []
+        for dk, dv in v.items():
+            k_expr, _ = _render_value(dk, obj_to_var=obj_to_var)
+            v_expr, v_imports = _render_value(dv, obj_to_var=obj_to_var)
+            if k_expr is None or v_expr is None:
+                return None, []
+            parts_d.append(f"{k_expr}: {v_expr}")
+            extra_imports_d.extend(v_imports)
+        return "{" + ", ".join(parts_d) + "}", extra_imports_d
     # Motl-like: resolve via the per-call variable map (provenance.bind)
     if hasattr(v, "df") and hasattr(v, "get_unique_values"):
         var = _ovmap.get(id(v))
@@ -278,6 +296,33 @@ def invoke_operation(
             _kw_var = _prov.var_for_obj(v)
         if _kw_var:
             obj_to_var[id(v)] = _kw_var
+
+    # Second pass: register pool-stamped objects nested inside list/tuple kwargs.
+    # _render_value recurses into lists, but the loop above only checks top-level
+    # values — so Motls inside a list kwarg (e.g. motl2=[motl_a, motl_b]) are
+    # missed and render as None in the script line.
+    for v in kwargs.values():
+        if not isinstance(v, (list, tuple)):
+            continue
+        for _item in v:
+            if id(_item) in obj_to_var:
+                continue
+            _ivar: str | None = None
+            for _attr in ("_pool_motl_id", "_pool_surface_id", "_pool_complex_id", "_pool_nn_id"):
+                _pid = getattr(_item, _attr, None)
+                if _pid is not None:
+                    _ivar = _prov.var_for(_pid)
+                    break
+            else:
+                _inner = getattr(_item, "_pool_surface_inner_id", None)
+                if _inner is not None:
+                    _outer2 = _prov.var_for(_inner)
+                    if _outer2:
+                        _ivar = f"{_outer2}.surface"
+                if _ivar is None:
+                    _ivar = _prov.var_for_obj(_item)
+            if _ivar:
+                obj_to_var[id(_item)] = _ivar
 
     # Derive the receiver variable name for the call event.
     derived_receiver: str | None = (

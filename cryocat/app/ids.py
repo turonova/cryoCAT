@@ -29,6 +29,7 @@ POOL_GROUPS:   str = "pool-groups"     # { groups: { group_id: {label, members} 
 
 DATA_POOL_REGISTRY: str = "data-pool-registry"  # { data_id: DataEntry as dict }
 DATA_POOL_NEXT_ID:  str = "data-pool-next-id"   # incrementing counter for stable data_id
+DATA_POOL_REVS:     str = "dp-pool-revs"         # { data_id: int } — shared revision map
 
 GRAPH_POOL_REGISTRY: str = "graph-pool-registry"  # { graph_id: {graph_id, label, kind} }
 GRAPH_POOL_NEXT_ID:  str = "graph-pool-next-id"   # incrementing counter for stable graph_id

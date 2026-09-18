@@ -66,9 +66,10 @@ app = dash.Dash(
     suppress_callback_exceptions=True,
 )
 
-from cryocat.app.instrument import instrument
+from cryocat.app.instrument import instrument, hook_flask
 
 instrument(app)
+hook_flask(app.server)
 
 # ── Suite-global motl pool ──────────────────────────────────────────────────────
 # The pool is the shared spine across all tools: a small, soft-sized set of
@@ -82,7 +83,8 @@ POOL_STORES = [
     dcc.Store(id=ids.POOL_GROUPS, data={"groups": {}, "next_id": 0}),  # group handles
     # pool-motls and pool-extra removed — row data lives in pool._payloads (server-side)
     dcc.Store(id=ids.DATA_POOL_REGISTRY, data={}),  # { data_id: DataEntry as dict }
-    dcc.Store(id=ids.DATA_POOL_NEXT_ID, data=0),  # monotone counter for stable data_id
+    dcc.Store(id=ids.DATA_POOL_NEXT_ID, data=0),   # monotone counter for stable data_id
+    dcc.Store(id=ids.DATA_POOL_REVS,    data={}),  # { data_id: int } — shared revision map
     dcc.Store(id=ids.GRAPH_POOL_REGISTRY, data={}),  # { graph_id: {graph_id, label, kind} }
     dcc.Store(id=ids.GRAPH_POOL_NEXT_ID, data=1),  # monotone counter for stable graph_id
 ]

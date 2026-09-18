@@ -176,18 +176,24 @@ def register_tablefilter_callbacks(app, prefix: str, resolve_df=None) -> None:
         State({"type": f"{prefix}-filter-slider", "column": ALL}, "id"),
         State({"type": f"{prefix}-filter-slider", "column": ALL}, "min"),
         State({"type": f"{prefix}-filter-slider", "column": ALL}, "max"),
+        State(f"{prefix}-slider-filters-store", "data"),
         prevent_initial_call=True,
     )
-    def _on_slider_change(slider_values, slider_ids, slider_mins, slider_maxs):
+    def _on_slider_change(slider_values, slider_ids, slider_mins, slider_maxs, current_filters):
         """Write active slider ranges to slider-filters-store to trigger server-side re-filter.
 
         Full-range sliders contribute nothing (W2 — no no-op filtering).
+        Slider DOM is rebuilt on every data load; guard against writing {} → {}
+        which would fire _update_filtered_btn and _update_filter_count for every
+        instance on every global-data-store change.
         """
         slider_filters = {}
         for val, sid, mn, mx in zip(slider_values, slider_ids, slider_mins, slider_maxs):
             lo, hi = val[0], val[1]
             if lo != mn or hi != mx:
                 slider_filters[sid["column"]] = [lo, hi]
+        if slider_filters == (current_filters or {}):
+            raise exceptions.PreventUpdate
         return slider_filters
 
     @app.callback(

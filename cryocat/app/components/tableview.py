@@ -24,6 +24,7 @@ def get_table_component(
     show_create_from_selected=True,
     save_dialog_prefix: str | None = None,
     show_editor: bool = False,
+    motl_table: bool = False,
 ):
     motl_mode = connected_motl_prefix is not None
     use_save_dialog = motl_mode and save_dialog_prefix is not None
@@ -172,7 +173,7 @@ def get_table_component(
         id=f"{prefix}-table-container",
         children=[
             dbc.Row(button_row_children, className="mb-2"),
-            get_grid_container(prefix),
+            get_grid_container(prefix, motl_table=motl_table),
             html.Div(
                 id=f"{prefix}-active-filter-count",
                 style={"color": "var(--color9)", "marginTop": "4px", "marginBottom": "4px"},
@@ -197,6 +198,8 @@ def register_table_callbacks(
     extra_csv_states=None,
     custom_csv_save_fn=None,
     show_editor: bool = False,
+    data_pool: bool = False,
+    motl_table: bool = False,
 ):
     """Register grid, filter, edit and CSV-save callbacks for *prefix*.
 
@@ -210,6 +213,8 @@ def register_table_callbacks(
         app, prefix,
         resolve_df=resolve_df, resolve_n_rows=resolve_n_rows,
         tabs_id=tabs_id, tab_value=tab_value,
+        data_pool=data_pool,
+        motl_table=motl_table,
     )
     register_tablefilter_callbacks(app, prefix, resolve_df=resolve_df)
     register_tableedit_callbacks(app, prefix)

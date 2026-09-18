@@ -111,6 +111,20 @@ def _emit(event: str, key: str, ts: float) -> None:
     print(f"  {_ts(ts)}  {event:5s}  {short}", flush=True)
 
 
+def _set_flask_g(attr: str, value) -> None:
+    """Write *value* onto Flask's per-request ``g`` object under *attr*.
+
+    Silently no-ops when called outside a Flask request context (tests,
+    background threads, startup).
+    """
+    try:
+        from flask import g as _g, has_request_context as _hrc
+        if _hrc():
+            setattr(_g, attr, value)
+    except Exception:
+        pass
+
+
 def _wrap(fn):
     name = f"{fn.__module__}.{fn.__name__}"
     WRAPPED.append(name)
@@ -118,6 +132,7 @@ def _wrap(fn):
     @functools.wraps(fn)
     def inner(*args, **kwargs):
         t0 = time.perf_counter()
+        _set_flask_g("_t_fn_start", t0)   # arrival → this = Dash dispatch time
         if _tracing:
             ts = time.time()
             key_enter = _instance_key(name)
@@ -127,9 +142,12 @@ def _wrap(fn):
         try:
             return fn(*args, **kwargs)
         finally:
+            t1 = time.perf_counter()
             key = _instance_key(name)
+            _set_flask_g("_t_fn_end", t1)  # this → after_request = serialisation time
+            _set_flask_g("_cb_name",  key)
             COUNTS[key] += 1
-            TIMES[key] += time.perf_counter() - t0
+            TIMES[key] += t1 - t0
             if _tracing:
                 ts = time.time()
                 TRACE.append((ts, "EXIT ", key))
@@ -137,6 +155,80 @@ def _wrap(fn):
                     _emit("EXIT ", key, ts)
 
     return inner
+
+
+def hook_flask(server) -> None:
+    """Register before/after request hooks for per-request pipeline timing.
+
+    Each ``/_dash-update-component`` request is decomposed into four wall-clock
+    durations and printed to stdout whenever :data:`_tracing` is active:
+
+    ======  ============================================================
+    gap     previous response-sent → this arrival  (client + queueing)
+    disp    arrival → callback-start               (Dash routing/JSON)
+    fn      callback-start → callback-return       (your code)
+    ser     callback-return → response-sent        (serialisation)
+    ======  ============================================================
+
+    Call once after :func:`instrument`::
+
+        from cryocat.app.instrument import instrument, hook_flask
+        instrument(app)
+        hook_flask(app.server)
+    """
+    from flask import g as _fg, request as _freq
+
+    _last_sent: list[float | None] = [None]  # mutable cell — survives closures
+
+    @server.before_request
+    def _t_arrive() -> None:
+        if _freq.path != "/_dash-update-component":
+            return
+        now = time.perf_counter()
+        _fg._t_arrival = now
+        _fg._t_gap = (
+            (now - _last_sent[0]) * 1000.0 if _last_sent[0] is not None else None
+        )
+
+    @server.after_request
+    def _t_send(response):
+        if _freq.path != "/_dash-update-component":
+            return response
+        if not hasattr(_fg, "_t_arrival"):
+            return response
+
+        t_sent = time.perf_counter()
+        _last_sent[0] = t_sent   # always update so gap is correct next request
+
+        if not _tracing:
+            return response
+
+        t_arr  = _fg._t_arrival
+        t_fn0  = getattr(_fg, "_t_fn_start", None)
+        t_fn1  = getattr(_fg, "_t_fn_end",   None)
+        gap    = getattr(_fg, "_t_gap",       None)
+        label  = getattr(_fg, "_cb_name",     "?")
+
+        disp_ms = (t_fn0 - t_arr)  * 1000.0 if t_fn0 is not None else float("nan")
+        fn_ms   = (t_fn1 - t_fn0)  * 1000.0 if (t_fn0 is not None and t_fn1 is not None) else float("nan")
+        ser_ms  = (t_sent - (t_fn1 if t_fn1 is not None else t_arr)) * 1000.0
+        gap_s   = f"{gap:7.1f}" if gap is not None else "    ---"
+
+        # Shorten label: keep last two module segments + first Output id
+        parts = label.split("  ->  ", 1)
+        short_fn  = ".".join(parts[0].split(".")[-2:]) if parts[0] else "?"
+        short_out = parts[1][:36] if len(parts) > 1 else ""
+        short = f"{short_fn}  ->  {short_out}" if short_out else short_fn
+
+        print(
+            f"  REQ  {short:<60s}"
+            f"  gap={gap_s} ms"
+            f"  disp={disp_ms:6.1f} ms"
+            f"  fn={fn_ms:6.1f} ms"
+            f"  ser={ser_ms:6.1f} ms",
+            flush=True,
+        )
+        return response
 
 
 def instrument(app=None):

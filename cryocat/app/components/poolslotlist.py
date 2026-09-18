@@ -91,7 +91,6 @@ def _build_rows(reg, sm, n_slots, active_id, prefix, row_extra_fn):
             "alignItems": "center",
             "gap": "0.4rem",
             "padding": "3px 4px",
-            "cursor": "pointer",
         }
         if is_active:
             row_style["backgroundColor"] = "var(--bs-primary-bg-subtle)"
@@ -121,14 +120,20 @@ def _build_rows(reg, sm, n_slots, active_id, prefix, row_extra_fn):
             )
 
         row_children = [
+            # id and n_clicks live on the label div only — not on the ListGroupItem
+            # wrapper — so a click on the slot dropdown does not propagate to
+            # _on_item_click and cannot trigger a stale re-render of the list.
             html.Div(
                 label_parts,
+                id={"type": f"{prefix}-psl-item", "item_id": item_id},
+                n_clicks=0,
                 style={
                     "display": "flex",
                     "alignItems": "center",
                     "gap": "0.25rem",
                     "flex": "1 1 0",
                     "minWidth": 0,
+                    "cursor": "pointer",
                 },
             ),
             html.Div(
@@ -147,9 +152,6 @@ def _build_rows(reg, sm, n_slots, active_id, prefix, row_extra_fn):
         rows.append(
             dbc.ListGroupItem(
                 row_children,
-                id={"type": f"{prefix}-psl-item", "item_id": item_id},
-                action=True,
-                n_clicks=0,
                 style=row_style,
             )
         )

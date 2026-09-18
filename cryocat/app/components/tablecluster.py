@@ -488,6 +488,7 @@ def register_table_cluster_callbacks(
     resolve_df: Callable | None = None,
     commit_fn: Callable | None = None,
     default_feature_columns_fn: Callable | None = None,
+    revs_store_id: str | None = None,
 ) -> None:
     """Register all clustering callbacks for one instance.
 
@@ -981,6 +982,8 @@ def register_table_cluster_callbacks(
     ]
     if cluster_cols_store_id:
         _save_out.append(Output(cluster_cols_store_id, "data", allow_duplicate=True))
+    if revs_store_id and not pool_aware:
+        _save_out.append(Output(revs_store_id, "data", allow_duplicate=True))
 
     _save_states: list = [
         State(f"{prefix}-cluster-data-store",    "data"),
@@ -997,6 +1000,8 @@ def register_table_cluster_callbacks(
             State(_ids.POOL_META,     "data"),
             State(_ids.POOL_NEXT_ID,  "data"),
         ]
+    if revs_store_id and not pool_aware:
+        _save_states.append(State(revs_store_id, "data"))
 
     @app.callback(
         *_save_out,
@@ -1011,8 +1016,11 @@ def register_table_cluster_callbacks(
             else:
                 registry, pool_meta, next_id = extra
                 existing_cols = None
+            revs_data = None
         else:
-            existing_cols = extra[0] if extra else None
+            extra_list = list(extra)
+            existing_cols = extra_list.pop(0) if cluster_cols_store_id else None
+            revs_data = extra_list.pop(0) if revs_store_id else None
             registry = pool_meta = next_id = None
 
         n_pool_out = 3 if pool_aware else 0
@@ -1024,6 +1032,8 @@ def register_table_cluster_callbacks(
         if not col_name:
             nu = [no_update] * n_pool_out + [no_update, "Enter a column name first."]
             if cluster_cols_store_id:
+                nu.append(no_update)
+            if revs_store_id and not pool_aware:
                 nu.append(no_update)
             return tuple(nu) if n_out > 1 else nu[0]
 
@@ -1067,6 +1077,7 @@ def register_table_cluster_callbacks(
                 result.append(cols)
             return tuple(result)
 
+        new_revs = no_update
         if commit_fn is not None:
             committed = commit_fn(main_data, df)
             if committed is None:
@@ -1074,16 +1085,26 @@ def register_table_cluster_callbacks(
                 nu = [no_update] * n_pool_out + [no_update, status]
                 if cluster_cols_store_id:
                     nu.append(no_update)
+                if revs_store_id and not pool_aware:
+                    nu.append(no_update)
                 return tuple(nu) if n_out > 1 else nu[0]
             new_data = committed
+            if revs_store_id:
+                data_id = (main_data or {}).get("data_id") if isinstance(main_data, dict) else None
+                if data_id:
+                    new_revs = dict(revs_data or {})
+                    new_revs[data_id] = new_revs.get(data_id, 0) + 1
         else:
             new_data = _cluster_df_to_store(df)
+        result: list = [new_data, status]
         if cluster_cols_store_id:
             cols = list(existing_cols or [])
             if col_name not in cols:
                 cols.append(col_name)
-            return new_data, status, cols
-        return new_data, status
+            result.append(cols)
+        if revs_store_id and not pool_aware:
+            result.append(new_revs)
+        return tuple(result) if len(result) > 1 else result[0]
 
     # ── Select-all button (always registered; button is always in layout) ────────
 
