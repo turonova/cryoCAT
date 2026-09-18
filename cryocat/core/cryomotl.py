@@ -394,11 +394,24 @@ class Motl:
         --------
         >>> assign_column(input_df, {'tomo_id': 'input_df_key1', 'subtomo_id': 'input_df_key2'})
 
+        Warns
+        -----
+        UserWarning
+            If any non-null value in a paired column could not be converted to numeric (as opposed to a
+            cell that was already empty/null), since it is silently replaced with 0.0.
+
         """
 
         for em_key, paired_key in column_pairs.items():
             if paired_key in input_df.columns:
-                self.df[em_key] = pd.to_numeric(input_df[paired_key], errors="coerce")
+                coerced = pd.to_numeric(input_df[paired_key], errors="coerce")
+                unparsable = coerced.isna() & input_df[paired_key].notna()
+                if unparsable.any():
+                    warnings.warn(
+                        f"{unparsable.sum()} value(s) in '{paired_key}' were not numeric and were set to 0.0 "
+                        f"for '{em_key}'."
+                    )
+                self.df[em_key] = coerced.fillna(0.0)
 
     @gui_exposed(category="Cleaning", label="Clean by separation radius")
     def clean_by_distance(
@@ -3505,9 +3518,18 @@ class RelionMotl(Motl):
             relion_df, {"score": "rlnMaxValueProbDistribution"}
         )  # getting the max value contribution per distribution - not really same as CCC but has similar indications
         if "rlnHelicalTubeID" in relion_df.columns:
-            self.df["object_id"] = relion_df["rlnHelicalTubeID"].values
+            self.assign_column(relion_df, {"object_id": "rlnHelicalTubeID"})
+        elif "ccObjectName" in relion_df.columns:
+            self.assign_column(relion_df, {"object_id": "ccObjectName"})
+        if "ccSubunitName" in relion_df.columns:
+            self.assign_column(relion_df, {"geom2": "ccSubunitName"})
         # store the idx of the original data - useful for writing out
         self.relion_df["ccSubtomoID"] = self.df["subtomo_id"]
+
+        # ensure self.df is fully numeric: columns whose source entries were absent from the
+        # starfile (e.g. rlnClassNumber, rlnHelicalTubeID) are never assigned above and would
+        # otherwise be left as NaN.
+        self.df = self.df.fillna(0.0)
 
     def adapt_original_entries(self):
         """The function updates DataFrame stored in `self.relion_df` based on the values in `self.df`.

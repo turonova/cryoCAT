@@ -506,7 +506,28 @@ def test_relion2stopgap():
     sg1 = StopgapMotl(input_motl=stopgap)
     assert not list(sg.sg_df.columns) == StopgapMotl.columns
     assert list(sg1.sg_df.columns) == StopgapMotl.columns
-    pd.testing.assert_frame_equal(sg1.df.dropna(), RelionMotl(relion3).df.dropna())
+    # Compare only the columns the relion->stopgap->relion round trip is expected to preserve;
+    # auxiliary geom*/subtomo_mean columns are not part of the stopgap conversion and may differ.
+    # NOTE: `.dropna()` used to be called on both sides here, but since every row had a NaN in at
+    # least one auxiliary column, it silently reduced both frames to 0 rows, making the assertion
+    # vacuously true regardless of the actual particle data.
+    core_columns = [
+        "score",
+        "subtomo_id",
+        "tomo_id",
+        "object_id",
+        "x",
+        "y",
+        "z",
+        "shift_x",
+        "shift_y",
+        "shift_z",
+        "phi",
+        "psi",
+        "theta",
+        "class",
+    ]
+    pd.testing.assert_frame_equal(sg1.df[core_columns], RelionMotl(relion3).df[core_columns])
 
     if os.path.exists(stopgap):
         os.remove(stopgap)
@@ -820,6 +841,29 @@ class TestMotl:
         # Ensure that the motl dataframe was not changed
         assert motl.df["tomo_id"].tolist() == [1, 1]
         assert motl.df["subtomo_id"].tolist() == [1, 2]
+
+    def test_assign_column_unparsable_value_warns_and_defaults_to_zero(self, sample_motl):
+        # A non-null value that pd.to_numeric cannot parse is real (corrupted) data, not an
+        # absent one, so it should be flagged before being silently defaulted to 0.0.
+        motl = sample_motl
+        input_df = pd.DataFrame({"input_tomo": [3, "not_a_number"]})
+
+        with pytest.warns(UserWarning, match="input_tomo"):
+            motl.assign_column(input_df, {"tomo_id": "input_tomo"})
+
+        assert motl.df["tomo_id"].tolist() == [3.0, 0.0]
+
+    def test_assign_column_missing_value_does_not_warn(self, sample_motl):
+        # A cell that was already empty/NaN in the source is expected to default to 0.0
+        # silently, so no warning should be raised for genuinely absent data.
+        motl = sample_motl
+        input_df = pd.DataFrame({"input_tomo": [3, np.nan]})
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            motl.assign_column(input_df, {"tomo_id": "input_tomo"})
+
+        assert motl.df["tomo_id"].tolist() == [3.0, 0.0]
 
     @pytest.fixture
     def sample_motl_data1(self):
@@ -3281,6 +3325,54 @@ class TestRelionMotl:
         # Optionally, you can also check if the 'ccSubtomoID' column exists in the 'relion_df'
         assert "ccSubtomoID" in relion_motl.relion_df.columns
         assert len(relion_motl.relion_df["ccSubtomoID"]) == len(relion_motl.df)
+
+    def test_convert_to_motl_no_nan_when_optional_columns_missing(self):
+        # rlnClassNumber, rlnMaxValueProbDistribution, rlnHelicalTubeID/ccObjectName and
+        # ccSubunitName are all optional and absent here; self.df must still end up fully
+        # numeric (defaulted to 0.0) rather than leaving NaN for the unset columns.
+        relion_df = pd.DataFrame(
+            {
+                "rlnMicrographName": [1, 1],
+                "rlnCoordinateX": [10.0, 20.0],
+                "rlnCoordinateY": [11.0, 21.0],
+                "rlnCoordinateZ": [12.0, 22.0],
+                "rlnAngleRot": [0.0, 10.0],
+                "rlnAngleTilt": [0.0, 20.0],
+                "rlnAnglePsi": [0.0, 30.0],
+                "rlnImageName": [1, 2],
+            }
+        )
+        relion_motl = RelionMotl()
+        relion_motl.convert_to_motl(relion_df, version=3.1)
+
+        assert not relion_motl.df.isna().any().any()
+        assert (relion_motl.df["class"] == 0.0).all()
+        assert (relion_motl.df["score"] == 0.0).all()
+        assert (relion_motl.df["object_id"] == 0.0).all()
+        assert (relion_motl.df["geom2"] == 0.0).all()
+
+    def test_convert_to_motl_assigns_object_id_and_geom2_from_relion_columns(self):
+        # object_id/geom2 now go through assign_column (change C); verify the values are
+        # still correctly carried over when the source columns are present.
+        relion_df = pd.DataFrame(
+            {
+                "rlnMicrographName": [1, 1],
+                "rlnCoordinateX": [10.0, 20.0],
+                "rlnCoordinateY": [11.0, 21.0],
+                "rlnCoordinateZ": [12.0, 22.0],
+                "rlnAngleRot": [0.0, 10.0],
+                "rlnAngleTilt": [0.0, 20.0],
+                "rlnAnglePsi": [0.0, 30.0],
+                "rlnImageName": [1, 2],
+                "rlnHelicalTubeID": [5, 6],
+                "ccSubunitName": [7, 8],
+            }
+        )
+        relion_motl = RelionMotl()
+        relion_motl.convert_to_motl(relion_df, version=3.1)
+
+        assert relion_motl.df["object_id"].tolist() == [5.0, 6.0]
+        assert relion_motl.df["geom2"].tolist() == [7.0, 8.0]
 
     def test_adapt_original_entries_no_change(self):
         relion_data = {
