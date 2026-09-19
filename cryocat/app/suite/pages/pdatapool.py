@@ -672,25 +672,28 @@ def register_callbacks(app):  # noqa: C901
         return f"data:{data_id}"
 
     # ── Clear picker when selected entry is removed ────────────────────────────
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(dp_reg, pool_reg, current_val) {
+            if (!current_val) return window.dash_clientside.no_update;
+            var reg_m = pool_reg || {};
+            var reg_d = dp_reg || {};
+            if (current_val.indexOf("motl:") === 0) {
+                var mid = current_val.slice(5);
+                if (!(mid in reg_m)) return null;
+            } else if (current_val.indexOf("data:") === 0) {
+                var did = current_val.slice(5);
+                if (!(did in reg_d)) return null;
+            }
+            return window.dash_clientside.no_update;
+        }
+        """,
         Output("dp-edit-src-dd", "value", allow_duplicate=True),
         Input(ids.DATA_POOL_REGISTRY, "data"),
-        Input(ids.POOL_REGISTRY,      "data"),
-        State("dp-edit-src-dd",       "value"),
+        Input(ids.POOL_REGISTRY, "data"),
+        State("dp-edit-src-dd", "value"),
         prevent_initial_call=True,
     )
-    def _clear_picker_if_stale(dp_reg, pool_reg, current_val):
-        if not current_val:
-            return no_update
-        if current_val.startswith("motl:"):
-            mid = current_val[5:]
-            if mid not in (pool_reg or {}):
-                return None
-        elif current_val.startswith("data:"):
-            did = current_val[5:]
-            if did not in (dp_reg or {}):
-                return None
-        return no_update
 
     # ── Graph viewer — fires once per slot switch via dp-active-id ────────────
     @app.callback(

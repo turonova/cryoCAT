@@ -1162,16 +1162,18 @@ def register_callbacks(app):
 
     # ── W1/W3: Populate source-motl dropdown options from pool registry ───────
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(registry) {
+            var reg = registry || {};
+            var opts = [];
+            for (var k in reg) { opts.push({label: reg[k].label || k, value: k}); }
+            return opts;
+        }
+        """,
         Output({"type": "nn-src-ts-extra", "param": "motl_selection"}, "options"),
         Input(ids.POOL_REGISTRY, "data"),
     )
-    def _populate_nn_source_motl_options(registry):
-        opts = [
-            {"label": v.get("label", k), "value": k}
-            for k, v in (registry or {}).items()
-        ]
-        return opts
 
     # ── W4: Gate table-to-motl buttons per slot ──────────────────────────────
 
@@ -1274,14 +1276,19 @@ def register_callbacks(app):
 
     # ── Step G: populate trace-chains motl pickers ────────────────────────────
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(registry) {
+            var reg = registry || {};
+            var opts = [];
+            for (var k in reg) { opts.push({label: reg[k].label || k, value: k}); }
+            return [opts, opts];
+        }
+        """,
         Output("nn-tc-motl-entry", "options"),
         Output("nn-tc-motl-exit", "options"),
         Input(ids.POOL_REGISTRY, "data"),
     )
-    def _populate_tc_motl_opts(registry):
-        opts = [{"label": v.get("label", k), "value": k} for k, v in (registry or {}).items()]
-        return opts, opts
 
     # ── Step H: barycentric motl callback ─────────────────────────────────────
 
@@ -1381,12 +1388,18 @@ def register_callbacks(app):
 
     # ── Step J: ordered pairs — motl picker options ───────────────────────────
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(registry) {
+            var reg = registry || {};
+            var opts = [];
+            for (var k in reg) { opts.push({label: reg[k].label || k, value: k}); }
+            return opts;
+        }
+        """,
         Output("nn-op-motl", "options"),
         Input(ids.POOL_REGISTRY, "data"),
     )
-    def _populate_op_motl_opts(registry):
-        return [{"label": v.get("label", k), "value": k} for k, v in (registry or {}).items()]
 
     # ── Step K: ordered pairs — show ring_size only when topology=circular ────
 

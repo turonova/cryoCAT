@@ -592,77 +592,62 @@ def register_path_hint_callback(app, id_type: str, id_extra: dict | None = None)
 
 
 def register_pool_table_writeback(app, id_type: str, id_extra: dict | None = None) -> None:
-    """Register a callback that populates ``DataPoolEntry`` dropdowns from the registry.
+    """Register a clientside callback that populates ``DataPoolEntry`` dropdowns.
 
-    Every ``DataPoolEntry``-tagged dropdown built by :func:`build_form` with the
-    given ``(id_type, id_extra)`` combination gets its options refreshed
-    whenever ``DATA_POOL_REGISTRY`` changes.  Options list only DataFrame-kind
-    entries; the value is the ``data_id`` string, resolved to the actual
-    payload by :func:`cryocat.utils.classutils._parse_data_pool_entry` at
-    dispatch time.
-
-    Call once per unique ``(id_type, id_extra)`` combination that may contain
-    ``DataPoolEntry`` parameters.
-    """
-    from dash import Input, Output, ALL as _ALL, no_update
-    from cryocat.app import ids as _ids
-    from cryocat.app.datapool import clean_registry as _clean
-
-    id_extra = id_extra or {}
-
-    @app.callback(
-        # "DataPoolEntry" is the alias name, not the widget name ("pool_table").
-        # build_form sets cid_tag = alias_name for non-path aliases; the Output
-        # pattern must match that, or the callback is permanently dead.
-        Output({"type": id_type, "owner": _ALL, "param": _ALL, "tag": "DataPoolEntry", **id_extra}, "options"),
-        Input(_ids.DATA_POOL_REGISTRY, "data"),
-        prevent_initial_call=False,
-    )
-    def _fill_pool_table_options(dp_registry):
-        reg = _clean(dp_registry)
-        opts = [
-            {"label": v.get("label", k), "value": k}
-            for k, v in reg.items()
-            if v.get("kind") in ("dataframe", None)
-        ]
-        from dash import ctx
-        n = len(ctx.outputs_list)
-        return [opts] * n
-
-
-def register_pool_motl_writeback(app, id_type: str, id_extra: dict | None = None) -> None:
-    """Register a callback that populates ``MotlSource`` dropdowns from the motl pool.
-
-    Every ``MotlSource``-tagged dropdown built by :func:`build_form` with the
-    given ``(id_type, id_extra)`` combination gets its options refreshed
-    whenever ``POOL_REGISTRY`` changes.  The value is the ``motl_id`` string,
-    resolved to an actual :class:`~cryocat.core.cryomotl.Motl` instance by
-    :func:`cryocat.utils.classutils._parse_motl_source` at dispatch time.
-
-    Call once per unique ``(id_type, id_extra)`` combination that may contain
-    ``MotlSource`` parameters.
+    Runs in the browser; no server round-trip on every DATA_POOL_REGISTRY change.
     """
     from dash import Input, Output, ALL as _ALL
     from cryocat.app import ids as _ids
 
     id_extra = id_extra or {}
+    app.clientside_callback(
+        """
+        function(dp_registry) {
+            var reg = dp_registry || {};
+            var opts = [];
+            for (var k in reg) {
+                if (k.indexOf('__') === 0) { continue; }
+                var v = reg[k];
+                var kind = v && v.kind;
+                if (kind === 'dataframe' || kind === null || kind === undefined || kind === '') {
+                    opts.push({label: (v && v.label) || k, value: k});
+                }
+            }
+            var n = dash_clientside.callback_context.outputs_list.length;
+            return Array(n).fill(opts);
+        }
+        """,
+        Output({"type": id_type, "owner": _ALL, "param": _ALL, "tag": "DataPoolEntry", **id_extra}, "options"),
+        Input(_ids.DATA_POOL_REGISTRY, "data"),
+    )
 
-    @app.callback(
-        # "MotlSource" is the alias name, not the widget name ("pool_motl").
-        # build_form sets cid_tag = alias_name for non-path aliases.
+
+def register_pool_motl_writeback(app, id_type: str, id_extra: dict | None = None) -> None:
+    """Register a clientside callback that populates ``MotlSource`` dropdowns.
+
+    Runs in the browser; no server round-trip on every POOL_REGISTRY change.
+    """
+    from dash import Input, Output, ALL as _ALL
+    from cryocat.app import ids as _ids
+
+    id_extra = id_extra or {}
+    app.clientside_callback(
+        """
+        function(registry) {
+            var reg = registry || {};
+            var opts = [];
+            for (var k in reg) {
+                if (k.indexOf('__') === 0) { continue; }
+                var v = reg[k];
+                opts.push({label: (v && v.label) || k, value: k});
+            }
+            var n = dash_clientside.callback_context.outputs_list.length;
+            return Array(n).fill(opts);
+        }
+        """,
         Output({"type": id_type, "owner": _ALL, "param": _ALL, "tag": "MotlSource", **id_extra}, "options"),
         Input(_ids.POOL_REGISTRY, "data"),
-        prevent_initial_call=False,
     )
-    def _fill_pool_motl_options(registry):
-        reg = registry or {}
-        opts = [
-            {"label": v.get("label", k), "value": k}
-            for k, v in reg.items()
-        ]
-        from dash import ctx
-        n = len(ctx.outputs_list)
-        return [opts] * n
 
 
 def register_form_callbacks(app, id_type: str, id_extra: dict | None = None) -> None:

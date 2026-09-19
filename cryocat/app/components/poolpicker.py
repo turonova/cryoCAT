@@ -307,6 +307,9 @@ def register_pool_picker_callbacks(app, prefix: str) -> None:
             (dropdown_val || []).forEach(function(v) {
                 if (!appended[v]) { kept.push(v); appended[v] = true; }
             });
+            if (JSON.stringify(kept) === JSON.stringify(current_order || [])) {
+                return window.dash_clientside.no_update;
+            }
             return kept;
         }
         """,
@@ -320,8 +323,8 @@ def register_pool_picker_callbacks(app, prefix: str) -> None:
         Input(f"{prefix}-pp-order", "data"),
         Input(f"{prefix}-pp-excluded", "data"),
         Input(f"{prefix}-pp-expand", "data"),
-        Input(ids.POOL_REGISTRY, "data"),
-        Input(ids.POOL_GROUPS, "data"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_GROUPS, "data"),
     )
     def _render(order, excluded, expand, registry, groups_data):
         from cryocat.app.pool import GroupState

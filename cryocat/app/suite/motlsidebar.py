@@ -1174,17 +1174,24 @@ def register_motl_editor_sidebar_callbacks(app):
         return gstate.to_store(), f"Group '{g['label']}' created with {len(g['members'])} motl(s)."
 
     # ── Group: populate create-group dropdown from pool ────────────────────────
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(registry) {
+            var reg = registry || {};
+            var opts = [];
+            for (var mid in reg) {
+                var m = reg[mid];
+                if (m.active !== false) {
+                    opts.push({label: (m.label || mid) + " (" + mid.replace(/-/g, "_") + ")",
+                               value: mid});
+                }
+            }
+            return opts;
+        }
+        """,
         Output("me-create-group-select", "options"),
         Input(ids.POOL_REGISTRY, "data"),
     )
-    def populate_create_group_select(registry):
-        registry = registry or {}
-        return [
-            {"label": f"{m.get('label', mid)} ({mid.replace('-', '_')})", "value": mid}
-            for mid, m in registry.items()
-            if m.get("active", True)
-        ]
 
     # ── Multiple-motl operations: collector-driven (pair / list) ───────────────
     register_multi_motl_picker_callbacks(app, "me-multi")

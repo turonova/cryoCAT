@@ -584,12 +584,18 @@ def register_callbacks(app) -> None:
 
     # ── DB3: Helpers tile callbacks ───────────────────────────────────────────
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(registry) {
+            var reg = registry || {};
+            var opts = [];
+            for (var k in reg) { opts.push({label: reg[k].label || k, value: k}); }
+            return opts;
+        }
+        """,
         Output("tango-helpers-motl", "options"),
         Input(ids.POOL_REGISTRY, "data"),
     )
-    def _populate_helpers_motl(registry):
-        return [{"label": v.get("label", k), "value": k} for k, v in (registry or {}).items()]
 
     @app.callback(
         Output("tango-helpers-alpha-status", "children"),
@@ -1190,20 +1196,39 @@ def register_callbacks(app) -> None:
 
     # ── W1/W3: Populate source-motl dropdown options from pool registry ───────
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(registry) {
+            var reg = registry || {};
+            var opts = [];
+            for (var k in reg) { opts.push({label: reg[k].label || k, value: k}); }
+            return opts;
+        }
+        """,
         Output({"type": "tango-twist-src-ts-extra", "param": "source_motl_selection"}, "options"),
         Input(ids.POOL_REGISTRY, "data"),
     )
-    def _populate_twist_source_motl_options(registry):
-        opts = [
-            {"label": v.get("label", k), "value": k}
-            for k, v in (registry or {}).items()
-        ]
-        return opts
 
     # ── W4: Gate table-to-motl buttons on motl_links["source"] ───────────────
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(handle, pool_registry) {
+            var links = (handle && handle.motl_links) ? handle.motl_links : {};
+            var source_ids = links.source || [];
+            var source_id = source_ids[0] || null;
+            if (!source_id) {
+                var msg = "Load data with a source motl selected to enable motl operations.";
+                return [true, msg, true, msg];
+            }
+            var reg = pool_registry || {};
+            if (!(source_id in reg)) {
+                var msg2 = "Source motl '" + source_id + "' is no longer in the motl pool.";
+                return [true, msg2, true, msg2];
+            }
+            return [false, "", false, ""];
+        }
+        """,
         Output("tango-ttm-ttm-write-btn", "disabled"),
         Output("tango-ttm-ttm-write-btn", "title"),
         Output("tango-ttm-ttm-create-btn", "disabled"),
@@ -1211,18 +1236,6 @@ def register_callbacks(app) -> None:
         Input("tango-twist-handle", "data"),
         Input(ids.POOL_REGISTRY, "data"),
     )
-    def _gate_tango_ttm(handle, pool_registry):
-        from cryocat.app.suite.pages._motl_link import has_source_motl
-        if not has_source_motl(handle):
-            msg = "Load data with a source motl selected to enable motl operations."
-            return True, msg, True, msg
-        links = (handle or {}).get("motl_links") or {}
-        source_ids = links.get("source", [])
-        source_id = source_ids[0] if source_ids else None
-        if source_id and source_id not in (pool_registry or {}):
-            msg = f"Source motl '{source_id}' is no longer in the motl pool."
-            return True, msg, True, msg
-        return False, "", False, ""
 
     # ── DE2: Remove a descriptor entry via its ✕ button ──────────────────────
 

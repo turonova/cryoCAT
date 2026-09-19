@@ -172,7 +172,33 @@ def register_motl_input_callbacks(app, prefix: str) -> None:
             return {"display": "block"}, {"display": "none"}
         return {"display": "none"}, {"display": "block"}
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(registry, groups_data, current_pool) {
+            var reg = registry || {};
+            var groups = (groups_data || {}).groups || {};
+            var pool_opts = [];
+            for (var mid in reg) {
+                pool_opts.push({label: reg[mid].label || mid, value: mid});
+            }
+            var valid = {};
+            pool_opts.forEach(function(o) { valid[o.value] = true; });
+            var pool_val = (current_pool || []).filter(function(v) { return valid[v]; });
+            var status = pool_opts.length ? "" : "Pool is empty.";
+            var group_opts = [];
+            for (var gid in groups) {
+                var g = groups[gid];
+                var members = g.members || [];
+                if (members.length) {
+                    group_opts.push({
+                        label: (g.label || gid) + " (" + members.length + " motls)",
+                        value: gid
+                    });
+                }
+            }
+            return [pool_opts, pool_val, status, group_opts];
+        }
+        """,
         Output(f"{prefix}-pool-select", "options"),
         Output(f"{prefix}-pool-select", "value"),
         Output(f"{prefix}-pool-status", "children"),
@@ -181,19 +207,6 @@ def register_motl_input_callbacks(app, prefix: str) -> None:
         Input(ids.POOL_GROUPS, "data"),
         State(f"{prefix}-pool-select", "value"),
     )
-    def _populate(registry, groups_data, current_pool):
-        from cryocat.app.pool import GroupState
-        groups = GroupState.from_store(groups_data).groups
-        pool_opts, pool_val, status = _pool_picker_options(registry, current_pool)
-        group_opts = [
-            {
-                "label": f"{g.get('label', gid)} ({len(g.get('members', []))} motls)",
-                "value": gid,
-            }
-            for gid, g in groups.items()
-            if g.get("members")
-        ]
-        return pool_opts, pool_val, status, group_opts
 
     @app.callback(
         Output(f"{prefix}-group-header-row", "style"),
@@ -236,15 +249,18 @@ def register_motl_input_callbacks(app, prefix: str) -> None:
     def _select_none(_n):
         return []
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(mode, pool_val, group_val) {
+            if (mode === "pool") {
+                if (pool_val === null || pool_val === undefined) return [];
+                return Array.isArray(pool_val) ? pool_val : [pool_val];
+            }
+            return group_val || [];
+        }
+        """,
         Output(f"{prefix}-value", "data"),
         Input(f"{prefix}-source-mode", "value"),
         Input(f"{prefix}-pool-select", "value"),
         Input(f"{prefix}-group-checklist", "value"),
     )
-    def _update_value(mode, pool_val, group_val):
-        if mode == "pool":
-            if pool_val is None:
-                return []
-            return pool_val if isinstance(pool_val, list) else [pool_val]
-        return group_val or []

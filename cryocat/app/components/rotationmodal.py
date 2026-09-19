@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from dash import html, dcc, Input, Output, State, ALL, no_update, ctx
 import dash_bootstrap_components as dbc
-from dash.exceptions import PreventUpdate
 
 from cryocat.app import ids
 from cryocat.app.components.rotationbuilder import (
@@ -107,7 +106,26 @@ def register_rotation_modal_callbacks(app) -> None:
             return True, {"target": tid}
         return False, no_update
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(n_use, euler_str, orient_value, active_tab, request) {
+            if (!n_use) return window.dash_clientside.no_update;
+            var target = ((request || {}).target) || {};
+            var owner = target.owner || '';
+            var param = target.param || '';
+            var value;
+            if (active_tab === 'rotation-modal-tab-pick' && orient_value) {
+                var a = orient_value;
+                value = a[0].toFixed(4) + ',' + a[1].toFixed(4) + ',' + a[2].toFixed(4);
+            } else {
+                value = euler_str;
+            }
+            return dash_clientside.callback_context.outputs_list.map(function(e) {
+                if (e.id && e.id.owner === owner && e.id.param === param) return value;
+                return window.dash_clientside.no_update;
+            });
+        }
+        """,
         Output({"type": ALL, "owner": ALL, "param": ALL, "tag": "RotationLike"}, "value"),
         Input("rotation-use-btn", "n_clicks"),
         State(f"{_INNER}-value", "data"),
@@ -116,18 +134,3 @@ def register_rotation_modal_callbacks(app) -> None:
         State(ids.ROTATION_REQUEST, "data"),
         prevent_initial_call=True,
     )
-    def _write_back(n_use, euler_str, orient_value, active_tab, request):
-        if not n_use:                                                           # 1
-            raise PreventUpdate
-        target = (request or {}).get("target") or {}                           # 2
-        owner, param = target.get("owner", ""), target.get("param", "")        # 3
-        if active_tab == "rotation-modal-tab-pick" and orient_value:           # 4
-            angles = orient_value  # [phi, theta, psi]
-            value = f"{angles[0]:.4f},{angles[1]:.4f},{angles[2]:.4f}"
-        else:
-            value = euler_str
-        return [                                                                # 5
-            value if (e["id"].get("owner") == owner and e["id"].get("param") == param)
-            else no_update
-            for e in ctx.outputs_list
-        ]

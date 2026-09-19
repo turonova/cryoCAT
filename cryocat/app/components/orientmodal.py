@@ -14,13 +14,11 @@ from __future__ import annotations
 
 from dash import html, dcc, Input, Output, State, ALL, no_update, ctx
 import dash_bootstrap_components as dbc
-from dash.exceptions import PreventUpdate
 
 from cryocat.app import ids
 from cryocat.app.components.orientpicker import (
     get_orientation_picker_panel,
     register_orientation_picker_callbacks,
-    _normalize,
 )
 
 _INNER = "orient-modal-inner"
@@ -83,26 +81,32 @@ def register_orient_modal_callbacks(app) -> None:
             return True, {"target": tid}
         return False, no_update
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(n_use, dir_value, request) {
+            if (!n_use) return window.dash_clientside.no_update;
+            var target = ((request || {}).target) || {};
+            var owner = target.owner || '';
+            var param = target.param || '';
+            var value;
+            try {
+                var d = (dir_value && dir_value.length >= 3) ? dir_value : [0.0, 0.0, 1.0];
+                var len = Math.sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+                if (len > 0) { d = [d[0]/len, d[1]/len, d[2]/len]; } else { d = [0.0, 0.0, 1.0]; }
+                function g6(x) { return parseFloat(x.toPrecision(6)).toString(); }
+                value = g6(d[0]) + ',' + g6(d[1]) + ',' + g6(d[2]);
+            } catch(e) {
+                return window.dash_clientside.no_update;
+            }
+            return dash_clientside.callback_context.outputs_list.map(function(e) {
+                if (e.id && e.id.owner === owner && e.id.param === param) return value;
+                return window.dash_clientside.no_update;
+            });
+        }
+        """,
         Output({"type": ALL, "owner": ALL, "param": ALL, "tag": "TripletLike"}, "value"),
         Input("orient-modal-use-btn", "n_clicks"),
         State(f"{_INNER}-value", "data"),
         State(ids.ORIENT_REQUEST, "data"),
         prevent_initial_call=True,
     )
-    def _write_back(n_use, dir_value, request):
-        if not n_use:                                                           # 1
-            raise PreventUpdate
-        target = (request or {}).get("target") or {}                           # 2
-        owner = target.get("owner", "")                                        # 3
-        param = target.get("param", "")                                        # 4
-        try:                                                                    # 5
-            d = _normalize(dir_value or [0.0, 0.0, 1.0])
-            value = f"{d[0]:.6g},{d[1]:.6g},{d[2]:.6g}"
-        except ValueError:
-            value = no_update
-        return [                                                                # 6
-            value if (e["id"].get("owner") == owner and e["id"].get("param") == param)
-            else no_update
-            for e in ctx.outputs_list
-        ]

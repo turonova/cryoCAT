@@ -329,17 +329,45 @@ def register_multi_motl_picker_callbacks(app, prefix):
     set them.
     """
 
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(registry, groups_data) {
+            var reg = registry || {};
+            var groups = (groups_data || {}).groups || {};
+            var all_grouped = {};
+            Object.values(groups).forEach(function(g) {
+                (g.members || []).forEach(function(m) { all_grouped[m] = true; });
+            });
+            var all_opts = [];
+            Object.entries(groups).forEach(function(kv) {
+                var gid = kv[0], g = kv[1];
+                var members = g.members || [];
+                if (!members.length) return;
+                var glabel = g.label || gid;
+                all_opts.push({label: "── " + glabel + " (" + members.length + ") ──",
+                               value: "__group__" + gid, disabled: true});
+                members.forEach(function(mid) {
+                    if (reg[mid]) {
+                        var mlabel = reg[mid].label || mid;
+                        all_opts.push({label: "  " + mlabel + " (" + mid.replace(/-/g, "_") + ")",
+                                       value: mid});
+                    }
+                });
+            });
+            Object.entries(reg).forEach(function(kv) {
+                var mid = kv[0], meta = kv[1];
+                if (meta.active === false) return;
+                if (all_grouped[mid]) return;
+                all_opts.push({label: (meta.label || mid) + " (" + mid.replace(/-/g, "_") + ")",
+                               value: mid});
+            });
+            var selectable = all_opts.filter(function(o) { return !o.disabled; });
+            return [selectable, selectable, all_opts];
+        }
+        """,
         Output(f"{prefix}-main-select", "options"),
         Output(f"{prefix}-second-select", "options"),
         Output(f"{prefix}-list-select", "options"),
         Input(ids.POOL_REGISTRY, "data"),
         Input(ids.POOL_GROUPS, "data"),
     )
-    def _populate(registry, groups_data):
-        from cryocat.app.pool import GroupState
-        groups = GroupState.from_store(groups_data).groups
-        # list-select shows group headers + members; pair selects show only selectable motls
-        all_opts, _, _ = picker_options(registry, None, multi=True, groups=groups)
-        selectable = [o for o in all_opts if not o.get("disabled")]
-        return selectable, selectable, all_opts
