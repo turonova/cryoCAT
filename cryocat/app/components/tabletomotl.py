@@ -253,6 +253,7 @@ def get_table_to_motl(prefix: str, *, allow_modal: bool = True) -> html.Div:
                         id=f"{prefix}-ttm-write-btn",
                         color=styles.BTN_PRIMARY,
                         size="sm",
+                        disabled=True,
                         style={"width": "100%", "marginBottom": "0.3rem"},
                     ),
                     dbc.Button(
@@ -260,6 +261,7 @@ def get_table_to_motl(prefix: str, *, allow_modal: bool = True) -> html.Div:
                         id=f"{prefix}-ttm-create-btn",
                         color=styles.BTN_SECONDARY,
                         size="sm",
+                        disabled=True,
                         style={"width": "100%", "marginBottom": "0.3rem"},
                     ),
                     dbc.Button(

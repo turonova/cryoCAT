@@ -166,6 +166,7 @@ def register_motl_input_callbacks(app, prefix: str) -> None:
         Output(f"{prefix}-pool-section", "style"),
         Output(f"{prefix}-group-section", "style"),
         Input(f"{prefix}-source-mode", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_sections(mode):
         if mode == "pool":
@@ -216,6 +217,7 @@ def register_motl_input_callbacks(app, prefix: str) -> None:
         Input(f"{prefix}-group-select", "value"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_GROUPS, "data"),
+        prevent_initial_call=True,
     )
     def _render_group(gid, registry, groups_data):
         if not gid:

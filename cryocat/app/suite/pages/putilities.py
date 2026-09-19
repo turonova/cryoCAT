@@ -755,6 +755,7 @@ def _register_wedge_mask_callbacks(app, prefix: str) -> None:
         Output(f"{prefix}-params", "data"),
         Input({"type": _WEDGE_ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "value"),
         State({"type": _WEDGE_ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "id"),
+        prevent_initial_call=True,
     )
     def _collect_params(values, ids):
         if not values or not ids:

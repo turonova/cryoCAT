@@ -256,6 +256,7 @@ def _evaluation_panel() -> html.Div:
             html.Div(
                 id="sta-loaded-readout",
                 style={**_HINT, "wordBreak": "break-word"},
+                children="No config loaded yet.",
             ),
             html.Div("Run evaluation", style={**_LBL, "marginTop": "0.5rem"}),
             dbc.Button(
@@ -1927,6 +1928,7 @@ def _tab_setup_output() -> html.Div:
             html.Div(
                 id="sta-setup-table-hint",
                 style=_HINT,
+                children="Edit cells inline (single-click). Provide an output path and save.",
             ),
             dag.AgGrid(
                 id="sta-setup-grid",
@@ -2556,6 +2558,7 @@ def register_callbacks(app):
         Output("sta-eval-params-wrapper", "style"),
         Output("sta-pool-wrapper", "style"),
         Input("sta-eval-mode", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_loader(mode):
         show, hide = {"display": "block"}, {"display": "none"}
@@ -2665,6 +2668,7 @@ def register_callbacks(app):
     @app.callback(
         Output("sta-loaded-readout", "children"),
         Input("sta-loader-config", "data"),
+        prevent_initial_call=True,
     )
     def _show_config(config):
         if not config:
@@ -2681,6 +2685,7 @@ def register_callbacks(app):
         Output("sta-params-grid", "rowData"),
         Output("sta-params-grid", "columnDefs"),
         Input("sta-params-store", "data"),
+        prevent_initial_call=True,
     )
     def update_params_table(data):
         if not data or not data.get("columns"):
@@ -3117,6 +3122,7 @@ def register_callbacks(app):
         Output("sta-setup-novasta-section", "style"),
         Output("sta-setup-stopgap-section", "style"),
         Input("sta-setup-sta-type", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_sta_type_sections(sta_type):
         if sta_type == "stopgap":
@@ -3127,6 +3133,7 @@ def register_callbacks(app):
     @app.callback(
         Output("sta-setup-euler-fields", "is_open"),
         Input("sta-setup-use-euler-search", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_euler_fields(use_euler):
         return bool(use_euler)
@@ -3135,6 +3142,7 @@ def register_callbacks(app):
     @app.callback(
         Output("sta-setup-extract-fields", "is_open"),
         Input("sta-setup-extract-subtomos", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_extract_fields(extract):
         return bool(extract)
@@ -3145,6 +3153,7 @@ def register_callbacks(app):
         Output("sta-setup-grid", "columnDefs"),
         Output("sta-setup-table-hint", "children"),
         Input("sta-setup-df-store", "data"),
+        prevent_initial_call=True,
     )
     def populate_setup_grid(data):
         if not data or not data.get("columns"):

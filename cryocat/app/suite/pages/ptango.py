@@ -573,6 +573,7 @@ def register_callbacks(app) -> None:
         Input("tango-tabs", "active_tab"),
         Input("tango-twist-tabv-global-data-store", "data"),
         *[Input(f"tango-desc-{i}-global-data-store", "data") for i in range(_DESC_SLOTS)],
+        prevent_initial_call=True,
     )
     def _sync_ttm_source(active_tab, twist_ref, *desc_refs):
         if active_tab == "tango-tab-twist" or not active_tab:
@@ -648,6 +649,7 @@ def register_callbacks(app) -> None:
     @app.callback(
         Output("tango-run-desc-btn", "disabled"),
         Input("tango-twist-handle", "data"),
+        prevent_initial_call=True,
     )
     def _gate_on_twist(handle):
         return not bool(handle)
@@ -1110,12 +1112,15 @@ def register_callbacks(app) -> None:
     @app.callback(
         Output("tango-desc-pool-registry", "data"),
         Input(ids.DATA_POOL_REGISTRY, "data"),
+        State("tango-desc-pool-registry", "data"),
+        prevent_initial_call=True,
     )
-    def _sync_desc_pool_registry(dp_registry):
-        return {
+    def _sync_desc_pool_registry(dp_registry, current):
+        filtered = {
             k: v for k, v in (dp_registry or {}).items()
             if v.get("reader") == "tango-desc"
         }
+        return no_update if filtered == current else filtered
 
     # ── Sync per-slot global-data-stores from slot map ────────────────────────
 
@@ -1123,6 +1128,7 @@ def register_callbacks(app) -> None:
         *[Output(f"tango-desc-{i}-global-data-store", "data") for i in range(_DESC_SLOTS)],
         Input("tango-desc-pool-slot-map", "data"),
         *[State(f"tango-desc-{i}-global-data-store", "data") for i in range(_DESC_SLOTS)],
+        prevent_initial_call=True,
     )
     def _sync_desc_slot_stores(slot_map, *current_stores):
         sm = list(slot_map or [None] * _DESC_SLOTS)
@@ -1140,6 +1146,7 @@ def register_callbacks(app) -> None:
         *[Output(f"tango-tab-desc-{i}", "disabled") for i in range(_DESC_SLOTS)],
         Input("tango-desc-pool-slot-map", "data"),
         State("tango-desc-pool-registry", "data"),
+        prevent_initial_call=True,
     )
     def _update_desc_slot_tabs(slot_map, pool_registry):
         reg = pool_registry or {}

@@ -447,7 +447,8 @@ def _load_panel() -> html.Div:
                 style={"marginBottom": "0.4rem"}),
             # The form for the selected loader (formgen rows OR the small
             # column-name input when "motl_pool" is selected).
-            html.Div(id="surfaces-load-form", style={"marginBottom": "0.4rem"}),
+            html.Div(id="surfaces-load-form", style={"marginBottom": "0.4rem"},
+                     children=html.Div("Pick a loader.", style=_HINT)),
             # Motl-pool picker, only visible for parametric-from-motl.
             html.Div(
                 id="surfaces-load-motl-wrapper",
@@ -1149,6 +1150,7 @@ def register_callbacks(app):
         Output("surfaces-load-form", "children"),
         Output("surfaces-load-motl-wrapper", "style"),
         Input("surfaces-load-select", "value"),
+        prevent_initial_call=True,
     )
     def _render_load_form(load_id):
         if not load_id or load_id not in LOAD_OPS:
@@ -1264,6 +1266,7 @@ def register_callbacks(app):
         Input("surfaces-op-select", "value"),
         Input("surfaces-selected", "data"),
         State("surfaces-pool", "data"),
+        prevent_initial_call=True,
     )
     def _render_op_form(op_id, selected_id, pool):
         _hidden = {"display": "none"}
@@ -1814,6 +1817,7 @@ def register_callbacks(app):
     @app.callback(
         Output("surfaces-results-op-label", "children"),
         Input("surfaces-last-op-label", "data"),
+        prevent_initial_call=True,
     )
     def _render_results_op_label(label):
         if not label:
@@ -1868,6 +1872,7 @@ def register_callbacks(app):
     @app.callback(
         Output("surfaces-scalar-results-area", "children"),
         Input("surfaces-scalar-result", "data"),
+        prevent_initial_call=True,
     )
     def _render_scalar_results(records):
         if not records:
@@ -1887,6 +1892,7 @@ def register_callbacks(app):
     @app.callback(
         Output("surfaces-active-fit", "children"),
         Input("parametric-active", "data"),
+        prevent_initial_call=True,
     )
     def _render_active_fit(handle):
         if not handle:
@@ -1903,6 +1909,7 @@ def register_callbacks(app):
         Output("surfaces-isect-results-area", "children"),
         Input("surfaces-isect-result", "data"),
         State(ids.GRAPH_SETTINGS_STORE, "data"),
+        prevent_initial_call=True,
     )
     def _render_isect_results(snap, gs):
         if not snap:
@@ -2054,6 +2061,7 @@ def register_callbacks(app):
         Output("surfaces-param-results-area", "children"),
         Input("surfaces-param-intersection-df", "data"),
         Input("surfaces-param-result-motl", "data"),
+        prevent_initial_call=True,
     )
     def _render_param_results(records, motl_rows):
         if motl_rows is not None:
@@ -2086,6 +2094,7 @@ def register_callbacks(app):
         Output("surfaces-pool-list", "children"),
         Input("surfaces-pool", "data"),
         Input("surfaces-selected", "data"),
+        prevent_initial_call=True,
     )
     def _render_list(pool, selected_id):
         pool = pool or {}
@@ -2193,6 +2202,7 @@ def register_callbacks(app):
         Output("surfaces-send-area", "children"),
         Input("surfaces-selected", "data"),
         Input("surfaces-pool", "data"),
+        prevent_initial_call=True,
     )
     def _render_send_area(selected_id, pool):
         pool = pool or {}

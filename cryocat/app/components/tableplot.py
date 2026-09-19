@@ -612,12 +612,11 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
     if special_graphs is not None:
         graph_options = graph_options + special_graphs
 
-    @app.callback(
+    app.clientside_callback(
+        f"function(_) {{ return {json.dumps(graph_options)}; }}",
         Output(f"{prefix}-graph-options-dropdown", "options"),
         Input(f"{prefix}-options-init", "data"),
     )
-    def load_graph_options(_):
-        return graph_options
 
     @app.callback(
         Output(f"{prefix}-graph-options", "style"),

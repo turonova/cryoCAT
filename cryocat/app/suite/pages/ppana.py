@@ -686,6 +686,7 @@ def register_callbacks(app):
     @app.callback(
         Output("ppana-s-subtomo-collapse", "is_open"),
         Input("ppana-s-use-subtomo", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_subtomo_form(use_subtomo):
         return bool(use_subtomo)
@@ -736,6 +737,7 @@ def register_callbacks(app):
     @app.callback(
         Output("ppana-s-wedge-collapse", "is_open"),
         Input("ppana-s-apply-wedge", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_wedge_form(apply_wedge):
         return bool(apply_wedge)
@@ -748,6 +750,7 @@ def register_callbacks(app):
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
     )
     def _collect_wedge_params(values, form_ids, registry, pool_meta, pool_next_id):
         if not values or not form_ids:

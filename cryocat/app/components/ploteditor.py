@@ -1201,6 +1201,7 @@ def register_plot_editor_callbacks(
         Input(f"{prefix}-pe-chart", "value"),
         *[Input(f"{prefix}-pe-role-{r}", "value") for r in _ALL_ROLES],
         State(f"{prefix}-pe-ext-figure", "data"),
+        prevent_initial_call=True,
     )
     def _guard_plot_btn(src_ref, chart, *args):
         *role_values, ext_fig = args
@@ -1237,6 +1238,7 @@ def register_plot_editor_callbacks(
         Output(f"{prefix}-pe-opts-placeholder", "style"),
         *[Output(f"{prefix}-pe-opts-{k}", "style") for k in _CHART_CONFIG],
         Input(f"{prefix}-pe-chart", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_chart_opts(chart):
         ph_style = _hide if chart else styles.HINT

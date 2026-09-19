@@ -957,6 +957,7 @@ def register_motl_editor_sidebar_callbacks(app):
         Output("me-active-unslotted-note", "children"),
         Input("me-active-target", "data"),
         State("me-slot-map", "data"),
+        prevent_initial_call=True,
     )
     def _update_active_unslotted_note(active_target, slot_map):
         if not active_target or active_target.get("type") != "motl":

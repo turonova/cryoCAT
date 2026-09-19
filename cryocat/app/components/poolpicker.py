@@ -249,6 +249,10 @@ def get_pool_picker(prefix: str, *, label: str = "Motl source") -> html.Div:
                     "maxHeight": "12rem",
                     "overflowY": "auto",
                 },
+                children=[html.Div(
+                    "No motls selected.",
+                    style={"color": "var(--color9)", "fontSize": "0.85rem", "padding": "0.3rem 0"},
+                )],
             ),
         ],
         id=f"{prefix}-pool-picker",
@@ -325,6 +329,7 @@ def register_pool_picker_callbacks(app, prefix: str) -> None:
         Input(f"{prefix}-pp-expand", "data"),
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_GROUPS, "data"),
+        prevent_initial_call=True,
     )
     def _render(order, excluded, expand, registry, groups_data):
         from cryocat.app.pool import GroupState

@@ -267,6 +267,7 @@ def register_callbacks(app):  # noqa: C901
         *[Output(f"gr-tab-{i}", "disabled") for i in range(N_SLOTS)],
         Input("gr-slot-map", "data"),
         Input(ids.GRAPH_POOL_REGISTRY, "data"),
+        prevent_initial_call=True,
     )
     def _update_tab_labels(slot_map, registry):
         sm = list(slot_map or [None] * N_SLOTS)
@@ -837,6 +838,7 @@ def register_callbacks(app):  # noqa: C901
         Output("gr-pe-update-trace-btn", "disabled"),
         Input("gr-pe-editing-trace-idx", "data"),
         Input("gr-active-id", "data"),
+        prevent_initial_call=True,
     )
     def _guard_update_btn(editing_idx, active_id):
         return not active_id or editing_idx is None

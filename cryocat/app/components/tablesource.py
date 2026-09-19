@@ -139,6 +139,7 @@ def get_table_source(
             html.Div(
                 compute_children,
                 id=f"{prefix}-ts-compute-panel",
+                style={},
             ),
             file_panel,
         ]
@@ -177,7 +178,7 @@ def register_table_source_callbacks(
         Output(f"{prefix}-ts-compute-panel", "style"),
         Output(f"{prefix}-ts-file-panel", "style"),
         Input(f"{prefix}-ts-radio", "value"),
-        prevent_initial_call=False,
+        prevent_initial_call=True,
     )
     def _toggle_panels(source):
         if source == "file":

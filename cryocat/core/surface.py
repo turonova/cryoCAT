@@ -1794,6 +1794,14 @@ class Mesh(DiscreteSurface):
                 )
             nrm = np.asarray(normals, dtype=np.float64)
 
+        if radii is not None:
+            if isinstance(radii, str):
+                radii = [float(v.strip()) for v in radii.replace(",", " ").split() if v.strip()]
+            elif isinstance(radii, (int, float)):
+                radii = [float(radii)]
+            else:
+                radii = [float(r) for r in radii]
+
         if radii is None:
             # Estimate mean nearest-neighbour distance
             try:

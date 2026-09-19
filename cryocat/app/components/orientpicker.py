@@ -332,7 +332,7 @@ def get_orientation_picker_controls(
             dbc.Checklist(
                 id=f"{p}-ref-toggle",
                 options=[{"label": "", "value": "show"}],
-                value=["show"],
+                value=["show"] if mode != "rotation" else [],
                 switch=True,
                 inputStyle={"cursor": "pointer"},
             ),
@@ -445,6 +445,7 @@ def register_orientation_picker_callbacks(
     @app.callback(
         Output(f"{p}-inplane-wrap", "style"),
         Input(f"{p}-mode-radio", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_inplane(m):
         return {} if m == "rotation" else {"display": "none"}
@@ -452,6 +453,7 @@ def register_orientation_picker_callbacks(
     @app.callback(
         Output(f"{p}-ref-toggle", "value"),
         Input(f"{p}-mode-radio", "value"),
+        prevent_initial_call=True,
     )
     def _set_ref_default(m):
         return ["show"] if m != "rotation" else []
@@ -551,6 +553,7 @@ def register_orientation_picker_callbacks(
         Input(f"{p}-dir-store", "data"),
         Input(f"{p}-mode-radio", "value"),
         Input(f"{p}-inplane", "value"),
+        prevent_initial_call=True,
     )
     def _update_value(dir_data, m, phi):
         try:                                                                    # 1
@@ -566,6 +569,7 @@ def register_orientation_picker_callbacks(
         Input(f"{p}-dir-store", "data"),
         Input(f"{p}-mode-radio", "value"),
         Input(f"{p}-inplane", "value"),
+        prevent_initial_call=True,
     )
     def _update_result(dir_data, m, phi):
         try:                                                                    # 1

@@ -236,6 +236,7 @@ def register_pool_slot_list_callbacks(
     @app.callback(
         Output(f"{prefix}-psl-list", "children"),
         *_all_inputs,
+        prevent_initial_call=True,
     )
     def _render(*args):
         _seq = args[0]  # trigger only

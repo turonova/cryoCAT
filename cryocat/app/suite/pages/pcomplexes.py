@@ -257,7 +257,8 @@ def _build_section() -> dbc.AccordionItem:
 
 def _handles_section() -> dbc.AccordionItem:
     return dbc.AccordionItem(
-        [html.Div(id="cpx-handles-list")],
+        [html.Div(id="cpx-handles-list",
+                  children=[html.Small("No complexes created yet.", style=_HINT)])],
         title="My complexes",
         item_id="cpx-handles-item",
     )
@@ -325,7 +326,8 @@ def _main() -> list:
         dcc.Store(id=_CPX_RES_MOTL),
         html.Hr(style={"margin": "0.6rem 0"}),
         html.Div("Results", style=_HDR),
-        html.Div(id="cpx-results-area"),
+        html.Div(id="cpx-results-area",
+                 children=[html.Small("No complex selected.", style=_HINT)]),
         dcc.Store(id=_CPX_RESULTS, data={}),
     ]
 
@@ -353,6 +355,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         Output("cpx-bdef-form", "children"),
         Output("cpx-bdef-create-btn", "disabled"),
         Input("cpx-bdef-creator-dd", "value"),
+        prevent_initial_call=True,
     )
     def _render_bdef_form(creator_key: str | None):
         if not creator_key or creator_key not in _BLOCK_DEF_CREATORS:
@@ -398,6 +401,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         Output("cpx-init-form", "children"),
         Output("cpx-create-btn", "disabled"),
         Input("cpx-class-dd", "value"),
+        prevent_initial_call=True,
     )
     def _update_init_form(cls_name: str | None):
         if not cls_name:
@@ -495,6 +499,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         Output("cpx-handles-list", "children"),
         Input(_CPX_POOL, "data"),
         Input(_CPX_SEL, "data"),
+        prevent_initial_call=True,
     )
     def _render_handles(pool_data, selected_id):
         if not pool_data:
@@ -551,6 +556,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         Output("cpx-sel-info", "children"),
         Input(_CPX_SEL, "data"),
         State(_CPX_POOL, "data"),
+        prevent_initial_call=True,
     )
     def _update_methods(selected_id, pool_data):
         if not selected_id:
@@ -595,6 +601,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         Input("cpx-method-dd", "value"),
         State(_CPX_SEL, "data"),
         State(_CPX_POOL, "data"),
+        prevent_initial_call=True,
     )
     def _update_meth_form(entry_key: str | None, selected_id, pool_data):
         if not entry_key or not selected_id:
@@ -794,6 +801,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         Output("cpx-results-area", "children"),
         Input(_CPX_SEL, "data"),
         Input(_CPX_RESULTS, "data"),
+        prevent_initial_call=True,
     )
     def _render_results_area(selected_id, results_store):
         if not selected_id:

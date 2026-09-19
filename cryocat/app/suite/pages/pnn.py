@@ -690,6 +690,7 @@ def register_callbacks(app):
     @app.callback(
         Output("nn-dist-toggle-wrap", "style"),
         Input({"type": "nn-forms-params", "owner": "", "param": "nn_type", "tag": "Literal", "cls_name": "nn-params"}, "value"),
+        prevent_initial_call=True,
     )
     def _toggle_dist_form(nn_type):
         return {"display": "block"} if nn_type == "radius" else {"display": "none"}
@@ -697,6 +698,7 @@ def register_callbacks(app):
     @app.callback(
         Output("nn-angular-form-wrap", "style"),
         Input("nn-angular-toggle", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_angular_form(angular_on):
         return {"display": "block"} if angular_on else {"display": "none"}
@@ -704,6 +706,7 @@ def register_callbacks(app):
     @app.callback(
         Output("nn-pp-angular-form-wrap", "style"),
         Input("nn-pp-angular-toggle", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_pp_angular_form(angular_on):
         return {"display": "block"} if angular_on else {"display": "none"}
@@ -1184,6 +1187,7 @@ def register_callbacks(app):
             Output(f"nn-slot-{_slot}-ttm-ttm-create-btn", "disabled"),
             Output(f"nn-slot-{_slot}-ttm-ttm-create-btn", "title"),
             Input(f"nn-slot-{_slot}-tabv-global-data-store", "data"),
+            prevent_initial_call=True,
         )
         def _gate(ref):
             from cryocat.app.suite.pages._motl_link import get_motl_role_id
@@ -1201,12 +1205,15 @@ def register_callbacks(app):
     @app.callback(
         Output("nn-pool-registry", "data"),
         Input(ids.DATA_POOL_REGISTRY, "data"),
+        State("nn-pool-registry", "data"),
+        prevent_initial_call=True,
     )
-    def _sync_nn_pool_registry(dp_registry):
-        return {
+    def _sync_nn_pool_registry(dp_registry, current):
+        filtered = {
             k: v for k, v in (dp_registry or {}).items()
             if v.get("reader") == "nn"
         }
+        return no_update if filtered == current else filtered
 
     # ── Slot tab labels follow slot map + pool registry ───────────────────────
 
@@ -1215,6 +1222,7 @@ def register_callbacks(app):
         *[Output(f"nn-slot-tab-{i}", "disabled") for i in range(_NN_SLOTS)],
         Input("nn-pool-slot-map", "data"),
         State("nn-pool-registry", "data"),
+        prevent_initial_call=True,
     )
     def _update_nn_slot_tabs(slot_map, pool_registry):
         reg = pool_registry or {}
@@ -1255,6 +1263,7 @@ def register_callbacks(app):
         *[Output(f"nn-slot-{i}-tabv-global-data-store", "data") for i in range(_NN_SLOTS)],
         Input("nn-pool-slot-map", "data"),
         *[State(f"nn-slot-{i}-tabv-global-data-store", "data") for i in range(_NN_SLOTS)],
+        prevent_initial_call=True,
     )
     def _sync_nn_slot_stores(slot_map, *current_stores):
         sm = list(slot_map or [None] * _NN_SLOTS)
@@ -1406,6 +1415,7 @@ def register_callbacks(app):
     @app.callback(
         Output("nn-op-ring-size-wrap", "style"),
         Input("nn-op-topology", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_op_ring_size(topology):
         return {"display": "block"} if topology == "circular" else {"display": "none"}

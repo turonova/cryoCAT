@@ -200,7 +200,11 @@ _MODE_CHOICES = [
 ]
 
 
-def get_per_membrane_mode_field(prefix: str, default_mode: str = "planar") -> html.Div:
+def get_per_membrane_mode_field(
+    prefix: str,
+    default_mode: str = "planar",
+    initial_labels: list[str] | None = None,
+) -> html.Div:
     """Single-mode dropdown with an optional per-membrane override.
 
     When the "Per-membrane override" switch is off, the rendered value is a
@@ -241,7 +245,7 @@ def get_per_membrane_mode_field(prefix: str, default_mode: str = "planar") -> ht
                 ],
                 style={"display": "flex", "alignItems": "center", "gap": "0.4rem"},
             ),
-            dcc.Store(id=f"{prefix}-labels-store", data=[]),
+            dcc.Store(id=f"{prefix}-labels-store", data=list(initial_labels or [])),
             html.Div(id=f"{prefix}-per-label-area", style={"marginTop": "0.4rem"}),
         ],
         id=f"{prefix}-container",

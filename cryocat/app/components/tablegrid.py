@@ -308,7 +308,10 @@ def get_grid_container(prefix: str, *, motl_table: bool = False) -> html.Div:
         html.Div(id=f"{prefix}-purge-sink", style={"display": "none"}),
         dcc.Store(id=f"{prefix}-slider-filters-store", data={}),
         dcc.Store(id=f"{prefix}-col-ref-store"),
+        dcc.Store(id=f"{prefix}-row-count-store"),
     ]
+    if not motl_table:
+        children.append(dcc.Store(id=f"{prefix}-rows-request-store"))
     if motl_table:
         # Notice div receives a message when the row count exceeds _MOTL_TABLE_MAX_ROWS.
         children.append(
@@ -404,14 +407,16 @@ def register_tablegrid_callbacks(
         @app.callback(
             Output(f"{prefix}-grid", "rowData"),
             Output(f"{prefix}-rowdata-notice", "children"),
+            Output(f"{prefix}-row-count-store", "data"),
             Input(f"{prefix}-global-data-store", "data"),
+            prevent_initial_call=True,
         )
         def _set_rows(ref):
             if not ref:
-                return [], ""
+                return [], "", None
             df = resolve_df(ref)
             if df is None:
-                return [], ""
+                return [], "", None
             if len(df) > _MOTL_TABLE_MAX_ROWS:
                 msg = (
                     f"This motl has {len(df):,} rows — above the "
@@ -419,8 +424,11 @@ def register_tablegrid_callbacks(
                     f"Create a subset via the pool (select / filter on the server-side "
                     f"table, then 'Create from filtered') to view a slice here."
                 )
-                return [], msg
-            return _motl_precision_df(df).to_dict("records"), ""
+                return [], msg, None
+            id_col = _pool.get_id_column(ref)
+            n = len(df)
+            rc = {"total": n, "filtered": n, "has_id_col": bool(id_col and id_col in df.columns)}
+            return _motl_precision_df(df).to_dict("records"), "", rc
 
         # Translate slider-filters-store → AG Grid filterModel as inRange conditions.
         # Previous slider columns tracked in window._cryocat_slider_cols[prefix] so
@@ -447,6 +455,32 @@ def register_tablegrid_callbacks(
             prevent_initial_call=True,
         )
 
+        # After any filter change, ask the AG Grid API for the actual displayed row
+        # count and write it back to row-count-store so the button label is correct.
+        app.clientside_callback(
+            f"""
+            async function(filterModel, rowCounts) {{
+                var rc = rowCounts || {{}};
+                if (rc.total === undefined || rc.total === null) {{
+                    return window.dash_clientside.no_update;
+                }}
+                try {{
+                    var api = await window.dash_ag_grid.getApiAsync("{prefix}-grid");
+                    if (!api) return window.dash_clientside.no_update;
+                    var count = api.getDisplayedRowCount();
+                    if (count === rc.filtered) return window.dash_clientside.no_update;
+                    return {{total: rc.total, filtered: count, has_id_col: !!rc.has_id_col}};
+                }} catch(e) {{
+                    return window.dash_clientside.no_update;
+                }}
+            }}
+            """,
+            Output(f"{prefix}-row-count-store", "data", allow_duplicate=True),
+            Input(f"{prefix}-grid", "filterModel"),
+            State(f"{prefix}-row-count-store", "data"),
+            prevent_initial_call=True,
+        )
+
         # Shared callbacks registered below.
 
     if not motl_table:
@@ -459,6 +493,7 @@ def register_tablegrid_callbacks(
             Output(f"{prefix}-col-ref-store", "data"),
             *_col_inputs,
             State(f"{prefix}-col-ref-store", "data"),
+            prevent_initial_call=True,
         )
         def _cols(*cb_args):
             if data_pool:
@@ -530,16 +565,17 @@ def register_tablegrid_callbacks(
             prevent_initial_call=True,
         )
 
-        # Empty-slot guard: when the slot has no data, respond to AG Grid's
-        # getRowsRequest in the browser (zero server round-trip).  The server
-        # _rows callback below guards against ref=None so it never fires for
-        # empty slots.
+        # Gate: passes getRowsRequest to rows-request-store only when ref is set.
+        # When ref is absent, responds with empty data in-browser — no server call.
         app.clientside_callback(
-            "function(req, ref) {"
-            "  if (ref || req === null || req === undefined)"
-            "    return window.dash_clientside.no_update;"
-            '  return {"rowData": [], "rowCount": 0};'
-            "}",
+            """
+            function(req, ref) {
+                if (!req) return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+                if (!ref) return [window.dash_clientside.no_update, {"rowData": [], "rowCount": 0}];
+                return [req, window.dash_clientside.no_update];
+            }
+            """,
+            Output(f"{prefix}-rows-request-store", "data"),
             Output(f"{prefix}-grid", "getRowsResponse", allow_duplicate=True),
             Input(f"{prefix}-grid", "getRowsRequest"),
             State(f"{prefix}-global-data-store", "data"),
@@ -548,20 +584,22 @@ def register_tablegrid_callbacks(
 
         @app.callback(
             Output(f"{prefix}-grid", "getRowsResponse", allow_duplicate=True),
-            Input(f"{prefix}-grid", "getRowsRequest"),
+            Output(f"{prefix}-row-count-store", "data"),
+            Input(f"{prefix}-rows-request-store", "data"),
             State(f"{prefix}-global-data-store", "data"),
             State(f"{prefix}-slider-filters-store", "data"),
             prevent_initial_call=True,
         )
         def _rows(request, ref, slider_filters):
-            if not ref:
-                return no_update  # empty-slot response handled by client-side callback
-            if request is None:
-                return no_update
+            if not ref or request is None:
+                return no_update, no_update
             df = resolve_df(ref)
             if df is None:
-                return no_update
-            return rows_response(request, df, len(df), slider_filters=slider_filters)
+                return no_update, no_update
+            resp = rows_response(request, df, len(df), slider_filters=slider_filters)
+            id_col = _pool.get_id_column(ref)
+            rc = {"total": len(df), "filtered": resp["rowCount"], "has_id_col": bool(id_col and id_col in df.columns)}
+            return resp, rc
 
     @app.callback(
         Output(f"{prefix}-selection-ids-store", "data", allow_duplicate=True),
@@ -611,48 +649,60 @@ def register_tablegrid_callbacks(
         label = f"Deselect All ({n:,})" if n < total else "Deselect All"
         return ids_list, label
 
-    @app.callback(
+    _motl_js = "true" if motl_table else "false"
+    app.clientside_callback(
+        f"""
+        function(filterModel, sliderFilters, rowCounts, ref) {{
+            if (!ref) return "";
+            var fm = filterModel || {{}};
+            var sf = {_motl_js} ? {{}} : (sliderFilters || {{}});
+            var active = Object.values(fm).filter(function(v) {{ return v; }}).length
+                        + Object.keys(sf).length;
+            var rc = rowCounts || {{}};
+            var total = rc.total;
+            if (total === undefined || total === null) {{
+                return active ? (active + " active filter" + (active !== 1 ? "s" : "")) : "";
+            }}
+            if (active === 0) return total.toLocaleString() + " rows";
+            var filtered = rc.filtered;
+            if (filtered !== undefined && filtered !== null) {{
+                return filtered.toLocaleString() + " of " + total.toLocaleString() + " rows";
+            }}
+            return active + " active filter" + (active !== 1 ? "s" : "");
+        }}
+        """,
         Output(f"{prefix}-active-filter-count", "children"),
         Input(f"{prefix}-grid", "filterModel"),
         Input(f"{prefix}-slider-filters-store", "data"),
+        Input(f"{prefix}-row-count-store", "data"),
         State(f"{prefix}-global-data-store", "data"),
         prevent_initial_call=True,
     )
-    def _update_filter_count(filter_model, slider_filters, ref):
-        effective_slider = {} if motl_table else (slider_filters or {})
-        df = resolve_df(ref)
-        active_filters = (
-            sum(1 for v in (filter_model or {}).values() if v) + len(effective_slider)
-        )
-        if df is None:
-            return f"{active_filters} active filter{'s' if active_filters != 1 else ''}" if active_filters else ""
-        total = len(df)
-        filtered_df = apply_filter_model(df, filter_model or {}, effective_slider)
-        n_filtered = len(filtered_df)
-        if active_filters == 0:
-            return f"{total:,} rows"
-        return f"{n_filtered:,} of {total:,} rows"
 
-    @app.callback(
+    app.clientside_callback(
+        f"""
+        function(filterModel, sliderFilters, rowCounts, ref) {{
+            if (!ref) return ["Create from filtered", true, {{"display": "none"}}];
+            var rc = rowCounts || {{}};
+            if (!rc.has_id_col) return ["Create from filtered", true, {{"display": "none"}}];
+            var sf = {_motl_js} ? {{}} : (sliderFilters || {{}});
+            var active = Object.values(filterModel || {{}}).filter(function(v) {{ return v; }}).length
+                        + Object.keys(sf).length;
+            var total = rc.total || 0;
+            var filtered = (rc.filtered !== undefined && rc.filtered !== null) ? rc.filtered : total;
+            var n = active ? filtered : total;
+            return ["Create from filtered (" + n.toLocaleString() + ")", n === 0, {{}}];
+        }}
+        """,
         Output(f"{prefix}-pool-from-filtered-btn", "children"),
         Output(f"{prefix}-pool-from-filtered-btn", "disabled"),
         Output(f"{prefix}-pool-from-filtered-btn", "style"),
         Input(f"{prefix}-grid", "filterModel"),
         Input(f"{prefix}-slider-filters-store", "data"),
+        Input(f"{prefix}-row-count-store", "data"),
         State(f"{prefix}-global-data-store", "data"),
         prevent_initial_call=True,
     )
-    def _update_filtered_btn(filter_model, slider_filters, ref):
-        effective_slider = {} if motl_table else (slider_filters or {})
-        df = resolve_df(ref)
-        if df is None:
-            return "Create from filtered", True, {"display": "none"}
-        id_col = _pool.get_id_column(ref)
-        if not id_col or id_col not in df.columns:
-            return "Create from filtered", True, {"display": "none"}
-        filtered_df = apply_filter_model(df, filter_model or {}, effective_slider)
-        n = len(filtered_df)
-        return f"Create from filtered ({n:,})", n == 0, {}
 
     @app.callback(
         Output(f"{prefix}-pool-from-selected-btn", "children"),

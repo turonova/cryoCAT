@@ -206,7 +206,7 @@ def _configure_section() -> html.Div:
                         html.Div(_stage_form(_STAGE_SURFACE)),
                         html.Hr(style={"margin": "0.4rem 0"}),
                         html.Div("Surface separation mode", style=_SECTION_HEADER),
-                        mw.get_per_membrane_mode_field("memthick-mode", default_mode="planar"),
+                        mw.get_per_membrane_mode_field("memthick-mode", default_mode="planar", initial_labels=["membrane"]),
                     ]
                 ),
                 title="Surface extraction",
@@ -747,17 +747,24 @@ def register_callbacks(app):
 
     # Mirror label-dict names into the per-membrane mode widget so its
     # override switch can render one dropdown per membrane.
+    # Category (b): layout initialises memthick-mode-labels-store with
+    # ["membrane"] to match the default memthick-labels-rows value, so pIC
+    # can suppress the redundant startup fire.
     @app.callback(
         Output("memthick-mode-labels-store", "data"),
         Input("memthick-labels-rows", "data"),
+        State("memthick-mode-labels-store", "data"),
+        prevent_initial_call=True,
     )
-    def _mirror_labels(rows):
-        return sorted({(r.get("name") or "").strip() for r in (rows or []) if (r.get("name") or "").strip()})
+    def _mirror_labels(rows, current):
+        new = sorted({(r.get("name") or "").strip() for r in (rows or []) if (r.get("name") or "").strip()})
+        return no_update if new == current else new
 
     # Show the SLURM extra fields only when the format requires them.
     @app.callback(
         Output("memthick-slurm-collapse", "is_open"),
         Input("memthick-format", "value"),
+        prevent_initial_call=True,
     )
     def _toggle_slurm(fmt):
         return fmt == "slurm"

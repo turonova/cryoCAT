@@ -276,6 +276,7 @@ def register_angles_builder_callbacks(app: dash.Dash, prefix: str, *, with_graph
         State(ids.POOL_REGISTRY, "data"),
         State(ids.POOL_META, "data"),
         State(ids.POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
     )
     def _collect_params(values, form_ids, registry, pool_meta, pool_next_id):
         if not values or not form_ids:

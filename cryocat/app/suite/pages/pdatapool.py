@@ -596,6 +596,7 @@ def register_callbacks(app):  # noqa: C901
         State("dp-slot-map",          "data"),
         State("dp-active-id",         "data"),
         State(ids.DATA_POOL_REVS,     "data"),
+        prevent_initial_call=True,
     )
     def _select_entry(src_ref, wc_signal, dp_registry, rev, slot_map, active_id, entry_revs):
         from cryocat.app.suite.pages._wcopy import get_copy, source_id_for_ref
@@ -647,6 +648,7 @@ def register_callbacks(app):  # noqa: C901
         Output("dp-panel-empty", "style"),
         Input("dp-active-id",         "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
+        prevent_initial_call=True,
     )
     def _update_panels(active_id, dp_reg):
         if not active_id or active_id not in (dp_reg or {}):
@@ -701,6 +703,7 @@ def register_callbacks(app):  # noqa: C901
         Input("dp-active-id",            "data"),
         State(ids.DATA_POOL_REGISTRY,    "data"),
         State(ids.GRAPH_SETTINGS_STORE,  "data"),
+        prevent_initial_call=True,
     )
     def _render_graph_viewer(active_id, registry, gs):
         if not active_id:
@@ -715,6 +718,7 @@ def register_callbacks(app):  # noqa: C901
         Output("dp-view-dict", "children"),
         Input("dp-active-id",            "data"),
         State(ids.DATA_POOL_REGISTRY,    "data"),
+        prevent_initial_call=True,
     )
     def _render_dict_viewer(active_id, dp_reg):
         if not active_id:
@@ -750,6 +754,7 @@ def register_callbacks(app):  # noqa: C901
         Output("dp-wc-section",    "style"),
         Input("dp-edit-wc-changed", "data"),
         State("dp-edit-src-ref",    "data"),
+        prevent_initial_call=True,
     )
     def _on_wc_ui_update(wc_signal, src_ref):
         return _wc_ui_update_op(wc_signal, src_ref)
@@ -974,7 +979,7 @@ def register_callbacks(app):  # noqa: C901
         *[Output(f"dp-mb-col-{mc}", "options") for group in _MOTL_COL_GROUPS for mc in group[1]],
         Input("dp-active-id",         "data"),
         Input(ids.DATA_POOL_REGISTRY, "data"),
-        prevent_initial_call=False,
+        prevent_initial_call=True,
     )
     def _populate_mb_cols(active_id, dp_reg):
         _all_motl_cols = [mc for g in _MOTL_COL_GROUPS for mc in g[1]]
@@ -996,7 +1001,7 @@ def register_callbacks(app):  # noqa: C901
         *[Output(f"dp-mb-col-{mc}", "value") for group in _MOTL_COL_GROUPS for mc in group[1]],
         Input("dp-active-id",         "data"),
         Input(ids.DATA_POOL_REGISTRY, "data"),
-        prevent_initial_call=False,
+        prevent_initial_call=True,
     )
     def _prefill_mb_cols(active_id, dp_reg):
         _all_motl_cols = [mc for g in _MOTL_COL_GROUPS for mc in g[1]]
