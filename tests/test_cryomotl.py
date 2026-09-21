@@ -1260,6 +1260,23 @@ class TestMotl:
         # Test that original dataframe is unchanged.
         assert sample_motl_data1.equals(pd.DataFrame(sample_motl_data1))
 
+    def test_check_df_type_forwards_extra_kwargs(self, sample_motl_data1):
+        # check_df_type must forward arbitrary keyword arguments to convert_to_motl when
+        # the input isn't already in the standard format, so subclass-specific loader
+        # options (e.g. RelionMotl's tomo_format/subtomo_format) aren't silently dropped.
+        class MockMotl(Motl):
+            def convert_to_motl(self, input_df, extra=None):
+                self.df = input_df.copy()
+                self.df.reset_index(inplace=True, drop=True)
+                self.df = self.df.fillna(0.0)
+                self.df["extra_seen"] = extra
+
+        incorrect_df = pd.DataFrame({"col1": [1, 2], "col2": [3, 4]})
+        mock_motl = MockMotl(sample_motl_data1.copy())
+        mock_motl.check_df_type(incorrect_df, extra="hello")
+
+        assert (mock_motl.df["extra_seen"] == "hello").all()
+
     def test_fill(self, sample_motl_data1):
         motl = Motl(copy.deepcopy(sample_motl_data1))
         input_dict1 = {"score": 1.0}
@@ -3374,6 +3391,30 @@ class TestRelionMotl:
         assert relion_motl.df["object_id"].tolist() == [5.0, 6.0]
         assert relion_motl.df["geom2"].tolist() == [7.0, 8.0]
 
+    def test_dataframe_input_forwards_tomo_and_subtomo_format(self):
+        # RelionMotl(input_motl=<DataFrame>, ...) routes through check_df_type, which
+        # previously dropped tomo_format/subtomo_format entirely for this input type
+        # (it only called self.convert_to_motl(input_motl), no extra kwargs). "path/12_34.mrc"
+        # is chosen so the default last-number rule ("34") and the unanchored "$yy"
+        # pattern (first digit run, "12") diverge into distinguishable results.
+        relion_df = pd.DataFrame(
+            {
+                "rlnMicrographName": [1],
+                "rlnCoordinateX": [10.0],
+                "rlnCoordinateY": [11.0],
+                "rlnCoordinateZ": [12.0],
+                "rlnAngleRot": [0.0],
+                "rlnAngleTilt": [0.0],
+                "rlnAnglePsi": [0.0],
+                "rlnImageName": ["path/12_34.mrc"],
+            }
+        )
+        default_motl = RelionMotl(relion_df, version=3.1)
+        custom_motl = RelionMotl(relion_df, version=3.1, subtomo_format="$yy")
+
+        assert default_motl.df["subtomo_id"].tolist() == [34.0]
+        assert custom_motl.df["subtomo_id"].tolist() == [12.0]
+
     def test_adapt_original_entries_no_change(self):
         relion_data = {
             "ccSubtomoID": [1, 2, 3],
@@ -4529,6 +4570,100 @@ class TestRelionMotl:
         motl.df = pd.DataFrame(index=range(1))
         motl.parse_subtomo_id(relion_df)
         assert motl.df.loc[0, "subtomo_id"] == 3.0
+
+
+class TestRelionMotlv5_1:
+    """RelionMotlv5_1 is a pure factory (__new__) dispatching to RelionMotl or
+    RelionMotlv5; these tests cover two gaps found while comparing its parameters
+    against the two underlying constructors: a silently-overridden binning default in
+    tomo-mode, and tomo_format/subtomo_format not being forwarded at all."""
+
+    @pytest.fixture
+    def tomo_df(self):
+        return pd.DataFrame(
+            {"rlnTomoName": ["TS_01"], "rlnTomoSizeX": [4000], "rlnTomoSizeY": [4000], "rlnTomoSizeZ": [2000]}
+        )
+
+    @pytest.fixture
+    def warp2_df(self):
+        return pd.DataFrame(
+            {
+                "rlnTomoName": ["TS_01"],
+                "rlnTomoParticleId": [1],
+                "rlnCoordinateX": [2010.0],
+                "rlnCoordinateY": [2020.0],
+                "rlnCoordinateZ": [1005.0],
+                "rlnAngleRot": [0.0],
+                "rlnAngleTilt": [0.0],
+                "rlnAnglePsi": [0.0],
+                "rlnTomoParticleName": ["TS_01/14"],
+                "rlnOpticsGroup": [1],
+                "rlnImageName": ["img1"],
+                "rlnOriginXAngst": [0.0],
+                "rlnOriginYAngst": [0.0],
+                "rlnOriginZAngst": [0.0],
+                "rlnTomoVisibleFrames": [15],
+            }
+        )
+
+    @pytest.fixture
+    def warp2_star_path(self, warp2_df, tmp_path):
+        # tomo_format/subtomo_format are only threaded through convert_to_motl when
+        # input_particles is a star file path (not a plain DataFrame - a separate,
+        # pre-existing gap in RelionMotlv5.__init__, out of scope here), so a real
+        # star file is required to exercise the forwarding fix below.
+        path = tmp_path / "warp2_particles.star"
+        starfileio.Starfile.write([warp2_df], str(path), specifiers=["data_particles"])
+        return str(path)
+
+    def test_tomo_mode_binning_defaults_to_one_not_none(self, warp2_df, tomo_df):
+        # Before the fix, RelionMotlv5_1's own binning=None default silently overrode
+        # RelionMotlv5's binning=1.0 default, producing a working object with
+        # self.binning=None and no warning, which then crashed with a TypeError deep
+        # inside create_relion_df's coordinate scaling.
+        with pytest.warns(UserWarning, match="binning"):
+            m = RelionMotlv5_1(input_particles=warp2_df, input_tomograms=tomo_df)
+
+        assert m.binning == 1.0
+        m.create_relion_df()  # must not raise TypeError on a None binning multiplier
+
+    def test_tomo_mode_forwards_tomo_and_subtomo_format(self, warp2_star_path, tomo_df):
+        default_motl = RelionMotlv5_1(input_particles=warp2_star_path, input_tomograms=tomo_df, binning=1.0)
+        # "$yy" has no anchor, so it matches the first digit run in "TS_01/14" ("01"),
+        # rather than the default parsing's last-number rule ("14") - a different,
+        # verifiable result only reachable if subtomo_format was actually forwarded.
+        custom_motl = RelionMotlv5_1(
+            input_particles=warp2_star_path, input_tomograms=tomo_df, binning=1.0, subtomo_format="$yy"
+        )
+
+        assert default_motl.df["subtomo_id"].tolist() == [14.0]
+        assert custom_motl.df["subtomo_id"].tolist() == [1.0]
+
+    def test_single_file_mode_forwards_tomo_and_subtomo_format(self, tmp_path):
+        # Single-file (RelionMotl-backed) branch: subtomo_format affects rlnImageName
+        # parsing the same way it does for a plain RelionMotl load. "path/12_34.mrc"
+        # is chosen so the default last-number rule ("34") and the unanchored "$yy"
+        # pattern (first digit run, "12") diverge into distinguishable results.
+        relion_df = pd.DataFrame(
+            {
+                "rlnMicrographName": [1],
+                "rlnCoordinateX": [10.0],
+                "rlnCoordinateY": [11.0],
+                "rlnCoordinateZ": [12.0],
+                "rlnAngleRot": [0.0],
+                "rlnAngleTilt": [0.0],
+                "rlnAnglePsi": [0.0],
+                "rlnImageName": ["path/12_34.mrc"],
+            }
+        )
+        path = tmp_path / "single_v51.star"
+        starfileio.Starfile.write([relion_df], str(path), specifiers=["data_particles"])
+
+        default_motl = RelionMotlv5_1(str(path))
+        custom_motl = RelionMotlv5_1(str(path), subtomo_format="$yy")
+
+        assert default_motl.df["subtomo_id"].tolist() == [34.0]
+        assert custom_motl.df["subtomo_id"].tolist() == [12.0]
 
 
 class TestStopgapMotl:
@@ -5765,6 +5900,23 @@ class TestRelionMotlv5:
 
         assert warp2_motl_instance.df["object_id"].tolist() == [5.0, 6.0, 7.0]
         assert warp2_motl_instance.df["geom2"].tolist() == [8.0, 9.0, 10.0]
+
+    def test_dataframe_input_forwards_tomo_and_subtomo_format(self, warp2_df, tomo_df):
+        # RelionMotlv5(input_particles=<DataFrame>, ...) routes through check_df_type,
+        # which previously dropped tomo_format/subtomo_format entirely for this input
+        # type. "$yy" is unanchored, so on this fixture's rlnTomoParticleName values
+        # ("TS_01/14", "TS_01/16", "TS_03/1") it matches the first digit run ("01",
+        # "01", "03") instead of the default last-number rule ("14", "16", "1"). The
+        # first two collide, which triggers parse_subtomo_id's non-unique-id fallback
+        # (sequential 1..N renumbering) - itself only reachable if subtomo_format was
+        # actually forwarded.
+        default_motl = RelionMotlv5(input_particles=warp2_df, input_tomograms=tomo_df, binning=1.0)
+        custom_motl = RelionMotlv5(
+            input_particles=warp2_df, input_tomograms=tomo_df, binning=1.0, subtomo_format="$yy"
+        )
+
+        assert default_motl.df["subtomo_id"].tolist() == [14.0, 16.0, 1.0]
+        assert custom_motl.df["subtomo_id"].tolist() == [1.0, 2.0, 3.0]
 
     def test_create_particles_data(self, tomo_df):
         relion_motl = RelionMotlv5(input_tomograms=tomo_df)  # by default isWarp=False

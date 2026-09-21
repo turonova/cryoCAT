@@ -1103,7 +1103,7 @@ class Motl:
         else:
             return False
 
-    def check_df_type(self, input_motl: pd.DataFrame) -> None:
+    def check_df_type(self, input_motl: pd.DataFrame, **convert_kwargs) -> None:
         """Checks the type of the input dataframe and assigns it to the class attribute 'df' if it is in the
         correct format. If it is not in the correct format it tries to convert it.
 
@@ -1111,6 +1111,11 @@ class Motl:
         ----------
         input_motl : pandas.DataFrame
             The input dataframe to be checked.
+        **convert_kwargs
+            Extra keyword arguments forwarded to `convert_to_motl` when `input_motl` is not
+            already in the standard format (e.g. `tomo_format`/`subtomo_format`/`version` for
+            `RelionMotl`/`RelionMotlv5`). Ignored when `input_motl` is already correctly
+            formatted, since `convert_to_motl` is not called in that case.
 
         Returns
         -------
@@ -1129,7 +1134,7 @@ class Motl:
             self.df = self.df.apply(pd.to_numeric, errors="coerce")
             self.df = self.df.fillna(0.0)
         else:
-            self.convert_to_motl(input_motl)
+            self.convert_to_motl(input_motl, **convert_kwargs)
 
     @gui_exposed(category="Utility", label="Fill columns")
     def fill(self, input_dict: dict) -> None:
@@ -2921,7 +2926,9 @@ class RelionMotl(Motl):
                 self.shifts_id_names = input_motl.shifts_id_names
                 self.data_spec = input_motl.data_spec
             elif isinstance(input_motl, pd.DataFrame):
-                self.check_df_type(input_motl)
+                self.check_df_type(
+                    input_motl, version=version, tomo_format=tomo_format, subtomo_format=subtomo_format
+                )
             elif isinstance(input_motl, str):
                 relion_df, data_version, optics_df = self.read_in(input_motl)
                 self.convert_to_motl(relion_df, data_version, optics_df, tomo_format, subtomo_format)
@@ -4428,7 +4435,7 @@ class RelionMotlv5(RelionMotl, Motl):
                     relion_df, optics_data = self.read_in(input_particles)
                     self.convert_to_motl(relion_df, optics_data, tomo_format, subtomo_format)
                 elif isinstance(input_particles, pd.DataFrame):
-                    self.check_df_type(input_particles)
+                    self.check_df_type(input_particles, tomo_format=tomo_format, subtomo_format=subtomo_format)
                 # allow to specify tomo_data and particles_data - but only latter is used?
                 elif isinstance(input_particles, RelionMotlv5):
                     self.df = input_particles.df.copy()
@@ -5249,10 +5256,18 @@ class RelionMotlv5_1:
         Subset of tomogram IDs to load.
     pixel_size : float, optional
         Voxel size in Angstroms.
-    binning : float, optional
-        Binning factor.
+    binning : float, default=1.0
+        Binning factor.  Matches :class:`RelionMotlv5`'s own default so tomo-mode gets
+        the same "binning defaults to 1.0, set it explicitly" warning when omitted,
+        rather than silently receiving ``None``.
     optics_data : pandas.DataFrame, optional
         Pre-loaded optics group data.
+    tomo_format : str, default=''
+        Format string for tomogram name parsing. See
+        :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for the syntax.
+    subtomo_format : str, default=''
+        Format string for subtomogram name parsing. See
+        :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for the syntax.
 
     Returns
     -------
@@ -5267,7 +5282,15 @@ class RelionMotlv5_1:
     """
 
     def __new__(
-        cls, input_particles=None, input_tomograms=None, tomo_idx=None, pixel_size=None, binning=None, optics_data=None
+        cls,
+        input_particles=None,
+        input_tomograms=None,
+        tomo_idx=None,
+        pixel_size=None,
+        binning=1.0,
+        optics_data=None,
+        tomo_format="",
+        subtomo_format="",
     ):
         if input_tomograms is None:  # single file mode
             if input_particles is not None:
@@ -5277,6 +5300,8 @@ class RelionMotlv5_1:
                     optics_data=optics_data,
                     binning=binning,
                     version=5.1,
+                    tomo_format=tomo_format,
+                    subtomo_format=subtomo_format,
                 )
             else:
                 raise UserInputError(
@@ -5290,6 +5315,8 @@ class RelionMotlv5_1:
                 version=5.1,
                 binning=binning,
                 tomo_idx=tomo_idx,
+                tomo_format=tomo_format,
+                subtomo_format=subtomo_format,
             )
 
 
