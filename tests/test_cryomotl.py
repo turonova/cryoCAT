@@ -5754,6 +5754,18 @@ class TestRelionMotlv5:
         mock_instance = RelionMotlv5(pixel_size=pixel_size, input_tomograms=tomo_df, input_particles=relion_df)
         assert mock_instance.check_isWarp() is False
 
+    def test_convert_to_motl_recognizes_cc_extra_columns(self, warp2_motl_instance, warp2_df):
+        # RelionMotlv5.convert_to_motl previously had no object_id/geom2 recognition at
+        # all ("missing in warp2"); it now shares assign_cc_extra_columns with RelionMotl.
+        extended_df = warp2_df.copy()
+        extended_df["ccObjectId"] = [5, 6, 7]
+        extended_df["ccGeom2"] = [8, 9, 10]
+
+        warp2_motl_instance.convert_to_motl(extended_df)
+
+        assert warp2_motl_instance.df["object_id"].tolist() == [5.0, 6.0, 7.0]
+        assert warp2_motl_instance.df["geom2"].tolist() == [8.0, 9.0, 10.0]
+
     def test_create_particles_data(self, tomo_df):
         relion_motl = RelionMotlv5(input_tomograms=tomo_df)  # by default isWarp=False
         num_particles = 3
@@ -6235,10 +6247,72 @@ def test_relion_extra_columns_writes_named_column():
     assert "ccSubunitName" not in rdf.columns
 
 
-def test_relion_add_object_id_backward_compat():
+def test_relion_extra_columns_object_id_geom2_round_trip(tmp_path):
+    # add_object_id/add_subunit_id were removed in favor of the single generic
+    # extra_columns interface; this covers writing object_id/geom2 under their
+    # conventional _cc_name() and recovering them on reload.
     m = RelionMotl(_relion_test_star)
-    rdf = m.create_relion_df(add_object_id=True)
-    assert "ccObjectName" in rdf.columns
+    m.df["object_id"] = list(range(10, 10 + len(m.df)))
+    m.df["geom2"] = list(range(1, 1 + len(m.df)))
+    out_path = tmp_path / "extra_columns_roundtrip.star"
+
+    # write_optics=False: this fixture file has multiple optics groups with differing pixel
+    # sizes, which makes the (unrelated) optics-group write path fail; irrelevant here since
+    # this test only checks the extra_columns round trip.
+    m.write_out(
+        str(out_path), write_optics=False, extra_columns={"object_id": "ccObjectId", "geom2": "ccGeom2"}
+    )
+    reloaded = RelionMotl(str(out_path))
+
+    assert reloaded.df["object_id"].tolist() == m.df["object_id"].tolist()
+    assert reloaded.df["geom2"].tolist() == m.df["geom2"].tolist()
+
+
+def test_relion_legacy_cc_names_recognized_on_load():
+    # ccObjectName/ccSubunitName are the pre-existing (legacy) names written by the old
+    # add_object_id/add_subunit_id flags; files using them must still round-trip.
+    relion_df = pd.DataFrame(
+        {
+            "rlnMicrographName": [1, 1],
+            "rlnCoordinateX": [10.0, 20.0],
+            "rlnCoordinateY": [11.0, 21.0],
+            "rlnCoordinateZ": [12.0, 22.0],
+            "rlnAngleRot": [0.0, 10.0],
+            "rlnAngleTilt": [0.0, 20.0],
+            "rlnAnglePsi": [0.0, 30.0],
+            "rlnImageName": [1, 2],
+            "ccObjectName": [5, 6],
+            "ccSubunitName": [7, 8],
+        }
+    )
+    relion_motl = RelionMotl()
+    relion_motl.convert_to_motl(relion_df, version=3.1)
+
+    assert relion_motl.df["object_id"].tolist() == [5.0, 6.0]
+    assert relion_motl.df["geom2"].tolist() == [7.0, 8.0]
+
+
+def test_relion_helical_tube_id_takes_priority_over_cc_object_id():
+    # rlnHelicalTubeID is a genuine RELION-standard column and must win over any
+    # cc-prefixed extra column when both are present.
+    relion_df = pd.DataFrame(
+        {
+            "rlnMicrographName": [1, 1],
+            "rlnCoordinateX": [10.0, 20.0],
+            "rlnCoordinateY": [11.0, 21.0],
+            "rlnCoordinateZ": [12.0, 22.0],
+            "rlnAngleRot": [0.0, 10.0],
+            "rlnAngleTilt": [0.0, 20.0],
+            "rlnAnglePsi": [0.0, 30.0],
+            "rlnImageName": [1, 2],
+            "rlnHelicalTubeID": [100, 200],
+            "ccObjectId": [5, 6],
+        }
+    )
+    relion_motl = RelionMotl()
+    relion_motl.convert_to_motl(relion_df, version=3.1)
+
+    assert relion_motl.df["object_id"].tolist() == [100.0, 200.0]
 
 
 def test_relion_extra_columns_collision_raises():
