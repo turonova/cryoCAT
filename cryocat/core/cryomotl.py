@@ -27,6 +27,7 @@ from cryocat._types import (
     ArrayLike,
     BoundaryType,
     DataPoolEntry,
+    ListLike,
     MapSource,
     MotlColumn,
     MotlType,
@@ -36,6 +37,7 @@ from cryocat._types import (
     TomoDimensions,
     RelionVersion,
 )
+from cryocat.utils import classutils
 from cryocat.utils.classutils import gui_exposed
 from typing import Literal
 
@@ -4326,6 +4328,72 @@ class RelionMotl(Motl):
         frames, specifiers = self.create_final_output(relion_df, optics_df, use_original_entries=use_original_entries)
 
         starfileio.Starfile.write(frames, output_path, specifiers=specifiers)
+
+    def complete_from_source(
+        self,
+        source_motl: "RelionMotl",
+        columns: ListLike[MotlColumn],
+        output_path: PathOrStr,
+        coord_tolerance: float,
+        tomo_id_column: MotlColumn = "tomo_id",
+        write_kwargs: dict | None = None,
+    ) -> "RelionMotl":
+        """Recover `columns` from `source_motl` into `self` and write the result out.
+
+        `self` is treated as the "target" (e.g. a subset of `source_motl`'s particles,
+        or the same particles that lost some columns in a prior conversion). Particles
+        are matched by `tomo_id_column` plus coordinate proximity (see
+        :func:`cryocat.analysis.nnana.recover_columns_by_coordinates` for the matching
+        details, including how differing pixel sizes/binning between `self` and
+        `source_motl` are handled). The recovered columns are automatically exported
+        in the output star file as ``cc``-prefixed extra columns (see :func:`_cc_name`),
+        unless already covered by `write_kwargs["extra_columns"]`.
+
+        Works on any RelionMotl-family instance (`RelionMotl`, `RelionMotlv5`, or an
+        instance returned by `RelionMotlv5_1`) since it's defined once here and
+        inherited by `RelionMotlv5`.
+
+        Parameters
+        ----------
+        source_motl : RelionMotl
+            The motl to recover `columns` from. Must expose `pixel_size` (true for
+            any RelionMotl-family instance).
+        columns : MotlColumn or list of MotlColumn
+            Column name(s) to recover from `source_motl.df` and export in the output.
+        output_path : PathOrStr
+            Destination for the completed star file, written via `self.write_out`.
+        coord_tolerance : float
+            Matching tolerance in Angstrom (physical units).
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column used to group particles before matching.
+        write_kwargs : dict, optional
+            Forwarded to `self.write_out`. If it already sets `extra_columns`, those
+            entries take priority; any of `columns` not already covered there are
+            added automatically under their `_cc_name()`.
+
+        Returns
+        -------
+        RelionMotl
+            The completed motl (same object that was written out); `self` is not
+            modified in place.
+
+        See Also
+        --------
+        cryocat.analysis.nnana.recover_columns_by_coordinates
+            Implements the underlying matching and column recovery.
+        """
+        completed = nnana.recover_columns_by_coordinates(
+            source_motl, self, columns, coord_tolerance, tomo_id_column=tomo_id_column
+        )
+
+        write_kwargs = dict(write_kwargs or {})
+        extra_columns = dict(write_kwargs.get("extra_columns") or {})
+        for col in classutils.as_list(columns):
+            extra_columns.setdefault(col, _cc_name(col))
+        write_kwargs["extra_columns"] = extra_columns
+
+        completed.write_out(output_path, **write_kwargs)
+        return completed
 
 
 class RelionMotlv5(RelionMotl, Motl):

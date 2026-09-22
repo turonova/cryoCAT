@@ -4571,6 +4571,69 @@ class TestRelionMotl:
         motl.parse_subtomo_id(relion_df)
         assert motl.df.loc[0, "subtomo_id"] == 3.0
 
+    def _relion_df(self, tomo_id, x, y, z, image_names, helical_tube_ids=None):
+        n = len(x)
+        data = {
+            "rlnMicrographName": [tomo_id] * n,
+            "rlnCoordinateX": x,
+            "rlnCoordinateY": y,
+            "rlnCoordinateZ": z,
+            "rlnAngleRot": [0.0] * n,
+            "rlnAngleTilt": [0.0] * n,
+            "rlnAnglePsi": [0.0] * n,
+            "rlnImageName": image_names,
+        }
+        if helical_tube_ids is not None:
+            data["rlnHelicalTubeID"] = helical_tube_ids
+        return pd.DataFrame(data)
+
+    def test_complete_from_source_writes_and_round_trips(self, tmp_path):
+        # method form of nnana.recover_columns_by_coordinates: target.complete_from_source(source, ...)
+        # must also write the recovered column out under its _cc_name() automatically.
+        source_df = self._relion_df(
+            1, [10.0, 50.0], [10.0, 50.0], [10.0, 50.0], [1, 2], helical_tube_ids=[7, 8]
+        )
+        source = RelionMotl(source_df, version=3.1, pixel_size=1.0)
+
+        target_df = self._relion_df(1, [10.0, 50.0], [10.0, 50.0], [10.0, 50.0], [101, 102])
+        target = RelionMotl(target_df, version=3.1, pixel_size=1.0)
+
+        out_path = tmp_path / "completed.star"
+        completed = target.complete_from_source(
+            source, columns=["object_id"], output_path=str(out_path), coord_tolerance=1.0
+        )
+
+        assert completed.df["object_id"].tolist() == [7.0, 8.0]
+        # target itself is not mutated
+        assert target.df["object_id"].tolist() == [0.0, 0.0]
+
+        reloaded = RelionMotl(str(out_path), version=3.1)
+        assert reloaded.df["object_id"].tolist() == [7.0, 8.0]
+
+    def test_complete_from_source_respects_explicit_extra_columns(self, tmp_path):
+        # a user-supplied extra_columns mapping for a recovered column must be
+        # respected instead of being overwritten by the automatic _cc_name() default.
+        source_df = self._relion_df(1, [10.0], [10.0], [10.0], [1], helical_tube_ids=[7])
+        source = RelionMotl(source_df, version=3.1, pixel_size=1.0)
+        target_df = self._relion_df(1, [10.0], [10.0], [10.0], [101])
+        target = RelionMotl(target_df, version=3.1, pixel_size=1.0)
+
+        out_path = tmp_path / "completed_custom_name.star"
+        target.complete_from_source(
+            source,
+            columns=["object_id"],
+            output_path=str(out_path),
+            coord_tolerance=1.0,
+            write_kwargs={"extra_columns": {"object_id": "ccMyObjectId"}},
+        )
+
+        from cryocat.utils import starfileio
+
+        frames, specifiers, _ = starfileio.Starfile.read(str(out_path))
+        particles_df = frames[specifiers.index("data_particles")]
+        assert "ccMyObjectId" in particles_df.columns
+        assert "ccObjectId" not in particles_df.columns
+
 
 class TestRelionMotlv5_1:
     """RelionMotlv5_1 is a pure factory (__new__) dispatching to RelionMotl or

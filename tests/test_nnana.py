@@ -37,6 +37,68 @@ def test_get_nn_within_radius(motl, column_name, expected_res):
     np.testing.assert_array_equal(expected_res, res)
 
 
+class TestRecoverColumnsByCoordinates:
+    def _relion_df(self, tomo_id, x, y, z, image_names, helical_tube_ids=None):
+        n = len(x)
+        data = {
+            "rlnMicrographName": [tomo_id] * n,
+            "rlnCoordinateX": x,
+            "rlnCoordinateY": y,
+            "rlnCoordinateZ": z,
+            "rlnAngleRot": [0.0] * n,
+            "rlnAngleTilt": [0.0] * n,
+            "rlnAnglePsi": [0.0] * n,
+            "rlnImageName": image_names,
+        }
+        if helical_tube_ids is not None:
+            data["rlnHelicalTubeID"] = helical_tube_ids
+        return pd.DataFrame(data)
+
+    def test_recovers_missing_column_for_matched_particles_and_warns_for_unmatched(self):
+        source_df = self._relion_df(
+            1, [10.0, 50.0, 90.0], [10.0, 50.0, 90.0], [10.0, 50.0, 90.0], [1, 2, 3], helical_tube_ids=[7, 8, 9]
+        )
+        source = cryomotl.RelionMotl(source_df, version=3.1, pixel_size=2.0)
+
+        # target: same 2 physical particles (same pixel_size, so same raw coords), plus
+        # one particle far away with no source match; rlnHelicalTubeID absent entirely.
+        target_df = self._relion_df(1, [10.0, 50.0, 500.0], [10.0, 50.0, 500.0], [10.0, 50.0, 500.0], [101, 102, 103])
+        target = cryomotl.RelionMotl(target_df, version=3.1, pixel_size=2.0)
+
+        assert target.df["object_id"].tolist() == [0.0, 0.0, 0.0]
+
+        with pytest.warns(UserWarning, match="1 target particle"):
+            completed = nnana.recover_columns_by_coordinates(source, target, ["object_id"], coord_tolerance=1.0)
+
+        assert completed.df["object_id"].tolist() == [7.0, 8.0, 0.0]
+        # target itself must not be mutated
+        assert target.df["object_id"].tolist() == [0.0, 0.0, 0.0]
+
+    def test_handles_different_pixel_sizes(self):
+        # source at pixel_size=1.0: physical position 100 Angstrom
+        source_df = self._relion_df(1, [100.0], [100.0], [100.0], [1], helical_tube_ids=[42])
+        source = cryomotl.RelionMotl(source_df, version=3.1, pixel_size=1.0)
+
+        # target at pixel_size=2.0: raw coord 50 -> same 100 Angstrom physical position
+        target_df = self._relion_df(1, [50.0], [50.0], [50.0], [201])
+        target = cryomotl.RelionMotl(target_df, version=3.1, pixel_size=2.0)
+
+        completed = nnana.recover_columns_by_coordinates(source, target, ["object_id"], coord_tolerance=1.0)
+
+        assert completed.df["object_id"].tolist() == [42.0]
+
+    def test_raises_on_missing_source_column(self):
+        # All 20 standard MotlColumn names always exist on any Motl.df (defaulted to
+        # 0.0), so this guard only ever fires for a caller-supplied typo/invalid name.
+        source_df = self._relion_df(1, [0.0], [0.0], [0.0], [1])
+        source = cryomotl.RelionMotl(source_df, version=3.1, pixel_size=1.0)
+        target_df = self._relion_df(1, [0.0], [0.0], [0.0], [2])
+        target = cryomotl.RelionMotl(target_df, version=3.1, pixel_size=1.0)
+
+        with pytest.raises(ValueError, match="not present in source_motl.df"):
+            nnana.recover_columns_by_coordinates(source, target, ["not_a_real_column"], coord_tolerance=1.0)
+
+
 @pytest.mark.parametrize(
     "column_name, rotation_type",
     [
