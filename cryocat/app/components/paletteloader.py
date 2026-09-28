@@ -234,6 +234,7 @@ def register_palette_loader_callbacks(
     prefix: str,
     mode: str = "discrete",
     settings_store_id: str | None = None,
+    allow_auto: bool = False,
 ) -> None:
     """Register callbacks for the palette loader identified by *prefix*.
 
@@ -244,7 +245,13 @@ def register_palette_loader_callbacks(
         When provided the callback adds it as an ``Input`` so that the Auto
         swatch updates whenever the effective default palette changes.
         Pass this for every Auto-capable loader (``allow_auto=True``).
+    allow_auto : bool, default False
+        Whether the preset dropdown has an "Auto" (empty-value) option.
+        Must match what ``get_palette_loader`` was called with for this prefix.
+        Used when rebuilding options after a user-registered palette is added.
     """
+    from cryocat.app import ids as _ids  # local to avoid circular import at module level
+
     _auto_key = "discrete_palette" if mode == "discrete" else "continuous_palette"
     _has_settings = settings_store_id is not None
     _all_inputs = [
@@ -269,3 +276,13 @@ def register_palette_loader_callbacks(
             auto_pal = (settings or {}).get(_auto_key) or _AUTO_DEFAULT_PAL
             return "", _make_swatch(auto_pal, mode), ""
         return preset, _make_swatch(preset, mode), ""
+
+    @app.callback(
+        Output(f"{prefix}-preset", "options"),
+        Input(_ids.PALETTE_REGISTRY_STORE, "data"),
+    )
+    def _refresh_options(_version):
+        presets = _discrete_presets() if mode == "discrete" else _continuous_presets()
+        if allow_auto:
+            return [{"label": "Auto", "value": ""}] + [{"label": p, "value": p} for p in presets]
+        return [{"label": p, "value": p} for p in presets]

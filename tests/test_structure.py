@@ -386,6 +386,30 @@ def test_NPC_merge_rings_single_input_raises():
         structure.NPC.merge_rings([_make_npc_motl()], npc_radius=50.0)
 
 
+def test_NPC_cluster_subunits_to_rings_gui_exposed():
+    from cryocat.app import discovery
+    entries = {e.fn.__name__: e for e in discovery.entries_for_class(structure.NPC)}
+    assert "cluster_subunits_to_rings" in entries, \
+        "cluster_subunits_to_rings not discoverable via gui_exposed"
+    e = entries["cluster_subunits_to_rings"]
+    assert e.label == "Cluster subunits to rings"
+    assert e.group == "NPC workflow"
+    assert e.returns == "motl"
+    assert e.kind == "staticmethod"
+
+
+def test_NPC_merge_rings_not_gui_exposed():
+    """merge_rings is intentionally not gui-exposed (Q2 removal): the instance
+    merge() method is the GUI route; the static method remains for API use."""
+    from cryocat.app import discovery
+    entries = {e.fn.__name__: e for e in discovery.entries_for_class(structure.NPC)}
+    assert "merge_rings" not in entries, (
+        "merge_rings should not be discoverable via gui_exposed — "
+        "the GUI route is the instance merge() method"
+    )
+    assert callable(structure.NPC.merge_rings), "merge_rings must still exist as a callable API"
+
+
 # ── ParametricSurface ─────────────────────────────────────────────────────────
 
 
@@ -2827,20 +2851,26 @@ class TestBlockDefinition:
             structure.BlockDefinition(sites=sites)
 
     def test_site_vectors_shape(self):
+        # cyclic() stores one site (the shift); effective_n_sites carries the order.
         bd = structure.BlockDefinition.cyclic(3, [5.0, 0.0, 0.0])
         vecs = bd.site_vectors()
-        assert vecs.shape == (3, 3)
+        assert vecs.shape == (1, 3)
+        assert bd.effective_n_sites == 3
         np.testing.assert_allclose(np.linalg.norm(vecs, axis=1), 5.0, atol=1e-12)
 
     def test_cyclic_classmethod(self):
+        # One site stored; effective_n_sites gives the cyclic order.
         bd = structure.BlockDefinition.cyclic(4, [2.0, 0.0, 0.0], site_type="a")
-        assert bd.n_sites == 4
-        assert all(s.site_type == "a" for s in bd.sites)
+        assert bd.n_sites == 1
+        assert bd.effective_n_sites == 4
+        assert bd.sites[0].site_type == "a"
         assert bd.pairing == (("a", "a"),)
 
     def test_site_types_property(self):
+        # One site stored; site_types has one entry; effective_n_sites is 2.
         bd = structure.BlockDefinition.cyclic(2, [1.0, 0.0, 0.0], site_type="x")
-        assert bd.site_types == ("x", "x")
+        assert bd.site_types == ("x",)
+        assert bd.effective_n_sites == 2
 
 
 # =============================================================================
@@ -2859,14 +2889,15 @@ class TestPleomorphicSurfaceBlockInit:
             structure.PleomorphicSurface(surface=42)
 
     def test_blocks_without_definition_raises(self):
+        # Validation now lives in BlockLayer; None block_definition raises there.
         motl = self._make_motl()
         with pytest.raises(ValueError, match="block_definition is required"):
-            structure.PleomorphicSurface(blocks=motl)
+            structure.BlockLayer(motl, None)
 
     def test_blocks_only_valid(self):
         motl = self._make_motl()
         bd = structure.BlockDefinition.cyclic(3, [5.0, 0.0, 0.0])
-        psurf = structure.PleomorphicSurface(blocks=motl, block_definition=bd)
+        psurf = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
         assert psurf.has_blocks
         assert not psurf.has_envelope
         assert len(psurf.blocks.df) == 5
@@ -2878,7 +2909,7 @@ class TestPleomorphicSurfaceBlockInit:
     def test_surface_property_raises_when_no_envelope(self):
         motl = self._make_motl()
         bd = structure.BlockDefinition.cyclic(2, [3.0, 0.0, 0.0])
-        psurf = structure.PleomorphicSurface(blocks=motl, block_definition=bd)
+        psurf = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
         with pytest.raises(ValueError, match="no envelope"):
             _ = psurf.surface
 
@@ -2888,35 +2919,16 @@ class TestPleomorphicSurfaceBlockInit:
         motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
         bd = structure.BlockDefinition.cyclic(3, [1.0, 0.0, 0.0])
         with pytest.raises(ValueError, match="subtomo_id must be unique"):
-            structure.PleomorphicSurface(blocks=motl, block_definition=bd)
+            structure.BlockLayer(motl, bd)
 
-    def test_ideal_lattice_mismatch_raises(self):
-        motl = self._make_motl()
-        bd = structure.BlockDefinition.cyclic(3, [1.0, 0.0, 0.0])
-        with pytest.raises(ValueError, match="ideal_degree and ideal_face_size"):
-            structure.PleomorphicSurface(blocks=motl, block_definition=bd, ideal_degree=6)
-
-    def test_ideal_lattice_wrong_euler_raises(self):
-        motl = self._make_motl()
-        bd = structure.BlockDefinition.cyclic(3, [1.0, 0.0, 0.0])
-        with pytest.raises(ValueError, match="1/2"):
-            structure.PleomorphicSurface(
-                blocks=motl, block_definition=bd, ideal_degree=6, ideal_face_size=6
-            )
-
-    def test_ideal_lattice_valid(self):
-        motl = self._make_motl()
-        bd = structure.BlockDefinition.cyclic(3, [1.0, 0.0, 0.0])
-        psurf = structure.PleomorphicSurface(
-            blocks=motl, block_definition=bd, ideal_degree=3, ideal_face_size=6
-        )
-        assert psurf.ideal_degree == 3
-        assert psurf.ideal_face_size == 6
+    # test_ideal_lattice_mismatch_raises — removed: ideal_degree/ideal_face_size no longer exist
+    # test_ideal_lattice_wrong_euler_raises — removed: same reason
+    # test_ideal_lattice_valid — removed: same reason
 
     def test_site_type_codes_built(self):
         motl = self._make_motl()
         bd = structure.BlockDefinition.cyclic(2, [1.0, 0.0, 0.0], site_type="arm")
-        psurf = structure.PleomorphicSurface(blocks=motl, block_definition=bd)
+        psurf = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
         assert "arm" in psurf.site_type_codes
         assert psurf.site_type_codes["arm"] == 1
 
@@ -2926,7 +2938,7 @@ class TestPleomorphicSurfaceBlockInit:
         bd0 = structure.BlockDefinition.cyclic(3, [2.0, 0.0, 0.0], site_type="a")
         bd1 = structure.BlockDefinition.cyclic(2, [3.0, 0.0, 0.0], site_type="b")
         psurf = structure.PleomorphicSurface(
-            blocks=motl, block_definition={0.0: bd0, 1.0: bd1}
+            block_layer=structure.BlockLayer(motl, {0.0: bd0, 1.0: bd1})
         )
         assert "a" in psurf.site_type_codes
         assert "b" in psurf.site_type_codes
@@ -2936,7 +2948,7 @@ class TestPleomorphicSurfaceBlockInit:
         motl.df["class"] = [0.0, 2.0]
         bd0 = structure.BlockDefinition.cyclic(3, [1.0, 0.0, 0.0])
         with pytest.raises(ValueError, match="without a BlockDefinition"):
-            structure.PleomorphicSurface(blocks=motl, block_definition={0.0: bd0})
+            structure.BlockLayer(motl, {0.0: bd0})
 
 
 # =============================================================================
@@ -2947,43 +2959,46 @@ class TestGetSitesAsMotl:
     def test_shape(self):
         blocks_motl, arm_length, arm_elev = _soccer_ball()
         bd = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        psurf = structure.PleomorphicSurface(blocks=blocks_motl, block_definition=bd)
+        psurf = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks_motl, bd))
         sites = psurf.get_sites_as_motl()
         assert len(sites.df) == 180, f"Expected 180 rows, got {len(sites.df)}"
 
     def test_geom1_values(self):
         blocks_motl, arm_length, arm_elev = _soccer_ball()
         bd = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        psurf = structure.PleomorphicSurface(blocks=blocks_motl, block_definition=bd)
+        psurf = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks_motl, bd))
         sites = psurf.get_sites_as_motl()
         assert set(sites.df["geom1"].unique()) == {1.0, 2.0, 3.0}
 
-    def test_object_id_tracks_block_ids(self):
+    def test_geom3_tracks_block_ids(self):
         blocks_motl, arm_length, arm_elev = _soccer_ball()
         bd = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        psurf = structure.PleomorphicSurface(blocks=blocks_motl, block_definition=bd)
+        psurf = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks_motl, bd))
         sites = psurf.get_sites_as_motl()
         expected = set(blocks_motl.df["subtomo_id"].unique())
-        assert set(sites.df["object_id"].unique()) == expected
+        assert set(sites.df["geom3"].unique()) == expected
 
     def test_positions_equal_c_plus_R_apply_v(self):
         blocks_motl, arm_length, arm_elev = _soccer_ball()
         bd = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        psurf = structure.PleomorphicSurface(blocks=blocks_motl, block_definition=bd)
+        psurf = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks_motl, bd))
         sites = psurf.get_sites_as_motl()
 
         angles = blocks_motl.df[["phi", "theta", "psi"]].values.astype(float)
         all_R = Rotation.from_euler("zxz", angles, degrees=True)
-        site_vecs = bd.site_vectors()
+        n = bd.effective_n_sites
+        shift = bd.site_vectors()[0]  # single stored shift
 
         for _, row in sites.df.iterrows():
-            obj_id = int(row["object_id"])
+            obj_id = int(row["geom3"])  # geom3 = block_id_column (default)
             site_idx = int(row["geom1"]) - 1
             block_mask = blocks_motl.df["subtomo_id"] == obj_id
             block_row = blocks_motl.df[block_mask].iloc[0]
             block_pos_idx = blocks_motl.df[block_mask].index[0]
             c = np.array([block_row["x"], block_row["y"], block_row["z"]])
-            expected_f = c + all_R[block_pos_idx].apply(site_vecs[site_idx])
+            # k-th site vector is shift rotated by 360*(k-1)/n degrees about z
+            v_k = Rotation.from_euler("z", 360.0 * site_idx / n, degrees=True).apply(shift)
+            expected_f = c + all_R[block_pos_idx].apply(v_k)
             expected = np.where(expected_f >= 0,
                                 np.floor(expected_f + 0.5),
                                 -np.floor(-expected_f + 0.5))
@@ -2996,7 +3011,7 @@ class TestGetSitesAsMotl:
     def test_no_blocks_raises(self):
         blocks_motl, arm_length, arm_elev = _soccer_ball()
         bd = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        psurf = structure.PleomorphicSurface(blocks=blocks_motl, block_definition=bd)
+        psurf = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks_motl, bd))
         psurf.blocks = None
         with pytest.raises(ValueError, match="requires a block layer"):
             psurf.get_sites_as_motl()
@@ -3013,7 +3028,7 @@ class TestUnifyPolarity:
     def _make_psurf(self, flipped=_SOCCER_FLIPPED):
         blocks_motl, arm_length, arm_elev = _soccer_ball(flipped=flipped)
         bd = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        return structure.PleomorphicSurface(blocks=blocks_motl, block_definition=bd)
+        return structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks_motl, bd))
 
     def test_neighbours_returns_changed_count(self):
         psurf = self._make_psurf()
@@ -3244,9 +3259,7 @@ class TestEnvelopeOnBlocksOnly:
     def _make(self):
         motl, arm_length, arm_elev = _soccer_ball()
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        return structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def, ideal_degree=3, ideal_face_size=6
-        )
+        return structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
 
     def test_get_mean_curvature_raises(self):
         ps = self._make()
@@ -3280,10 +3293,11 @@ class TestGetSitesAsMotlFold:
 
     def test_fold3_positions_match_site_vectors(self):
         m, block_def = self._make_psurf(3, 9.0, 30.0, 11.0)
-        ps = structure.PleomorphicSurface(blocks=m, block_definition=block_def)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, block_def))
         site_motl = ps.get_sites_as_motl()
 
-        expected_vecs = block_def.site_vectors()  # (3, 3)
+        n = block_def.effective_n_sites
+        shift = block_def.site_vectors()[0]
         angles_all = m.df[["phi", "theta", "psi"]].values.astype(float)
         block_coords = m.get_coordinates()
 
@@ -3292,14 +3306,15 @@ class TestGetSitesAsMotlFold:
             R_b = Rotation.from_euler("zxz", angles_all[block_row_idx], degrees=True)
             c_b = block_coords[block_row_idx]
 
-            for k in range(1, 4):
+            for k in range(1, n + 1):
                 site_rows = site_motl.df[
-                    (site_motl.df["object_id"] == block_id) &
+                    (site_motl.df["geom3"] == block_id) &  # geom3 = block_id_column (default)
                     (site_motl.df["geom1"] == float(k))
                 ]
                 assert len(site_rows) == 1, f"block {block_id} site {k}: {len(site_rows)} rows"
                 site_pos = site_motl.get_coordinates()[site_rows.index[0]]
-                expected = c_b + R_b.apply(expected_vecs[k - 1])
+                v_k = Rotation.from_euler("z", 360.0 * (k - 1) / n, degrees=True).apply(shift)
+                expected = c_b + R_b.apply(v_k)
                 np.testing.assert_allclose(
                     site_pos, expected, atol=1e-4,
                     err_msg=f"block {block_id} site {k}"
@@ -3307,10 +3322,11 @@ class TestGetSitesAsMotlFold:
 
     def test_fold6_positions_match_site_vectors(self):
         m, block_def = self._make_psurf(6, 5.0, 0.0, 15.0)
-        ps = structure.PleomorphicSurface(blocks=m, block_definition=block_def)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, block_def))
         site_motl = ps.get_sites_as_motl()
 
-        expected_vecs = block_def.site_vectors()
+        n = block_def.effective_n_sites
+        shift = block_def.site_vectors()[0]
         angles_all = m.df[["phi", "theta", "psi"]].values.astype(float)
         block_coords = m.get_coordinates()
 
@@ -3319,14 +3335,15 @@ class TestGetSitesAsMotlFold:
             R_b = Rotation.from_euler("zxz", angles_all[block_row_idx], degrees=True)
             c_b = block_coords[block_row_idx]
 
-            for k in range(1, 7):
+            for k in range(1, n + 1):
                 site_rows = site_motl.df[
-                    (site_motl.df["object_id"] == block_id) &
+                    (site_motl.df["geom3"] == block_id) &  # geom3 = block_id_column (default)
                     (site_motl.df["geom1"] == float(k))
                 ]
                 assert len(site_rows) == 1
                 site_pos = site_motl.get_coordinates()[site_rows.index[0]]
-                expected = c_b + R_b.apply(expected_vecs[k - 1])
+                v_k = Rotation.from_euler("z", 360.0 * (k - 1) / n, degrees=True).apply(shift)
+                expected = c_b + R_b.apply(v_k)
                 np.testing.assert_allclose(site_pos, expected, atol=1e-4)
 
 
@@ -3371,10 +3388,7 @@ class TestSoccerBallConnect:
     def psurf(self):
         motl, arm_length, arm_elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         return ps
 
@@ -3403,7 +3417,7 @@ class TestSoccerBallConnect:
 
     def test_defect_charge(self, psurf):
         asm = psurf.get_assembly_stats()
-        np.testing.assert_allclose(float(asm.iloc[0]["defect_charge"]), 2.0, atol=1e-9)
+        np.testing.assert_allclose(float(asm.iloc[0]["majority_face_defect"]), 2.0, atol=1e-9)
 
     def test_angle_deficit_sum(self, psurf):
         asm = psurf.get_assembly_stats()
@@ -3436,10 +3450,7 @@ class TestRelabelInvariance:
     def _face_size_counts(self, seed):
         motl, arm_length, arm_elev = _soccer_ball(seed=seed)
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         fs = ps.get_face_stats()
         return fs["size"].value_counts().to_dict()
@@ -3459,27 +3470,31 @@ class TestPolarityMatters:
     def _build(self, flipped=()):
         motl, arm_length, arm_elev = _soccer_ball(seed=0, flipped=flipped)
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         return ps
 
-    def test_flip_one_block_changes_euler(self):
+    def test_flip_one_block_reported_not_topology(self):
+        # MCB operates on the undirected contact graph.  A flipped block keeps
+        # its three bonds, so topology is unchanged: chi=2, 32 faces.
+        # The inversion is detected by get_inverted_blocks, not face tracing.
         ps = self._build(flipped=(0,))
         ps.connect(max_distance=4.0)
         asm = ps.get_assembly_stats()
-        chi = int(asm.iloc[0]["euler_characteristic"])
-        assert chi == 0
+        assert int(asm.iloc[0]["euler_characteristic"]) == 2
+        inv = ps.get_inverted_blocks(max_block_distance=20.0)
+        assert len(inv) == 1
+        assert int(inv.iloc[0]["subtomo_id"]) == 1  # block index 0 → subtomo_id 1
 
-    def test_flip_one_block_faces(self):
+    def test_flip_one_block_faces_unchanged(self):
+        # Inverted block leaves face topology intact; inversion shows in
+        # get_inverted_blocks with three disagreeing neighbours.
         ps = self._build(flipped=(0,))
         ps.connect(max_distance=4.0)
         fs = ps.get_face_stats()
         sizes = fs["size"].value_counts().to_dict()
-        assert sizes.get(5, 0) == 11
-        assert sizes.get(6, 0) == 18
-        assert sizes.get(17, 0) == 1
+        assert sizes == {5: 12, 6: 20}
+        inv = ps.get_inverted_blocks(max_block_distance=20.0)
+        assert int(inv.iloc[0]["n_disagree"]) == 3
 
     def test_flip_all_blocks_same_as_unflipped(self):
         ps_all = self._build(flipped=tuple(range(60)))
@@ -3502,6 +3517,65 @@ class TestPolarityMatters:
 
 
 # =============================================================================
+# Phase 2 — get_inverted_blocks / get_inverted_blocks_as_motl
+# =============================================================================
+
+class TestGetInvertedBlocks:
+    _MAX_DIST = 20.0
+
+    def _make_ps(self, flipped=()):
+        motl, arm_length, arm_elev = _soccer_ball(seed=0, flipped=flipped)
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        return structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+
+    def test_one_inverted_block_found(self):
+        ps = self._make_ps(flipped=(0,))
+        inv = ps.get_inverted_blocks(max_block_distance=self._MAX_DIST)
+        assert len(inv) == 1
+        assert int(inv.iloc[0]["subtomo_id"]) == 1  # block index 0 → subtomo_id 1
+
+    def test_one_inverted_three_disagreeing(self):
+        ps = self._make_ps(flipped=(0,))
+        inv = ps.get_inverted_blocks(max_block_distance=self._MAX_DIST)
+        row = inv.iloc[0]
+        assert int(row["n_disagree"]) == 3
+        assert int(row["n_agree"]) == 0
+        assert int(row["n_neighbours"]) == 3
+
+    def test_no_inverted_blocks_empty(self):
+        ps = self._make_ps(flipped=())
+        inv = ps.get_inverted_blocks(max_block_distance=self._MAX_DIST)
+        assert inv.empty
+
+    def test_two_adjacent_inverted_both_flagged(self):
+        # Blocks 0 and 1 are adjacent (distance == edge == 18.0 < max_dist=20.0).
+        # Each agrees with the other but disagrees with its two non-inverted
+        # neighbours → n_disagree=2 > n_agree=1 → both flagged.
+        ps = self._make_ps(flipped=(0, 1))
+        inv = ps.get_inverted_blocks(max_block_distance=self._MAX_DIST)
+        assert len(inv) == 2
+        ids = set(inv["subtomo_id"].astype(int))
+        assert ids == {1, 2}
+        for _, row in inv.iterrows():
+            assert int(row["n_disagree"]) == 2
+            assert int(row["n_agree"]) == 1
+
+    def test_motl_same_blocks_as_dataframe(self):
+        ps = self._make_ps(flipped=(0,))
+        inv_df = ps.get_inverted_blocks(max_block_distance=self._MAX_DIST)
+        inv_motl = ps.get_inverted_blocks_as_motl(max_block_distance=self._MAX_DIST)
+        assert set(inv_motl.df["subtomo_id"].astype(int)) == set(inv_df["subtomo_id"].astype(int))
+
+    def test_no_inverted_motl_empty(self):
+        ps = self._make_ps(flipped=())
+        inv_motl = ps.get_inverted_blocks_as_motl(max_block_distance=self._MAX_DIST)
+        assert inv_motl.df.empty
+
+
+# =============================================================================
 # Phase 2 — T5: open patch
 # =============================================================================
 
@@ -3515,10 +3589,7 @@ class TestOpenPatch:
         mask = (coords[:, 2] - 100.0) >= -5.0
         sub_df = motl.df[mask].copy().reset_index(drop=True)
         sub_motl = cryomotl.Motl(sub_df)
-        ps = structure.PleomorphicSurface(
-            blocks=sub_motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(sub_motl, block_def))
         ps.connect(max_distance=4.0)
         return ps
 
@@ -3544,11 +3615,7 @@ class TestGeodesicConnect:
     def psurf(self):
         motl, block_def = _geodesic(edge=10.0, seed=0)
         ps = structure.PleomorphicSurface(
-            blocks=motl,
-            block_definition=block_def,
-            block_type_column="geom3",
-            ideal_degree=6,
-            ideal_face_size=3,
+            block_layer=structure.BlockLayer(motl, block_def, block_type_column="geom3")
         )
         ps.connect(max_distance=3.0)
         return ps
@@ -3576,9 +3643,14 @@ class TestGeodesicConnect:
         assert int(row["n_contacts"]) == 120
         assert int(row["n_faces"]) == 80
 
-    def test_defect_charge(self, psurf):
+    def test_closure_via_euler_and_degree_distribution(self, psurf):
+        # A geodesic dome (80 triangular faces) has no face-size defect: all faces
+        # are triangles so majority_face_size = 3 and majority_face_defect = 0.
+        # Topological closure is captured by euler_characteristic = 2 and the
+        # twelve degree-5 vertices that source the curvature.
         asm = psurf.get_assembly_stats()
-        np.testing.assert_allclose(float(asm.iloc[0]["defect_charge"]), 2.0, atol=1e-9)
+        assert int(asm.iloc[0]["euler_characteristic"]) == 2
+        assert int(asm.iloc[0]["n_degree_5"]) == 12
 
 
 # =============================================================================
@@ -3589,10 +3661,7 @@ class TestMicrotubuleConnect:
     @pytest.fixture(scope="class")
     def psurf(self):
         motl, block_def = _microtubule(n_pf=13, n_dimers=20)
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=4, ideal_face_size=4,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         return ps
 
@@ -3651,10 +3720,7 @@ class TestStoreBlockStats:
     def psurf(self):
         motl, arm_length, arm_elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         return ps
 
@@ -3695,10 +3761,7 @@ class TestGettersRaiseBeforeConnect:
     def _make(self):
         motl, arm_length, arm_elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        return structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        return structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
 
     def test_contact_stats_raises(self):
         with pytest.raises(ValueError, match="connect"):
@@ -3726,10 +3789,7 @@ class TestGetFacesAsMotl:
     def psurf(self):
         motl, arm_length, arm_elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         return ps
 
@@ -3741,16 +3801,20 @@ class TestGetFacesAsMotl:
         fm = psurf.get_faces_as_motl()
         assert set(fm.df["subtomo_id"].astype(int)) == set(range(1, 33))
 
-    def test_class_is_face_size(self, psurf):
+    def test_geom3_is_face_size(self, psurf):
+        # face_size_column defaults to "geom3" (BlockLayer constructor param).
         fm = psurf.get_faces_as_motl()
-        counts = fm.df["class"].astype(int).value_counts().to_dict()
+        counts = fm.df["geom3"].astype(int).value_counts().to_dict()
         assert counts.get(5, 0) == 12
         assert counts.get(6, 0) == 20
 
-    def test_object_id_is_face_id(self, psurf):
+    def test_object_id_is_affiliation_geom2_is_face_id(self, psurf):
         fm = psurf.get_faces_as_motl()
         fs = psurf.get_face_stats()
-        assert set(fm.df["object_id"].astype(int)) == set(fs["face_id"].astype(int))
+        aff_col = psurf.affiliation_column
+        # object_id carries affiliation; geom2 carries per-assembly face index
+        assert set(fm.df["object_id"].astype(float)) == set(fs[aff_col].astype(float))
+        assert set(fm.df["geom2"].astype(int)) == set(fs["face_id"].astype(int))
 
     def test_geom1_is_assembly_id(self, psurf):
         fm = psurf.get_faces_as_motl()
@@ -3759,7 +3823,7 @@ class TestGetFacesAsMotl:
     def test_positions_match_centroids(self, psurf):
         fm = psurf.get_faces_as_motl()
         fs = psurf.get_face_stats().sort_values("face_id").reset_index(drop=True)
-        fm_sorted = fm.df.sort_values("object_id").reset_index(drop=True)
+        fm_sorted = fm.df.sort_values("geom2").reset_index(drop=True)
         np.testing.assert_allclose(fm_sorted["x"].values, fs["centroid_x"].values, atol=1e-6)
         np.testing.assert_allclose(fm_sorted["y"].values, fs["centroid_y"].values, atol=1e-6)
         np.testing.assert_allclose(fm_sorted["z"].values, fs["centroid_z"].values, atol=1e-6)
@@ -3773,10 +3837,7 @@ class TestGetGapsAsMotl:
     @pytest.fixture(scope="class")
     def psurf(self):
         motl, block_def = _microtubule(n_pf=13, n_dimers=20)
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=4, ideal_face_size=4,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         return ps
 
@@ -3804,6 +3865,112 @@ class TestGetGapsAsMotl:
 
 
 # =============================================================================
+# Column-name parameters honoured across motl-producing methods
+# =============================================================================
+
+class TestBlockLayerColumnParameters:
+    """Column assignments are controlled by BlockLayer constructor params."""
+
+    def _make_ps(self, **bl_kwargs):
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        bl = structure.BlockLayer(motl, bd, **bl_kwargs)
+        ps = structure.PleomorphicSurface(block_layer=bl)
+        ps.connect(max_distance=4.0)
+        return ps
+
+    def _make_ps_missing(self, **bl_kwargs):
+        """Soccer ball minus block 0 → one merged face with one missing block."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        sub_df = motl.df.iloc[1:].copy().reset_index(drop=True)
+        sub_motl = cryomotl.Motl(sub_df)
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        bl = structure.BlockLayer(sub_motl, bd, **bl_kwargs)
+        ps = structure.PleomorphicSurface(block_layer=bl)
+        ps.connect(max_distance=arm_length * 2.5)
+        return ps
+
+    # ── default defaults ──────────────────────────────────────────────────────
+
+    def test_faces_default_columns(self):
+        ps = self._make_ps()
+        fm = ps.get_faces_as_motl()
+        assert "geom1" in fm.df.columns  # assembly_id_column
+        assert "geom2" in fm.df.columns  # face_id_column
+        assert "geom3" in fm.df.columns  # face_size_column
+        assert set(fm.df["geom3"].astype(int)) == {5, 6}
+
+    def test_faces_custom_columns(self):
+        ps = self._make_ps(assembly_id_column="geom4", face_id_column="geom5", face_size_column="score")
+        fm = ps.get_faces_as_motl()
+        assert set(fm.df["score"].astype(int)) == {5, 6}
+        assert fm.df["geom4"].notna().all()
+        assert fm.df["geom5"].notna().all()
+        # defaults stay zero
+        assert (fm.df["geom1"] == 0.0).all()
+        assert (fm.df["geom2"] == 0.0).all()
+        assert (fm.df["geom3"] == 0.0).all()
+
+    def test_faces_nothing_writes_class(self):
+        ps = self._make_ps()
+        fm = ps.get_faces_as_motl()
+        assert (fm.df["class"] == 0.0).all()
+
+    # ── face_id is the same column in faces and missing-block motl ────────────
+
+    def test_face_id_column_consistent_across_methods(self):
+        """Custom face_id_column='geom5' is respected by get_faces_as_motl().
+        get_missing_block_motl() returns empty because the removed block is on
+        the surface: all faces adjacent to the gap are boundary-touching and
+        are excluded from inference."""
+        ps = self._make_ps_missing(face_id_column="geom5")
+        fm = ps.get_faces_as_motl()
+        assert fm.df["geom5"].notna().all()   # face ids written to geom5
+        assert (fm.df["geom2"] == 0.0).all()  # old default not written
+        mb = ps.get_missing_block_motl()
+        assert len(mb.df) == 0  # all adjacent faces touch the boundary → excluded
+
+    def test_missing_block_excluded_when_adjacent_faces_touch_boundary(self):
+        """Soccer ball minus one block: the hole is on the surface edge, so all
+        faces adjacent to it are boundary-touching and excluded from inference."""
+        ps = self._make_ps_missing()
+        mb = ps.get_missing_block_motl()
+        assert len(mb.df) == 0
+
+    def test_missing_block_motl_has_class_column(self):
+        """get_missing_block_motl() always returns a Motl with a 'class' column,
+        even when the result is empty (boundary-adjacent faces excluded)."""
+        ps = self._make_ps_missing()
+        mb = ps.get_missing_block_motl()
+        assert len(mb.df) == 0
+        assert "class" in mb.df.columns
+
+    # ── gaps motl ─────────────────────────────────────────────────────────────
+
+    def test_gaps_default_source_block_count_column(self):
+        motl, block_def = _microtubule(n_pf=13, n_dimers=20)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
+        ps.connect(max_distance=4.0)
+        gm = ps.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
+        assert (gm.df["geom1"].astype(int) == 13).all()
+
+    def test_gaps_custom_source_block_count_column(self):
+        motl, block_def = _microtubule(n_pf=13, n_dimers=20)
+        bl = structure.BlockLayer(motl, block_def, source_block_count_column="geom4")
+        ps = structure.PleomorphicSurface(block_layer=bl)
+        ps.connect(max_distance=4.0)
+        gm = ps.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
+        assert (gm.df["geom4"].astype(int) == 13).all()
+        assert (gm.df["geom1"] == 0.0).all()  # old default not written
+
+
+# =============================================================================
 # Phase 3 — T7.4: envelope_from_faces
 # =============================================================================
 
@@ -3812,10 +3979,7 @@ class TestEnvelopeFromFaces:
     def mesh_and_psurf(self):
         motl, arm_length, arm_elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         m = ps.envelope_from_faces()
         return m, ps
@@ -3865,16 +4029,10 @@ class TestAnnotateWithEnvelope:
         # soccer ball, then create PS with envelope + same blocks.
         motl, arm_length, arm_elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps_clean = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps_clean.connect(max_distance=4.0)
         mesh = ps_clean.envelope_from_faces()
-        ps = structure.PleomorphicSurface(
-            mesh, blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl, block_def))
         annot = ps.annotate_with_envelope()
         return annot, ps
 
@@ -3911,10 +4069,7 @@ class TestUnifyPolarityEnvelope:
     def _make_inverted(self, seed=0):
         motl, arm_length, arm_elev = _soccer_ball(seed=seed)
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         # Invert every other block to create polarity mismatches
         rng = np.random.default_rng(42)
@@ -3938,17 +4093,11 @@ class TestUnifyPolarityEnvelope:
         # connect(), which relied on the now-removed envelope_from_faces fallback.
         motl_clean, arm, elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps_clean = structure.PleomorphicSurface(
-            blocks=motl_clean, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl_clean, block_def))
         ps_clean.connect(max_distance=4.0)
         mesh = ps_clean.envelope_from_faces()
         motl_flipped, _, _ = _soccer_ball(seed=0, flipped=(3, 17, 25, 31, 40, 44, 52, 59))
-        ps = structure.PleomorphicSurface(
-            mesh, blocks=motl_flipped, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl_flipped, block_def))
         ps.unify_polarity(reference="envelope")
         annot = ps.annotate_with_envelope()
         # After unification, all blocks should face the envelope
@@ -3959,17 +4108,11 @@ class TestUnifyPolarityEnvelope:
         # layers.  Previous setup used _make_inverted(seed=0) — blocks-only PS.
         motl_clean, arm, elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps_clean = structure.PleomorphicSurface(
-            blocks=motl_clean, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl_clean, block_def))
         ps_clean.connect(max_distance=4.0)
         mesh = ps_clean.envelope_from_faces()
         motl_f, _, _ = _soccer_ball(seed=0, flipped=(3, 17, 25, 31, 40, 44, 52, 59))
-        ps = structure.PleomorphicSurface(
-            mesh, blocks=motl_f, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl_f, block_def))
         n_flipped = ps.unify_polarity(reference="envelope")
         assert isinstance(n_flipped, int)
         assert n_flipped >= 0
@@ -3979,17 +4122,11 @@ class TestUnifyPolarityEnvelope:
         # Previous setup used _make_inverted(seed=0) — blocks-only PS.
         motl_clean, arm, elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps_clean = structure.PleomorphicSurface(
-            blocks=motl_clean, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl_clean, block_def))
         ps_clean.connect(max_distance=4.0)
         mesh = ps_clean.envelope_from_faces()
         motl_f, _, _ = _soccer_ball(seed=0, flipped=(3, 17, 25, 31, 40, 44, 52, 59))
-        ps = structure.PleomorphicSurface(
-            mesh, blocks=motl_f, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl_f, block_def))
         # Must not raise when max_block_distance is None (default)
         ps.unify_polarity(reference="envelope")
 
@@ -4002,17 +4139,11 @@ class TestUnifyPolarityEnvelope:
         # Phase 5 Step 2: verify exactly 8 blocks are flipped and all z outward.
         motl_clean, arm, elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps_clean = structure.PleomorphicSurface(
-            blocks=motl_clean, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl_clean, block_def))
         ps_clean.connect(max_distance=4.0)
         mesh = ps_clean.envelope_from_faces()
         motl_flipped, _, _ = _soccer_ball(seed=0, flipped=(3, 17, 25, 31, 40, 44, 52, 59))
-        ps = structure.PleomorphicSurface(
-            mesh, blocks=motl_flipped, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl_flipped, block_def))
         n = ps.unify_polarity(reference="envelope")
         assert n == 8
         from scipy.spatial.transform import Rotation as srot
@@ -4030,13 +4161,15 @@ class TestUnifyPolarityEnvelope:
 class TestBlockDefinitionCyclicSymmetry:
     def test_int_n_still_works(self):
         bd3 = structure.BlockDefinition.cyclic(3, [9.0, 0.0, 0.0])
-        assert bd3.n_sites == 3
-        assert bd3.fold == 3
+        assert bd3.n_sites == 1
+        assert bd3.effective_n_sites == 3
+        assert bd3.symmetry == "C3"
 
     def test_string_cn_works(self):
         bd5 = structure.BlockDefinition.cyclic("C5", [9.0, 0.0, 0.0])
-        assert bd5.n_sites == 5
-        assert bd5.fold == 5
+        assert bd5.n_sites == 1
+        assert bd5.effective_n_sites == 5
+        assert bd5.symmetry == "C5"
 
     def test_string_and_int_give_same_sites(self):
         bd_int = structure.BlockDefinition.cyclic(3, [9.0, 0.0, 0.0])
@@ -4053,7 +4186,7 @@ class TestBlockDefinitionCyclicSymmetry:
 
     def test_case_insensitive(self):
         bd = structure.BlockDefinition.cyclic("c4", [9.0, 0.0, 0.0])
-        assert bd.n_sites == 4
+        assert bd.effective_n_sites == 4
 
 
 # =============================================================================
@@ -4061,46 +4194,20 @@ class TestBlockDefinitionCyclicSymmetry:
 # =============================================================================
 
 class TestDefaultIdealLattice:
-    def test_d3_gives_ideals_3_6(self):
-        motl, arm_length, arm_elev = _soccer_ball(seed=0)
-        block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        # Do NOT pass ideal_degree / ideal_face_size
-        ps = structure.PleomorphicSurface(blocks=motl, block_definition=block_def)
-        assert ps.ideal_degree == 3
-        assert ps.ideal_face_size == 6
+    # test_d3_gives_ideals_3_6 — removed: ideal_degree/ideal_face_size no longer exist
+    # test_d4_gives_ideals_4_4 — removed: same reason
+    # test_d5_no_derivation — removed: same reason
+    # test_explicit_ideals_not_overridden — removed: same reason
 
     def test_d3_defect_charge(self):
+        # Soccer ball with C3 blocks → 12 pentagons as background-face deviants;
+        # majority_face_defect = 2.0 (same value as the C5/C6 cases, by Gauss-Bonnet).
         motl, arm_length, arm_elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps = structure.PleomorphicSurface(blocks=motl, block_definition=block_def)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         asm = ps.get_assembly_stats()
-        np.testing.assert_allclose(float(asm.iloc[0]["defect_charge"]), 2.0, atol=1e-9)
-
-    def test_d4_gives_ideals_4_4(self):
-        motl, block_def = _microtubule(n_pf=13, n_dimers=5)
-        ps = structure.PleomorphicSurface(blocks=motl, block_definition=block_def)
-        assert ps.ideal_degree == 4
-        assert ps.ideal_face_size == 4
-
-    def test_d5_no_derivation(self):
-        # n_sites=5 → not in {3,4,6} → ideals remain None
-        motl, arm_length, arm_elev = _soccer_ball(seed=0)
-        block_def_5 = structure.BlockDefinition.cyclic(5, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps = structure.PleomorphicSurface(blocks=motl, block_definition=block_def_5)
-        assert ps.ideal_degree is None
-        assert ps.ideal_face_size is None
-
-    def test_explicit_ideals_not_overridden(self):
-        motl, arm_length, arm_elev = _soccer_ball(seed=0)
-        block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
-        # Explicit values are kept
-        assert ps.ideal_degree == 3
-        assert ps.ideal_face_size == 6
+        np.testing.assert_allclose(float(asm.iloc[0]["majority_face_defect"]), 2.0, atol=1e-9)
 
 
 # =============================================================================
@@ -4165,7 +4272,7 @@ class TestMicrotubulePreset:
 
     def test_microtubule_connect_mismatch_y(self):
         motl, block_def = _microtubule(n_pf=13, n_dimers=5)
-        ps = structure.PleomorphicSurface(blocks=motl, block_definition=block_def)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         cs = ps.get_contact_stats()
         lat_r = cs[cs["site_type"] == "lateral_right"]["mismatch_y"].abs()
@@ -4255,29 +4362,21 @@ class TestFaceBlockIdsWalkOrder:
     def test_soccer_ball(self):
         motl, arm, elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         self._check_walk_order(ps)
 
     def test_geodesic(self):
         motl, block_def = _geodesic(edge=10.0, seed=0)
         ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            block_type_column="geom3",
-            ideal_degree=6, ideal_face_size=3,
+            block_layer=structure.BlockLayer(motl, block_def, block_type_column="geom3")
         )
         ps.connect(max_distance=3.0)
         self._check_walk_order(ps)
 
     def test_microtubule(self):
         motl, block_def = _microtubule(n_pf=13, n_dimers=20)
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=4, ideal_face_size=4,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         self._check_walk_order(ps)
 
@@ -4287,17 +4386,14 @@ class TestFaceBlockIdsWalkOrder:
         mask = (coords[:, 2] - 100.0) >= -5.0
         sub_motl = cryomotl.Motl(motl_full.df[mask].copy().reset_index(drop=True))
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=sub_motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(sub_motl, block_def))
         ps.connect(max_distance=4.0)
         self._check_walk_order(ps)
 
     def test_honeycomb(self):
         motl, arm = _honeycomb(edge=18.0, n=4, seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm, 0.0, 0.0])
-        ps = structure.PleomorphicSurface(blocks=motl, block_definition=block_def)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         self._check_walk_order(ps)
 
@@ -4311,8 +4407,7 @@ class TestHoneycombLattice:
     def psurf(self):
         motl, arm = _honeycomb(edge=18.0, n=4, seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm, 0.0, 0.0])
-        # No explicit ideals: derived from n_sites=3 gives (3, 6).
-        ps = structure.PleomorphicSurface(blocks=motl, block_definition=block_def)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         return ps
 
@@ -4345,7 +4440,7 @@ class TestHoneycombLattice:
 
     def test_defect_charge(self, psurf):
         asm = psurf.get_assembly_stats()
-        np.testing.assert_allclose(float(asm.iloc[0]["defect_charge"]), 0.0, atol=1e-9)
+        np.testing.assert_allclose(float(asm.iloc[0]["majority_face_defect"]), 0.0, atol=1e-9)
 
     def test_angle_deficit_sum(self, psurf):
         asm = psurf.get_assembly_stats()
@@ -4380,19 +4475,13 @@ class TestUnifyPolarityInvalidatesGraph:
         # Build an unflipped soccer ball and extract its face-polygon envelope.
         motl_clean, arm, elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps_clean = structure.PleomorphicSurface(
-            blocks=motl_clean, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl_clean, block_def))
         ps_clean.connect(max_distance=4.0)
         mesh = ps_clean.envelope_from_faces()
         # Create a new surface with the correct envelope + 8 specifically chosen
         # flipped blocks (distributed so no face has a flipped majority).
         motl_flipped, _, _ = _soccer_ball(seed=0, flipped=(3, 17, 25, 31, 40, 44, 52, 59))
-        ps = structure.PleomorphicSurface(
-            mesh, blocks=motl_flipped, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl_flipped, block_def))
         ps.connect(max_distance=4.0)
         ps.unify_polarity(reference="envelope")
         # Contact graph must be cleared after unify_polarity
@@ -4415,14 +4504,14 @@ class TestEnvelopeMethodsRequireEnvelope:
     def test_annotate_raises_without_envelope(self):
         motl, arm, elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(blocks=motl, block_definition=block_def)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         with pytest.raises(ValueError):
             ps.annotate_with_envelope()
 
     def test_unify_polarity_raises_without_envelope(self):
         motl, arm, elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(blocks=motl, block_definition=block_def)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         with pytest.raises(ValueError):
             ps.unify_polarity(reference="envelope")
 
@@ -4440,10 +4529,7 @@ class TestEnvelopeMethodsRequireEnvelopeAfterConnect:
     def ps_connected(self):
         motl, arm, elev = _soccer_ball(seed=0)
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=block_def,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
         return ps
 
@@ -4523,10 +4609,7 @@ class TestFromBlocks:
         motl, arm, elev = _soccer_ball(seed=0)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
 
-        ps_direct = structure.PleomorphicSurface(
-            blocks=motl, block_definition=bd,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps_direct = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
         ps_direct.connect(max_distance=4.0)
         asm_direct = ps_direct.get_assembly_stats()
 
@@ -4547,10 +4630,7 @@ class TestFromBlocks:
         motl, arm, elev = _soccer_ball(seed=0)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
 
-        ps_direct = structure.PleomorphicSurface(
-            blocks=motl, block_definition=bd,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps_direct = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
         ps_fb = structure.PleomorphicSurface.from_blocks(
             motl, symmetry="C3",
             site_shift=[arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))],
@@ -4574,9 +4654,7 @@ class TestFromBlocks:
 
         # Build direct version (geom3 column)
         ps_direct = structure.PleomorphicSurface(
-            blocks=geo_motl, block_definition=block_def_dict,
-            block_type_column="geom3",
-            ideal_degree=6, ideal_face_size=3,
+            block_layer=structure.BlockLayer(geo_motl, block_def_dict, block_type_column="geom3")
         )
         ps_direct.connect(max_distance=3.0)
         asm_direct = ps_direct.get_assembly_stats()
@@ -4593,10 +4671,6 @@ class TestFromBlocks:
         )
         ps_fb.connect(max_distance=3.0)
         asm_fb = ps_fb.get_assembly_stats()
-
-        # Check ideals derived from max n_sites = 6
-        assert ps_fb.ideal_degree == 6
-        assert ps_fb.ideal_face_size == 3
 
         # Check topology matches direct construction
         assert int(asm_fb.iloc[0]["n_blocks"]) == int(asm_direct.iloc[0]["n_blocks"])
@@ -4664,10 +4738,7 @@ class TestStoreBlockStat:
     def soccer_ps(self):
         motl, arm, elev = _soccer_ball(seed=0)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=motl, block_definition=bd,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
         ps.connect(max_distance=4.0)
         return ps
 
@@ -4704,7 +4775,7 @@ class TestBlocksIsCopied:
     def test_init_blocks_is_not_same_object(self):
         m, arm, elev = _soccer_ball(seed=0)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(blocks=m, block_definition=bd)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         assert ps.blocks is not m
         pd.testing.assert_frame_equal(ps.blocks.df.reset_index(drop=True),
                                       m.df.reset_index(drop=True))
@@ -4758,13 +4829,13 @@ class TestBlocksIsCopied:
             ps.blocks.df.reset_index(drop=True),
             geo_m.df.reset_index(drop=True),
         )
-        assert ps.ideal_degree == 6
-        assert ps.ideal_face_size == 3
+        # ideal_degree/ideal_face_size no longer exist; just check blocks were loaded
+        assert ps.blocks is not None
 
     def test_copy_constructor_deep_copies_blocks(self):
         m, arm, elev = _soccer_ball(seed=0)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(blocks=m, block_definition=bd)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         ps2 = structure.PleomorphicSurface(ps)
         assert ps2.blocks is not ps.blocks
         pd.testing.assert_frame_equal(ps2.blocks.df.reset_index(drop=True),
@@ -4775,7 +4846,7 @@ class TestBlocksIsCopied:
         em_file = str(tmp_path / "blocks.em")
         m.write_out(em_file)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(blocks=em_file, block_definition=bd)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(em_file, bd))
         assert ps.blocks is not m
         assert len(ps.blocks.df) == len(m.df)
 
@@ -4786,7 +4857,7 @@ class TestInputUntouchedByUnifyPolarity:
     def test_original_motl_unchanged(self):
         m, arm, elev = _soccer_ball(flipped=_SOCCER_FLIPPED)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(blocks=m, block_definition=bd)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         before = m.df.copy()
         ps.unify_polarity(20.0, "centroid")
         pd.testing.assert_frame_equal(m.df, before, check_like=False)
@@ -4795,7 +4866,7 @@ class TestInputUntouchedByUnifyPolarity:
         from scipy.spatial.transform import Rotation as srot
         m, arm, elev = _soccer_ball(flipped=_SOCCER_FLIPPED)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(blocks=m, block_definition=bd)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         before = m.df.copy()
         ps.unify_polarity(20.0, "centroid")
         angle_cols = ["phi", "theta", "psi"]
@@ -4810,7 +4881,7 @@ class TestInputUntouchedByUnifyPolarity:
     def test_internal_non_angle_columns_unchanged(self):
         m, arm, elev = _soccer_ball(flipped=_SOCCER_FLIPPED)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(blocks=m, block_definition=bd)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         before = m.df.copy()
         ps.unify_polarity(20.0, "centroid")
         other_cols = [c for c in before.columns if c not in ("phi", "theta", "psi")]
@@ -4823,7 +4894,7 @@ class TestInputUntouchedByUnifyPolarity:
     def test_internal_index_and_row_order_unchanged(self):
         m, arm, elev = _soccer_ball(flipped=_SOCCER_FLIPPED)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(blocks=m, block_definition=bd)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         before_index = m.df.index.tolist()
         before_subtomo = m.df["subtomo_id"].tolist()
         ps.unify_polarity(20.0, "centroid")
@@ -4838,10 +4909,7 @@ class TestInputUntouchedByStores:
     def connected_ps(self):
         m, arm, elev = _soccer_ball(seed=0)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=m, block_definition=bd,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         ps.connect(max_distance=4.0)
         return ps, m
 
@@ -4877,10 +4945,7 @@ class TestGettersLeaveStateUnchanged:
     def test_getters_leave_original_and_blocks_unchanged(self):
         m, arm, elev = _soccer_ball(seed=0)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=m, block_definition=bd,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         ps.connect(max_distance=4.0)
         before_m = m.df.copy()
         before_blocks = ps.blocks.df.copy()
@@ -4900,10 +4965,7 @@ class TestGetBlocksAsMotl:
     def unified_ps(self):
         m, arm, elev = _soccer_ball(flipped=_SOCCER_FLIPPED)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=m, block_definition=bd,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         ps.connect(max_distance=4.0)
         ps.store_block_stats({"degree": "geom4"})
         ps.unify_polarity(20.0, "centroid")
@@ -4937,10 +4999,7 @@ class TestGetBlocksRoundTrip:
     def test_round_trip_soccer_ball_topology(self):
         m, arm, elev = _soccer_ball(flipped=_SOCCER_FLIPPED)
         bd = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
-        ps = structure.PleomorphicSurface(
-            blocks=m, block_definition=bd,
-            ideal_degree=3, ideal_face_size=6,
-        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         ps.connect(max_distance=4.0)
         ps.unify_polarity(20.0, "centroid")
 
@@ -4966,15 +5025,13 @@ class TestBlockDefinitionCyclicSiteShift:
     """Phase 13 — site_shift replaces length/azimuth/elevation in cyclic()."""
 
     def test_site_vectors_c3_minus_x(self):
-        """cyclic(3, [-5, 0, 0]) produces the expected three site vectors."""
+        """cyclic(3, [-5, 0, 0]) stores the shift; get_sites_as_motl expands to 3 sites."""
         bd = structure.BlockDefinition.cyclic(3, [-5.0, 0.0, 0.0])
         vecs = bd.site_vectors()
-        expected = np.array([
-            [-5.0,  0.0,    0.0],
-            [ 2.5, -4.330,  0.0],
-            [ 2.5,  4.330,  0.0],
-        ])
-        np.testing.assert_allclose(vecs, expected, atol=1e-3)
+        # One shift stored; the three rotated positions come from split_in_asymmetric_subunits.
+        assert vecs.shape == (1, 3)
+        np.testing.assert_allclose(vecs[0], [-5.0, 0.0, 0.0], atol=1e-12)
+        assert bd.effective_n_sites == 3
 
     def test_get_sites_as_motl_positions_equal_c_plus_R_apply_vk(self):
         """get_sites_as_motl places site k at round(c + R.apply(vector_k)) for each block."""
@@ -4992,7 +5049,7 @@ class TestBlockDefinitionCyclicSiteShift:
         m = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
 
         bd = structure.BlockDefinition.cyclic(3, [-5.0, 0.0, 0.0])
-        ps = structure.PleomorphicSurface(blocks=m, block_definition=bd)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(m, bd))
         sites = ps.get_sites_as_motl()
 
         vecs = bd.site_vectors()
@@ -5010,7 +5067,7 @@ class TestBlockDefinitionCyclicSiteShift:
                 expected = np.where(expected_f >= 0,
                                     np.floor(expected_f + 0.5),
                                     -np.floor(-expected_f + 0.5))
-                mask = (sites.df["object_id"] == block_id) & (sites.df["geom1"] == float(k_idx + 1))
+                mask = (sites.df["geom3"] == block_id) & (sites.df["geom1"] == float(k_idx + 1))
                 site_rows = sites.df[mask]
                 assert len(site_rows) == 1, f"block {block_id} site {k_idx + 1}: {len(site_rows)} rows"
                 actual_pos = np.array([site_rows.iloc[0]["x"], site_rows.iloc[0]["y"], site_rows.iloc[0]["z"]])
@@ -5018,3 +5075,2102 @@ class TestBlockDefinitionCyclicSiteShift:
                     actual_pos, expected, atol=1e-6,
                     err_msg=f"block {block_id} site {k_idx + 1}",
                 )
+
+
+# =============================================================================
+# NPC multi-ring redesign tests
+# =============================================================================
+
+
+def _make_ring_motl(n_subunits: int = 8, tomo_id: float = 1.0, object_id: float = 1.0,
+                    center=(50.0, 50.0, 50.0), radius: float = 50.0, z_offset: float = 0.0,
+                    phi_offset: float = 0.0, start_subtomo: int = 1) -> cryomotl.Motl:
+    """Synthetic ring motl: particles on a circle, orientations pointing outward."""
+    rows = []
+    cx, cy, cz = center
+    for s in range(n_subunits):
+        theta = 2 * np.pi * s / n_subunits
+        rows.append({
+            "score": 0.0, "geom1": float(s + 1), "geom2": float(s + 1),
+            "subtomo_id": float(start_subtomo + s),
+            "tomo_id": tomo_id,
+            "object_id": object_id,
+            "subtomo_mean": 0.0,
+            "x": cx + radius * np.cos(theta),
+            "y": cy + radius * np.sin(theta),
+            "z": cz + z_offset,
+            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+            "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+            "phi": float(np.degrees(theta)) + phi_offset,
+            "psi": 0.0, "theta": 0.0, "class": 1.0,
+        })
+    m = cryomotl.Motl()
+    m.df = pd.DataFrame(rows)
+    return m
+
+
+# ── cluster_subunits_to_rings has no ring_column parameter ───────────────────
+
+
+def test_cluster_subunits_to_rings_no_ring_column_param():
+    """ring_column was removed; cluster_subunits_to_rings must not accept that kwarg."""
+    import inspect
+    sig = inspect.signature(structure.NPC.cluster_subunits_to_rings)
+    assert "ring_column" not in sig.parameters, (
+        "ring_column should not exist on cluster_subunits_to_rings"
+    )
+
+
+def test_merge_rings_no_ring_column_param():
+    """ring_column was removed from merge_rings too."""
+    import inspect
+    sig = inspect.signature(structure.NPC.merge_rings)
+    assert "ring_column" not in sig.parameters, (
+        "ring_column should not exist on merge_rings"
+    )
+
+
+# ── merge_rings no longer crashes with get_all_pairs ─────────────────────────
+
+
+def test_merge_rings_no_arange_crash():
+    """merge_rings must not raise ValueError from get_all_pairs(np.arange(...))."""
+    cr_motl = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir_motl = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0, start_subtomo=100)
+    out = structure.NPC.merge_rings([cr_motl, ir_motl], npc_radius=50.0, distance_threshold=200.0)
+    assert isinstance(out, list) and len(out) == 2
+
+
+# ── NPC accepts ListLike[MotlSource] ─────────────────────────────────────────
+
+
+def test_npc_single_motl_is_merged_by_default():
+    """NPC with a single motl is considered merged (_rings_merged=True)."""
+    m = _make_ring_motl()
+    npc = structure.NPC(m)
+    assert npc._rings_merged is True
+    assert len(npc._ring_motls) == 1
+
+
+def test_npc_two_motls_is_not_merged():
+    """NPC with two motls starts unmerged (_rings_merged=False)."""
+    cr = _make_ring_motl(n_subunits=4, start_subtomo=1)
+    ir = _make_ring_motl(n_subunits=4, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    assert npc._rings_merged is False
+    assert len(npc._ring_motls) == 2
+
+
+def test_npc_tuple_of_motls_accepted():
+    """Tuple input is also accepted via ListLike normalisation."""
+    cr = _make_ring_motl(n_subunits=4, start_subtomo=1)
+    ir = _make_ring_motl(n_subunits=4, start_subtomo=100)
+    npc = structure.NPC((cr, ir))
+    assert len(npc._ring_motls) == 2
+
+
+# ── per_ring dispatch ────────────────────────────────────────────────────────
+
+
+def test_per_ring_single_delegates_directly():
+    """per_ring on a single-motl NPC returns result without ring column."""
+    m = _make_ring_motl()
+    npc = structure.NPC(m)
+    result = npc.per_ring("occupancy")
+    assert isinstance(result, pd.DataFrame)
+    assert structure.NPC._ring_column not in result.columns
+
+
+def test_per_ring_multi_returns_dataframe_with_ring_column():
+    """per_ring on a multi-motl NPC concatenates DataFrames and adds ring column."""
+    cr = _make_ring_motl(n_subunits=4, start_subtomo=1)
+    ir = _make_ring_motl(n_subunits=4, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    result = npc.per_ring("occupancy")
+    assert isinstance(result, pd.DataFrame)
+    assert structure.NPC._ring_column in result.columns
+    assert set(result[structure.NPC._ring_column].unique()) == {1.0, 2.0}
+
+
+def test_npc_occupancy_after_merge_has_ring_column():
+    """After merge(), occupancy() reports per (tomo_id, object_id, ring) row."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    assert npc._rings_merged is True
+    occ = npc.occupancy()
+    assert structure.NPC._ring_column in occ.columns
+    assert len(occ) >= 2
+
+
+# ── unify_nn_orientations has ring_index parameter ───────────────────────────
+
+
+def test_unify_nn_orientations_accepts_ring_index():
+    """ring_index parameter must be present in the unify_nn_orientations signature."""
+    import inspect
+    sig = inspect.signature(structure.NPC.unify_nn_orientations)
+    assert "ring_index" in sig.parameters
+    assert sig.parameters["ring_index"].default == 0
+
+
+def test_unify_nn_orientations_ring_index_updates_correct_ring():
+    """Calling unify_nn_orientations(ring_index=1) updates _ring_motls[1], not [0]."""
+    cr = _make_ring_motl(n_subunits=4, start_subtomo=1)
+    ir = _make_ring_motl(n_subunits=4, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    cr_hash_before = npc._ring_motls[0].df["phi"].sum()
+    npc.unify_nn_orientations(dist_threshold=500.0, ring_index=1)
+    cr_hash_after = npc._ring_motls[0].df["phi"].sum()
+    assert np.isclose(cr_hash_before, cr_hash_after), (
+        "ring_index=1 should not modify _ring_motls[0]"
+    )
+
+
+def test_unify_nn_orientations_raises_post_merge_nonzero_ring_index():
+    """Q3: Passing ring_index != 0 after merge() raises ValueError."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    with pytest.raises(ValueError, match="ring_index=1 is not valid after merge"):
+        npc.unify_nn_orientations(ring_index=1)
+
+
+# ── merge() stamps ring column and sets _rings_merged ────────────────────────
+
+
+def test_merge_stamps_ring_column():
+    """After merge(), _ring_column (geom3) is populated in self.motl."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    assert structure.NPC._ring_column in npc.motl.df.columns
+    assert set(npc.motl.df[structure.NPC._ring_column].unique()) == {1.0, 2.0}
+
+
+def test_merge_sets_rings_merged():
+    """merge() sets _rings_merged to True."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    assert npc._rings_merged is True
+
+
+def test_merge_is_idempotent_on_single_motl():
+    """merge() on an already-merged NPC is a no-op."""
+    m = _make_ring_motl()
+    npc = structure.NPC(m)
+    motl_before = npc.motl.df.copy()
+    npc.merge(npc_radius=50.0)
+    pd.testing.assert_frame_equal(npc.motl.df.reset_index(drop=True),
+                                   motl_before.reset_index(drop=True))
+
+
+def test_merge_ring_group_columns_extended():
+    """After merge(), _ring_group_columns includes the ring column."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    assert structure.NPC._ring_column in npc._ring_group_columns
+
+
+def test_merge_unifies_object_id_for_same_pore():
+    """Rings from the same pore share object_id after merge with large threshold."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    merged_df = npc.motl.df
+    cr_ring = merged_df[merged_df[structure.NPC._ring_column] == 1.0]
+    ir_ring = merged_df[merged_df[structure.NPC._ring_column] == 2.0]
+    assert cr_ring["object_id"].nunique() == 1
+    assert ir_ring["object_id"].nunique() == 1
+    assert cr_ring["object_id"].iloc[0] == ir_ring["object_id"].iloc[0]
+
+
+def test_merge_rings_no_longer_uses_object_id_as_ring_id():
+    """object_id identifies pore; _ring_column identifies which ring."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    ring_col_values = set(npc.motl.df[structure.NPC._ring_column].unique())
+    object_id_values = set(npc.motl.df["object_id"].unique())
+    # ring_column encodes ring identity (1 and 2 for two rings)
+    assert ring_col_values == {1.0, 2.0}
+    # object_id encodes pore identity — all particles from both rings share one pore id
+    assert len(object_id_values) == 1
+
+
+# ── ring_column constructor parameter ────────────────────────────────────────
+
+
+def test_npc_ring_column_default_is_geom3():
+    """Constructor default for ring_column is geom3 (class attribute value)."""
+    npc = structure.NPC(_make_ring_motl())
+    assert npc._ring_column == "geom3"
+
+
+def test_npc_ring_column_custom_overrides_default():
+    """Passing ring_column='geom4' stores that value on the instance."""
+    npc = structure.NPC(_make_ring_motl(), ring_column="geom4")
+    assert npc._ring_column == "geom4"
+
+
+def test_npc_ring_column_custom_used_in_merge():
+    """A custom ring_column is stamped by merge() into the specified column."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir], ring_column="geom4")
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    assert "geom4" in npc.motl.df.columns
+    assert set(npc.motl.df["geom4"].unique()) == {1.0, 2.0}
+    assert "geom3" not in npc.motl.df.columns or (npc.motl.df["geom3"] == 0.0).all()
+
+
+# =============================================================================
+# NPC multi-ring per-ring operations, merge, and results
+# =============================================================================
+
+
+# ── _DISPATCH_PER_RING and routing-wrapper dispatch ──────────────────────────
+
+
+def test_npc_dispatch_per_ring_attribute_exists():
+    """NPC._DISPATCH_PER_RING exists and contains the expected instance methods."""
+    assert hasattr(structure.NPC, "_DISPATCH_PER_RING")
+    dp = structure.NPC._DISPATCH_PER_RING
+    for name in (
+        "assign_subunit_order",
+        "circumference",
+        "central_angles",
+        "get_object_stats",
+        "occupancy",
+        "merge_subunits",
+        "create_affiliation",
+    ):
+        assert name in dp, f"{name!r} missing from NPC._DISPATCH_PER_RING"
+    # get_centers_as_motl is a @staticmethod on NPC and does not dispatch on self.motl
+    assert "get_centers_as_motl" not in dp
+
+
+def test_npc_direct_call_dispatches_per_ring_for_multi():
+    """Direct call to occupancy() on multi-ring NPC goes through per_ring."""
+    cr = _make_ring_motl(n_subunits=4, start_subtomo=1)
+    ir = _make_ring_motl(n_subunits=4, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    result = npc.occupancy()  # routing guard dispatches via per_ring
+    assert isinstance(result, pd.DataFrame)
+    assert structure.NPC._ring_column in result.columns
+    assert set(result[structure.NPC._ring_column].unique()) == {1.0, 2.0}
+
+
+def test_npc_direct_call_single_no_ring_column():
+    """On a single-motl NPC, direct method call returns result without ring column."""
+    m = _make_ring_motl(n_subunits=4)
+    npc = structure.NPC(m)
+    result = npc.occupancy()
+    assert isinstance(result, pd.DataFrame)
+    assert structure.NPC._ring_column not in result.columns
+
+
+def test_npc_three_ring_direct_call_covers_all_rings():
+    """assign_subunit_order() dispatched on 3-ring NPC updates all three ring motls."""
+    r0 = _make_ring_motl(n_subunits=8, start_subtomo=1)
+    r1 = _make_ring_motl(n_subunits=8, start_subtomo=100)
+    r2 = _make_ring_motl(n_subunits=8, start_subtomo=200)
+    for m in (r0, r1, r2):
+        m.df["geom1"] = 0.0  # clear ordering
+    npc = structure.NPC([r0, r1, r2])
+    npc.assign_subunit_order()
+    for idx, rm in enumerate(npc._ring_motls):
+        assert (rm.df["geom1"] != 0).any(), f"Ring {idx} still unordered after dispatch"
+
+
+def test_npc_occupancy_multi_ring_row_count():
+    """Three-ring NPC returns 3 occupancy rows (one per ring) not 1."""
+    r0 = _make_ring_motl(n_subunits=8, start_subtomo=1)
+    r1 = _make_ring_motl(n_subunits=8, start_subtomo=100)
+    r2 = _make_ring_motl(n_subunits=8, start_subtomo=200)
+    npc = structure.NPC([r0, r1, r2])
+    result = npc.occupancy()
+    assert len(result) == 3, f"Expected 3 rows (one per ring), got {len(result)}"
+
+
+# ── get_object_stats does not crash on NPC ────────────────────────────────────
+
+
+def test_npc_get_object_stats_single_ring_no_error():
+    """get_object_stats on single-ring NPC completes without AttributeError."""
+    m = _make_ring_motl(n_subunits=8)
+    npc = structure.NPC(m)
+    stats = npc.get_object_stats()
+    assert isinstance(stats, pd.DataFrame)
+    assert len(stats) >= 1
+
+
+def test_npc_get_object_stats_multi_ring_has_ring_column():
+    """get_object_stats on multi-ring NPC returns DataFrame with ring column."""
+    cr = _make_ring_motl(n_subunits=4, start_subtomo=1)
+    ir = _make_ring_motl(n_subunits=4, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    stats = npc.get_object_stats()
+    assert isinstance(stats, pd.DataFrame)
+    assert structure.NPC._ring_column in stats.columns
+    assert set(stats[structure.NPC._ring_column].unique()) == {1.0, 2.0}
+
+
+def test_npc_get_object_stats_three_ring_row_count():
+    """Three-ring NPC get_object_stats returns 3 rows (one per ring)."""
+    r0 = _make_ring_motl(n_subunits=4, start_subtomo=1)
+    r1 = _make_ring_motl(n_subunits=4, start_subtomo=100)
+    r2 = _make_ring_motl(n_subunits=4, start_subtomo=200)
+    npc = structure.NPC([r0, r1, r2])
+    stats = npc.get_object_stats()
+    assert len(stats) == 3, f"Expected 3 rows for 3 rings, got {len(stats)}"
+
+
+def test_npc_get_object_stats_no_spacing_columns():
+    """Pre-merge NPC.get_object_stats dispatches per-ring and has no spacing columns."""
+    cr = _make_ring_motl(n_subunits=4, start_subtomo=1)
+    ir = _make_ring_motl(n_subunits=4, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    # Pre-merge: get_object_stats routes through per_ring → CnComplex.get_object_stats
+    # per ring, which never calls ring_spacing or inter_ring_twist.
+    stats = npc.get_object_stats()
+    assert "spacing_0_1" not in stats.columns
+    assert "inter_ring_twist" not in stats.columns
+
+
+# ── merge is gui_exposed and has an ordering gate ────────────────────────────
+
+
+def test_npc_merge_instance_method_is_gui_exposed():
+    """NPC.merge() is discoverable via @gui_exposed."""
+    from cryocat.app import discovery
+    entries = {e.fn.__name__: e for e in discovery.entries_for_class(structure.NPC)}
+    assert "merge" in entries, "merge not discoverable via gui_exposed"
+    e = entries["merge"]
+    assert e.label == "Merge"
+    assert e.group == "NPC workflow"
+    assert e.returns == "motl"
+
+
+def test_npc_merge_raises_if_ring_unordered():
+    """merge() raises ValueError when any ring has all-zero order_column."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    ir.df["geom1"] = 0.0  # ring 1 not ordered
+    npc = structure.NPC([cr, ir])
+    with pytest.raises(ValueError, match="Ring 1.*subunit ordering"):
+        npc.merge(npc_radius=50.0, distance_threshold=200.0)
+
+
+def test_npc_merge_raises_names_remedy_method():
+    """ValueError from merge names 'assign_subunit_order' as the remedy."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    cr.df["geom1"] = 0.0  # ring 0 not ordered
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    with pytest.raises(ValueError, match="assign_subunit_order"):
+        npc.merge(npc_radius=50.0, distance_threshold=200.0)
+
+
+def test_npc_merge_passes_when_all_rings_ordered():
+    """merge() succeeds when all rings have non-zero order column."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    # _make_ring_motl sets geom1 to 1..n_subunits — ordering gate should pass
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    assert npc._rings_merged is True
+
+
+# ── split_by_ring method ──────────────────────────────────────────────────────
+
+
+def test_split_by_ring_no_ring_column_returns_single():
+    """split_by_ring on a DataFrame without ring column returns single-element list."""
+    m = _make_ring_motl(n_subunits=4)
+    npc = structure.NPC(m)
+    df = pd.DataFrame({"a": [1, 2, 3]})
+    parts = npc.split_by_ring(df)
+    assert len(parts) == 1
+    assert len(parts[0]) == 3
+
+
+def test_split_by_ring_splits_correctly():
+    """split_by_ring on per-ring result produces one subset per ring."""
+    cr = _make_ring_motl(n_subunits=4, start_subtomo=1)
+    ir = _make_ring_motl(n_subunits=4, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    result = npc.occupancy()  # dispatches per_ring, has ring column
+    parts = npc.split_by_ring(result)
+    assert len(parts) == 2
+    assert (parts[0][structure.NPC._ring_column] == 1.0).all()
+    assert (parts[1][structure.NPC._ring_column] == 2.0).all()
+
+
+def test_split_by_ring_three_rings():
+    """split_by_ring on 3-ring result produces 3 subsets."""
+    r0 = _make_ring_motl(n_subunits=4, start_subtomo=1)
+    r1 = _make_ring_motl(n_subunits=4, start_subtomo=100)
+    r2 = _make_ring_motl(n_subunits=4, start_subtomo=200)
+    npc = structure.NPC([r0, r1, r2])
+    result = npc.occupancy()
+    parts = npc.split_by_ring(result)
+    assert len(parts) == 3
+    for idx, part in enumerate(parts):
+        assert (part[structure.NPC._ring_column] == float(idx + 1)).all()
+
+
+def test_split_by_ring_post_merge_uses_ring_column():
+    """split_by_ring post-merge correctly partitions by ring column value."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    stats = npc.get_object_stats()  # runs on merged motl, ring col present
+    parts = npc.split_by_ring(stats)
+    assert len(parts) == 2
+
+
+# ── NPC.ring_spacing ─────────────────────────────────────────────────────────
+
+
+def test_npc_ring_spacing_raises_before_merge():
+    """ring_spacing raises ValueError when called before merge()."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    with pytest.raises(ValueError, match="merge"):
+        npc.ring_spacing()
+
+
+def test_npc_ring_spacing_returns_correct_columns():
+    """ring_spacing on merged 2-ring NPC returns spacing_1_2 column."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 55.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    sp = npc.ring_spacing()
+    assert isinstance(sp, pd.DataFrame)
+    assert "tomo_id" in sp.columns
+    assert "object_id" in sp.columns
+    assert "spacing_1_2" in sp.columns
+    assert len(sp) >= 1
+    # Euclidean distance between centres at z=50 and z=55 is ~5 voxels
+    assert sp["spacing_1_2"].iloc[0] > 0
+
+
+def test_npc_ring_spacing_three_rings_has_two_pair_columns():
+    """ring_spacing on merged 3-ring NPC returns spacing_1_2 and spacing_2_3."""
+    r0 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 45.0), object_id=1.0, start_subtomo=1)
+    r1 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    r2 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 55.0), object_id=3.0, start_subtomo=200)
+    npc = structure.NPC([r0, r1, r2])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    sp = npc.ring_spacing()
+    assert "spacing_1_2" in sp.columns
+    assert "spacing_2_3" in sp.columns
+    assert "spacing_0_1" not in sp.columns  # only adjacent 1-based pairs
+
+
+def test_npc_get_object_stats_post_merge_has_spacing_columns():
+    """post-merge multi-ring NPC.get_object_stats includes spacing_1_2."""
+    cr = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 55.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    stats = npc.get_object_stats()
+    assert isinstance(stats, pd.DataFrame)
+    assert "spacing_1_2" in stats.columns
+    assert "inter_ring_twist" not in stats.columns  # DnComplex only
+
+
+# =============================================================================
+# Block expansion redesign tests
+# =============================================================================
+
+
+def _make_block_motl(n: int = 4, seed: int = 0) -> cryomotl.Motl:
+    """Synthetic block motl with random positions and orientations."""
+    rng = np.random.default_rng(seed)
+    data = {c: np.zeros(n) for c in cryomotl.Motl.motl_columns}
+    data["subtomo_id"] = np.arange(1, n + 1, dtype=float)
+    data["tomo_id"] = np.ones(n, dtype=float)
+    data["x"] = rng.uniform(50.0, 150.0, n)
+    data["y"] = rng.uniform(50.0, 150.0, n)
+    data["z"] = rng.uniform(50.0, 150.0, n)
+    data["phi"] = rng.uniform(-180.0, 180.0, n)
+    data["theta"] = rng.uniform(0.0, 180.0, n)
+    data["psi"] = rng.uniform(-180.0, 180.0, n)
+    return cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
+
+
+class TestCyclicStorageShape:
+    """cyclic() stores symmetry + single shift; no rotation enumeration."""
+
+    def test_cyclic_6_stores_one_site(self):
+        bd = structure.BlockDefinition.cyclic(6, [-5.0, 0.0, 0.0])
+        assert bd.n_sites == 1
+
+    def test_cyclic_5_stores_one_site(self):
+        bd = structure.BlockDefinition.cyclic(5, [-4.0, 0.0, 0.0])
+        assert bd.n_sites == 1
+
+    def test_cyclic_stores_shift_unrotated(self):
+        shift = [-5.0, 0.0, 0.0]
+        bd = structure.BlockDefinition.cyclic(6, shift)
+        np.testing.assert_allclose(bd.sites[0].vector, shift, atol=1e-12)
+
+
+class TestSymmetryField:
+    """symmetry field replaces fold; effective_n_sites returns cyclic order."""
+
+    def test_cyclic_symmetry_field_c6(self):
+        bd = structure.BlockDefinition.cyclic(6, [-5.0, 0.0, 0.0])
+        assert bd.symmetry == "C6"
+
+    def test_cyclic_symmetry_field_c5(self):
+        bd = structure.BlockDefinition.cyclic(5, [-4.0, 0.0, 0.0])
+        assert bd.symmetry == "C5"
+
+    def test_cyclic_symmetry_from_string(self):
+        bd = structure.BlockDefinition.cyclic("C8", [-3.0, 0.0, 0.0])
+        assert bd.symmetry == "C8"
+
+    def test_effective_n_sites_cyclic_6(self):
+        bd = structure.BlockDefinition.cyclic(6, [-5.0, 0.0, 0.0])
+        assert bd.effective_n_sites == 6
+
+    def test_effective_n_sites_cyclic_5(self):
+        bd = structure.BlockDefinition.cyclic(5, [-4.0, 0.0, 0.0])
+        assert bd.effective_n_sites == 5
+
+    def test_effective_n_sites_noncyclic_equals_n_sites(self):
+        bd = structure.BlockDefinition.microtubule(5.0, 3.0)
+        assert bd.effective_n_sites == bd.n_sites == 4
+
+    def test_no_fold_field(self):
+        bd = structure.BlockDefinition.cyclic(6, [-5.0, 0.0, 0.0])
+        assert not hasattr(bd, "fold")
+
+    def test_noncyclic_symmetry_is_none(self):
+        bd = structure.BlockDefinition.microtubule(5.0, 3.0)
+        assert bd.symmetry is None
+
+
+class TestSixSitesSplitAsymmetricSubunits:
+    """get_sites_as_motl output matches split_in_asymmetric_subunits directly."""
+
+    def _build_ps(self, n: int, shift: list[float]) -> tuple:
+        blocks = _make_block_motl(n=4, seed=7)
+        bd = structure.BlockDefinition.cyclic(n, shift)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks, bd))
+        return ps, blocks, bd
+
+    def test_c6_site_count(self):
+        ps, blocks, _ = self._build_ps(6, [-5.0, 0.0, 0.0])
+        sites = ps.get_sites_as_motl()
+        assert len(sites.df) == 4 * 6
+
+    def test_c5_site_count(self):
+        ps, blocks, _ = self._build_ps(5, [-4.0, 0.0, 0.0])
+        sites = ps.get_sites_as_motl()
+        assert len(sites.df) == 4 * 5
+
+    def test_c6_positions_match_split(self):
+        shift = [-5.0, 0.0, 0.0]
+        blocks = _make_block_motl(n=3, seed=11)
+        bd = structure.BlockDefinition.cyclic(6, shift)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks, bd))
+        sites = ps.get_sites_as_motl()
+
+        ref = blocks.split_in_asymmetric_subunits(6, shift)
+        # ref geom2 = 1-based CCW index, ref geom5 = original subtomo_id
+        # sites geom3 = block subtomo_id (block_id_column default), sites geom1 = site index
+
+        for _, ref_row in ref.df.iterrows():
+            block_id = ref_row["geom5"]
+            site_idx = ref_row["geom2"]
+            mask = (sites.df["geom3"] == block_id) & (sites.df["geom1"] == site_idx)
+            matched = sites.df[mask]
+            assert len(matched) == 1, f"block {block_id} site {site_idx}: {len(matched)} rows"
+            np.testing.assert_allclose(
+                matched.iloc[0][["x", "y", "z"]].values.astype(float),
+                np.array([ref_row["x"], ref_row["y"], ref_row["z"]], dtype=float),
+                atol=1e-6,
+            )
+
+    def test_c5_positions_match_split(self):
+        shift = [-4.0, 0.0, 0.0]
+        blocks = _make_block_motl(n=3, seed=13)
+        bd = structure.BlockDefinition.cyclic(5, shift)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks, bd))
+        sites = ps.get_sites_as_motl()
+
+        ref = blocks.split_in_asymmetric_subunits(5, shift)
+        for _, ref_row in ref.df.iterrows():
+            block_id = ref_row["geom5"]
+            site_idx = ref_row["geom2"]
+            mask = (sites.df["geom3"] == block_id) & (sites.df["geom1"] == site_idx)
+            matched = sites.df[mask]
+            assert len(matched) == 1
+            np.testing.assert_allclose(
+                matched.iloc[0][["x", "y", "z"]].values.astype(float),
+                np.array([ref_row["x"], ref_row["y"], ref_row["z"]], dtype=float),
+                atol=1e-6,
+            )
+
+
+class TestMixedBlockTypes:
+    """dict block_definition handles hexamers + pentamers; unknown type raises."""
+
+    def _mixed_motl(self, n_hex: int = 3, n_pent: int = 2) -> cryomotl.Motl:
+        rng = np.random.default_rng(42)
+        n = n_hex + n_pent
+        data = {c: np.zeros(n) for c in cryomotl.Motl.motl_columns}
+        data["subtomo_id"] = np.arange(1, n + 1, dtype=float)
+        data["tomo_id"] = np.ones(n, dtype=float)
+        data["x"] = rng.uniform(50.0, 150.0, n)
+        data["y"] = rng.uniform(50.0, 150.0, n)
+        data["z"] = rng.uniform(50.0, 150.0, n)
+        data["phi"] = rng.uniform(-180.0, 180.0, n)
+        data["theta"] = rng.uniform(0.0, 180.0, n)
+        data["psi"] = rng.uniform(-180.0, 180.0, n)
+        data["class"] = [6.0] * n_hex + [5.0] * n_pent
+        return cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
+
+    def test_mixed_total_site_count(self):
+        n_hex, n_pent = 3, 2
+        blocks = self._mixed_motl(n_hex, n_pent)
+        bd_dict = {
+            6.0: structure.BlockDefinition.cyclic(6, [-5.0, 0.0, 0.0]),
+            5.0: structure.BlockDefinition.cyclic(5, [-4.0, 0.0, 0.0]),
+        }
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks, bd_dict))
+        sites = ps.get_sites_as_motl()
+        assert len(sites.df) == n_hex * 6 + n_pent * 5
+
+    def test_hexamer_sites_at_correct_radius(self):
+        blocks = self._mixed_motl(n_hex=2, n_pent=0)
+        r = 5.0
+        bd_dict = {6.0: structure.BlockDefinition.cyclic(6, [-r, 0.0, 0.0])}
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks, bd_dict))
+        sites = ps.get_sites_as_motl()
+        # Each site is R.apply([-r, 0, 0]) away from its block; distance in plane ~ r
+        # Check all object_id entries exist (12 rows)
+        assert len(sites.df) == 12
+
+    def test_unknown_block_type_raises(self):
+        blocks = self._mixed_motl(n_hex=2, n_pent=1)
+        # dict covers only class=6 — class=5 blocks are unknown
+        bd_dict = {6.0: structure.BlockDefinition.cyclic(6, [-5.0, 0.0, 0.0])}
+        with pytest.raises(ValueError, match="without a BlockDefinition"):
+            structure.BlockLayer(blocks, bd_dict)
+
+    def test_pentamer_site_count_matches_expected_radius(self):
+        """Pentamers get 5 sites; hexamers get 6 — checked per-class."""
+        n_hex, n_pent = 2, 3
+        blocks = self._mixed_motl(n_hex, n_pent)
+        bd_dict = {
+            6.0: structure.BlockDefinition.cyclic(6, [-5.0, 0.0, 0.0]),
+            5.0: structure.BlockDefinition.cyclic(5, [-4.0, 0.0, 0.0]),
+        }
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks, bd_dict))
+        sites = ps.get_sites_as_motl()
+        # object_id for hexamers are subtomo_ids 1..n_hex
+        hex_ids = set(blocks.df[blocks.df["class"] == 6.0]["subtomo_id"].tolist())
+        pent_ids = set(blocks.df[blocks.df["class"] == 5.0]["subtomo_id"].tolist())
+        hex_rows = sites.df[sites.df["geom3"].isin(hex_ids)]   # geom3 = block_id_column
+        pent_rows = sites.df[sites.df["geom3"].isin(pent_ids)]
+        assert len(hex_rows) == n_hex * 6
+        assert len(pent_rows) == n_pent * 5
+
+
+class TestCustomColumnNames:
+    """block_id_column, site_index_column, site_type_column are constructor params."""
+
+    def test_custom_columns_appear_in_sites_output(self):
+        blocks = _make_block_motl(n=2, seed=3)
+        bd = structure.BlockDefinition.cyclic(3, [-5.0, 0.0, 0.0])
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(
+                blocks, bd,
+                block_id_column="geom3",
+                site_index_column="geom4",
+                site_type_column="geom5",
+            )
+        )
+        sites = ps.get_sites_as_motl()
+        assert "geom3" in sites.df.columns
+        assert "geom4" in sites.df.columns
+        assert "geom5" in sites.df.columns
+
+    def test_custom_block_id_holds_source_subtomo_id(self):
+        blocks = _make_block_motl(n=2, seed=3)
+        bd = structure.BlockDefinition.cyclic(3, [-5.0, 0.0, 0.0])
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(
+                blocks, bd,
+                block_id_column="geom3",
+                site_index_column="geom4",
+                site_type_column="geom5",
+            )
+        )
+        sites = ps.get_sites_as_motl()
+        assert set(sites.df["geom3"].unique()) == set(blocks.df["subtomo_id"].unique())
+
+    def test_custom_site_index_is_one_based(self):
+        blocks = _make_block_motl(n=2, seed=5)
+        bd = structure.BlockDefinition.cyclic(4, [-5.0, 0.0, 0.0])
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(blocks, bd, site_index_column="geom4")
+        )
+        sites = ps.get_sites_as_motl()
+        assert set(sites.df["geom4"].unique()) == {1.0, 2.0, 3.0, 4.0}
+
+    def test_default_columns_still_work(self):
+        blocks = _make_block_motl(n=2, seed=9)
+        bd = structure.BlockDefinition.cyclic(6, [-5.0, 0.0, 0.0])
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks, bd))
+        assert ps.block_id_column == "geom3"
+        assert ps.site_index_column == "geom1"
+        assert ps.site_type_column == "geom2"
+        sites = ps.get_sites_as_motl()
+        assert "geom3" in sites.df.columns   # block id
+        assert "object_id" in sites.df.columns  # affiliation (propagated from blocks)
+        assert "geom1" in sites.df.columns
+        assert "geom2" in sites.df.columns
+
+
+class TestMicrotubuleFourTypedSites:
+    """microtubule() still produces 4 typed sites; symmetry is None."""
+
+    def test_n_sites_is_4(self):
+        bd = structure.BlockDefinition.microtubule(5.0, 3.0)
+        assert bd.n_sites == 4
+
+    def test_effective_n_sites_is_4(self):
+        bd = structure.BlockDefinition.microtubule(5.0, 3.0)
+        assert bd.effective_n_sites == 4
+
+    def test_symmetry_is_none(self):
+        bd = structure.BlockDefinition.microtubule(5.0, 3.0)
+        assert bd.symmetry is None
+
+    def test_site_types(self):
+        bd = structure.BlockDefinition.microtubule(5.0, 3.0)
+        assert set(bd.site_types) == {"lateral_right", "lateral_left", "plus", "minus"}
+
+
+# =============================================================================
+# BlockLayer + PleomorphicSurface constructor
+# =============================================================================
+
+def _minimal_motl(n: int, *, tomo_id: float = 1.0) -> "cryomotl.Motl":
+    data = {c: np.zeros(n, dtype=float) for c in cryomotl.Motl.motl_columns}
+    data["subtomo_id"] = np.arange(1, n + 1, dtype=float)
+    data["tomo_id"] = np.full(n, tomo_id, dtype=float)
+    data["x"] = np.linspace(0.0, float(n - 1) * 10.0, n)
+    data["y"] = np.zeros(n, dtype=float)
+    data["z"] = np.zeros(n, dtype=float)
+    return cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
+
+
+class TestBlockLayer:
+    """BlockLayer class and PleomorphicSurface(block_layer=...) constructor."""
+
+    def test_from_blocks_c3_site_count(self):
+        motl = _minimal_motl(4)
+        bd = structure.BlockDefinition.cyclic(3, [5.0, 0.0, 0.0])
+        ps = structure.PleomorphicSurface.from_blocks(motl, symmetry="C3", site_shift=[5.0, 0.0, 0.0])
+        sites = ps.get_sites_as_motl()
+        assert len(sites.df) == 4 * 3
+
+    def test_from_blocks_c6_site_count(self):
+        motl = _minimal_motl(5)
+        ps = structure.PleomorphicSurface.from_blocks(motl, symmetry="C6", site_shift=[4.0, 0.0, 0.0])
+        sites = ps.get_sites_as_motl()
+        assert len(sites.df) == 5 * 6
+
+    def test_init_with_block_layer_equiv_to_from_blocks(self):
+        motl = _minimal_motl(3)
+        bd = structure.BlockDefinition.cyclic(3, [5.0, 0.0, 0.0])
+        ps_init = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps_fb = structure.PleomorphicSurface.from_blocks(motl, symmetry="C3", site_shift=[5.0, 0.0, 0.0])
+        sites_init = ps_init.get_sites_as_motl()
+        sites_fb = ps_fb.get_sites_as_motl()
+        assert len(sites_init.df) == len(sites_fb.df)
+        np.testing.assert_allclose(
+            sites_init.df[["x", "y", "z"]].values,
+            sites_fb.df[["x", "y", "z"]].values,
+            atol=1e-10,
+        )
+
+    def test_two_block_types_correct_site_counts(self):
+        n_c3, n_c6 = 3, 2
+        data = {c: np.zeros(n_c3 + n_c6, dtype=float) for c in cryomotl.Motl.motl_columns}
+        data["subtomo_id"] = np.arange(1, n_c3 + n_c6 + 1, dtype=float)
+        data["tomo_id"] = np.ones(n_c3 + n_c6, dtype=float)
+        data["x"] = np.linspace(0.0, float(n_c3 + n_c6 - 1) * 10.0, n_c3 + n_c6)
+        data["class"] = [3.0] * n_c3 + [6.0] * n_c6
+        mixed_motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
+        bd_dict = {
+            3.0: structure.BlockDefinition.cyclic(3, [5.0, 0.0, 0.0]),
+            6.0: structure.BlockDefinition.cyclic(6, [4.0, 0.0, 0.0]),
+        }
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(mixed_motl, bd_dict))
+        sites = ps.get_sites_as_motl()
+        assert len(sites.df) == n_c3 * 3 + n_c6 * 6
+
+    def test_column_override_honoured(self):
+        motl = _minimal_motl(4)
+        bd = structure.BlockDefinition.cyclic(4, [6.0, 0.0, 0.0])
+        layer = structure.BlockLayer(
+            motl, bd,
+            block_id_column="object_id",
+            site_index_column="geom2",
+        )
+        assert layer.block_id_column == "object_id"
+        assert layer.site_index_column == "geom2"
+        ps = structure.PleomorphicSurface(block_layer=layer)
+        sites = ps.get_sites_as_motl()
+        assert len(sites.df) == 4 * 4
+
+
+# =============================================================================
+# _ring_centre_spacing, _ring_centre_twist, DnComplex / NPC thin wrappers
+# =============================================================================
+
+
+class TestRingGeometryFreeFunctions:
+    """Ring geometry free functions and class callers."""
+
+    def test_spacing_free_function_known_distance(self):
+        """_ring_centre_spacing returns known Euclidean distance when no axis given."""
+        c0 = np.array([0.0, 0.0, 0.0])
+        c1 = np.array([0.0, 0.0, 10.0])
+        dist = structure._ring_centre_spacing(c0, c1)
+        np.testing.assert_allclose(dist, 10.0, atol=1e-12)
+
+    def test_spacing_free_function_with_axis_projection(self):
+        """_ring_centre_spacing with axis gives axial projection, not Euclidean."""
+        c0 = np.array([0.0, 0.0, 0.0])
+        c1 = np.array([3.0, 4.0, 10.0])
+        axis = np.array([0.0, 0.0, 1.0])
+        dist = structure._ring_centre_spacing(c0, c1, axis=axis)
+        np.testing.assert_allclose(dist, 10.0, atol=1e-12)
+
+    def test_twist_free_function_known_angle(self):
+        """_ring_centre_twist returns the correct angle for a known rotation."""
+        n = 6
+        axis = np.array([0.0, 0.0, 1.0])
+        r = 10.0
+        angles0 = np.linspace(0, 360, n, endpoint=False)
+        stagger = 180.0 / n
+        angles1 = angles0 + stagger
+        pos0 = np.column_stack([r * np.cos(np.radians(angles0)), r * np.sin(np.radians(angles0)), np.zeros(n)])
+        pos1 = np.column_stack([r * np.cos(np.radians(angles1)), r * np.sin(np.radians(angles1)), np.zeros(n)])
+        twist = structure._ring_centre_twist(pos0, pos1, n, axis)
+        np.testing.assert_allclose(twist, stagger, atol=1e-4)
+
+    def test_dn_ring_spacing_unchanged_from_before(self):
+        """DnComplex.ring_spacing returns same numeric value as before the refactor."""
+        axial_offset = 30.0
+        m = _make_dn_motl(n=6, axial_offset=axial_offset)
+        dn = structure.DnComplex(m, "D6")
+        df = dn.ring_spacing(pixel_size=1.0)
+        assert "ring_spacing" in df.columns
+        np.testing.assert_allclose(df["ring_spacing"].iloc[0], axial_offset, atol=1e-6)
+
+    def test_npc_three_rings_gives_two_spacings_and_two_twists(self):
+        """NPC with three rings produces spacing_1_2, spacing_2_3, twist_1_2, twist_2_3."""
+        z_sep = 5.0
+        r0 = _make_ring_motl(n_subunits=6, center=(50.0, 50.0, 50.0 - z_sep), object_id=1.0, start_subtomo=1)
+        r1 = _make_ring_motl(n_subunits=6, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+        r2 = _make_ring_motl(n_subunits=6, center=(50.0, 50.0, 50.0 + z_sep), object_id=3.0, start_subtomo=200)
+        npc = structure.NPC([r0, r1, r2])
+        npc.merge(npc_radius=50.0, distance_threshold=200.0)
+        sp = npc.ring_spacing()
+        tw = npc.inter_ring_twist()
+        assert "spacing_1_2" in sp.columns
+        assert "spacing_2_3" in sp.columns
+        assert "twist_1_2" in tw.columns
+        assert "twist_2_3" in tw.columns
+        assert len(sp) >= 1
+        assert len(tw) >= 1
+
+    def test_dn_ring_spacing_auto_splits_without_explicit_call(self):
+        """DnComplex.ring_spacing auto-splits when split_rings() has not been called."""
+        m = _make_dn_motl(n=6, axial_offset=20.0)
+        dn = structure.DnComplex(m, "D6")
+        df = dn.ring_spacing(pixel_size=1.0)
+        assert "ring_spacing" in df.columns
+        assert df["ring_spacing"].iloc[0] > 0
+
+    def test_dn_inter_ring_twist_auto_splits_without_explicit_call(self):
+        """DnComplex.inter_ring_twist auto-splits when split_rings() has not been called."""
+        m = _make_dn_motl(n=6, axial_offset=20.0)
+        dn = structure.DnComplex(m, "D6")
+        df = dn.inter_ring_twist(degrees=True)
+        assert "inter_ring_twist" in df.columns
+
+    def test_npc_inter_ring_twist_raises_before_merge(self):
+        """NPC.inter_ring_twist raises ValueError naming merge() as remedy."""
+        r0 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=1.0)
+        r1 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 55.0), object_id=2.0, start_subtomo=100)
+        npc = structure.NPC([r0, r1])
+        with pytest.raises(ValueError, match="merge"):
+            npc.inter_ring_twist()
+
+
+# =============================================================================
+# Assumption-free assembly statistics
+# =============================================================================
+
+
+class TestAssemblyStats:
+    """Graph-derived assembly statistics; no assumed ideal lattice."""
+
+    # ── Closed shell ─────────────────────────────────────────────────────────
+
+    def test_closed_shell_euler_is_2(self):
+        """A connected closed shell gives Euler characteristic exactly 2."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        block_def = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
+        ps.connect(max_distance=3.0)
+        asm = ps.get_assembly_stats()
+        assert len(asm) == 1
+        assert int(asm.iloc[0]["euler_characteristic"]) == 2
+
+    # ── Open sheet ───────────────────────────────────────────────────────────
+
+    def test_open_sheet_euler_is_not_2(self):
+        """An open chain gives an Euler characteristic that is computed but is not 2."""
+        # C2 blocks in a row: A-B-C. V=3, E=2, F=0, χ=1.
+        spacing = 10.0
+        n = 3
+        data = {c: np.zeros(n, dtype=float) for c in cryomotl.Motl.motl_columns}
+        data["subtomo_id"] = np.arange(1, n + 1, dtype=float)
+        data["tomo_id"] = np.ones(n, dtype=float)
+        data["x"] = np.array([0.0, spacing, 2.0 * spacing])
+        data["y"] = np.zeros(n)
+        data["z"] = np.zeros(n)
+        motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
+        block_def = structure.BlockDefinition.cyclic(2, [spacing / 2.0, 0.0, 0.0])
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
+        ps.connect(max_distance=spacing * 0.6)
+        asm = ps.get_assembly_stats()
+        chi = int(asm.iloc[0]["euler_characteristic"])
+        assert chi != 2
+        assert "euler_characteristic" in asm.columns
+
+    # ── 12-pentagon face-size distribution ───────────────────────────────────
+
+    def test_twelve_pentagon_shell_face_distribution(self):
+        """Sphere with 12 pentagons and 20 hexagons: distribution exact, no assumed lattice."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        block_def = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
+        ps.connect(max_distance=3.0)
+        asm = ps.get_assembly_stats()
+        assert int(asm.iloc[0]["n_faces_5"]) == 12
+        assert int(asm.iloc[0]["n_faces_6"]) == 20
+
+    # ── Clathrin-like mixed cage ──────────────────────────────────────────────
+
+    def test_mixed_cage_distributions_no_ideal_required(self):
+        """Mixed C5/C6 geodesic cage: degree and face distributions present, no assumed lattice."""
+        motl, block_def = _geodesic(edge=10.0, seed=0)
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(motl, block_def, block_type_column="geom3")
+        )
+        ps.connect(max_distance=3.0)
+        asm = ps.get_assembly_stats()
+        # 12 blocks of degree 5, 30 of degree 6
+        assert int(asm.iloc[0]["n_degree_5"]) == 12
+        assert int(asm.iloc[0]["n_degree_6"]) == 30
+        # All 80 faces are triangles
+        assert int(asm.iloc[0]["n_faces_3"]) == 80
+
+    # ── pixel_size per layer ──────────────────────────────────────────────────
+
+    def test_pixel_size_layers_independent(self):
+        """Mesh pixel_size=2 and block_layer pixel_size=3: surface unchanged, warning issued."""
+        import warnings as _warnings
+        from cryocat.core.surface import Mesh as _Mesh
+
+        mesh = _Mesh()
+        mesh.vertices = np.array(
+            [[0., 0., 0.], [10., 0., 0.], [0., 10., 0.], [0., 0., 10.]], dtype=float
+        )
+        mesh.faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], dtype=int)
+        mesh.pixel_size = np.array([2.0, 2.0, 2.0])
+
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        block_def = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        bl = structure.BlockLayer(motl, block_def, pixel_size=3.0)
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            ps = structure.PleomorphicSurface(mesh, block_layer=bl)
+
+        # Surface pixel_size is unchanged
+        np.testing.assert_array_equal(ps._surface.pixel_size, np.array([2.0, 2.0, 2.0]))
+        # Block-layer scale is 3
+        assert ps.block_pixel_size == 3.0
+        # Warning names both values
+        assert any(
+            "2.0" in str(w.message) and "3.0" in str(w.message)
+            for w in caught
+            if issubclass(w.category, UserWarning)
+        )
+
+
+# =============================================================================
+# Face gap detection: damaged hexagons vs genuine pentagons
+# =============================================================================
+
+
+def _ring_centres(n: int, radius: float, normal: np.ndarray, angles_deg: list[float] | None = None) -> np.ndarray:
+    """Return n block-centre positions on a circle of given radius in the plane normal to `normal`."""
+    n_unit = normal / np.linalg.norm(normal)
+    # Build two orthonormal axes perpendicular to n_unit
+    ref = np.array([1.0, 0.0, 0.0]) if abs(n_unit[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    u = np.cross(n_unit, ref)
+    u /= np.linalg.norm(u)
+    v = np.cross(n_unit, u)
+    if angles_deg is None:
+        angles_deg = [360.0 * i / n for i in range(n)]
+    angles_rad = np.radians(angles_deg)
+    return np.array([radius * (np.cos(a) * u + np.sin(a) * v) for a in angles_rad])
+
+
+class TestFaceGapDetection:
+    """Merged-face detection and missing-block inference."""
+
+    # ── _face_hole_analysis unit tests ────────────────────────────────────────
+
+    def test_face_hole_analysis_complete_hexagon(self):
+        """6 evenly-spaced vertices: n_missing=0, is_merged=False."""
+        centres = _ring_centres(6, 10.0, np.array([0., 0., 1.]))
+        result = structure.PleomorphicSurface._face_hole_analysis(centres, np.array([0., 0., 1.]))
+        assert result["n_missing"] == 0
+        assert result["is_merged"] is False
+
+    def test_face_hole_analysis_complete_pentagon(self):
+        """5 evenly-spaced vertices: n_missing=0, is_merged=False."""
+        centres = _ring_centres(5, 10.0, np.array([0., 0., 1.]))
+        result = structure.PleomorphicSurface._face_hole_analysis(centres, np.array([0., 0., 1.]))
+        assert result["n_missing"] == 0
+        assert result["is_merged"] is False
+
+    def test_face_hole_analysis_genuine_heptagon(self):
+        """7 evenly-spaced vertices: n_missing=0, is_merged=False."""
+        centres = _ring_centres(7, 10.0, np.array([0., 0., 1.]))
+        result = structure.PleomorphicSurface._face_hole_analysis(centres, np.array([0., 0., 1.]))
+        assert result["n_missing"] == 0
+        assert result["is_merged"] is False
+
+    def test_face_hole_analysis_merged_12vertex_face(self):
+        """12-vertex merged face (3 hex, 1 block removed): n_missing=1, position≈origin.
+
+        Hexagonal lattice with block B at origin removed.  B had 3 direct
+        neighbours N1, N2, N3.  Removing B merges 3 faces into one 12-vertex
+        boundary.  N1/N2/N3 become reflex vertices (turn_angle ≈ −60°); all
+        other 9 boundary vertices are convex (turn_angle ≈ +60°).
+        median interior = 120° < 150° − 20° → is_merged=True.
+        centroid of {N1,N2,N3} = (0,0,0) = position of B.
+        """
+        L = 10.0
+        s3 = np.sqrt(3.0)
+        # Exact hexagonal-lattice positions (bond_length = L), walk order CCW:
+        # N1, P_high, M12, Q2, N2, Q1, M23, R1, N3, R2, M31, P_low
+        centres_12 = L * np.array([
+            [ 1.0,    0.0,   0.],  # N1   (reflex)
+            [ 1.5,    s3/2,  0.],  # P_high
+            [ 1.0,    s3,    0.],  # M12
+            [ 0.0,    s3,    0.],  # Q2
+            [-0.5,    s3/2,  0.],  # N2   (reflex)
+            [-1.5,    s3/2,  0.],  # Q1
+            [-2.0,    0.0,   0.],  # M23
+            [-1.5,   -s3/2,  0.],  # R1
+            [-0.5,   -s3/2,  0.],  # N3   (reflex)
+            [ 0.0,   -s3,    0.],  # R2
+            [ 1.0,   -s3,    0.],  # M31
+            [ 1.5,   -s3/2,  0.],  # P_low
+        ])
+        norm = np.array([0., 0., 1.])
+        result = structure.PleomorphicSurface._face_hole_analysis(centres_12, norm)
+        assert result["is_merged"] is True, (
+            f"Expected is_merged=True; median_interior={result['median_interior_deg']:.1f}, "
+            f"expected={result['expected_interior_deg']:.1f}"
+        )
+        assert result["n_missing"] == 1, f"Expected n_missing=1, got {result['n_missing']}"
+        pos = result["missing_positions"][0]
+        np.testing.assert_allclose(pos, np.zeros(3), atol=L * 0.25,
+            err_msg=f"Missing position {pos} should be near origin (B at (0,0,0))")
+
+    def test_face_hole_analysis_two_holes(self):
+        """Two separate holes: 21-vertex face → n_missing=2, is_merged=True.
+
+        Take the 12-vertex merged face and shift a second copy so its missing
+        block B2 sits at (6L, 0, 0).  The two faces share no vertices, so the
+        combined boundary has 24 vertices and 6 reflex vertices (3 per hole).
+        """
+        L = 10.0
+        s3 = np.sqrt(3.0)
+        norm = np.array([0., 0., 1.])
+        # One merged 12-vertex face with B at (0,0,0)
+        template = L * np.array([
+            [ 1.0,    0.0,   0.],
+            [ 1.5,    s3/2,  0.],
+            [ 1.0,    s3,    0.],
+            [ 0.0,    s3,    0.],
+            [-0.5,    s3/2,  0.],
+            [-1.5,    s3/2,  0.],
+            [-2.0,    0.0,   0.],
+            [-1.5,   -s3/2,  0.],
+            [-0.5,   -s3/2,  0.],
+            [ 0.0,   -s3,    0.],
+            [ 1.0,   -s3,    0.],
+            [ 1.5,   -s3/2,  0.],
+        ])
+        # Shift second copy far enough that vertices don't overlap
+        offset = np.array([8 * L, 0., 0.])
+        centres_24 = np.vstack([template, template + offset])
+        result = structure.PleomorphicSurface._face_hole_analysis(centres_24, norm)
+        assert result["is_merged"] is True
+        assert result["n_missing"] == 2, f"Expected n_missing=2, got {result['n_missing']}"
+
+    # ── get_face_stats columns ────────────────────────────────────────────────
+
+    def test_face_stats_has_geometry_columns(self):
+        """get_face_stats returns geometry columns: n_vertices, n_boundary_blocks, planarity, centroid_depth."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))]
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=arm_length * 2.5)
+        fs = ps.get_face_stats()
+        for col in ("n_vertices", "n_boundary_blocks", "planarity", "centroid_depth"):
+            assert col in fs.columns, f"Missing column: {col}"
+
+    def test_face_stats_n_vertices_equals_size(self):
+        """n_vertices == size for every face."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))]
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=arm_length * 2.5)
+        fs = ps.get_face_stats()
+        pd.testing.assert_series_equal(
+            fs["n_vertices"].reset_index(drop=True),
+            fs["size"].reset_index(drop=True),
+            check_names=False,
+        )
+
+    # ── Genuine pentagon tests ────────────────────────────────────────────────
+
+    def test_soccer_ball_pentagons_are_complete(self):
+        """Soccer-ball: exactly 12 genuine pentagons (size=5, n_vertices=5)."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))]
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=arm_length * 2.5)
+        fs = ps.get_face_stats()
+        pentagons = fs[fs["size"] == 5]
+        assert len(pentagons) == 12, f"Expected 12 pentagons, got {len(pentagons)}"
+        assert (pentagons["n_vertices"] == 5).all(), "Pentagons should have n_vertices=5"
+
+    def test_soccer_ball_hexagons_are_complete(self):
+        """Soccer-ball: exactly 20 genuine hexagons (size=6, n_vertices=6)."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))]
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=arm_length * 2.5)
+        fs = ps.get_face_stats()
+        hexagons = fs[fs["size"] == 6]
+        assert len(hexagons) == 20, f"Expected 20 hexagons, got {len(hexagons)}"
+        assert (hexagons["n_vertices"] == 6).all()
+
+    def test_assembly_stats_both_distributions_match_for_complete_assembly(self):
+        """Closed soccer ball: assembly stats contain n_faces_5==12 and n_faces_6==20."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))]
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=arm_length * 2.5)
+        asm = ps.get_assembly_stats()
+        row = asm.iloc[0]
+        assert "n_faces_5" in row.index, "n_faces_5 missing from assembly stats"
+        assert "n_faces_6" in row.index, "n_faces_6 missing from assembly stats"
+        assert int(row["n_faces_5"]) == 12
+        assert int(row["n_faces_6"]) == 20
+
+    # ── Boundary blocks ───────────────────────────────────────────────────────
+
+    def test_boundary_blocks_counted_not_inferred(self):
+        """Open-boundary assembly: n_boundary_blocks > 0.
+
+        Boundary-touching faces are excluded by get_missing_block_motl, so the
+        result is empty even though the assembly is incomplete.
+        """
+        motl_full, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))]
+        )
+        sub = cryomotl.Motl(motl_full.df.iloc[:30].copy().reset_index(drop=True))
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(sub, bd))
+        ps.connect(max_distance=arm_length * 2.5)
+        asm = ps.get_assembly_stats()
+        fs = ps.get_face_stats()
+        assert "n_boundary_blocks" in asm.columns
+        assert int(asm["n_boundary_blocks"].sum()) > 0
+        assert "n_boundary_blocks" in fs.columns
+        # Boundary-touching faces excluded → no inferred particles
+        missing_motl = ps.get_missing_block_motl()
+        assert len(missing_motl.df) == 0
+
+    def test_n_boundary_blocks_zero_for_closed_assembly(self):
+        """Closed soccer ball has n_boundary_blocks == 0."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))]
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=arm_length * 2.5)
+        asm = ps.get_assembly_stats()
+        assert int(asm.iloc[0]["n_boundary_blocks"]) == 0
+
+    # ── get_missing_block_motl integration tests ──────────────────────────────
+
+    def test_missing_block_motl_empty_for_closed_soccer_ball(self):
+        """Closed soccer ball has no missing blocks → empty Motl."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))]
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=arm_length * 2.5)
+        missing = ps.get_missing_block_motl()
+        assert len(missing.df) == 0
+
+    def test_missing_block_motl_columns(self):
+        """get_missing_block_motl returns a Motl with standard columns."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))]
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=arm_length * 2.5)
+        missing = ps.get_missing_block_motl()
+        for col in cryomotl.Motl.motl_columns:
+            assert col in missing.df.columns
+
+
+# =============================================================================
+# NPC multi-ring: assign_subunit_order, ring numbering, merge pore identity
+# =============================================================================
+
+
+def _make_ring_at(n: int, cx: float, cy: float, cz: float, radius: float,
+                  tomo_id: float, object_id: float,
+                  angle_offset_steps: int = 0, start_subtomo: int = 1) -> cryomotl.Motl:
+    """Ring of n particles; angle_offset_steps rotates positions by k*(2π/n)."""
+    rows = []
+    for s in range(n):
+        theta = 2 * np.pi * ((s + angle_offset_steps) % n) / n
+        rows.append({
+            "score": 0.0, "geom1": 0.0, "geom2": 0.0,
+            "subtomo_id": float(start_subtomo + s),
+            "tomo_id": tomo_id, "object_id": object_id,
+            "subtomo_mean": 0.0,
+            "x": cx + radius * np.cos(theta),
+            "y": cy + radius * np.sin(theta),
+            "z": cz,
+            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+            "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+            "phi": float(np.degrees(theta)), "psi": 0.0, "theta": 0.0, "class": 1.0,
+        })
+    m = cryomotl.Motl()
+    m.df = pd.DataFrame(rows)
+    return m
+
+
+class TestNPCMultiRing:
+    """NPC multi-ring assign_subunit_order, ring numbering, merge pore identity."""
+
+    # ── assign_subunit_order on 3-ring NPC assigns all 24 subunits ─────────────
+
+    def test_assign_subunit_order_three_rings_returns_24_rows(self):
+        """result covers all 3 rings (8×3=24 rows), not just ring 0."""
+        r0 = _make_ring_at(8, 50., 50., 45., 50., 1., 1., start_subtomo=1)
+        r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., start_subtomo=100)
+        r2 = _make_ring_at(8, 50., 50., 55., 50., 1., 1., start_subtomo=200)
+        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        result = npc.assign_subunit_order()
+        assert isinstance(result, cryomotl.Motl)
+        assert len(result.df) == 24, f"expected 24 rows, got {len(result.df)}"
+
+    # ── ring column is 1-based ────────────────────────────────────────────────
+
+    def test_assign_subunit_order_ring_column_is_one_based(self):
+        """ring column holds 1, 2, 3 — not 0, 1, 2."""
+        r0 = _make_ring_at(8, 50., 50., 45., 50., 1., 1., start_subtomo=1)
+        r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., start_subtomo=100)
+        r2 = _make_ring_at(8, 50., 50., 55., 50., 1., 1., start_subtomo=200)
+        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        result = npc.assign_subunit_order()
+        ring_vals = sorted(result.df[structure.NPC._ring_column].unique())
+        assert ring_vals == [1.0, 2.0, 3.0], f"ring values: {ring_vals}"
+
+    def test_subunit_indices_per_ring_span_one_to_n(self):
+        """each ring's order_column holds exactly 1..8."""
+        r0 = _make_ring_at(8, 50., 50., 45., 50., 1., 1., start_subtomo=1)
+        r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., start_subtomo=100)
+        npc = structure.NPC([r0, r1], symmetry=8)
+        result = npc.assign_subunit_order()
+        for ring_val in [1.0, 2.0]:
+            subset = result.df[result.df[structure.NPC._ring_column] == ring_val]
+            indices = sorted(subset[npc.order_column].astype(int).tolist())
+            assert indices == list(range(1, 9)), f"ring {ring_val} indices: {indices}"
+
+    # ── cyclic shift aligns subunit 1 across rings ────────────────────────────
+
+    def test_cyclic_shift_aligns_ring2_to_ring1_reference(self):
+        """ring 2 shifted by 2 steps → nearest to ring-1 sub-1 gets index 1."""
+        # Ring 1: standard positions, subunit 1 at theta=0
+        r0 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., angle_offset_steps=0, start_subtomo=1)
+        # Ring 2: positions shifted by 2 steps (particle at theta=2*2pi/8 is nearest to theta=0)
+        r1 = _make_ring_at(8, 50., 50., 55., 50., 1., 1., angle_offset_steps=2, start_subtomo=100)
+        npc = structure.NPC([r0, r1], symmetry=8)
+        result = npc.assign_subunit_order()
+
+        ring1_rows = result.df[result.df[structure.NPC._ring_column] == 1.0]
+        ring2_rows = result.df[result.df[structure.NPC._ring_column] == 2.0]
+
+        # Subunit 1 in ring 1 is at theta=0, i.e. x=100, y=50
+        sub1_ring1 = ring1_rows[ring1_rows[npc.order_column] == 1.0]
+        assert len(sub1_ring1) == 1
+
+        # After alignment, the ring-2 particle closest to ring-1 sub-1 must have index 1
+        sub1_ring1_pos = sub1_ring1[["x", "y", "z"]].to_numpy()
+        ring2_pos = ring2_rows[["x", "y", "z"]].to_numpy()
+        dists = np.linalg.norm(ring2_pos - sub1_ring1_pos, axis=1)
+        nearest_local = np.argmin(dists)
+        nearest_order = ring2_rows.iloc[nearest_local][npc.order_column]
+        assert nearest_order == 1.0, f"nearest ring-2 particle has order {nearest_order}, expected 1"
+
+    # ── missing subunit gap preserved after shift ─────────────────────────────
+
+    def test_missing_subunit_gap_preserved_after_shift(self):
+        """missing subunit in ring 2 does not affect other assignments."""
+        r0 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., angle_offset_steps=0, start_subtomo=1)
+        # Ring 2 with only 7 particles (drop position 3)
+        r1_full = _make_ring_at(8, 50., 50., 55., 50., 1., 1., angle_offset_steps=2, start_subtomo=100)
+        r1_partial = cryomotl.Motl()
+        r1_partial.df = r1_full.df.iloc[:-1].copy().reset_index(drop=True)  # drop last
+        npc = structure.NPC([r0, r1_partial], symmetry=8)
+        result = npc.assign_subunit_order()
+
+        ring2_rows = result.df[result.df[structure.NPC._ring_column] == 2.0]
+        assert len(ring2_rows) == 7, f"expected 7 ring-2 rows, got {len(ring2_rows)}"
+        # All assigned indices must be in 1..8 with no duplicates
+        indices = ring2_rows[npc.order_column].dropna().astype(int).tolist()
+        assert len(indices) == len(set(indices)), f"duplicate indices: {indices}"
+        assert all(1 <= i <= 8 for i in indices)
+
+    # ── merge with exact threshold produces one object_id per pore ───────────
+
+    def test_merge_exact_threshold_produces_one_object_id_per_pore(self):
+        """ring-centre distance exactly equals distance_threshold → merged."""
+        radius = 50.0
+        # Two rings for the same pore; centres exactly 10 voxels apart axially
+        cr = _make_ring_at(8, 50., 50., 50., radius, 1., 1., start_subtomo=1)
+        ir = _make_ring_at(8, 50., 50., 60., radius, 1., 2., start_subtomo=100)  # object_id=2 before merge
+        npc = structure.NPC([cr, ir], symmetry=8)
+        npc.assign_subunit_order()
+        npc.merge(npc_radius=radius, distance_threshold=10.0)
+        object_ids = npc.motl.df["object_id"].unique()
+        assert len(object_ids) == 1, f"expected 1 object_id, got {sorted(object_ids)}"
+        assert len(npc.motl.df) == 16, f"expected 16 rows (2×8), got {len(npc.motl.df)}"
+
+    # ── 3-ring merge → single object_id, 24 particles ────────────────────────
+
+    def test_three_ring_merge_produces_24_particles_one_pore(self):
+        """3-ring NPC after merge has exactly 1 pore and 24 particles."""
+        r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
+        r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 2., start_subtomo=100)
+        r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 3., start_subtomo=200)
+        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        npc.assign_subunit_order()
+        npc.merge(npc_radius=50., distance_threshold=20.)
+        assert len(npc.motl.df) == 24, f"expected 24 rows, got {len(npc.motl.df)}"
+        object_ids = npc.motl.df["object_id"].unique()
+        assert len(object_ids) == 1, f"expected 1 object_id, got {sorted(object_ids)}"
+        ring_vals = sorted(npc.motl.df[structure.NPC._ring_column].unique())
+        assert ring_vals == [1.0, 2.0, 3.0], f"ring values after merge: {ring_vals}"
+
+
+class TestNPCSubunitStats:
+    """get_object_stats per-ring, get_subunit_spacing, get_subunit_stats."""
+
+    # ── get_object_stats gives one row per ring post-merge ────────────────────
+
+    def test_get_object_stats_three_rings_gives_three_rows_with_distinct_z(self):
+        """3-ring merged NPC → 3 object-stats rows with z ≈ 40, 50, 60."""
+        r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
+        r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 2., start_subtomo=100)
+        r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 3., start_subtomo=200)
+        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        npc.assign_subunit_order()
+        npc.merge(npc_radius=50., distance_threshold=20.)
+        stats = npc.get_object_stats(pixel_size=1.0)
+        assert len(stats) == 3, f"expected 3 rows (one per ring), got {len(stats)}"
+        z_vals = sorted(stats["z"].tolist())
+        assert abs(z_vals[0] - 40.) < 0.5, f"z[0]={z_vals[0]} expected ~40"
+        assert abs(z_vals[1] - 50.) < 0.5, f"z[1]={z_vals[1]} expected ~50"
+        assert abs(z_vals[2] - 60.) < 0.5, f"z[2]={z_vals[2]} expected ~60"
+
+    # ── per-subunit spacing matches constructed axial separation ─────────────
+
+    def test_get_subunit_spacing_axial_spacing_matches_geometry(self):
+        """3-ring coaxial NPC → spacing_1_2 = spacing_2_3 = 10 for all 8 subunits."""
+        r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
+        r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 2., start_subtomo=100)
+        r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 3., start_subtomo=200)
+        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        npc.assign_subunit_order()
+        npc.merge(npc_radius=50., distance_threshold=20.)
+        spacing_df = npc.get_subunit_spacing(pixel_size=1.0)
+        assert len(spacing_df) == 8, f"expected 8 rows (one per subunit), got {len(spacing_df)}"
+        assert "spacing_1_2" in spacing_df.columns, "missing column spacing_1_2"
+        assert "spacing_2_3" in spacing_df.columns, "missing column spacing_2_3"
+        # Rings are coaxial with z-separation 10 → Euclidean distance = 10
+        np.testing.assert_allclose(spacing_df["spacing_1_2"].values, 10.0, atol=1e-6)
+        np.testing.assert_allclose(spacing_df["spacing_2_3"].values, 10.0, atol=1e-6)
+
+    # ── per-subunit stats: 24 rows, distances match ring radius ──────────────
+
+    def test_get_subunit_stats_24_rows_distance_to_centre_equals_radius(self):
+        """merged 3-ring NPC → 24 rows; distance_to_centre = radius for every particle."""
+        radius = 50.
+        r0 = _make_ring_at(8, 50., 50., 40., radius, 1., 1., start_subtomo=1)
+        r1 = _make_ring_at(8, 50., 50., 50., radius, 1., 2., start_subtomo=100)
+        r2 = _make_ring_at(8, 50., 50., 60., radius, 1., 3., start_subtomo=200)
+        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        npc.assign_subunit_order()
+        npc.merge(npc_radius=radius, distance_threshold=20.)
+        stats = npc.get_subunit_stats(pixel_size=1.0)
+        assert len(stats) == 24, f"expected 24 rows (3 rings × 8 subunits), got {len(stats)}"
+        np.testing.assert_allclose(stats["distance_to_centre"].values, radius, atol=1e-6)
+
+    # ── one tilted particle → elevated tilt_angle in its ring ────────────────
+
+    def test_get_subunit_stats_one_tilted_particle_has_higher_tilt_angle(self):
+        """theta=30 on one particle in ring 1 → its tilt_angle > 15°; others < 10°."""
+        r0 = _make_ring_at(8, 0., 0., 0., 50., 1., 1., start_subtomo=1)
+        r1 = _make_ring_at(8, 0., 0., 10., 50., 1., 2., start_subtomo=100)
+        # Tilt particle with subtomo_id=1 (ring 1) by 30° around the X axis
+        r0.df.loc[r0.df["subtomo_id"] == 1.0, "theta"] = 30.0
+        npc = structure.NPC([r0, r1], symmetry=8)
+        npc.assign_subunit_order()
+        npc.merge(npc_radius=50., distance_threshold=15.)
+        stats = npc.get_subunit_stats(pixel_size=1.0)
+        assert len(stats) == 16, f"expected 16 rows, got {len(stats)}"
+        ring_col = structure.NPC._ring_column
+        tilted = stats[(stats["subtomo_id"] == 1.0) & (stats[ring_col] == 1.0)]
+        others_r1 = stats[(stats["subtomo_id"] != 1.0) & (stats[ring_col] == 1.0)]
+        assert len(tilted) == 1, "tilted particle not uniquely identified"
+        assert tilted["tilt_angle"].iloc[0] > 15.0, (
+            f"tilted particle tilt_angle={tilted['tilt_angle'].iloc[0]:.1f}° expected > 15°"
+        )
+        assert (others_r1["tilt_angle"] < 10.0).all(), (
+            f"flat ring-1 particles have unexpected tilt: {others_r1['tilt_angle'].tolist()}"
+        )
+
+
+# =============================================================================
+# Ring direction detection and correction in _align_subunit_order_across_rings
+# =============================================================================
+
+
+def _build_npc_with_reversed_ring2(shift: int = 3):
+    """3-ring NPC (n=8) where ring 2 is reversed and rotated by *shift* positions.
+
+    Ring 2's per-ring CCW indices are reflected (k → (1−k) % 8 + 1) and then
+    cyclically shifted, simulating a ring whose SVD normal pointed the opposite
+    way.  Rings 1 and 3 are left with their natural CCW ordering.
+    """
+    n = 8
+    r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
+    r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., start_subtomo=100)
+    r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 1., start_subtomo=200)
+    npc = structure.NPC([r0, r1, r2], symmetry=n)
+    npc.per_ring("assign_subunit_order")
+    order_col = npc.order_column
+    old_k = npc._ring_motls[1].df[order_col].values.astype(int)
+    rev_k = ((1 - old_k) % n) + 1
+    shifted_rev_k = ((rev_k - 1 + shift) % n) + 1
+    npc._ring_motls[1].df[order_col] = shifted_rev_k.astype(float)
+    return npc
+
+
+class TestRingDirectionCorrection:
+    """_align_subunit_order_across_rings detects and corrects reversed rings."""
+
+    def test_reversed_ring_detected_and_reported(self):
+        """a manually reversed ring 2 is flagged reversed with the expected shift."""
+        npc = _build_npc_with_reversed_ring2(shift=3)
+        corrections = npc._align_subunit_order_across_rings()
+        key = (1.0, 1.0, 2)
+        assert key in corrections, f"ring 2 not in corrections: {list(corrections.keys())}"
+        assert corrections[key]["reversed"] is True, (
+            f"expected ring 2 reversed, got {corrections[key]}"
+        )
+        assert corrections[key]["shift"] == 3, (
+            f"expected shift 3, got {corrections[key]['shift']}"
+        )
+
+    def test_non_reversed_ring_not_flagged(self):
+        """ring 3 (natural CCW order) is not flagged as reversed."""
+        npc = _build_npc_with_reversed_ring2(shift=3)
+        corrections = npc._align_subunit_order_across_rings()
+        key3 = (1.0, 1.0, 3)
+        if key3 in corrections:
+            assert corrections[key3]["reversed"] is False, (
+                f"ring 3 should not be reversed, got {corrections[key3]}"
+            )
+
+    def test_spacing_uniform_after_correction(self):
+        """after correction all 8 cross-ring spacing values are in a tight range."""
+        import pandas as _pd
+
+        npc = _build_npc_with_reversed_ring2(shift=3)
+        corrections = npc._align_subunit_order_across_rings()
+        assert corrections[(1.0, 1.0, 2)]["reversed"] is True
+
+        # Assemble merged NPC from corrected ring motls
+        frames = []
+        for ri, rm in enumerate(npc._ring_motls):
+            df = rm.df.copy()
+            df[npc._ring_column] = float(ri + 1)
+            frames.append(df)
+        npc.motl = cryomotl.Motl(_pd.concat(frames, ignore_index=True))
+        npc._rings_merged = True
+
+        spacing_df = npc.get_subunit_spacing(pixel_size=1.0)
+        assert "spacing_1_2" in spacing_df.columns
+        vals = spacing_df["spacing_1_2"].values
+        assert len(vals) == 8, f"expected 8 rows, got {len(vals)}"
+        assert vals.max() - vals.min() < 1.0, (
+            f"spacing values not uniform after correction: {vals.tolist()}"
+        )
+        # Coaxial rings 10 voxels apart → spacing = 10 exactly
+        np.testing.assert_allclose(vals, 10.0, atol=0.1)
+
+    def test_twists_near_zero_after_correction(self):
+        """all 8 cross-ring twist values are near zero after correction."""
+        import pandas as _pd
+
+        npc = _build_npc_with_reversed_ring2(shift=3)
+        npc._align_subunit_order_across_rings()
+
+        frames = []
+        for ri, rm in enumerate(npc._ring_motls):
+            df = rm.df.copy()
+            df[npc._ring_column] = float(ri + 1)
+            frames.append(df)
+        npc.motl = cryomotl.Motl(_pd.concat(frames, ignore_index=True))
+        npc._rings_merged = True
+
+        spacing_df = npc.get_subunit_spacing(pixel_size=1.0)
+        if "twist_1_2" in spacing_df.columns:
+            twists = spacing_df["twist_1_2"].values
+            np.testing.assert_allclose(twists, 0.0, atol=1.0, err_msg=(
+                f"twists not near zero after correction: {twists.tolist()}"
+            ))
+
+    def test_assign_subunit_order_stores_last_alignment(self):
+        """NPC.assign_subunit_order stores corrections in _last_alignment."""
+        n = 8
+        r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
+        r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., start_subtomo=100)
+        r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 1., start_subtomo=200)
+        npc = structure.NPC([r0, r1, r2], symmetry=n)
+        npc.per_ring("assign_subunit_order")
+        order_col = npc.order_column
+        old_k = npc._ring_motls[1].df[order_col].values.astype(int)
+        rev_k = ((1 - old_k) % n) + 1
+        npc._ring_motls[1].df[order_col] = rev_k.astype(float)  # shift=0
+
+        npc._last_alignment = npc._align_subunit_order_across_rings()
+
+        assert hasattr(npc, "_last_alignment"), "_last_alignment not set"
+        assert len(npc._last_alignment) > 0, "_last_alignment is empty"
+
+
+# =============================================================================
+# Block-analysis grouping respects object_id (affiliation_column)
+# =============================================================================
+
+
+def _make_two_dimers_df(aff1=1.0, aff2=2.0, tomo1=1.0, tomo2=1.0, aff_col="object_id"):
+    """Return a DataFrame with 4 blocks forming two dimers.
+
+    Dimer 1: subtomo_id 1/2, x = 0/9, y = 0.   Affiliation = aff1, tomo = tomo1.
+    Dimer 2: subtomo_id 3/4, x = 0/9, y = 2.   Affiliation = aff2, tomo = tomo2.
+
+    With BlockDefinition.cyclic(2, [4,0,0]) and max_distance=3:
+    - Each dimer connects internally: site 1 of left block (4, y, 0) ↔ site 2 of right
+      block (5, y, 0), distance = 1.
+    - Cross-dimer dangling sites are at distance 2 (within max_distance=3), so they
+      WOULD connect if both dimers share the same affiliation.
+    """
+    specs = [
+        (1., tomo1, aff1, 0., 0.),
+        (2., tomo1, aff1, 9., 0.),
+        (3., tomo2, aff2, 0., 2.),
+        (4., tomo2, aff2, 9., 2.),
+    ]
+    rows = []
+    for sid, tomo, aff, x, y in specs:
+        row = {c: 0.0 for c in cryomotl.Motl.motl_columns}
+        row.update({"subtomo_id": sid, "tomo_id": tomo, aff_col: aff, "x": x, "y": y})
+        rows.append(row)
+    return pd.DataFrame(rows)[cryomotl.Motl.motl_columns]
+
+
+_DIMER_BLOCK_DEF = structure.BlockDefinition.cyclic(2, [4., 0., 0.])
+
+
+class TestBlockAffiliation:
+    """connect() and stats respect affiliation_column."""
+
+    def test_cleared_vs_assigned_gives_different_assembly_row_counts(self):
+        """same 4-block motl, cleared object_id → 1 assembly row; assigned → 2."""
+        df_assigned = _make_two_dimers_df(aff1=1.0, aff2=2.0)
+        df_cleared = df_assigned.copy()
+        df_cleared["object_id"] = 0.0
+
+        ps_cleared = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(cryomotl.Motl(df_cleared), _DIMER_BLOCK_DEF)
+        )
+        ps_cleared.connect(max_distance=3.0)
+        asm_cleared = ps_cleared.get_assembly_stats()
+
+        ps_assigned = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(cryomotl.Motl(df_assigned), _DIMER_BLOCK_DEF)
+        )
+        ps_assigned.connect(max_distance=3.0)
+        asm_assigned = ps_assigned.get_assembly_stats()
+
+        assert len(asm_cleared) == 1, (
+            f"cleared object_id → expected 1 assembly row, got {len(asm_cleared)}"
+        )
+        assert len(asm_assigned) == 2, (
+            f"assigned object_id → expected 2 assembly rows, got {len(asm_assigned)}"
+        )
+
+    def test_different_tomo_id_blocks_never_connected(self):
+        """same affiliation but different tomo_id → always separate assembly rows."""
+        df = _make_two_dimers_df(aff1=1.0, aff2=1.0, tomo1=1.0, tomo2=2.0)
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(cryomotl.Motl(df), _DIMER_BLOCK_DEF)
+        )
+        ps.connect(max_distance=3.0)
+        asm = ps.get_assembly_stats()
+        assert len(asm) == 2, (
+            f"different tomo_id → expected 2 assembly rows, got {len(asm)}"
+        )
+        tomos = sorted(asm["tomo_id"].unique().tolist())
+        assert tomos == [1.0, 2.0], f"unexpected tomo_id values: {tomos}"
+
+    def test_different_affiliations_never_merged(self):
+        """adjacent dimers with different object_id stay in separate assemblies."""
+        df = _make_two_dimers_df(aff1=1.0, aff2=2.0, tomo1=1.0, tomo2=1.0)
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(cryomotl.Motl(df), _DIMER_BLOCK_DEF)
+        )
+        ps.connect(max_distance=3.0)
+        asm = ps.get_assembly_stats()
+        assert len(asm) == 2, (
+            f"different affiliations → expected 2 rows, got {len(asm)}"
+        )
+        for _, row in asm.iterrows():
+            assert row["n_blocks"] == 2, (
+                f"affiliation {row['object_id']}: expected 2 blocks, got {row['n_blocks']}"
+            )
+
+    def test_custom_affiliation_column_honoured(self):
+        """affiliation_column='geom3' separates dimers just as 'object_id' does."""
+        df = _make_two_dimers_df(aff1=1.0, aff2=2.0, tomo1=1.0, tomo2=1.0, aff_col="geom3")
+        # object_id is 0 for all blocks — only geom3 carries affiliation
+        assert (df["object_id"] == 0.0).all()
+        bl = structure.BlockLayer(cryomotl.Motl(df), _DIMER_BLOCK_DEF, affiliation_column="geom3")
+        ps = structure.PleomorphicSurface(block_layer=bl)
+        ps.connect(max_distance=3.0)
+        asm = ps.get_assembly_stats()
+        assert len(asm) == 2, (
+            f"custom affiliation_column='geom3' → expected 2 rows, got {len(asm)}"
+        )
+        assert "geom3" in asm.columns, "affiliation column 'geom3' missing from assembly_stats"
+        aff_vals = sorted(asm["geom3"].unique().tolist())
+        assert aff_vals == [1.0, 2.0], f"unexpected affiliation values: {aff_vals}"
+
+
+# =============================================================================
+# Greedy matching and outer boundary tests
+# =============================================================================
+
+def _make_single_block_df(
+    subtomo_id: float, tomo_id: float,
+    x: float, y: float, z: float,
+    phi: float, theta: float, psi: float,
+) -> pd.DataFrame:
+    data = {c: np.zeros(1) for c in cryomotl.Motl.motl_columns}
+    data["subtomo_id"] = [subtomo_id]
+    data["tomo_id"] = [tomo_id]
+    data["x"] = [x]; data["y"] = [y]; data["z"] = [z]
+    data["phi"] = [phi]; data["theta"] = [theta]; data["psi"] = [psi]
+    return pd.DataFrame(data)[cryomotl.Motl.motl_columns]
+
+
+_ROT180Z_ZXZ = Rotation.from_euler("z", 180.0, degrees=True).as_euler("zxz", degrees=True)
+_IDENTITY_ZXZ = Rotation.identity().as_euler("zxz", degrees=True)
+
+
+class TestGreedyMatching:
+    """greedy matching — nearer leg wins when two legs compete for one partner."""
+
+    def _make_psurf(self) -> "structure.PleomorphicSurface":
+        # B at (0,0,0) identity  — site0 tip at (5, 0, 0)
+        # A at (10.5,0,0) 180°z — site0 tip at (5.5, 0, 0); tip_dist to B.site0 = 0.5
+        # C at (10.0,0,0) 180°z — site0 tip at (5.0, 0, 0); tip_dist to B.site0 = 0.0
+        # Greedy by tip distance: (B,C) committed first (dist=0.0); (B,A) skipped.
+        # A–C pair (tip_dist=0.5) is rejected by CC filter (cc_dist=0.5 < cc_lo=5).
+        phi_id, theta_id, psi_id = _IDENTITY_ZXZ
+        phi_180, theta_180, psi_180 = _ROT180Z_ZXZ
+        df = pd.concat([
+            _make_single_block_df(1, 1, 0.0, 0.0, 0.0, phi_id, theta_id, psi_id),      # B
+            _make_single_block_df(2, 1, 10.5, 0.0, 0.0, phi_180, theta_180, psi_180),  # A (far)
+            _make_single_block_df(3, 1, 10.0, 0.0, 0.0, phi_180, theta_180, psi_180),  # C (near)
+        ], ignore_index=True)
+        bd = structure.BlockDefinition.cyclic(3, [5.0, 0.0, 0.0])
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(cryomotl.Motl(df), bd)
+        )
+        ps.connect(max_distance=1.5)
+        return ps
+
+    def test_nearer_leg_wins(self):
+        """C (tip_dist=0.0 to B) beats A (tip_dist=0.5); B and C paired, A unmatched."""
+        ps = self._make_psurf()
+        bs = ps.get_block_stats()
+        degree = {int(row["block_id"]): int(row["degree"]) for _, row in bs.iterrows()}
+        assert degree[1] == 1, f"B (block 1) expected degree 1, got {degree[1]}"
+        assert degree[3] == 1, f"C (block 3) expected degree 1, got {degree[3]}"
+        assert degree[2] == 0, f"A (block 2) expected degree 0, got {degree[2]}"
+
+    def test_each_leg_pairs_at_most_once(self):
+        """No block has degree > 1 (each leg pairs at most once)."""
+        ps = self._make_psurf()
+        bs = ps.get_block_stats()
+        over = bs[bs["degree"] > 1]
+        assert over.empty, (
+            f"Expected all degrees ≤ 1; blocks with degree > 1: "
+            f"{over[['block_id', 'degree']].to_dict('records')}"
+        )
+
+
+class TestCentreDistanceFilter:
+    """CC filter rejects a pair whose block-centre distance is implausibly short."""
+
+    def test_close_centres_rejected(self):
+        """Tips within max_distance but cc_dist < cc_lo → no edge formed."""
+        # A at (0,0,0) identity; site_length=5 → nominal_cc=10, cc_lo=5.
+        # B at (4,0,0) 180°z; cc_dist=4 < 5 → pair rejected.
+        # Without CC filter the tips would match: A.s0=(5,0,0), B.s0=(-1,0,0), dist=6 < 8.
+        phi_id, theta_id, psi_id = _IDENTITY_ZXZ
+        phi_180, theta_180, psi_180 = _ROT180Z_ZXZ
+        df = pd.concat([
+            _make_single_block_df(1, 1, 0.0, 0.0, 0.0, phi_id, theta_id, psi_id),
+            _make_single_block_df(2, 1, 4.0, 0.0, 0.0, phi_180, theta_180, psi_180),
+        ], ignore_index=True)
+        bd = structure.BlockDefinition.cyclic(3, [5.0, 0.0, 0.0])
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(cryomotl.Motl(df), bd)
+        )
+        ps.connect(max_distance=8.0)
+        bs = ps.get_block_stats()
+        for _, row in bs.iterrows():
+            assert int(row["degree"]) == 0, (
+                f"block {int(row['block_id'])} expected degree 0, "
+                f"got {int(row['degree'])} (CC filter should have rejected this pair)"
+            )
+
+
+class TestOuterBoundary:
+    """n_boundary_blocks is correct for closed cages and open chi=1 patches."""
+
+    def _make_closed_psurf(self) -> "structure.PleomorphicSurface":
+        motl, arm, elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))]
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=4.0)
+        return ps
+
+    def _make_open_psurf(self) -> "structure.PleomorphicSurface":
+        motl, arm, elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))]
+        )
+        coords = motl.get_coordinates()
+        mask = (coords[:, 2] - 100.0) >= -5.0
+        sub_df = motl.df[mask].copy().reset_index(drop=True)
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(cryomotl.Motl(sub_df), bd)
+        )
+        ps.connect(max_distance=4.0)
+        return ps
+
+    def test_closed_cage_no_outer_boundary(self):
+        """Fully closed cage: all faces have n_boundary_blocks == 0."""
+        fs = self._make_closed_psurf().get_face_stats()
+        assert "n_boundary_blocks" in fs.columns
+        assert (fs["n_boundary_blocks"] == 0).all(), (
+            f"Closed cage should have n_boundary_blocks=0 for all faces; "
+            f"{(fs['n_boundary_blocks'] > 0).sum()} face(s) have boundary blocks"
+        )
+
+    def test_open_patch_chi1_no_outer_boundary(self):
+        """Open chi=1 patch: assembly has boundary blocks, interior faces have none."""
+        ps = self._make_open_psurf()
+        asm = ps.get_assembly_stats()
+        n_boundary = int(asm.iloc[0]["n_boundary_blocks"])
+        euler = int(asm.iloc[0]["euler_characteristic"])
+        assert n_boundary > 0, "Test premise: expected an open assembly with boundary blocks"
+        assert euler == 1, f"Test premise: expected euler=1 for this open patch, got {euler}"
+        fs = ps.get_face_stats()
+        # At least some faces must have n_boundary_blocks == 0 (interior faces)
+        assert "n_boundary_blocks" in fs.columns
+        assert (fs["n_boundary_blocks"] == 0).any(), "Expected some interior faces with no boundary blocks"
+
+
+# =============================================================================
+# Planar-embedding face detection
+# =============================================================================
+
+
+class TestPlanarFaces:
+    """Planar-embedding face detection replaces trace_faces rotation system."""
+
+    def _soccer_ps(self, max_distance: float = 3.0) -> "structure.PleomorphicSurface":
+        motl, arm, elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))]
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=max_distance)
+        return ps
+
+    def test_closed_sphere_total_face_count(self):
+        """Closed soccer ball: exactly 32 faces (12 pentagons + 20 hexagons), no outer face."""
+        fs = self._soccer_ps().get_face_stats()
+        assert len(fs) == 32, f"Expected 32 faces, got {len(fs)}"
+
+    def test_closed_sphere_no_merged_faces(self):
+        """Closed soccer ball: all faces are size 5 or 6 (no merged proxy faces)."""
+        fs = self._soccer_ps().get_face_stats()
+        assert (fs["size"] <= 6).all(), (
+            f"Closed soccer ball should have no merged faces; "
+            f"got sizes: {sorted(fs['size'].unique())}"
+        )
+
+    def test_get_faces_as_motl_pentagon_filter(self):
+        """get_faces_as_motl(size=5) returns only pentagons: 12 rows, geom3 == 5."""
+        ps = self._soccer_ps()
+        m5 = ps.get_faces_as_motl(size=5)
+        assert len(m5.df) == 12, f"Expected 12 pentagons, got {len(m5.df)}"
+        assert (m5.df["geom3"] == 5.0).all(), "Not all geom3 values are 5.0"
+
+    def test_hex_minus_one_block_merged_face(self):
+        """Remove the block at i=0,j=0 from a honeycomb: one merged face with size==12."""
+        motl_full, arm = _honeycomb(n=2, seed=42)
+        pts = motl_full.df[["x", "y", "z"]].values
+        # A-block at i=0, j=0 sits at the lattice origin (100,100,100) — guaranteed interior
+        center = np.array([100.0, 100.0, 100.0])
+        remove_row = int(np.argmin(np.linalg.norm(pts - center, axis=1)))
+        remove_id = float(motl_full.df.iloc[remove_row]["subtomo_id"])
+        keep_df = motl_full.df[motl_full.df["subtomo_id"] != remove_id].reset_index(drop=True)
+        bd = structure.BlockDefinition.cyclic(3, [arm, 0.0, 0.0])
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(cryomotl.Motl(keep_df), bd)
+        )
+        ps.connect(max_distance=4.0)
+        fs = ps.get_face_stats()
+        # Missing block causes its two flanking hexagons to merge into a size-12 proxy face
+        merged = fs[fs["size"] > 6]
+        assert len(merged) == 1, f"Expected 1 merged face (size>6), got {len(merged)}"
+        assert int(merged.iloc[0]["size"]) == 12, (
+            f"Expected merged face size=12, got {int(merged.iloc[0]['size'])}"
+        )
+
+
+# =============================================================================
+# Block-layer integration tests — object_1.csv (soccer-ball, 60 blocks)
+# =============================================================================
+#
+# Fixture: tests/test_data/structure_data/object_1.csv
+#   60 blocks placed at the 1/3 and 2/3 points of the 30 edges of a regular
+#   icosahedron (soccer-ball arrangement), seed=0, edge=18 voxels.
+#   arm_length=9.0, arm_elevation_deg≈11.6407, max_distance=4.0 for connect().
+#
+# All numeric baselines were recorded from a run of the current code; they
+# are the ground truth for these tests.
+# =============================================================================
+
+_ARM_ELEV = 11.640723136770575  # degrees, from _soccer_ball(seed=0, edge=18)
+
+
+@pytest.fixture(scope="module")
+def soccer_ball_ps():
+    """PleomorphicSurface connected from the object_1.csv soccer-ball motl."""
+    df = pd.read_csv(DATA_DIR / "object_1.csv")
+    motl = cryomotl.Motl(df)
+    arm_length = 9.0
+    bd = structure.BlockDefinition.cyclic(
+        3,
+        [
+            arm_length * np.cos(np.radians(_ARM_ELEV)),
+            0.0,
+            -arm_length * np.sin(np.radians(_ARM_ELEV)),
+        ],
+    )
+    bl = structure.BlockLayer(motl, bd)
+    ps = structure.PleomorphicSurface(block_layer=bl)
+    ps.connect(max_distance=4.0)
+    return ps
+
+
+class TestBlockLayerIntegration:
+    """Block-layer integration: baselines from a run on object_1.csv."""
+
+    # ── contact graph ──────────────────────────────────────────────────────────
+
+    def test_contact_block_count(self, soccer_ball_ps):
+        asm = soccer_ball_ps.get_assembly_stats()
+        assert int(asm.iloc[0]["n_blocks"]) == 60
+
+    def test_contact_contact_count(self, soccer_ball_ps):
+        # get_assembly_stats reports unique pairs (90 for a soccer ball)
+        asm = soccer_ball_ps.get_assembly_stats()
+        assert int(asm.iloc[0]["n_contacts"]) == 90
+
+    def test_contact_connected_components(self, soccer_ball_ps):
+        cog = soccer_ball_ps.check_object_grouping()
+        assert int(cog.iloc[0]["n_components"]) == 1
+
+    def test_contact_component_sizes(self, soccer_ball_ps):
+        cog = soccer_ball_ps.check_object_grouping()
+        sizes = cog.iloc[0]["component_sizes"]
+        assert sizes == [60]
+
+    # ── cycle basis (= minimum spanning faces) ─────────────────────────────────
+
+    def test_cycle_basis_count(self, soccer_ball_ps):
+        asm = soccer_ball_ps.get_assembly_stats()
+        assert int(asm.iloc[0]["n_faces"]) == 32
+
+    def test_cycle_basis_lengths(self, soccer_ball_ps):
+        # 12 pentagons (size=5) + 20 hexagons (size=6)
+        fs = soccer_ball_ps.get_face_stats()
+        size_counts = fs["size"].value_counts().to_dict()
+        assert size_counts.get(5, 0) == 12
+        assert size_counts.get(6, 0) == 20
+
+    # ── get_face_stats ─────────────────────────────────────────────────────────
+
+    def test_face_stats_row_count(self, soccer_ball_ps):
+        fs = soccer_ball_ps.get_face_stats()
+        assert len(fs) == 32
+
+    def test_face_stats_size_distribution(self, soccer_ball_ps):
+        fs = soccer_ball_ps.get_face_stats()
+        size_counts = fs["size"].value_counts().to_dict()
+        assert size_counts.get(5, 0) == 12
+        assert size_counts.get(6, 0) == 20
+
+    def test_face_stats_planarity(self, soccer_ball_ps):
+        # Synthetic flat faces: planarity is numerically zero
+        fs = soccer_ball_ps.get_face_stats()
+        np.testing.assert_allclose(fs["planarity"].to_numpy(), 0.0, atol=1e-12)
+
+    def test_face_stats_centroid_depth(self, soccer_ball_ps):
+        # centroid_depth == 1.0 for all faces (centroid inside shell at depth 1)
+        fs = soccer_ball_ps.get_face_stats()
+        np.testing.assert_allclose(fs["centroid_depth"].to_numpy(), 1.0, atol=1e-12)
+
+    # ── get_assembly_stats ─────────────────────────────────────────────────────
+
+    def test_assembly_euler_characteristic(self, soccer_ball_ps):
+        asm = soccer_ball_ps.get_assembly_stats()
+        assert len(asm) == 1
+        assert int(asm.iloc[0]["euler_characteristic"]) == 2
+
+    def test_assembly_n_faces_5(self, soccer_ball_ps):
+        asm = soccer_ball_ps.get_assembly_stats()
+        assert int(asm.iloc[0]["n_faces_5"]) == 12
+
+    def test_assembly_n_faces_6(self, soccer_ball_ps):
+        asm = soccer_ball_ps.get_assembly_stats()
+        assert int(asm.iloc[0]["n_faces_6"]) == 20
+
+    def test_assembly_degree_distribution(self, soccer_ball_ps):
+        # All 60 blocks have degree 3 (each touches exactly 3 others)
+        asm = soccer_ball_ps.get_assembly_stats()
+        assert int(asm.iloc[0]["n_degree_3"]) == 60
+
+    # ── infer_missing_blocks ───────────────────────────────────────────────────
+
+    def test_infer_missing_blocks_full_ball(self, soccer_ball_ps):
+        # Complete soccer ball: no missing block candidates
+        imb = soccer_ball_ps.infer_missing_blocks()
+        assert len(imb.df) == 0
+
+    # ── check_object_grouping ──────────────────────────────────────────────────
+
+    def test_check_object_grouping_component_count(self, soccer_ball_ps):
+        cog = soccer_ball_ps.check_object_grouping()
+        assert int(cog.iloc[0]["n_components"]) == 1
+
+    def test_check_object_grouping_sizes(self, soccer_ball_ps):
+        cog = soccer_ball_ps.check_object_grouping()
+        assert cog.iloc[0]["component_sizes"] == [60]

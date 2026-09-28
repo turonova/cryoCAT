@@ -2623,6 +2623,11 @@ class Motl:
         center_shift = np.einsum("kij,j->ki", rot_matrices, xyz)
 
         new_motl_df = pd.concat([self.df] * n_subunits)
+        # Ensure float so pandas accepts the float results of the shift computation below.
+        # pd.concat inherits dtypes; if shift_x/y/z were all-zero they may be int64.
+        new_motl_df[["shift_x", "shift_y", "shift_z"]] = (
+            new_motl_df[["shift_x", "shift_y", "shift_z"]].astype(float)
+        )
         new_motl_df["geom5"] = new_motl_df["subtomo_id"]
         new_motl_df = new_motl_df.sort_values(by="subtomo_id")
         new_motl_df["geom2"] = np.tile(np.arange(1, n_subunits + 1).reshape(n_subunits, 1), (len(self.df), 1))

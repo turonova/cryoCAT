@@ -39,6 +39,53 @@ def apply_sort_model(df: pd.DataFrame, sort_model: list[dict]) -> pd.DataFrame:
     return df.sort_values(cols, ascending=asc, kind="stable")
 
 
+def _apply_single_condition(series: pd.Series, spec: dict) -> pd.Series:
+    """Apply one atomic AG Grid filter condition; return boolean mask."""
+    ftype = spec.get("filterType", "number")
+    op = spec.get("type", "equals")
+    val = spec.get("filter")
+    val2 = spec.get("filterTo")
+    if ftype == "number":
+        if op == "equals" and val is not None:
+            return series == val
+        if op == "notEqual" and val is not None:
+            return series != val
+        if op == "greaterThan" and val is not None:
+            return series > val
+        if op == "greaterThanOrEqual" and val is not None:
+            return series >= val
+        if op == "lessThan" and val is not None:
+            return series < val
+        if op == "lessThanOrEqual" and val is not None:
+            return series <= val
+        if op == "inRange" and val is not None and val2 is not None:
+            return series.between(val, val2)
+        if op == "blank":
+            return series.isna()
+        if op == "notBlank":
+            return series.notna()
+    elif ftype == "text":
+        s = series.astype(str)
+        if op == "contains" and val:
+            return s.str.contains(str(val), case=False, na=False)
+        if op == "notContains" and val:
+            return ~s.str.contains(str(val), case=False, na=False)
+        if op == "equals" and val is not None:
+            return s.str.lower() == str(val).lower()
+        if op == "notEqual" and val is not None:
+            return s.str.lower() != str(val).lower()
+        if op == "startsWith" and val:
+            return s.str.lower().str.startswith(str(val).lower())
+        if op == "endsWith" and val:
+            return s.str.lower().str.endswith(str(val).lower())
+        if op == "blank":
+            return series.isna() | (s.str.strip() == "")
+        if op == "notBlank":
+            return series.notna() & (s.str.strip() != "")
+    # Unrecognised condition — pass all rows through rather than silently dropping them
+    return pd.Series(True, index=series.index)
+
+
 def apply_filter_model(
     df: pd.DataFrame,
     filter_model: dict,
@@ -47,8 +94,13 @@ def apply_filter_model(
     """Apply AG Grid filterModel plus slider range filters to *df*.  Pure.
 
     Both sources combine with logical AND.  Recognised filterModel types:
-    - ``"number"`` with ops ``equals``, ``greaterThan``, ``lessThan``, ``inRange``
-    - ``"text"`` with op ``contains``
+    - ``"number"`` with ops ``equals``, ``notEqual``, ``greaterThan``,
+      ``greaterThanOrEqual``, ``lessThan``, ``lessThanOrEqual``, ``inRange``,
+      ``blank``, ``notBlank``
+    - ``"text"`` with ops ``contains``, ``notContains``, ``equals``,
+      ``notEqual``, ``startsWith``, ``endsWith``, ``blank``, ``notBlank``
+    - ``"set"`` with ``values`` list (matched as strings)
+    - Combined conditions via ``"operator": "AND"|"OR"`` + ``"conditions"`` list
 
     Columns prefixed with ``_`` are ignored (internal grid markers).
     """
@@ -56,21 +108,21 @@ def apply_filter_model(
         if col not in df.columns or col.startswith("_"):
             continue
         ftype = spec.get("filterType", "number")
-        op = spec.get("type", "equals")
-        val = spec.get("filter")
-        val2 = spec.get("filterTo")
-        if ftype == "number":
-            if op == "equals" and val is not None:
-                df = df[df[col] == val]
-            elif op == "greaterThan" and val is not None:
-                df = df[df[col] > val]
-            elif op == "lessThan" and val is not None:
-                df = df[df[col] < val]
-            elif op == "inRange" and val is not None and val2 is not None:
-                df = df[df[col].between(val, val2)]
-        elif ftype == "text":
-            if op == "contains" and val:
-                df = df[df[col].astype(str).str.contains(str(val), case=False, na=False)]
+        if ftype == "set":
+            values = spec.get("values")
+            if values is not None:
+                str_values = {str(v) for v in values}
+                df = df[df[col].astype(str).isin(str_values)]
+        elif "conditions" in spec:
+            operator = spec.get("operator", "AND")
+            masks = [_apply_single_condition(df[col], c) for c in spec["conditions"]]
+            if masks:
+                combined = masks[0]
+                for m in masks[1:]:
+                    combined = (combined & m) if operator == "AND" else (combined | m)
+                df = df[combined]
+        else:
+            df = df[_apply_single_condition(df[col], spec)]
     for col, (lo, hi) in (slider_filters or {}).items():
         if col in df.columns:
             df = df[df[col].between(lo, hi)]
@@ -106,8 +158,14 @@ def rows_response(
     filtered = apply_filter_model(df, filter_model, slider_filters or {})
     sorted_df = apply_sort_model(filtered, sort_model)
     block = slice_block(sorted_df, start_row, end_row)
+    records = block_to_records(block, max_rows=CACHE_BLOCK_SIZE)
+    # Inject stable row identity so selection callbacks can recover the original
+    # df.index value even after sorting or filtering.  AG Grid ignores this field
+    # in column display (no matching columnDef) but returns it in selectedRows.
+    for rec, idx in zip(records, block.index):
+        rec["__rowid__"] = idx
     return {
-        "rowData": block_to_records(block, max_rows=CACHE_BLOCK_SIZE),
+        "rowData": records,
         "rowCount": len(filtered),
     }
 
@@ -130,7 +188,9 @@ def resolve_select_all_ids(
     for candidate in ("subtomo_id", "qp_id", "qp_subtomo_id"):
         if candidate in filtered.columns:
             return filtered[candidate].tolist()
-    return list(range(len(filtered)))
+    # Fall back to the df.index values — these are stable under filtering and
+    # sorting because Pandas preserves index labels through df[mask]/sort_values.
+    return filtered.index.tolist()
 
 
 def resolve_filtered_ids(
@@ -618,36 +678,23 @@ def register_tablegrid_callbacks(
                     id_col = candidate
                     break
         if not id_col:
-            return []
+            return [row["__rowid__"] for row in selected_rows if "__rowid__" in row]
         return [row[id_col] for row in selected_rows if id_col in row]
 
-    @app.callback(
+    app.clientside_callback(
+        f"""
+        function(n) {{
+            if (!n) return window.dash_clientside.no_update;
+            dash_ag_grid.getApiAsync("{prefix}-grid").then(function(api) {{
+                if (api) api.selectAllFiltered();
+            }});
+            return window.dash_clientside.no_update;
+        }}
+        """,
         Output(f"{prefix}-selection-ids-store", "data", allow_duplicate=True),
-        Output(f"{prefix}-select-all-btn", "children"),
         Input(f"{prefix}-select-all-btn", "n_clicks"),
-        State(f"{prefix}-global-data-store", "data"),
-        State(f"{prefix}-grid", "filterModel"),
-        State(f"{prefix}-selection-ids-store", "data"),
-        State(f"{prefix}-slider-filters-store", "data"),
         prevent_initial_call=True,
     )
-    def _toggle_select_all(n_clicks, ref, filter_model, current_ids, slider_filters):
-        """Select all filtered rows by identity column, or deselect if already all selected."""
-        if not n_clicks:
-            raise exceptions.PreventUpdate
-        if current_ids:
-            return [], "Select All Filtered"
-        df = resolve_df(ref)
-        if df is None:
-            raise exceptions.PreventUpdate
-        id_col = _pool.get_id_column(ref)
-        # motl_table: slider conditions are already in filter_model as inRange entries
-        effective_slider = {} if motl_table else (slider_filters or {})
-        ids_list = resolve_select_all_ids(df, filter_model or {}, effective_slider, id_column=id_col)
-        total = len(df)
-        n = len(ids_list)
-        label = f"Deselect All ({n:,})" if n < total else "Deselect All"
-        return ids_list, label
 
     _motl_js = "true" if motl_table else "false"
     app.clientside_callback(

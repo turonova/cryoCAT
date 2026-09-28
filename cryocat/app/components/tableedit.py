@@ -43,17 +43,18 @@ def register_tableedit_callbacks(app, prefix: str) -> None:
         prevent_initial_call=True,
     )
     def remove_selected_rows(_, selection_ids, ref, registry, pool_meta, next_id):
-        """Remove rows whose identity column value is in selection_ids."""
+        """Remove rows whose identity column value (or positional index) is in selection_ids."""
         if not selection_ids or not isinstance(ref, dict):
             raise exceptions.PreventUpdate
-        id_col = pool.get_id_column(ref)
-        if not id_col:
-            raise exceptions.PreventUpdate
         df = pool.get_table_df(ref)
-        if df is None or id_col not in df.columns:
+        if df is None:
             raise exceptions.PreventUpdate
+        id_col = pool.get_id_column(ref)
         id_set = set(selection_ids)
-        kept_df = df[~df[id_col].isin(id_set)]
+        if id_col and id_col in df.columns:
+            kept_df = df[~df[id_col].isin(id_set)]
+        else:
+            kept_df = df[~df.index.isin(id_set)]
         return (*pool.commit_rows(ref, kept_df, registry, pool_meta, next_id), [])
 
     @app.callback(
@@ -69,12 +70,10 @@ def register_tableedit_callbacks(app, prefix: str) -> None:
         """Invert the selection: all filtered rows not currently selected."""
         if not isinstance(ref, dict):
             raise exceptions.PreventUpdate
-        id_col = pool.get_id_column(ref)
-        if not id_col:
-            raise exceptions.PreventUpdate
         df = pool.get_table_df(ref)
         if df is None:
             raise exceptions.PreventUpdate
+        id_col = pool.get_id_column(ref)
         all_filtered_ids = resolve_select_all_ids(
             df, filter_model or {}, slider_filters or {}, id_column=id_col
         )

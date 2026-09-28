@@ -259,10 +259,10 @@ def _alpha_shape_sidebar_content() -> html.Div:
         formgen.form_row(
             "save_path",
             get_path_field(
-                f"{p}-save-path", mode="save", extensions=(".ply", ".vtp"),
+                f"{p}-save-path", mode="save", extensions=(".ply", ".vtp", ".stl", ".obj", ".off"),
                 placeholder="e.g. /data/mesh.ply",
             ),
-            "Write path for the mesh. Format inferred from the extension (.ply or .vtp).",
+            "Write path for the mesh. Format inferred from the extension (.ply, .vtp, .stl, .obj, .off).",
             label_text="Save path",
         ),
         dbc.Button(

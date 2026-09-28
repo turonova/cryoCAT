@@ -14,6 +14,7 @@ string ``"pool-registry"`` etc.; the §11.3 test enforces this.
 
 GRAPH_SETTINGS_STORE: str = "graph-settings-store"
 GRAPH_PALETTE_SIGNAL: str = "graph-palette-signal"
+PALETTE_REGISTRY_STORE: str = "palette-registry-store"  # int counter; bumped on each user registration
 
 # ── Motl pool ───────────────────────────────────────────────────────────────────
 # Managed exclusively through app/pool.py (§5).  No other module may mutate

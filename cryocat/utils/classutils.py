@@ -575,6 +575,12 @@ def resolve_param_type(annotation: Any) -> tuple[str, dict]:
         # Unknown alias — fall back to resolving its underlying value.
         return resolve_param_type(annotation.__value__)
 
+    # list[MotlSource] → multi-select pool-motl picker.
+    if origin is list:
+        args = typing.get_args(annotation)
+        if args and isinstance(args[0], typing.TypeAliasType) and args[0].__name__ == "MotlSource":
+            return ("MotlSource", {"multi": True})
+
     # Bare builtins.
     if annotation in (bool, int, float, str):
         return (annotation.__name__, {})
@@ -730,13 +736,21 @@ def _parse_data_pool_entry(value: Any):
 
 
 def _parse_motl_source(value: Any):
-    """Pool-motl picker value (motl_id string) -> server-side Motl instance.
+    """Pool-motl picker value (motl_id string or list of ids) -> Motl or list[Motl].
 
     The lazy import means this function is only reachable after the GUI app has
     started; calling it from a pure-library context returns None.
     """
     if not value:
         return None
+    if isinstance(value, list):
+        try:
+            from cryocat.app.pool import get_rows as _get_rows
+            from cryocat.core.cryomotl import EmMotl
+            result = [EmMotl(_get_rows(str(v))) for v in value if v]
+            return result if result else None
+        except Exception:
+            return None
     try:
         from cryocat.app.pool import get_rows as _get_rows
         from cryocat.core.cryomotl import EmMotl

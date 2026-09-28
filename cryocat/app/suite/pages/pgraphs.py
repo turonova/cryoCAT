@@ -329,20 +329,24 @@ def register_callbacks(app):  # noqa: C901
                     if "frozen_fig" in payload:
                         frozen_fig = payload["frozen_fig"]
                         extra_traces = payload.get("traces", [])
-                        if extra_traces:
-                            fig = go.Figure(frozen_fig)
-                            for trace_cfg in extra_traces:
-                                try:
-                                    _add_overlay(fig, trace_cfg,
-                                                 pool_resolve_df, datapool.resolve_payload_df,
-                                                 {}, "", settings)
-                                except OverlaySourceMissing as e:
-                                    missing_overlays.append(str(e))
-                            fig_data = figure_to_dict(fig)
-                        else:
-                            fig_data = frozen_fig
+                    elif "data" in payload:
+                        extra_traces = payload.get("traces", [])
+                        frozen_fig = {k: v for k, v in payload.items() if k != "traces"}
                     else:
-                        fig_data = payload
+                        frozen_fig = payload
+                        extra_traces = []
+                    if extra_traces:
+                        fig = go.Figure(frozen_fig)
+                        for trace_cfg in extra_traces:
+                            try:
+                                _add_overlay(fig, trace_cfg,
+                                             pool_resolve_df, datapool.resolve_payload_df,
+                                             {}, "", settings)
+                            except OverlaySourceMissing as e:
+                                missing_overlays.append(str(e))
+                        fig_data = figure_to_dict(fig)
+                    else:
+                        fig_data = frozen_fig
                     new_fig_updates[slot_idx] = fig_data
                 except Exception:
                     pass
@@ -645,11 +649,17 @@ def register_callbacks(app):  # noqa: C901
             except Exception:
                 continue
             if kind == "frozen":
-                frozen_src = payload.get("frozen_fig", payload)
+                if "frozen_fig" in payload:
+                    frozen_src = payload["frozen_fig"]
+                    extra_traces = payload.get("traces", [])
+                elif "data" in payload:
+                    extra_traces = payload.get("traces", [])
+                    frozen_src = {k: v for k, v in payload.items() if k != "traces"}
+                else:
+                    continue
                 base = _apply_layout_only(
                     copy.deepcopy(frozen_src), layout_spec or {}, settings, None, None
                 )
-                extra_traces = payload.get("traces", []) if "frozen_fig" in payload else []
                 if extra_traces:
                     fig = go.Figure(base)
                     for trace_cfg in extra_traces:
@@ -746,10 +756,18 @@ def register_callbacks(app):  # noqa: C901
 
     def _rebuild_fig(gid: str, payload: dict, kind: str, settings: dict | None) -> tuple[dict | None, list[str]]:
         if kind == "frozen":
-            frozen_fig = payload.get("frozen_fig")
+            if "frozen_fig" in payload:
+                frozen_fig = payload["frozen_fig"]
+                extra = payload.get("traces", [])
+            elif "data" in payload:
+                # Raw figure dict stored directly (via customel._send_to_editor)
+                # "traces" key at top level = overlay defs added by _add_trace
+                extra = payload.get("traces", [])
+                frozen_fig = {k: v for k, v in payload.items() if k != "traces"}
+            else:
+                return None, []
             if not frozen_fig:
                 return None, []
-            extra = payload.get("traces", [])
             if not extra:
                 return frozen_fig, []
             fig = go.Figure(frozen_fig)
@@ -762,7 +780,10 @@ def register_callbacks(app):  # noqa: C901
                 except OverlaySourceMissing as e:
                     tc_label = tc.get("label", "Overlay")
                     all_warnings.append(f"Trace '{tc_label}': source '{e}' not found, trace skipped.")
-            return figure_to_dict(fig), all_warnings
+            fig_dict = figure_to_dict(fig)
+            apply_settings_to_figure(fig_dict, settings or {})
+            fig_dict.setdefault("layout", {})["uirevision"] = len(extra)
+            return fig_dict, all_warnings
         spec = normalize_spec(payload)
         traces = spec.get("traces", [])
         if not traces:
@@ -809,7 +830,10 @@ def register_callbacks(app):  # noqa: C901
             except OverlaySourceMissing as e:
                 tc_label = tc.get("label", "Overlay")
                 all_warnings.append(f"Trace '{tc_label}': source '{e}' not found, trace skipped.")
-        return figure_to_dict(fig), all_warnings
+        fig_dict = figure_to_dict(fig)
+        apply_settings_to_figure(fig_dict, settings or {})
+        fig_dict.setdefault("layout", {})["uirevision"] = len(traces)
+        return fig_dict, all_warnings
 
     # ── GU3: update traces list when active graph changes ─────────────────────
 

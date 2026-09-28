@@ -36,11 +36,25 @@ _MAX_COLUMNS = 50  # cap columns list in the handle so the store stays lightweig
 # Process-local; clears on hot-reload / restart.  Keyed by data_id.
 
 _payloads: dict[str, Any] = {}
+_private_counter: list[int] = [0]
 
 
 def clear_payloads() -> None:
     """Drop all server-side payloads.  For tests and hot-reload only."""
     _payloads.clear()
+
+
+def store_private(df: "pd.DataFrame", namespace: str) -> str:
+    """Store *df* server-side under a private key; not registered anywhere.
+
+    Returns the key, which ``get_payload()`` accepts.  Each call generates a
+    unique key so the surface view's Input fires even when the same source is
+    re-intersected.
+    """
+    _private_counter[0] += 1
+    key = f"_{namespace}_{_private_counter[0]}"
+    _payloads[key] = df
+    return key
 
 
 # ── Exception ─────────────────────────────────────────────────────────────────

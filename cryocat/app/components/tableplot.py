@@ -26,7 +26,7 @@ hist_norms = [
     {"label": "None", "value": ""},
     {"label": "Percent", "value": "percent"},
     {"label": "Probability", "value": "probability"},
-    {"label": "Density", "value": "Density"},
+    {"label": "Density", "value": "density"},
     {"label": "Probability density", "value": "probability density"},
 ]
 hist_types = ["Count", "Sum", "Avg", "Min", "Max"]
@@ -617,6 +617,22 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         Output(f"{prefix}-graph-options-dropdown", "options"),
         Input(f"{prefix}-options-init", "data"),
     )
+
+    @app.callback(
+        Output(f"{prefix}-plot-discrete-palette-dropdown", "options"),
+        Input(ids.PALETTE_REGISTRY_STORE, "data"),
+    )
+    def _refresh_discrete_options(_version):
+        names = _build_discrete()
+        return [{"label": "Auto", "value": ""}] + [{"label": n, "value": n} for n in names]
+
+    @app.callback(
+        Output(f"{prefix}-plot-continuous-colorscale-dropdown", "options"),
+        Input(ids.PALETTE_REGISTRY_STORE, "data"),
+    )
+    def _refresh_continuous_options(_version):
+        names = _build_continuous()
+        return [{"label": "Auto", "value": ""}] + [{"label": n, "value": n} for n in names]
 
     @app.callback(
         Output(f"{prefix}-graph-options", "style"),

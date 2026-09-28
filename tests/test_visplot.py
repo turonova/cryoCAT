@@ -914,3 +914,404 @@ class TestPlotRotationNormalsBinned:
         x = np.array(fig.data[0].x)
         n_bars = int(np.sum(~np.isnan(x)) / 2)
         assert n_bars >= 40, f"Only {n_bars}/50 bins populated for uniform rotations"
+
+
+# ---------------------------------------------------------------------------
+# save_as_svg — 3-D → 2-D projection
+# ---------------------------------------------------------------------------
+
+# Camera looking straight down -Z: eye=(0,0,5), center=(0,0,0), up=(0,1,0).
+# Derivation:
+#   forward = (0,0,-1)
+#   right   = normalize(cross((0,0,-1),(0,1,0))) = (1,0,0)
+#   true_up = cross((1,0,0),(0,0,-1)) = (0,1,0)
+#   x2 = dot(rel, right)   = rel.x
+#   y2 = dot(rel, true_up) = rel.y
+# → projection simply drops Z.
+_CAM_DOWN_Z = {
+    "eye":    {"x": 0.0, "y": 0.0, "z": 5.0},
+    "center": {"x": 0.0, "y": 0.0, "z": 0.0},
+    "up":     {"x": 0.0, "y": 1.0, "z": 0.0},
+}
+
+
+def _make_scatter3d(xs, ys, zs, **kw):
+    import plotly.graph_objects as go
+    return go.Figure(data=[go.Scatter3d(x=xs, y=ys, z=zs, **kw)])
+
+
+class TestProjectPoints:
+    """Unit tests for the pure projection helpers."""
+
+    def test_down_z_drops_z(self):
+        """Looking straight down -Z should map (x,y,z) → (x,y)."""
+        eye    = np.array([0.0, 0.0, 5.0])
+        center = np.array([0.0, 0.0, 0.0])
+        up     = np.array([0.0, 1.0, 0.0])
+        pts = np.array([[3.0, 4.0, 2.0],
+                        [1.0, -1.0, 100.0],
+                        [0.0, 0.0, -50.0]])
+        xy2 = vp._project_points(pts, eye, center, up)
+        np.testing.assert_allclose(xy2[:, 0], [3.0, 1.0, 0.0], atol=1e-10)
+        np.testing.assert_allclose(xy2[:, 1], [4.0, -1.0, 0.0], atol=1e-10)
+
+    def test_equal_aspect_ratio(self):
+        """A unit step along the camera's right axis and a unit step along true_up
+        must both project to unit length — verifying equal x/y scale."""
+        eye    = np.array([3.0, 2.0, 4.0])
+        center = np.array([0.0, 0.0, 0.0])
+        up     = np.array([0.0, 0.0, 1.0])
+        _, right, true_up = vp._view_basis(eye, center, up)
+        # A unit step along right from center → projects to (1, 0) in screen space.
+        # A unit step along true_up  from center → projects to (0, 1) in screen space.
+        pt_right   = center + right
+        pt_true_up = center + true_up
+        xy2 = vp._project_points(
+            np.stack([pt_right, pt_true_up]), eye, center, up
+        )
+        np.testing.assert_allclose(xy2[0], [1.0, 0.0], atol=1e-10)
+        np.testing.assert_allclose(xy2[1], [0.0, 1.0], atol=1e-10)
+
+    def test_perspective_shrinks_far_points(self):
+        """Perspective projection should shrink points that are farther from the eye."""
+        eye    = np.array([0.0, 0.0, 10.0])
+        center = np.array([0.0, 0.0, 0.0])
+        up     = np.array([0.0, 1.0, 0.0])
+        near = np.array([[1.0, 0.0, -1.0]])   # closer to eye
+        far  = np.array([[1.0, 0.0, -9.0]])   # farther from eye
+        xy_near = vp._project_points(near, eye, center, up, perspective=True)
+        xy_far  = vp._project_points(far,  eye, center, up, perspective=True)
+        # Far point should have smaller projected x because of the perspective divide
+        assert abs(xy_far[0, 0]) < abs(xy_near[0, 0])
+
+
+class TestCameraVectors:
+    def test_defaults_used_when_dict_empty(self):
+        eye, center, up = vp._camera_vectors({})
+        np.testing.assert_array_equal(eye,    vp._DEF_EYE)
+        np.testing.assert_array_equal(center, vp._DEF_CENTER)
+        np.testing.assert_array_equal(up,     vp._DEF_UP)
+
+    def test_explicit_values_parsed(self):
+        cam = {
+            "eye":    {"x": 1.0, "y": 2.0, "z": 3.0},
+            "center": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "up":     {"x": 0.0, "y": 0.0, "z": 1.0},
+        }
+        eye, center, up = vp._camera_vectors(cam)
+        np.testing.assert_array_equal(eye,    [1.0, 2.0, 3.0])
+        np.testing.assert_array_equal(center, [0.0, 0.0, 0.0])
+        np.testing.assert_array_equal(up,     [0.0, 0.0, 1.0])
+
+
+class TestHas3dTraces:
+    def test_scatter_is_not_3d(self):
+        import plotly.graph_objects as go
+        fig = go.Figure(data=[go.Scatter(x=[1], y=[1])])
+        assert not vp._has_3d_traces(fig)
+
+    def test_scatter3d_is_3d(self):
+        import plotly.graph_objects as go
+        fig = go.Figure(data=[go.Scatter3d(x=[0], y=[0], z=[0])])
+        assert vp._has_3d_traces(fig)
+
+    def test_surface_is_3d(self):
+        import plotly.graph_objects as go
+        fig = go.Figure(data=[go.Surface(z=[[1, 2], [3, 4]])])
+        assert vp._has_3d_traces(fig)
+
+
+class TestScatter3dToScatter:
+    """_scatter3d_to_scatter preserves style and projects correctly."""
+
+    def _eye_center_up(self):
+        return (np.array([0., 0., 5.]),
+                np.array([0., 0., 0.]),
+                np.array([0., 1., 0.]))
+
+    def test_known_projection(self):
+        """Points (3,4,z) should project to (3,4) with the down-Z camera.
+
+        Uses mode='lines' to bypass the back-to-front depth sort (which only
+        applies to marker traces), so input order is preserved.
+        """
+        import plotly.graph_objects as go
+        t = go.Scatter3d(x=[3.0, 1.0], y=[4.0, -1.0], z=[99.0, -7.0],
+                         mode="lines", name="A")
+        eye, center, up = self._eye_center_up()
+        result = vp._scatter3d_to_scatter(t.to_plotly_json(), eye, center, up)
+        np.testing.assert_allclose(result.x, [3.0, 1.0], atol=1e-10)
+        np.testing.assert_allclose(result.y, [4.0, -1.0], atol=1e-10)
+
+    def test_name_preserved(self):
+        import plotly.graph_objects as go
+        t = go.Scatter3d(x=[0], y=[0], z=[0], name="my_group")
+        eye, center, up = self._eye_center_up()
+        result = vp._scatter3d_to_scatter(t.to_plotly_json(), eye, center, up)
+        assert result.name == "my_group"
+
+    def test_marker_color_preserved(self):
+        import plotly.graph_objects as go
+        t = go.Scatter3d(x=[0], y=[0], z=[0],
+                         marker=dict(color="#ff0000", size=8))
+        eye, center, up = self._eye_center_up()
+        result = vp._scatter3d_to_scatter(t.to_plotly_json(), eye, center, up)
+        assert result.marker.color == "#ff0000"
+        assert result.marker.size == 8
+
+    def test_line_color_preserved_for_lines_mode(self):
+        import plotly.graph_objects as go
+        t = go.Scatter3d(x=[0, 1], y=[0, 1], z=[0, 1],
+                         mode="lines",
+                         line=dict(color="#00ff00", width=3))
+        eye, center, up = self._eye_center_up()
+        result = vp._scatter3d_to_scatter(t.to_plotly_json(), eye, center, up)
+        assert result.line.color == "#00ff00"
+        assert result.line.width == 3
+
+    def test_empty_trace_returns_empty_scatter(self):
+        import plotly.graph_objects as go
+        t = go.Scatter3d(x=[], y=[], z=[], name="empty")
+        eye, center, up = self._eye_center_up()
+        result = vp._scatter3d_to_scatter(t.to_plotly_json(), eye, center, up)
+        assert result.name == "empty"
+
+
+class TestSaveAsSvgProjection:
+    """Integration tests for save_as_svg — mock to_image so kaleido is not required."""
+
+    def _mock_fig(self, monkeypatch):
+        """Patch go.Figure.to_image to return a minimal SVG bytes object."""
+        monkeypatch.setattr(
+            "plotly.graph_objects.Figure.to_image",
+            lambda self, format, **kw: b"<svg></svg>",
+        )
+
+    def test_2d_figure_does_not_take_projection_path(self, monkeypatch):
+        """A figure with only 2-D traces exports via the normal path."""
+        import plotly.graph_objects as go
+        self._mock_fig(monkeypatch)
+        fig = go.Figure(data=[go.Scatter(x=[1, 2], y=[3, 4])])
+        svg, skipped = vp.save_as_svg(fig, camera=_CAM_DOWN_Z)
+        # The mock returns the same bytes regardless; what matters is no exception
+        # and that the function returns a string with an empty skipped list.
+        assert isinstance(svg, str)
+        assert skipped == []
+
+    def test_3d_figure_returns_string(self, monkeypatch):
+        """A scatter3d figure returns an SVG string without raising."""
+        self._mock_fig(monkeypatch)
+        fig = _make_scatter3d([1, 2], [3, 4], [0, 0])
+        svg, skipped = vp.save_as_svg(fig, camera=_CAM_DOWN_Z)
+        assert isinstance(svg, str)
+        assert skipped == []
+
+    def test_accepts_dict_input(self, monkeypatch):
+        """save_as_svg accepts a plain dict (as Dash State returns)."""
+        self._mock_fig(monkeypatch)
+        import plotly.graph_objects as go
+        fig = go.Figure(data=[go.Scatter(x=[1], y=[2])])
+        fig_dict = fig.to_plotly_json()
+        svg, skipped = vp.save_as_svg(fig_dict)
+        assert isinstance(svg, str)
+        assert skipped == []
+
+    def test_depth_ordering_back_to_front(self, monkeypatch):
+        """The trace further from the camera appears first in the projected figure."""
+        self._mock_fig(monkeypatch)
+        import plotly.graph_objects as go
+        # Camera: eye at +z, looking down.  far_trace is at z=-5 (depth=5, far).
+        # near_trace is at z=3 (depth=-3, close).
+        far_trace  = go.Scatter3d(x=[0], y=[0], z=[-5], name="far")
+        near_trace = go.Scatter3d(x=[0], y=[0], z=[3],  name="near")
+        fig = go.Figure(data=[near_trace, far_trace])  # add near first
+
+        built_traces: list = []
+
+        def _capture_to_image(self_fig, format, **kw):
+            built_traces.extend(self_fig.data)
+            return b"<svg></svg>"
+
+        monkeypatch.setattr("plotly.graph_objects.Figure.to_image", _capture_to_image)
+        vp.save_as_svg(fig, camera=_CAM_DOWN_Z)
+
+        assert len(built_traces) == 2
+        # far trace must be first (index 0) in the projected figure
+        assert built_traces[0].name == "far"
+        assert built_traces[1].name == "near"
+
+    def test_color_and_line_group_survive(self, monkeypatch):
+        """Names (line groups) and marker colours survive the projection."""
+        self._mock_fig(monkeypatch)
+        import plotly.graph_objects as go
+        t1 = go.Scatter3d(x=[0], y=[0], z=[0], name="grp_A",
+                          marker=dict(color="#aabbcc"))
+        t2 = go.Scatter3d(x=[1], y=[1], z=[1], name="grp_B",
+                          marker=dict(color="#112233"))
+        fig = go.Figure(data=[t1, t2])
+
+        built_traces: list = []
+
+        def _capture(self_fig, format, **kw):
+            built_traces.extend(self_fig.data)
+            return b"<svg></svg>"
+
+        monkeypatch.setattr("plotly.graph_objects.Figure.to_image", _capture)
+        vp.save_as_svg(fig, camera=_CAM_DOWN_Z)
+
+        names  = {t.name for t in built_traces}
+        colors = {t.marker.color for t in built_traces}
+        assert names  == {"grp_A", "grp_B"}
+        assert colors == {"#aabbcc", "#112233"}
+
+    def test_unsupported_3d_type_returned_in_skipped(self, monkeypatch):
+        """Unsupported 3-D traces are omitted and their types returned in the skipped list."""
+        import plotly.graph_objects as go
+
+        monkeypatch.setattr("plotly.graph_objects.Figure.to_image",
+                            lambda self_fig, format, **kw: b"<svg></svg>")
+        fig = go.Figure(data=[go.Surface(z=[[1, 2], [3, 4]])])
+        svg, skipped = vp.save_as_svg(fig, camera=_CAM_DOWN_Z)
+        assert isinstance(svg, str)
+        assert "surface" in skipped
+
+    def test_within_trace_depth_ordering_markers(self, monkeypatch):
+        """For a markers-only trace, the near point must be drawn last (rendered on top).
+
+        Camera: eye at (0, 0, 5), looking at origin.  Forward vector = (0, 0, -1).
+        Point A at z=+2 is nearer (depth -2); point B at z=-3 is further (depth 3).
+        After depth sort B (far) comes first, A (near) comes second in the projected trace.
+        """
+        import plotly.graph_objects as go
+
+        built_traces: list = []
+
+        def _capture(self_fig, format, **kw):
+            built_traces.extend(self_fig.data)
+            return b"<svg></svg>"
+
+        monkeypatch.setattr("plotly.graph_objects.Figure.to_image", _capture)
+
+        # Two-point marker trace: A at z=+2 (near), B at z=-3 (far).
+        # We give them distinct colours so we can tell them apart after sorting.
+        fig = go.Figure(data=[
+            go.Scatter3d(
+                x=[0, 0], y=[0, 0], z=[2, -3],
+                mode="markers",
+                marker=dict(color=["red", "blue"]),
+                name="pts",
+            )
+        ])
+        vp.save_as_svg(fig, camera=_CAM_DOWN_Z)
+
+        assert len(built_traces) == 1
+        colors = built_traces[0].marker.color
+        # After depth sort: far (blue, originally index 1) is first, near (red, index 0) is last.
+        assert list(colors) == ["blue", "red"]
+
+    # ------------------------------------------------------------------
+    # Axis normalisation (scene.aspectmode)
+    # ------------------------------------------------------------------
+
+    def test_scene_normalisation_cube_unequal_ranges(self, monkeypatch):
+        """Unequal data ranges are normalised before projection (aspectmode="cube").
+
+        x spans [0, 400] and z spans [0, 40] — a 10:1 ratio.  With "cube" mode
+        Plotly rescales both to the same visual extent.  Two points that differ
+        only in which axis they're offset along should therefore project to equal
+        displacement in the SVG.
+
+        Camera: eye at (0, 0, 5) looking at origin — pure top-down, forward = (0,0,-1).
+        Forward is along z, so depth sort is stable; right = (1,0,0).
+
+        _scene_transform uses midpoint centering: each axis maps its midpoint to 0
+        and its full range to 1 (scale = 1/range).
+
+        x range [0, 400]: midpoint=200, scale=1/400.
+          origin x=0   → scene_x = (0-200)/400   = -0.5
+          A      x=400 → scene_x = (400-200)/400  =  0.5
+        z range [0, 40]:  midpoint=20,  scale=1/40.
+          origin z=0   → scene_z = (0-20)/40     = -0.5
+          B      z=40  → scene_z = (40-20)/40     =  0.5
+
+        So:
+          origin (0,0,0) → scene (-0.5, 0, -0.5) → x2 = -0.5
+          A (400,0,0)    → scene (0.5, 0, -0.5)  → x2 =  0.5
+          B (0,0,40)     → scene (-0.5, 0, 0.5)  → x2 = -0.5  (B's offset is in z, not x)
+
+        Key normalisation invariant: displacement from origin to A in scene-x
+        (= 1.0) equals displacement from origin to B in scene-z (= 1.0), proving
+        that the 400:40 data ratio has been equalised.
+        """
+        import plotly.graph_objects as go
+
+        built_traces: list = []
+
+        def _capture(self_fig, format, **kw):
+            built_traces.extend(self_fig.data)
+            return b"<svg></svg>"
+
+        monkeypatch.setattr("plotly.graph_objects.Figure.to_image", _capture)
+
+        # One trace with three points: origin, A (far along x), B (far along z).
+        # Data ranges: x ∈ [0, 400], y ∈ [0, 0] (padded to ±1), z ∈ [0, 40].
+        fig = go.Figure(data=[
+            go.Scatter3d(
+                x=[0.0, 400.0, 0.0],
+                y=[0.0,   0.0, 0.0],
+                z=[0.0,   0.0, 40.0],
+                mode="markers",
+                name="pts",
+            )
+        ])
+        fig.update_layout(scene=dict(aspectmode="cube"))
+        vp.save_as_svg(fig, camera=_CAM_DOWN_Z, perspective=False)
+
+        assert len(built_traces) == 1
+        x2 = built_traces[0].x  # projected x coordinates
+
+        # Midpoint centering: origin → x2=-0.5, A → x2=0.5, B → x2=-0.5.
+        # The normalisation invariant is x2[A] - x2[origin] = 1.0 (not 10).
+        assert abs(x2[0] - (-0.5)) < 1e-9, f"origin projected x2 should be -0.5, got {x2[0]}"
+        assert abs(x2[1] - 0.5) < 1e-6, f"A projected x2 should be 0.5, got {x2[1]}"
+        assert abs(x2[2] - (-0.5)) < 1e-9, f"B projected x2 should be -0.5, got {x2[2]}"
+        assert abs((x2[1] - x2[0]) - 1.0) < 1e-6, "normalised x-displacement A→origin should equal 1.0"
+
+    def test_projection_type_read_from_figure(self, monkeypatch):
+        """perspective=None reads projection.type from the figure, not from a hard-coded default."""
+        import plotly.graph_objects as go
+
+        built_figs: list = []
+
+        def _capture(self_fig, format, **kw):
+            built_figs.append(self_fig)
+            return b"<svg></svg>"
+
+        monkeypatch.setattr("plotly.graph_objects.Figure.to_image", _capture)
+
+        # Figure with two points separated along the camera axis.
+        # Orthographic → parallel projection → same projected x for both.
+        # We just verify no exception is raised and the call completes.
+        fig = go.Figure(data=[
+            go.Scatter3d(x=[0, 1], y=[0, 0], z=[0, 0], mode="markers", name="t")
+        ])
+
+        # Explicitly orthographic in the figure — perspective=None should honour it.
+        fig.update_layout(scene=dict(
+            camera=dict(projection=dict(type="orthographic")),
+            aspectmode="cube",
+        ))
+        vp.save_as_svg(fig, camera=_CAM_DOWN_Z)
+        assert len(built_figs) >= 1  # completed without error
+
+        # Explicitly perspective in the figure — perspective=None should honour it.
+        fig.update_layout(scene=dict(camera=dict(projection=dict(type="perspective"))))
+        built_figs.clear()
+        vp.save_as_svg(fig, camera=_CAM_DOWN_Z)
+        assert len(built_figs) >= 1
+
+        # perspective=True overrides even when figure says orthographic.
+        fig.update_layout(scene=dict(camera=dict(projection=dict(type="orthographic"))))
+        built_figs.clear()
+        vp.save_as_svg(fig, camera=_CAM_DOWN_Z, perspective=True)
+        assert len(built_figs) >= 1

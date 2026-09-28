@@ -10,6 +10,7 @@ GRAPH_SETTINGS_DEFAULTS = {
     "font_family": "Arial",
     "font_size": 12,
     "marker_size": 6,
+    "marker_opacity": None,
     "line_width": 2,
     "line_dash": "solid",
     "discrete_palette": "StarryNight",
@@ -58,6 +59,7 @@ def get_graph_settings_components():
             "discrete_palette": GRAPH_SETTINGS_DEFAULTS["discrete_palette"],
             "continuous_palette": GRAPH_SETTINGS_DEFAULTS["continuous_palette"],
         }),
+        dcc.Store(id=ids.PALETTE_REGISTRY_STORE, data=0),
         dbc.Modal(
             id="graph-settings-modal",
             is_open=False,
@@ -236,21 +238,20 @@ def register_graph_settings_callbacks(app):
             "palette_is_user_set": palette_is_user_set,
         }, "Applied."
 
-    @app.callback(
+    app.clientside_callback(
+        """function(pathname, settings) {
+            var s = settings || {};
+            if (s.palette_is_user_set) return window.dash_clientside.no_update;
+            var tool = (pathname || '').replace(/^\\//, '').split('/')[0] || '';
+            var target = (tool === 'tango') ? 'Monet' : 'StarryNight';
+            if (s.discrete_palette === target) return window.dash_clientside.no_update;
+            return Object.assign({}, s, {discrete_palette: target, continuous_palette: target});
+        }""",
         Output(ids.GRAPH_SETTINGS_STORE, "data", allow_duplicate=True),
         Input(ids.SUITE_URL, "pathname"),
         State(ids.GRAPH_SETTINGS_STORE, "data"),
         prevent_initial_call=True,
     )
-    def _set_tab_palette(pathname, settings):
-        tool = (pathname or "").lstrip("/").split("/")[0] or ""
-        settings = dict(settings or GRAPH_SETTINGS_DEFAULTS)
-        if settings.get("palette_is_user_set"):
-            return no_update
-        target = "Monet" if tool == "tango" else "StarryNight"
-        if settings.get("discrete_palette") == target:
-            return no_update
-        return {**settings, "discrete_palette": target, "continuous_palette": target}
 
 
 _DISCRETE_TRACE_TYPES = {"scatter", "scattergl", "scatter3d", "bar", "histogram", "violin", "box"}
@@ -315,12 +316,6 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
         if ax_s:
             layout.setdefault(axis_key, {}).update(ax_s)
 
-    # W1: palette_is_user_set=True  → clear existing scalar string colours first so the
-    #     chosen palette wins over Express-assigned per-trace colours.
-    # W1: palette_is_user_set=False → fill-only: skip traces that already carry any
-    #     explicit string colour (they were deliberately coloured by the figure builder).
-    palette_is_user_set = bool(settings.get("palette_is_user_set"))
-
     if settings.get("discrete_palette"):
         palette = resolve_palette(settings["discrete_palette"])
         layout["colorway"] = palette
@@ -335,12 +330,12 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
                 # Per-point data array — never overwrite in either mode.
                 continue
 
-            if not palette_is_user_set and isinstance(existing_mc, str):
-                # Fill-only: trace already has an explicit colour — leave it.
+            if marker.get("coloraxis"):
+                # Coloraxis-bound trace (px continuous color) — palette must not flatten it.
                 continue
 
-            # User-set mode: clear scalar string colours so the palette wins.
-            if palette_is_user_set and isinstance(existing_mc, str):
+            # Clear existing scalar colour first so the palette wins cleanly.
+            if isinstance(existing_mc, str):
                 trace.setdefault("marker", {}).pop("color", None)
                 existing_lc = trace.get("line", {}).get("color")
                 if isinstance(existing_lc, str):
@@ -359,17 +354,39 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
 
     if settings.get("continuous_palette"):
         scale = resolve_colorscale(settings["continuous_palette"])
-        # W2: coloraxis-bound traces (marker.coloraxis set) read the palette from
-        # layout.coloraxis.colorscale — that is the correct path for Express scatter
-        # with color="continuous_column".  Standalone heatmap/contour/surface traces
-        # keep their own trace-level colorscale and need it set directly.
+        # Update every coloraxisN entry already present in the layout.  Overlays
+        # added via _add_overlay are remapped to coloraxis2, coloraxis3, … to
+        # avoid collisions; a single setdefault("coloraxis") would miss them.
+        for _ca_key in list(layout):
+            if _ca_key == "coloraxis" or (
+                _ca_key.startswith("coloraxis") and _ca_key[9:].isdigit()
+            ):
+                layout[_ca_key]["colorscale"] = scale
+        # Guarantee coloraxis exists even when no trace has initialised it yet.
         layout.setdefault("coloraxis", {})["colorscale"] = scale
         for trace in fig_dict.get("data", []):
+            ca = trace.get("marker", {}).get("coloraxis")
+            if ca:
+                # colorscale lives on the layout entry; ensure it is set even if
+                # the entry was created after the loop above (edge case: trace
+                # references a coloraxis key not yet present in the layout).
+                layout.setdefault(ca, {})["colorscale"] = scale
+                continue
             if trace.get("type") in _CONTINUOUS_TRACE_TYPES:
-                if not trace.get("marker", {}).get("coloraxis"):
-                    trace["colorscale"] = scale
+                # heatmap/contour/surface/mesh3d etc. carry their own colorscale.
+                trace["colorscale"] = scale
+            else:
+                # scatter/scatter3d/scattergl with data-driven array color:
+                # set marker.colorscale (and line.colorscale where applicable).
+                marker = trace.get("marker", {})
+                if isinstance(marker.get("color"), list):
+                    trace.setdefault("marker", {})["colorscale"] = scale
+                lc = trace.get("line", {}).get("color")
+                if isinstance(lc, list):
+                    trace.setdefault("line", {})["colorscale"] = scale
 
     marker_size = settings.get("marker_size")
+    marker_opacity = settings.get("marker_opacity")
     line_width = settings.get("line_width")
     line_dash = settings.get("line_dash")
 
@@ -379,6 +396,9 @@ def apply_settings_to_figure(fig_dict: dict, settings: dict, override: bool = Fa
             marker = trace.setdefault("marker", {})
             if override or marker.get("size") is None:
                 marker["size"] = marker_size
+        if trace_type in ("scatter", "scattergl", "scatter3d") and marker_opacity is not None:
+            if override or trace.get("opacity") is None:
+                trace["opacity"] = marker_opacity
         if trace_type in ("scatter", "scattergl", "scatter3d"):
             if line_width or line_dash:
                 line = trace.setdefault("line", {})

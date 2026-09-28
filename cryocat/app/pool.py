@@ -559,12 +559,17 @@ def natural_sort_key(s: str) -> list:
 def get_id_column(ref: dict | None) -> str | None:
     """Return the identity column name for any ref type.
 
-    Motl refs → ``"subtomo_id"``.
+    dp-view bridge refs (data_id present) → ``ref["id_column"]`` (may be None).
+    Pure motl refs → ``"subtomo_id"``.
     Table-pool refs → ``ref["id_column"]`` (may be ``None``).
     All other → ``None``.
     """
     if not isinstance(ref, dict):
         return None
+    # dp-view bridge refs carry data_id; check before motl_id to avoid the
+    # motl path returning "subtomo_id" for data-pool entries.
+    if "data_id" in ref:
+        return ref.get("id_column")
     if "motl_id" in ref:
         return "subtomo_id"
     return ref.get("id_column")
@@ -573,11 +578,20 @@ def get_id_column(ref: dict | None) -> str | None:
 def get_table_df(ref: dict | None) -> pd.DataFrame | None:
     """Return the DataFrame for any ref type, or ``None``.
 
+    dp-view bridge refs (data_id present) → direct payload fetch by data_id.
     Motl refs → :func:`get_rows`; returns ``None`` on :exc:`PoolPayloadMissing`.
     Table-pool refs → :func:`~cryocat.app.datapool.resolve_df`.
     """
     if not isinstance(ref, dict):
         return None
+    # dp-view bridge refs carry data_id; fetch directly so the motl-pool path
+    # is not taken (get_rows("dp-view") only works in the working-copy path).
+    if "data_id" in ref:
+        try:
+            from cryocat.app import datapool as _datapool
+            return _datapool.get_payload(ref["data_id"])
+        except Exception:
+            return None
     if "motl_id" in ref:
         try:
             return get_rows(ref["motl_id"])
@@ -605,12 +619,27 @@ def get_column_ranges_for_ref(
 ) -> dict:
     """Return ``column_ranges`` metadata for any ref type.
 
+    dp-view bridge refs (data_id present): computed from the payload.
     Motl refs: pulled from ``registry[motl_id]["column_ranges"]``.
     Table-pool refs: computed from the live DataFrame (via *resolve_df* when
     provided, otherwise via :func:`~cryocat.app.datapool.resolve_df`).
     """
     if not isinstance(ref, dict):
         return {}
+    # dp-view bridge refs carry data_id; compute ranges from the actual payload
+    # because the motl-pool registry has no "dp-view" entry.
+    if "data_id" in ref:
+        df = resolve_df(ref) if resolve_df is not None else None
+        if df is None:
+            try:
+                from cryocat.app import datapool as _datapool
+                df = _datapool.get_payload(ref["data_id"])
+            except Exception:
+                return {}
+        if df is None or df.empty:
+            return {}
+        _, col_ranges, _ = _compute_entry_metadata(df)
+        return col_ranges
     if "motl_id" in ref:
         return (registry or {}).get(ref["motl_id"], {}).get("column_ranges", {})
     if "table_id" in ref:
@@ -642,6 +671,19 @@ def commit_rows(
     ``{"motl_id": …, "rev": …}``.
     """
     from dash import no_update as _nu
+    # dp-view bridge refs: update the data pool payload in-place and bump rev
+    # so the grid refreshes.  The DATA_POOL_REGISTRY store is not updated here
+    # (no dp stores in scope); n_rows reflects the new df.
+    if "data_id" in ref:
+        data_id = ref["data_id"]
+        from cryocat.app import datapool as _dp
+        try:
+            _dp._payloads[data_id] = df.copy()
+        except Exception:
+            pass
+        _dp.set_view_df_direct(df)
+        new_rev = (ref.get("rev") or 0) + 1
+        return _nu, _nu, _nu, {**ref, "n_rows": len(df), "rev": new_rev}
     if "motl_id" in ref:
         motl_id = ref["motl_id"]
         state = PoolState.from_stores(registry, pool_meta, next_id)

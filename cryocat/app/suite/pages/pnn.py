@@ -1178,27 +1178,23 @@ def register_callbacks(app):
         Input(ids.POOL_REGISTRY, "data"),
     )
 
-    # ── W4: Gate table-to-motl buttons per slot ──────────────────────────────
+    # ── W4: Gate the shared table-to-motl buttons ────────────────────────────
 
-    def _make_ttm_gate(_slot):
-        @app.callback(
-            Output(f"nn-slot-{_slot}-ttm-ttm-write-btn", "disabled"),
-            Output(f"nn-slot-{_slot}-ttm-ttm-write-btn", "title"),
-            Output(f"nn-slot-{_slot}-ttm-ttm-create-btn", "disabled"),
-            Output(f"nn-slot-{_slot}-ttm-ttm-create-btn", "title"),
-            Input(f"nn-slot-{_slot}-tabv-global-data-store", "data"),
-            prevent_initial_call=True,
-        )
-        def _gate(ref):
-            from cryocat.app.suite.pages._motl_link import get_motl_role_id
-            query_mid = get_motl_role_id((ref or {}).get("motl_links"), "query")
-            if query_mid:
-                return False, f"Targets query motl: {query_mid}", False, f"Targets query motl: {query_mid}"
-            msg = "Load data with a source motl selected to enable motl operations."
-            return True, msg, True, msg
-
-    for _slot_idx in range(_NN_SLOTS):
-        _make_ttm_gate(_slot_idx)
+    @app.callback(
+        Output("nn-ttm-ttm-write-btn", "disabled"),
+        Output("nn-ttm-ttm-write-btn", "title"),
+        Output("nn-ttm-ttm-create-btn", "disabled"),
+        Output("nn-ttm-ttm-create-btn", "title"),
+        Input("nn-ttm-active-data-store", "data"),
+        prevent_initial_call=True,
+    )
+    def _gate_ttm(ref):
+        from cryocat.app.suite.pages._motl_link import get_motl_role_id
+        query_mid = get_motl_role_id((ref or {}).get("motl_links"), "query")
+        if query_mid:
+            return False, f"Targets query motl: {query_mid}", False, f"Targets query motl: {query_mid}"
+        msg = "Load data with a source motl selected to enable motl operations."
+        return True, msg, True, msg
 
     # ── Sync filtered NN registry from the global data pool ──────────────────
 

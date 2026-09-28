@@ -39,6 +39,413 @@ def _save_plotly(fig: go.Figure, output_path: PathOrStr | None) -> None:
         fig.write_image(p)
 
 
+# ── 3-D → 2-D projection for editable SVG export ─────────────────────────────
+
+# Trace types considered "3D" by save_as_svg.
+_3D_TRACE_TYPES: frozenset[str] = frozenset({"scatter3d", "mesh3d", "surface", "cone", "streamtube"})
+# Only scatter3d is projected; the rest are skipped with a note.
+_SUPPORTED_3D_TYPES: frozenset[str] = frozenset({"scatter3d"})
+
+_DEF_EYE    = np.array([1.25, 1.25, 1.25])
+_DEF_CENTER = np.array([0.0,  0.0,  0.0])
+_DEF_UP     = np.array([0.0,  0.0,  1.0])
+
+
+def _norm3(v: np.ndarray) -> np.ndarray:
+    n = float(np.linalg.norm(v))
+    return v / n if n > 1e-12 else v
+
+
+def _to_float_array(v) -> np.ndarray:
+    """Convert a Plotly serialized coordinate value to a float64 numpy array.
+
+    Plotly 6.x ``to_plotly_json()`` may encode arrays as typed-array dicts:
+    ``{"bdata": "<base64>", "dtype": "f8"}``.  This helper decodes both that
+    format and plain Python lists / numpy arrays.
+    """
+    if v is None:
+        return np.array([], dtype=float)
+    if isinstance(v, dict) and "bdata" in v:
+        import base64 as _b64
+        _dtypes = {
+            "f4": "<f4", "f8": "<f8",
+            "i4": "<i4", "i2": "<i2", "u4": "<u4", "u1": "u1",
+        }
+        raw = _b64.b64decode(v["bdata"])
+        np_dtype = _dtypes.get(v.get("dtype", "f8"), "<f8")
+        return np.frombuffer(raw, dtype=np_dtype).astype(float)
+    return np.asarray(v, dtype=float)
+
+
+def _camera_vectors(cam: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Extract (eye, center, up) arrays from a Plotly camera dict."""
+    def _v(sub, default):
+        if not sub:
+            return default.copy()
+        return np.array([float(sub.get("x", default[0])),
+                         float(sub.get("y", default[1])),
+                         float(sub.get("z", default[2]))])
+    return _v(cam.get("eye"), _DEF_EYE), _v(cam.get("center"), _DEF_CENTER), _v(cam.get("up"), _DEF_UP)
+
+
+def _view_basis(eye: np.ndarray, center: np.ndarray, up: np.ndarray
+                ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return (forward, right, true_up) orthonormal basis vectors for the camera."""
+    forward = _norm3(center - eye)
+    right   = _norm3(np.cross(forward, up))
+    true_up = np.cross(right, forward)
+    return forward, right, true_up
+
+
+def _project_points(
+    xyz: np.ndarray,
+    eye: np.ndarray,
+    center: np.ndarray,
+    up: np.ndarray,
+    *,
+    perspective: bool = False,
+) -> np.ndarray:
+    """Orthographic (default) or perspective projection of (N,3) world points → (N,2).
+
+    Orthographic: x2 = dot(rel, right), y2 = dot(rel, true_up) where rel = point - center.
+    Perspective:  divide both by distance from eye along the forward axis.
+    Equal-aspect is guaranteed by using the same basis vector for both axes.
+    """
+    forward, right, true_up = _view_basis(eye, center, up)
+    rel = xyz - center
+    x2 = rel @ right
+    y2 = rel @ true_up
+    if perspective:
+        d = rel @ forward + float(np.linalg.norm(center - eye))
+        d = np.where(d > 1e-8, d, 1e-8)
+        x2 = x2 / d
+        y2 = y2 / d
+    return np.column_stack([x2, y2])
+
+
+def _trace_mean_depth(t: dict, center: np.ndarray, forward: np.ndarray) -> float:
+    """Mean depth of a scatter3d trace along the *forward* axis from *center*.
+
+    Larger value = further along the view direction = should be drawn first.
+    """
+    xs = _to_float_array(t.get("x"))
+    ys = _to_float_array(t.get("y"))
+    zs = _to_float_array(t.get("z"))
+    if xs.size == 0:
+        return 0.0
+    xyz = np.column_stack([xs, ys, zs])
+    rel = xyz - center
+    depths = rel @ forward
+    valid = depths[~np.isnan(depths)]
+    return float(np.mean(valid)) if valid.size else 0.0
+
+
+def _scatter3d_to_scatter(
+    t: dict,
+    eye: np.ndarray,
+    center: np.ndarray,
+    up: np.ndarray,
+    *,
+    perspective: bool = False,
+) -> go.Scatter:
+    """Project one scatter3d trace dict to a 2-D go.Scatter, preserving style.
+
+    For pure marker traces (``mode`` contains no ``"lines"``), points are
+    sorted back-to-front by depth so that near markers are drawn on top of far
+    ones.  Line traces are left in their original order to preserve geometry.
+    """
+    xs = _to_float_array(t.get("x"))
+    ys = _to_float_array(t.get("y"))
+    zs = _to_float_array(t.get("z"))
+    if xs.size == 0:
+        return go.Scatter(name=t.get("name") or "")
+
+    xyz = np.column_stack([xs, ys, zs])
+    mode = t.get("mode") or "markers"
+    mk_src: dict = dict(t.get("marker") or {})
+
+    # --- within-trace depth sort (markers only) ---------------------------
+    if "lines" not in mode:
+        forward, _, _ = _view_basis(eye, center, up)
+        depths = (xyz - center) @ forward
+        # NaN-depth points (gaps) sort last; far points sort first.
+        sort_idx = np.argsort(-np.nan_to_num(depths, nan=-np.inf), kind="stable")
+        xyz = xyz[sort_idx]
+        n = len(sort_idx)
+        for k in ("color", "size", "opacity"):
+            v = mk_src.get(k)
+            if isinstance(v, list) and len(v) == n:
+                mk_src[k] = [v[i] for i in sort_idx]
+
+    xy2 = _project_points(xyz, eye, center, up, perspective=perspective)
+    # NaN propagates through the projection; Plotly treats NaN as a line break.
+
+    mk: dict = {}
+    for k in ("color", "size", "colorscale", "cmin", "cmax", "opacity",
+               "showscale", "colorbar", "line"):
+        if k in mk_src and mk_src[k] is not None:
+            mk[k] = mk_src[k]
+    # 3-D marker symbols have no 2-D equivalent — omit "symbol".
+
+    ln_src = t.get("line") or {}
+    ln: dict = {}
+    for k in ("color", "width", "dash", "colorscale", "cmin", "cmax"):
+        if k in ln_src and ln_src[k] is not None:
+            ln[k] = ln_src[k]
+
+    scatter = go.Scatter(
+        x=xy2[:, 0].tolist(),
+        y=xy2[:, 1].tolist(),
+        mode=mode,
+        name=t.get("name") or "",
+        showlegend=t.get("showlegend", True),
+        opacity=t.get("opacity"),
+        connectgaps=t.get("connectgaps", False),
+        marker=mk if mk else None,
+        line=ln if ln and "lines" in mode else None,
+    )
+    return scatter
+
+
+def _has_3d_traces(fig: go.Figure) -> bool:
+    """Return True if *fig* contains any trace whose type is in ``_3D_TRACE_TYPES``."""
+    return any(getattr(t, "type", None) in _3D_TRACE_TYPES for t in fig.data)
+
+
+def _collect_3d_data_ranges(trace_dicts: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+    """Per-axis (lo, hi) arrays of shape (3,) across all 3-D trace dicts.
+
+    Axes with no finite data fall back to [-1, 1]; zero-range axes are padded
+    by ±1 so scale factors remain finite.
+    """
+    lo = np.full(3, np.inf)
+    hi = np.full(3, -np.inf)
+    for t in trace_dicts:
+        for i, key in enumerate(("x", "y", "z")):
+            v = _to_float_array(t.get(key))
+            finite = v[np.isfinite(v)]
+            if finite.size:
+                lo[i] = min(lo[i], float(finite.min()))
+                hi[i] = max(hi[i], float(finite.max()))
+    for i in range(3):
+        if not np.isfinite(lo[i]):
+            lo[i], hi[i] = -1.0, 1.0
+        elif lo[i] == hi[i]:
+            lo[i] -= 1.0
+            hi[i] += 1.0
+    return lo, hi
+
+
+def _scene_transform(
+    fig: go.Figure,
+    trace_dicts: list[dict],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(data_center, scale)`` that maps data → scene coordinates.
+
+    ``p_scene = scale * (p_data − data_center)``
+
+    Matches Plotly's ``scene.aspectmode``:
+
+    * ``"cube"`` / ``"auto"`` (Plotly default): each axis independently
+      scaled to the same visual span (unit cube in scene space).
+    * ``"data"``: uniform scale, longest axis maps to 1.
+    * ``"manual"``: uses ``scene.aspectratio`` to set relative axis lengths.
+
+    The camera ``eye``/``center``/``up`` are already expressed in scene
+    space, so they need no adjustment.
+    """
+    lo, hi = _collect_3d_data_ranges(trace_dicts)
+    ranges = hi - lo
+    center = (lo + hi) / 2.0
+
+    aspectmode = "auto"
+    try:
+        m = fig.layout.scene.aspectmode
+        if m:
+            aspectmode = m
+    except Exception:
+        pass
+
+    if aspectmode == "manual":
+        try:
+            ar = fig.layout.scene.aspectratio
+            ratios = np.array([float(ar.x or 1.0), float(ar.y or 1.0), float(ar.z or 1.0)])
+        except Exception:
+            ratios = np.ones(3)
+        scale = ratios / ranges
+    elif aspectmode == "data":
+        s = 1.0 / float(np.max(ranges))
+        scale = np.array([s, s, s])
+    else:  # "cube" or "auto" — each axis independently
+        scale = 1.0 / ranges
+
+    return center, scale
+
+
+def _apply_scene_transform(t: dict, data_center: np.ndarray, scale: np.ndarray) -> dict:
+    """Return a shallow copy of *t* with x/y/z replaced by scene-space coordinates."""
+    t = dict(t)
+    for i, key in enumerate(("x", "y", "z")):
+        v = _to_float_array(t.get(key))
+        t[key] = (scale[i] * (v - data_center[i])).tolist() if v.size else []
+    return t
+
+
+def save_as_svg(
+    fig: go.Figure | dict,
+    path: PathOrStr | None = None,
+    *,
+    camera: dict | None = None,
+    perspective: bool | None = None,
+) -> tuple[str, list[str]]:
+    """Export *fig* as an editable SVG string, projecting 3-D traces to 2-D first.
+
+    Parameters
+    ----------
+    fig : go.Figure or dict
+        The figure to export.  A plain dict (as received from a Dash State) is
+        also accepted and converted internally.
+    path : path-like, optional
+        If given, the SVG string is also written to this file.
+    camera : dict, optional
+        Plotly camera dict with optional sub-dicts ``eye``, ``center``, ``up``
+        and ``projection`` (each with the usual Plotly keys).  When supplied,
+        it **overrides** the camera declared in ``fig.layout.scene.camera``.
+        This is how the GUI passes the camera currently shown on screen.
+    perspective : bool or None, default None
+        When ``None`` (default), the projection type is read from the figure's
+        ``scene.camera.projection.type`` (Plotly's default is
+        ``"perspective"``).  Pass ``True`` or ``False`` to override.
+
+    Returns
+    -------
+    svg : str
+        The SVG file content.
+    skipped : list[str]
+        Trace types that were present in the figure but could not be projected
+        (``mesh3d``, ``surface``, ``cone``, ``streamtube``).  Empty when all
+        traces were handled.  The caller is responsible for surfacing this to
+        the user.
+
+    Notes on supported trace types
+    --------------------------------
+    ``scatter3d``
+        Fully supported.  Points are projected; line and marker style, colour,
+        colourscale+range, marker size, ``connectgaps``, legend name and
+        colour bar are all preserved.  Marker *symbol* has no 2-D equivalent
+        and is dropped.  For ``mode="markers"`` traces, points are sorted
+        back-to-front by depth so near markers are drawn on top; line traces
+        are left in their original order to preserve geometry.
+    ``mesh3d``, ``surface``, ``cone``, ``streamtube``
+        Not supported.  These traces are silently omitted; their types are
+        returned in ``skipped``.
+
+    Axis normalisation
+    ------------------
+    Plotly rescales data before applying the camera according to
+    ``scene.aspectmode`` (default ``"auto"`` / ``"cube"``).  This function
+    applies the same normalisation so that a figure with *x* spanning 400
+    and *z* spanning 40 projects identically to the screen view.
+
+    If the figure contains *no* 3-D traces, Plotly's normal SVG export is
+    used and the projection path is not taken.
+    """
+    if isinstance(fig, dict):
+        fig = go.Figure(fig)
+
+    if not _has_3d_traces(fig):
+        svg = fig.to_image(format="svg").decode("utf-8")
+        if path is not None:
+            import pathlib
+            pathlib.Path(str(path)).write_text(svg, encoding="utf-8")
+        return svg, []
+
+    # --- resolve effective camera -----------------------------------------
+    scene_cam: dict = {}
+    try:
+        cam_obj = fig.layout.scene.camera
+        scene_cam = cam_obj.to_plotly_json() if cam_obj else {}
+    except Exception:
+        pass
+    eff_camera: dict = {**scene_cam, **(camera or {})}
+    eye, center, up = _camera_vectors(eff_camera)
+    forward, _, _ = _view_basis(eye, center, up)
+
+    # --- resolve projection type ------------------------------------------
+    # Plotly's default is "perspective"; honour the figure's setting unless
+    # the caller explicitly overrides with the perspective= argument.
+    if perspective is None:
+        proj_type = (eff_camera.get("projection") or {}).get("type") or "perspective"
+        use_perspective = proj_type == "perspective"
+    else:
+        use_perspective = bool(perspective)
+
+    # --- collect 3-D trace dicts (needed for scene normalisation) ---------
+    skipped_types: list[str] = []
+    raw_3d_dicts: list[dict] = []
+    all_trace_entries: list[tuple[dict, str]] = []  # (t_dict, ttype)
+    for t in fig.data:
+        ttype = getattr(t, "type", None) or ""
+        t_dict = t.to_plotly_json()
+        all_trace_entries.append((t_dict, ttype))
+        if ttype in _SUPPORTED_3D_TYPES:
+            raw_3d_dicts.append(t_dict)
+        elif ttype in _3D_TRACE_TYPES:
+            skipped_types.append(ttype)
+
+    # --- compute scene normalisation (matches Plotly aspectmode) ----------
+    data_center, data_scale = _scene_transform(fig, raw_3d_dicts)
+
+    # --- collect traces with scene-normalised mean depth ------------------
+    trace_entries: list[tuple[dict, float]] = []
+    for t_dict, ttype in all_trace_entries:
+        if ttype not in _3D_TRACE_TYPES:
+            trace_entries.append((t_dict, -np.inf))  # 2-D traces always in front
+        elif ttype in _SUPPORTED_3D_TYPES:
+            t_norm = _apply_scene_transform(t_dict, data_center, data_scale)
+            depth = _trace_mean_depth(t_norm, center, forward)
+            trace_entries.append((t_norm, depth))
+        # unsupported 3D types already counted in skipped_types, not added
+
+    # Back-to-front: furthest (largest depth along forward axis) drawn first.
+    trace_entries.sort(key=lambda td: -td[1])
+
+    # --- build 2-D figure -------------------------------------------------
+    try:
+        bg = fig.layout.paper_bgcolor or "white"
+    except AttributeError:
+        bg = "white"
+
+    fig2d = go.Figure()
+    fig2d.update_layout(
+        paper_bgcolor=bg,
+        plot_bgcolor=bg,
+        showlegend=fig.layout.showlegend if fig.layout.showlegend is not None else True,
+        xaxis=dict(visible=False, scaleanchor="y", scaleratio=1,
+                   showgrid=False, zeroline=False),
+        yaxis=dict(visible=False, showgrid=False, zeroline=False),
+        margin=dict(l=10, r=10, t=10, b=10),
+    )
+
+    for t_dict, _depth in trace_entries:
+        ttype = t_dict.get("type", "")
+        if ttype == "scatter3d":
+            # t_dict is already in scene coords (normalised above)
+            fig2d.add_trace(_scatter3d_to_scatter(t_dict, eye, center, up,
+                                                   perspective=use_perspective))
+        else:
+            try:
+                fig2d.add_trace(go.Figure({"data": [t_dict]}).data[0])
+            except Exception:
+                pass
+
+    svg = fig2d.to_image(format="svg").decode("utf-8")
+    if path is not None:
+        import pathlib
+        pathlib.Path(str(path)).write_text(svg, encoding="utf-8")
+    return svg, skipped_types
+
+
 # ---------- Example usage --------------------
 # # 1) Set global defaults for the session
 # set_defaults(
@@ -337,6 +744,16 @@ register_palette("Klimt", ["#466AA1", "#DFE0DF", "#EAAE47", "#C1554D"])
 # Hokusai: extended blue -> teal accent palette.
 register_palette("Hokusai", ["#0c1f45", "#466AA1", "#7D9DD8", "#E1F5F3", "#75C6C0", "#3D908B"])
 register_colorscale("Hokusai", ["#0c1f45", "#466AA1", "#7D9DD8", "#E1F5F3", "#75C6C0", "#3D908B"])
+
+# Teal only:
+register_palette(
+    "TealMaterial",
+    ["#B2DFDB", "#80CBC4", "#4DB6AC", "#26A69A", "#009688", "#00897B", "#00796B", "#00695C", "#004D40"],
+)
+register_colorscale(
+    "TealMaterial",
+    ["#B2DFDB", "#80CBC4", "#4DB6AC", "#26A69A", "#009688", "#00897B", "#00796B", "#00695C", "#004D40"],
+)
 
 
 def set_defaults(**kwargs: Any) -> None:
@@ -1441,6 +1858,17 @@ class KDEBuilder(Hist2DBuilder):
             grid_spec=grid_spec,
         )
 
+        # The parent titles reflect histogram semantics ("Count", "Count (percent)"…).
+        # KDE values are derived from probability density, so override with correct labels.
+        _norm = (self.hist_norm or "").lower().strip()
+        if _norm == "percent":
+            self.y_axis_title = "Percent"
+        elif _norm == "probability":
+            self.y_axis_title = "Probability"
+        else:  # "", "density", "probability density" — all raw KDE density output
+            self.y_axis_title = "Density"
+        self.colorbar["title"]["text"] = self.y_axis_title
+
     def padded_limits(
         self,
         v: ArrayLike,
@@ -1536,6 +1964,17 @@ class KDEBuilder(Hist2DBuilder):
         X, Y = np.meshgrid(xg, yg)
         zg = kde(np.vstack([X.ravel(), Y.ravel()])).reshape(self.nbinsy, self.nbinsx)
 
+        # Apply requested normalization.  gaussian_kde returns probability density
+        # (values integrate to 1 over the continuous domain).
+        _norm = (self.hist_norm or "").lower().strip()
+        if _norm in ("probability", "percent"):
+            dx = float(xg[1] - xg[0]) if len(xg) > 1 else 1.0
+            dy = float(yg[1] - yg[0]) if len(yg) > 1 else 1.0
+            zg = zg * dx * dy        # probability mass per grid cell
+            if _norm == "percent":
+                zg = zg * 100.0
+        # "density" / "probability density" / "" → keep raw probability density
+
         tol = 1e-4 * float(np.nanmax(zg))
         zmax = float(np.nanmax(np.where(zg < tol, 0.0, zg)))
 
@@ -1613,15 +2052,17 @@ class KDEBuilder(Hist2DBuilder):
             self.fig.update_xaxes(title_text=self.x_id[i], row=r, col=c, range=x_ranges[i])
             self.fig.update_yaxes(title_text=self.y_id[i], row=r, col=c, range=y_ranges[i])
 
-        self.fig.update_layout(meta={
-            "kde_grids": [
-                {
-                    "step_x": float(xg[i][1] - xg[i][0]) if len(xg[i]) > 1 else 0.0,
-                    "step_y": float(yg[i][1] - yg[i][0]) if len(yg[i]) > 1 else 0.0,
-                }
-                for i in range(len(xg))
-            ]
-        })
+        self.fig.update_layout(
+            meta={
+                "kde_grids": [
+                    {
+                        "step_x": float(xg[i][1] - xg[i][0]) if len(xg[i]) > 1 else 0.0,
+                        "step_y": float(yg[i][1] - yg[i][0]) if len(yg[i]) > 1 else 0.0,
+                    }
+                    for i in range(len(xg))
+                ]
+            }
+        )
 
         return self.fig
 
@@ -1918,8 +2359,7 @@ def plot_spherical_density_2d(
     if isinstance(input_data, pd.DataFrame):
         if not column_names_x:
             raise ValueError(
-                "When input_data is a DataFrame or CSV path, column_names_x "
-                "(ordered list of columns) is required."
+                "When input_data is a DataFrame or CSV path, column_names_x " "(ordered list of columns) is required."
             )
         cols = [c for c in column_names_x if c in input_data.columns]
         if len(cols) == 0 or (len(cols) % 3) != 0:
@@ -2178,7 +2618,8 @@ def plot_scatter_xyz_panels(
     subplot_titles = ["XY Distribution", "XZ Distribution", "YZ Distribution"]
 
     fig = make_subplots(
-        rows=1, cols=3,
+        rows=1,
+        cols=3,
         subplot_titles=subplot_titles,
         shared_yaxes=False,
         horizontal_spacing=0.08,
@@ -2190,35 +2631,46 @@ def plot_scatter_xyz_panels(
             for col_idx, (xc, yc) in enumerate(pairs, start=1):
                 fig.add_trace(
                     go.Scattergl(
-                        x=sub[xc], y=sub[yc], mode="markers",
+                        x=sub[xc],
+                        y=sub[yc],
+                        mode="markers",
                         marker=dict(size=marker_size),
                         name=str(type_val),
                         legendgroup=str(type_val),
                         showlegend=(col_idx == 1),
                     ),
-                    row=1, col=col_idx,
+                    row=1,
+                    col=col_idx,
                 )
     else:
         hover = df[hover_column_name] if hover_column_name is not None else None
         for col_idx, (xc, yc) in enumerate(pairs, start=1):
             fig.add_trace(
                 go.Scattergl(
-                    x=df[xc], y=df[yc], mode="markers",
+                    x=df[xc],
+                    y=df[yc],
+                    mode="markers",
                     marker=dict(size=marker_size),
                     text=hover,
                     showlegend=False,
                 ),
-                row=1, col=col_idx,
+                row=1,
+                col=col_idx,
             )
 
     if circle_radius is not None:
         for c in (1, 2, 3):
             fig.add_shape(
                 type="circle",
-                x0=-circle_radius, y0=-circle_radius,
-                x1=circle_radius, y1=circle_radius,
-                fillcolor="gold", opacity=0.4, line_color="gold",
-                row=1, col=c,
+                x0=-circle_radius,
+                y0=-circle_radius,
+                x1=circle_radius,
+                y1=circle_radius,
+                fillcolor="gold",
+                opacity=0.4,
+                line_color="gold",
+                row=1,
+                col=c,
             )
 
     for c, xref in enumerate(["x", "x2", "x3"], start=1):
@@ -2290,11 +2742,15 @@ def plot_scatter_3d(
         marker_kwargs["colorbar"] = dict(title=color_label)
 
     fig = go.Figure(
-        data=[go.Scatter3d(
-            x=df[x_col], y=df[y_col], z=df[z_col],
-            mode="markers",
-            marker=marker_kwargs,
-        )]
+        data=[
+            go.Scatter3d(
+                x=df[x_col],
+                y=df[y_col],
+                z=df[z_col],
+                mode="markers",
+                marker=marker_kwargs,
+            )
+        ]
     )
     fig.update_layout(
         title=title,
@@ -2375,14 +2831,20 @@ def plot_ply_mesh(
             continue
         verts = np.asarray(mesh.vertices)
         faces = np.asarray(mesh.triangles)
-        fig.add_trace(go.Mesh3d(
-            x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
-            i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
-            color=color,
-            opacity=opacity,
-            name=name,
-            showlegend=True,
-        ))
+        fig.add_trace(
+            go.Mesh3d(
+                x=verts[:, 0],
+                y=verts[:, 1],
+                z=verts[:, 2],
+                i=faces[:, 0],
+                j=faces[:, 1],
+                k=faces[:, 2],
+                color=color,
+                opacity=opacity,
+                name=name,
+                showlegend=True,
+            )
+        )
 
     if overlay_points is not None:
         if isinstance(overlay_points, np.ndarray) and overlay_points.ndim == 2:
@@ -2393,13 +2855,17 @@ def plot_ply_mesh(
         ov_palette = resolve_colors_any(overlay_colors, color_type="palette", n=n_ov)
         for pts, ov_name, ov_color in zip(overlay_points, overlay_names, ov_palette):
             pts = np.asarray(pts)
-            fig.add_trace(go.Scatter3d(
-                x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
-                mode="markers",
-                marker=dict(size=overlay_marker_size, color=ov_color),
-                name=ov_name,
-                showlegend=True,
-            ))
+            fig.add_trace(
+                go.Scatter3d(
+                    x=pts[:, 0],
+                    y=pts[:, 1],
+                    z=pts[:, 2],
+                    mode="markers",
+                    marker=dict(size=overlay_marker_size, color=ov_color),
+                    name=ov_name,
+                    showlegend=True,
+                )
+            )
 
     if title is not None:
         fig.update_layout(title=title)
@@ -2507,7 +2973,7 @@ def plot_vtp_mesh(
 
     # Collect global min/max from data unless the caller supplied an explicit range.
     meshes = []
-    global_min, global_max = (colorscale_range if colorscale_range is not None else (None, None))
+    global_min, global_max = colorscale_range if colorscale_range is not None else (None, None)
     for path in vtp_paths:
         mesh = pv.read(str(path))
         meshes.append(mesh)
@@ -2527,10 +2993,7 @@ def plot_vtp_mesh(
     # (resolved) colorscale, with a named colorbar. Negative codes (e.g. flat) render gray.
     cat_colorscale = cat_cmin = cat_cmax = cat_colorbar = None
     if categorical and color_by is not None:
-        codes_all = [
-            np.unique(np.asarray(m.point_data[color_by]))
-            for m in meshes if color_by in m.point_data
-        ]
+        codes_all = [np.unique(np.asarray(m.point_data[color_by])) for m in meshes if color_by in m.point_data]
         if codes_all:
             codes = np.unique(np.concatenate(codes_all)).astype(int)
             base_scale = [[float(p), c] for p, c in resolve_colorscale(plot_colorscale)]
@@ -2539,10 +3002,7 @@ def plot_vtp_mesh(
                 positions = (nonneg - nonneg.min()) / (nonneg.max() - nonneg.min())
             else:
                 positions = np.full(len(nonneg), 0.5)
-            sampled = (
-                px.colors.sample_colorscale(base_scale, list(positions))
-                if len(nonneg) else []
-            )
+            sampled = px.colors.sample_colorscale(base_scale, list(positions)) if len(nonneg) else []
             code_to_color = {int(c): col for c, col in zip(nonneg, sampled)}
             cat_cmin, cat_cmax = float(codes.min()) - 0.5, float(codes.max()) + 0.5
             span = cat_cmax - cat_cmin
@@ -2567,8 +3027,12 @@ def plot_vtp_mesh(
         faces = mesh.faces.reshape(-1, 4)[:, 1:]
 
         trace_kwargs: dict = dict(
-            x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
-            i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+            x=verts[:, 0],
+            y=verts[:, 1],
+            z=verts[:, 2],
+            i=faces[:, 0],
+            j=faces[:, 1],
+            k=faces[:, 2],
             opacity=opacity,
             name=name,
             showlegend=True,
@@ -2577,25 +3041,29 @@ def plot_vtp_mesh(
         if color_by is not None and color_by in mesh.point_data:
             vals = np.asarray(mesh.point_data[color_by])
             if categorical and cat_colorscale is not None:
-                trace_kwargs.update(dict(
-                    intensity=vals,
-                    intensitymode="vertex",
-                    colorscale=cat_colorscale,
-                    cmin=cat_cmin,
-                    cmax=cat_cmax,
-                    showscale=(n == 1),
-                    colorbar=cat_colorbar if n == 1 else None,
-                ))
+                trace_kwargs.update(
+                    dict(
+                        intensity=vals,
+                        intensitymode="vertex",
+                        colorscale=cat_colorscale,
+                        cmin=cat_cmin,
+                        cmax=cat_cmax,
+                        showscale=(n == 1),
+                        colorbar=cat_colorbar if n == 1 else None,
+                    )
+                )
             else:
-                trace_kwargs.update(dict(
-                    intensity=vals,
-                    intensitymode="vertex",
-                    colorscale=plot_colorscale,
-                    cmin=global_min,
-                    cmax=global_max,
-                    showscale=(n == 1),
-                    colorbar=dict(title=color_by) if n == 1 else None,
-                ))
+                trace_kwargs.update(
+                    dict(
+                        intensity=vals,
+                        intensitymode="vertex",
+                        colorscale=plot_colorscale,
+                        cmin=global_min,
+                        cmax=global_max,
+                        showscale=(n == 1),
+                        colorbar=dict(title=color_by) if n == 1 else None,
+                    )
+                )
         else:
             trace_kwargs["color"] = color
 
@@ -2611,13 +3079,17 @@ def plot_vtp_mesh(
         ov_palette = resolve_colors_any(overlay_colors, color_type="palette", n=n_ov)
         for pts, ov_name, ov_color in zip(overlay_points, overlay_names, ov_palette):
             pts = np.asarray(pts)
-            fig.add_trace(go.Scatter3d(
-                x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
-                mode="markers",
-                marker=dict(size=overlay_marker_size, color=ov_color),
-                name=ov_name,
-                showlegend=True,
-            ))
+            fig.add_trace(
+                go.Scatter3d(
+                    x=pts[:, 0],
+                    y=pts[:, 1],
+                    z=pts[:, 2],
+                    mode="markers",
+                    marker=dict(size=overlay_marker_size, color=ov_color),
+                    name=ov_name,
+                    showlegend=True,
+                )
+            )
 
     if title is not None:
         fig.update_layout(title=title)
@@ -2703,26 +3175,36 @@ def plot_points_with_normals(
 
         sub_pts = pts[idx]
 
-        fig.add_trace(go.Scatter3d(
-            x=sub_pts[:, 0], y=sub_pts[:, 1], z=sub_pts[:, 2],
-            mode="markers",
-            marker=dict(size=marker_size, color=color, opacity=0.8),
-            name=label,
-            showlegend=True,
-        ))
+        fig.add_trace(
+            go.Scatter3d(
+                x=sub_pts[:, 0],
+                y=sub_pts[:, 1],
+                z=sub_pts[:, 2],
+                mode="markers",
+                marker=dict(size=marker_size, color=color, opacity=0.8),
+                name=label,
+                showlegend=True,
+            )
+        )
 
         if show_normals and nrm is not None:
             sub_nrm = np.asarray(nrm)[idx]
-            fig.add_trace(go.Cone(
-                x=sub_pts[:, 0], y=sub_pts[:, 1], z=sub_pts[:, 2],
-                u=sub_nrm[:, 0], v=sub_nrm[:, 1], w=sub_nrm[:, 2],
-                sizemode="absolute",
-                sizeref=normal_scale,
-                colorscale=[[0, color], [1, color]],
-                showscale=False,
-                name=f"{label} normals",
-                showlegend=False,
-            ))
+            fig.add_trace(
+                go.Cone(
+                    x=sub_pts[:, 0],
+                    y=sub_pts[:, 1],
+                    z=sub_pts[:, 2],
+                    u=sub_nrm[:, 0],
+                    v=sub_nrm[:, 1],
+                    w=sub_nrm[:, 2],
+                    sizemode="absolute",
+                    sizeref=normal_scale,
+                    colorscale=[[0, color], [1, color]],
+                    showscale=False,
+                    name=f"{label} normals",
+                    showlegend=False,
+                )
+            )
 
     if title is not None:
         fig.update_layout(title=title)
@@ -2779,12 +3261,14 @@ def plot_grouped_box(
 
     fig = go.Figure()
     for i, grp in enumerate(unique_groups):
-        fig.add_trace(go.Box(
-            y=df.loc[df[group_column_name] == grp, value_column_name],
-            name=str(grp),
-            boxpoints=boxpoints,
-            marker_color=palette[i],
-        ))
+        fig.add_trace(
+            go.Box(
+                y=df.loc[df[group_column_name] == grp, value_column_name],
+                name=str(grp),
+                boxpoints=boxpoints,
+                marker_color=palette[i],
+            )
+        )
 
     fig.update_layout(
         title=title,
@@ -2796,8 +3280,6 @@ def plot_grouped_box(
 
     _save_plotly(fig, output_path)
     return fig
-
-
 
 
 def _hemisphere_distance_traces(
@@ -2888,20 +3370,25 @@ def plot_polar_nn_distances(
     cmax = float(np.amax(distances))
 
     fig = make_subplots(
-        rows=1, cols=2,
+        rows=1,
+        cols=2,
         specs=[[{"type": "polar"}, {"type": "polar"}]],
         subplot_titles=("Northern hemisphere", "Southern hemisphere"),
         horizontal_spacing=0.1,
     )
     fig.add_trace(
-        _hemisphere_distance_traces(theta_r_pos, dist_pos, colorscale, marker_size, cmin, cmax,
-                                     show_cbar=False, customdata=orig_idx_pos),
-        row=1, col=1,
+        _hemisphere_distance_traces(
+            theta_r_pos, dist_pos, colorscale, marker_size, cmin, cmax, show_cbar=False, customdata=orig_idx_pos
+        ),
+        row=1,
+        col=1,
     )
     fig.add_trace(
-        _hemisphere_distance_traces(theta_r_neg, dist_neg, colorscale, marker_size, cmin, cmax,
-                                     show_cbar=True, customdata=orig_idx_neg),
-        row=1, col=2,
+        _hemisphere_distance_traces(
+            theta_r_neg, dist_neg, colorscale, marker_size, cmin, cmax, show_cbar=True, customdata=orig_idx_neg
+        ),
+        row=1,
+        col=2,
     )
     fig.update_polars(
         radialaxis=dict(range=[0, max_radius], showticklabels=False),
@@ -2966,14 +3453,20 @@ def plot_rotation_normals(
     fig = go.Figure(
         data=[
             go.Scatter3d(
-                x=new_points[:, 0], y=new_points[:, 1], z=new_points[:, 2],
-                mode="markers", marker=marker, showlegend=False,
+                x=new_points[:, 0],
+                y=new_points[:, 1],
+                z=new_points[:, 2],
+                mode="markers",
+                marker=marker,
+                showlegend=False,
             )
         ]
     )
     axis_kw = dict(range=[-radius, radius], showspikes=False)
     fig.update_scenes(
-        xaxis=axis_kw, yaxis=axis_kw, zaxis=axis_kw,
+        xaxis=axis_kw,
+        yaxis=axis_kw,
+        zaxis=axis_kw,
         aspectmode="cube",
     )
     if graph_title is not None:
@@ -3056,15 +3549,11 @@ def plot_rotation_normals_binned(
     from cryocat.utils.exceptions import UserInputError
 
     if n_bins is not None and cone_sampling is not None:
-        raise UserInputError(
-            "Specify at most one of 'n_bins' and 'cone_sampling', not both."
-        )
+        raise UserInputError("Specify at most one of 'n_bins' and 'cone_sampling', not both.")
 
     angles = np.asarray(input_angles, dtype=float)
     if angles.ndim != 2 or angles.shape[1] != 3 or angles.shape[0] < 1:
-        raise UserInputError(
-            f"input_angles must be shape (N, 3) with N >= 1; got {angles.shape}."
-        )
+        raise UserInputError(f"input_angles must be shape (N, 3) with N >= 1; got {angles.shape}.")
 
     if n_bins is not None:
         n = int(n_bins)
@@ -3101,7 +3590,9 @@ def plot_rotation_normals_binned(
 
     traces = [
         go.Scatter3d(
-            x=xyz[:, 0].tolist(), y=xyz[:, 1].tolist(), z=xyz[:, 2].tolist(),
+            x=xyz[:, 0].tolist(),
+            y=xyz[:, 1].tolist(),
+            z=xyz[:, 2].tolist(),
             mode="lines",
             line=dict(
                 color=line_color,
@@ -3125,7 +3616,9 @@ def plot_rotation_normals_binned(
         zs = radius * np.cos(th2d)
         traces.append(
             go.Surface(
-                x=xs, y=ys, z=zs,
+                x=xs,
+                y=ys,
+                z=zs,
                 surfacecolor=np.zeros_like(xs),
                 colorscale=[[0, "#b0b0b0"], [1, "#b0b0b0"]],
                 opacity=0.15,
@@ -3201,9 +3694,7 @@ def plot_orientational_distribution(
     def _bin_hemisphere(theta_r):
         if theta_r.shape[0] == 0:
             return None, None, 0
-        theta_bins = np.linspace(
-            np.amin(theta_r[:, 0]), np.amin(theta_r[:, 0]) + 2 * np.pi, theta_bin
-        )
+        theta_bins = np.linspace(np.amin(theta_r[:, 0]), np.amin(theta_r[:, 0]) + 2 * np.pi, theta_bin)
         h, x_edges, y_edges = np.histogram2d(theta_r[:, 0], theta_r[:, 1], bins=(theta_bins, radius_bins))
         return (h, x_edges, y_edges), theta_bins, float(np.amax(h))
 
@@ -3248,7 +3739,8 @@ def plot_orientational_distribution(
         return traces
 
     fig = make_subplots(
-        rows=1, cols=2,
+        rows=1,
+        cols=2,
         specs=[[{"type": "polar"}, {"type": "polar"}]],
         subplot_titles=("Northern hemisphere", "Southern hemisphere"),
         horizontal_spacing=0.1,
@@ -3320,7 +3812,8 @@ def plot_otsu_thresholds(
         panels.append((bin_edges, bin_counts, cc_t))
 
     fig = make_subplots(
-        rows=n_rows, cols=n_cols,
+        rows=n_rows,
+        cols=n_cols,
         subplot_titles=titles or None,
         horizontal_spacing=0.08,
         vertical_spacing=0.18,
@@ -3334,11 +3827,14 @@ def plot_otsu_thresholds(
         centers = bin_edges[:-1] + widths / 2.0
         fig.add_trace(
             go.Bar(
-                x=centers, y=bin_counts, width=widths,
+                x=centers,
+                y=bin_counts,
+                width=widths,
                 marker=dict(color=bar_color, line=dict(width=0)),
                 showlegend=False,
             ),
-            row=r, col=c,
+            row=r,
+            col=c,
         )
         fig.add_vline(x=cc_t, line=dict(color="red", dash="dash", width=1.5), row=r, col=c)
         fig.update_xaxes(title_text="score", row=r, col=c)
@@ -3361,7 +3857,9 @@ def _class_lines(values_by_class: dict, palette: list[Color]) -> list[go.Scatter
         color = palette[i % len(palette)] if palette else None
         traces.append(
             go.Scatter(
-                x=xs, y=ys, mode="lines+markers",
+                x=xs,
+                y=ys,
+                mode="lines+markers",
                 name=f"Class {c}",
                 line=dict(color=color) if color else None,
                 marker=dict(color=color) if color else None,
@@ -3486,7 +3984,8 @@ def plot_classification_convergence(
     palette = resolve_colors_any(color_scheme, color_type="palette", n=n_classes)
 
     fig = make_subplots(
-        rows=1, cols=2,
+        rows=1,
+        cols=2,
         subplot_titles=("Class occupancy progress", "Stability of classes"),
         horizontal_spacing=0.12,
     )
@@ -3549,7 +4048,8 @@ def plot_alignment_stability(
         show_legend = True
 
     fig = make_subplots(
-        rows=n_rows, cols=n_cols,
+        rows=n_rows,
+        cols=n_cols,
         subplot_titles=[columns[i] if i < len(columns) else "" for i in range(n_rows * n_cols)],
         horizontal_spacing=0.07,
         vertical_spacing=0.12,
@@ -3563,14 +4063,16 @@ def plot_alignment_stability(
             color = palette[dfi % len(palette)] if palette else None
             fig.add_trace(
                 go.Scatter(
-                    x=x_axis, y=df.iloc[:, col_idx],
+                    x=x_axis,
+                    y=df.iloc[:, col_idx],
                     mode="lines",
                     name=str(labels[dfi]),
                     legendgroup=str(labels[dfi]),
                     showlegend=show_legend and col_idx == 0,
                     line=dict(color=color) if color else None,
                 ),
-                row=r, col=c,
+                row=r,
+                col=c,
             )
         fig.update_xaxes(title_text="Iteration", dtick=1, row=r, col=c)
         fig.update_yaxes(title_text=columns[col_idx], row=r, col=c)
@@ -3662,34 +4164,50 @@ def plot_scatter_with_histogram(
     # 2x2 layout: top-left x-hist (shared x with scatter), bottom-left scatter,
     # bottom-right y-hist (shared y with scatter); top-right empty.
     fig = make_subplots(
-        rows=2, cols=2,
-        row_heights=[0.25, 0.75], column_widths=[0.78, 0.22],
-        shared_xaxes=True, shared_yaxes=True,
-        horizontal_spacing=0.02, vertical_spacing=0.02,
+        rows=2,
+        cols=2,
+        row_heights=[0.25, 0.75],
+        column_widths=[0.78, 0.22],
+        shared_xaxes=True,
+        shared_yaxes=True,
+        horizontal_spacing=0.02,
+        vertical_spacing=0.02,
     )
     fig.add_trace(
         go.Bar(
-            x=centers_x, y=hist_x, width=np.diff(edges_x_h),
+            x=centers_x,
+            y=hist_x,
+            width=np.diff(edges_x_h),
             marker=dict(color=bar_colors_x, line=dict(color="black", width=0.4)),
-            opacity=0.85, showlegend=False,
+            opacity=0.85,
+            showlegend=False,
         ),
-        row=1, col=1,
+        row=1,
+        col=1,
     )
     fig.add_trace(
         go.Scatter(
-            x=data_x, y=data_y, mode="markers",
+            x=data_x,
+            y=data_y,
+            mode="markers",
             marker=dict(opacity=0.5, color=resolve_palette(DEFAULTS.colorway)[0]),
             showlegend=False,
         ),
-        row=2, col=1,
+        row=2,
+        col=1,
     )
     fig.add_trace(
         go.Bar(
-            y=centers_y, x=hist_y, orientation="h", width=np.diff(edges_y_h),
+            y=centers_y,
+            x=hist_y,
+            orientation="h",
+            width=np.diff(edges_y_h),
             marker=dict(color=bar_colors_y, line=dict(color="black", width=0.4)),
-            opacity=0.85, showlegend=False,
+            opacity=0.85,
+            showlegend=False,
         ),
-        row=2, col=2,
+        row=2,
+        col=2,
     )
 
     if axis_title_x:
@@ -3864,8 +4382,6 @@ def plot_kde(
     return fig
 
 
-
-
 def add_xyz_heatmap_row(
     fig: go.Figure,
     slices: ArrayLike,
@@ -3908,17 +4424,17 @@ def add_xyz_heatmap_row(
 
     for col_idx, sl in enumerate(slices, start=1):
         data = np.flipud(np.asarray(sl).T)
-        text_arr = (
-            [[format(v, annot_format) for v in r] for r in data.tolist()]
-            if annot_format is not None else None
-        )
+        text_arr = [[format(v, annot_format) for v in r] for r in data.tolist()] if annot_format is not None else None
         fig.add_trace(
             go.Heatmap(
-                z=data, coloraxis=coloraxis, showscale=False,
+                z=data,
+                coloraxis=coloraxis,
+                showscale=False,
                 text=text_arr,
                 texttemplate="%{text}" if annot_format is not None else None,
             ),
-            row=row, col=col_idx,
+            row=row,
+            col=col_idx,
         )
         if hide_ticks:
             fig.update_xaxes(showticklabels=False, row=row, col=col_idx)
@@ -3977,12 +4493,16 @@ def plot_scores_and_peaks(
             row=i + 1,
             coloraxis=coloraxis_name,
         )
-        fig.update_layout(**{
-            coloraxis_name: dict(
-                colorscale="viridis", cmin=data_min, cmax=peak_height,
-                colorbar=dict(thickness=12, len=row_h * 0.9, y=cb_y, yanchor="middle"),
-            )
-        })
+        fig.update_layout(
+            **{
+                coloraxis_name: dict(
+                    colorscale="viridis",
+                    cmin=data_min,
+                    cmax=peak_height,
+                    colorbar=dict(thickness=12, len=row_h * 0.9, y=cb_y, yanchor="middle"),
+                )
+            }
+        )
 
     if plot_title is not None:
         fig.update_layout(title_text=plot_title, title_font=dict(size=28))
@@ -4053,10 +4573,12 @@ def plot_fsc(
                 )
             )
 
-    fig.add_hline(y=0.5, line_dash="dash", line_color="grey", line_width=1,
-                  annotation_text="0.5", annotation_position="right")
-    fig.add_hline(y=0.143, line_dash="dash", line_color="grey", line_width=1,
-                  annotation_text="0.143", annotation_position="right")
+    fig.add_hline(
+        y=0.5, line_dash="dash", line_color="grey", line_width=1, annotation_text="0.5", annotation_position="right"
+    )
+    fig.add_hline(
+        y=0.143, line_dash="dash", line_color="grey", line_width=1, annotation_text="0.143", annotation_position="right"
+    )
     fig.add_hline(y=0, line_color="black", line_width=0.75)
 
     visible = [c for c in fsc_cols if c in df.columns]

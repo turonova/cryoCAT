@@ -103,6 +103,13 @@ def _vertex_field(psurf, color_by: str) -> np.ndarray | None:
     return None
 
 
+# Cache keyed by (surface_id, target_count) → (vertices_array, faces_array).
+# Survives across redraws so repeated layout changes don't re-decimate.
+_DECIM_CACHE: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
+
+_DECIM_DEFAULT_THRESHOLD = 50_000
+
+
 # ── Trace builders ────────────────────────────────────────────────────────────
 
 def _mesh_traces(
@@ -111,8 +118,13 @@ def _mesh_traces(
     opacity: float = 0.5,
     cmin: float | None = None,
     cmax: float | None = None,
-) -> list:
+    surface_id: str | None = None,
+    max_triangles: int | None = None,
+) -> tuple[list, str]:
     """Build the Plotly traces for a Mesh-backed :class:`PleomorphicSurface`.
+
+    Returns ``(traces, notice)`` where *notice* is a non-empty string when the
+    mesh was decimated for display (e.g. "showing 50,000 of 200,000 triangles").
 
     Parameters
     ----------
@@ -132,14 +144,42 @@ def _mesh_traces(
         ``color`` when None or shape-mismatched.
     colorscale : str, default="RdBu_r"
         Plotly colorscale name used when ``intensity`` is provided.
+    surface_id : str, optional
+        Stable identifier used as the cache key for display decimation.
+    max_triangles : int, optional
+        When set and the mesh has more faces, decimate for display only
+        (stored mesh is untouched). Uses :data:`_DECIM_CACHE` to avoid
+        re-decimating on every redraw.
     """
     mesh = surface.surface
     if mesh.vertices is None or mesh.faces is None:
-        return []
+        return [], ""
     v = np.asarray(mesh.vertices)
     f = np.asarray(mesh.faces)
     if v.size == 0 or f.size == 0:
-        return []
+        return [], ""
+
+    notice = ""
+    n_original = len(f)
+    threshold = max_triangles if max_triangles and max_triangles > 0 else None
+    if threshold is not None and n_original > threshold:
+        cache_key = (surface_id, threshold)
+        if cache_key in _DECIM_CACHE:
+            v, f = _DECIM_CACHE[cache_key]
+        else:
+            try:
+                import open3d as _o3d
+                o3d_mesh = _o3d.geometry.TriangleMesh()
+                o3d_mesh.vertices = _o3d.utility.Vector3dVector(v)
+                o3d_mesh.triangles = _o3d.utility.Vector3iVector(f)
+                o3d_mesh = o3d_mesh.simplify_quadric_decimation(threshold)
+                v = np.asarray(o3d_mesh.vertices)
+                f = np.asarray(o3d_mesh.triangles)
+                _DECIM_CACHE[cache_key] = (v, f)
+            except Exception:
+                pass
+        if len(f) < n_original:
+            notice = f"showing {len(f):,} of {n_original:,} triangles"
 
     kw: dict = dict(
         x=v[:, 0].tolist(), y=v[:, 1].tolist(), z=v[:, 2].tolist(),
@@ -175,7 +215,7 @@ def _mesh_traces(
     else:
         kw["color"] = color
 
-    return [go.Mesh3d(**kw)]
+    return [go.Mesh3d(**kw)], notice
 
 
 def _point_cloud_traces(
@@ -251,7 +291,8 @@ def _build_figure(
     hit_colorscale: str = "",
     cmin: float | None = None,
     cmax: float | None = None,
-) -> go.Figure:
+    max_triangles: int | None = None,
+) -> tuple[go.Figure, str]:
     """Assemble the combined figure for every visible handle in ``handles``.
 
     Parameters
@@ -310,10 +351,11 @@ def _build_figure(
                 "font": {"size": 14},
             }]
         )
-        return fig
+        return fig, ""
 
     palette = _resolve_palette(surf_palette or (gs or {}).get("discrete_palette"))
     traces: list = []
+    decim_notices: list[str] = []
     for i, (sid, h) in enumerate(handles.items()):
         if not h.get("visible", True):
             continue
@@ -332,8 +374,14 @@ def _build_figure(
             ):
                 intensity = _vertex_field(psurf, color_by)
             surf_opacity = min(1.0, surface_opacity + 0.30) if is_sel else surface_opacity
-            traces.extend(_mesh_traces(psurf, color, label, is_sel, intensity=intensity,
-                                       opacity=surf_opacity, cmin=cmin, cmax=cmax))
+            mesh_traces, notice = _mesh_traces(
+                psurf, color, label, is_sel, intensity=intensity,
+                opacity=surf_opacity, cmin=cmin, cmax=cmax,
+                surface_id=sid, max_triangles=max_triangles,
+            )
+            traces.extend(mesh_traces)
+            if notice:
+                decim_notices.append(f"{label}: {notice}")
         elif rep == "point_cloud":
             surf_opacity = min(1.0, surface_opacity + 0.30) if is_sel else surface_opacity
             traces.extend(_point_cloud_traces(psurf, color, label, is_sel,
@@ -372,13 +420,14 @@ def _build_figure(
         ))
 
     fig = go.Figure(data=traces)
+    notice_text = " | ".join(decim_notices) if decim_notices else ""
     return styled_figure(
         fig, gs or {},
         uirevision="surface-view",
         height=620,
         margin={"t": 0, "b": 0, "l": 0, "r": 0},
         scene={"xaxis": {"title": "x"}, "yaxis": {"title": "y"}, "zaxis": {"title": "z"}, "aspectmode": "data"},
-    )
+    ), notice_text
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -466,6 +515,22 @@ def get_surface_view(prefix: str):
                         color="primary",
                         style={"flexShrink": 0, "marginLeft": "0.25rem"},
                     ),
+                    html.Label("Max triangles", style={"marginLeft": "0.75rem", "marginRight": "0.25rem", "flexShrink": 0}),
+                    dbc.Input(
+                        id=f"{prefix}-max-triangles",
+                        type="number",
+                        value=_DECIM_DEFAULT_THRESHOLD,
+                        min=1000,
+                        step=1000,
+                        debounce=True,
+                        size="sm",
+                        style={"width": "7rem"},
+                    ),
+                    html.Span(
+                        "",
+                        id=f"{prefix}-decim-notice",
+                        style={"fontSize": "0.8rem", "color": "#888", "marginLeft": "0.4rem", "fontStyle": "italic"},
+                    ),
                 ],
                 style=_row,
             ),
@@ -518,6 +583,7 @@ def register_surface_view_callbacks(
     *,
     selected_store_id: str | None = None,
     isect_pool_id_store_id: str | None = None,
+    isect_snap_store_id: str | None = None,
     isect_coord_prefix_store_id: str | None = None,
 ):
     """Register the redraw callback.
@@ -566,11 +632,21 @@ def register_surface_view_callbacks(
     register_palette_loader_callbacks(app, f"{prefix}-hit-pal", mode="continuous",
                                       settings_store_id=ids.GRAPH_SETTINGS_STORE)
 
-    def _resolve_isect_df(pool_data_id: str | None):
-        if not pool_data_id:
+    # Either a snap dict (isect_snap_store_id) or a data-pool entry-id string
+    # (isect_pool_id_store_id) arrives here; handle both.
+    def _resolve_isect_df(data):
+        if not data:
             return None
+        if isinstance(data, dict):
+            records = data.get("raw_records")
+            if not records:
+                return None
+            try:
+                return pd.DataFrame(records)
+            except Exception:
+                return None
         try:
-            return _datapool.get_payload(pool_data_id)
+            return _datapool.get_payload(data)
         except Exception:
             return None
 
@@ -578,6 +654,7 @@ def register_surface_view_callbacks(
         Input(f"{prefix}-update-surf-btn", "n_clicks"),
         Input(f"{prefix}-update-hit-btn", "n_clicks"),
     ]
+    max_triangles_id = f"{prefix}-max-triangles"
     _setting_states = [
         State(color_by_id, "value"),
         State(surface_opacity_id, "value"),
@@ -587,28 +664,35 @@ def register_surface_view_callbacks(
         State(hit_pal_id, "data"),
         State(cmin_id, "value"),
         State(cmax_id, "value"),
+        State(max_triangles_id, "value"),
     ]
 
-    # isect_pool_id_store_id is an Input so the graph redraws automatically when
-    # a computation completes (without the user having to press "Update graph").
+    # The "isect trigger" is whichever of the two optional stores is provided.
+    # isect_snap_store_id holds the snap dict directly; isect_pool_id_store_id
+    # holds a data-pool entry-id string.  Both arrive as Input so the graph
+    # redraws automatically when a computation completes.
+    _isect_trigger_id = isect_snap_store_id or isect_pool_id_store_id
+    _has_selected = selected_store_id is not None
+    _has_pool = _isect_trigger_id is not None
+    _has_prefix = isect_coord_prefix_store_id is not None
+
     extra_inputs = []
     extra_state = []
-    if isect_pool_id_store_id is not None:
-        extra_inputs.append(Input(isect_pool_id_store_id, "data"))
+    if _isect_trigger_id is not None:
+        extra_inputs.append(Input(_isect_trigger_id, "data"))
     if isect_coord_prefix_store_id is not None:
         extra_state.append(State(isect_coord_prefix_store_id, "data"))
 
-    if isect_pool_id_store_id is not None:
-        # Populate hit-colour-by dropdown options from the intersection DataFrame columns,
-        # and auto-select the first valid column so the scatter uses meaningful coloring.
+    if _isect_trigger_id is not None:
+        # Populate hit-colour-by dropdown options from the intersection DataFrame columns.
         @app.callback(
             Output(hit_color_by_id, "options"),
             Output(hit_color_by_id, "value"),
-            Input(isect_pool_id_store_id, "data"),
+            Input(_isect_trigger_id, "data"),
             prevent_initial_call=True,
         )
-        def _update_hit_color_options(pool_data_id):
-            df = _resolve_isect_df(pool_data_id)
+        def _update_hit_color_options(isect_data):
+            df = _resolve_isect_df(isect_data)
             fallback = [{"label": "t_hit (distance)", "value": "t_hit"}]
             if df is None or df.empty:
                 return fallback, "t_hit"
@@ -626,11 +710,7 @@ def register_surface_view_callbacks(
                 return fallback, "t_hit"
             return options, options[0]["value"]
 
-    _has_selected = selected_store_id is not None
-    _has_pool = isect_pool_id_store_id is not None
-    _has_prefix = isect_coord_prefix_store_id is not None
-
-    def _build_kw(surface_opacity, hit_color_by, hit_marker_size, surf_palette, hit_colorscale, cmin_val=None, cmax_val=None, pool_data_id=None, coord_prefix=None):
+    def _build_kw(surface_opacity, hit_color_by, hit_marker_size, surf_palette, hit_colorscale, cmin_val=None, cmax_val=None, pool_data_id=None, coord_prefix=None, max_tri=None):
         return dict(
             surface_opacity=float(surface_opacity) if surface_opacity is not None else 0.5,
             hit_color_by=hit_color_by or "t_hit",
@@ -641,6 +721,7 @@ def register_surface_view_callbacks(
             hit_coord_prefix=coord_prefix or "hit_points",
             cmin=float(cmin_val) if cmin_val is not None else None,
             cmax=float(cmax_val) if cmax_val is not None else None,
+            max_triangles=int(max_tri) if max_tri is not None else _DECIM_DEFAULT_THRESHOLD,
         )
 
     # One registration. Settings are States so they only apply when the user
@@ -695,6 +776,7 @@ def register_surface_view_callbacks(
 
     @app.callback(
         Output({"type": "styled-graph", "owner": prefix, "name": "graph"}, "figure"),
+        Output(f"{prefix}-decim-notice", "children"),
         *_all_inputs,
         prevent_initial_call=False,
     )
@@ -712,11 +794,13 @@ def register_surface_view_callbacks(
         hit_colorscale = args[_i]; _i += 1
         cmin_val = args[_i]; _i += 1
         cmax_val = args[_i]; _i += 1
+        max_tri = args[_i]; _i += 1
         gs = args[_i]; _i += 1
         pool_data_id = args[_i] if _has_pool else None
         if _has_pool: _i += 1
         coord_prefix = args[_i] if _has_prefix else None
-        return _build_figure(handles, selected_id, gs, color_by=color_by,
-                             **_build_kw(surface_opacity, hit_color_by, hit_marker_size,
-                                         surf_palette, hit_colorscale, cmin_val, cmax_val,
-                                         pool_data_id, coord_prefix))
+        fig, notice = _build_figure(handles, selected_id, gs, color_by=color_by,
+                                    **_build_kw(surface_opacity, hit_color_by, hit_marker_size,
+                                                surf_palette, hit_colorscale, cmin_val, cmax_val,
+                                                pool_data_id, coord_prefix, max_tri))
+        return fig, notice

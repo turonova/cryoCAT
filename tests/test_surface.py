@@ -1281,3 +1281,133 @@ class TestGetCurvatureTable:
         df = sphere_mesh_with_curvatures.get_curvature_table(element="vertex")
         expected = np.abs(df["k1"].values - df["k2"].values)
         np.testing.assert_allclose(df["curvature_anisotropy"].values, expected, atol=1e-10)
+
+
+# =============================================================================
+# Mesh.simplify — tests
+# =============================================================================
+
+class TestMeshSimplify:
+    """Tests for Mesh.simplify (display/export decimation, original untouched)."""
+
+    def test_triangle_count_reduced(self, unit_sphere_mesh):
+        n_original = len(unit_sphere_mesh.faces)
+        target = max(1, n_original // 4)
+        result = unit_sphere_mesh.simplify(target_number_of_triangles=target)
+        assert len(result.faces) <= n_original
+        assert len(result.faces) > 0
+
+    def test_original_untouched(self, unit_sphere_mesh):
+        n_verts_before = len(unit_sphere_mesh.vertices)
+        n_faces_before = len(unit_sphere_mesh.faces)
+        unit_sphere_mesh.simplify(target_number_of_triangles=100)
+        assert len(unit_sphere_mesh.vertices) == n_verts_before
+        assert len(unit_sphere_mesh.faces) == n_faces_before
+
+    def test_returns_new_mesh_instance(self, unit_sphere_mesh):
+        result = unit_sphere_mesh.simplify(target_number_of_triangles=100)
+        assert result is not unit_sphere_mesh
+
+    def test_result_has_normals(self, unit_sphere_mesh):
+        result = unit_sphere_mesh.simplify(target_number_of_triangles=100)
+        assert result.normals is not None
+        assert len(result.normals) == len(result.vertices)
+
+    def test_bounding_box_close_to_original(self, unit_sphere_mesh):
+        result = unit_sphere_mesh.simplify(target_number_of_triangles=200)
+        orig_min = unit_sphere_mesh.vertices.min(axis=0)
+        orig_max = unit_sphere_mesh.vertices.max(axis=0)
+        res_min = result.vertices.min(axis=0)
+        res_max = result.vertices.max(axis=0)
+        np.testing.assert_allclose(res_min, orig_min, atol=0.15)
+        np.testing.assert_allclose(res_max, orig_max, atol=0.15)
+
+    def test_reduction_fraction(self, unit_sphere_mesh):
+        n_original = len(unit_sphere_mesh.faces)
+        result = unit_sphere_mesh.simplify(reduction_fraction=0.5)
+        assert len(result.faces) <= n_original
+
+    def test_reduction_fraction_out_of_range_raises(self, unit_sphere_mesh):
+        with pytest.raises(ValueError, match="reduction_fraction"):
+            unit_sphere_mesh.simplify(reduction_fraction=1.5)
+
+    def test_target_count_approximately_met(self, unit_sphere_mesh):
+        n_original = len(unit_sphere_mesh.faces)
+        target = max(4, n_original // 5)
+        result = unit_sphere_mesh.simplify(target_number_of_triangles=target)
+        # Open3D quadric decimation reaches close to, but not always exactly, the target.
+        assert len(result.faces) <= target * 2
+
+    def test_no_vertices_raises(self):
+        m = Mesh()
+        with pytest.raises(ValueError, match="vertices"):
+            m.simplify(target_number_of_triangles=100)
+
+
+# =============================================================================
+# Mesh.save STL — round-trip and format-specific tests
+# =============================================================================
+
+class TestMeshSaveSTL:
+    """Tests for STL export via Mesh.save."""
+
+    def test_stl_file_is_created(self, unit_sphere_mesh, tmp_path):
+        out = tmp_path / "sphere.stl"
+        unit_sphere_mesh.save(out)
+        assert out.exists() and out.stat().st_size > 0
+
+    def test_roundtrip_face_count(self, unit_sphere_mesh, tmp_path):
+        """Face count is preserved exactly by STL."""
+        out = tmp_path / "sphere.stl"
+        unit_sphere_mesh.save(out)
+        loaded = Mesh.read(out)
+        assert len(loaded.faces) == len(unit_sphere_mesh.faces)
+
+    def test_roundtrip_vertex_count(self, unit_sphere_mesh, tmp_path):
+        """STL does not share vertices across faces; after deduplication the
+        vertex count matches the original."""
+        out = tmp_path / "sphere.stl"
+        unit_sphere_mesh.save(out)
+        loaded = Mesh.read(out)
+        o3d_mesh = o3d.geometry.TriangleMesh()
+        o3d_mesh.vertices = o3d.utility.Vector3dVector(loaded.vertices)
+        o3d_mesh.triangles = o3d.utility.Vector3iVector(loaded.faces)
+        o3d_mesh.remove_duplicated_vertices()
+        deduped_count = len(np.asarray(o3d_mesh.vertices))
+        assert deduped_count == len(unit_sphere_mesh.vertices)
+
+    def test_roundtrip_bounding_box(self, unit_sphere_mesh, tmp_path):
+        out = tmp_path / "sphere.stl"
+        unit_sphere_mesh.save(out)
+        loaded = Mesh.read(out)
+        np.testing.assert_allclose(
+            loaded.vertices.min(axis=0), unit_sphere_mesh.vertices.min(axis=0), atol=1e-5
+        )
+        np.testing.assert_allclose(
+            loaded.vertices.max(axis=0), unit_sphere_mesh.vertices.max(axis=0), atol=1e-5
+        )
+
+    def test_roundtrip_no_curvatures(self, unit_sphere_mesh, tmp_path):
+        """STL cannot carry curvature fields; the read-back mesh has none."""
+        out = tmp_path / "sphere.stl"
+        unit_sphere_mesh.save(out)
+        loaded = Mesh.read(out)
+        assert loaded._mean_curvature is None
+        assert loaded._gaussian_curvature is None
+
+    def test_explicit_format_stl(self, unit_sphere_mesh, tmp_path):
+        out = tmp_path / "sphere_explicit.stl"
+        unit_sphere_mesh.save(out, format="stl")
+        assert out.exists()
+
+    def test_include_curvatures_stl_raises(self, unit_sphere_mesh, tmp_path):
+        """include_curvatures=True with STL must raise, not silently drop data."""
+        out = tmp_path / "sphere.stl"
+        with pytest.raises(ValueError, match="curvature"):
+            unit_sphere_mesh.save(out, format="stl", include_curvatures=True)
+
+    def test_save_opc_as_stl_raises(self, unit_sphere_opc, tmp_path):
+        """Saving a point cloud as STL must fail with a message naming the reason."""
+        out = tmp_path / "opc.stl"
+        with pytest.raises(ValueError, match="point cloud|triangle mesh|STL"):
+            unit_sphere_opc.save(out, format="stl")

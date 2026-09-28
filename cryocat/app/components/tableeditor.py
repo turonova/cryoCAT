@@ -311,54 +311,26 @@ def get_table_editor(
         id=f"{prefix}-assign_column-section",
         style={"display": "none"},
         children=[
-            html.Div(
-                "⚠ Positional matching is only valid when both tables share the same row "
-                "order and have not been sorted or filtered independently.",
-                style={**styles.HINT, "marginBottom": styles.FORM_ROW_GAP},
-            ),
-            formgen.form_row(
-                "source_table",
-                formgen.make_dropdown(f"{prefix}-assign-right-dd", [], None),
-                "Table from which a column is copied.",
-                label_id=f"{prefix}-assign-right-lbl",
-                label_text="Source table",
-            ),
             formgen.form_row(
                 "source_column",
                 formgen.make_dropdown(f"{prefix}-assign-src-col-dd", [], None),
-                "Column to copy from the source table.",
+                "Column from the source entry whose values are copied.",
                 label_id=f"{prefix}-assign-src-col-lbl",
                 label_text="Source column",
             ),
             formgen.form_row(
-                "dest_column_name",
-                dbc.Input(id=f"{prefix}-assign-dst-name", type="text",
-                          placeholder="new_column_name"),
-                "Name for the column in the result table (blank → uses source column name).",
-                label_id=f"{prefix}-assign-dst-lbl",
-                label_text="Destination name",
-                truly_optional=True,
+                "dest_table",
+                formgen.make_dropdown(f"{prefix}-assign-right-dd", [], None),
+                "Table that receives the column values.",
+                label_id=f"{prefix}-assign-right-lbl",
+                label_text="Destination table",
             ),
             formgen.form_row(
-                "match_mode",
-                formgen.make_dropdown(
-                    f"{prefix}-assign-mode-dd",
-                    [{"label": "Positional (same row order)", "value": "positional"},
-                     {"label": "Key-based (match on column)", "value": "key"}],
-                    "positional",
-                    clearable=False,
-                ),
-                "How to match rows: positional uses row order; key-based matches on a shared column.",
-                label_id=f"{prefix}-assign-mode-lbl",
-                label_text="Match mode",
-            ),
-            formgen.form_row(
-                "key_column",
-                formgen.make_dropdown(f"{prefix}-assign-key-dd", [], None),
-                "Column in both tables to join on (key-based only).",
-                label_id=f"{prefix}-assign-key-lbl",
-                label_text="Key column",
-                truly_optional=True,
+                "dest_column",
+                formgen.make_dropdown(f"{prefix}-assign-dst-col-dd", [], None),
+                "Column in the destination table to overwrite.",
+                label_id=f"{prefix}-assign-dst-col-lbl",
+                label_text="Destination column",
             ),
         ],
     )
@@ -367,15 +339,26 @@ def get_table_editor(
     if working_copy_mode:
         # In working-copy mode the Apply button previews the op on the copy;
         # commit actions live in the separate section added by pdatapool.
+        # Assign column is a direct-write op that bypasses the working copy.
         footer = html.Div([
             html.Div(
-                dbc.Button(
-                    "Apply to working copy",
-                    id=f"{prefix}-apply-btn",
-                    color=styles.BTN_SECONDARY,
-                    size="sm",
-                    title="Apply this operation to the working copy — not committed until you click 'Apply to original'.",
-                ),
+                [
+                    dbc.Button(
+                        "Apply to working copy",
+                        id=f"{prefix}-apply-btn",
+                        color=styles.BTN_SECONDARY,
+                        size="sm",
+                        title="Apply this operation to the working copy — not committed until you click 'Apply to original'.",
+                    ),
+                    dbc.Button(
+                        "Assign column",
+                        id=f"{prefix}-assign-direct-btn",
+                        color=styles.BTN_PRIMARY,
+                        size="sm",
+                        title="Copy source column values to the selected destination column (writes directly — not a working-copy operation).",
+                        style={"display": "none"},
+                    ),
+                ],
                 style={"marginTop": styles.SECTION_GAP},
             ),
             html.Div(id=f"{prefix}-status", style={**styles.HINT, "marginTop": styles.FORM_ROW_GAP}),
@@ -498,9 +481,7 @@ def _execute_operation(
     pos_merge_right_val: "str | None" = None,
     assign_right_val: "str | None" = None,
     assign_src_col: "str | None" = None,
-    assign_dst_name: "str | None" = None,
-    assign_mode: "str | None" = None,
-    assign_key_col: "str | None" = None,
+    assign_dst_col: "str | None" = None,
 ) -> "tuple[pd.DataFrame | None, str | None, str]":
     """Apply a table operation; return (result_df, extra_msg, error).
 
@@ -600,29 +581,7 @@ def _execute_operation(
             )
             return result_df, extra_msg, ""
         elif op == "assign_column":
-            if not assign_right_val:
-                return None, None, "Select a source table."
-            if not assign_src_col:
-                return None, None, "Select a source column."
-            right_ref = entrypicker.decode_value(assign_right_val)
-            try:
-                right_df = _fetch_df(right_ref)
-            except Exception as exc:
-                return None, None, f"Cannot load source table: {exc}"
-            dst = (assign_dst_name or "").strip() or assign_src_col
-            mode = assign_mode or "positional"
-            result_df = _run(
-                ops.assign_column,
-                {"left": src_df, "right": right_df,
-                 "src_col": assign_src_col, "dst_col": dst,
-                 "match_mode": mode, "key_col": assign_key_col or None},
-            )
-            assign_msg = f"Assigned '{assign_src_col}' as '{dst}' ({mode})."
-            if mode == "key":
-                nan_count = int(result_df[dst].isna().sum())
-                if nan_count:
-                    assign_msg += f"  ⚠ {nan_count:,} row(s) received NaN (key had no match)."
-            return result_df, assign_msg, ""
+            return None, None, "assign_column is handled by the apply callback directly."
         else:
             return None, None, f"Unknown operation: {op!r}."
     except Exception as exc:
@@ -633,6 +592,70 @@ def _execute_operation(
     return result_df, None, ""
 
 
+def _do_assign_column(
+    assign_src_col: str | None,
+    assign_right_val: str | None,
+    assign_dst_col: str | None,
+    src_df: "pd.DataFrame",
+    pool_registry: dict | None,
+    pool_meta: dict | None,
+    pool_next_id,
+    dp_registry: dict | None,
+    dp_next_id,
+):
+    """Execute assign_column; return 7-tuple (pr, pm, pn, dr, dn, did, status)."""
+    from cryocat.app.pool import PoolState
+    from cryocat.app.datapool import DataPoolState
+    _no = no_update
+    _fail = (_no, _no, _no, _no, _no, _no)
+    if not assign_src_col:
+        return *_fail, "Select a source column."
+    if not assign_right_val:
+        return *_fail, "Select a destination table."
+    if not assign_dst_col:
+        return *_fail, "Select a destination column."
+    if assign_src_col not in src_df.columns:
+        return *_fail, f"Source column '{assign_src_col}' not found."
+    dest_ref = entrypicker.decode_value(assign_right_val)
+    try:
+        dest_df = _fetch_df(dest_ref).copy()
+    except Exception as exc:
+        return *_fail, f"Cannot load destination table: {exc}"
+    if assign_dst_col not in dest_df.columns:
+        return *_fail, f"Destination has no column '{assign_dst_col}'."
+    if "subtomo_id" in src_df.columns and "subtomo_id" in dest_df.columns:
+        mapping = src_df.drop_duplicates("subtomo_id").set_index("subtomo_id")[assign_src_col].to_dict()
+        dest_df[assign_dst_col] = dest_df["subtomo_id"].map(mapping)
+        matched = int(dest_df["subtomo_id"].isin(mapping).sum())
+        extra = f"Matched {matched:,} of {len(dest_df):,} rows by subtomo_id."
+    else:
+        n = min(len(src_df), len(dest_df))
+        dest_df.iloc[:n, dest_df.columns.get_loc(assign_dst_col)] = (
+            src_df[assign_src_col].iloc[:n].values
+        )
+        extra = f"Positional: wrote {n:,} rows."
+    dest_is_motl = "motl_id" in dest_ref
+    status = f"Assigned '{assign_src_col}' → '{assign_dst_col}'.  {extra}"
+    if dest_is_motl:
+        p = PoolState.from_stores(pool_registry, pool_meta, pool_next_id)
+        p = replace_motl_rows(p, dest_ref["motl_id"], dest_df)
+        new_pr, new_pm, new_pn = p.to_stores()
+        return new_pr, new_pm, new_pn, _no, _no, _no, status
+    did = dest_ref.get("data_id") if dest_ref else None
+    if did and dp_module.clean_registry(dp_registry).get(did):
+        ds = DataPoolState.from_stores(dp_registry, dp_next_id)
+        ds = dp_module.replace_entry(ds, did, dest_df)
+        new_dr, new_dn = ds.to_stores()
+        return _no, _no, _no, new_dr, new_dn, did, status
+    ds = DataPoolState.from_stores(dp_registry, dp_next_id)
+    ds, new_did = dp_module.insert_entry(
+        ds, dest_df, label=f"{assign_src_col}→{assign_dst_col}",
+        reader="table_op", source_path="",
+    )
+    new_dr, new_dn = ds.to_stores()
+    return _no, _no, _no, new_dr, new_dn, new_did, status
+
+
 def _apply_wc_op(
     op, label_val,
     derive_name, derive_expr,
@@ -641,12 +664,14 @@ def _apply_wc_op(
     merge_right_val, merge_keys, merge_how,
     concat_extra_vals, concat_label_col,
     pos_merge_right_val,
-    assign_right_val, assign_src_col, assign_dst_name, assign_mode, assign_key_col,
+    assign_right_val, assign_src_col, assign_dst_col,
     src_ref, pool_reg, dp_reg,
 ):
     """Working-copy apply logic — extracted for thin-callback compliance."""
     from cryocat.app.suite.pages import _wcopy as _wc
     _no = no_update
+    if op == "assign_column":
+        return _no, "Assign column writes to a destination table directly — use the non-working-copy mode."
     source_id = _wc.source_id_for_ref(src_ref)
     if source_id is None:
         return _no, "Cannot determine source id."
@@ -671,8 +696,7 @@ def _apply_wc_op(
         concat_label_col=concat_label_col,
         pos_merge_right_val=pos_merge_right_val,
         assign_right_val=assign_right_val, assign_src_col=assign_src_col,
-        assign_dst_name=assign_dst_name, assign_mode=assign_mode,
-        assign_key_col=assign_key_col,
+        assign_dst_col=assign_dst_col,
     )
     if err:
         return _no, err
@@ -736,13 +760,14 @@ def register_table_editor_callbacks(
 
     # ── 2. Update column dropdowns when source ref changes ────────────────
     @app.callback(
-        Output(f"{prefix}-drop-dd",      "options", allow_duplicate=True),
-        Output(f"{prefix}-reorder-dd",   "options", allow_duplicate=True),
-        Output(f"{prefix}-cast-col-dd",  "options", allow_duplicate=True),
-        Output(f"{prefix}-merge-keys-dd","options", allow_duplicate=True),
-        Input(f"{prefix}-src-ref",         "data"),
-        State(ids.POOL_REGISTRY,           "data"),
-        State(ids.DATA_POOL_REGISTRY,      "data"),
+        Output(f"{prefix}-drop-dd",         "options", allow_duplicate=True),
+        Output(f"{prefix}-reorder-dd",      "options", allow_duplicate=True),
+        Output(f"{prefix}-cast-col-dd",     "options", allow_duplicate=True),
+        Output(f"{prefix}-merge-keys-dd",   "options", allow_duplicate=True),
+        Output(f"{prefix}-assign-src-col-dd","options", allow_duplicate=True),
+        Input(f"{prefix}-src-ref",           "data"),
+        State(ids.POOL_REGISTRY,             "data"),
+        State(ids.DATA_POOL_REGISTRY,        "data"),
         prevent_initial_call=True,
     )
     def _on_source_change(ref, pool_reg, dp_reg):
@@ -754,7 +779,7 @@ def register_table_editor_callbacks(
             except Exception:
                 pass
         opts = [{"label": c, "value": c} for c in cols]
-        return opts, opts, opts, opts
+        return opts, opts, opts, opts, opts
 
     # ── 3. Populate merge / concat secondary pickers (multi_source) ───────
     if multi_source:
@@ -850,31 +875,19 @@ def register_table_editor_callbacks(
             return opts, opts
 
         @app.callback(
-            Output(f"{prefix}-assign-src-col-dd", "options"),
-            Output(f"{prefix}-assign-key-dd",     "options"),
+            Output(f"{prefix}-assign-dst-col-dd", "options"),
             Input(f"{prefix}-assign-right-dd",    "value"),
-            State(f"{prefix}-src-ref",             "data"),
             prevent_initial_call=True,
         )
-        def _on_assign_right_change(right_val, src_ref):
+        def _on_assign_right_change(right_val):
             if not right_val:
-                return [], []
+                return []
             right_ref = entrypicker.decode_value(right_val)
             try:
                 right_df = _fetch_df(right_ref)
             except Exception:
-                return [], []
-            r_opts = [{"label": c, "value": c} for c in right_df.columns]
-            # key column = columns present in both tables
-            key_opts: list[dict] = []
-            if src_ref:
-                try:
-                    src_df = _fetch_df(src_ref)
-                    common = sorted(set(src_df.columns) & set(right_df.columns))
-                    key_opts = [{"label": c, "value": c} for c in common]
-                except Exception:
-                    pass
-            return r_opts, key_opts
+                return []
+            return [{"label": c, "value": c} for c in right_df.columns]
 
         @app.callback(
             Output(f"{prefix}-pos-merge-report", "children"),
@@ -903,7 +916,7 @@ def register_table_editor_callbacks(
         @app.callback(
             # allow_duplicate: pdatapool also writes this store for commit actions
             Output(f"{prefix}-wc-changed", "data", allow_duplicate=True),
-            Output(f"{prefix}-status", "children"),
+            Output(f"{prefix}-status", "children", allow_duplicate=True),
             Input(f"{prefix}-apply-btn", "n_clicks"),
             State(f"{prefix}-op-dd",              "value"),
             State(f"{prefix}-label",              "value"),
@@ -922,9 +935,7 @@ def register_table_editor_callbacks(
             State(f"{prefix}-pos-merge-right-dd", "value"),
             State(f"{prefix}-assign-right-dd",    "value"),
             State(f"{prefix}-assign-src-col-dd",  "value"),
-            State(f"{prefix}-assign-dst-name",    "value"),
-            State(f"{prefix}-assign-mode-dd",     "value"),
-            State(f"{prefix}-assign-key-dd",      "value"),
+            State(f"{prefix}-assign-dst-col-dd",  "value"),
             State(f"{prefix}-src-ref",            "data"),
             State(ids.POOL_REGISTRY,              "data"),
             State(ids.DATA_POOL_REGISTRY,         "data"),
@@ -938,7 +949,7 @@ def register_table_editor_callbacks(
             merge_right_val, merge_keys, merge_how,
             concat_extra_vals, concat_label_col,
             pos_merge_right_val,
-            assign_right_val, assign_src_col, assign_dst_name, assign_mode, assign_key_col,
+            assign_right_val, assign_src_col, assign_dst_col,
             src_ref, pool_reg, dp_reg,
         ):
             _no = no_update
@@ -952,8 +963,63 @@ def register_table_editor_callbacks(
                 cast_col, cast_dtype, merge_right_val, merge_keys, merge_how,
                 concat_extra_vals, concat_label_col,
                 pos_merge_right_val,
-                assign_right_val, assign_src_col, assign_dst_name, assign_mode, assign_key_col,
+                assign_right_val, assign_src_col, assign_dst_col,
                 src_ref, pool_reg, dp_reg,
+            )
+
+        # Show "Assign column" button instead of "Apply to working copy" for the
+        # assign_column op, which writes directly to a destination table.
+        app.clientside_callback(
+            """function(op) {
+                var isAssign = op === 'assign_column';
+                return [
+                    isAssign ? {"display": "none"} : {},
+                    isAssign ? {} : {"display": "none"}
+                ];
+            }""",
+            Output(f"{prefix}-apply-btn", "style"),
+            Output(f"{prefix}-assign-direct-btn", "style"),
+            Input(f"{prefix}-op-dd", "value"),
+            prevent_initial_call=True,
+        )
+
+        @app.callback(
+            Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
+            Output(ids.POOL_META, "data", allow_duplicate=True),
+            Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
+            Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
+            Output(ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
+            Output("dp-selected-id", "data", allow_duplicate=True),
+            Output(f"{prefix}-status", "children", allow_duplicate=True),
+            Input(f"{prefix}-assign-direct-btn", "n_clicks"),
+            State(f"{prefix}-assign-src-col-dd", "value"),
+            State(f"{prefix}-assign-right-dd",   "value"),
+            State(f"{prefix}-assign-dst-col-dd", "value"),
+            State(f"{prefix}-src-ref",           "data"),
+            State(ids.POOL_REGISTRY,             "data"),
+            State(ids.POOL_META,                 "data"),
+            State(ids.POOL_NEXT_ID,              "data"),
+            State(ids.DATA_POOL_REGISTRY,        "data"),
+            State(ids.DATA_POOL_NEXT_ID,         "data"),
+            prevent_initial_call=True,
+        )
+        def _on_assign_direct(
+            _n,
+            assign_src_col, assign_right_val, assign_dst_col,
+            src_ref,
+            pool_registry, pool_meta, pool_next_id,
+            dp_registry, dp_next_id,
+        ):
+            _fail = (no_update,) * 6
+            if not src_ref:
+                return *_fail, "Select a source entry from the picker."
+            try:
+                src_df = _fetch_df(src_ref)
+            except Exception as exc:
+                return *_fail, f"Cannot load source: {exc}"
+            return _do_assign_column(
+                assign_src_col, assign_right_val, assign_dst_col,
+                src_df, pool_registry, pool_meta, pool_next_id, dp_registry, dp_next_id,
             )
 
         return  # ── working-copy mode: no pool-writing Apply registered ──
@@ -993,9 +1059,7 @@ def register_table_editor_callbacks(
         State(f"{prefix}-pos-merge-right-dd","value"),
         State(f"{prefix}-assign-right-dd",   "value"),
         State(f"{prefix}-assign-src-col-dd", "value"),
-        State(f"{prefix}-assign-dst-name",   "value"),
-        State(f"{prefix}-assign-mode-dd",    "value"),
-        State(f"{prefix}-assign-key-dd",     "value"),
+        State(f"{prefix}-assign-dst-col-dd", "value"),
         # ── pool states ──
         State(f"{prefix}-create-new",     "value"),
         State(f"{prefix}-add-as-motl",    "value"),
@@ -1018,7 +1082,7 @@ def register_table_editor_callbacks(
         merge_right_val, merge_keys, merge_how,
         concat_extra_vals, concat_label_col,
         pos_merge_right_val,
-        assign_right_val, assign_src_col, assign_dst_name, assign_mode, assign_key_col,
+        assign_right_val, assign_src_col, assign_dst_col,
         create_new_val,
         add_as_motl_val,
         src_ref,
@@ -1045,6 +1109,13 @@ def register_table_editor_callbacks(
         src_is_motl = "motl_id" in src_ref
         src_label   = _src_label(src_ref, pool_registry, dp_registry)
 
+        # ── Special case: assign_column writes to destination pool ───────
+        if op == "assign_column":
+            return _do_assign_column(
+                assign_src_col, assign_right_val, assign_dst_col,
+                src_df, pool_registry, pool_meta, pool_next_id, dp_registry, dp_next_id,
+            )
+
         # ── Apply operation (W6: through run_operation) ───────────────────
         result_df, extra_msg, err = _execute_operation(
             op, src_df, src_label,
@@ -1057,8 +1128,7 @@ def register_table_editor_callbacks(
             merge_how=merge_how, concat_extra_vals=concat_extra_vals,
             pos_merge_right_val=pos_merge_right_val,
             assign_right_val=assign_right_val, assign_src_col=assign_src_col,
-            assign_dst_name=assign_dst_name, assign_mode=assign_mode,
-            assign_key_col=assign_key_col,
+            assign_dst_col=assign_dst_col,
             concat_label_col=concat_label_col,
         )
         if err:

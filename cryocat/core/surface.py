@@ -2219,6 +2219,47 @@ class Mesh(DiscreteSurface):
         print(f"Mesh after cleaning: {len(self.vertices)} vertices, {len(self.faces)} faces")
         return self
 
+    @gui_exposed(category="surface-op", label="[Mesh] Simplify", group="Mesh", order=6, returns="surface")
+    def simplify(
+        self,
+        target_number_of_triangles: int = 50000,
+        reduction_fraction: float | None = None,
+    ) -> "Mesh":
+        """Return a new decimated Mesh; the original is left untouched.
+
+        Parameters
+        ----------
+        target_number_of_triangles : int, default=50000
+            Desired face count in the returned mesh.  Ignored when
+            ``reduction_fraction`` is set.
+        reduction_fraction : float, optional
+            When given (0 < value < 1), the target is computed as
+            ``max(1, int(len(self.faces) * (1 - reduction_fraction)))``.
+
+        Returns
+        -------
+        Mesh
+            A new :class:`Mesh` instance with the decimated geometry.
+            Normals are recomputed on the reduced mesh.
+        """
+        if self.vertices is None or self.faces is None:
+            raise ValueError("Cannot simplify a Mesh with no vertices/faces.")
+        n_faces = len(self.faces)
+        if reduction_fraction is not None:
+            if not (0.0 < reduction_fraction < 1.0):
+                raise ValueError("reduction_fraction must be strictly between 0 and 1.")
+            target = max(1, int(n_faces * (1.0 - reduction_fraction)))
+        else:
+            target = max(1, int(target_number_of_triangles))
+
+        o3d_mesh = self._to_open3d()
+        o3d_mesh = o3d_mesh.simplify_quadric_decimation(target)
+
+        result = Mesh()
+        result._from_open3d(o3d_mesh)
+        result.compute_normals()
+        return result
+
     def remove_disconnected_components(self, min_component_size: int = 100, logger: logging.Logger | None = None) -> "Mesh":
         """Remove small disconnected components that are likely artifacts.
 
@@ -3261,30 +3302,36 @@ class Mesh(DiscreteSurface):
         return vertices_world, faces, normals, vertices_pixel
 
     @gui_exposed(category="surface-op", label="[Mesh/OPC] Save to disk", group="Mesh/OPC", order=90, returns="none")
-    def save(self, output_path: PathOrStr, format: Literal["ply", "vtp"] | None = None, include_curvatures: bool = False):
+    def save(self, output_path: PathOrStr, format: Literal["ply", "vtp", "stl", "obj", "off"] | None = None, include_curvatures: bool = False):
         """
         Save mesh to file with optional curvature data.
 
         Supports multiple output formats with optional per-vertex curvature properties.
         Curvature export is supported only via VTP (requires pyvista). Use ``format='vtp'``.
 
+        PLY, STL, OBJ, and OFF are geometry-only formats written via Open3D's
+        ``write_triangle_mesh``. STL, OBJ, and OFF cannot carry curvature fields;
+        a warning is issued when curvatures have been computed but these formats are chosen.
+
         Parameters
         ----------
         output_path : str or Path
             Output file path.
-        format : {'ply', 'vtp'}, optional
-            Output format.  ``'ply'`` — PLY geometry only.  ``'vtp'`` — VTK PolyData
-            (requires pyvista); use for curvature export.  If None, inferred from
-            ``output_path`` suffix and defaults to ``'ply'`` when missing.
+        format : {'ply', 'vtp', 'stl', 'obj', 'off'}, optional
+            Output format.  ``'ply'``/``'stl'``/``'obj'``/``'off'`` — geometry only via
+            Open3D.  ``'vtp'`` — VTK PolyData (requires pyvista); the only format that
+            supports curvature export.  If None, inferred from ``output_path`` suffix and
+            defaults to ``'ply'`` when the suffix is absent or unrecognised.
         include_curvatures : bool, default=False
             If True, include curvature data as vertex properties.
             Requires curvatures to be computed first via compute_curvatures().
+            Only supported for ``format='vtp'``; raises for all other formats.
 
-            Curvature fields saved:
+            Curvature fields saved (VTP only):
             - Scalars: mean_curvature, gaussian_curvature, k1, k2, curvature_anisotropy,
               shape_index, curvedness, shape_category
             - Vectors: normals, principal_direction_1, principal_direction_2
-        
+
         Returns
         -------
         dict or None
@@ -3292,15 +3339,24 @@ class Mesh(DiscreteSurface):
             If include_curvatures=False, returns None.
         """
         output_path = Path(output_path)
-        
+
         if self.vertices is None or self.faces is None:
             raise ValueError("Mesh must have vertices and faces to save")
-        
+
         format_lower = output_path.suffix.lower().lstrip(".") if format is None else str(format).lower()
         if not format_lower:
             format_lower = "ply"
-        
+
+        _GEOMETRY_ONLY_FORMATS = {"ply", "stl", "obj", "off"}
+
         if not include_curvatures:
+            if format_lower in _GEOMETRY_ONLY_FORMATS and format_lower != "ply" and self._mean_curvature is not None:
+                warnings.warn(
+                    f"Saving as {format_lower.upper()}: curvature fields will not be included. "
+                    "Use format='vtp' with include_curvatures=True to preserve them.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             return self._save_mesh(output_path, format_lower)
         else:
             if format_lower == 'ply':
@@ -3319,11 +3375,13 @@ class Mesh(DiscreteSurface):
                 return self._save_mesh_vtp_with_curvatures(output_path)
             else:
                 raise ValueError(
-                    f"Unsupported format '{format}' for curvature export. Use 'vtp'."
+                    f"Format '{format_lower}' cannot store curvature fields. "
+                    "Use format='vtp' with include_curvatures=True, "
+                    "or save geometry only with include_curvatures=False."
                 )
 
-    def _save_mesh(self, output_path: PathOrStr, format: Literal["ply", "vtp"] = 'ply'):
-        """Save mesh without curvature using Open3D or pyvista (for VTP)."""
+    def _save_mesh(self, output_path: PathOrStr, format: Literal["ply", "vtp", "stl", "obj", "off"] = 'ply'):
+        """Save mesh without curvature using Open3D (PLY/STL/OBJ/OFF) or pyvista (VTP)."""
         output_path = Path(output_path)
         
         # VTP format requires pyvista
@@ -3365,8 +3423,11 @@ class Mesh(DiscreteSurface):
         
         # For other formats, use Open3D
         import open3d as o3d
-        
+
         o3d_mesh = self._to_open3d()
+        # STL writer requires triangle normals; compute them if not already present.
+        if format == 'stl' and not o3d_mesh.has_triangle_normals():
+            o3d_mesh.compute_triangle_normals()
         success = o3d.io.write_triangle_mesh(str(output_path), o3d_mesh)
         
         if success:
@@ -5649,6 +5710,12 @@ class OrientedPointCloud(DiscreteSurface):
                 input_dict=input_dict,
                 subtomo_ids=subtomo_ids,
                 tomo_id=tomo_id,
+            )
+        if fmt in ("stl", "obj", "off"):
+            raise ValueError(
+                f"Cannot save an OrientedPointCloud as {fmt.upper()}: "
+                "STL/OBJ/OFF store triangle meshes only, not point clouds. "
+                "Use format='ply' for point-cloud export."
             )
         raise ValueError(
             f"Unsupported point-cloud save format '{fmt}'. Use 'ply', 'motl', or 'em'."

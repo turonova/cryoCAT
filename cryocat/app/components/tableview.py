@@ -54,7 +54,7 @@ def get_table_component(
     button_children += [
         dbc.Button("Save as CSV", id=f"{prefix}-save-csv-btn", color="primary", className="me-1"),
         dbc.Button("Remove Selected Rows", id=f"{prefix}-remove-rows-btn", color="primary", className="me-1"),
-        dbc.Button("Select All Filtered", id=f"{prefix}-select-all-btn", color="secondary", className="me-1"),
+        dbc.Button("Select All Visible", id=f"{prefix}-select-all-btn", color="secondary", className="me-1"),
         dbc.Button(
             "Create from filtered",
             id=f"{prefix}-pool-from-filtered-btn",

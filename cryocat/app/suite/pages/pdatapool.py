@@ -164,6 +164,9 @@ def _dp_slot_ref(
     n_rows = reg[data_id].get("n_rows")
     if n_rows is not None:
         ref["n_rows"] = n_rows
+    id_col = reg[data_id].get("id_column")
+    if id_col:
+        ref["id_column"] = id_col
     return ref
 
 

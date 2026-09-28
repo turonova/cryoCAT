@@ -243,13 +243,15 @@ def _pool_motl_field(cid, default, required, choices=None, extra=None):
     :func:`register_pool_motl_writeback`; the widget renders empty until the
     motl pool is non-empty.
     """
+    multi = bool((extra or {}).get("multi", False))
     return dcc.Dropdown(
         id=cid,
         options=[],
-        value=None,
-        placeholder="Select a motl from pool…",
+        value=[] if multi else None,
+        placeholder="Select motl(s) from pool…" if multi else "Select a motl from pool…",
         style={"fontSize": "11px"},
         clearable=True,
+        multi=multi,
     )
 
 

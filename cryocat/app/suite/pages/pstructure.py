@@ -38,6 +38,7 @@ from __future__ import annotations
 import inspect
 import math
 import traceback as _tb
+from datetime import datetime as _dt
 from typing import Any, Callable
 
 import numpy as np
@@ -60,6 +61,9 @@ from cryocat.app.components.motlsink import (
     get_send_to_editor_button,
     register_send_to_editor_callbacks,
 )
+from cryocat.app.components.resultsslot import (
+    get_results_slot, register_results_slot_callbacks,
+)
 from cryocat.app.components.motlsource import (
     get_motl_source,
     register_motl_source_callbacks,
@@ -79,6 +83,7 @@ import cryocat.app.datapool as _datapool
 import cryocat.app.provenance as _prov
 from cryocat.app import session as _session
 from cryocat.app.components.customel import customel_graph
+from cryocat.app.components.tabletomotl import get_table_to_motl, register_table_to_motl_callbacks
 from cryocat.app.components.alphashape import (
     alpha_tetra_cache as _struct_alpha_cache,
     compute_tetra as _compute_alpha_tetra,
@@ -86,6 +91,8 @@ from cryocat.app.components.alphashape import (
     render_alpha_figure as _render_alpha_figure,
 )
 
+
+_SURF_RESULTS = "surfaces-results-store"  # dict[str, list[dict]] — sections per surface_id
 
 # ── Dynamically-rendered component IDs (§11.3) ───────────────────────────────
 # These IDs are rendered into placeholder divs by callbacks, so they are absent
@@ -99,14 +106,6 @@ DYNAMIC_IDS: list[tuple[str, str]] = [
     ("surfaces-send-area",         "surfaces-send-send-label"),
     ("surfaces-send-area",         "surfaces-send-send-to-editor"),
     ("surfaces-send-area",         "surfaces-send-send-status"),
-    ("surfaces-isect-results-area", "surfaces-isect-filter-btn"),
-    ("surfaces-isect-results-area", "surfaces-isect-send-send-label"),
-    ("surfaces-isect-results-area", "surfaces-isect-send-send-to-editor"),
-    ("surfaces-isect-results-area", "surfaces-isect-send-send-status"),
-    # param-send is rendered by _render_param_results when a parametric motl op runs
-    ("surfaces-param-results-area", "surfaces-param-send-send-label"),
-    ("surfaces-param-results-area", "surfaces-param-send-send-to-editor"),
-    ("surfaces-param-results-area", "surfaces-param-send-send-status"),
 ]
 
 
@@ -661,59 +660,6 @@ def _op_ui_widgets() -> list[html.Div]:
     return containers
 
 
-def _register_one_preview(app, op_id: str, lp: dict) -> None:
-    """Register the live-preview callback for one OP_UI entry with `live_preview`."""
-    on_params: list[str] = lp["on"]
-    render_fn = lp["render"]
-    widget_outputs: list[tuple[str, str]] = lp.get("widget_outputs", [])
-    override_status_id = f"surfaces-op-override-{op_id}-status"
-    input_list = [
-        Input(f"surfaces-op-override-{op_id}-{p}", "value")
-        for p in on_params
-    ]
-
-    @app.callback(
-        Output({"type": "styled-graph", "owner": "structure",
-                "name": "op-preview"}, "figure", allow_duplicate=True),
-        Output("surfaces-op-preview-stats", "children", allow_duplicate=True),
-        Output(override_status_id, "children"),
-        *[Output(cid, prop, allow_duplicate=True) for cid, prop in widget_outputs],
-        *input_list,
-        State("surfaces-op-select", "value"),
-        State("surfaces-selected", "data"),
-        State(ids.GRAPH_SETTINGS_STORE, "data"),
-        prevent_initial_call=True,
-    )
-    def _live_preview(*args):
-        n_on = len(on_params)
-        param_vals = args[:n_on]
-        current_op = args[n_on]
-        selected_id = args[n_on + 1]
-        gs = args[n_on + 2]
-        if current_op != op_id or not selected_id:
-            raise dash.exceptions.PreventUpdate
-        psurf = sr.registry.get(selected_id)
-        if psurf is None:
-            raise dash.exceptions.PreventUpdate
-        kwargs = dict(zip(on_params, param_vals))
-        n_widget_noupdate = (no_update,) * len(widget_outputs)
-        try:
-            result = render_fn(psurf, kwargs, selected_id=selected_id, gs=gs or {})
-        except Exception as exc:
-            from cryocat.app.components.graphsettings import error_figure as _ef
-            return _ef(f"Preview error: {exc}"), str(exc), "", *n_widget_noupdate
-        if widget_outputs:
-            fig, stats, *widget_vals = result
-        else:
-            fig, stats = result
-            widget_vals = []
-        n_pts = 0
-        if getattr(psurf, "is_point_cloud", False) and psurf.surface.vertices is not None:
-            n_pts = len(psurf.surface.vertices)
-        return fig, stats, (f"{n_pts:,} points" if n_pts else ""), *widget_vals
-
-    _live_preview.__name__ = f"_live_preview_{op_id}"
-
 
 def _op_panel() -> html.Div:
     return html.Div(
@@ -842,42 +788,12 @@ def _main() -> list:
                     label="View",
                     tab_id="surfaces-tab-view",
                     children=html.Div(
-                        get_surface_view("surfaces-view"),
-                        style=_pad,
-                    ),
-                ),
-                # ── Results tab: every op's output ──────────────────────────
-                dbc.Tab(
-                    label="Results",
-                    tab_id="surfaces-tab-results",
-                    children=html.Div(
                         [
-                            # Op-label header — updated by _track_op_label callback.
-                            html.Div(id="surfaces-results-op-label"),
-                            # Scalar-result panel (surface area, etc.)
-                            html.Div(
-                                id="surfaces-scalar-results-area",
-                                children=html.Div(
-                                    "Scalar operation results (e.g. surface area) "
-                                    "appear here.",
-                                    style=_HINT,
-                                ),
-                                style={"marginBottom": "0.5rem"},
-                            ),
-                            # Intersection results (populated after Cast)
-                            html.Div(
-                                id="surfaces-isect-results-area",
-                                children=html.Div(
-                                    "Run a particle–mesh intersection from the "
-                                    "sidebar to see hits, region summary, and "
-                                    "distance histogram.",
-                                    style=_HINT,
-                                ),
-                            ),
-                            # Live-preview area for ops with a preview figure
+                            get_surface_view("surfaces-view"),
+                            # Live-preview area for ops with a per-step figure (e.g. alpha shape)
                             html.Div(
                                 id="surfaces-op-preview-area",
-                                style={"display": "none", "marginBottom": "0.5rem"},
+                                style={"display": "none", "marginTop": "0.8rem"},
                                 children=[
                                     customel_graph(
                                         "structure", "op-preview",
@@ -892,16 +808,27 @@ def _main() -> list:
                                              style=_HINT),
                                 ],
                             ),
-                            # Parametric results (table or motl send-to-editor)
+                        ],
+                        style=_pad,
+                    ),
+                ),
+                # ── Results tab: mirrors complexes page structure ────────────
+                dbc.Tab(
+                    label="Results",
+                    tab_id="surfaces-tab-results",
+                    children=html.Div(
+                        [
+                            html.Div("Results", style=_SECTION_HEADER),
                             html.Div(
-                                id="surfaces-param-results-area",
-                                children=html.Div(
-                                    "Parametric ops that return motls appear "
-                                    "here with a Send-to-editor control. "
-                                    "Ops that return a table render the table.",
-                                    style=_HINT,
-                                ),
+                                id="surfaces-results-area",
+                                children=[html.Small("No surface selected.", style=_HINT)],
                             ),
+                            html.Hr(style={"margin": "0.6rem 0"}),
+                            html.Div("DataFrame results", style=_SECTION_HEADER),
+                            get_results_slot("surfaces-df"),
+                            html.Hr(style={"margin": "0.6rem 0"}),
+                            html.Div("Table → motl", style=_SECTION_HEADER),
+                            get_table_to_motl("surfaces-ttm", show_rows_mode=False),
                         ],
                         style=_pad,
                     ),
@@ -914,6 +841,7 @@ def _main() -> list:
 layout = html.Div(
     [
         # Page-local pool of handles. Live surfaces live in surface_registry.
+        dcc.Store(id="surfaces-isect-hits-ref"),
         dcc.Store(id="surfaces-pool", data={}),
         dcc.Store(id="surfaces-selected", data=None),
         # Send-to-editor: result motl rows go here, motlsink picks them up.
@@ -929,13 +857,11 @@ layout = html.Div(
         # Column prefix for hit-point coordinates: "hit_points" (ray cast) or
         # "closest_points" (distance mode). Written by _sync_coord_prefix.
         dcc.Store(id="surfaces-isect-coord-prefix", data="hit_points"),
-        # Scalar-op result snapshot (label + value), rendered into the main
-        # area's scalar-results panel.  Stays a list so successive scalar
-        # ops accumulate instead of overwriting.
+        # Per-surface operation result sections (mirrors cpx-results-store).
+        dcc.Store(id=_SURF_RESULTS, data={}),
+        # Scalar-op result (kept as output target; rendered via results area).
         dcc.Store(id="surfaces-scalar-result", data=[]),
-        # Tracks the label of the most-recently-run operation (for Results tab header).
-        dcc.Store(id="surfaces-last-op-label"),
-        # Parametric active-fit handle + per-op result stores.
+        # Parametric active-fit handle + per-op result stores (kept as output targets).
         dcc.Store(id="parametric-active"),
         dcc.Store(id="surfaces-param-result-motl"),
         dcc.Store(id="surfaces-param-intersection-df"),
@@ -1130,10 +1056,54 @@ def register_callbacks(app):
         isect_pool_id_store_id="surfaces-isect-pool-id",
         isect_coord_prefix_store_id="surfaces-isect-coord-prefix",
     )
-    register_send_to_editor_callbacks(app, "surfaces-param-send",
-                                      "surfaces-param-result-motl")
-    register_send_to_editor_callbacks(app, "surfaces-isect-send",
-                                      "surfaces-isect-filtered-motl")
+    register_results_slot_callbacks(app, "surfaces-df", "surfaces-selected")
+
+    def _resolve_surf_slot_df(slot_data: dict | None) -> pd.DataFrame | None:
+        if not slot_data or not slot_data.get("records"):
+            return None
+        return pd.DataFrame(slot_data["records"])
+
+    register_table_to_motl_callbacks(
+        app, "surfaces-ttm",
+        source_store_id="surfaces-df-slot-data",
+        resolve_df=_resolve_surf_slot_df,
+    )
+
+    # IU1: Enable TTM buttons only when a DataFrame result is available.
+    @app.callback(
+        Output("surfaces-ttm-ttm-write-btn", "disabled"),
+        Output("surfaces-ttm-ttm-write-btn", "title"),
+        Output("surfaces-ttm-ttm-create-btn", "disabled"),
+        Output("surfaces-ttm-ttm-create-btn", "title"),
+        Input("surfaces-df-slot-data", "data"),
+        prevent_initial_call=True,
+    )
+    def _gate_ttm(slot_data):
+        if slot_data and slot_data.get("records"):
+            return False, "", False, ""
+        msg = "Run an operation that returns a DataFrame to enable motl write operations."
+        return True, msg, True, msg
+
+    # IU2: Build (or clear) the TTM hits-ref whenever a new intersection result arrives.
+    # Populates the source-column dropdowns in the table-to-motl panel immediately,
+    # without requiring the user to click "Filter particles" first.
+    @app.callback(
+        Output("surfaces-isect-hits-ref", "data", allow_duplicate=True),
+        Input("surfaces-isect-result", "data"),
+        State("surfaces-isect-motl-rows", "data"),
+        prevent_initial_call=True,
+    )
+    def _build_hits_ref_on_result(snap, motl_rows):
+        if not snap:
+            return None
+        hits_list = snap.get("hits_records") or []
+        if not hits_list:
+            return None
+        hits_df = pd.DataFrame(hits_list)
+        if "source_id" in hits_df.columns and motl_rows:
+            src_to_stid = {i: row.get("subtomo_id") for i, row in enumerate(motl_rows)}
+            hits_df["subtomo_id"] = hits_df["source_id"].map(src_to_stid)
+        return _datapool.insert(hits_df, label="intersection results", id_column="subtomo_id")
 
     from dash import ALL as _ALL
     formgen.register_form_callbacks(app, _LOAD_ID_TYPE, {"op": _ALL})
@@ -1262,7 +1232,6 @@ def register_callbacks(app):
         Output("surfaces-op-object-picker-wrapper", "style"),
         Output("surfaces-op-isect-wrapper", "style"),
         Output("surfaces-op-override-area-alpha_shape", "style"),
-        Output("surfaces-op-preview-area", "style"),
         Input("surfaces-op-select", "value"),
         Input("surfaces-selected", "data"),
         State("surfaces-pool", "data"),
@@ -1271,7 +1240,6 @@ def register_callbacks(app):
     def _render_op_form(op_id, selected_id, pool):
         _hidden = {"display": "none"}
         _show_over = {"display": "block", "marginBottom": "0.4rem"}
-        _show_prev = {"display": "block", "marginBottom": "0.5rem"}
 
         # All override areas hidden by default; toggled per-category below.
         _all_hidden = (_hidden,) * len(OP_UI)  # one per OP_UI entry
@@ -1279,7 +1247,7 @@ def register_callbacks(app):
         if not op_id or op_id not in OPERATIONS:
             return (
                 html.Div("Pick an operation to render its form.", style=_HINT),
-                _hidden, _hidden, _hidden, *_all_hidden, _hidden,
+                _hidden, _hidden, _hidden, *_all_hidden,
             )
         op = OPERATIONS[op_id]
 
@@ -1288,7 +1256,7 @@ def register_callbacks(app):
                 html.Div(),
                 _hidden, _hidden,
                 {"display": "block", "marginBottom": "0.4rem"},
-                *_all_hidden, _hidden,
+                *_all_hidden,
             )
 
         if op["category"] == "alpha_shape":
@@ -1297,15 +1265,14 @@ def register_callbacks(app):
                 and (pool or {}).get(selected_id, {}).get("representation") == "point_cloud"
             )
             hint = (
-                "Adjust the slider to preview; click Run to commit the mesh."
+                "Adjust the slider then click Run to commit the mesh."
                 if opc_ready else
-                "Select a point-cloud (OPC) surface to enable the alpha-shape preview."
+                "Select a point-cloud (OPC) surface to enable the alpha-shape tool."
             )
             return (
                 html.Div(hint, style=_HINT),
                 _hidden, _hidden, _hidden,
                 _show_over,
-                _show_prev if opc_ready else _hidden,
             )
 
         if op["category"] == "ball_pivoting":
@@ -1319,7 +1286,7 @@ def register_callbacks(app):
                         "Select a point-cloud (OPC) surface to enable ball pivoting.",
                         style=_HINT,
                     ),
-                    _hidden, _hidden, _hidden, *_all_hidden, _hidden,
+                    _hidden, _hidden, _hidden, *_all_hidden,
                 )
             rows = formgen.build_form(
                 Mesh.from_ball_pivoting,
@@ -1329,7 +1296,7 @@ def register_callbacks(app):
             )
             return (
                 html.Div(rows),
-                _hidden, _hidden, _hidden, *_all_hidden, _hidden,
+                _hidden, _hidden, _hidden, *_all_hidden,
             )
 
         if op["category"] == "mesh":
@@ -1337,7 +1304,7 @@ def register_callbacks(app):
             rows = formgen.build_form(entry, id_type=_OP_ID_TYPE, id_extra={"op": op_id})
             return (
                 html.Div(rows),
-                _hidden, _hidden, _hidden, *_all_hidden, _hidden,
+                _hidden, _hidden, _hidden, *_all_hidden,
             )
 
         # parametric
@@ -1364,7 +1331,7 @@ def register_callbacks(app):
         )
         return (
             html.Div(rows), input_style, object_style,
-            _hidden, *_all_hidden, _hidden,
+            _hidden, *_all_hidden,
         )
 
     # ── Operations Run dispatch ──────────────────────────────────────────────
@@ -1379,6 +1346,8 @@ def register_callbacks(app):
         Output("surfaces-op-status", "children"),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
+        Output("surfaces-df-obj-results", "data", allow_duplicate=True),
+        Output(_SURF_RESULTS, "data", allow_duplicate=True),
         Input("surfaces-op-run-btn", "n_clicks"),
         State("surfaces-op-select", "value"),
         State({"type": _OP_ID_TYPE, "owner": ALL, "op": ALL, "param": ALL, "tag": ALL}, "value"),
@@ -1406,6 +1375,8 @@ def register_callbacks(app):
         State(ids.POOL_NEXT_ID, "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
         State(ids.DATA_POOL_NEXT_ID, "data"),
+        State(_SURF_RESULTS, "data"),
+        State("surfaces-df-obj-results", "data"),
         prevent_initial_call=True,
     )
     def _run_operation(
@@ -1417,11 +1388,37 @@ def register_callbacks(app):
         alpha_override_val,
         registry, pool_meta, pool_next_id,
         dp_registry, dp_next_id,
+        results_store,
+        obj_results_store,
     ):
+        def _push_section(section):
+            if not selected_id:
+                return no_update
+            nr = dict(results_store or {})
+            prev = list(nr.get(selected_id, []))
+            key = section.get("key", section["label"])
+            replaced = False
+            for _i, _s in enumerate(prev):
+                if _s.get("key") == key:
+                    prev[_i] = section
+                    replaced = True
+                    break
+            if not replaced:
+                prev.append(section)
+            nr[selected_id] = prev
+            return nr
+
+        def _push_slot(slot):
+            if not selected_id or slot is None:
+                return no_update
+            nr = dict(obj_results_store or {})
+            nr[selected_id] = slot
+            return nr
+
         if not n_clicks:
             raise dash.exceptions.PreventUpdate
         if not op_id:
-            return (no_update,) * 7 + ("Pick an operation first.", no_update, no_update)
+            return (no_update,) * 8 + ("Pick an operation first.", no_update, no_update, no_update)
         op = OPERATIONS[op_id]
         pool = dict(pool or {})
         pool_state = _pool.PoolState.from_stores(registry, pool_meta, pool_next_id)
@@ -1434,17 +1431,17 @@ def register_callbacks(app):
             psurf: PleomorphicSurface | None = None
             if op.get("needs_selection"):
                 if not selected_id or selected_id not in pool:
-                    return (no_update,) * 7 + (
-                        "Select a surface from the list first.", no_update, no_update)
+                    return (no_update,) * 8 + (
+                        "Select a surface from the list first.", no_update, no_update, no_update)
                 psurf = sr.registry.get(selected_id)
                 if psurf is None:
-                    return (no_update,) * 7 + (
-                        f"Surface {selected_id} is no longer in the registry.", no_update, no_update)
+                    return (no_update,) * 8 + (
+                        f"Surface {selected_id} is no longer in the registry.", no_update, no_update, no_update)
 
             method = op["method_for"](psurf)
             if method is None:
-                return (no_update,) * 7 + (
-                    "This operation is not available for the selected surface.", no_update, no_update)
+                return (no_update,) * 8 + (
+                    "This operation is not available for the selected surface.", no_update, no_update, no_update)
             kwargs = _filter_kwargs_to_signature(method, kwargs)
             _scalar_var: str | None = None
             if op["kind"] == "scalar":
@@ -1460,11 +1457,11 @@ def register_callbacks(app):
             try:
                 result = _invoke_op(method, kwargs, assign_to=_scalar_var or _op_raw_var or _df_var)
             except Exception as exc:
-                return (no_update,) * 7 + (f"Error: {exc}", no_update, no_update)
+                return (no_update,) * 8 + (f"Error: {exc}", no_update, no_update, no_update)
 
             if op["kind"] == "export":
                 tgt = kwargs.get("output_path") or "(unspecified path)"
-                return (no_update,) * 7 + (f"Saved to {tgt}.", no_update, no_update)
+                return (no_update,) * 8 + (f"Saved to {tgt}.", no_update, no_update, no_update)
             if op["kind"] == "scalar":
                 rows: list[dict] = []
                 if isinstance(result, dict):
@@ -1472,16 +1469,23 @@ def register_callbacks(app):
                         rows.append({"label": f"{op['label']} / {k}", "value": _fmt_cell(v)})
                 else:
                     rows.append({"label": op["label"], "value": _fmt_cell(result)})
+                _ts = _dt.now().strftime("%H:%M:%S")
+                _sec = {"key": op_id, "label": op["label"], "time": _ts,
+                        "kind": "scalar", "rows": rows}
                 return (no_update, None, None, None, None, rows,
                         no_update,
-                        f"{op['label']} -> see Results.", no_update, no_update)
+                        f"{op['label']} → see Results.", no_update, no_update, no_update,
+                        _push_section(_sec))
             if op["kind"] == "field-source":
                 handle = pool.get(selected_id)
                 if handle is not None and psurf is not None:
                     handle["has_curvatures"] = sr._mesh_has_curvatures(psurf.surface)
                     pool[selected_id] = handle
+                _ts = _dt.now().strftime("%H:%M:%S")
+                _sec = {"key": op_id, "label": op["label"], "time": _ts, "kind": "none"}
                 return (pool, None, None, None, None, None, no_update,
-                        f"{op['label']} applied; curvature fields populated.", no_update, no_update)
+                        f"{op['label']} applied; curvature fields populated.", no_update, no_update, no_update,
+                        _push_section(_sec))
             if op["kind"] in ("unary-inplace", "unary") and (result is None or result is psurf.surface or result is psurf):
                 handle = pool.get(selected_id)
                 if handle is not None and psurf is not None:
@@ -1491,53 +1495,61 @@ def register_callbacks(app):
                         else handle["n_elements"]
                     )
                     pool[selected_id] = handle
+                _ts = _dt.now().strftime("%H:%M:%S")
+                _sec = {"key": op_id, "label": op["label"], "time": _ts, "kind": "none"}
                 return (pool, None, None, None, None, None, no_update,
-                        f"{op['label']} applied in place.", no_update, no_update)
+                        f"{op['label']} applied in place.", no_update, no_update, no_update,
+                        _push_section(_sec))
 
             if op["kind"] == "dataframe":
                 if not isinstance(result, pd.DataFrame):
-                    return (no_update,) * 7 + (f"{op['label']} did not return a DataFrame.", no_update, no_update)
-                records = result.to_dict("records")
-                _dp_state = _datapool.DataPoolState.from_stores(dp_registry, dp_next_id)
-                _dp_state, _entry_id = _datapool.insert_entry(
-                    _dp_state, result,
-                    label=f"{op['label']} (surface op)",
-                    reader=op.get("reg_key", ""),
-                    source_path="",
-                    entry_kind="surf",
-                )
-                _new_dp_reg, _new_dp_next = _dp_state.to_stores()
-                return (no_update, None, records, None, None, None, no_update,
-                        f"{op['label']} → {len(records)} rows; table entry {_entry_id}.",
-                        _new_dp_reg, _new_dp_next)
+                    return (no_update,) * 8 + (f"{op['label']} did not return a DataFrame.", no_update, no_update, no_update)
+                _slot = {
+                    "records": result.head(200).to_dict("records"),
+                    "label": op["label"],
+                    "n_rows": len(result),
+                    "pool_label": f"results_surf_{selected_id}",
+                }
+                _ts = _dt.now().strftime("%H:%M:%S")
+                _sec = {"key": op_id, "label": op["label"], "time": _ts,
+                        "kind": "dataframe", "count": len(result)}
+                return (no_update, None, None, None, None, None, no_update,
+                        f"{op['label']} → {len(result)} rows.",
+                        no_update, no_update, _push_slot(_slot),
+                        _push_section(_sec))
 
             if result is None:
-                return (no_update,) * 7 + (
-                    f"{op['label']}: no output (result was empty or all elements masked).", no_update, no_update)
+                return (no_update,) * 8 + (
+                    f"{op['label']}: no output (result was empty or all elements masked).", no_update, no_update, no_update)
             new_entries = _adopt_result(
                 result, parent_id=selected_id, label_root=op["label"],
             )
             for sid, h in new_entries:
                 pool[sid] = h
+            _ts = _dt.now().strftime("%H:%M:%S")
+            _names = [h.get("label", s) for s, h in new_entries]
+            _sec = {"key": "_create_" + op_id, "label": op["label"], "time": _ts,
+                    "kind": "create", "count": len(new_entries), "names": _names}
             return (pool, None, None, None, None, None, no_update,
                     f"Created {len(new_entries)} new surface(s): "
-                    + ", ".join(s for s, _ in new_entries) + ".", no_update, no_update)
+                    + ", ".join(s for s, _ in new_entries) + ".", no_update, no_update, no_update,
+                    _push_section(_sec))
 
         # ── Parametric op ───────────────────────────────────────────────
         if op["category"] == "parametric":
             if op.get("needs_input_motl", True):
                 in_motl = _motl_from_pool_rows(in_motl_id)
                 if in_motl is None:
-                    return (no_update,) * 7 + (
-                        "Pick a non-empty input motl from the pool.", no_update, no_update)
+                    return (no_update,) * 8 + (
+                        "Pick a non-empty input motl from the pool.", no_update, no_update, no_update)
                 kwargs: dict = {"input_motl": in_motl}
             else:
                 kwargs: dict = {}
             if "object_motl" in op.get("extra_pickers", []):
                 obj = _motl_from_pool_rows(obj_motl_id)
                 if obj is None:
-                    return (no_update,) * 7 + (
-                        "Pick a non-empty motl for 'object_motl'.", no_update, no_update)
+                    return (no_update,) * 8 + (
+                        "Pick a non-empty motl for 'object_motl'.", no_update, no_update, no_update)
                 kwargs["object_motl"] = obj
             scalar_kwargs = generate_kwargs(ids, values, pool_state) if (ids and values) else {}
             scalar_kwargs = {k: v for k, v in scalar_kwargs.items()
@@ -1547,53 +1559,67 @@ def register_callbacks(app):
                 _pkeys = pr.registry.keys()
                 psurf = pr.registry.get(_pkeys[0]) if _pkeys else None
                 if psurf is None:
-                    return (no_update,) * 7 + (
-                        "No active fit -- load a parametric surface first.", no_update, no_update)
+                    return (no_update,) * 8 + (
+                        "No active fit -- load a parametric surface first.", no_update, no_update, no_update)
                 method = getattr(psurf, op["method_name"])
             else:
                 method = getattr(ParametricSurface, op["method_name"])
             try:
                 result = run_operation(method, kwargs)
             except Exception as exc:
-                return (no_update,) * 7 + (f"{op['label']} failed: {exc}", no_update, no_update)
+                return (no_update,) * 8 + (f"{op['label']} failed: {exc}", no_update, no_update, no_update)
             if op["result_kind"] == "export":
                 tgt = kwargs.get("output_path", "?")
-                return (no_update,) * 7 + (f"Saved to {tgt}.", no_update, no_update)
+                return (no_update,) * 8 + (f"Saved to {tgt}.", no_update, no_update, no_update)
             if op["result_kind"] == "dataframe":
                 if not isinstance(result, pd.DataFrame):
-                    return (no_update,) * 7 + (
-                        f"{op['label']} did not return a DataFrame.", no_update, no_update)
-                records = result.to_dict("records")
-                return (no_update, None, records, None, None, None,
+                    return (no_update,) * 8 + (
+                        f"{op['label']} did not return a DataFrame.", no_update, no_update, no_update)
+                _ts = _dt.now().strftime("%H:%M:%S")
+                _sec = {"key": op_id, "label": op["label"], "time": _ts,
+                        "kind": "dataframe", "count": len(result)}
+                _slot = {
+                    "records": result.head(200).to_dict("records"),
+                    "label": op["label"],
+                    "n_rows": len(result),
+                    "pool_label": f"results_surf_{selected_id}",
+                }
+                return (no_update, None, None, None, None, None,
                         no_update,
-                        f"{op['label']} -> {len(records)} rows; "
-                        "see results table.", no_update, no_update)
+                        f"{op['label']} → {len(result)} rows; "
+                        "see results table.", no_update, no_update,
+                        _push_slot(_slot),
+                        _push_section(_sec))
             if not isinstance(result, Motl):
-                return (no_update,) * 7 + (
+                return (no_update,) * 8 + (
                     f"{op['label']} did not return a Motl "
-                    f"({type(result).__name__}).", no_update, no_update)
+                    f"({type(result).__name__}).", no_update, no_update, no_update)
             rows = result.df.to_dict("records")
+            _ts = _dt.now().strftime("%H:%M:%S")
+            _sec = {"key": op_id, "label": op["label"], "time": _ts,
+                    "kind": "motl", "count": len(rows)}
             return (no_update, rows, None, None, None, None,
                     no_update,
-                    f"{op['label']} -> {len(rows)} particles, "
-                    "ready to send to editor.", no_update, no_update)
+                    f"{op['label']} → {len(rows)} particles, "
+                    "ready to send to editor.", no_update, no_update, no_update,
+                    _push_section(_sec))
 
         # ── Intersection (custom flow) ───────────────────────────────────
         if op["category"] == "intersection":
             if not selected_id:
-                return (no_update,) * 7 + ("Select a mesh surface first.", no_update, no_update)
+                return (no_update,) * 8 + ("Select a mesh surface first.", no_update, no_update, no_update)
             psurf = sr.registry.get(selected_id)
             if psurf is None or not psurf.is_mesh:
-                return (no_update,) * 7 + ("Selected surface must be a mesh.", no_update, no_update)
+                return (no_update,) * 8 + ("Selected surface must be a mesh.", no_update, no_update, no_update)
             if not isect_motl_id:
-                return (no_update,) * 7 + ("Pick a motl from the pool.", no_update, no_update)
+                return (no_update,) * 8 + ("Pick a motl from the pool.", no_update, no_update, no_update)
             try:
                 isect_df = _pool.get_rows(isect_motl_id)
             except _pool.PoolPayloadMissing:
                 isect_df = None
             if isect_df is None or isect_df.empty:
-                return (no_update,) * 7 + (
-                    f"Motl '{isect_motl_id}' has no data.", no_update, no_update)
+                return (no_update,) * 8 + (
+                    f"Motl '{isect_motl_id}' has no data.", no_update, no_update, no_update)
             isect_motl = Motl(isect_df)
             isect_motl._pool_motl_id = isect_motl_id
             motl_rows = isect_df.to_dict("records")
@@ -1612,13 +1638,13 @@ def register_callbacks(app):
                     raw = _invoke_op(
                         psurf.distance_to_points,
                         {"target": target, "return_closest_points": True},
-                        assign_to="raw",
+                        assign_to="results_surf",
                     )
                 except Exception as exc:
                     _tb_str = _tb.format_exc()
                     print(_tb_str, flush=True)
                     dash_logger.write(f"TRACEBACK (distance_to_points):\n{_tb_str}", source="error")
-                    return (no_update,) * 7 + (f"distance_to_points failed: {exc!r}", no_update, no_update)
+                    return (no_update,) * 8 + (f"distance_to_points failed: {exc!r}", no_update, no_update, no_update)
                 n_pts = target.shape[0]
                 op_label = f"distance_to_points:{selected_id}"
                 # Add hit=True for all points — every target has a closest point.
@@ -1628,9 +1654,21 @@ def register_callbacks(app):
                 raw["hit"] = np.ones(n_pts, dtype=bool)
                 store_value = _result_to_store({}, [], raw=raw, raw_label=op_label)
                 store_value["hit_coord_prefix"] = "closest_points"
+                _ts = _dt.now().strftime("%H:%M:%S")
+                _sec = {"key": "intersection", "label": "Distance to points", "time": _ts,
+                        "kind": "intersection", "n_hits": n_pts, "n_rays": n_pts, "pct": 100.0}
+                _raw_recs = store_value.get("raw_records", [])
+                _dist_slot = {
+                    "records": _raw_recs[:200],
+                    "label": "Distance to points",
+                    "n_rows": len(_raw_recs),
+                    "pool_label": f"results_surf_{selected_id}",
+                }
                 return (no_update, None, None, store_value, motl_rows,
                         None, no_update,
-                        f"Computed distances for {n_pts} particles.", no_update, no_update)
+                        f"Computed distances for {n_pts} particles.", no_update, no_update,
+                        _push_slot(_dist_slot),
+                        _push_section(_sec))
 
             # ── Ray-cast mode (uses particle orientations) ────────────────
             _rays_kwargs = {
@@ -1654,7 +1692,7 @@ def register_callbacks(app):
                 _tb_str = _tb.format_exc()
                 print(_tb_str, flush=True)
                 dash_logger.write(f"TRACEBACK (rays_from_motl):\n{_tb_str}", source="error")
-                return (no_update,) * 7 + (f"Ray construction failed: {exc!r}", no_update, no_update)
+                return (no_update,) * 8 + (f"Ray construction failed: {exc!r}", no_update, no_update, no_update)
             dash_logger.write(
                 f"DEBUG ray_intersections kwargs: rays.shape={rays.shape!r}, "
                 f"one_hit_per_target={bool(isect_oh)!r}",
@@ -1669,14 +1707,14 @@ def register_callbacks(app):
                         "return_orientations": True,
                         "target_orientation": isect_orient or "normal",
                     },
-                    assign_to="raw",
+                    assign_to="results_surf",
                 )
             except Exception as exc:
                 _tb_str = _tb.format_exc()
                 print(_tb_str, flush=True)
                 dash_logger.write(f"TRACEBACK (ray_intersections):\n{_tb_str}", source="error")
-                return (no_update,) * 7 + (
-                    f"ray_intersections failed: {exc!r}", no_update, no_update)
+                return (no_update,) * 8 + (
+                    f"ray_intersections failed: {exc!r}", no_update, no_update, no_update)
             # Add hit boolean so the surface viewer can draw the scatter layer.
             raw = dict(raw)
             raw["hit"] = np.isfinite(np.asarray(raw.get("t_hit", []))).astype(bool)
@@ -1709,8 +1747,8 @@ def register_callbacks(app):
                 _tb_str = _tb.format_exc()
                 print(_tb_str, flush=True)
                 dash_logger.write(f"TRACEBACK (intersection_data):\n{_tb_str}", source="error")
-                return (no_update,) * 7 + (
-                    f"intersection_data failed: {exc!r}", no_update, no_update)
+                return (no_update,) * 8 + (
+                    f"intersection_data failed: {exc!r}", no_update, no_update, no_update)
             hits_df = data.get("hits")
             if isinstance(hits_df, pd.DataFrame) and "source_id" in hits_df.columns:
                 seen = sorted({int(x) for x in hits_df["source_id"].tolist()})
@@ -1724,26 +1762,38 @@ def register_callbacks(app):
             n_miss = n_rays - n_hits
             pct = 100 * n_hits / n_rays if n_rays > 0 else 0.0
 
+            _ts = _dt.now().strftime("%H:%M:%S")
+            _sec = {"key": "intersection", "label": "Ray intersections", "time": _ts,
+                    "kind": "intersection", "n_hits": n_hits, "n_rays": n_rays, "pct": pct}
+            _raw_recs = store_value.get("raw_records", [])
+            _isect_slot = {
+                "records": _raw_recs[:200],
+                "label": "Ray intersections",
+                "n_rows": len(_raw_recs),
+                "pool_label": f"results_surf_{selected_id}",
+            }
             return (pool, None, None, store_value, motl_rows,
                     None, no_update,
                     f"Cast {n_rays} rays; {n_hits} hits ({pct:.0f}%), "
-                    f"{n_miss} misses.", no_update, no_update)
+                    f"{n_miss} misses.", no_update, no_update,
+                    _push_slot(_isect_slot),
+                    _push_section(_sec))
 
         # ── Alpha shape ──────────────────────────────────────────────────
         if op["category"] == "alpha_shape":
             if not selected_id or selected_id not in pool:
-                return (no_update,) * 7 + ("Select a surface first.", no_update, no_update)
+                return (no_update,) * 8 + ("Select a surface first.", no_update, no_update, no_update)
             psurf = sr.registry.get(selected_id)
             if psurf is None or not psurf.is_point_cloud:
-                return (no_update,) * 7 + (
-                    "Alpha shape requires an OrientedPointCloud surface.", no_update, no_update)
+                return (no_update,) * 8 + (
+                    "Alpha shape requires an OrientedPointCloud surface.", no_update, no_update, no_update)
             coords = psurf.surface.vertices
             source_key = selected_id
             if source_key not in _struct_alpha_cache:
                 tetra_info = _compute_alpha_tetra(source_key, coords)
                 if tetra_info is None:
-                    return (no_update,) * 7 + (
-                        "Cannot compute alpha shape: fewer than 4 points or coplanar.", no_update, no_update)
+                    return (no_update,) * 8 + (
+                        "Cannot compute alpha shape: fewer than 4 points or coplanar.", no_update, no_update, no_update)
             lo, hi = Mesh.suggest_alpha_range(coords)
             alpha = _slider_to_alpha(
                 float(alpha_override_val or 0.5),
@@ -1759,25 +1809,30 @@ def register_callbacks(app):
                     assign_to=_raw_var,
                 )
             except Exception as exc:
-                return (no_update,) * 7 + (f"Alpha shape failed: {exc}", no_update, no_update)
+                return (no_update,) * 8 + (f"Alpha shape failed: {exc}", no_update, no_update, no_update)
             new_entries = _adopt_result(
                 mesh, parent_id=selected_id, label_root=f"alpha={alpha:.4g}",
             )
             pool = dict(pool or {})
             for sid, h in new_entries:
                 pool[sid] = h
+            _ts = _dt.now().strftime("%H:%M:%S")
+            _names = [h.get("label", s) for s, h in new_entries]
+            _sec = {"key": "_alpha_" + source_key, "label": f"Alpha shape α={alpha:.4g}",
+                    "time": _ts, "kind": "create", "count": len(new_entries), "names": _names}
             return (pool,) + (no_update,) * 6 + (
                 f"Committed alpha={alpha:.4g}: "
-                f"{len(new_entries)} surface(s) added to pool.", no_update, no_update)
+                f"{len(new_entries)} surface(s) added to pool.", no_update, no_update, no_update,
+                _push_section(_sec))
 
         # ── Ball pivoting ────────────────────────────────────────────────
         if op["category"] == "ball_pivoting":
             if not selected_id or selected_id not in pool:
-                return (no_update,) * 7 + ("Select a surface first.", no_update, no_update)
+                return (no_update,) * 8 + ("Select a surface first.", no_update, no_update, no_update)
             psurf = sr.registry.get(selected_id)
             if psurf is None or not psurf.is_point_cloud:
-                return (no_update,) * 7 + (
-                    "Ball pivoting requires an OrientedPointCloud surface.", no_update, no_update)
+                return (no_update,) * 8 + (
+                    "Ball pivoting requires an OrientedPointCloud surface.", no_update, no_update, no_update)
             _raw_kw = generate_kwargs(ids, values, pool_state) if (ids and values) else {}
             _raw_kw = {k: v for k, v in _raw_kw.items() if v not in (None, "", [])}
             _raw_kw = _filter_kwargs_to_signature(Mesh.from_ball_pivoting, _raw_kw)
@@ -1789,72 +1844,94 @@ def register_callbacks(app):
                     assign_to=_bp_var,
                 )
             except Exception as exc:
-                return (no_update,) * 7 + (f"Ball pivoting failed: {exc}", no_update, no_update)
+                return (no_update,) * 8 + (f"Ball pivoting failed: {exc}", no_update, no_update, no_update)
             new_entries = _adopt_result(mesh, parent_id=selected_id, label_root="ball pivoting")
             pool = dict(pool or {})
             for sid, h in new_entries:
                 pool[sid] = h
+            _ts = _dt.now().strftime("%H:%M:%S")
+            _names = [h.get("label", s) for s, h in new_entries]
+            _sec = {"key": "_bp_" + selected_id, "label": "Ball pivoting",
+                    "time": _ts, "kind": "create", "count": len(new_entries), "names": _names}
             return (pool,) + (no_update,) * 6 + (
-                f"Ball pivoting: {len(new_entries)} surface(s) added to pool.", no_update, no_update)
+                f"Ball pivoting: {len(new_entries)} surface(s) added to pool.", no_update, no_update, no_update,
+                _push_section(_sec))
 
-        return (no_update,) * 7 + (f"Unknown op category: {op['category']!r}.", no_update, no_update)
+        return (no_update,) * 8 + (f"Unknown op category: {op['category']!r}.", no_update, no_update, no_update)
 
-    # ── Fix 8: track and display the label of the most-recently-run operation ──
+    # ── Render per-surface result sections (mirrors cpx-results-area) ────────
     @app.callback(
-        Output("surfaces-last-op-label", "data"),
-        Input("surfaces-op-status", "children"),
-        State("surfaces-op-select", "value"),
+        Output("surfaces-results-area", "children"),
+        Input(_SURF_RESULTS, "data"),
+        Input("surfaces-selected", "data"),
         prevent_initial_call=True,
     )
-    def _track_op_label(status, op_id):
-        if not status or not op_id or op_id not in OPERATIONS:
-            return no_update
-        _skip = ("Error:", "Pick ", "Select ", "No ", "Cannot ", "Alpha shape requires")
-        if any(status.startswith(s) for s in _skip) or "failed" in status.lower():
-            return no_update
-        return OPERATIONS[op_id].get("label", op_id)
+    def _render_results_area(results_store, selected_id):
+        if not selected_id:
+            return html.Small("No surface selected.", style=_HINT)
+        sections = (results_store or {}).get(selected_id, [])
+        if not sections:
+            return html.Small("No results yet for this surface.", style=_HINT)
+        items = []
+        for i, sec in enumerate(sections):
+            is_last = i == len(sections) - 1
+            kind = sec.get("kind", "")
+            detail: list = []
+            if kind == "scalar":
+                for r in (sec.get("rows") or []):
+                    detail.append(html.Small(
+                        f"{r['label']}: {r['value']}",
+                        style={**_HINT, "display": "block"},
+                    ))
+            elif kind == "dataframe":
+                detail = [html.Small(f"{sec.get('count', 0)} rows", style=_HINT)]
+            elif kind == "intersection":
+                n_h = sec.get("n_hits", 0)
+                n_r = sec.get("n_rays", 0)
+                pct = sec.get("pct", 0.0)
+                detail = [html.Small(
+                    f"{n_h} hits / {n_r} rays ({pct:.0f}%)", style=_HINT,
+                )]
+            elif kind == "create":
+                names = sec.get("names") or []
+                detail = [html.Small(
+                    f"{sec.get('count', 0)} surface(s): {', '.join(names)}",
+                    style=_HINT,
+                )]
+            elif kind == "motl":
+                detail = [html.Small(f"{sec.get('count', 0)} particles", style=_HINT)]
+            else:
+                detail = []
+            items.append(html.Details(
+                [
+                    html.Summary(
+                        f"{sec['label']}  ·  {sec['time']}",
+                        style={"fontSize": "0.85rem", "cursor": "pointer"},
+                    ),
+                    *detail,
+                ],
+                open=is_last,
+                style={"marginBottom": "0.3rem"},
+            ))
+        return items
 
+    # ── FK2: cache raw intersection DataFrame for the surface view scatter ──────
+    # Stores the DataFrame server-side (no DATA_POOL_REGISTRY entry) and writes
+    # the private key to surfaces-isect-pool-id.  This creates the two-step
+    # cascade that guarantees surfaces-isect-coord-prefix (updated in FK2b by
+    # the same Input) is already fresh when the surface view fires in wave 2.
     @app.callback(
-        Output("surfaces-results-op-label", "children"),
-        Input("surfaces-last-op-label", "data"),
-        prevent_initial_call=True,
-    )
-    def _render_results_op_label(label):
-        if not label:
-            return ""
-        return html.H5(label, style={"marginBottom": "0.5rem"})
-
-    # ── FK2: adopt raw ray_intersections result into the data pool ───────────
-    @app.callback(
-        Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("surfaces-isect-pool-id", "data", allow_duplicate=True),
         Input("surfaces-isect-result", "data"),
-        State(ids.DATA_POOL_REGISTRY, "data"),
-        State(ids.DATA_POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
-    def _adopt_isect_to_pool(snap, dp_reg, dp_next):
+    def _cache_isect_for_view(snap):
         if not snap or "raw_records" not in snap:
             raise dash.exceptions.PreventUpdate
         try:
             df = pd.DataFrame(snap["raw_records"])
-            label = snap.get("raw_label", "ray_intersections")
-            ds = _datapool.DataPoolState.from_stores(dp_reg, dp_next)
-            new_ds, data_id = _datapool.insert_entry(
-                ds, df,
-                label=label,
-                reader="dataframe",
-                source_path="",
-                entry_kind="isect",
-            )
-            return (*new_ds.to_stores(), data_id)
-        except Exception as exc:
-            dash_logger.write(
-                f"_adopt_isect_to_pool failed: {exc!r}\n"
-                f"{_tb.format_exc()}",
-                source="error",
-            )
+            return _datapool.store_private(df, "isect")
+        except Exception:
             raise dash.exceptions.PreventUpdate
 
     # ── FK2b: sync coordinate prefix for the surface viewer ──────────────────
@@ -1867,26 +1944,6 @@ def register_callbacks(app):
         if not snap:
             raise dash.exceptions.PreventUpdate
         return snap.get("hit_coord_prefix", "hit_points")
-
-    # ── Scalar-results panel (main area) ─────────────────────────────────────
-    @app.callback(
-        Output("surfaces-scalar-results-area", "children"),
-        Input("surfaces-scalar-result", "data"),
-        prevent_initial_call=True,
-    )
-    def _render_scalar_results(records):
-        if not records:
-            return html.Div(
-                "Scalar operation results (e.g. surface area) appear here.",
-                style=_HINT,
-            )
-        return html.Div([
-            html.H6("Scalar results"),
-            html.Div(
-                _records_table(records),
-                style={"maxHeight": "200px", "overflowY": "auto"},
-            ),
-        ])
 
     # ── Active-fit info readout ──────────────────────────────────────────────
     @app.callback(
@@ -1903,89 +1960,6 @@ def register_callbacks(app):
             f"{int(handle.get('n_quadrics', 0))} surface(s); "
             f"source={handle.get('source', '?')}."
         )
-
-    # ── Render intersection results (main area) ──────────────────────────────
-    @app.callback(
-        Output("surfaces-isect-results-area", "children"),
-        Input("surfaces-isect-result", "data"),
-        State(ids.GRAPH_SETTINGS_STORE, "data"),
-        prevent_initial_call=True,
-    )
-    def _render_isect_results(snap, gs):
-        if not snap:
-            return html.Div(
-                "Run a particle–mesh intersection from the sidebar to see "
-                "hits, region summary, and distance histogram.",
-                style=_HINT,
-            )
-        children: list = [html.H6("Intersection results")]
-        rs = snap.get("region_summary_records") or []
-        if rs:
-            children.append(html.Div("Region summary",
-                                     style={"fontWeight": "bold"}))
-            children.append(html.Div(
-                _records_table(rs),
-                style={"maxHeight": "220px", "overflowY": "auto",
-                       "marginBottom": "0.6rem"},
-            ))
-        hits = snap.get("hits_records") or []
-        if hits:
-            children.append(html.Div(
-                f"Hits ({len(hits)} rows; showing first 200)",
-                style={"fontWeight": "bold"},
-            ))
-            children.append(html.Div(
-                _records_table(hits[:200]),
-                style={"maxHeight": "260px", "overflowY": "auto",
-                       "marginBottom": "0.6rem"},
-            ))
-            try:
-                hits_df = pd.DataFrame(hits)
-                _hist_col = (
-                    "distance_nm" if "distance_nm" in hits_df.columns
-                    else "t_hit" if "t_hit" in hits_df.columns
-                    else None
-                )
-                if _hist_col is not None:
-                    from cryocat.app.components.graphsettings import styled_figure as _sf
-                    fig = _sf(visplot.plot_histogram(hits_df[[_hist_col]], bins=30), gs or {})
-                    children.append(customel_graph("structure", "intersection-hist", dcc.Graph(id={"type": "styled-graph", "owner": "structure", "name": "intersection-hist"}, figure=fig, style={"height": "320px"})))
-            except Exception as exc:
-                children.append(html.Div(
-                    f"Histogram skipped: {exc}", style=_HINT,
-                ))
-        regions = snap.get("regions") or {}
-        if regions:
-            children.append(html.Div("Extract region",
-                                     style={"fontWeight": "bold"}))
-            buttons = []
-            for region_name, idx in regions.items():
-                if not idx:
-                    continue
-                buttons.append(dbc.Button(
-                    f"{region_name} ({len(idx)})",
-                    id={"type": "surfaces-isect-extract-btn",
-                        "region": region_name},
-                    color="secondary", size="sm",
-                    style={"marginRight": "0.4rem", "marginBottom": "0.3rem"},
-                ))
-            children.append(html.Div(buttons))
-        n_filt = len(snap.get("hit_source_ids") or [])
-        children.append(html.Hr(style={"margin": "0.5rem 0"}))
-        children.append(html.Div("Filter motl by intersection",
-                                 style={"fontWeight": "bold"}))
-        children.append(html.Div(
-            f"{n_filt} unique particle(s) intersected the surface.",
-            style={**_HINT, "marginBottom": "0.4rem"},
-        ))
-        children.append(dbc.Button(
-            "Filter particles -> result store",
-            id="surfaces-isect-filter-btn",
-            color="secondary", size="sm",
-            style={"marginRight": "0.4rem", "marginBottom": "0.4rem"},
-        ))
-        children.append(get_send_to_editor_button("surfaces-isect-send"))
-        return html.Div(children)
 
     # ── Extract region (per-button via pattern-matched id) ───────────────────
     @app.callback(
@@ -2031,63 +2005,6 @@ def register_callbacks(app):
             pool[sid] = h
         sid_str = ", ".join(s for s, _ in new_entries)
         return pool, f"Extracted '{region_name}' as {sid_str}."
-
-    # ── Filter motl rows to the intersecting subset ──────────────────────────
-    @app.callback(
-        Output("surfaces-isect-filtered-motl", "data"),
-        Output("surfaces-op-status", "children", allow_duplicate=True),
-        Input("surfaces-isect-filter-btn", "n_clicks"),
-        State("surfaces-isect-result", "data"),
-        State("surfaces-isect-motl-rows", "data"),
-        prevent_initial_call=True,
-    )
-    def _filter_motl(n_clicks, snap, motl_rows):
-        if not n_clicks:
-            raise dash.exceptions.PreventUpdate
-        if not snap:
-            return no_update, "No intersection result -- run Cast first."
-        if not motl_rows:
-            return no_update, "Source motl rows are missing."
-        idx = snap.get("hit_source_ids") or []
-        subset = subset_motl_rows(motl_rows, idx)
-        if not subset:
-            return no_update, "No particles intersected the surface."
-        return subset, (
-            f"Filtered {len(subset)} particles -> ready to send to editor."
-        )
-
-    # ── Render parametric results (motl send-to-editor or intersection table) ──
-    @app.callback(
-        Output("surfaces-param-results-area", "children"),
-        Input("surfaces-param-intersection-df", "data"),
-        Input("surfaces-param-result-motl", "data"),
-        prevent_initial_call=True,
-    )
-    def _render_param_results(records, motl_rows):
-        if motl_rows is not None:
-            return html.Div([
-                html.Div(
-                    f"{len(motl_rows)} particles ready.",
-                    style={**_HINT, "marginBottom": "0.4rem"},
-                ),
-                get_send_to_editor_button("surfaces-param-send"),
-            ])
-        if records:
-            return html.Div([
-                html.H6("Intersection distances"),
-                html.Div(
-                    f"{len(records)} rows; showing first 200.",
-                    style={**_HINT, "marginBottom": "0.4rem"},
-                ),
-                html.Div(
-                    _records_table(records[:200]),
-                    style={"maxHeight": "400px", "overflowY": "auto"},
-                ),
-            ])
-        return html.Div(
-            "Parametric results (motl or intersection-distance table) appear here.",
-            style=_HINT,
-        )
 
     # ── Surfaces list rendering ──────────────────────────────────────────────
     @app.callback(
@@ -2180,12 +2097,14 @@ def register_callbacks(app):
     @app.callback(
         Output("surfaces-pool", "data", allow_duplicate=True),
         Output("surfaces-selected", "data", allow_duplicate=True),
+        Output("surfaces-df-obj-results", "data", allow_duplicate=True),
         Input({"type": "surfaces-row-delete", "sid": ALL}, "n_clicks"),
         State("surfaces-pool", "data"),
         State("surfaces-selected", "data"),
+        State("surfaces-df-obj-results", "data"),
         prevent_initial_call=True,
     )
-    def _delete_row(n_clicks_list, pool, selected_id):
+    def _delete_row(n_clicks_list, pool, selected_id, obj_results):
         triggered = ctx.triggered_id
         if not (isinstance(triggered, dict) and "sid" in triggered):
             raise dash.exceptions.PreventUpdate
@@ -2195,7 +2114,8 @@ def register_callbacks(app):
         pool = {k: v for k, v in (pool or {}).items() if k != sid}
         sr.registry.remove(sid)
         new_selected = None if selected_id == sid else selected_id
-        return pool, new_selected
+        new_obj_results = {k: v for k, v in (obj_results or {}).items() if k != sid}
+        return pool, new_selected, new_obj_results
 
     # ── Send-to-editor area (point clouds only) ──────────────────────────────
     @app.callback(
@@ -2269,8 +2189,3 @@ def register_callbacks(app):
     # register here at startup -- Dash tolerates the late-mount.
     register_send_to_editor_callbacks(app, "surfaces-send", "surfaces-send-result")
 
-    # ── BY: register one live-preview callback per OP_UI live_preview entry ───
-    for _op_id, _spec in OP_UI.items():
-        _lp = _spec.get("live_preview")
-        if _lp:
-            _register_one_preview(app, _op_id, _lp)

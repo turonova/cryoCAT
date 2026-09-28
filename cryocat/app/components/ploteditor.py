@@ -45,6 +45,7 @@ import dash_bootstrap_components as dbc
 from cryocat.app import ids, styles
 from cryocat.app.formgen import form_row, make_dropdown, section_divider
 from cryocat.app.components import entrypicker
+from cryocat.app.components.pathfield import get_path_field
 from cryocat.app.components.paletteloader import (
     get_palette_loader,
     register_palette_loader_callbacks,
@@ -57,8 +58,31 @@ from cryocat.app.components.graphsettings import (
     GRAPH_SETTINGS_DEFAULTS,
     _is_dark,
 )
+from cryocat.analysis.visplot import save_as_svg
 
 _log = logging.getLogger(__name__)
+
+
+def _extract_live_camera(relayout_data: dict | None) -> dict | None:
+    """Return a camera dict from relayoutData, or None if none present."""
+    if not relayout_data:
+        return None
+    cam = relayout_data.get("scene.camera")
+    if cam:
+        return cam
+    eye = relayout_data.get("scene.camera.eye")
+    center = relayout_data.get("scene.camera.center")
+    up = relayout_data.get("scene.camera.up")
+    if eye or center or up:
+        result: dict = {}
+        if eye:
+            result["eye"] = eye
+        if center:
+            result["center"] = center
+        if up:
+            result["up"] = up
+        return result
+    return None
 
 # ── Spec ─────────────────────────────────────────────────────────────────────
 
@@ -645,26 +669,71 @@ def _layout_panel(prefix: str) -> html.Div:
         section_divider("Axis lines & grid"),
         form_row("x_showline",
                  dbc.Switch(id=f"{prefix}-pe-xaxis-showline", value=False, label="Show X axis line"),
-                 "Draw a line along the X axis. Writes xaxis.showline.",
-                 truly_optional=True),
-        form_row("x_mirror",
-                 dbc.Switch(id=f"{prefix}-pe-xaxis-mirror", value=False, label="Mirror X axis"),
-                 "Mirror the X axis line on the opposite side. Writes xaxis.mirror.",
+                 "Draw a line along the X axis.",
                  truly_optional=True),
         form_row("x_showgrid",
                  dbc.Switch(id=f"{prefix}-pe-xaxis-showgrid", value=True, label="X grid"),
-                 "Show the X axis grid lines. Writes xaxis.showgrid."),
+                 "Show the X axis grid lines."),
         form_row("y_showline",
                  dbc.Switch(id=f"{prefix}-pe-yaxis-showline", value=False, label="Show Y axis line"),
-                 "Draw a line along the Y axis. Writes yaxis.showline.",
-                 truly_optional=True),
-        form_row("y_mirror",
-                 dbc.Switch(id=f"{prefix}-pe-yaxis-mirror", value=False, label="Mirror Y axis"),
-                 "Mirror the Y axis line on the opposite side. Writes yaxis.mirror.",
+                 "Draw a line along the Y axis.",
                  truly_optional=True),
         form_row("y_showgrid",
                  dbc.Switch(id=f"{prefix}-pe-yaxis-showgrid", value=True, label="Y grid"),
-                 "Show the Y axis grid lines. Writes yaxis.showgrid."),
+                 "Show the Y axis grid lines."),
+        html.Div(id=f"{prefix}-pe-mirror-rows", children=[
+            form_row("x_mirror",
+                     dbc.Switch(id=f"{prefix}-pe-xaxis-mirror", value=False, label="Mirror X axis"),
+                     "Mirror the X axis line on the opposite side (2D only).",
+                     truly_optional=True),
+            form_row("y_mirror",
+                     dbc.Switch(id=f"{prefix}-pe-yaxis-mirror", value=False, label="Mirror Y axis"),
+                     "Mirror the Y axis line on the opposite side (2D only).",
+                     truly_optional=True),
+        ]),
+        html.Div(id=f"{prefix}-pe-3d-xy-extras", style={"display": "none"}, children=[
+            form_row("x_showbackground",
+                     dbc.Switch(id=f"{prefix}-pe-xaxis-showbackground", value=True, label="X background plane"),
+                     "Show X axis background plane (3D only)."),
+            form_row("x_showspikes",
+                     dbc.Switch(id=f"{prefix}-pe-xaxis-showspikes", value=True, label="X spikes"),
+                     "Show X axis spike lines on hover (3D only)."),
+            form_row("y_showbackground",
+                     dbc.Switch(id=f"{prefix}-pe-yaxis-showbackground", value=True, label="Y background plane"),
+                     "Show Y axis background plane (3D only)."),
+            form_row("y_showspikes",
+                     dbc.Switch(id=f"{prefix}-pe-yaxis-showspikes", value=True, label="Y spikes"),
+                     "Show Y axis spike lines on hover (3D only)."),
+        ]),
+        html.Div(id=f"{prefix}-pe-z-section", style={"display": "none"}, children=[
+            section_divider("Z axis"),
+            form_row("z_title",
+                     dcc.Input(id=f"{prefix}-pe-zaxis-title", type="text", value="",
+                               placeholder="Z axis label…", style=styles.FORM_COMPACT_INPUT),
+                     "Z axis title."),
+            form_row("z_min",
+                     dcc.Input(id=f"{prefix}-pe-zaxis-min", **num_inp),
+                     "Z axis minimum (leave blank for auto).", truly_optional=True),
+            form_row("z_max",
+                     dcc.Input(id=f"{prefix}-pe-zaxis-max", **num_inp),
+                     "Z axis maximum (leave blank for auto).", truly_optional=True),
+            form_row("z_log",
+                     dbc.Switch(id=f"{prefix}-pe-zaxis-log", value=False, label="Log scale"),
+                     "Enable log scale on Z axis."),
+            form_row("z_showline",
+                     dbc.Switch(id=f"{prefix}-pe-zaxis-showline", value=False, label="Show Z axis line"),
+                     "Draw a line along the Z axis.",
+                     truly_optional=True),
+            form_row("z_showgrid",
+                     dbc.Switch(id=f"{prefix}-pe-zaxis-showgrid", value=True, label="Z grid"),
+                     "Show the Z axis grid lines."),
+            form_row("z_showbackground",
+                     dbc.Switch(id=f"{prefix}-pe-zaxis-showbackground", value=True, label="Z background plane"),
+                     "Show Z axis background plane (3D only)."),
+            form_row("z_showspikes",
+                     dbc.Switch(id=f"{prefix}-pe-zaxis-showspikes", value=True, label="Z spikes"),
+                     "Show Z axis spike lines on hover (3D only)."),
+        ]),
         section_divider("Legend"),
         form_row("legend_visible",
                  dbc.Switch(id=f"{prefix}-pe-legend-visible", value=True, label="Visible"),
@@ -702,6 +771,12 @@ def _layout_panel(prefix: str) -> html.Div:
 
 def _export_panel(prefix: str) -> html.Div:
     return html.Div([
+        form_row("output_path",
+                 get_path_field(f"{prefix}-pe-exp-path",
+                                mode="save", kind="output",
+                                extensions=(".png", ".svg", ".jpeg", ".webp"),
+                                placeholder="Output path (e.g. /data/figure.png)"),
+                 "Path to save the exported figure."),
         form_row("format",
                  make_dropdown(f"{prefix}-pe-exp-fmt",
                                _EXPORT_FORMATS, "png", clearable=False),
@@ -740,11 +815,54 @@ def _export_panel(prefix: str) -> html.Div:
                  dcc.Input(id=f"{prefix}-pe-exp-font-size", type="number", value=14,
                            min=6, max=48, style=styles.FORM_COMPACT_INPUT),
                  "Font size for export (print typically needs larger font than screen)."),
-        dcc.Download(id=f"{prefix}-pe-download"),
+        form_row("vector_3d",
+                 dbc.Switch(id=f"{prefix}-pe-exp-3d-vector", value=False,
+                            label="Export 3D as vector (2D projection)"),
+                 "When checked, projects 3-D scatter traces to 2-D before export "
+                 "to produce a genuine vector SVG editable in Inkscape / Illustrator. "
+                 "Uses the camera angle currently on screen. Only 'markers' and "
+                 "'lines' scatter3d modes are supported.",
+                 label_id=f"{prefix}-pe-lbl-3d-vector"),
         html.Div(style={"marginTop": "0.5rem"}),
         dbc.Button("Export figure", id=f"{prefix}-pe-export-btn",
                    color=styles.BTN_PRIMARY, size="sm"),
         html.Div(id=f"{prefix}-pe-export-status", style=styles.HINT),
+    ])
+
+
+def _palettes_panel(prefix: str) -> html.Div:
+    """Register custom palettes that persist for the session (IP2)."""
+    return html.Div([
+        html.P(
+            "Add a custom palette that will appear in all palette dropdowns. "
+            "Choose in the Layout or Defaults tab after registering.",
+            style=styles.HINT,
+        ),
+        form_row("pal_reg_name",
+                 dcc.Input(id=f"{prefix}-def-pal-reg-name", type="text",
+                           placeholder="Name",
+                           style=styles.FORM_COMPACT_INPUT),
+                 "Unique palette name.", label_id=f"{prefix}-def-lbl-pal-reg-name"),
+        form_row("pal_reg_kind",
+                 make_dropdown(f"{prefix}-def-pal-reg-kind",
+                               [{"label": "Discrete", "value": "discrete"},
+                                {"label": "Continuous", "value": "continuous"}],
+                               "discrete", clearable=False),
+                 "Discrete = categorical; continuous = colorscale.",
+                 label_id=f"{prefix}-def-lbl-pal-reg-kind"),
+        form_row("pal_reg_codes",
+                 dcc.Textarea(id=f"{prefix}-def-pal-reg-codes",
+                              placeholder="#hex1, #hex2, …",
+                              style={**styles.FORM_COMPACT_INPUT, "height": "60px",
+                                     "resize": "vertical"}),
+                 "Comma-separated hex colour codes.",
+                 label_id=f"{prefix}-def-lbl-pal-reg-codes"),
+        html.Div([
+            dbc.Button("Register", id=f"{prefix}-def-pal-reg-btn",
+                       color=styles.BTN_SECONDARY, size="sm", n_clicks=0),
+            html.Span(id=f"{prefix}-def-pal-reg-status",
+                      style={"marginLeft": "0.75rem", **styles.HINT}),
+        ], style={"display": "flex", "alignItems": "center"}),
     ])
 
 
@@ -775,6 +893,12 @@ def _defaults_panel(prefix: str) -> html.Div:
                            value=6, min=1, max=30, step=1,
                            style=styles.FORM_COMPACT_INPUT),
                  "Default marker size."),
+        form_row("marker_opacity",
+                 dcc.Input(id=f"{prefix}-def-marker-opacity", type="number",
+                           value=None, min=0.0, max=1.0, step=0.05,
+                           style=styles.FORM_COMPACT_INPUT),
+                 "Default marker/trace opacity (0 = transparent, 1 = opaque). Leave blank to keep chart default.",
+                 truly_optional=True, label_id=f"{prefix}-def-lbl-marker-opacity"),
         form_row("line_width",
                  dcc.Input(id=f"{prefix}-def-line-width", type="number",
                            value=2, min=0.5, max=10, step=0.5,
@@ -865,11 +989,13 @@ def get_plot_editor_sidebar(prefix: str) -> list:
         dcc.Store(id=f"{prefix}-pe-spec-store", data=copy.deepcopy(SPEC_DEFAULTS)),
         dcc.Store(id=f"{prefix}-pe-selected-ids", data=[]),
         dcc.Store(id=f"{prefix}-pe-ext-figure", data=None),
+        dcc.Store(id=f"{prefix}-pe-camera-store", data=None),
         sidebar_accordion([
             dbc.AccordionItem(_data_panel(prefix), title="Data", item_id="data"),
             dbc.AccordionItem(_layout_panel(prefix), title="Layout", item_id="layout"),
             dbc.AccordionItem(_export_panel(prefix), title="Export", item_id="export"),
             dbc.AccordionItem(_defaults_panel(prefix), title="Defaults", item_id="defaults"),
+            dbc.AccordionItem(_palettes_panel(prefix), title="Palettes", item_id="palettes"),
         ], active_item=["data"]),
     ]
 
@@ -953,8 +1079,8 @@ def _build_figure(
             valid = [c for c in v if c in df.columns]
             if not valid:
                 continue
-            # Keep as list for multi-always roles; unwrap single item for x/y to avoid wide mode
-            clean_roles[k] = valid[0] if (len(valid) == 1 and k in {"x", "y"}) else valid
+            _multi_roles = {"hover_data", "dimensions", "path"}
+            clean_roles[k] = valid if (len(valid) > 1 or k in _multi_roles) else valid[0]
         elif v and v in df.columns:
             clean_roles[k] = v
 
@@ -1049,7 +1175,18 @@ def _build_figure(
     if eff_layout:
         fig_dict.setdefault("layout", {}).update(eff_layout)
 
+    fig_dict.setdefault("layout", {}).setdefault("uirevision", "stable")
     return go.Figure(fig_dict)
+
+
+_3D_TRACE_TYPES = {"scatter3d", "surface", "mesh3d", "isosurface", "volume", "cone", "streamtube"}
+
+
+def _is_3d(fig_dict: dict) -> bool:
+    for trace in (fig_dict or {}).get("data", []):
+        if trace.get("type") in _3D_TRACE_TYPES:
+            return True
+    return "scene" in (fig_dict or {}).get("layout", {})
 
 
 def _apply_layout_only(existing_fig: dict, layout_spec: dict, settings: dict,
@@ -1059,45 +1196,51 @@ def _apply_layout_only(existing_fig: dict, layout_spec: dict, settings: dict,
     eff_settings = _eff_settings(settings, fig_palette_dis, fig_palette_con)
     fig_dict = apply_settings_to_figure(fig_dict, eff_settings)
 
+    is3d = _is_3d(fig_dict)
     eff_layout: dict = {}
     if layout_spec.get("title"):
         eff_layout["title"] = {"text": layout_spec["title"]}
-    xaxis: dict = {}
-    if layout_spec.get("xaxis_title"):
-        xaxis["title"] = layout_spec["xaxis_title"]
-    if layout_spec.get("xaxis_min") is not None or layout_spec.get("xaxis_max") is not None:
-        xaxis["range"] = [layout_spec.get("xaxis_min"), layout_spec.get("xaxis_max")]
-    if layout_spec.get("xaxis_log"):
-        xaxis["type"] = "log"
-    if layout_spec.get("xaxis_showline"):
-        xaxis["showline"] = True
-    if layout_spec.get("xaxis_mirror"):
-        xaxis["mirror"] = True
-    if layout_spec.get("xaxis_showgrid") is False:
-        xaxis["showgrid"] = False
-    if xaxis:
-        eff_layout.setdefault("xaxis", {}).update(xaxis)
-    yaxis: dict = {}
-    if layout_spec.get("yaxis_title"):
-        yaxis["title"] = layout_spec["yaxis_title"]
-    if layout_spec.get("yaxis_min") is not None or layout_spec.get("yaxis_max") is not None:
-        yaxis["range"] = [layout_spec.get("yaxis_min"), layout_spec.get("yaxis_max")]
-    if layout_spec.get("yaxis_log"):
-        yaxis["type"] = "log"
-    if layout_spec.get("yaxis_showline"):
-        yaxis["showline"] = True
-    if layout_spec.get("yaxis_mirror"):
-        yaxis["mirror"] = True
-    if layout_spec.get("yaxis_showgrid") is False:
-        yaxis["showgrid"] = False
-    if yaxis:
-        eff_layout.setdefault("yaxis", {}).update(yaxis)
+
+    def _axis_props(pfx: str) -> dict:
+        ax: dict = {}
+        if layout_spec.get(f"{pfx}_title"):
+            ax["title"] = layout_spec[f"{pfx}_title"]
+        v_min = layout_spec.get(f"{pfx}_min")
+        v_max = layout_spec.get(f"{pfx}_max")
+        if v_min is not None or v_max is not None:
+            ax["range"] = [v_min, v_max]
+        if layout_spec.get(f"{pfx}_log"):
+            ax["type"] = "log"
+        if layout_spec.get(f"{pfx}_showline"):
+            ax["showline"] = True
+        if not is3d and layout_spec.get(f"{pfx}_mirror"):
+            ax["mirror"] = True
+        if layout_spec.get(f"{pfx}_showgrid") is False:
+            ax["showgrid"] = False
+        if is3d and layout_spec.get(f"{pfx}_showbackground") is False:
+            ax["showbackground"] = False
+        if is3d and layout_spec.get(f"{pfx}_showspikes") is False:
+            ax["showspikes"] = False
+        return ax
+
+    if is3d:
+        for axis_name in ("xaxis", "yaxis", "zaxis"):
+            ax = _axis_props(axis_name)
+            if ax:
+                eff_layout.setdefault("scene", {}).setdefault(axis_name, {}).update(ax)
+    else:
+        for axis_name in ("xaxis", "yaxis"):
+            ax = _axis_props(axis_name)
+            if ax:
+                eff_layout.setdefault(axis_name, {}).update(ax)
+
     legend_vis = layout_spec.get("legend_visible", True)
     eff_layout["showlegend"] = legend_vis
     if legend_vis:
         eff_layout.setdefault("legend", {})["orientation"] = layout_spec.get("legend_orient", "v")
     if eff_layout:
         fig_dict.setdefault("layout", {}).update(eff_layout)
+    fig_dict.setdefault("layout", {}).setdefault("uirevision", "stable")
     return fig_dict
 
 
@@ -1136,9 +1279,9 @@ def register_plot_editor_callbacks(
     """
     # Register palette loader callbacks for the Layout panel overlays (Auto-capable).
     register_palette_loader_callbacks(app, f"{prefix}-pe-dis-pal", mode="discrete",
-                                      settings_store_id=settings_store_id)
+                                      settings_store_id=settings_store_id, allow_auto=True)
     register_palette_loader_callbacks(app, f"{prefix}-pe-con-pal", mode="continuous",
-                                      settings_store_id=settings_store_id)
+                                      settings_store_id=settings_store_id, allow_auto=True)
     # Defaults panel palette loaders — no Auto (they define what Auto resolves to).
     register_palette_loader_callbacks(app, f"{prefix}-def-dis-pal", mode="discrete")
     register_palette_loader_callbacks(app, f"{prefix}-def-con-pal", mode="continuous")
@@ -1276,6 +1419,12 @@ def register_plot_editor_callbacks(
         Input(f"{prefix}-pe-yaxis-min", "value"),
         Input(f"{prefix}-pe-yaxis-max", "value"),
         Input(f"{prefix}-pe-yaxis-log", "value"),
+        Input(f"{prefix}-pe-zaxis-title", "value"),
+        Input(f"{prefix}-pe-zaxis-min", "value"),
+        Input(f"{prefix}-pe-zaxis-max", "value"),
+        Input(f"{prefix}-pe-zaxis-log", "value"),
+        Input(f"{prefix}-pe-zaxis-showline", "value"),
+        Input(f"{prefix}-pe-zaxis-showgrid", "value"),
         Input(f"{prefix}-pe-legend-visible", "value"),
         Input(f"{prefix}-pe-legend-orient", "value"),
         Input(f"{prefix}-pe-xaxis-showline", "value"),
@@ -1284,12 +1433,21 @@ def register_plot_editor_callbacks(
         Input(f"{prefix}-pe-yaxis-showline", "value"),
         Input(f"{prefix}-pe-yaxis-mirror", "value"),
         Input(f"{prefix}-pe-yaxis-showgrid", "value"),
+        Input(f"{prefix}-pe-xaxis-showbackground", "value"),
+        Input(f"{prefix}-pe-xaxis-showspikes", "value"),
+        Input(f"{prefix}-pe-yaxis-showbackground", "value"),
+        Input(f"{prefix}-pe-yaxis-showspikes", "value"),
+        Input(f"{prefix}-pe-zaxis-showbackground", "value"),
+        Input(f"{prefix}-pe-zaxis-showspikes", "value"),
         prevent_initial_call=True,
     )
     def _collect_layout(title, xt, xmin, xmax, xlog, yt, ymin, ymax, ylog,
+                        zt, zmin, zmax, zlog, z_showline, z_showgrid,
                         leg_vis, leg_or,
                         x_showline, x_mirror, x_showgrid,
-                        y_showline, y_mirror, y_showgrid):
+                        y_showline, y_mirror, y_showgrid,
+                        x_showbg, x_showspikes, y_showbg, y_showspikes,
+                        z_showbg, z_showspikes):
         return {
             "title": title or "",
             "xaxis_title": xt or "",
@@ -1300,6 +1458,12 @@ def register_plot_editor_callbacks(
             "yaxis_min": ymin,
             "yaxis_max": ymax,
             "yaxis_log": bool(ylog),
+            "zaxis_title": zt or "",
+            "zaxis_min": zmin,
+            "zaxis_max": zmax,
+            "zaxis_log": bool(zlog),
+            "zaxis_showline": bool(z_showline) if z_showline is not None else False,
+            "zaxis_showgrid": bool(z_showgrid) if z_showgrid is not None else True,
             "legend_visible": bool(leg_vis) if leg_vis is not None else True,
             "legend_orient": leg_or or "v",
             "xaxis_showline": bool(x_showline) if x_showline is not None else False,
@@ -1308,7 +1472,32 @@ def register_plot_editor_callbacks(
             "yaxis_showline": bool(y_showline) if y_showline is not None else False,
             "yaxis_mirror": bool(y_mirror) if y_mirror is not None else False,
             "yaxis_showgrid": bool(y_showgrid) if y_showgrid is not None else True,
+            "xaxis_showbackground": bool(x_showbg) if x_showbg is not None else True,
+            "xaxis_showspikes": bool(x_showspikes) if x_showspikes is not None else True,
+            "yaxis_showbackground": bool(y_showbg) if y_showbg is not None else True,
+            "yaxis_showspikes": bool(y_showspikes) if y_showspikes is not None else True,
+            "zaxis_showbackground": bool(z_showbg) if z_showbg is not None else True,
+            "zaxis_showspikes": bool(z_showspikes) if z_showspikes is not None else True,
         }
+
+    # ── Toggle 3D-specific layout controls ────────────────────────────────────
+
+    @app.callback(
+        Output(f"{prefix}-pe-mirror-rows", "style"),
+        Output(f"{prefix}-pe-z-section", "style"),
+        Output(f"{prefix}-pe-3d-xy-extras", "style"),
+        Input(f"{prefix}-pe-graph", "figure"),
+        prevent_initial_call=True,
+    )
+    def _toggle_3d_controls(figure):
+        if not figure:
+            return no_update, no_update, no_update
+        is3d = _is_3d(figure)
+        return (
+            {"display": "none"} if is3d else {},
+            {"display": "block"} if is3d else {"display": "none"},
+            {"display": "block"} if is3d else {"display": "none"},
+        )
 
     # ── Export (W10) ───────────────────────────────────────────────────────────
 
@@ -1353,10 +1542,11 @@ def register_plot_editor_callbacks(
         return dpi_dis, trans_dis
 
     @app.callback(
-        Output(f"{prefix}-pe-download", "data"),
         Output(f"{prefix}-pe-export-status", "children"),
         Input(f"{prefix}-pe-export-btn", "n_clicks"),
+        State({"type": "path-input", "owner": f"{prefix}-pe-exp-path"}, "value"),
         State(f"{prefix}-pe-graph", "figure"),
+        State(f"{prefix}-pe-camera-store", "data"),
         State(f"{prefix}-pe-exp-fmt", "value"),
         State(f"{prefix}-pe-exp-width", "value"),
         State(f"{prefix}-pe-exp-height", "value"),
@@ -1364,11 +1554,25 @@ def register_plot_editor_callbacks(
         State(f"{prefix}-pe-exp-dpi", "value"),
         State(f"{prefix}-pe-exp-transparent", "value"),
         State(f"{prefix}-pe-exp-font-size", "value"),
+        State(f"{prefix}-pe-exp-3d-vector", "value"),
         prevent_initial_call=True,
     )
-    def _export(_n, existing, fmt, w, h, unit, dpi, transparent, font_size):
+    def _export(_n, out_path, existing, live_camera, fmt, w, h, unit, dpi, transparent, font_size, use_3d_vector):
         if not existing:
-            return no_update, "No figure to export."
+            return "No figure to export."
+        if not out_path:
+            return "Specify an output path."
+
+        if use_3d_vector:
+            try:
+                _svg, skipped = save_as_svg(existing, out_path, camera=live_camera)
+            except Exception as exc:
+                return f"3D vector export failed: {exc}"
+            status = f"Saved → {out_path}"
+            if skipped:
+                types_str = ", ".join(sorted(set(skipped)))
+                status += f"; {len(skipped)} {types_str} trace(s) omitted (not vector-exportable)"
+            return status
 
         w_px, h_px, scale = _export_dims(w or 85, h or 65, unit or "mm", dpi or 300)
         fig_copy = copy.deepcopy(existing)
@@ -1380,20 +1584,15 @@ def register_plot_editor_callbacks(
         if transparent and fmt != "jpeg":
             layout["paper_bgcolor"] = "rgba(0,0,0,0)"
             layout["plot_bgcolor"] = "rgba(0,0,0,0)"
+        if live_camera:
+            layout.setdefault("scene", {})["camera"] = live_camera
 
         try:
             fig = go.Figure(fig_copy)
-            if fmt == "svg":
-                content = fig.to_image(format="svg").decode("utf-8")
-                return {"content": content, "filename": f"figure.{fmt}", "type": "text/plain"}, "Exported."
-            else:
-                import base64
-                img_bytes = fig.to_image(format=fmt, scale=scale)
-                encoded = base64.b64encode(img_bytes).decode()
-                return {"base64": True, "content": encoded,
-                        "filename": f"figure.{fmt}", "type": f"image/{fmt}"}, "Exported."
+            fig.write_image(out_path, format=fmt or None, scale=scale)
+            return f"Saved → {out_path}"
         except Exception as exc:
-            return no_update, f"Export failed: {exc}"
+            return f"Export failed: {exc}"
 
     # ── Defaults panel — write to GRAPH_SETTINGS_STORE (W11) ──────────────────
 
@@ -1404,6 +1603,7 @@ def register_plot_editor_callbacks(
         State(f"{prefix}-def-font-family", "value"),
         State(f"{prefix}-def-font-size", "value"),
         State(f"{prefix}-def-marker-size", "value"),
+        State(f"{prefix}-def-marker-opacity", "value"),
         State(f"{prefix}-def-line-width", "value"),
         State(f"{prefix}-def-line-dash", "value"),
         State(f"{prefix}-def-dis-pal-value", "data"),
@@ -1417,13 +1617,14 @@ def register_plot_editor_callbacks(
         State(f"{prefix}-def-yaxis-showgrid", "value"),
         prevent_initial_call=True,
     )
-    def _save_defaults(_, font_family, font_size, marker_size, line_width, line_dash,
+    def _save_defaults(_, font_family, font_size, marker_size, marker_opacity, line_width, line_dash,
                        dis_pal, con_pal, bg_color,
                        x_showline, x_mirror, x_showgrid, y_showline, y_mirror, y_showgrid):
         return {
             "font_family": font_family or GRAPH_SETTINGS_DEFAULTS["font_family"],
             "font_size": font_size or GRAPH_SETTINGS_DEFAULTS["font_size"],
             "marker_size": marker_size or GRAPH_SETTINGS_DEFAULTS["marker_size"],
+            "marker_opacity": marker_opacity if marker_opacity is not None else GRAPH_SETTINGS_DEFAULTS["marker_opacity"],
             "line_width": line_width or GRAPH_SETTINGS_DEFAULTS["line_width"],
             "line_dash": line_dash or GRAPH_SETTINGS_DEFAULTS["line_dash"],
             "discrete_palette": dis_pal or GRAPH_SETTINGS_DEFAULTS["discrete_palette"],
@@ -1437,6 +1638,64 @@ def register_plot_editor_callbacks(
             "y_mirror": bool(y_mirror) if y_mirror is not None else GRAPH_SETTINGS_DEFAULTS["y_mirror"],
             "y_showgrid": bool(y_showgrid) if y_showgrid is not None else GRAPH_SETTINGS_DEFAULTS["y_showgrid"],
         }, "Applied."
+
+    # ── Palette registration (IP2) ────────────────────────────────────────────
+
+    @app.callback(
+        Output(f"{prefix}-def-pal-reg-status", "children"),
+        Output(ids.PALETTE_REGISTRY_STORE, "data", allow_duplicate=True),
+        Input(f"{prefix}-def-pal-reg-btn", "n_clicks"),
+        State(f"{prefix}-def-pal-reg-name", "value"),
+        State(f"{prefix}-def-pal-reg-kind", "value"),
+        State(f"{prefix}-def-pal-reg-codes", "value"),
+        State(ids.PALETTE_REGISTRY_STORE, "data"),
+        prevent_initial_call=True,
+    )
+    def _register_palette(_n, name, kind, codes_raw, registry_version):
+        import re as _re
+        from cryocat.analysis.visplot import (
+            register_palette, register_colorscale,
+            _BUILTIN_PALETTES, _BUILTIN_SCALES,
+        )
+        name = (name or "").strip()
+        codes_raw = (codes_raw or "").strip()
+        if not name:
+            return "Enter a palette name.", no_update
+        if not codes_raw:
+            return "Enter at least one hex colour code.", no_update
+        tokens = [t.strip() for t in codes_raw.replace(";", ",").split(",") if t.strip()]
+        bad = [t for t in tokens if not _re.match(r"^#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$", t)]
+        if bad:
+            return f"Invalid hex code(s): {', '.join(bad)}", no_update
+        if not tokens:
+            return "No valid colours found.", no_update
+        if kind == "discrete":
+            if name.lower() in _BUILTIN_PALETTES:
+                return f'"{name}" is a built-in palette and cannot be overwritten.', no_update
+            register_palette(name, tokens)
+        else:
+            if name.lower() in _BUILTIN_SCALES:
+                return f'"{name}" is a built-in colorscale and cannot be overwritten.', no_update
+            register_colorscale(name, tokens)
+        return f'Registered "{name}".', (registry_version or 0) + 1
+
+    # ── Camera persistence ─────────────────────────────────────────────────────
+    # relayoutData gets overwritten with {"autosize": true} whenever a callback
+    # pushes a new figure to the graph.  This callback watches for real camera
+    # events and saves them to a dedicated store so Export always has the last
+    # user-set viewpoint regardless of subsequent figure updates.
+
+    @app.callback(
+        Output(f"{prefix}-pe-camera-store", "data"),
+        Input(f"{prefix}-pe-graph", "relayoutData"),
+        State(f"{prefix}-pe-camera-store", "data"),
+        prevent_initial_call=True,
+    )
+    def _persist_camera(relayout_data, current_camera):
+        cam = _extract_live_camera(relayout_data)
+        if cam is None:
+            return no_update
+        return cam
 
     # ── Selection round-trip (W7) ──────────────────────────────────────────────
 
@@ -1500,12 +1759,17 @@ def _add_overlay(
         if not ov_chart:
             return [f"Trace '{label}': no chart type set, trace skipped."]
         return [f"Trace '{label}': unknown chart type '{ov_chart}', trace skipped."]
+    valid_overlay_roles = set(cfg.get("roles", []))
     clean_roles: dict = {}
     for k, v in ov_roles.items():
+        if k not in valid_overlay_roles:
+            continue
         if isinstance(v, list):
             valid = [c for c in v if c in df.columns]
             if valid:
-                clean_roles[k] = valid[0] if (len(valid) == 1 and k in {"x", "y"}) else valid
+                # Only hover_data, dimensions, and path legitimately accept lists.
+                _multi_roles = {"hover_data", "dimensions", "path"}
+                clean_roles[k] = valid if (len(valid) > 1 or k in _multi_roles) else valid[0]
             elif v:
                 warnings.append(f"Trace '{label}': column(s) {v!r} not in source, role '{k}' skipped.")
         elif v and isinstance(v, str) and v in df.columns:
@@ -1513,6 +1777,25 @@ def _add_overlay(
         elif v:
             warnings.append(f"Trace '{label}': column '{v}' not in source, role '{k}' skipped.")
     overlay_fig = cfg["fn"](df, **clean_roles)  # bugs surface, not swallowed
+
+    # Copy coloraxis definitions from the overlay figure into the main figure,
+    # remapping keys to avoid collisions (px creates "coloraxis", "coloraxis2", …).
+    import re as _re_ca
+    _ov_json = overlay_fig.layout.to_plotly_json()
+    _ov_cas = {k: v for k, v in _ov_json.items() if _re_ca.match(r"^coloraxis\d*$", k)}
+    _ca_remap: dict[str, str] = {}
+    if _ov_cas:
+        _main_json = fig.layout.to_plotly_json()
+        _n_existing = sum(1 for k in _main_json if _re_ca.match(r"^coloraxis\d*$", k))
+        _additions: dict = {}
+        for _i, _old_k in enumerate(sorted(_ov_cas)):
+            _new_n = _n_existing + _i + 1
+            _new_k = "coloraxis" if _new_n == 1 else f"coloraxis{_new_n}"
+            _ca_remap[_old_k] = _new_k
+            _additions[_new_k] = _ov_cas[_old_k]
+        if _additions:
+            fig.update_layout(_additions)
+
     for trace in overlay_fig.data:
         trace.name = label
         if color:
@@ -1520,5 +1803,13 @@ def _add_overlay(
                 trace.marker.color = color  # type: ignore[attr-defined]
             except Exception:
                 pass
+        else:
+            if _ca_remap:
+                try:
+                    old_ca = trace.marker.coloraxis  # type: ignore[attr-defined]
+                    if old_ca and old_ca in _ca_remap:
+                        trace.marker.coloraxis = _ca_remap[old_ca]  # type: ignore[attr-defined]
+                except Exception:
+                    pass
         fig.add_trace(trace)
     return warnings
