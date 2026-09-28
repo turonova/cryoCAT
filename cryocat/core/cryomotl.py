@@ -2608,8 +2608,18 @@ class Motl:
 
         return None if inplace else target
 
-    @gui_exposed(category="Geometry", output="motl", label="Split in asymmetric subunits")
-    def split_in_asymmetric_subunits(self, symmetry: Symmetry, xyz_shift: ArrayLike) -> "Motl":
+    @gui_exposed(
+        category="Geometry",
+        output="motl",
+        label="Split in asymmetric subunits",
+        hide=("symmetry_orientation",),
+    )
+    def split_in_asymmetric_subunits(
+        self,
+        symmetry: Symmetry,
+        xyz_shift: ArrayLike,
+        symmetry_orientation: RotationLike | None = None,
+    ) -> "Motl":
         """Split the motive list into asymmetric subunits.
 
         Parameters
@@ -2622,11 +2632,39 @@ class Motl:
         xyz_shift : ArrayLike
             Shift from the particle centre to the reference subunit,
             expressed in the particle's local frame.
+        symmetry_orientation : RotationLike, optional
+            Orientation of the symmetry axes inside the reference, i.e. in
+            the particle's local frame (e.g. ``complex.solid.rotation`` of a
+            fitted :class:`cryocat.analysis.structure.PolyhedralComplex`).
+            The canonical rotations of
+            :func:`cryocat.utils.symmetry.get_symmetry_rotations` are
+            re-expressed in this orientation (``R @ g @ R.T``) before
+            splitting. Must describe a single rotation. Default is None: the
+            reference is assumed to be in the canonical orientation.
 
         Returns
         -------
         :class:`Motl`
             Expanded particle list with one entry per subunit.
+
+        Raises
+        ------
+        ValueError
+            If *symmetry_orientation* describes more than one rotation.
+
+        Notes
+        -----
+        Each subunit is a rigid copy of the reference subunit, so its z-axis
+        (normal) is the particle's z-axis carried along by the symmetry
+        rotation. It points outward from the particle centre only when
+        *xyz_shift* lies along +z; otherwise every subunit is tilted from its
+        outward direction by the same angle.
+
+        If *xyz_shift* lies on a symmetry axis, several copies land on the
+        same position (with different in-plane rotations). In the canonical
+        orientation the z-axis is always a symmetry axis, so e.g.
+        ``"I"`` with a shift along z gives 60 copies at only 30 distinct
+        positions. A true asymmetric unit lies off every symmetry axis.
 
         Warnings
         --------
@@ -2635,7 +2673,16 @@ class Motl:
         """
         from cryocat.utils.symmetry import get_symmetry_rotations
 
-        rot_matrices = get_symmetry_rotations(symmetry)  # (M, 3, 3)
+        if symmetry_orientation is None:
+            rot_matrices = get_symmetry_rotations(symmetry)  # (M, 3, 3)
+        else:
+            frame = geom.as_rotation(symmetry_orientation)
+            if not frame.single:
+                raise ValueError(
+                    f"symmetry_orientation must describe a single rotation, got {len(frame)} rotations."
+                )
+            # Re-express the canonical group in the given orientation: R @ g @ R.T
+            rot_matrices = get_symmetry_rotations(symmetry, conjugation_matrix=frame.as_matrix())
         n_subunits = len(rot_matrices)
 
         xyz = np.asarray(xyz_shift, dtype=float)

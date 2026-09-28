@@ -1046,6 +1046,10 @@ class Icosahedron(Polyhedron):
 class Dodecahedron(Polyhedron):
     """Regular dodecahedron — 20 vertices, 30 edges, 12 pentagonal faces.
 
+    The canonical orientation is the dual of :class:`Icosahedron`: the
+    vertices coincide with the icosahedron's face centres, so both solids are
+    left unchanged by :class:`cryocat.utils.symmetry.IcosahedralGroup`.
+
     Parameters
     ----------
     radius : float or int, default=1.0
@@ -1082,7 +1086,11 @@ class Dodecahedron(Polyhedron):
             ],
             dtype=float,
         )
-        return np.vstack((v12, cube_v))
+        # Rotate by 90 deg about z so the vertices sit on the face centres of
+        # Icosahedron (dual alignment). Rotating the whole array keeps the
+        # vertex order, hence edge and face indices, unchanged.
+        rz90 = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+        return np.vstack((v12, cube_v)) @ rz90.T
 
 
 

@@ -2434,6 +2434,128 @@ class TestMotl:
         np.testing.assert_allclose(result.df["theta"].values, expected_theta, atol=1e-5)
         np.testing.assert_allclose(result.df["psi"].values, expected_psi, atol=1e-5)
 
+    # --- split_in_asymmetric_subunits: symmetry_orientation (added 2026-09-25) ---
+
+    @staticmethod
+    def _split_positions(df: pd.DataFrame) -> np.ndarray:
+        """Total subunit positions (integer coordinates + fractional shifts)."""
+        return df[["x", "y", "z"]].to_numpy() + df[["shift_x", "shift_y", "shift_z"]].to_numpy()
+
+    @staticmethod
+    def _split_rotations(df: pd.DataFrame) -> np.ndarray:
+        """Subunit orientations as (N, 3, 3) rotation matrices."""
+        return rot.from_euler("zxz", df[["phi", "theta", "psi"]].to_numpy(), degrees=True).as_matrix()
+
+    @staticmethod
+    def _identity_particle_motl() -> Motl:
+        """One particle at (100, 100, 100), identity orientation, zero shifts."""
+        df = pd.DataFrame(np.zeros((1, len(Motl.motl_columns))), columns=Motl.motl_columns)
+        df.loc[0, ["subtomo_id", "x", "y", "z"]] = [1, 100, 100, 100]
+        return Motl(df)
+
+    @pytest.mark.parametrize("sym", ["C3", "D2", "I"])
+    def test_split_symmetry_orientation_identity_matches_default(self, single_row_motl, sym):
+        # An identity orientation means "canonical frame", so the result must be
+        # identical to calling the method without symmetry_orientation.
+        default = Motl(single_row_motl).split_in_asymmetric_subunits(sym, [10, 0, 5]).df
+        oriented = Motl(single_row_motl).split_in_asymmetric_subunits(
+            sym, [10, 0, 5], symmetry_orientation=np.eye(3)
+        ).df
+        np.testing.assert_allclose(self._split_positions(oriented), self._split_positions(default), atol=1e-6)
+        np.testing.assert_allclose(self._split_rotations(oriented), self._split_rotations(default), atol=1e-6)
+        assert np.array_equal(oriented["geom2"].values, default["geom2"].values)
+
+    def test_split_symmetry_orientation_group_element_gives_same_set(self, single_row_motl):
+        # A map whose orientation is one of the group's own rotations is still
+        # canonically oriented: the same subunits must come out (possibly in a
+        # different order).
+        from cryocat.utils.symmetry import get_symmetry_rotations
+
+        g = get_symmetry_rotations("I")[7]
+        default = Motl(single_row_motl).split_in_asymmetric_subunits("I", [3, 1, 7]).df
+        oriented = Motl(single_row_motl).split_in_asymmetric_subunits("I", [3, 1, 7], symmetry_orientation=g).df
+        pos_d, pos_o = self._split_positions(default), self._split_positions(oriented)
+        rot_d, rot_o = self._split_rotations(default), self._split_rotations(oriented)
+        for p, m in zip(pos_o, rot_o):
+            # every oriented subunit matches one default subunit in position and orientation
+            match = np.where(np.linalg.norm(pos_d - p, axis=1) < 1e-5)[0]
+            assert len(match) == 1
+            assert np.allclose(rot_d[match[0]], m, atol=1e-6)
+
+    def test_split_symmetry_orientation_fitted_frame(self):
+        # Scenario: the reference average is NOT canonically oriented. An
+        # icosahedron is fitted from two vertex markers (as PolyhedralComplex
+        # does), and a reference subunit is placed near one of its corners, off
+        # every symmetry axis.
+        true_rot = rot.from_euler("zxz", [30, 50, 10], degrees=True)
+        true_ico = geom.Icosahedron(radius=40, R=true_rot)
+        neighbour = next(e[1] if e[0] == 0 else e[0] for e in true_ico._edge_idx if 0 in e)
+        solid = geom.Icosahedron.from_vectors(true_ico.vertices[0], true_ico.vertices[neighbour])
+        shift = 0.8 * solid.vertices[0] + 0.2 * solid.faces[0]
+
+        def nearest_vertex_distances(df):
+            rel = self._split_positions(df) - 100.0
+            return np.array([np.min(np.linalg.norm(solid.vertices - p, axis=1)) for p in rel])
+
+        fitted = self._identity_particle_motl().split_in_asymmetric_subunits(
+            "I", shift, symmetry_orientation=solid.rotation
+        ).df
+        canonical = self._identity_particle_motl().split_in_asymmetric_subunits("I", shift).df
+
+        # With the fitted orientation: 60 distinct subunits, all sitting at the
+        # same distance from their nearest fitted corner (symmetric placement).
+        assert len(np.unique(self._split_positions(fitted).round(4), axis=0)) == 60
+        d_fit = nearest_vertex_distances(fitted)
+        assert np.ptp(d_fit) < 1e-4
+        # Without it, the textbook axes don't match the map: distances scatter.
+        assert np.ptp(nearest_vertex_distances(canonical)) > 1.0
+
+    @pytest.mark.parametrize("sym", ["D3", "O"])
+    def test_split_symmetry_orientation_rigid_copies(self, single_row_motl, sym):
+        # Each subunit is a rigid copy: its offset from the particle centre must
+        # equal its own orientation applied to xyz_shift, for any orientation.
+        shift = np.array([4.0, -2.0, 6.0])
+        orientation = rot.from_euler("zxz", [15, 70, -40], degrees=True)
+        motl = Motl(single_row_motl)
+        centre = self._split_positions(motl.df)[0]
+        out = motl.split_in_asymmetric_subunits(sym, shift, symmetry_orientation=orientation).df
+        offsets = self._split_positions(out) - centre
+        expected = np.einsum("kij,j->ki", self._split_rotations(out), shift)
+        np.testing.assert_allclose(offsets, expected, atol=1e-5)
+
+    def test_split_symmetry_orientation_accepts_rotationlike_forms(self, single_row_motl):
+        # Rotation object, 3x3 matrix and zxz Euler triple (degrees) describing
+        # the same orientation must give identical results.
+        euler = [20.0, 35.0, 50.0]
+        r = rot.from_euler("zxz", euler, degrees=True)
+        results = [
+            Motl(single_row_motl).split_in_asymmetric_subunits("T", [5, 1, 2], symmetry_orientation=o).df
+            for o in (r, r.as_matrix(), euler)
+        ]
+        for other in results[1:]:
+            np.testing.assert_allclose(self._split_positions(other), self._split_positions(results[0]), atol=1e-6)
+            np.testing.assert_allclose(self._split_rotations(other), self._split_rotations(results[0]), atol=1e-6)
+
+    def test_split_symmetry_orientation_rejects_multiple_rotations(self, single_row_motl):
+        # A stack of orientations is ambiguous and must be rejected.
+        stack = rot.from_euler("zxz", [[0, 0, 0], [10, 20, 30]], degrees=True)
+        with pytest.raises(ValueError, match="single rotation"):
+            Motl(single_row_motl).split_in_asymmetric_subunits("C2", [5, 0, 0], symmetry_orientation=stack)
+
+    def test_split_symmetry_orientation_hidden_from_gui(self):
+        # The new parameter is for programmatic use only: the GUI form must not show it.
+        assert "symmetry_orientation" in Motl.split_in_asymmetric_subunits._gui["hide"]
+
+    def test_split_shift_on_symmetry_axis_gives_overlapping_copies(self):
+        # Documented behaviour (docstring Notes): in the canonical orientation z
+        # is a 2-fold axis of "I", so a shift along z yields 60 copies at only
+        # 30 distinct positions. An off-axis shift yields 60 distinct positions.
+        on_axis = self._identity_particle_motl().split_in_asymmetric_subunits("I", [0, 0, 5]).df
+        off_axis = self._identity_particle_motl().split_in_asymmetric_subunits("I", [0.65, 2.61, 4.22]).df
+        assert len(on_axis) == 60
+        assert len(np.unique(self._split_positions(on_axis).round(4), axis=0)) == 30
+        assert len(np.unique(self._split_positions(off_axis).round(4), axis=0)) == 60
+
     @pytest.fixture
     def get_sample_data1(self):
         sample_data = {

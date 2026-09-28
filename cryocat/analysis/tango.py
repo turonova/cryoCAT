@@ -578,9 +578,9 @@ class SymmParticle(Particle):
             for cyclic C_N symmetry.  An integer ``n > 1`` specifies cyclic C_n
             symmetry.  Default is None.
         custom_rot : np.ndarray or scipy.spatial.transform.Rotation, optional
-            Rotation applied to Platonic-solid vertices before orienting them
-            with the particle rotation.  Not needed for cyclic (integer) symmetry.
-            Default is None.
+            Rotation applied (once) to Platonic-solid vertices before orienting
+            them with the particle rotation.  Not needed for cyclic (integer)
+            symmetry.  Default is None.
 
         Raises
         ------
@@ -633,10 +633,8 @@ class SymmParticle(Particle):
         elif custom_rot is not None:
 
             if isinstance(custom_rot, R):
-
+                # Convert only; the rotation is applied once in the branch below.
                 custom_rot = custom_rot.as_matrix()
-                vertices = vertices @ custom_rot.T
-                self.solid = vertices @ self.rotation.T
 
             if Matrix(custom_rot).is_SO3():
 

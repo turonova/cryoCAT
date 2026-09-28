@@ -15,6 +15,7 @@ from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.core import cryomask
 from cryocat.utils import geom
+from cryocat.utils.symmetry import SYMMETRY_GROUPS, SymmGroup
 from cryocat.utils import mathutils
 from cryocat.analysis import nnana
 from cryocat.analysis import clustering as _clustering
@@ -10271,6 +10272,10 @@ class PolyhedralComplex(SymmetricComplex):
         features_coords = (vecs + self.center) * self._pixel_size
         ioutils.write_coords_to_cmm_file(features_coords, output_path)
 
+    
+    # def angular_score(self, orientation_matrix1, orientation_matrix2):
+    #     return self._solid._angular_score(self, orientation_matrix1, orientation_matrix2)
+
     # ------------------------------------------------------------------
     # Symmetry expansion
     # ------------------------------------------------------------------
@@ -10349,6 +10354,75 @@ class PolyhedralComplex(SymmetricComplex):
             start_index=0,
         )
         return cryomotl.motl_converter_kwargs(output_motl, output_motl_type, output_path=output_path, **output_kwargs)
+
+    def symmetry_group(self) -> SymmGroup:
+        """Return the complex's symmetry group in its fitted orientation.
+
+        After :meth:`fit_geometry`, the group is derived from ``self.solid``
+        via :meth:`cryocat.utils.symmetry.SymmGroup.from_polyhedron`, so its
+        rotations match the symmetry axes of the reference map (checked for
+        consistency with the fitted solid). Before fitting, the canonical
+        group is returned, matching the canonical solid used by
+        :meth:`feature_vectors`.
+
+        Returns
+        -------
+        cryocat.utils.symmetry.SymmGroup
+            12, 24 or 60 rotations for T, O or I; ``.rotation`` holds the
+            fitted orientation (identity if not fitted).
+        """
+        group_cls = SYMMETRY_GROUPS[self._symmetry]
+        if self.solid is None:
+            return group_cls()
+        return group_cls.from_polyhedron(self.solid)
+
+    @gui_exposed(
+        label="Split in asymmetric units",
+        group="Expansion",
+        order=35,
+        returns="motl",
+        hide=(),
+    )
+    def split_in_asymmetric_units(
+        self,
+        xyz_shift: ArrayLike,
+        *,
+        output_motl_type: MotlType = "emmotl",
+        output_path: PathOrStr | None = None,
+        **output_kwargs,
+    ) -> MotlSource:
+        """Split each particle into its asymmetric units, in the fitted frame.
+
+        Calls :meth:`cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits`
+        with the orientation of :meth:`symmetry_group`, so the subunits are
+        placed around the symmetry axes of the reference map rather than the
+        canonical ones. This works for references in any orientation and uses
+        the same frame as :meth:`expand`. Without :meth:`fit_geometry`, the
+        reference is assumed to be canonically oriented.
+
+        Parameters
+        ----------
+        xyz_shift : ArrayLike
+            Position of the reference subunit in the reference map, in voxels
+            relative to the map centre (the frame of :meth:`feature_vectors`).
+            It should lie off every symmetry axis; otherwise copies overlap.
+        output_motl_type : MotlType, default="emmotl"
+            Format of the returned/written motive list.
+        output_path : PathOrStr, optional
+            Write path. No file is written when None.
+        **output_kwargs
+            Forwarded to :func:`cryocat.core.cryomotl.motl_converter_kwargs`.
+
+        Returns
+        -------
+        MotlSource
+            Expanded motive list with 12, 24 or 60 subunits per particle.
+        """
+        group = self.symmetry_group()
+        split = self.motl.split_in_asymmetric_subunits(
+            self._symmetry, xyz_shift, symmetry_orientation=group.rotation
+        )
+        return cryomotl.motl_converter_kwargs(split, output_motl_type, output_path=output_path, **output_kwargs)
 
     # ------------------------------------------------------------------
     # Feature recovery
