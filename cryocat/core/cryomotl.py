@@ -27,6 +27,7 @@ from cryocat._types import (
     ArrayLike,
     BoundaryType,
     DataPoolEntry,
+    ListLike,
     MapSource,
     MotlColumn,
     MotlType,
@@ -36,6 +37,7 @@ from cryocat._types import (
     TomoDimensions,
     RelionVersion,
 )
+from cryocat.utils import classutils
 from cryocat.utils.classutils import gui_exposed
 from typing import Literal
 
@@ -394,11 +396,24 @@ class Motl:
         --------
         >>> assign_column(input_df, {'tomo_id': 'input_df_key1', 'subtomo_id': 'input_df_key2'})
 
+        Warns
+        -----
+        UserWarning
+            If any non-null value in a paired column could not be converted to numeric (as opposed to a
+            cell that was already empty/null), since it is silently replaced with 0.0.
+
         """
 
         for em_key, paired_key in column_pairs.items():
             if paired_key in input_df.columns:
-                self.df[em_key] = pd.to_numeric(input_df[paired_key], errors="coerce")
+                coerced = pd.to_numeric(input_df[paired_key], errors="coerce")
+                unparsable = coerced.isna() & input_df[paired_key].notna()
+                if unparsable.any():
+                    warnings.warn(
+                        f"{unparsable.sum()} value(s) in '{paired_key}' were not numeric and were set to 0.0 "
+                        f"for '{em_key}'."
+                    )
+                self.df[em_key] = coerced.fillna(0.0)
 
     @gui_exposed(category="Cleaning", label="Clean by separation radius")
     def clean_by_distance(
@@ -1090,7 +1105,7 @@ class Motl:
         else:
             return False
 
-    def check_df_type(self, input_motl: pd.DataFrame) -> None:
+    def check_df_type(self, input_motl: pd.DataFrame, **convert_kwargs) -> None:
         """Checks the type of the input dataframe and assigns it to the class attribute 'df' if it is in the
         correct format. If it is not in the correct format it tries to convert it.
 
@@ -1098,6 +1113,11 @@ class Motl:
         ----------
         input_motl : pandas.DataFrame
             The input dataframe to be checked.
+        **convert_kwargs
+            Extra keyword arguments forwarded to `convert_to_motl` when `input_motl` is not
+            already in the standard format (e.g. `tomo_format`/`subtomo_format`/`version` for
+            `RelionMotl`/`RelionMotlv5`). Ignored when `input_motl` is already correctly
+            formatted, since `convert_to_motl` is not called in that case.
 
         Returns
         -------
@@ -1116,7 +1136,7 @@ class Motl:
             self.df = self.df.apply(pd.to_numeric, errors="coerce")
             self.df = self.df.fillna(0.0)
         else:
-            self.convert_to_motl(input_motl)
+            self.convert_to_motl(input_motl, **convert_kwargs)
 
     @gui_exposed(category="Utility", label="Fill columns")
     def fill(self, input_dict: dict) -> None:
@@ -2913,7 +2933,9 @@ class RelionMotl(Motl):
                 self.shifts_id_names = input_motl.shifts_id_names
                 self.data_spec = input_motl.data_spec
             elif isinstance(input_motl, pd.DataFrame):
-                self.check_df_type(input_motl)
+                self.check_df_type(
+                    input_motl, version=version, tomo_format=tomo_format, subtomo_format=subtomo_format
+                )
             elif isinstance(input_motl, str):
                 relion_df, data_version, optics_df = self.read_in(input_motl)
                 self.convert_to_motl(relion_df, data_version, optics_df, tomo_format, subtomo_format)
@@ -3509,10 +3531,54 @@ class RelionMotl(Motl):
         self.assign_column(
             relion_df, {"score": "rlnMaxValueProbDistribution"}
         )  # getting the max value contribution per distribution - not really same as CCC but has similar indications
-        if "rlnHelicalTubeID" in relion_df.columns:
-            self.df["object_id"] = relion_df["rlnHelicalTubeID"].values
+        object_id_from_helical_tube = "rlnHelicalTubeID" in relion_df.columns
+        if object_id_from_helical_tube:
+            self.assign_column(relion_df, {"object_id": "rlnHelicalTubeID"})
+        self.assign_cc_extra_columns(relion_df, object_id_already_assigned=object_id_from_helical_tube)
         # store the idx of the original data - useful for writing out
         self.relion_df["ccSubtomoID"] = self.df["subtomo_id"]
+
+        # ensure self.df is fully numeric: columns whose source entries were absent from the
+        # starfile (e.g. rlnClassNumber, rlnHelicalTubeID) are never assigned above and would
+        # otherwise be left as NaN.
+        self.df = self.df.fillna(0.0)
+
+    def assign_cc_extra_columns(self, relion_df: pd.DataFrame, object_id_already_assigned: bool = False) -> None:
+        """Recognize non-standard ``cc``-prefixed columns in `relion_df` and map them back onto `self.df`.
+
+        Counterpart to `create_relion_df`'s `extra_columns` parameter: any auxiliary motl
+        column with no standard RELION mapping (`object_id`, `geom1`, `geom2`, `geom3`,
+        `geom4`, `geom5`, `subtomo_mean`) can be exported under its conventional ``cc``-prefixed
+        name (see :func:`_cc_name`, e.g. ``geom2`` -> ``ccGeom2``) and is recognized here on load.
+        The legacy ``ccObjectName``/``ccSubunitName`` names (for `object_id`/`geom2`) are also
+        recognized as a fallback, for backward compatibility with files written before the
+        generic `extra_columns` interface existed.
+
+        Parameters
+        ----------
+        relion_df : pandas.DataFrame
+            The loaded RELION particles DataFrame to read extra columns from.
+        object_id_already_assigned : bool, default=False
+            Set when `object_id` was already populated from `rlnHelicalTubeID` (a genuine
+            RELION-standard column, which takes priority over any ``cc``-prefixed name);
+            skips `object_id` here in that case.
+
+        Returns
+        -------
+        None
+
+        """
+        legacy_names = {"object_id": "ccObjectName", "geom2": "ccSubunitName"}
+        auxiliary_columns = ["object_id", "geom1", "geom2", "geom3", "geom4", "geom5", "subtomo_mean"]
+
+        for motl_col in auxiliary_columns:
+            if motl_col == "object_id" and object_id_already_assigned:
+                continue
+            cc_col = _cc_name(motl_col)
+            if cc_col in relion_df.columns:
+                self.assign_column(relion_df, {motl_col: cc_col})
+            elif motl_col in legacy_names and legacy_names[motl_col] in relion_df.columns:
+                self.assign_column(relion_df, {motl_col: legacy_names[motl_col]})
 
     def adapt_original_entries(self):
         """The function updates DataFrame stored in `self.relion_df` based on the values in `self.df`.
@@ -3992,7 +4058,7 @@ class RelionMotl(Motl):
 
         return pd.DataFrame(optics_default, index=[0])
 
-    def create_final_output(self, relion_df, optics_df=None):
+    def create_final_output(self, relion_df, optics_df=None, use_original_entries=False):
         """Creates the final output frames and specifiers based on the given input dataframes.
 
         Parameters
@@ -4001,6 +4067,11 @@ class RelionMotl(Motl):
             The dataframe containing the relion data.
         optics_df : pandas.DataFrame, optional
             The dataframe containing the optics data. Defaults to None.
+        use_original_entries : bool, default=False
+            Whether `relion_df` was built from the originally loaded entries. If True, the
+            `rlnOpticsGroup` values already present in `relion_df` are left untouched. If False,
+            `rlnOpticsGroup` (when present in both `relion_df` and `optics_df`) is synced to the
+            group defined in `optics_df`, since freshly built particle data has no group assigned.
 
         Returns
         -------
@@ -4022,6 +4093,19 @@ class RelionMotl(Motl):
 
         """
 
+        if (
+            not use_original_entries
+            and optics_df is not None
+            and "rlnOpticsGroup" in relion_df.columns
+            and "rlnOpticsGroup" in optics_df.columns
+        ):
+            unique_groups = optics_df["rlnOpticsGroup"].unique()
+            # A single optics group unambiguously applies to every particle. With more than one
+            # group there is no per-particle mapping to infer, so the existing (per-particle)
+            # rlnOpticsGroup values, if any, are left untouched rather than guessed at.
+            if len(unique_groups) == 1:
+                relion_df["rlnOpticsGroup"] = unique_groups[0]
+
         if optics_df is None:
             frames = [relion_df]
             specifiers = [self.data_spec]
@@ -4042,8 +4126,6 @@ class RelionMotl(Motl):
         use_original_entries=False,
         keep_all_entries=False,
         version=None,
-        add_object_id=False,
-        add_subunit_id=False,
         binning=None,
         pixel_size=None,
         adapt_object_attr=False,
@@ -4070,13 +4152,6 @@ class RelionMotl(Motl):
         version : float, optional
             Specify the version and thereby the format of the DataFrame. If not provided the value from `self.version`
             will be used. Defaults to None.
-        add_object_id : bool, default=False
-            Whether to add "object_id" from `self.df` to the DataFrame. If True, the column will be named
-            "ccObjectName". This is particularly useful for exporting fields mapped during loading,
-            such as "rlnHelicalTubeID". Defaults to False.
-        add_subunit_id : bool, default=False
-            Whether to add "subunit_id" from `self.df` to the DataFrame. If True, the column will be named
-            "ccSubunitName". Defaults to False.
         binning : int, optional
             Binning that should be used for conversion in case of Relion v. 4.x. If not provided the value from
             `self.binning` will be used. Defaults to None.
@@ -4085,6 +4160,11 @@ class RelionMotl(Motl):
             will be used. Defaults to None.
         adapt_object_attr : bool, default=False
             Store the created DataFrame to `self.relion_df` attribute of the object. Defaults to False.
+        extra_columns : dict[str, str], optional
+            Additional `self.df` columns to export as non-standard ``cc``-prefixed fields, e.g.
+            ``{"object_id": "ccObjectId", "geom2": "ccGeom2"}``. Use :func:`_cc_name` to derive the
+            conventional target name for a given motl column. Raises ``ValueError`` if a target name
+            collides with a standard Relion column for the given version.
 
         Returns
         -------
@@ -4133,10 +4213,6 @@ class RelionMotl(Motl):
         relion_df["rlnClassNumber"] = self.df["class"].to_numpy()
 
         _extra: dict[str, str] = dict(extra_columns or {})
-        if add_object_id and "object_id" not in _extra:
-            _extra["object_id"] = "ccObjectName"
-        if add_subunit_id and "geom2" not in _extra:
-            _extra["geom2"] = "ccSubunitName"
         if _extra:
             _rln_cols = set(
                 self.columns_v3_0 if (version or self.version) < 3.1
@@ -4174,8 +4250,6 @@ class RelionMotl(Motl):
         use_original_entries: bool = False,
         keep_all_entries: bool = False,
         version: float | None = None,
-        add_object_id: bool = False,
-        add_subunit_id: bool = False,
         binning=None,
         pixel_size: float | None = None,
         optics_data=None,
@@ -4207,13 +4281,6 @@ class RelionMotl(Motl):
         version : float, optional
             Specify the version and thereby the format of the DataFrame. If not provided the
             value from `self.version` will be used. Defaults to None.
-        add_object_id : bool, default=False
-            Whether to add "object_id" from `self.df` to the DataFrame. If True, the column will be named
-            "ccObjectName". This is particularly useful for exporting fields mapped during loading,
-            such as "rlnHelicalTubeID". Defaults to False.
-        add_subunit_id : bool, default=False
-            Whether to add "subunit_id" from `self.df` to the DataFrame. If True,
-            the column will be named "ccSubunitName". Defaults to False.
         binning : int, optional
             Binning that should be used for conversion in case of Relion v. 4.x. If not provided the
             value from `self.binning` will be used. Defaults to None.
@@ -4227,6 +4294,9 @@ class RelionMotl(Motl):
             the attribute `self.optics_df` will be used. Defaults to None.
         subtomo_size : int, optional
             The size of the subtomograms. If not provided, it will be set to "NaN". Defaults to None.
+        extra_columns : dict[str, str], optional
+            Additional `self.df` columns to export as non-standard ``cc``-prefixed fields, e.g.
+            ``{"object_id": "ccObjectId", "geom2": "ccGeom2"}``. See :meth:`create_relion_df`.
 
 
         Returns
@@ -4245,8 +4315,6 @@ class RelionMotl(Motl):
             use_original_entries=use_original_entries,
             keep_all_entries=keep_all_entries,
             version=version,
-            add_object_id=add_object_id,
-            add_subunit_id=add_subunit_id,
             tomo_format=tomo_format,
             subtomo_format=subtomo_format,
             binning=binning,
@@ -4262,9 +4330,75 @@ class RelionMotl(Motl):
         else:
             optics_df = None
 
-        frames, specifiers = self.create_final_output(relion_df, optics_df)
+        frames, specifiers = self.create_final_output(relion_df, optics_df, use_original_entries=use_original_entries)
 
         starfileio.Starfile.write(frames, output_path, specifiers=specifiers)
+
+    def complete_from_source(
+        self,
+        source_motl: "RelionMotl",
+        columns: ListLike[MotlColumn],
+        output_path: PathOrStr,
+        coord_tolerance: float,
+        tomo_id_column: MotlColumn = "tomo_id",
+        write_kwargs: dict | None = None,
+    ) -> "RelionMotl":
+        """Recover `columns` from `source_motl` into `self` and write the result out.
+
+        `self` is treated as the "target" (e.g. a subset of `source_motl`'s particles,
+        or the same particles that lost some columns in a prior conversion). Particles
+        are matched by `tomo_id_column` plus coordinate proximity (see
+        :func:`cryocat.analysis.nnana.recover_columns_by_coordinates` for the matching
+        details, including how differing pixel sizes/binning between `self` and
+        `source_motl` are handled). The recovered columns are automatically exported
+        in the output star file as ``cc``-prefixed extra columns (see :func:`_cc_name`),
+        unless already covered by `write_kwargs["extra_columns"]`.
+
+        Works on any RelionMotl-family instance (`RelionMotl`, `RelionMotlv5`, or an
+        instance returned by `RelionMotlv5_1`) since it's defined once here and
+        inherited by `RelionMotlv5`.
+
+        Parameters
+        ----------
+        source_motl : RelionMotl
+            The motl to recover `columns` from. Must expose `pixel_size` (true for
+            any RelionMotl-family instance).
+        columns : MotlColumn or list of MotlColumn
+            Column name(s) to recover from `source_motl.df` and export in the output.
+        output_path : PathOrStr
+            Destination for the completed star file, written via `self.write_out`.
+        coord_tolerance : float
+            Matching tolerance in Angstrom (physical units).
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column used to group particles before matching.
+        write_kwargs : dict, optional
+            Forwarded to `self.write_out`. If it already sets `extra_columns`, those
+            entries take priority; any of `columns` not already covered there are
+            added automatically under their `_cc_name()`.
+
+        Returns
+        -------
+        RelionMotl
+            The completed motl (same object that was written out); `self` is not
+            modified in place.
+
+        See Also
+        --------
+        cryocat.analysis.nnana.recover_columns_by_coordinates
+            Implements the underlying matching and column recovery.
+        """
+        completed = nnana.recover_columns_by_coordinates(
+            source_motl, self, columns, coord_tolerance, tomo_id_column=tomo_id_column
+        )
+
+        write_kwargs = dict(write_kwargs or {})
+        extra_columns = dict(write_kwargs.get("extra_columns") or {})
+        for col in classutils.as_list(columns):
+            extra_columns.setdefault(col, _cc_name(col))
+        write_kwargs["extra_columns"] = extra_columns
+
+        completed.write_out(output_path, **write_kwargs)
+        return completed
 
 
 class RelionMotlv5(RelionMotl, Motl):
@@ -4374,7 +4508,7 @@ class RelionMotlv5(RelionMotl, Motl):
                     relion_df, optics_data = self.read_in(input_particles)
                     self.convert_to_motl(relion_df, optics_data, tomo_format, subtomo_format)
                 elif isinstance(input_particles, pd.DataFrame):
-                    self.check_df_type(input_particles)
+                    self.check_df_type(input_particles, tomo_format=tomo_format, subtomo_format=subtomo_format)
                 # allow to specify tomo_data and particles_data - but only latter is used?
                 elif isinstance(input_particles, RelionMotlv5):
                     self.df = input_particles.df.copy()
@@ -4574,6 +4708,11 @@ class RelionMotlv5(RelionMotl, Motl):
         self.assign_column(
             relion_df, {"score": "rlnMaxValueProbDistribution"}
         )  # getting the max value contribution per distribution - not really same as CCC but has similar indications
+
+        object_id_from_helical_tube = "rlnHelicalTubeID" in relion_df.columns
+        if object_id_from_helical_tube:
+            self.assign_column(relion_df, {"object_id": "rlnHelicalTubeID"})
+        self.assign_cc_extra_columns(relion_df, object_id_already_assigned=object_id_from_helical_tube)
 
         # store the idx of the original data - useful for writing out
         self.relion_df["ccSubtomoID"] = self.df["subtomo_id"]
@@ -4973,8 +5112,6 @@ class RelionMotlv5(RelionMotl, Motl):
         tomo_format="",
         subtomo_format="",
         keep_all_entries=False,
-        add_object_id=False,
-        add_subunit_id=False,
         binning=None,
         pixel_size=None,
         adapt_object_attr=False,
@@ -4995,10 +5132,6 @@ class RelionMotlv5(RelionMotl, Motl):
         keep_all_entries : bool, default=False
             When ``True`` and ``use_original_entries`` is ``True``, return all
             original columns without dropping ``subtomo_id``.
-        add_object_id : bool, default=False
-            Add a ``ccObjectName`` column from ``self.df['object_id']``.
-        add_subunit_id : bool, default=False
-            Add a ``ccSubunitName`` column from ``self.df['geom2']``.
         binning : float, optional
             Override ``self.binning`` for coordinate scaling.
         pixel_size : float, optional
@@ -5008,6 +5141,10 @@ class RelionMotlv5(RelionMotl, Motl):
         convert : bool, default=False
             When ``True``, convert between WarpTools and RELION 5 coordinate
             systems before returning.
+        extra_columns : dict[str, str], optional
+            Additional ``self.df`` columns to export as non-standard ``cc``-prefixed fields, e.g.
+            ``{"object_id": "ccObjectId", "geom2": "ccGeom2"}``. Use :func:`_cc_name` to derive the
+            conventional target name for a given motl column.
 
         Returns
         -------
@@ -5072,10 +5209,6 @@ class RelionMotlv5(RelionMotl, Motl):
             relion_df["rlnClassNumber"] = self.df["class"].to_numpy()
 
         _extra: dict[str, str] = dict(extra_columns or {})
-        if add_object_id and "object_id" not in _extra:
-            _extra["object_id"] = "ccObjectName"
-        if add_subunit_id and "geom2" not in _extra:
-            _extra["geom2"] = "ccSubunitName"
         if _extra:
             _rln_cols = set(self.columns_v4)
             for mc, cc in _extra.items():
@@ -5119,8 +5252,6 @@ class RelionMotlv5(RelionMotl, Motl):
         subtomo_format: str = "",
         use_original_entries: bool = False,
         keep_all_entries: bool = False,
-        add_object_id: bool = False,
-        add_subunit_id: bool = False,
         binning=None,
         pixel_size: float | None = None,
         optics_data=None,
@@ -5144,10 +5275,6 @@ class RelionMotlv5(RelionMotl, Motl):
             Reconstruct from ``self.relion_df`` rather than from ``self.df``.
         keep_all_entries : bool, default=False
             Retain all original columns when ``use_original_entries`` is ``True``.
-        add_object_id : bool, default=False
-            Append a ``ccObjectName`` column.
-        add_subunit_id : bool, default=False
-            Append a ``ccSubunitName`` column.
         binning : float, optional
             Coordinate scaling factor override.
         pixel_size : float, optional
@@ -5158,12 +5285,13 @@ class RelionMotlv5(RelionMotl, Motl):
             Subtomogram box size for a freshly generated optics group.
         convert : bool, default=False
             Convert between WarpTools and RELION 5 coordinate systems.
+        extra_columns : dict[str, str], optional
+            Additional ``self.df`` columns to export as non-standard ``cc``-prefixed fields, e.g.
+            ``{"object_id": "ccObjectId", "geom2": "ccGeom2"}``. See :meth:`create_relion_df`.
         """
         relion_df = self.create_relion_df(
             use_original_entries=use_original_entries,
             keep_all_entries=keep_all_entries,
-            add_object_id=add_object_id,
-            add_subunit_id=add_subunit_id,
             tomo_format=tomo_format,
             subtomo_format=subtomo_format,
             binning=binning,
@@ -5178,7 +5306,7 @@ class RelionMotlv5(RelionMotl, Motl):
         else:
             optics_df = None
 
-        frames, specifiers = self.create_final_output(relion_df, optics_df)
+        frames, specifiers = self.create_final_output(relion_df, optics_df, use_original_entries=use_original_entries)
 
         starfileio.Starfile.write(frames, output_path, specifiers=specifiers)
 
@@ -5201,10 +5329,18 @@ class RelionMotlv5_1:
         Subset of tomogram IDs to load.
     pixel_size : float, optional
         Voxel size in Angstroms.
-    binning : float, optional
-        Binning factor.
+    binning : float, default=1.0
+        Binning factor.  Matches :class:`RelionMotlv5`'s own default so tomo-mode gets
+        the same "binning defaults to 1.0, set it explicitly" warning when omitted,
+        rather than silently receiving ``None``.
     optics_data : pandas.DataFrame, optional
         Pre-loaded optics group data.
+    tomo_format : str, default=''
+        Format string for tomogram name parsing. See
+        :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for the syntax.
+    subtomo_format : str, default=''
+        Format string for subtomogram name parsing. See
+        :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for the syntax.
 
     Returns
     -------
@@ -5219,7 +5355,15 @@ class RelionMotlv5_1:
     """
 
     def __new__(
-        cls, input_particles=None, input_tomograms=None, tomo_idx=None, pixel_size=None, binning=None, optics_data=None
+        cls,
+        input_particles=None,
+        input_tomograms=None,
+        tomo_idx=None,
+        pixel_size=None,
+        binning=1.0,
+        optics_data=None,
+        tomo_format="",
+        subtomo_format="",
     ):
         if input_tomograms is None:  # single file mode
             if input_particles is not None:
@@ -5229,6 +5373,8 @@ class RelionMotlv5_1:
                     optics_data=optics_data,
                     binning=binning,
                     version=5.1,
+                    tomo_format=tomo_format,
+                    subtomo_format=subtomo_format,
                 )
             else:
                 raise UserInputError(
@@ -5242,6 +5388,8 @@ class RelionMotlv5_1:
                 version=5.1,
                 binning=binning,
                 tomo_idx=tomo_idx,
+                tomo_format=tomo_format,
+                subtomo_format=subtomo_format,
             )
 
 

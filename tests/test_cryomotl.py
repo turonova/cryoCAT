@@ -506,7 +506,28 @@ def test_relion2stopgap():
     sg1 = StopgapMotl(input_motl=stopgap)
     assert not list(sg.sg_df.columns) == StopgapMotl.columns
     assert list(sg1.sg_df.columns) == StopgapMotl.columns
-    pd.testing.assert_frame_equal(sg1.df.dropna(), RelionMotl(relion3).df.dropna())
+    # Compare only the columns the relion->stopgap->relion round trip is expected to preserve;
+    # auxiliary geom*/subtomo_mean columns are not part of the stopgap conversion and may differ.
+    # NOTE: `.dropna()` used to be called on both sides here, but since every row had a NaN in at
+    # least one auxiliary column, it silently reduced both frames to 0 rows, making the assertion
+    # vacuously true regardless of the actual particle data.
+    core_columns = [
+        "score",
+        "subtomo_id",
+        "tomo_id",
+        "object_id",
+        "x",
+        "y",
+        "z",
+        "shift_x",
+        "shift_y",
+        "shift_z",
+        "phi",
+        "psi",
+        "theta",
+        "class",
+    ]
+    pd.testing.assert_frame_equal(sg1.df[core_columns], RelionMotl(relion3).df[core_columns])
 
     if os.path.exists(stopgap):
         os.remove(stopgap)
@@ -820,6 +841,29 @@ class TestMotl:
         # Ensure that the motl dataframe was not changed
         assert motl.df["tomo_id"].tolist() == [1, 1]
         assert motl.df["subtomo_id"].tolist() == [1, 2]
+
+    def test_assign_column_unparsable_value_warns_and_defaults_to_zero(self, sample_motl):
+        # A non-null value that pd.to_numeric cannot parse is real (corrupted) data, not an
+        # absent one, so it should be flagged before being silently defaulted to 0.0.
+        motl = sample_motl
+        input_df = pd.DataFrame({"input_tomo": [3, "not_a_number"]})
+
+        with pytest.warns(UserWarning, match="input_tomo"):
+            motl.assign_column(input_df, {"tomo_id": "input_tomo"})
+
+        assert motl.df["tomo_id"].tolist() == [3.0, 0.0]
+
+    def test_assign_column_missing_value_does_not_warn(self, sample_motl):
+        # A cell that was already empty/NaN in the source is expected to default to 0.0
+        # silently, so no warning should be raised for genuinely absent data.
+        motl = sample_motl
+        input_df = pd.DataFrame({"input_tomo": [3, np.nan]})
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            motl.assign_column(input_df, {"tomo_id": "input_tomo"})
+
+        assert motl.df["tomo_id"].tolist() == [3.0, 0.0]
 
     @pytest.fixture
     def sample_motl_data1(self):
@@ -1215,6 +1259,23 @@ class TestMotl:
 
         # Test that original dataframe is unchanged.
         assert sample_motl_data1.equals(pd.DataFrame(sample_motl_data1))
+
+    def test_check_df_type_forwards_extra_kwargs(self, sample_motl_data1):
+        # check_df_type must forward arbitrary keyword arguments to convert_to_motl when
+        # the input isn't already in the standard format, so subclass-specific loader
+        # options (e.g. RelionMotl's tomo_format/subtomo_format) aren't silently dropped.
+        class MockMotl(Motl):
+            def convert_to_motl(self, input_df, extra=None):
+                self.df = input_df.copy()
+                self.df.reset_index(inplace=True, drop=True)
+                self.df = self.df.fillna(0.0)
+                self.df["extra_seen"] = extra
+
+        incorrect_df = pd.DataFrame({"col1": [1, 2], "col2": [3, 4]})
+        mock_motl = MockMotl(sample_motl_data1.copy())
+        mock_motl.check_df_type(incorrect_df, extra="hello")
+
+        assert (mock_motl.df["extra_seen"] == "hello").all()
 
     def test_fill(self, sample_motl_data1):
         motl = Motl(copy.deepcopy(sample_motl_data1))
@@ -3282,6 +3343,78 @@ class TestRelionMotl:
         assert "ccSubtomoID" in relion_motl.relion_df.columns
         assert len(relion_motl.relion_df["ccSubtomoID"]) == len(relion_motl.df)
 
+    def test_convert_to_motl_no_nan_when_optional_columns_missing(self):
+        # rlnClassNumber, rlnMaxValueProbDistribution, rlnHelicalTubeID/ccObjectName and
+        # ccSubunitName are all optional and absent here; self.df must still end up fully
+        # numeric (defaulted to 0.0) rather than leaving NaN for the unset columns.
+        relion_df = pd.DataFrame(
+            {
+                "rlnMicrographName": [1, 1],
+                "rlnCoordinateX": [10.0, 20.0],
+                "rlnCoordinateY": [11.0, 21.0],
+                "rlnCoordinateZ": [12.0, 22.0],
+                "rlnAngleRot": [0.0, 10.0],
+                "rlnAngleTilt": [0.0, 20.0],
+                "rlnAnglePsi": [0.0, 30.0],
+                "rlnImageName": [1, 2],
+            }
+        )
+        relion_motl = RelionMotl()
+        relion_motl.convert_to_motl(relion_df, version=3.1)
+
+        assert not relion_motl.df.isna().any().any()
+        assert (relion_motl.df["class"] == 0.0).all()
+        assert (relion_motl.df["score"] == 0.0).all()
+        assert (relion_motl.df["object_id"] == 0.0).all()
+        assert (relion_motl.df["geom2"] == 0.0).all()
+
+    def test_convert_to_motl_assigns_object_id_and_geom2_from_relion_columns(self):
+        # object_id/geom2 now go through assign_column (change C); verify the values are
+        # still correctly carried over when the source columns are present.
+        relion_df = pd.DataFrame(
+            {
+                "rlnMicrographName": [1, 1],
+                "rlnCoordinateX": [10.0, 20.0],
+                "rlnCoordinateY": [11.0, 21.0],
+                "rlnCoordinateZ": [12.0, 22.0],
+                "rlnAngleRot": [0.0, 10.0],
+                "rlnAngleTilt": [0.0, 20.0],
+                "rlnAnglePsi": [0.0, 30.0],
+                "rlnImageName": [1, 2],
+                "rlnHelicalTubeID": [5, 6],
+                "ccSubunitName": [7, 8],
+            }
+        )
+        relion_motl = RelionMotl()
+        relion_motl.convert_to_motl(relion_df, version=3.1)
+
+        assert relion_motl.df["object_id"].tolist() == [5.0, 6.0]
+        assert relion_motl.df["geom2"].tolist() == [7.0, 8.0]
+
+    def test_dataframe_input_forwards_tomo_and_subtomo_format(self):
+        # RelionMotl(input_motl=<DataFrame>, ...) routes through check_df_type, which
+        # previously dropped tomo_format/subtomo_format entirely for this input type
+        # (it only called self.convert_to_motl(input_motl), no extra kwargs). "path/12_34.mrc"
+        # is chosen so the default last-number rule ("34") and the unanchored "$yy"
+        # pattern (first digit run, "12") diverge into distinguishable results.
+        relion_df = pd.DataFrame(
+            {
+                "rlnMicrographName": [1],
+                "rlnCoordinateX": [10.0],
+                "rlnCoordinateY": [11.0],
+                "rlnCoordinateZ": [12.0],
+                "rlnAngleRot": [0.0],
+                "rlnAngleTilt": [0.0],
+                "rlnAnglePsi": [0.0],
+                "rlnImageName": ["path/12_34.mrc"],
+            }
+        )
+        default_motl = RelionMotl(relion_df, version=3.1)
+        custom_motl = RelionMotl(relion_df, version=3.1, subtomo_format="$yy")
+
+        assert default_motl.df["subtomo_id"].tolist() == [34.0]
+        assert custom_motl.df["subtomo_id"].tolist() == [12.0]
+
     def test_adapt_original_entries_no_change(self):
         relion_data = {
             "ccSubtomoID": [1, 2, 3],
@@ -4090,6 +4223,35 @@ class TestRelionMotl:
         pd.testing.assert_frame_equal(frames_dup[0].sort_index(axis=1), expected_combined_df_dup.sort_index(axis=1))
         assert specifiers_dup == ["combined_data"]
 
+    def test_create_final_output_syncs_optics_group_single_group(self):
+        relion_motl = RelionMotl()
+        relion_motl.version = 3.1
+        relion_motl.data_spec = "particle_data"
+        sample_optics_df = pd.DataFrame({"rlnOpticsGroup": [3]})
+        sample_relion_df = pd.DataFrame({"particleId": [1, 2, 3], "rlnOpticsGroup": [0, 0, 0]})
+        frames, _ = relion_motl.create_final_output(sample_relion_df, optics_df=sample_optics_df)
+        assert (frames[1]["rlnOpticsGroup"] == 3).all()
+
+    def test_create_final_output_leaves_optics_group_with_multiple_groups(self):
+        relion_motl = RelionMotl()
+        relion_motl.version = 3.1
+        relion_motl.data_spec = "particle_data"
+        sample_optics_df = pd.DataFrame({"rlnOpticsGroup": [1, 2]})
+        sample_relion_df = pd.DataFrame({"particleId": [1, 2], "rlnOpticsGroup": [0, 0]})
+        frames, _ = relion_motl.create_final_output(sample_relion_df, optics_df=sample_optics_df)
+        assert (frames[1]["rlnOpticsGroup"] == 0).all()
+
+    def test_create_final_output_use_original_entries_preserves_optics_group(self):
+        relion_motl = RelionMotl()
+        relion_motl.version = 3.1
+        relion_motl.data_spec = "particle_data"
+        sample_optics_df = pd.DataFrame({"rlnOpticsGroup": [3]})
+        sample_relion_df = pd.DataFrame({"particleId": [1, 2], "rlnOpticsGroup": [1, 1]})
+        frames, _ = relion_motl.create_final_output(
+            sample_relion_df, optics_df=sample_optics_df, use_original_entries=True
+        )
+        assert (frames[1]["rlnOpticsGroup"] == 1).all()
+
     def test_create_relion_df_default_v30(self, relion_paths):
         # Load the relion_3.0.star file using RelionMotl
         motl = RelionMotl(input_motl=relion_paths["relion30_path"], version=3.0)
@@ -4408,6 +4570,163 @@ class TestRelionMotl:
         motl.df = pd.DataFrame(index=range(1))
         motl.parse_subtomo_id(relion_df)
         assert motl.df.loc[0, "subtomo_id"] == 3.0
+
+    def _relion_df(self, tomo_id, x, y, z, image_names, helical_tube_ids=None):
+        n = len(x)
+        data = {
+            "rlnMicrographName": [tomo_id] * n,
+            "rlnCoordinateX": x,
+            "rlnCoordinateY": y,
+            "rlnCoordinateZ": z,
+            "rlnAngleRot": [0.0] * n,
+            "rlnAngleTilt": [0.0] * n,
+            "rlnAnglePsi": [0.0] * n,
+            "rlnImageName": image_names,
+        }
+        if helical_tube_ids is not None:
+            data["rlnHelicalTubeID"] = helical_tube_ids
+        return pd.DataFrame(data)
+
+    def test_complete_from_source_writes_and_round_trips(self, tmp_path):
+        # method form of nnana.recover_columns_by_coordinates: target.complete_from_source(source, ...)
+        # must also write the recovered column out under its _cc_name() automatically.
+        source_df = self._relion_df(
+            1, [10.0, 50.0], [10.0, 50.0], [10.0, 50.0], [1, 2], helical_tube_ids=[7, 8]
+        )
+        source = RelionMotl(source_df, version=3.1, pixel_size=1.0)
+
+        target_df = self._relion_df(1, [10.0, 50.0], [10.0, 50.0], [10.0, 50.0], [101, 102])
+        target = RelionMotl(target_df, version=3.1, pixel_size=1.0)
+
+        out_path = tmp_path / "completed.star"
+        completed = target.complete_from_source(
+            source, columns=["object_id"], output_path=str(out_path), coord_tolerance=1.0
+        )
+
+        assert completed.df["object_id"].tolist() == [7.0, 8.0]
+        # target itself is not mutated
+        assert target.df["object_id"].tolist() == [0.0, 0.0]
+
+        reloaded = RelionMotl(str(out_path), version=3.1)
+        assert reloaded.df["object_id"].tolist() == [7.0, 8.0]
+
+    def test_complete_from_source_respects_explicit_extra_columns(self, tmp_path):
+        # a user-supplied extra_columns mapping for a recovered column must be
+        # respected instead of being overwritten by the automatic _cc_name() default.
+        source_df = self._relion_df(1, [10.0], [10.0], [10.0], [1], helical_tube_ids=[7])
+        source = RelionMotl(source_df, version=3.1, pixel_size=1.0)
+        target_df = self._relion_df(1, [10.0], [10.0], [10.0], [101])
+        target = RelionMotl(target_df, version=3.1, pixel_size=1.0)
+
+        out_path = tmp_path / "completed_custom_name.star"
+        target.complete_from_source(
+            source,
+            columns=["object_id"],
+            output_path=str(out_path),
+            coord_tolerance=1.0,
+            write_kwargs={"extra_columns": {"object_id": "ccMyObjectId"}},
+        )
+
+        from cryocat.utils import starfileio
+
+        frames, specifiers, _ = starfileio.Starfile.read(str(out_path))
+        particles_df = frames[specifiers.index("data_particles")]
+        assert "ccMyObjectId" in particles_df.columns
+        assert "ccObjectId" not in particles_df.columns
+
+
+class TestRelionMotlv5_1:
+    """RelionMotlv5_1 is a pure factory (__new__) dispatching to RelionMotl or
+    RelionMotlv5; these tests cover two gaps found while comparing its parameters
+    against the two underlying constructors: a silently-overridden binning default in
+    tomo-mode, and tomo_format/subtomo_format not being forwarded at all."""
+
+    @pytest.fixture
+    def tomo_df(self):
+        return pd.DataFrame(
+            {"rlnTomoName": ["TS_01"], "rlnTomoSizeX": [4000], "rlnTomoSizeY": [4000], "rlnTomoSizeZ": [2000]}
+        )
+
+    @pytest.fixture
+    def warp2_df(self):
+        return pd.DataFrame(
+            {
+                "rlnTomoName": ["TS_01"],
+                "rlnTomoParticleId": [1],
+                "rlnCoordinateX": [2010.0],
+                "rlnCoordinateY": [2020.0],
+                "rlnCoordinateZ": [1005.0],
+                "rlnAngleRot": [0.0],
+                "rlnAngleTilt": [0.0],
+                "rlnAnglePsi": [0.0],
+                "rlnTomoParticleName": ["TS_01/14"],
+                "rlnOpticsGroup": [1],
+                "rlnImageName": ["img1"],
+                "rlnOriginXAngst": [0.0],
+                "rlnOriginYAngst": [0.0],
+                "rlnOriginZAngst": [0.0],
+                "rlnTomoVisibleFrames": [15],
+            }
+        )
+
+    @pytest.fixture
+    def warp2_star_path(self, warp2_df, tmp_path):
+        # tomo_format/subtomo_format are only threaded through convert_to_motl when
+        # input_particles is a star file path (not a plain DataFrame - a separate,
+        # pre-existing gap in RelionMotlv5.__init__, out of scope here), so a real
+        # star file is required to exercise the forwarding fix below.
+        path = tmp_path / "warp2_particles.star"
+        starfileio.Starfile.write([warp2_df], str(path), specifiers=["data_particles"])
+        return str(path)
+
+    def test_tomo_mode_binning_defaults_to_one_not_none(self, warp2_df, tomo_df):
+        # Before the fix, RelionMotlv5_1's own binning=None default silently overrode
+        # RelionMotlv5's binning=1.0 default, producing a working object with
+        # self.binning=None and no warning, which then crashed with a TypeError deep
+        # inside create_relion_df's coordinate scaling.
+        with pytest.warns(UserWarning, match="binning"):
+            m = RelionMotlv5_1(input_particles=warp2_df, input_tomograms=tomo_df)
+
+        assert m.binning == 1.0
+        m.create_relion_df()  # must not raise TypeError on a None binning multiplier
+
+    def test_tomo_mode_forwards_tomo_and_subtomo_format(self, warp2_star_path, tomo_df):
+        default_motl = RelionMotlv5_1(input_particles=warp2_star_path, input_tomograms=tomo_df, binning=1.0)
+        # "$yy" has no anchor, so it matches the first digit run in "TS_01/14" ("01"),
+        # rather than the default parsing's last-number rule ("14") - a different,
+        # verifiable result only reachable if subtomo_format was actually forwarded.
+        custom_motl = RelionMotlv5_1(
+            input_particles=warp2_star_path, input_tomograms=tomo_df, binning=1.0, subtomo_format="$yy"
+        )
+
+        assert default_motl.df["subtomo_id"].tolist() == [14.0]
+        assert custom_motl.df["subtomo_id"].tolist() == [1.0]
+
+    def test_single_file_mode_forwards_tomo_and_subtomo_format(self, tmp_path):
+        # Single-file (RelionMotl-backed) branch: subtomo_format affects rlnImageName
+        # parsing the same way it does for a plain RelionMotl load. "path/12_34.mrc"
+        # is chosen so the default last-number rule ("34") and the unanchored "$yy"
+        # pattern (first digit run, "12") diverge into distinguishable results.
+        relion_df = pd.DataFrame(
+            {
+                "rlnMicrographName": [1],
+                "rlnCoordinateX": [10.0],
+                "rlnCoordinateY": [11.0],
+                "rlnCoordinateZ": [12.0],
+                "rlnAngleRot": [0.0],
+                "rlnAngleTilt": [0.0],
+                "rlnAnglePsi": [0.0],
+                "rlnImageName": ["path/12_34.mrc"],
+            }
+        )
+        path = tmp_path / "single_v51.star"
+        starfileio.Starfile.write([relion_df], str(path), specifiers=["data_particles"])
+
+        default_motl = RelionMotlv5_1(str(path))
+        custom_motl = RelionMotlv5_1(str(path), subtomo_format="$yy")
+
+        assert default_motl.df["subtomo_id"].tolist() == [34.0]
+        assert custom_motl.df["subtomo_id"].tolist() == [12.0]
 
 
 class TestStopgapMotl:
@@ -5633,6 +5952,35 @@ class TestRelionMotlv5:
         mock_instance = RelionMotlv5(pixel_size=pixel_size, input_tomograms=tomo_df, input_particles=relion_df)
         assert mock_instance.check_isWarp() is False
 
+    def test_convert_to_motl_recognizes_cc_extra_columns(self, warp2_motl_instance, warp2_df):
+        # RelionMotlv5.convert_to_motl previously had no object_id/geom2 recognition at
+        # all ("missing in warp2"); it now shares assign_cc_extra_columns with RelionMotl.
+        extended_df = warp2_df.copy()
+        extended_df["ccObjectId"] = [5, 6, 7]
+        extended_df["ccGeom2"] = [8, 9, 10]
+
+        warp2_motl_instance.convert_to_motl(extended_df)
+
+        assert warp2_motl_instance.df["object_id"].tolist() == [5.0, 6.0, 7.0]
+        assert warp2_motl_instance.df["geom2"].tolist() == [8.0, 9.0, 10.0]
+
+    def test_dataframe_input_forwards_tomo_and_subtomo_format(self, warp2_df, tomo_df):
+        # RelionMotlv5(input_particles=<DataFrame>, ...) routes through check_df_type,
+        # which previously dropped tomo_format/subtomo_format entirely for this input
+        # type. "$yy" is unanchored, so on this fixture's rlnTomoParticleName values
+        # ("TS_01/14", "TS_01/16", "TS_03/1") it matches the first digit run ("01",
+        # "01", "03") instead of the default last-number rule ("14", "16", "1"). The
+        # first two collide, which triggers parse_subtomo_id's non-unique-id fallback
+        # (sequential 1..N renumbering) - itself only reachable if subtomo_format was
+        # actually forwarded.
+        default_motl = RelionMotlv5(input_particles=warp2_df, input_tomograms=tomo_df, binning=1.0)
+        custom_motl = RelionMotlv5(
+            input_particles=warp2_df, input_tomograms=tomo_df, binning=1.0, subtomo_format="$yy"
+        )
+
+        assert default_motl.df["subtomo_id"].tolist() == [14.0, 16.0, 1.0]
+        assert custom_motl.df["subtomo_id"].tolist() == [1.0, 2.0, 3.0]
+
     def test_create_particles_data(self, tomo_df):
         relion_motl = RelionMotlv5(input_tomograms=tomo_df)  # by default isWarp=False
         num_particles = 3
@@ -6114,10 +6462,72 @@ def test_relion_extra_columns_writes_named_column():
     assert "ccSubunitName" not in rdf.columns
 
 
-def test_relion_add_object_id_backward_compat():
+def test_relion_extra_columns_object_id_geom2_round_trip(tmp_path):
+    # add_object_id/add_subunit_id were removed in favor of the single generic
+    # extra_columns interface; this covers writing object_id/geom2 under their
+    # conventional _cc_name() and recovering them on reload.
     m = RelionMotl(_relion_test_star)
-    rdf = m.create_relion_df(add_object_id=True)
-    assert "ccObjectName" in rdf.columns
+    m.df["object_id"] = list(range(10, 10 + len(m.df)))
+    m.df["geom2"] = list(range(1, 1 + len(m.df)))
+    out_path = tmp_path / "extra_columns_roundtrip.star"
+
+    # write_optics=False: this fixture file has multiple optics groups with differing pixel
+    # sizes, which makes the (unrelated) optics-group write path fail; irrelevant here since
+    # this test only checks the extra_columns round trip.
+    m.write_out(
+        str(out_path), write_optics=False, extra_columns={"object_id": "ccObjectId", "geom2": "ccGeom2"}
+    )
+    reloaded = RelionMotl(str(out_path))
+
+    assert reloaded.df["object_id"].tolist() == m.df["object_id"].tolist()
+    assert reloaded.df["geom2"].tolist() == m.df["geom2"].tolist()
+
+
+def test_relion_legacy_cc_names_recognized_on_load():
+    # ccObjectName/ccSubunitName are the pre-existing (legacy) names written by the old
+    # add_object_id/add_subunit_id flags; files using them must still round-trip.
+    relion_df = pd.DataFrame(
+        {
+            "rlnMicrographName": [1, 1],
+            "rlnCoordinateX": [10.0, 20.0],
+            "rlnCoordinateY": [11.0, 21.0],
+            "rlnCoordinateZ": [12.0, 22.0],
+            "rlnAngleRot": [0.0, 10.0],
+            "rlnAngleTilt": [0.0, 20.0],
+            "rlnAnglePsi": [0.0, 30.0],
+            "rlnImageName": [1, 2],
+            "ccObjectName": [5, 6],
+            "ccSubunitName": [7, 8],
+        }
+    )
+    relion_motl = RelionMotl()
+    relion_motl.convert_to_motl(relion_df, version=3.1)
+
+    assert relion_motl.df["object_id"].tolist() == [5.0, 6.0]
+    assert relion_motl.df["geom2"].tolist() == [7.0, 8.0]
+
+
+def test_relion_helical_tube_id_takes_priority_over_cc_object_id():
+    # rlnHelicalTubeID is a genuine RELION-standard column and must win over any
+    # cc-prefixed extra column when both are present.
+    relion_df = pd.DataFrame(
+        {
+            "rlnMicrographName": [1, 1],
+            "rlnCoordinateX": [10.0, 20.0],
+            "rlnCoordinateY": [11.0, 21.0],
+            "rlnCoordinateZ": [12.0, 22.0],
+            "rlnAngleRot": [0.0, 10.0],
+            "rlnAngleTilt": [0.0, 20.0],
+            "rlnAnglePsi": [0.0, 30.0],
+            "rlnImageName": [1, 2],
+            "rlnHelicalTubeID": [100, 200],
+            "ccObjectId": [5, 6],
+        }
+    )
+    relion_motl = RelionMotl()
+    relion_motl.convert_to_motl(relion_df, version=3.1)
+
+    assert relion_motl.df["object_id"].tolist() == [100.0, 200.0]
 
 
 def test_relion_extra_columns_collision_raises():

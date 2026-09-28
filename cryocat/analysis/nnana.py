@@ -27,6 +27,8 @@ chain stats, etc.) lives in ``cryocat.analysis.structure.Chain``.
 
 from __future__ import annotations
 
+import copy
+import warnings
 from typing import Any, TYPE_CHECKING
 
 import numpy as np
@@ -44,7 +46,7 @@ from cryocat._types import (
     RotationDistanceType,
 )
 from cryocat.core import cryomap, cryomotl
-from cryocat.utils import geom, ioutils
+from cryocat.utils import classutils, geom, ioutils
 from cryocat.utils.classutils import gui_exposed
 
 if TYPE_CHECKING:
@@ -1681,6 +1683,100 @@ def get_nn_within_radius(
         counts.append(kdt.query_radius(coord_a, r=nn_radius, count_only=True))
 
     return np.concatenate(counts, axis=0) if counts else np.array([])
+
+
+def recover_columns_by_coordinates(
+    source_motl: "cryomotl.Motl",
+    target_motl: "cryomotl.Motl",
+    columns: ListLike[MotlColumn],
+    coord_tolerance: float,
+    tomo_id_column: MotlColumn = "tomo_id",
+) -> "cryomotl.Motl":
+    """Recover columns from `source_motl` into a copy of `target_motl`.
+
+    Matches particles by `tomo_id_column` plus coordinate proximity (nearest
+    neighbor within `coord_tolerance`), then copies `columns` from the matched
+    source particle onto the corresponding target particle. `target_motl` may
+    represent the same particles as `source_motl` or a subset of them.
+    `source_motl` and `target_motl` may have different pixel sizes/binning:
+    coordinates are compared in physical units (voxels x each motl's own
+    ``pixel_size``), not raw voxel counts.
+
+    Parameters
+    ----------
+    source_motl : Motl
+        Motl to recover `columns` from. Must expose a `pixel_size` attribute
+        (true for any RelionMotl-family instance).
+    target_motl : Motl
+        Motl to recover `columns` into. Must also expose `pixel_size`. Not
+        modified in place; a copy is returned.
+    columns : MotlColumn or list of MotlColumn
+        Column name(s) to copy from `source_motl.df` onto the returned motl.
+    coord_tolerance : float
+        Matching tolerance in Angstrom (physical units).
+    tomo_id_column : MotlColumn, default='tomo_id'
+        Column used to group particles before the per-group nearest-neighbor
+        search.
+
+    Returns
+    -------
+    Motl
+        A copy of `target_motl` with `columns` filled in for particles that
+        found a source match within `coord_tolerance`. Target particles with
+        no match keep the columns' existing values in the copy (0.0 for a
+        column that didn't already exist on `target_motl`, matching the
+        standard motl-schema default).
+
+    Raises
+    ------
+    ValueError
+        If any requested column is not present in `source_motl.df`.
+
+    Warns
+    -----
+    UserWarning
+        If any target particle has no source match within `coord_tolerance`.
+    """
+    columns = classutils.as_list(columns)
+    for col in columns:
+        if col not in source_motl.df.columns:
+            raise ValueError(f"Column '{col}' not present in source_motl.df.")
+
+    result = copy.deepcopy(target_motl)
+    for col in columns:
+        if col not in result.df.columns:
+            result.df[col] = 0.0
+
+    unmatched_idx = []
+    tomo_ids = np.intersect1d(
+        source_motl.df[tomo_id_column].unique(), target_motl.df[tomo_id_column].unique()
+    )
+    for tomo in tomo_ids:
+        src_subset = source_motl.get_motl_subset(tomo, column_name=tomo_id_column)
+        tgt_subset = target_motl.get_motl_subset(tomo, column_name=tomo_id_column, reset_index=False)
+
+        src_coords_ang = src_subset.get_coordinates() * source_motl.pixel_size
+        tgt_coords_ang = tgt_subset.get_coordinates() * target_motl.pixel_size
+
+        kdt = sn.KDTree(src_coords_ang)
+        distances, nn_idx = kdt.query(tgt_coords_ang, k=1)
+
+        for tgt_row_idx, dist, src_i in zip(tgt_subset.df.index, distances[:, 0], nn_idx[:, 0]):
+            if dist <= coord_tolerance:
+                result.df.loc[tgt_row_idx, columns] = src_subset.df.iloc[src_i][columns].values
+            else:
+                unmatched_idx.append(tgt_row_idx)
+
+    # target particles whose tomo_id has no particles at all in source
+    unmatched_idx.extend(target_motl.df.index[~target_motl.df[tomo_id_column].isin(tomo_ids)].tolist())
+
+    if unmatched_idx:
+        warnings.warn(
+            f"{len(unmatched_idx)} target particle(s) had no source match within "
+            f"{coord_tolerance} Angstrom and kept their existing value for {columns}."
+        )
+
+    return result
 
 
 def get_nn_stats(
