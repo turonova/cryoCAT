@@ -8,6 +8,38 @@ and is linked to the matching Platonic solid of :mod:`cryocat.utils.geom`
 (:meth:`SymmGroup.to_polyhedron`, :meth:`SymmGroup.from_polyhedron`). The
 dependency is one-way: this module imports :mod:`~cryocat.utils.geom`, never
 the reverse.
+
+Notes
+-----
+**Group order is not the number of corners of the solid.** The *order* of a
+group (:attr:`SymmGroup.order`, and the number returned by
+:func:`cryocat.utils.geom.as_symmetry`) counts its *rotations*: 60 for
+``"I"``. A :class:`cryocat.utils.geom.Icosahedron` has only 12 corners
+(vertices). Both numbers are correct; they count different things.
+
+Apply every rotation of a group to one point and count the distinct places
+it lands (:meth:`SymmGroup.orbit`). A point on an ``n``-fold spin axis is
+left in place by ``n`` of the rotations, so it lands on only
+``order / n`` distinct places; a point off every axis lands on ``order``
+places. Corners, edge midpoints and face centres of a solid sit on axes,
+hence::
+
+    group  order  solid          vertices    edges      faces
+    -----  -----  -------------  ----------  ---------  ---------
+    T      12     Tetrahedron     4 = 12/3    6 = 12/2   4 = 12/3
+    O      24     Octahedron      6 = 24/4   12 = 24/2   8 = 24/3
+    O      24     Cube            8 = 24/3   12 = 24/2   6 = 24/4
+    I      60     Icosahedron    12 = 60/5   30 = 60/2  20 = 60/3
+    I      60     Dodecahedron   20 = 60/3   30 = 60/2  12 = 60/5
+
+In practice: splitting a particle into asymmetric units
+(:meth:`cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits`) gives
+``order`` copies (60 for ``"I"``), whereas expanding it onto the corners,
+edges or faces of a solid
+(:meth:`cryocat.analysis.structure.PolyhedralComplex.expand`) gives the
+vertex, edge or face count (12, 30 or 20 for the icosahedron). For ``"Dn"``
+note also that :func:`~cryocat.utils.geom.as_symmetry` returns ``n``,
+while :class:`DihedralGroup` has ``2 * n`` rotations.
 """
 
 from __future__ import annotations
@@ -189,7 +221,9 @@ class SymmGroup:
     symbol : str
         Group letter: ``"C"``, ``"D"``, ``"T"``, ``"O"`` or ``"I"``.
     order : int
-        Number of group elements.
+        Number of group elements (rotations), e.g. 60 for ``"I"``. This is
+        not the vertex count of the matching solid (12 for the
+        icosahedron); see the module Notes.
     matrices : numpy.ndarray
         ``(order, 3, 3)`` array of rotation matrices, expressed in the
         group's orientation. The identity is always the first element.
@@ -301,7 +335,8 @@ class SymmGroup:
         The number of distinct positions is ``order`` divided by the number
         of rotations that leave *point* in place: a point off every symmetry
         axis gives ``order`` positions, a point on an ``n``-fold axis gives
-        ``order / n``.
+        ``order / n``. This is why a solid's vertex/edge/face counts differ
+        from the group order (table in the module Notes).
 
         Parameters
         ----------

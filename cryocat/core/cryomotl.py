@@ -2666,6 +2666,12 @@ class Motl:
         ``"I"`` with a shift along z gives 60 copies at only 30 distinct
         positions. A true asymmetric unit lies off every symmetry axis.
 
+        The number of subunits is the group order (12/24/60 for
+        ``"T"``/``"O"``/``"I"``; ``2 * n`` for ``"Dn"``), not the vertex count of
+        the matching solid (e.g. 12 for :class:`cryocat.utils.geom.Icosahedron`,
+        as used by :meth:`cryocat.analysis.structure.PolyhedralComplex.expand`).
+        See the :mod:`cryocat.utils.symmetry` module Notes.
+
         Warnings
         --------
         This method does not preserve a child class – it always returns

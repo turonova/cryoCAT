@@ -808,6 +808,16 @@ class Polyhedron:
         Midpoint coordinates of each edge.
     faces : numpy.ndarray, shape (F, 3)
         Centroid coordinates of each face.
+
+    Notes
+    -----
+    ``V``, ``E`` and ``F`` are not the order of the matching symmetry group
+    (e.g. an :class:`Icosahedron` has 12 vertices, but ``"I"`` has 60
+    rotations). Each vertex, edge midpoint or face centre sits on an
+    ``n``-fold spin axis, so the group's rotations move it to only
+    ``order / n`` distinct places: ``V = 60 / 5 = 12``, ``E = 60 / 2 = 30``,
+    ``F = 60 / 3 = 20`` for the icosahedron. Full table for all five solids:
+    :mod:`cryocat.utils.symmetry` module Notes.
     """
 
     n_vertices: int

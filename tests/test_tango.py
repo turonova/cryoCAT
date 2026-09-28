@@ -429,12 +429,153 @@ class TestSymmParticle:
         assert sp.category == 4
 
     def test_platonic_tetrahedron(self):
-        sp = SymmParticle(np.eye(3), np.zeros(3), symm="tetra")
-        assert sp.category == "tetrahedron"
+        # category is now the Symmetry group letter; kind holds the specific solid.
+        sp = SymmParticle(np.eye(3), np.zeros(3), symm="T")
+        assert sp.category == "T"
+        assert sp.kind == "tetrahedron"
 
     def test_platonic_octahedron(self):
-        sp = SymmParticle(np.eye(3), np.zeros(3), symm="octa")
-        assert sp.category == "octahedron"
+        sp = SymmParticle(np.eye(3), np.zeros(3), symm="O")
+        assert sp.category == "O"
+        assert sp.kind == "octahedron"
+
+    def test_cyclic_symmetry_has_no_kind(self):
+        sp = SymmParticle(np.eye(3), np.zeros(3), symm=4)
+        assert sp.kind is None
+
+
+# ===========================================================================
+# SymmParticle: Symmetry type consistency (added 2026-09-25)
+# ===========================================================================
+
+
+class TestSymmParticleSymmetryType:
+    """SymmParticle accepts only the canonical Symmetry type (as_symmetry); the
+    legacy free-text words ('tetra', 'octa', 'cube', 'ico', 'dodeca') were
+    removed 2026-09-28 and now raise a ValueError naming their canonical
+    replacement (see TestLegacySymmWordsRejected below). A `kind` parameter
+    (mirrors SymmGroup.to_polyhedron) picks between the two solids sharing a
+    group letter (O: octahedron/cube, I: icosahedron/dodecahedron).
+    """
+
+    def test_bare_letter_uses_default_kind(self):
+        # Default kind matches SymmGroup.to_polyhedron()'s defaults: Octahedron / Icosahedron.
+        assert SymmParticle(np.eye(3), np.zeros(3), symm="O").kind == "octahedron"
+        assert SymmParticle(np.eye(3), np.zeros(3), symm="I").kind == "icosahedron"
+
+    def test_kind_selects_alternate_solid(self):
+        sp_cube = SymmParticle(np.eye(3), np.zeros(3), symm="O", kind="cube")
+        sp_octa = SymmParticle(np.eye(3), np.zeros(3), symm="O", kind="octahedron")
+        assert sp_cube.category == sp_octa.category == "O"
+        assert sp_cube.kind == "cube"
+        assert sp_cube.solid.shape != sp_octa.solid.shape  # 8 vs 6 vertices
+
+    def test_kind_for_cyclic_raises(self):
+        with pytest.raises(ValueError, match="only applicable to Platonic"):
+            SymmParticle(np.eye(3), np.zeros(3), symm=4, kind="cube")
+
+    def test_unknown_kind_raises(self):
+        with pytest.raises(ValueError, match="Unknown kind"):
+            SymmParticle(np.eye(3), np.zeros(3), symm="O", kind="not_a_solid")
+
+    def test_dihedral_symmetry_not_supported(self):
+        with pytest.raises(NotImplementedError, match="[Dd]ihedral"):
+            SymmParticle(np.eye(3), np.zeros(3), symm="D3")
+
+    def test_similarity_symm_requires_matching_kind_not_just_category(self):
+        # Same category ("O") but different kind: must be rejected as incomparable,
+        # not silently compared (which would fail/mislead since vertex counts differ).
+        sp_cube = SymmParticle(np.eye(3), np.zeros(3), symm="O", kind="cube")
+        sp_octa = SymmParticle(np.eye(3), np.zeros(3), symm="O", kind="octahedron")
+        with pytest.raises(ValueError, match="don't match"):
+            sp_cube.similarity_symm(sp_octa)
+
+    def test_equip_symmetry_forwards_kind(self):
+        p = Particle(np.array([0.0, 0.0, 0.0]), np.zeros(3))
+        sp = SymmParticle.equip_symmetry(p, "O", kind="cube")
+        assert sp.category == "O"
+        assert sp.kind == "cube"
+
+
+# ===========================================================================
+# SymmParticle: legacy word rejection (added 2026-09-28)
+# ===========================================================================
+
+
+class TestLegacySymmWordsRejected:
+    """The free-text words 'tetra'/'octa'/'cube'/'ico'/'dodeca' formerly
+    accepted as `symm` (and kept as aliases in the 2026-09-25 refactor, see
+    TestSymmParticleSymmetryType) were removed 2026-09-28: tango.py now
+    requires the canonical Symmetry form exclusively. Each legacy word must
+    raise a ValueError naming its canonical replacement, regardless of
+    whether `kind` is also given.
+    """
+
+    @pytest.mark.parametrize(
+        "legacy, hint",
+        [
+            ("tetra", "symm='T'"),
+            ("octa", "symm='O'"),
+            ("cube", "symm='O'"),
+            ("ico", "symm='I'"),
+            ("dodeca", "symm='I'"),
+        ],
+    )
+    def test_legacy_word_raises_with_migration_hint(self, legacy, hint):
+        with pytest.raises(ValueError, match="no longer accepted"):
+            SymmParticle(np.eye(3), np.zeros(3), symm=legacy)
+        # The error message must name the canonical replacement, not just reject.
+        try:
+            SymmParticle(np.eye(3), np.zeros(3), symm=legacy)
+        except ValueError as exc:
+            assert hint in str(exc)
+
+    def test_legacy_word_raises_even_with_matching_kind(self):
+        # Legacy-word rejection happens before kind is ever consulted, so a
+        # kind that would have been consistent with the old word still raises.
+        with pytest.raises(ValueError, match="no longer accepted"):
+            SymmParticle(np.eye(3), np.zeros(3), symm="cube", kind="cube")
+
+    def test_legacy_word_raises_through_get_symm_parameters(self):
+        # Same rejection must be visible through the TwistDescriptor entry point,
+        # not just at the SymmParticle level.
+        with pytest.raises(ValueError, match="no longer accepted"):
+            TwistDescriptor.get_symm_parameters(_make_single_particle_motl(), symm="ico")
+
+
+def _make_single_particle_motl():
+    """Minimal one-row Motl usable by get_symm_parameters/convert_to_particle_list."""
+    from cryocat.core.cryomotl import Motl
+
+    df = pd.DataFrame({col: [0.0] for col in Motl.motl_columns})
+    df["subtomo_id"] = [1.0]
+    df["tomo_id"] = [1.0]
+    return Motl(df)
+
+
+class TestGetSymmParameters:
+    """TwistDescriptor.get_symm_parameters, now Symmetry-typed with a `kind` param."""
+
+    def test_none_symm_returns_none_none(self):
+        assert TwistDescriptor.get_symm_parameters(_make_single_particle_motl(), symm=None) == (None, None)
+
+    def test_cyclic_returns_int_category(self):
+        max_dis, category = TwistDescriptor.get_symm_parameters(_make_single_particle_motl(), symm=4)
+        assert category == 4
+        assert max_dis == pytest.approx(np.pi / 4, rel=1e-6)
+
+    def test_platonic_returns_letter_category(self):
+        _, category = TwistDescriptor.get_symm_parameters(_make_single_particle_motl(), symm="T")
+        assert category == "T"
+
+    def test_kind_selects_alternate_solid(self):
+        _, category = TwistDescriptor.get_symm_parameters(_make_single_particle_motl(), symm="O", kind="cube")
+        assert category == "O"  # category is the group letter regardless of kind
+
+    def test_kind_forwarded_to_convert_to_particle_list(self):
+        # Canonical form + kind must resolve the same way at this level too.
+        _, category = TwistDescriptor.get_symm_parameters(_make_single_particle_motl(), symm="I", kind="dodecahedron")
+        assert category == "I"
 
 
 # ===========================================================================
@@ -614,6 +755,66 @@ class TestSymmParticleSimilaritySymm:
         sp = SymmParticle(np.eye(3), np.zeros(3), symm=n)
         assert sp.similarity_symm(sp) == pytest.approx(1.0, rel=1e-6)
 
+    @pytest.mark.parametrize("kind", ["icosahedron", "dodecahedron"])
+    def test_icosahedral_equivalent_orientations_score_one(self, kind):
+        # A particle turned by any of the 60 icosahedral symmetry rotations is
+        # indistinguishable from the original, so both the icosahedron and the
+        # dodecahedron ("I", kind="icosahedron"/"dodecahedron") must score 1.
+        # Regression test for the Dodecahedron alignment fix (2026-09-24): the
+        # dodecahedron previously scored 1 for only 12 of the 60.
+        from cryocat.utils.symmetry import IcosahedralGroup
+
+        ref = SymmParticle(np.eye(3), np.zeros(3), symm="I", kind=kind)
+        for g in IcosahedralGroup().matrices:
+            other = SymmParticle(g, np.zeros(3), symm="I", kind=kind)
+            assert ref.similarity_symm(other) == pytest.approx(1.0, abs=1e-6)
+
+
+# ===========================================================================
+# SymmParticle custom_rot
+# ===========================================================================
+
+
+class TestSymmParticleCustomRot:
+    @pytest.mark.parametrize(
+        "symm, kind",
+        [("T", None), ("O", "octahedron"), ("O", "cube"), ("I", "icosahedron"), ("I", "dodecahedron")],
+    )
+    def test_rotation_object_and_matrix_give_same_solid(self, symm, kind):
+        # custom_rot must be applied exactly once, whether it is passed as a
+        # scipy Rotation or as the equivalent 3x3 matrix. Regression test for
+        # the double application of Rotation inputs (fixed 2026-09-24).
+        custom = R.from_euler("zxz", [20.0, 35.0, 50.0], degrees=True)
+        particle_rot = R.from_euler("zxz", [10.0, 60.0, 5.0], degrees=True).as_matrix()
+        sp_obj = SymmParticle(particle_rot, np.zeros(3), symm=symm, kind=kind, custom_rot=custom)
+        sp_mat = SymmParticle(particle_rot, np.zeros(3), symm=symm, kind=kind, custom_rot=custom.as_matrix())
+        assert np.allclose(sp_obj.solid, sp_mat.solid)
+
+    def test_custom_rot_applied_once(self):
+        # With an identity particle rotation, the solid must equal the
+        # canonical vertices turned once by custom_rot.
+        from cryocat.utils import geom
+
+        custom = R.from_euler("z", 30.0, degrees=True)
+        sp = SymmParticle(np.eye(3), np.zeros(3), symm="I", kind="icosahedron", custom_rot=custom)
+        expected = geom.Icosahedron().vertices @ custom.as_matrix().T
+        assert np.allclose(sp.solid, expected)
+
+    def test_previous_dodecahedron_frame_recoverable(self):
+        # The pre-fix 'dodeca' frame (turned 90 deg about z) is documented as
+        # recoverable with custom_rot = -90 deg about z. The resulting solid
+        # must then no longer be preserved by all 60 icosahedral rotations
+        # (only the 12 tetrahedral ones), matching the old behaviour.
+        from cryocat.utils.symmetry import IcosahedralGroup
+
+        old_frame = R.from_euler("z", -90.0, degrees=True)
+        ref = SymmParticle(np.eye(3), np.zeros(3), symm="I", kind="dodecahedron", custom_rot=old_frame)
+        scores = [
+            ref.similarity_symm(SymmParticle(g, np.zeros(3), symm="I", kind="dodecahedron", custom_rot=old_frame))
+            for g in IcosahedralGroup().matrices
+        ]
+        assert sum(s == pytest.approx(1.0, abs=1e-6) for s in scores) == 12
+
 
 # ===========================================================================
 # Descriptor.filter_features
@@ -747,6 +948,21 @@ class TestTwistDescriptorProcessTwist:
         result = TwistDescriptor.process_tomo_twist(_make_nn())
         for col in ["twist_so_x", "twist_so_y", "twist_so_z", "twist_x", "twist_y", "twist_z"]:
             assert np.isfinite(result[col]).all(), f"{col} contains non-finite values"
+
+    def test_cyclic_symm_category_still_computes_angular_score(self):
+        # symm_category as an int (cyclic) must keep working exactly as before.
+        result = TwistDescriptor.process_tomo_twist(_make_nn(), symm=4, symm_max_value=np.pi / 4, symm_category=4)
+        assert "angular_score" in result.columns
+        assert np.isfinite(result["angular_score"]).all()
+
+    def test_platonic_symm_category_raises_not_implemented(self):
+        # Regression test (added 2026-09-25): after self.category became the
+        # Symmetry group letter ("T"/"O"/"I"), geom.angular_score_for_c_symmetry
+        # would otherwise silently misuse it as a cyclic order instead of
+        # raising the ValueError it used to raise for the old word-based
+        # category ("tetrahedron", ...). This guard keeps the failure loud.
+        with pytest.raises(NotImplementedError, match="Platonic"):
+            TwistDescriptor.process_tomo_twist(_make_nn(), symm="T", symm_max_value=1.0, symm_category="T")
 
     def test_identity_rotation_zero_so_twist(self):
         nn = _make_nn()
@@ -903,6 +1119,37 @@ class TestTwistDescriptorRadiusStorage:
         td = TwistDescriptor(input_motl=motl, nn_radius=50.0, build_unique_desc=False)
         assert td.nn_radius == pytest.approx(50.0)
         assert td.radius_source == "given"
+
+    def test_kind_reaches_symm_particle_through_constructor(self):
+        # Regression test (2026-09-28): TwistDescriptor.__init__ never had a
+        # `kind` parameter even after get_symm_parameters/
+        # get_nn_twist_stats_within_radius gained one, so `kind` could never
+        # reach SymmParticle through the class the GUI actually instantiates.
+        # A Platonic symm_category must still hit the process_tomo_twist guard
+        # (§10.4) rather than raising a plain TypeError for the unknown `kind`
+        # keyword, which is what happened before this fix.
+        from cryocat.core.cryomotl import Motl
+
+        df = pd.DataFrame({col: [1.0, 2.0] for col in Motl.motl_columns})
+        df["subtomo_id"] = [1.0, 2.0]
+        df["tomo_id"] = [1.0, 1.0]
+        motl = Motl(df)
+
+        with pytest.raises(NotImplementedError, match="Platonic"):
+            TwistDescriptor(input_motl=motl, nn_radius=50.0, symm="O", kind="cube", build_unique_desc=False)
+
+    def test_cyclic_symm_reaches_symm_particle_through_constructor(self):
+        # Same entry point, cyclic path: must still compute angular_score end-to-end.
+        from cryocat.core.cryomotl import Motl
+
+        df = pd.DataFrame({col: [1.0, 2.0] for col in Motl.motl_columns})
+        df["subtomo_id"] = [1.0, 2.0]
+        df["tomo_id"] = [1.0, 1.0]
+        motl = Motl(df)
+
+        td = TwistDescriptor(input_motl=motl, nn_radius=50.0, symm=4, build_unique_desc=False)
+        assert "angular_score" in td.df.columns
+        assert np.isfinite(td.df["angular_score"]).all()
 
     def test_nn_radius_attribute_exists_after_file_load(self, tmp_path):
         df = _minimal_twist_df({"twist_x": [3.0], "twist_y": [4.0], "twist_z": [0.0]})

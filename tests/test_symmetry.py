@@ -651,3 +651,74 @@ class TestFromPolyhedron:
         misaligned.vertices = misaligned.vertices @ rot.from_euler("z", 90.0, degrees=True).as_matrix().T
         with pytest.raises(ValueError, match="does not leave its vertices unchanged"):
             SymmGroup.from_polyhedron(misaligned)
+
+
+# ---------------------------------------------------------------------------
+# Group order vs. solid counts (plan point 3: "document the mismatch")
+# ---------------------------------------------------------------------------
+
+class TestOrderVersusSolidCounts:
+    """Pin the relationship documented in the ``symmetry`` module Notes.
+
+    The group *order* counts rotations (T 12, O 24, I 60); a Platonic solid's
+    vertex/edge/face counts are smaller, because every vertex, edge midpoint
+    and face centre sits on an ``n``-fold axis and so only lands on
+    ``order / n`` distinct places. ``TestSymmGroupOrbit`` already covers the
+    icosahedral orbit sizes; here every solid of T, O and I is checked against
+    its own declared counts.
+    """
+
+    @pytest.mark.parametrize(
+        "letter, group_cls, order",
+        [("T", TetrahedralGroup, 12), ("O", OctahedralGroup, 24), ("I", IcosahedralGroup, 60)],
+    )
+    def test_as_symmetry_order_is_group_order(self, letter, group_cls, order):
+        # as_symmetry and SymmGroup report the same number: the rotation count.
+        from cryocat.utils.geom import as_symmetry
+
+        assert as_symmetry(letter) == (letter, order)
+        assert group_cls.order == order
+        assert len(group_cls().matrices) == order
+
+    @pytest.mark.parametrize(
+        "group_cls, solid_cls, folds",
+        [
+            # folds = spin-axis fold through (vertex, edge midpoint, face centre)
+            (TetrahedralGroup, Tetrahedron, (3, 2, 3)),
+            (OctahedralGroup, Octahedron, (4, 2, 3)),
+            (OctahedralGroup, Cube, (3, 2, 4)),
+            (IcosahedralGroup, Icosahedron, (5, 2, 3)),
+            (IcosahedralGroup, Dodecahedron, (3, 2, 5)),
+        ],
+    )
+    def test_solid_counts_are_order_over_fold(self, group_cls, solid_cls, folds):
+        group = group_cls()
+        solid = solid_cls()
+        features = (solid.vertices, solid.edges, solid.faces)
+        declared = (solid.n_vertices, solid.n_edges, solid.n_faces)
+        for points, n_declared, fold in zip(features, declared, folds):
+            # The solid's declared count follows the counting rule order / fold ...
+            assert n_declared == group.order // fold
+            assert len(points) == n_declared
+            # ... exactly `fold` rotations leave one such point in place ...
+            n_fixed = sum(np.allclose(m @ points[0], points[0], atol=1e-9) for m in group.matrices)
+            assert n_fixed == fold
+            # ... and the orbit of that one point is the whole feature set.
+            orbit = group.orbit(points[0])
+            assert len(orbit) == n_declared
+            assert _check_symmetry(group.matrices, points)
+
+    @pytest.mark.parametrize("group_cls", [TetrahedralGroup, OctahedralGroup])
+    def test_generic_point_gives_order_copies(self, group_cls):
+        # A point off every axis lands on `order` places (I is covered in
+        # TestSymmGroupOrbit), as split_in_asymmetric_subunits assumes.
+        assert len(group_cls().orbit([0.3, 0.1, 0.9])) == group_cls.order
+
+    @pytest.mark.parametrize("n", [2, 3, 6])
+    def test_dihedral_as_symmetry_returns_n_not_group_order(self, n):
+        # For "Dn", as_symmetry returns n, while DihedralGroup(n) has 2n rotations.
+        from cryocat.utils.geom import as_symmetry
+
+        assert as_symmetry(f"D{n}") == ("D", n)
+        assert DihedralGroup(n).order == 2 * n
+        assert len(get_symmetry_rotations(f"D{n}")) == 2 * n

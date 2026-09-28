@@ -28,6 +28,8 @@ from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.utils.geom import Matrix
 from cryocat.utils.classutils import get_classes_from_names, get_class_names_by_parent
+from cryocat.utils.symmetry import SYMMETRY_GROUPS
+from cryocat._types import Symmetry
 from typing import Literal
 from cryocat.analysis import visplot
 
@@ -550,13 +552,102 @@ class Particle:
 ##### Subclass for symmetric particles #####
 
 
+#: Legacy free-text words formerly accepted by SymmParticle, mapped to the
+#: canonical Symmetry group letter and geom.Polyhedron "kind" name. No longer
+#: accepted as input (removed 2026-09-28) — kept only to build a helpful
+#: migration error message when one of these words is detected in `symm`.
+_LEGACY_SYMM_WORDS: dict[str, tuple[str, str]] = {
+    "tetra": ("T", "tetrahedron"),
+    "octa": ("O", "octahedron"),
+    "cube": ("O", "cube"),
+    "ico": ("I", "icosahedron"),
+    "dodeca": ("I", "dodecahedron"),
+}
+
+#: Default geom.Polyhedron "kind" for each Platonic group letter, used when
+#: *kind* is not given (mirrors SymmGroup.to_polyhedron()'s own defaults).
+_DEFAULT_KIND: dict[str, str] = {"T": "tetrahedron", "O": "octahedron", "I": "icosahedron"}
+
+_VALID_KINDS = frozenset({"tetrahedron", "octahedron", "cube", "icosahedron", "dodecahedron"})
+
+
+def _parse_symm_spec(symm: Symmetry | None, kind: str | None):
+    """Resolve a (symm, kind) pair to a cyclic order or a Platonic (letter, kind).
+
+    Parameters
+    ----------
+    symm : Symmetry or None
+        Symmetry specification, in the canonical :data:`cryocat._types.Symmetry`
+        form: ``"T"``, ``"O"``, ``"I"`` for Platonic solids, or ``"CN"``/a bare
+        int for cyclic C_N symmetry. Parsed via :func:`cryocat.utils.geom.as_symmetry`.
+        The legacy free-text words this module used to accept (``'tetra'``,
+        ``'octa'``, ``'cube'``, ``'ico'``, ``'dodeca'``) are no longer valid
+        input; passing one raises a :class:`ValueError` naming its canonical
+        replacement.
+    kind : str or None
+        For O/I, which :mod:`cryocat.utils.geom` solid to use:
+        ``"octahedron"``/``"cube"`` for O, ``"icosahedron"``/``"dodecahedron"``
+        for I. Ignored (must be None) for cyclic symmetry.
+
+    Returns
+    -------
+    tuple
+        ``("cyclic", n)`` or ``("platonic", letter, kind_name)``.
+
+    Raises
+    ------
+    ValueError
+        If *symm* is not a recognised :data:`Symmetry` specification (this
+        includes the removed legacy words, which get a message naming their
+        canonical replacement), or if *kind* is given for cyclic symmetry.
+    NotImplementedError
+        If *symm* specifies dihedral symmetry (not supported here yet).
+    """
+    resolved_kind = None
+    if kind is not None:
+        resolved_kind = kind.strip().lower()
+        if resolved_kind not in _VALID_KINDS:
+            raise ValueError(f"Unknown kind {kind!r}; expected one of {sorted(_VALID_KINDS)}.")
+
+    if isinstance(symm, str):
+        word = symm.strip().lower()
+        for prefix, (letter, kind_name) in _LEGACY_SYMM_WORDS.items():
+            if prefix in word:
+                hint = f"symm={letter!r}" + ("" if letter == "T" else f", kind={kind_name!r}")
+                raise ValueError(
+                    f"symm={symm!r}: legacy word-based symmetry specifications are no longer "
+                    f"accepted; use the canonical Symmetry form instead ({hint})."
+                )
+
+    letter, order = geom.as_symmetry(symm)
+    if letter == "D":
+        raise NotImplementedError(
+            f"Dihedral symmetry ({symm!r}) is not supported by SymmParticle yet; only C, T, O, I are."
+        )
+    if letter == "C":
+        if resolved_kind is not None:
+            raise ValueError(f"kind={kind!r} is only applicable to Platonic (T/O/I) symmetry, not cyclic.")
+        return "cyclic", order
+    return "platonic", letter, (resolved_kind or _DEFAULT_KIND[letter])
+
+
 class SymmParticle(Particle):
     """Particle subclass that additionally encodes point-group symmetry.
 
     See :meth:`__init__` for parameter details.
     """
 
-    def __init__(self, rotation, position, tomo_id=None, motl_fid=None, particle_id=None, symm=None, custom_rot=None):
+    def __init__(
+        self,
+        rotation,
+        position,
+        tomo_id=None,
+        motl_fid=None,
+        particle_id=None,
+        symm: Symmetry | None = None,
+        kind: str | None = None,
+        custom_rot=None,
+    ):
         """Initialize a SymmParticle with rotation, position, and symmetry.
 
         Parameters
@@ -572,11 +663,32 @@ class SymmParticle(Particle):
             Column name used as an additional label.  Default is None.
         particle_id : int, optional
             Particle identifier.  Default is None.
-        symm : str or int, optional
-            Symmetry specification.  Accepted strings: ``'tetra'``, ``'octa'``,
-            ``'cube'``, ``'ico'``, ``'dodeca'`` for Platonic solids, or ``'cN'``
-            for cyclic C_N symmetry.  An integer ``n > 1`` specifies cyclic C_n
-            symmetry.  Default is None.
+        symm : Symmetry, optional
+            Symmetry specification, in the canonical
+            :data:`cryocat._types.Symmetry` form: ``"T"``, ``"O"``, ``"I"``
+            for Platonic solids, ``"CN"`` or a bare integer ``n > 1`` for
+            cyclic C_n symmetry. Parsed via :func:`cryocat.utils.geom.as_symmetry`.
+            Dihedral symmetry is not supported yet.
+
+            The legacy free-text words this module used to accept (``'tetra'``,
+            ``'octa'``, ``'cube'``, ``'ico'``, ``'dodeca'``) are no longer
+            valid input; passing one raises a :class:`ValueError` naming its
+            canonical replacement (e.g. ``'octa'`` -> ``symm="O"``). Default
+            is None.
+        kind : str, optional
+            For ``symm="O"``/``"I"``, which :mod:`cryocat.utils.geom` solid to
+            use: ``"octahedron"`` (default) or ``"cube"`` for O,
+            ``"icosahedron"`` (default) or ``"dodecahedron"`` for I. Mirrors
+            :meth:`cryocat.utils.symmetry.SymmGroup.to_polyhedron`'s ``kind``.
+            Not applicable to cyclic symmetry. Default is None (the default
+            kind for the given group).
+
+            ``kind="dodecahedron"`` uses :class:`cryocat.utils.geom.Dodecahedron`,
+            whose canonical orientation is aligned with ``kind="icosahedron"``
+            (same symmetry axes). Before this alignment (2026-09-24) the
+            dodecahedron was turned 90° about z, so similarity scores computed
+            with earlier versions differ. The previous frame can be recovered
+            with ``custom_rot`` set to a rotation of -90° about z.
         custom_rot : np.ndarray or scipy.spatial.transform.Rotation, optional
             Rotation applied (once) to Platonic-solid vertices before orienting
             them with the particle rotation.  Not needed for cyclic (integer)
@@ -585,43 +697,31 @@ class SymmParticle(Particle):
         Raises
         ------
         ValueError
-            If the symmetry type is invalid or ``custom_rot`` is not a valid
-            rotation object or matrix.
+            If ``symm`` is not a recognised :data:`Symmetry` specification
+            (including a removed legacy word), if ``kind`` is unknown or given
+            for cyclic symmetry, or if ``custom_rot`` is not a valid rotation
+            object or matrix.
+        NotImplementedError
+            If ``symm`` specifies dihedral symmetry.
         """
         super().__init__(rotation, position, tomo_id, motl_fid, particle_id=particle_id)
 
         ## take care of symmetric part:
         platonic = False
         self.category = None
+        self.kind = None
 
-        if isinstance(symm, str):
-            if symm.__contains__("tetra"):
-                self.category = "tetrahedron"  # 1
-                vertices = geom.Tetrahedron().vertices
+        if symm is not None:
+            spec = _parse_symm_spec(symm, kind)
+            if spec[0] == "cyclic":
+                self.category = spec[1]
+                vertices = geom.n_gon_points(self.category)  # vertices lie in plane
+            else:
+                _, letter, kind_name = spec
+                self.category = letter
+                self.kind = kind_name
+                vertices = SYMMETRY_GROUPS[letter]().to_polyhedron(kind=kind_name).vertices
                 platonic = True
-            elif symm.__contains__("octa"):
-                self.category = "octahedron"  # 2
-                vertices = geom.Octahedron().vertices
-                platonic = True
-            elif symm.__contains__("cube"):
-                self.category = "cube"  # 3
-                vertices = geom.Cube().vertices
-                platonic = True
-            elif symm.__contains__("ico"):
-                self.category = "icosahedron"  # 4
-                vertices = geom.Icosahedron().vertices
-                platonic = True
-            elif symm.__contains__("dodeca"):
-                self.category = "dodecahedron"  # 5
-                vertices = geom.Dodecahedron().vertices
-                platonic = True
-            elif symm.startswith("c"):
-                self.category = int(re.findall(r"\d+", symm)[-1])
-                vertices = geom.n_gon_points(self.category)
-
-        elif isinstance(symm, (int, float, np.integer, np.floating)):
-            self.category = int(symm)
-            vertices = geom.n_gon_points(symm)  # vertices lie in plane
 
         if self.category is None or (not platonic and self.category == 1):
             raise ValueError(
@@ -656,16 +756,23 @@ class SymmParticle(Particle):
         Given the input particle's symmetry type, this function returns the associated maximum
         angular dissimilarity.
 
+        Notes
+        -----
+        Branches on ``self.kind`` (the specific solid), not ``self.category``
+        (the group letter, "O" or "I"): the vertex layout, and hence which
+        vertex pair is used, differs between the two solids sharing a group
+        letter (Octahedron/Cube for "O", Icosahedron/Dodecahedron for "I").
+
         Returns
         -------
         float
         """
-        if self.category in ["cube", "icosahedron"]:
+        if self.kind in ("cube", "icosahedron"):
 
             p1, p2 = self.solid[0], self.solid[2]
             return np.pi - geom.great_circle_distance(p1, p2)
 
-        elif self.category in ["tetrahedron", "octahedron", "dodecahedron"]:
+        elif self.kind in ("tetrahedron", "octahedron", "dodecahedron"):
 
             p1, p2 = self.solid[0], self.solid[1]
             return np.pi - geom.great_circle_distance(p1, p2)
@@ -689,13 +796,17 @@ class SymmParticle(Particle):
         Raises
         ------
         ValueError
-            If the symmetry types of the input particles don't match.
+            If the symmetry types of the input particles don't match. For
+            Platonic symmetry, both ``category`` (group letter) and ``kind``
+            (specific solid) must match, e.g. an Octahedron- and a
+            Cube-equipped particle both have ``category == "O"`` but are not
+            comparable.
 
         Returns
         -------
         float
         """
-        if self.category != other.category:
+        if self.category != other.category or self.kind != other.kind:
 
             raise ValueError("The symmetry tpyes of the input particles don't match!")
         else:
@@ -714,7 +825,7 @@ class SymmParticle(Particle):
             return 1 - sim_measure / max_val
 
     @staticmethod
-    def equip_symmetry(input_particle: Particle, symm, custom_rot=None):
+    def equip_symmetry(input_particle: Particle, symm: Symmetry, kind: str | None = None, custom_rot=None):
         """
         Equip an existing particle object with symmetry information.
 
@@ -722,10 +833,11 @@ class SymmParticle(Particle):
         ----------
         input_particle : Particle
             The input particle to be equipped with symmetry information.
-        symm : str or int
-            Refers to symmetry type. Can be one of the following:
-            - 'tetra', 'octa', 'cube', 'ico', 'dodeca' for platonic solids
-            - An integer n > 1 for cyclic groups C_n.
+        symm : Symmetry
+            Symmetry specification; see :meth:`SymmParticle.__init__`.
+        kind : str, optional
+            Which :mod:`cryocat.utils.geom` solid to use for O/I symmetry; see
+            :meth:`SymmParticle.__init__`. Default is None.
         custom_rot : numpy ndarray (3,3) or rotation object, optional
             Rotation matrix or rotation object describing the symmetry of the particle in the case of a platonic solid.
             Default is None.
@@ -740,14 +852,17 @@ class SymmParticle(Particle):
             input_particle.tomo_id,
             input_particle.motl_fid,
             input_particle.id,
-            symm,
-            custom_rot,
+            symm=symm,
+            kind=kind,
+            custom_rot=custom_rot,
         )
         return result
 
 
 # TODO - move as a function to cryomotl
-def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, symm=None, custom_rot=None):
+def convert_to_particle_list(
+    input_motl, motl_fid=None, subset_tomo_id=None, symm: Symmetry | None = None, kind: str | None = None, custom_rot=None
+):
     """Convert a Motl object to a list of Particle objects.
 
     Parameters
@@ -759,10 +874,13 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
         If None, the motl_fid attribute will be set to None for all particles. Default is None.
     subset_tomo_id : int or list, optional
         A tomo_id(s) that should be used. If None, the entire Motl will be used. Default is None.
-    symm : int or str, optional
-        Specifies symmetry of a particle. If int is passed, cyclic (C) symmetry is assumed. See SymParticle for more
-        details on str specifications. If specified, list of SymmParticle objects is created, instead of list of
-        Particle objects. Default is None.
+    symm : Symmetry, optional
+        Specifies symmetry of a particle; see :meth:`SymmParticle.__init__`.
+        If specified, a list of SymmParticle objects is created, instead of a
+        list of Particle objects. Default is None.
+    kind : str, optional
+        Which :mod:`cryocat.utils.geom` solid to use for O/I symmetry; see
+        :meth:`SymmParticle.__init__`. Default is None.
     custom_rot : np.array, optional
         The input custom_rot can be a rotation matrix for the case that the given particle symmetry does not align with
         the canonical options for platonic solids as defined in geom. This is not needed in the case where sym == n >1.
@@ -811,6 +929,7 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
                     motl_fid=features[i],
                     particle_id=tm.df.iloc[i]["subtomo_id"],
                     symm=symm,
+                    kind=kind,
                     custom_rot=custom_rot,
                 )
             )
@@ -1218,7 +1337,8 @@ class TwistDescriptor(Descriptor):
         input_motl=None,
         nn_radius: float | None = None,
         column_name: Literal["tomo_id", "object_id", "class", "geom1", "geom2", "geom3", "geom4", "geom5"] = "tomo_id",
-        symm=None,
+        symm: Symmetry | None = None,
+        kind: str | None = None,
         remove_qp: bool = False,
         remove_duplicates: bool = False,
         build_unique_desc=True,
@@ -1244,9 +1364,12 @@ class TwistDescriptor(Descriptor):
             neighbors will be searched in the objects with same "object_id". Note that one should ensure unique
             numbering among all tomograms in case "tomo_id" is not set, otherwise objects from different tomograms might
             be incorrectly grouped together. Default is "tomo_id".
-        symm : int or str, optional
+        symm : Symmetry, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
             values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
+        kind : str, optional
+            Which :mod:`cryocat.utils.geom` solid to use for O/I symmetry; see
+            :meth:`SymmParticle.__init__`. Default is None.
         remove_qp : bool, default=False
             Specifies whether to remove the query point during the nearest neighbor analysis. The parameter is relevant
             only if two motls are specified and it can happen that the nearest point is identical to the query point or
@@ -1284,7 +1407,13 @@ class TwistDescriptor(Descriptor):
                     self.radius_source = "unknown"
         elif input_motl is not None and isinstance(nn_radius, (float, int, np.floating, np.integer)):
             self.df = TwistDescriptor.get_nn_twist_stats_within_radius(
-                input_motl, nn_radius, column_name, symm, remove_qp=remove_qp, remove_duplicates=remove_duplicates
+                input_motl,
+                nn_radius,
+                column_name,
+                symm,
+                kind=kind,
+                remove_qp=remove_qp,
+                remove_duplicates=remove_duplicates,
             )
             self.nn_radius = float(nn_radius)
             self.radius_source = "given"
@@ -1475,8 +1604,19 @@ class TwistDescriptor(Descriptor):
             values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
         symm_max_value : float, optional
             Maximum dissimilarity for symmetry. Default is None.
-        symm_category : str, optional
-            Type of symmetry. Default is None.
+        symm_category : int or str, optional
+            Symmetry category as returned by :meth:`get_symm_parameters`
+            (i.e. ``SymmParticle.category``): an int for cyclic symmetry, or
+            the group letter ``"T"``/``"O"``/``"I"`` for Platonic symmetry.
+            Default is None.
+
+        Raises
+        ------
+        NotImplementedError
+            If *symm_category* is Platonic (a non-numeric group letter).
+            :func:`cryocat.utils.geom.angular_score_for_c_symmetry` only
+            supports cyclic symmetry; extending it to Platonic groups is
+            tracked separately and intentionally not addressed here.
 
         Returns
         -------
@@ -1494,6 +1634,15 @@ class TwistDescriptor(Descriptor):
         tomo_idx = t_nn.df[t_nn.column_name].to_numpy()
 
         if symm is not None:
+            if isinstance(symm_category, str):
+                # geom.angular_score_for_c_symmetry only supports cyclic
+                # symmetry; symm_category is a Platonic group letter here
+                # ("T"/"O"/"I"). Fail loudly rather than silently score as if
+                # cyclic of the same numeric order (see Notes above).
+                raise NotImplementedError(
+                    f"process_tomo_twist: angular_score is not yet supported for Platonic symmetry "
+                    f"(symm_category={symm_category!r}); only cyclic symmetry is."
+                )
             ang_scores = geom.angular_score_for_c_symmetry(
                 np.deg2rad(phi_qp), np.deg2rad(phi_nn), symm_category, symm_max_value
             )
@@ -1524,24 +1673,29 @@ class TwistDescriptor(Descriptor):
         return twist_df
 
     @staticmethod
-    def get_symm_parameters(input_motl, symm=None):
+    def get_symm_parameters(input_motl, symm: Symmetry | None = None, kind: str | None = None):
         """Get symmetry parameters (symmetry type, maximum dissimilarity) for a given input_motl.
 
         Parameters
         ----------
         input_motl : str or Motl
             The path to the input Motl file or Motl object to be loaded.
-        symm : int or str, optional
+        symm : Symmetry, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
             values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
+        kind : str, optional
+            Which :mod:`cryocat.utils.geom` solid to use for O/I symmetry; see
+            :meth:`SymmParticle.__init__`. Default is None.
 
         Returns
         -------
         tuple
         - max_dissimilarity : float
             The maximum dissimilarity for the given symmetry type.
-        - category : str
-            The symmetry type (e.g., 'tetrahedron', 'octahedron', etc.).
+        - category : int or str
+            The symmetry category (``SymmParticle.category``): an int for
+            cyclic symmetry, or the group letter ``"T"``/``"O"``/``"I"`` for
+            Platonic symmetry.
 
         """
         if not symm:
@@ -1553,12 +1707,18 @@ class TwistDescriptor(Descriptor):
             motl = cryomotl.Motl.load(input_motl)
 
         pm = motl.get_motl_subset(column_values=motl.df["subtomo_id"].iloc[0], column_name="subtomo_id")
-        part = convert_to_particle_list(pm, symm=symm)
+        part = convert_to_particle_list(pm, symm=symm, kind=kind)
         return part[0].max_dissimilarity(), part[0].category
 
     @staticmethod
     def get_nn_twist_stats_within_radius(
-        input_motl, nn_radius, column_name="tomo_id", symm=None, remove_qp=None, remove_duplicates=False
+        input_motl,
+        nn_radius,
+        column_name="tomo_id",
+        symm: Symmetry | None = None,
+        kind: str | None = None,
+        remove_qp=None,
+        remove_duplicates=False,
     ):
         """Compute twist descriptor for a given input_motl within a specified radius.
 
@@ -1574,9 +1734,12 @@ class TwistDescriptor(Descriptor):
             neighbors will be searched in the objects with same "object_id". Note that one should ensure unique
             numbering among all tomograms in case "tomo_id" is not set, otherwise objects from different tomograms might
             be incorrectly grouped together. Default is "tomo_id".
-        symm : int or str, optional
+        symm : Symmetry, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
             values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
+        kind : str, optional
+            Which :mod:`cryocat.utils.geom` solid to use for O/I symmetry; see
+            :meth:`SymmParticle.__init__`. Default is None.
         remove_qp : bool, optional
             If True, the query point is removed from the nearest neighbors in the DataFrame. Default is None.
         remove_duplicates : bool, default=False
@@ -1597,7 +1760,7 @@ class TwistDescriptor(Descriptor):
             remove_qp=remove_qp,
             remove_duplicates=remove_duplicates,
         )
-        symm_max_value, symm_category = TwistDescriptor.get_symm_parameters(input_motl=input_motl, symm=symm)
+        symm_max_value, symm_category = TwistDescriptor.get_symm_parameters(input_motl=input_motl, symm=symm, kind=kind)
         tomo_idx = nn.get_unique_values()
 
         results = []

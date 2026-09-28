@@ -10335,6 +10335,15 @@ class PolyhedralComplex(SymmetricComplex):
         ------
         ValueError
             If *shift_vecs* has wrong shape or a required column is missing.
+
+        Notes
+        -----
+        The number of subparticles per particle is the solid's vertex, edge
+        or face count (icosahedron: 12, 30 or 20), not the group order (60
+        for ``"I"``) used by :meth:`split_in_asymmetric_units`. Corners, edge
+        midpoints and face centres lie on symmetry axes, so the group's
+        rotations only produce ``order / n`` distinct places for them (table
+        in the :mod:`cryocat.utils.symmetry` module Notes).
         """
         if shift_vecs is None:
             shift_vecs = self.feature_vectors(mode=mode, project_to_sphere=project_to_sphere, radius=radius)
@@ -10417,6 +10426,13 @@ class PolyhedralComplex(SymmetricComplex):
         -------
         MotlSource
             Expanded motive list with 12, 24 or 60 subunits per particle.
+
+        Notes
+        -----
+        One subunit per group rotation (60 for ``"I"``), which differs from
+        the 12/30/20 subparticles :meth:`expand` places on the icosahedron's
+        vertices/edges/faces; see the :mod:`cryocat.utils.symmetry` module
+        Notes.
         """
         group = self.symmetry_group()
         split = self.motl.split_in_asymmetric_subunits(
