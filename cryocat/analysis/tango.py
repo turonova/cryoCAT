@@ -682,7 +682,7 @@ class SymmParticle(Particle):
         Compute angular similarity between two symmetric particles in an unambiguous manner.
 
         Parameters
-        -----------
+        ----------
         max : float, optional
             If not None, the maximum dissimilarity is set to the input value.
             This is designed to accelerate computations by computing max only once.

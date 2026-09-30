@@ -1520,14 +1520,12 @@ class Mesh(DiscreteSurface):
     def triangle_sizes(self) -> "pd.DataFrame":
         """Return a DataFrame with per-triangle longest edge length and area.
 
-        Columns
+        Returns
         -------
-        triangle_index : int
-            Zero-based triangle index.
-        longest_edge : float
-            Length of the longest edge of the triangle.
-        area : float
-            Area of the triangle.
+        pandas.DataFrame
+            One row per triangle with columns ``triangle_index`` (int, zero-based
+            triangle index), ``longest_edge`` (float, length of the longest edge)
+            and ``area`` (float, area of the triangle).
 
         Raises
         ------
@@ -3328,6 +3326,7 @@ class Mesh(DiscreteSurface):
             Only supported for ``format='vtp'``; raises for all other formats.
 
             Curvature fields saved (VTP only):
+
             - Scalars: mean_curvature, gaussian_curvature, k1, k2, curvature_anisotropy,
               shape_index, curvedness, shape_category
             - Vectors: normals, principal_direction_1, principal_direction_2

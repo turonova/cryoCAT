@@ -327,8 +327,10 @@ def save_as_svg(
         traces were handled.  The caller is responsible for surfacing this to
         the user.
 
-    Notes on supported trace types
-    --------------------------------
+    Notes
+    -----
+    **Supported trace types**
+
     ``scatter3d``
         Fully supported.  Points are projected; line and marker style, colour,
         colourscale+range, marker size, ``connectgaps``, legend name and
@@ -340,8 +342,8 @@ def save_as_svg(
         Not supported.  These traces are silently omitted; their types are
         returned in ``skipped``.
 
-    Axis normalisation
-    ------------------
+    **Axis normalisation**
+
     Plotly rescales data before applying the camera according to
     ``scene.aspectmode`` (default ``"auto"`` / ``"cube"``).  This function
     applies the same normalisation so that a figure with *x* spanning 400

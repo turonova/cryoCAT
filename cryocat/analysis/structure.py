@@ -487,17 +487,15 @@ class Chain:
         pandas.DataFrame
             One row per step; *n* particles → *n* − 1 rows.
 
-            ========================  ========  ==========================================
-            ``<column_name>``         —         value of ``self.column_name`` (e.g. tomo_id)
-            ``chain_id``              —         value of ``self.chain_id_col``
-            ``step``                  —         ``order_id_col`` value of the upstream
-                                                particle
-            ``step_dist``             motl's own units    ``step_dist_col`` of the upstream particle;
-                                                NaN when the column is absent
-            ``angular_distance``      degrees   SO(3) geodesic distance between orientations
-            ``cone_distance``         degrees   angle between z-axes (normal-vector distance)
-            ``in_plane_distance``     degrees   in-plane rotation component
-            ========================  ========  ==========================================
+            ========================  ================  =========================================================================
+            ``<column_name>``         —                 value of ``self.column_name`` (e.g. tomo_id)
+            ``chain_id``              —                 value of ``self.chain_id_col``
+            ``step``                  —                 ``order_id_col`` value of the upstream particle
+            ``step_dist``             motl's own units  ``step_dist_col`` of the upstream particle; NaN when the column is absent
+            ``angular_distance``      degrees           SO(3) geodesic distance between orientations
+            ``cone_distance``         degrees           angle between z-axes (normal-vector distance)
+            ``in_plane_distance``     degrees           in-plane rotation component
+            ========================  ================  =========================================================================
 
         Notes
         -----
@@ -6596,23 +6594,23 @@ class PleomorphicSurface:
         pandas.DataFrame
             Columns per face:
 
-            ``tomo_id``, ``object_id`` — identity, from the face record.
-            ``face_id`` — face identifier.
-            ``size`` — observed boundary length (number of half-edges).
-            ``is_merged`` — True when the median interior angle deviates from
-                the ideal n-gon value by more than 20°.
-            ``n_reflex`` — count of reflex vertices (turn angle < −30° in the
-                minority winding direction); the raw signal driving ``n_missing``.
-            ``n_missing`` — inferred missing trivalent blocks
-                (``n_reflex // 3``); 0 when ``is_merged`` is False or the reflex
-                count is not a multiple of 3.
-            ``n_faces_recovered`` — faces that would be restored: 0 when
-                ``n_missing == 0``; ``1 + 2 * n_missing`` otherwise (Euler:
-                each re-inserted unit adds ΔV=+1, ΔE=+3 → ΔF=+2, Δχ=0).
-            ``recovered_face_size`` — majority observed face size for this
-                assembly (the expected size of each recovered face); NaN when
-                ``n_missing == 0`` or the assembly size distribution has no
-                unique mode.
+            - ``tomo_id``, ``object_id`` — identity, from the face record.
+            - ``face_id`` — face identifier.
+            - ``size`` — observed boundary length (number of half-edges).
+            - ``is_merged`` — True when the median interior angle deviates from
+              the ideal n-gon value by more than 20°.
+            - ``n_reflex`` — count of reflex vertices (turn angle < −30° in the
+              minority winding direction); the raw signal driving ``n_missing``.
+            - ``n_missing`` — inferred missing trivalent blocks
+              (``n_reflex // 3``); 0 when ``is_merged`` is False or the reflex
+              count is not a multiple of 3.
+            - ``n_faces_recovered`` — faces that would be restored: 0 when
+              ``n_missing == 0``; ``1 + 2 * n_missing`` otherwise (Euler:
+              each re-inserted unit adds ΔV=+1, ΔE=+3 → ΔF=+2, Δχ=0).
+            - ``recovered_face_size`` — majority observed face size for this
+              assembly (the expected size of each recovered face); NaN when
+              ``n_missing == 0`` or the assembly size distribution has no
+              unique mode.
 
         Raises
         ------
@@ -7923,6 +7921,7 @@ class PleomorphicSurface:
         method : {'mesh', 'mesh_curvatures', 'mesh_from_mrc', 'point_cloud', \
 'point_cloud_from_mrc', 'point_cloud_from_motl'}, default='mesh'
             Loader to use:
+
             - "mesh": geometry-only triangle mesh via :meth:`Mesh.read`
             - "mesh_curvatures": VTP triangle mesh with curvature fields via
               :meth:`Mesh.read_curvatures`

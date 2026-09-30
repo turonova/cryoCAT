@@ -2542,7 +2542,7 @@ def run_analysis(
         cross-correlation scores in `analyze_rotations`.
 
     Notes
-    -------
+    -----
     - Writes output files for each processed index:
         * '<output_base>_scores.em' (cross-correlation coefficient map)
         * '<output_base>_angles.em' (best-angle index map)

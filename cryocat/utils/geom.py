@@ -1770,8 +1770,8 @@ def angular_score_for_c_symmetry(
     """
     Computes an angular similarity score for arrays of in-plane angles, based on rotational symmetry.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     inplane_1 : ArrayLike
         First set of in-plane angles (in radians). Normalized via
         :func:`numpy.atleast_1d` / :func:`numpy.asarray`.
@@ -1783,8 +1783,8 @@ def angular_score_for_c_symmetry(
     max_val : float, optional
         Maximum possible angular distance for normalization.
 
-    Returns:
-    --------
+    Returns
+    -------
     np.ndarray: Array of angular similarity scores in [0, 1].
     """
     _, symm = as_symmetry(cyclic_symmetry)
@@ -2512,18 +2512,19 @@ def point_ellipsoid_distance(
 ) -> float:
     """Computes the shortest distance from a point p to the surface of an ellipsoid.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     p : ArrayLike
         The 3D point in space. Normalized via :func:`numpy.asarray`.
     params : ArrayLike
-        The ellipsoid parameters in the following order:
-        ["cx", "cy", "cz", "rx", "ry", "rz",
-         "ev1x", "ev1y", "ev1z", "ev2x", "ev2y", "ev2z",
-         "ev3x", "ev3y", "ev3z", "p1", ..., "p10"]
+        The ellipsoid parameters in the following order::
 
-    Returns:
-    --------
+            ["cx", "cy", "cz", "rx", "ry", "rz",
+             "ev1x", "ev1y", "ev1z", "ev2x", "ev2y", "ev2z",
+             "ev3x", "ev3y", "ev3z", "p1", ..., "p10"]
+
+    Returns
+    -------
     float
         The shortest distance from the point to the ellipsoid surface.
     """
@@ -3664,14 +3665,14 @@ def orthonormal_frame(v1: ArrayLike, v2: ArrayLike) -> np.ndarray:
     """Construct an orthonormal basis from two non-collinear vectors
 
     Parameters
-    -----------
+    ----------
     v1 : numpy.ndarray 
         First inputs vector
     v2 : numpy.ndarray
         Second input vector
 
     Returns
-    --------
+    -------
     numpy.ndarray
         Matrix of three vectors representing the orthonormal basis
     

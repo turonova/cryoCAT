@@ -168,7 +168,7 @@ def sort_files_by_idx(
         An array of file names sorted according to the specified order of indices.
 
     Raises
-    -------
+    ------
     ValueError
         If idx_list and file_list aren't of list type.
         If idx_list doesn't contain only integers, or if file_list doesn't contain only strings.
@@ -231,7 +231,7 @@ def get_files_prefix_suffix(
         A list of filenames that match the given prefix and suffix criteria.
 
     Raises
-    -------
+    ------
     ValueError
         If the directory specified by ``dir_path`` does not exist.
 
@@ -376,18 +376,18 @@ def fileformat_replace_pattern(
     'some_text_079_rest'
 
     >>> fileformat_replace_pattern("file_/$A/$B.txt", 123, "C")
-    ValueError: The format file_/$A/$B.txt does not contain any sequence of \$ followed by C.
+    ValueError: The format file_/$A/$B.txt does not contain any sequence of $ followed by C.
 
     >>> fileformat_replace_pattern("file_/$A/$B.txt", 12345, "A")
-    ValueError: Number '12345' has more digits than string '\$A'.
+    ValueError: Number '12345' has more digits than string '$A'.
     """
 
-    pattern = f"\$(?:{test_letter})+"
+    pattern = rf"\$(?:{test_letter})+"
     findings = re.findall(pattern, filename_format)
     if not findings:
         if raise_error:
             raise ValueError(
-                f"The format {filename_format} does not contain any sequence of \$ followed by {test_letter}."
+                f"The format {filename_format} does not contain any sequence of \\$ followed by {test_letter}."
             )
         else:
             return filename_format
@@ -704,7 +704,7 @@ def one_value_per_line_read(
         A ndarray with values of the type data_type.
 
     Raises
-    -------
+    ------
     ValueError
         If file does not exist or if specified from input_path is not readable
     """
@@ -1498,7 +1498,7 @@ def indices_load(
         An array of indices, adjusted based on the input data and the numbered_from_1 flag.
 
     Raises
-    -------
+    ------
     ValueError
         If input data isn't either a path to valid file either a list/array
     """
@@ -1800,8 +1800,8 @@ def cmm_read(input_path: PathOrStr) -> pd.DataFrame:
 def marker_coords_load(input_data: DataSource | TripletLike) -> pd.DataFrame:   #str | np.ndarray | pd.DataFrame | list[float]) -> pd.DataFrame:
     """Extract 3D coordinates of points from various sources.
 
-    Paramerters
-    ------------
+    Parameters
+    ----------
     input_data : DataSource or TripletLike
         The input data to load. If a pandas DataFrame is provided, it is assumed to already contain the coordinates data
         with the header containing "x", "y" and "z" columns. If a numpy ndarray is provided, the shape should be Nx3, where
@@ -1812,22 +1812,22 @@ def marker_coords_load(input_data: DataSource | TripletLike) -> pd.DataFrame:   
         for each coordinate.
 
     Returns
-    --------
+    -------
     pd.DataFrame
         A DataFrame containing the 3D coordinates of each point. Columns will be named as ["x", "y", "z"].
     
     Raises
-    -------
+    ------
     ValueError
         If the number of columns does not match
     FileNotFoundError
         If the file at the specified path does not exist.
     
-    See also
+    See Also
     --------
-    - :func:`cmm_read` for reading coordinates from a ChimeraX marker file.
-    - :func:`df_load` for loading data into a DataFrame from a DataFrame or numpy ndarray.
-    - :func:`cryocat.utils.geom.as_triplet` for converting a list, tuple, int or floats to a triplet of coordinates.
+    cmm_read : Read coordinates from a ChimeraX marker file.
+    df_load : Load data into a DataFrame from a DataFrame or numpy ndarray.
+    cryocat.utils.geom.as_triplet : Convert a list, tuple, int or float to a triplet of coordinates.
     """
     required_cols=["x", "y", "z"] # columns of the output dataframe
 
@@ -1891,7 +1891,7 @@ def write_coords_to_cmm_file(coords: np.ndarray | pd.DataFrame | TripletLike, ou
        Destination file path. Extension must be .cmm (ChimeraX marker file).
 
     Returns
-    --------
+    -------
     None
     
     Raises
@@ -2105,15 +2105,17 @@ def read_warp_tilt_xml(path: PathOrStr) -> dict:
     """Load per-tilt geometry from a Warp XML file, in cryoCAT frame.
 
     FG1 conjugation: Warp builds tilt matrices in Relion convention (z flipped).
-    Conjugating by F = diag(1,1,-1) converts them to cryoCAT convention:
-      F Rz(0) Ry(θ) Rz(φ) Rx(a) F  =  Rz(0) Ry(−θ) Rz(φ) Rx(−a).
+    Conjugating by F = diag(1,1,-1) converts them to cryoCAT convention::
+
+      F Rz(0) Ry(θ) Rz(φ) Rx(a) F  =  Rz(0) Ry(−θ) Rz(φ) Rx(−a)
+
     Effect: tilt angle and levelAngleX are negated; axis angle (z-rotation) is unchanged.
     Matrices are pre-built once here; no coordinate flip is needed in the call path.
 
-    Returns a dict with keys:
-        pixel_size, angles, dose, axis_offset_x, axis_offset_y, tilt_matrices,
-        grid_movement_x, grid_movement_y, grid_volume_warp, movie_paths,
-        use_tilt, angles_inverted, image_dims, volume_dims.
+    Returns a dict with keys
+    pixel_size, angles, dose, axis_offset_x, axis_offset_y, tilt_matrices,
+    grid_movement_x, grid_movement_y, grid_volume_warp, movie_paths,
+    use_tilt, angles_inverted, image_dims, volume_dims.
     """
     r = load_xml_root(path)
     ctf = r.find("CTF")

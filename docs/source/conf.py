@@ -242,6 +242,10 @@ def _setup_navbar_side_toctree(app: Any):
             if matches is None or len(matches) == 0:
                 return ""
             items = []
+            # Only API object entries (dt with an id) count; docstrings can contain plain definition lists
+            matches = [m for m in matches if m.find("dt") is not None and m.find("dt").get("id") is not None]
+            if len(matches) == 0:
+                return ""
             deeper_depth = matches[0].find("dt").get("id").count(".")
             for match in matches:
                 match_dt = match.find("dt")

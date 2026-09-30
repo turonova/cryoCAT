@@ -36,7 +36,7 @@ def get_stable_particles(
     ----------
     motl_base_name : str
         Base name for a motl to perform the evaluation on. Base name means without the
-        iteration number and extension. For example for name motl_shift_3.em the base name is motl\_shift\_.
+        iteration number and extension. For example for name motl_shift_3.em the base name is ``motl_shift_``.
     start_it : int
         Starting iteration number.
     end_it : int
@@ -105,7 +105,7 @@ def evaluate_alignment(
     ----------
     motl_base_names : ListLike of str
         List of MOTL base names or a single motl base name to perform the evaluation on. Base name means without the
-        iteration number and extension. For example for name motl_shift_3.em the base name is motl_shift\_.
+        iteration number and extension. For example for name motl_shift_3.em the base name is ``motl_shift_``.
     start_it : int
         Starting iteration number.
     end_it : int
@@ -115,7 +115,7 @@ def evaluate_alignment(
     write_out_stats : bool, default=False
         Whether to write out stats. If True, the stats will be written to the motl_base_name + _as_motlID.csv where the
         motlID is given by its position in the motl_base_names list. For example, for motl_shift_3.em the final will
-        be motl_shift_as_1.em if the motl_shift\_ is the first motl in the motl_base_names.
+        be motl_shift_as_1.em if the ``motl_shift_`` is the first motl in the motl_base_names.
     plot_values : bool, default=True
         Whether to plot values.
     filter_rows : ListLike or None, default=None
@@ -284,7 +284,7 @@ def compute_alignment_statistics(
     ----------
     motl_base_name : str
         Base name for a motl to perform the evaluation on. Base name means without the
-        iteration number and extension. For example for name motl_shift_3.em the base name is motl\_shift\_.
+        iteration number and extension. For example for name motl_shift_3.em the base name is ``motl_shift_``.
     start_it : int
         Starting iteration number.
     end_it : int
@@ -674,7 +674,7 @@ def get_subtomos_class_stability(
     ----------
     motl_base_name : str
         Base name for a motl to perform the evaluation on. Base name means without the
-        iteration number and extension. For example for name motl_shift_3.em the base name is motl\_shift\_.
+        iteration number and extension. For example for name motl_shift_3.em the base name is ``motl_shift_``.
     start_it : int
         Starting iteration number.
     end_it : int
@@ -735,7 +735,7 @@ def evaluate_classification(
     ----------
     motl_base_name : str
         Base name for a motl to perform the evaluation on. Base name means without the
-        iteration number and extension. For example for name motl_shift_3.em the base name is motl\_shift\_.
+        iteration number and extension. For example for name motl_shift_3.em the base name is ``motl_shift_``.
     start_it : int
         Starting iteration number.
     end_it : int
@@ -826,7 +826,7 @@ def get_class_occupancy(
     ----------
     motl_base_name : str
         Base name for a motl to perform the evaluation on. Base name means without the
-        iteration number and extension. For example for name motl_shift_3.em the base name is motl\_shift\_.
+        iteration number and extension. For example for name motl_shift_3.em the base name is ``motl_shift_``.
     start_it : int
         Starting iteration number.
     end_it : int

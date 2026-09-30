@@ -43,7 +43,7 @@ def extract_peak_orientations(
     If cyclic symmetry is specified, a random multiple of 360/N degrees is added to phi for each particle when N > 1.
 
     Parameters
-    -----------
+    ----------
     peak_coords : numpy.ndarray
         Array of shape (N, 3) containing the coordinates of the detected peaks (particles) in the scores map.
     angles_map : MapSource
@@ -64,7 +64,7 @@ def extract_peak_orientations(
         :func:`cryocat.utils.geom.as_symmetry`. Default is "c1".
 
     Returns
-    --------
+    -------
     tuple[np.ndarray, np.ndarray, np.ndarray]
         Three arrays containing the phi, theta, and psi angles corresponding to the provided peak coordinates.
 
@@ -1436,7 +1436,7 @@ def scores_extract_particles_around_positions(
         See :func:`cryomotl.motl_converter_kwargs` for details.
 
     Returns
-    --------
+    -------
     motl : Motl
         :class:`cryocat.core.cryomotl.Motl` containing extracted particle
         coordinates, scores, and orientations.

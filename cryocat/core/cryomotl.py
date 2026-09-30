@@ -6093,7 +6093,7 @@ def emmotl2relion(
         `{"optics_data": ..., "optics_data": ...}`
 
     Returns
-    ----------
+    -------
     rln_motl : RelionMotl converted object.
     """
     em_motl = EmMotl(input_motl)
@@ -6338,7 +6338,7 @@ def stopgap2relion(
         `{"optics_data": ..., "optics_data": ...}`
 
     Returns
-    ----------
+    -------
     rln_motl : RelionMotl converted object.
     """
     sg_motl = StopgapMotl(input_motl)
@@ -6447,7 +6447,7 @@ def motl_converter_kwargs(
     relion output motls), and kwargs provided for the conversion. It then performs the conversion
     based on the specified output motl type and returns the converted motl object.
 
-    Parameters:
+    Parameters
     ----------
     input_motl : str or pandas.DataFrame or EmMotl
         Path to the input EM MOTL file to convert or an already loaded EmMotl object.
@@ -6462,19 +6462,19 @@ def motl_converter_kwargs(
         relion_version argument will be ignored with a warning.
     **output_kwargs
         Additional keyword arguments for the conversion function. The accepted kwargs depend on the specified output_motl_type.
-        Check :func:`cryocat.core.cryomotl.emmotl2stopgap`, :func:`cryocat.core.cryomotl.emmotl2relion`, `:func:cryocat.core.cryomotl.emmotl2mod`
+        Check :func:`cryocat.core.cryomotl.emmotl2stopgap`, :func:`cryocat.core.cryomotl.emmotl2relion`, :func:`cryocat.core.cryomotl.emmotl2mod`
         for the available parameters for each output motl type.
 
-    Returns:
-    --------
+    Returns
+    -------
     output_motl : MotlSource
         The converted motl object of the specified output type.
 
-    Raises:
-    -------
-    ValueError:
+    Raises
+    ------
+    ValueError
         If an invalid output_motl_type is provided, if the relion_version is inconsistent with the output_motl_type, or if invalid kwargs are provided for the specified output_motl_type.
-    UserWarning:
+    UserWarning
         If the provided relion_version is ignored due to the specified output_motl_type being "relion5" or "relion5_1", or if a relion_version is provided but not relevant for the specified output_motl_type.
     """
     # map motl types and acceptable kwargs

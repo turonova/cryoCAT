@@ -678,7 +678,7 @@ def em2mrc(
         The function writes the converted data to the specified output file.
 
     Raises
-    -------
+    ------
     ValueError
         If ``input_path`` is not a valid .em file path
 
@@ -712,6 +712,8 @@ def mrc2em(
 ) -> None:
     """Convert a file in MRC format to EM format.
 
+    Parameters
+    ----------
     input_path : PathOrStr
         Path to the input map file to be converted (must have ``.mrc`` extension).
     invert : bool, default=False
@@ -729,7 +731,7 @@ def mrc2em(
         The function writes the converted data to the specified output file.
 
     Raises
-    -------
+    ------
     ValueError
         If the provided file name does not end with .em extension.
 
@@ -785,7 +787,7 @@ def write_hdf5(
         This function does not return any value. It writes the data, labels, and weights to the specified HDF5 file.
 
     Raises
-    -------
+    ------
     ValueError
         If the provided file name does not end with .em or .mrc extension.
 
@@ -1717,8 +1719,8 @@ def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
     """
     Symmetrize the input volume based on the specified symmetry.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     input_map : MapSource
         The input volume to be symmetrized, either as an ndarray or a path to a
         map file. Normalized via :func:`read`.
@@ -1726,12 +1728,12 @@ def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
         The point-group symmetry specifier. Accepts a string like ``"C5"`` or a
         bare number (interpreted as the order of the cyclic symmetry).
 
-    Returns:
-    --------
+    Returns
+    -------
     ndarray: The symmetrized volume.
 
-    Raises:
-    -------
+    Raises
+    ------
     ValueError
         If the symmetry is not specified correctly
 

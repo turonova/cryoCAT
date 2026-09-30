@@ -1572,10 +1572,10 @@ class IntensityProfileAnalyzer:
         Weighted-median fallback threshold: keep segments with slope >=
         ``inflection_slope_fraction * max_slope``.
 
-    Typical usage
-    -------------
-    analyzer = IntensityProfileAnalyzer(smooth_sigma_intensity_profiles=1.0)
-    results = analyzer.detect(profiles, thickness_df, profile_half_width_nm=6.0, max_distance_nm=10.0)
+    Examples
+    --------
+    >>> analyzer = IntensityProfileAnalyzer(smooth_sigma_intensity_profiles=1.0)
+    >>> results = analyzer.detect(profiles, thickness_df, profile_half_width_nm=6.0, max_distance_nm=10.0)
     """
 
     def __init__(
@@ -3938,8 +3938,8 @@ def run_full_pipeline(
     matched pair, resolve inflection-based boundaries, and apply a final
     ``max_distance_nm`` cap in nanometers to the inflection thickness column.
 
-    Stages
-    ------
+    **Stages**
+
     1. ``process_membrane_segmentation`` — marching-cubes vertices/normals, optional
        densification, normal refinement, surface split, CSV export per membrane label.
     2. ``match_points`` — GPU/CPU normal-cone matching, writes
@@ -3957,8 +3957,6 @@ def run_full_pipeline(
     membrane_labels : dict, optional
         ``{name: label_id}`` mapping of membrane names to label ids.
 
-    Surface extraction
-    ------------------
     step_size_marching_cubes : int, default 1
         Marching-cubes stride (larger = faster, coarser mesh).
     smooth_sigma_segmentation : float or None, default None
@@ -3987,8 +3985,6 @@ def run_full_pipeline(
     save_split_surface_meshes : bool, default False
         Save each separated bilayer leaflet as a ``.ply`` file before normal flipping.
 
-    Geometric matching
-    ------------------
     max_distance_nm : float, default 8.0
         Nanometer cap for **both** the geometric matcher and the downstream
         inflection-thickness filter (passed through as ``max_distance_nm``).
@@ -4010,8 +4006,6 @@ def run_full_pipeline(
         Required when the segmentation was saved without voxel-size metadata
         (header reports 0 Å) — pass the true physical voxel size here instead.
 
-    Profile / boundary stage
-    ------------------------
     extract_intensity_profiles : bool, default True
         When ``True`` **and** ``tomogram_map`` is provided, run ``analyse_intensity_profiles``
         after geometric matching for every successfully matched membrane.
