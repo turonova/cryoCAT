@@ -726,6 +726,106 @@ def test_generate_angles_symmetry():
 
 
 # ---------------------------------------------------------------------------
+# generate_angles — symmetry-reduced search for D/T/O/I (added 2026-10-01)
+# ---------------------------------------------------------------------------
+
+
+def _worst_gap_deg(grid_angles, symmetry, test_rotations):
+    """Largest angle (deg) from any test rotation to the nearest grid orientation,
+    allowing for symmetry: min over grid R and group g of angle(test, R @ g)."""
+    from cryocat.utils.symmetry import get_symmetry_rotations
+
+    grid = srot.from_euler("zxz", grid_angles, degrees=True).as_matrix()
+    group = get_symmetry_rotations(symmetry) if symmetry != "C1" else np.eye(3)[None]
+    best = np.full(len(test_rotations), np.inf)
+    for g in group:
+        traces = np.einsum("mji,njk,ki->mn", test_rotations, grid, g)  # trace(test^T @ R @ g)
+        best = np.minimum(best, np.degrees(np.arccos(np.clip((traces - 1) / 2, -1, 1))).min(axis=1))
+    return best.max()
+
+
+_RANDOM_ROTATIONS = srot.random(300, random_state=0).as_matrix()
+
+
+@pytest.mark.parametrize("symmetry", ["C1", "C2", "C6"])
+def test_generate_angles_cyclic_keeps_inplane_reduction(symmetry):
+    # Cyclic symmetry keeps the original algorithm: in-plane angles limited to
+    # [0, 360/n) and the grid 1/n of the C1 grid (verified identical to the
+    # pre-2026-10-01 output on 30 cases when the change was made).
+    n = int(symmetry[1:])
+    full = generate_angles(360, 10)
+    red = generate_angles(360, 10, symmetry=symmetry)
+    assert len(red) == len(full) // n
+    assert red[:, 0].max() < 360.0 / n
+
+
+@pytest.mark.parametrize("symmetry", ["D2", "D6", "T", "O", "I"])
+def test_generate_angles_global_search_covers_all_orientations(symmetry):
+    # Every orientation must be as close to a searched orientation (allowing
+    # for symmetry) as with the unreduced grid, whose worst gap at a 10 deg
+    # step is ~7.5 deg. A fixed bound of 8 deg is used because a worst gap
+    # estimated from random samples fluctuates. The bound catches both the
+    # old bug (T/O/I gaps of ~19/28/10 deg) and a missing edge margin (~8.9 deg for I).
+    gap = _worst_gap_deg(generate_angles(360, 10, symmetry=symmetry), symmetry, _RANDOM_ROTATIONS)
+    assert gap <= 8.0
+
+
+@pytest.mark.parametrize("symmetry, order", [("D2", 4), ("D6", 12), ("T", 12), ("O", 24), ("I", 60)])
+def test_generate_angles_global_search_size(symmetry, order):
+    # About 1/order of the unreduced grid, plus the half-step margin (< 40% extra).
+    n_full = len(generate_angles(360, 10))
+    n_red = len(generate_angles(360, 10, symmetry=symmetry))
+    assert n_full / order <= n_red <= 1.4 * n_full / order
+
+
+@pytest.mark.parametrize("n", [2, 3, 6])
+def test_generate_angles_dihedral_is_not_cyclic(n):
+    # D_n is handled as true dihedral symmetry: its extra 2-fold axes make the
+    # grid smaller than for C_n (previously "Dn" gave exactly the C_n grid).
+    c = generate_angles(360, 10, symmetry=f"C{n}")
+    d = generate_angles(360, 10, symmetry=f"D{n}")
+    assert len(d) < 0.75 * len(c)
+
+
+@pytest.mark.parametrize("symmetry", ["D6", "T", "I"])
+def test_generate_angles_local_search_loses_nothing(symmetry):
+    # Local search around a starting orientation: every orientation of the
+    # unreduced local grid must have a kept symmetric copy within the
+    # tolerance (half a sampling step = 2.5 deg).
+    start = [30.0, 50.0, 70.0]
+    full = generate_angles(30, 5, starting_angles=start)
+    red = generate_angles(30, 5, starting_angles=start, symmetry=symmetry)
+    assert len(red) <= len(full)
+    full_rot = srot.from_euler("zxz", full, degrees=True).as_matrix()
+    assert _worst_gap_deg(red, symmetry, full_rot) <= 2.5 + 1e-6
+
+
+def test_generate_angles_lookalike_convention_matches_template_rotation():
+    # The reduction treats R and R @ g as look-alikes. This must match how an
+    # orientation turns a template's content (particle-list convention,
+    # cryomap.rotate(..., transpose_rotation=True), as in cryomap.place_object):
+    # an icosahedrally symmetric map turned by R and by R @ g must be identical.
+    from cryocat.core import cryomap
+    from cryocat.utils.symmetry import IcosahedralGroup
+
+    n_box, radius = 40, 12.0
+    centre = np.array(as_triplet(None, reference_size=(n_box, n_box, n_box)), float)
+    grid = np.indices((n_box,) * 3).reshape(3, -1).T.astype(float)
+    volume = np.zeros(len(grid))
+    for vertex in Icosahedron().vertices * radius + centre:  # canonical orientation
+        volume += np.exp(-np.sum((grid - vertex) ** 2, axis=1) / (2 * 1.5**2))
+    volume = volume.reshape((n_box,) * 3)
+
+    r = srot.from_euler("zxz", [25, 40, 65], degrees=True)
+    g = srot.from_matrix(IcosahedralGroup().matrices[7])
+    a = cryomap.rotate(volume, rotation=r, transpose_rotation=True)
+    b = cryomap.rotate(volume, rotation=r * g, transpose_rotation=True)
+    c = cryomap.rotate(volume, rotation=g * r, transpose_rotation=True)  # the other order: NOT a look-alike
+    assert np.corrcoef(a.ravel(), b.ravel())[0, 1] > 0.99
+    assert np.corrcoef(a.ravel(), c.ravel())[0, 1] < 0.9
+
+
+# ---------------------------------------------------------------------------
 # generate_angles with output_path — save-to-file behaviour
 # ---------------------------------------------------------------------------
 
