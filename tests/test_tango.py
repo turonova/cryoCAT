@@ -10,6 +10,7 @@ from scipy.spatial.transform import Rotation as R
 
 from cryocat.analysis import nnana
 from cryocat.core import cryomotl
+from cryocat.utils import geom, symmetry
 from cryocat.analysis.tango import (
     Particle,
     SymmParticle,
@@ -18,6 +19,7 @@ from cryocat.analysis.tango import (
     SHOTDescriptor,
     AlphaComplexDescriptor,
     PLComplexDescriptor,
+    AngularScoreNN,
     _check_numeric_param,
 )
 
@@ -771,6 +773,116 @@ class TestSymmParticleSimilaritySymm:
 
 
 # ===========================================================================
+# SymmParticle.max_dissimilarity fix and similarity_symm delegation (2026-09-29)
+# ===========================================================================
+
+_PLATONIC_CASES = [("T", None), ("O", "octahedron"), ("O", "cube"), ("I", "icosahedron"), ("I", "dodecahedron")]
+
+
+class TestSymmParticleMaxDissimilarityFix:
+    """max_dissimilarity() used "180 deg minus the angle between two hand-picked
+    corners", correct only for the tetrahedron. It now returns the true largest
+    mismatch (corner -> nearest face centre) via symmetry.max_angular_mismatch.
+    """
+
+    @pytest.mark.parametrize(
+        "symm, kind, expected_deg",
+        [
+            ("T", None, 70.5288),  # unchanged by the fix
+            ("O", "octahedron", 54.7356),  # was 90.00
+            ("O", "cube", 54.7356),  # was 109.47
+            ("I", "icosahedron", 37.3774),  # was 116.57
+            ("I", "dodecahedron", 37.3774),  # was 138.19
+        ],
+    )
+    def test_platonic_values_are_true_maximum(self, symm, kind, expected_deg):
+        sp = SymmParticle(np.eye(3), np.zeros(3), symm=symm, kind=kind)
+        assert np.degrees(sp.max_dissimilarity()) == pytest.approx(expected_deg, abs=1e-3)
+
+    @pytest.mark.parametrize("n", [2, 3, 5, 6])
+    def test_cyclic_value_unchanged(self, n):
+        # pi/n, exactly as before the fix.
+        assert SymmParticle(np.eye(3), np.zeros(3), symm=n).max_dissimilarity() == pytest.approx(np.pi / n)
+
+    def test_independent_of_particle_and_custom_rotation(self):
+        # d_max is a property of the shape, not of how the particle is turned;
+        # the old code read corners from the turned solid, the new one must not
+        # depend on rotation or custom_rot at all.
+        r = R.from_euler("zxz", [10, 60, 5], degrees=True).as_matrix()
+        c = R.from_euler("zxz", [20, 35, 50], degrees=True)
+        a = SymmParticle(np.eye(3), np.zeros(3), symm="I", kind="dodecahedron")
+        b = SymmParticle(r, np.zeros(3), symm="I", kind="dodecahedron", custom_rot=c)
+        assert a.max_dissimilarity() == pytest.approx(b.max_dissimilarity())
+
+    @pytest.mark.parametrize("symm, kind", _PLATONIC_CASES)
+    def test_worst_case_now_scores_zero(self, symm, kind):
+        # Turning one particle so that a corner lands on the other's nearest
+        # face centre is the worst possible mismatch, so the default score is 0.
+        # With the old, too-large maximum O/I could never reach 0.
+        solid = symmetry.SYMMETRY_GROUPS[symm]().to_polyhedron(kind=kind)
+        v = solid.vertices[0] / np.linalg.norm(solid.vertices[0])
+        centres = solid.faces / np.linalg.norm(solid.faces, axis=1, keepdims=True)
+        f = centres[np.argmax(centres @ v)]
+        # Rotation about the axis perpendicular to both, taking v onto f.
+        axis = np.cross(v, f)
+        turn = R.from_rotvec(axis / np.linalg.norm(axis) * np.arccos(np.clip(v @ f, -1, 1))).as_matrix()
+        ref = SymmParticle(np.eye(3), np.zeros(3), symm=symm, kind=kind)
+        other = SymmParticle(turn, np.zeros(3), symm=symm, kind=kind)
+        assert ref.similarity_symm(other) == pytest.approx(0.0, abs=1e-6)
+
+
+class TestSymmParticleSimilarityDelegation:
+    """similarity_symm now delegates to symmetry.angular_score (single source of
+    truth). Scores must equal the previous direct Hausdorff computation on the
+    stored solids, apart from the documented clamping to [0, 1].
+    """
+
+    @staticmethod
+    def _old_score(a, b, max_val):
+        # The pre-2026-09-29 implementation, kept here as the reference.
+        return 1 - geom.hausdorff_distance_sphere(a.solid, b.solid) / max_val
+
+    @pytest.mark.parametrize("symm, kind", [(4, None), (6, None)] + _PLATONIC_CASES)
+    def test_matches_previous_implementation(self, symm, kind):
+        rots = R.random(30, random_state=3).as_matrix()
+        ref = SymmParticle(rots[0], np.zeros(3), symm=symm, kind=kind)
+        for m in rots[1:]:
+            other = SymmParticle(m, np.zeros(3), symm=symm, kind=kind)
+            expected = np.clip(self._old_score(ref, other, ref.max_dissimilarity()), 0.0, 1.0)
+            assert ref.similarity_symm(other) == pytest.approx(expected, abs=1e-5)
+
+    def test_matches_previous_implementation_with_custom_rot(self):
+        # Delegation rebuilds each solid's orientation as rotation @ custom_rot;
+        # particles may even carry different custom_rot values.
+        c1 = R.from_euler("zxz", [20, 35, 50], degrees=True)
+        c2 = R.from_euler("z", -90, degrees=True)
+        rots = R.random(20, random_state=4).as_matrix()
+        ref = SymmParticle(rots[0], np.zeros(3), symm="I", kind="dodecahedron", custom_rot=c1)
+        for m in rots[1:]:
+            other = SymmParticle(m, np.zeros(3), symm="I", kind="dodecahedron", custom_rot=c2)
+            expected = np.clip(self._old_score(ref, other, ref.max_dissimilarity()), 0.0, 1.0)
+            assert ref.similarity_symm(other) == pytest.approx(expected, abs=1e-5)
+
+    def test_custom_rot_is_stored_as_matrix(self):
+        c = R.from_euler("z", 30, degrees=True)
+        assert SymmParticle(np.eye(3), np.zeros(3), symm="O").custom_rot is None
+        sp = SymmParticle(np.eye(3), np.zeros(3), symm="O", custom_rot=c)
+        np.testing.assert_allclose(sp.custom_rot, c.as_matrix())
+
+    def test_explicit_max_smaller_than_mismatch_clamps_to_zero(self):
+        # Documented behaviour change: with a user-given max below the actual
+        # mismatch, the old code returned a negative number; now 0.
+        ref = SymmParticle(np.eye(3), np.zeros(3), symm=2)
+        other = SymmParticle(R.from_euler("z", 80, degrees=True).as_matrix(), np.zeros(3), symm=2)
+        assert self._old_score(ref, other, 0.5) < 0
+        assert ref.similarity_symm(other, max=0.5) == 0.0
+
+    def test_returns_python_float(self):
+        sp = SymmParticle(np.eye(3), np.zeros(3), symm="T")
+        assert isinstance(sp.similarity_symm(sp), float)
+
+
+# ===========================================================================
 # SymmParticle custom_rot
 # ===========================================================================
 
@@ -814,6 +926,14 @@ class TestSymmParticleCustomRot:
             for g in IcosahedralGroup().matrices
         ]
         assert sum(s == pytest.approx(1.0, abs=1e-6) for s in scores) == 12
+
+    @pytest.mark.parametrize("symm", [4, "C6"])
+    def test_custom_rot_for_cyclic_raises_clear_error(self, symm):
+        # Regression test (2026-09-29): custom_rot with cyclic symmetry used to
+        # fail with an opaque numpy matmul shape error (2D polygon vs 3x3
+        # matrix). It now raises a ValueError that names the actual problem.
+        with pytest.raises(ValueError, match="only applicable to Platonic"):
+            SymmParticle(np.eye(3), np.zeros(3), symm=symm, custom_rot=np.eye(3))
 
 
 # ===========================================================================
@@ -955,14 +1075,36 @@ class TestTwistDescriptorProcessTwist:
         assert "angular_score" in result.columns
         assert np.isfinite(result["angular_score"]).all()
 
-    def test_platonic_symm_category_raises_not_implemented(self):
-        # Regression test (added 2026-09-25): after self.category became the
-        # Symmetry group letter ("T"/"O"/"I"), geom.angular_score_for_c_symmetry
-        # would otherwise silently misuse it as a cyclic order instead of
-        # raising the ValueError it used to raise for the old word-based
-        # category ("tetrahedron", ...). This guard keeps the failure loud.
-        with pytest.raises(NotImplementedError, match="Platonic"):
-            TwistDescriptor.process_tomo_twist(_make_nn(), symm="T", symm_max_value=1.0, symm_category="T")
+    @pytest.mark.parametrize(
+        "letter, kind", [("T", None), ("O", "octahedron"), ("O", "cube"), ("I", "icosahedron"), ("I", "dodecahedron")]
+    )
+    def test_platonic_symm_category_computes_angular_score(self, letter, kind):
+        # Until 2026-09-29 a Platonic symm_category raised NotImplementedError
+        # (the guard of 2026-09-25). It now scores the full qp/nn rotations with
+        # symmetry.angular_score; the column must equal a direct call on the
+        # same rotations (qp: phi=theta=psi=0; nn: phi=90, theta=45, psi=0).
+        max_val = symmetry.max_angular_mismatch(letter, kind)
+        result = TwistDescriptor.process_tomo_twist(
+            _make_nn(), symm=letter, symm_max_value=max_val, symm_category=letter, symm_kind=kind
+        )
+        expected = symmetry.angular_score([0.0, 0.0, 0.0], [90.0, 45.0, 0.0], letter, kind=kind)[0]
+        np.testing.assert_allclose(result["angular_score"].to_numpy(), expected, atol=1e-12)
+        assert ((result["angular_score"] >= 0) & (result["angular_score"] <= 1)).all()
+
+    def test_platonic_symm_kind_changes_markers(self):
+        # symm_kind must actually reach the score: octahedron and cube corners
+        # are different marker sets, so the two scores for this (generic) pair
+        # differ, each matching its own direct angular_score call.
+        max_val = symmetry.max_angular_mismatch("O")
+        octa = TwistDescriptor.process_tomo_twist(
+            _make_nn(), symm="O", symm_max_value=max_val, symm_category="O", symm_kind="octahedron"
+        )["angular_score"].iloc[0]
+        cube = TwistDescriptor.process_tomo_twist(
+            _make_nn(), symm="O", symm_max_value=max_val, symm_category="O", symm_kind="cube"
+        )["angular_score"].iloc[0]
+        assert octa == pytest.approx(symmetry.angular_score([0, 0, 0], [90, 45, 0], "O", kind="octahedron")[0])
+        assert cube == pytest.approx(symmetry.angular_score([0, 0, 0], [90, 45, 0], "O", kind="cube")[0])
+        assert octa != pytest.approx(cube)
 
     def test_identity_rotation_zero_so_twist(self):
         nn = _make_nn()
@@ -1125,9 +1267,9 @@ class TestTwistDescriptorRadiusStorage:
         # `kind` parameter even after get_symm_parameters/
         # get_nn_twist_stats_within_radius gained one, so `kind` could never
         # reach SymmParticle through the class the GUI actually instantiates.
-        # A Platonic symm_category must still hit the process_tomo_twist guard
-        # (§10.4) rather than raising a plain TypeError for the unknown `kind`
-        # keyword, which is what happened before this fix.
+        # Since 2026-09-29 (the process_tomo_twist guard was replaced by the
+        # Platonic angular score) the constructor must complete and produce an
+        # angular_score column in [0, 1], instead of raising.
         from cryocat.core.cryomotl import Motl
 
         df = pd.DataFrame({col: [1.0, 2.0] for col in Motl.motl_columns})
@@ -1135,8 +1277,9 @@ class TestTwistDescriptorRadiusStorage:
         df["tomo_id"] = [1.0, 1.0]
         motl = Motl(df)
 
-        with pytest.raises(NotImplementedError, match="Platonic"):
-            TwistDescriptor(input_motl=motl, nn_radius=50.0, symm="O", kind="cube", build_unique_desc=False)
+        td = TwistDescriptor(input_motl=motl, nn_radius=50.0, symm="O", kind="cube", build_unique_desc=False)
+        assert "angular_score" in td.df.columns
+        assert ((td.df["angular_score"] >= 0) & (td.df["angular_score"] <= 1)).all()
 
     def test_cyclic_symm_reaches_symm_particle_through_constructor(self):
         # Same entry point, cyclic path: must still compute angular_score end-to-end.
@@ -1160,6 +1303,79 @@ class TestTwistDescriptorRadiusStorage:
         assert hasattr(td, "nn_radius")
         assert hasattr(td, "radius_source")
         assert td.radius_source in ("computed", "given", "unknown")
+
+
+# ===========================================================================
+# AngularScoreNN (fixed 2026-09-29)
+# ===========================================================================
+
+
+def _scored_twist_descriptor():
+    """Two query points with known angular scores for their neighbours."""
+    df = _minimal_twist_df(
+        {
+            "qp_id": [1, 1, 1, 2, 2],
+            "nn_id": [10, 11, 12, 20, 21],
+            "angular_score": [0.2, 0.9, 0.5, 0.7, 0.1],
+        }
+    )
+    return TwistDescriptor(input_twist=df)
+
+
+class TestAngularScoreNN:
+    """The angular score is a similarity (1 = identical up to symmetry), so the
+    filter must keep the neighbours with the HIGHEST scores. Before the fix it
+    sorted ascending and kept the least similar ones."""
+
+    def test_keeps_best_fit_per_query_point(self):
+        kept = AngularScoreNN(_scored_twist_descriptor(), num_neighbors=1).filter.df
+        assert dict(zip(kept["qp_id"], kept["nn_id"])) == {1: 11, 2: 20}  # scores 0.9 and 0.7
+
+    def test_keeps_top_n_in_descending_order(self):
+        kept = AngularScoreNN(_scored_twist_descriptor(), num_neighbors=2).filter.df
+        qp1 = kept[kept["qp_id"] == 1]["angular_score"].tolist()
+        assert qp1 == [0.9, 0.5]  # the 0.2 neighbour is dropped
+
+    def test_num_neighbors_larger_than_available_keeps_all(self):
+        kept = AngularScoreNN(_scored_twist_descriptor(), num_neighbors=5).filter.df
+        assert len(kept) == 5
+
+
+# ===========================================================================
+# TwistDescriptor.symmetry_statistics c_range (fixed 2026-09-29)
+# ===========================================================================
+
+
+class TestSymmetryStatisticsRange:
+    """An integer c_range must include its own value (docstring: "from 2 up to
+    and including that value"); before the fix c_range=4 gave only C2, C3."""
+
+    @staticmethod
+    def _box_names(fig):
+        return [trace.name for trace in fig.data]
+
+    def _descriptor(self):
+        td = _scored_twist_descriptor()
+        td.df["qp_inplane"] = [0.0, 10.0, 20.0, 30.0, 40.0]
+        td.df["nn_inplane"] = [5.0, 50.0, 90.0, 100.0, 170.0]
+        return td
+
+    def test_integer_c_range_includes_endpoint(self):
+        fig = self._descriptor().symmetry_statistics(c_range=4, plot_graph=False)
+        assert self._box_names(fig) == ["2", "3", "4"]
+
+    def test_float_c_range_includes_endpoint(self):
+        fig = self._descriptor().symmetry_statistics(c_range=3.0, plot_graph=False)
+        assert self._box_names(fig) == ["2", "3"]
+
+    def test_default_range_unchanged(self):
+        # Default stays C2..C9.
+        fig = self._descriptor().symmetry_statistics(plot_graph=False)
+        assert self._box_names(fig) == [str(n) for n in range(2, 10)]
+
+    def test_explicit_range_object_used_as_is(self):
+        fig = self._descriptor().symmetry_statistics(c_range=range(3, 6), plot_graph=False)
+        assert self._box_names(fig) == ["3", "4", "5"]
 
 
 # ── TwistDescriptor Integration tests ──────────────────────────────────────

@@ -40,6 +40,22 @@ edges or faces of a solid
 vertex, edge or face count (12, 30 or 20 for the icosahedron). For ``"Dn"``
 note also that :func:`~cryocat.utils.geom.as_symmetry` returns ``n``,
 while :class:`DihedralGroup` has ``2 * n`` rotations.
+
+**Canonical orientations.** The groups are built in fixed orientations,
+identical to ChimeraX's defaults (``sym`` / ``measure symmetry``) except for
+D_n (checked against the ChimeraX source, 2026-10-01)::
+
+    group  canonical axes                                     ChimeraX
+    -----  -------------------------------------------------  ---------------------------
+    C_n    n-fold along z                                     Cn
+    D_n    n-fold along z; 2-folds at 90/n degrees from x     Dn turned by 90/n about z
+    T      2-folds along x, y, z                              T, orientation 222
+    O      4-folds along x, y, z                              O
+    I      2-folds along x, y, z; 5-folds in the yz-plane     I, orientation 222
+
+Functions that assume a symmetric map or template is in this orientation
+(e.g. :func:`cryocat.utils.geom.generate_angles`) need the map aligned
+first; see the Notes of that function.
 """
 
 from __future__ import annotations
@@ -490,6 +506,9 @@ class DihedralGroup(SymmGroup):
     ``360 / (2n)`` degree steps.  Elements are sorted by their in-plane
     angle so the output is deterministic and reproduces the classic
     even/odd-interleaved ordering (0°, half-step, step, …).
+
+    This differs from ChimeraX, which places a 2-fold axis along x: this
+    group equals ChimeraX's D_n turned by ``90/n`` degrees about z.
     """
 
     symbol = "D"
@@ -675,3 +694,287 @@ def get_symmetry_angles(
             return df
 
     return angles
+
+
+def _check_scorable(symmetry: Symmetry, kind: str | None) -> tuple[str, int]:
+    """Parse *symmetry* and reject combinations the angular score does not support.
+
+    Parameters
+    ----------
+    symmetry : Symmetry
+        Symmetry specifier.
+    kind : str or None
+        Solid name; only valid for T/O/I.
+
+    Returns
+    -------
+    tuple of (str, int)
+        Group letter and order, as returned by :func:`cryocat.utils.geom.as_symmetry`.
+
+    Raises
+    ------
+    ValueError
+        If a cyclic order is below 2, or *kind* is given for cyclic symmetry.
+    NotImplementedError
+        For dihedral symmetry.
+    """
+    letter, order = geom.as_symmetry(symmetry)
+    if letter == "D":
+        raise NotImplementedError(f"Angular score is not implemented for dihedral symmetry ({symmetry!r}).")
+    if letter == "C":
+        if order <= 1:
+            raise ValueError("Cyclic symmetry must specify an order greater than 1.")
+        if kind is not None:
+            raise ValueError(f"kind={kind!r} is only applicable to T/O/I symmetry, not cyclic.")
+    return letter, order
+
+
+def max_angular_mismatch(symmetry: Symmetry, kind: str | None = None) -> float:
+    """Largest possible mismatch (radians) between two turned copies of a symmetric shape.
+
+    This is the normaliser ``d_max`` of :func:`angular_score`: the score is
+    ``1 - d / d_max``, so it only spans 0 to 1 if ``d_max`` is the true
+    worst case.
+
+    Parameters
+    ----------
+    symmetry : Symmetry
+        ``"CN"``/int (N > 1), ``"T"``, ``"O"`` or ``"I"``.
+    kind : str, optional
+        For O/I, which solid's corners are used (see
+        :meth:`SymmGroup.to_polyhedron`). Default is the group's default solid.
+
+    Returns
+    -------
+    float
+        ``pi / N`` for cyclic C_N; for T/O/I the angle from a corner of the
+        solid to the centre of the nearest face.
+
+    Raises
+    ------
+    ValueError
+        For a cyclic order below 2, *kind* given for cyclic symmetry, or a
+        *kind* that doesn't match the group.
+    NotImplementedError
+        For dihedral symmetry.
+
+    Notes
+    -----
+    The mismatch between two copies is the angle of their worst-matched
+    corner. It is largest when a corner of one copy lands in the deepest
+    "hole" between the corners of the other: halfway between two
+    neighbouring corners of a polygon (``pi / N``), or the centre of a face
+    of a solid. For T/O/I this gives 70.53°, 54.74° and 37.38°; both solids
+    of a group (octahedron/cube, icosahedron/dodecahedron) have the same
+    value.
+    """
+    letter, order = _check_scorable(symmetry, kind)
+    if letter == "C":
+        return np.pi / order
+    solid = SYMMETRY_GROUPS[letter]().to_polyhedron(kind=kind)
+    corner = solid.vertices[0] / np.linalg.norm(solid.vertices[0])
+    centres = solid.faces / np.linalg.norm(solid.faces, axis=1, keepdims=True)
+    return float(np.arccos(np.clip(centres @ corner, -1.0, 1.0)).min())
+
+
+def angular_score(
+    rotations_1: RotationLike,
+    rotations_2: RotationLike,
+    symmetry: Symmetry,
+    kind: str | None = None,
+    max_val: float | None = None,
+    *,
+    chunk_size: int = 10000,
+) -> np.ndarray:
+    """Symmetry-aware similarity of paired orientations, from 0 (most different) to 1 (identical).
+
+    Marker points with the particle's symmetry (a regular polygon for
+    C_N, the corners of the matching Platonic solid for T/O/I) are turned
+    by each rotation of a pair; the score is ``1 - d / d_max``, where ``d``
+    is the angle of the worst-matched marker
+    (:func:`cryocat.utils.geom.hausdorff_distance_sphere`) and ``d_max``
+    the largest possible value of ``d`` (:func:`max_angular_mismatch`).
+    Orientations that differ only by a symmetry rotation score 1.
+
+    Parameters
+    ----------
+    rotations_1 : RotationLike
+        First orientation of each pair (``N`` rotations, or one). Normalized
+        via :func:`cryocat.utils.geom.as_rotation` (Euler angles in degrees,
+        ``zxz``).
+    rotations_2 : RotationLike
+        Second orientation of each pair, same length as *rotations_1*.
+    symmetry : Symmetry
+        ``"CN"``/int (N > 1), ``"T"``, ``"O"`` or ``"I"``.
+    kind : str, optional
+        For O/I, which solid's corners are the markers: ``"octahedron"``
+        (default) or ``"cube"``, ``"icosahedron"`` (default) or
+        ``"dodecahedron"``. Scores for the two solids of a group agree at 0
+        and 1 but differ slightly in between. Not applicable to cyclic
+        symmetry.
+    max_val : float, optional
+        Normaliser ``d_max`` in radians. Default is
+        :func:`max_angular_mismatch` for the given symmetry and kind.
+    chunk_size : int, optional
+        Number of pairs processed at once (bounds memory use). Default 10000.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(N,)`` scores. As in
+        :func:`cryocat.utils.geom.angular_score_for_c_symmetry`, values within
+        ``1e-5`` of 1 are set to 1 and values below ``1e-5`` to 0.
+
+    Raises
+    ------
+    ValueError
+        If the two inputs have different lengths, for a cyclic order below 2,
+        *kind* given for cyclic symmetry, or a *kind* that doesn't match the
+        group.
+    NotImplementedError
+        For dihedral symmetry.
+
+    Notes
+    -----
+    Cyclic symmetry is delegated to
+    :func:`cryocat.utils.geom.angular_score_for_c_symmetry`, which compares
+    only the in-plane angle (the first ``zxz`` Euler angle, ``phi``, of each
+    rotation). T/O/I use the full 3D rotations, since these particles look
+    the same after rotations about several different axes. The score
+    depends only on how the two orientations differ: turning both by the
+    same rotation leaves it unchanged.
+    """
+    letter, order = _check_scorable(symmetry, kind)
+    m1 = geom.as_rotation(rotations_1).as_matrix().reshape(-1, 3, 3)
+    m2 = geom.as_rotation(rotations_2).as_matrix().reshape(-1, 3, 3)
+    if len(m1) != len(m2):
+        raise ValueError(f"rotations_1 and rotations_2 must have the same length, got {len(m1)} and {len(m2)}.")
+
+    if letter == "C":
+        phi_1 = rot.from_matrix(m1).as_euler("zxz")[:, 0]
+        phi_2 = rot.from_matrix(m2).as_euler("zxz")[:, 0]
+        return geom.angular_score_for_c_symmetry(phi_1, phi_2, order, max_val)
+
+    if max_val is None:
+        max_val = max_angular_mismatch(symmetry, kind)
+    vertices = SYMMETRY_GROUPS[letter]().to_polyhedron(kind=kind).vertices
+    vertices = vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
+
+    distances = np.empty(len(m1))
+    for start in range(0, len(m1), chunk_size):
+        stop = start + chunk_size
+        a = np.einsum("kj,nij->nki", vertices, m1[start:stop])  # (n, k, 3) corners turned by each rotation
+        b = np.einsum("kj,nij->nki", vertices, m2[start:stop])
+        angles = np.arccos(np.clip(np.einsum("nik,njk->nij", a, b), -1.0, 1.0))  # (n, k, k)
+        distances[start:stop] = np.maximum(angles.min(axis=2).max(axis=1), angles.min(axis=1).max(axis=1))
+
+    scores = 1.0 - distances / max_val
+    scores[scores > 1 - 1e-5] = 1.0
+    scores[scores < 1e-5] = 0.0
+    return scores
+
+
+def _rotation_angles_deg(traces: np.ndarray) -> np.ndarray:
+    """Rotation angle (degrees) of rotation matrices given their traces."""
+    return np.degrees(np.arccos(np.clip((traces - 1.0) / 2.0, -1.0, 1.0)))
+
+
+def reduce_angle_grid(
+    rotations: RotationLike,
+    symmetry: Symmetry,
+    *,
+    reference: RotationLike | None = None,
+    local: bool = False,
+    margin_deg: float = 0.0,
+    tolerance_deg: float = 0.0,
+    chunk_size: int = 20000,
+) -> np.ndarray:
+    """Select one orientation per set of symmetric look-alikes in an angle grid.
+
+    A particle with symmetry *symmetry* looks identical in orientations ``R``
+    and ``R @ g`` for every group rotation ``g`` (the template's content is
+    turned by ``R``, as for particle-list angles). Searching both is wasted
+    work; this function returns a mask keeping (about) one of each.
+
+    Parameters
+    ----------
+    rotations : RotationLike
+        The unreduced grid of orientations, e.g. from
+        :func:`cryocat.utils.geom.generate_angles` with ``symmetry="C1"``
+        (Euler angles in degrees, ``zxz``).
+    symmetry : Symmetry
+        Symmetry of the template, in the canonical frame of this module (see
+        Notes). Any group (C, D, T, O, I).
+    reference : RotationLike, optional
+        Orientation around which the kept slice is centred (e.g. the starting
+        orientation of a local search). Default is no rotation.
+    local : bool, optional
+        False (default) for a grid covering all orientations: keep the
+        orientations in one slice of orientation space (fundamental zone)
+        around *reference*. True for a grid covering only part of it (a local
+        search): drop an orientation only if a symmetric copy of it, within
+        *tolerance_deg*, is kept, so nothing that was searched is lost.
+    margin_deg : float, optional
+        Global mode: also keep orientations up to this angle beyond the edge
+        of the slice. Grid points rarely line up across the slice's edges, so
+        a margin of about half the sampling step keeps the coverage at the
+        edges as good as in the unreduced grid. Default is 0.
+    tolerance_deg : float, optional
+        Local mode: how close (degrees) a kept symmetric copy must be for an
+        orientation to be dropped. Default is 0 (only exact copies).
+    chunk_size : int, optional
+        Number of orientations processed at once (bounds memory use).
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean mask of length ``len(rotations)``; True = keep.
+
+    Notes
+    -----
+    Canonical frames (identical to ChimeraX's default orientations, except
+    D_n): C_n and D_n have the n-fold axis along z; D_n has its 2-fold axes
+    in the xy-plane at ``90/n`` degrees from x (ChimeraX's D_n turned by
+    ``90/n`` degrees about z); T has 2-fold axes along x, y, z (ChimeraX
+    ``T`` ``222``); O has 4-fold axes along x, y, z; I has 2-fold axes along
+    x, y, z with 5-fold axes in the yz-plane (ChimeraX ``I`` ``222``).
+    """
+    letter, order = geom.as_symmetry(symmetry)
+    group = SYMMETRY_GROUPS[letter]() if letter in ("T", "O", "I") else SYMMETRY_GROUPS[letter](order)
+    g_mats = group.matrices  # identity first
+    mats = geom.as_rotation(rotations).as_matrix().reshape(-1, 3, 3)
+    if reference is not None:
+        ref = _as_single_rotation(reference).as_matrix()
+        mats = np.einsum("ji,njk->nik", ref, mats)  # orientation relative to the reference
+    n = len(mats)
+
+    # For every orientation: rotation angle of each symmetric copy R @ g, and the closest copy.
+    copy_angles_min = np.empty(n)
+    own_angle = np.empty(n)
+    closest = np.empty(n, dtype=int)
+    for start in range(0, n, chunk_size):
+        angles = _rotation_angles_deg(np.einsum("nij,gji->ng", mats[start : start + chunk_size], g_mats))
+        own_angle[start : start + chunk_size] = angles[:, 0]
+        copy_angles_min[start : start + chunk_size] = angles.min(axis=1)
+        closest[start : start + chunk_size] = angles.argmin(axis=1)
+
+    if not local:
+        return own_angle <= copy_angles_min + margin_deg
+
+    # Local: fold every orientation onto its copy closest to the reference, then
+    # drop an orientation only if an earlier, kept one folds onto (almost) the same place.
+    from scipy.spatial import cKDTree
+
+    folded = np.einsum("nij,njk->nik", mats, g_mats[closest])
+    quats = rot.from_matrix(folded).as_quat()
+    quats *= np.where(quats[:, 3:4] < 0, -1.0, 1.0)  # q and -q are the same rotation
+    radius = 2.0 * np.sin(np.radians(tolerance_deg) / 4.0) + 1e-12  # quaternion distance for that angle
+    tree = cKDTree(np.vstack([quats, -quats]))
+    keep = np.ones(n, dtype=bool)
+    for i in range(n):
+        if keep[i]:
+            for j in tree.query_ball_point(quats[i], radius):
+                j %= n
+                if j > i:
+                    keep[j] = False
+    return keep

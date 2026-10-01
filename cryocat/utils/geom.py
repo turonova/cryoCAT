@@ -2123,25 +2123,34 @@ def generate_angles(
     angle_order: str = "zxz",
     output_path: PathOrStr | None = None,
 ) -> np.ndarray:
-    """Compute Euler angles from sample for normal vectors on sphere.
-    Sphere sample corresponds to cone-angles.
+    """Generate an angle list (grid of orientations) for an orientational search.
+
+    Directions of the template's z-axis are sampled on a cone, each combined
+    with a series of in-plane rotations. When the template is symmetric, the
+    grid is reduced so that orientations that look identical because of the
+    symmetry are not searched more than once (see Notes).
 
     Parameters
     ----------
     cone_angle : float
-        Angle for sampling of cone-angles (refers to range of z-normals of particles).
+        Full opening angle (degrees) of the cone of z-axis directions: 360
+        covers the whole sphere (global search), 180 a hemisphere, smaller
+        values a local search around the starting orientation.
     cone_sampling : float
-        Frequency for cone sampling.
+        Angular step (degrees) between sampled directions.
     inplane_angle : float, optional
-        Desired inplane-angles for particle orientations. Defaults to 360.0.
+        Range (degrees) of in-plane rotations. Defaults to 360.0.
     inplane_sampling : float, optional
-        Frequency for sampling of inplane-angles. Defaults to None.
+        Angular step (degrees) of the in-plane rotations. Defaults to
+        *cone_sampling*.
     starting_angles : EulerAngles, optional
         Triplet of Euler angles in convention as specified by ``angle_order``
-        (single triple ``(3,)`` or 3-list/tuple). Defaults to None.
-    symmetry : Symmetry, default=1
-        Rotational symmetry specifier (``"Cn"`` or ``n``); normalized via
-        :func:`as_symmetry`.
+        (single triple ``(3,)`` or 3-list/tuple), around which a local search
+        is centred. Defaults to None (no rotation).
+    symmetry : Symmetry, default="C1"
+        Symmetry of the template (``"Cn"``/``n``, ``"Dn"``, ``"T"``, ``"O"``,
+        ``"I"``); normalized via :func:`as_symmetry`. **The template must be
+        in cryoCAT's canonical orientation for this symmetry** (see Notes).
     angle_order : str, optional
         Convention for Euler angles. Defaults to "zxz".
     output_path : str or path-like, optional
@@ -2151,9 +2160,69 @@ def generate_angles(
     Returns
     -------
     ndarray
-        Sample of Euler angles.
+        ``(N, 3)`` Euler angles (degrees).
+
+    Notes
+    -----
+    **Symmetry reduction.** A symmetric template looks identical after any of
+    its symmetry rotations, so each orientation has 2..60 look-alike copies.
+    Only about one of each is kept:
+
+    * C_n: the in-plane range is limited to ``360 / n`` degrees.
+    * D_n, T, O, I: the unreduced grid is built and passed to
+      :func:`cryocat.utils.symmetry.reduce_angle_grid`. For a global search
+      (``cone_angle >= 360`` and ``inplane_angle >= 360``) the grid keeps one
+      slice of orientation space, about ``1 / order`` of the grid, plus a
+      margin of half the sampling step beyond the slice's edges so that the
+      coverage there is as good as without reduction. For a local search an
+      orientation is only dropped if a symmetric copy of it (within half a
+      sampling step) is kept, so nothing that was searched is lost.
+
+    **The template must be in the canonical orientation.** The reduction
+    assumes the template's symmetry axes lie where cryoCAT's groups put them
+    (:mod:`cryocat.utils.symmetry`); for a template oriented differently,
+    orientations would be treated as look-alikes although they are not, and
+    real orientations would be missed without warning. Align the template
+    before generating the angle list. The canonical orientations, with the
+    matching ChimeraX settings (``sym`` / ``measure symmetry``):
+
+    ======== ============================================= ===================
+    symmetry canonical axes                                 ChimeraX
+    ======== ============================================= ===================
+    C_n      n-fold along z                                 ``Cn``
+    D_n      n-fold along z; 2-folds in the xy-plane at     ``Dn`` turned by
+             ``90/n`` degrees from x (e.g. D2: 45°, 135°)   ``90/n`` about z
+    T        2-folds along x, y, z                          ``T``, ``222``
+    O        4-folds along x, y, z                          ``O``
+    I        2-folds along x, y, z; 5-folds in yz-plane     ``I``, ``222``
+    ======== ============================================= ===================
+
+    ChimeraX puts a D_n 2-fold axis along x. A D_n template aligned to
+    ChimeraX's convention must therefore be turned by a further ``90/n``
+    degrees about z (either direction) to match cryoCAT's.
+
+    Whether a template already is in a standard orientation can be checked
+    with ChimeraX ``measure symmetry`` (it tests only standard orientations,
+    centred in the box). Otherwise, a template can be aligned by placing two
+    markers on neighbouring vertices of its symmetric arrangement (e.g. two
+    adjacent 5-fold positions for I), building the matching solid with
+    :meth:`Polyhedron.from_vectors` (marker positions in voxels relative to
+    the box centre), taking ``S = SymmGroup.from_polyhedron(solid).rotation``
+    and calling ``cryomap.rotate(template, rotation=S)``. Note that
+    :func:`cryocat.core.cryomap.rotate` turns the coordinate frame, so it
+    receives ``S`` itself, not ``S.inv()``. The symmetry centre must be the
+    box centre.
+
+    **Behaviour change (2026-10-01).** Previously only the order of the
+    symmetry was used, so "Dn" was treated as "Cn" (complete but twice as
+    large), and "T"/"O"/"I" as C12/C24/C60, which left orientations
+    unsearched (gaps of up to about 19°/28°/10° at a 10° step). C_n grids
+    are unchanged.
     """
-    _, symmetry = as_symmetry(symmetry)
+    group_letter, order = as_symmetry(symmetry)
+    # Cyclic symmetry is reduced directly by limiting the in-plane range below;
+    # every other group starts from the unreduced (C1) grid, reduced at the end.
+    n_fold = order if group_letter == "C" else 1
 
     points = sample_cone(cone_angle, cone_sampling)
     angles = normals_to_euler_angles(points, output_order=angle_order)
@@ -2179,9 +2248,9 @@ def generate_angles(
         inplane_sampling = cone_sampling
 
     if inplane_angle != 360.0:
-        phi_max = min(360.0 / symmetry, inplane_angle)
+        phi_max = min(360.0 / n_fold, inplane_angle)
     else:
-        phi_max = inplane_angle / symmetry
+        phi_max = inplane_angle / n_fold
 
     phi_steps = phi_max / inplane_sampling
     phi_array = np.linspace(0, phi_max, round(phi_steps) + 1)
@@ -2201,6 +2270,24 @@ def generate_angles(
         ],
         axis=1,
     )
+
+    if group_letter != "C":
+        # Local import: cryocat.utils.symmetry imports this module, so geom must
+        # not import it at load time (one-way dependency, deliberate exception).
+        from cryocat.utils.symmetry import reduce_angle_grid
+
+        half_step = 0.5 * max(cone_sampling, inplane_sampling)
+        is_global = cone_angle >= 360.0 and inplane_angle >= 360.0
+        reference = None if starting_angles is None else srot.from_euler(angle_order, starting_angles, degrees=True)
+        keep = reduce_angle_grid(
+            srot.from_euler(angle_order, angular_array, degrees=True),
+            f"{group_letter}{order}" if group_letter == "D" else group_letter,
+            reference=reference,
+            local=not is_global,
+            margin_deg=half_step,
+            tolerance_deg=half_step,
+        )
+        angular_array = angular_array[keep]
 
     if output_path is not None:
         from cryocat.utils.ioutils import angles_save
@@ -4224,6 +4311,17 @@ def as_symmetry(source: Symmetry) -> tuple[str, int]:
         If the string does not start with a recognised letter, if no
         digits are present for C/D groups, or if the input type is
         unsupported.
+
+    Notes
+    -----
+    For ``"T"``/``"O"``/``"I"``, *order* is the number of rotations in the
+    group, not the number of vertices of the matching :class:`Polyhedron`:
+    ``"I"`` gives 60, while :class:`Icosahedron` has 12 vertices
+    (60 rotations / 5 per vertex) and :class:`Dodecahedron` 20 (60 / 3).
+    Likewise ``"T"`` gives 12 (:class:`Tetrahedron`: 4 vertices) and ``"O"``
+    gives 24 (:class:`Octahedron`: 6, :class:`Cube`: 8). For ``"Dn"``,
+    *order* is ``n``, although the dihedral group has ``2 * n`` rotations.
+    See the :mod:`cryocat.utils.symmetry` module Notes for the full table.
 
     Examples
     --------

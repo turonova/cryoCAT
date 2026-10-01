@@ -12,6 +12,10 @@ from cryocat.utils.symmetry import (
     OctahedralGroup,
     TetrahedralGroup,
     SymmGroup,
+    SYMMETRY_GROUPS,
+    angular_score,
+    max_angular_mismatch,
+    reduce_angle_grid,
     compute_conjugation_matrix,
     get_symmetry_angles,
     get_symmetry_rotations,
@@ -722,3 +726,213 @@ class TestOrderVersusSolidCounts:
         assert as_symmetry(f"D{n}") == ("D", n)
         assert DihedralGroup(n).order == 2 * n
         assert len(get_symmetry_rotations(f"D{n}")) == 2 * n
+
+
+# ---------------------------------------------------------------------------
+# max_angular_mismatch / angular_score (added 2026-09-29)
+# ---------------------------------------------------------------------------
+
+_SCORE_CASES = [("T", None), ("O", "octahedron"), ("O", "cube"), ("I", "icosahedron"), ("I", "dodecahedron")]
+
+
+def _unit_corners(letter, kind):
+    v = SYMMETRY_GROUPS[letter]().to_polyhedron(kind=kind).vertices
+    return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+
+class TestMaxAngularMismatch:
+    """d_max = the largest possible mismatch: pi/N for cyclic, corner -> nearest
+    face centre for T/O/I (the deepest "hole" between corners)."""
+
+    @pytest.mark.parametrize("n", [2, 3, 5, 12])
+    def test_cyclic_is_pi_over_n(self, n):
+        assert max_angular_mismatch(n) == pytest.approx(np.pi / n)
+        assert max_angular_mismatch(f"C{n}") == pytest.approx(np.pi / n)
+
+    @pytest.mark.parametrize(
+        "letter, kind, expected_deg",
+        [
+            ("T", None, 70.5288),
+            ("O", None, 54.7356),
+            ("O", "cube", 54.7356),
+            ("I", None, 37.3774),
+            ("I", "dodecahedron", 37.3774),
+        ],
+    )
+    def test_platonic_values(self, letter, kind, expected_deg):
+        # Both solids of a group share the same maximum (their holes are the
+        # other solid's corners, at the same angle).
+        assert np.degrees(max_angular_mismatch(letter, kind)) == pytest.approx(expected_deg, abs=1e-3)
+
+    @pytest.mark.parametrize("letter, kind", _SCORE_CASES)
+    def test_no_random_pair_exceeds_it(self, letter, kind):
+        # Sampled check that it is an upper bound on the actual mismatch.
+        v = _unit_corners(letter, kind)
+        d_max = max_angular_mismatch(letter, kind)
+        for m in rot.random(500, random_state=11).as_matrix():
+            assert hausdorff_distance_sphere(v, v @ m.T) <= d_max + 1e-9
+
+    def test_invalid_inputs(self):
+        with pytest.raises(NotImplementedError, match="dihedral"):
+            max_angular_mismatch("D4")
+        with pytest.raises(ValueError, match="greater than 1"):
+            max_angular_mismatch(1)
+        with pytest.raises(ValueError, match="only applicable"):
+            max_angular_mismatch(4, kind="cube")
+        with pytest.raises(ValueError, match="does not match"):
+            max_angular_mismatch("O", kind="dodecahedron")
+
+
+class TestAngularScore:
+    """Symmetry-aware similarity of paired orientations in [0, 1]."""
+
+    @pytest.mark.parametrize("letter, kind", _SCORE_CASES)
+    def test_symmetry_equivalent_orientations_score_one(self, letter, kind):
+        # Any orientation compared with itself turned by one of the group's
+        # rotations looks identical: score 1 for every group element.
+        base = rot.from_euler("zxz", [10, 60, 5], degrees=True).as_matrix()
+        group = SYMMETRY_GROUPS[letter]().matrices
+        first = np.repeat(base[None], len(group), axis=0)
+        second = np.einsum("ij,njk->nik", base, group)  # base @ g
+        np.testing.assert_array_equal(angular_score(first, second, letter, kind=kind), 1.0)
+
+    @pytest.mark.parametrize("letter, kind", _SCORE_CASES)
+    def test_matches_hausdorff_reference(self, letter, kind):
+        # The batched computation equals the per-pair Hausdorff formula
+        # (clamped as documented), also when split into several chunks.
+        r1 = rot.random(120, random_state=1).as_matrix()
+        r2 = rot.random(120, random_state=2).as_matrix()
+        v = _unit_corners(letter, kind)
+        d_max = max_angular_mismatch(letter, kind)
+        ref = np.array([1 - hausdorff_distance_sphere(v @ a.T, v @ b.T) / d_max for a, b in zip(r1, r2)])
+        ref = np.where(ref > 1 - 1e-5, 1.0, np.where(ref < 1e-5, 0.0, ref))
+        np.testing.assert_allclose(angular_score(r1, r2, letter, kind=kind, chunk_size=7), ref, atol=1e-12)
+
+    @pytest.mark.parametrize("letter, kind", _SCORE_CASES)
+    def test_scores_in_unit_interval(self, letter, kind):
+        r1 = rot.random(300, random_state=5)
+        r2 = rot.random(300, random_state=6)
+        s = angular_score(r1, r2, letter, kind=kind)
+        assert s.shape == (300,)
+        assert ((s >= 0) & (s <= 1)).all()
+
+    @pytest.mark.parametrize("letter, kind", _SCORE_CASES)
+    def test_only_relative_orientation_matters(self, letter, kind):
+        # Turning both particles of every pair by the same rotation g leaves
+        # the score unchanged.
+        r1 = rot.random(50, random_state=7)
+        r2 = rot.random(50, random_state=8)
+        g = rot.from_euler("zxz", [33, 71, 12], degrees=True)
+        np.testing.assert_allclose(
+            angular_score(r1, r2, letter, kind=kind), angular_score(g * r1, g * r2, letter, kind=kind), atol=1e-9
+        )
+
+    def test_cyclic_delegates_to_geom(self):
+        # Cyclic input is scored exactly as geom.angular_score_for_c_symmetry,
+        # from the first zxz Euler angle (phi) of each rotation.
+        from cryocat.utils.geom import angular_score_for_c_symmetry
+
+        e1 = np.array([[10.0, 30.0, 0.0], [50.0, 80.0, 20.0], [0.0, 45.0, 0.0]])
+        e2 = np.array([[40.0, 10.0, 5.0], [175.0, 20.0, 0.0], [72.0, 45.0, 0.0]])
+        phi1 = rot.from_euler("zxz", e1, degrees=True).as_euler("zxz")[:, 0]
+        phi2 = rot.from_euler("zxz", e2, degrees=True).as_euler("zxz")[:, 0]
+        np.testing.assert_allclose(angular_score(e1, e2, "C5"), angular_score_for_c_symmetry(phi1, phi2, 5))
+
+    def test_kind_changes_intermediate_scores(self):
+        # Octahedron and cube corners are different marker sets: they agree at
+        # 1 (see above) but generic pairs get slightly different scores.
+        r1 = rot.random(50, random_state=9)
+        r2 = rot.random(50, random_state=10)
+        assert not np.allclose(angular_score(r1, r2, "O", kind="octahedron"), angular_score(r1, r2, "O", kind="cube"))
+
+    def test_explicit_max_val_is_used(self):
+        r1 = rot.random(20, random_state=12)
+        r2 = rot.random(20, random_state=13)
+        d_max = max_angular_mismatch("I")
+        a = angular_score(r1, r2, "I", max_val=d_max)
+        b = angular_score(r1, r2, "I", max_val=2 * d_max)
+        # Doubling d_max halves 1 - score (up to clamping near 1).
+        mask = a < 1
+        np.testing.assert_allclose(1 - b[mask], (1 - a[mask]) / 2, atol=1e-5)
+
+    def test_accepts_single_rotations_and_euler_angles(self):
+        s = angular_score([0.0, 0.0, 0.0], [90.0, 45.0, 0.0], "T")
+        assert s.shape == (1,)
+        same = angular_score(rot.identity(), rot.from_euler("zxz", [90, 45, 0], degrees=True), "T")
+        np.testing.assert_allclose(s, same)
+
+    def test_invalid_inputs(self):
+        r = rot.random(3, random_state=0)
+        with pytest.raises(ValueError, match="same length"):
+            angular_score(r, rot.random(2, random_state=1), "T")
+        with pytest.raises(NotImplementedError, match="dihedral"):
+            angular_score(r, r, "D2")
+        with pytest.raises(ValueError, match="only applicable"):
+            angular_score(r, r, 3, kind="cube")
+        with pytest.raises(ValueError, match="does not match"):
+            angular_score(r, r, "I", kind="cube")
+
+
+# ---------------------------------------------------------------------------
+# reduce_angle_grid (added 2026-10-01)
+# ---------------------------------------------------------------------------
+
+
+def _rot_angle_deg(m):
+    return np.degrees(np.arccos(np.clip((np.trace(m) - 1) / 2, -1, 1)))
+
+
+class TestReduceAngleGrid:
+    """Keep about one orientation per set of symmetric look-alikes (R ~ R @ g)."""
+
+    def test_identity_always_kept_in_global_mode(self):
+        grid = rot.from_matrix(np.stack([np.eye(3)] + list(rot.random(50, random_state=1).as_matrix())))
+        assert reduce_angle_grid(grid, "O")[0]
+
+    @pytest.mark.parametrize("symmetry", ["C4", "D3", "T", "O", "I"])
+    def test_global_keeps_exactly_one_of_each_exact_orbit(self, symmetry):
+        # A grid made of complete symmetry orbits {R @ g}: with no margin,
+        # exactly one member of each orbit lies in the kept slice.
+        group = get_symmetry_rotations(symmetry)
+        seeds = rot.random(20, random_state=2).as_matrix()
+        grid = np.einsum("aij,gjk->agik", seeds, group).reshape(-1, 3, 3)
+        keep = reduce_angle_grid(grid, symmetry).reshape(len(seeds), len(group))
+        assert np.array_equal(keep.sum(axis=1), np.ones(len(seeds)))
+
+    def test_global_kept_orientation_is_closest_to_reference(self):
+        # The kept member of an orbit is the copy closest to the reference.
+        group = get_symmetry_rotations("T")
+        ref = rot.from_euler("zxz", [30, 50, 70], degrees=True).as_matrix()
+        seed = rot.from_euler("zxz", [100, 20, -40], degrees=True).as_matrix()
+        orbit = np.einsum("ij,gjk->gik", seed, group)
+        kept = orbit[reduce_angle_grid(orbit, "T", reference=ref)][0]
+        dists = [_rot_angle_deg(ref.T @ m) for m in orbit]
+        assert _rot_angle_deg(ref.T @ kept) == pytest.approx(min(dists))
+
+    def test_margin_keeps_more(self):
+        grid = rot.random(2000, random_state=3)
+        n0 = reduce_angle_grid(grid, "I").sum()
+        n5 = reduce_angle_grid(grid, "I", margin_deg=5.0).sum()
+        assert n0 < n5 < 2000
+
+    def test_local_drops_only_orientations_with_a_kept_copy(self):
+        # Local mode: every dropped orientation has a kept symmetric copy within
+        # the tolerance, so nothing that was searched is lost.
+        group = get_symmetry_rotations("D3")
+        seeds = rot.random(30, random_state=4).as_matrix()
+        jitter = rot.from_euler("z", 1.0, degrees=True).as_matrix()
+        grid = np.concatenate([seeds, np.einsum("aij,jk,kl->ail", seeds, group[3], jitter)])
+        keep = reduce_angle_grid(grid, "D3", local=True, tolerance_deg=2.0)
+        for i in np.flatnonzero(~keep):
+            copies = np.einsum("ij,gjk->gik", grid[i], group)
+            gaps = [min(_rot_angle_deg(k.T @ c) for c in copies) for k in grid[keep]]
+            assert min(gaps) <= 2.0 + 1e-6
+
+    def test_local_with_zero_tolerance_keeps_distinct_orientations(self):
+        grid = rot.random(100, random_state=5)
+        assert reduce_angle_grid(grid, "O", local=True).all()
+
+    def test_c1_keeps_everything(self):
+        grid = rot.random(100, random_state=6)
+        assert reduce_angle_grid(grid, "C1").all()
+        assert reduce_angle_grid(grid, "C1", local=True, tolerance_deg=1.0).all()

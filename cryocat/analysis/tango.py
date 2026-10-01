@@ -28,6 +28,7 @@ from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.utils.geom import Matrix
 from cryocat.utils.classutils import get_classes_from_names, get_class_names_by_parent
+from cryocat.utils import symmetry
 from cryocat.utils.symmetry import SYMMETRY_GROUPS
 from cryocat._types import Symmetry
 from typing import Literal
@@ -691,16 +692,19 @@ class SymmParticle(Particle):
             with ``custom_rot`` set to a rotation of -90° about z.
         custom_rot : np.ndarray or scipy.spatial.transform.Rotation, optional
             Rotation applied (once) to Platonic-solid vertices before orienting
-            them with the particle rotation.  Not needed for cyclic (integer)
-            symmetry.  Default is None.
+            them with the particle rotation.  Only valid for Platonic (T/O/I)
+            symmetry; passing it for cyclic symmetry raises ValueError.  Stored as the ``(3, 3)`` matrix ``self.custom_rot``
+            (None if not given), so :meth:`similarity_symm` can rebuild the
+            full orientation of the solid.  Default is None.
 
         Raises
         ------
         ValueError
             If ``symm`` is not a recognised :data:`Symmetry` specification
             (including a removed legacy word), if ``kind`` is unknown or given
-            for cyclic symmetry, or if ``custom_rot`` is not a valid rotation
-            object or matrix.
+            for cyclic symmetry, if ``custom_rot`` is given for cyclic
+            symmetry, or if ``custom_rot`` is not a valid rotation object or
+            matrix.
         NotImplementedError
             If ``symm`` specifies dihedral symmetry.
         """
@@ -710,6 +714,7 @@ class SymmParticle(Particle):
         platonic = False
         self.category = None
         self.kind = None
+        self.custom_rot = None
 
         if symm is not None:
             spec = _parse_symm_spec(symm, kind)
@@ -728,6 +733,12 @@ class SymmParticle(Particle):
                 f"{symm} is an invalid symmetry type. It must refer to a platonic solid or be an integer > 1."
             )
 
+        if not platonic and custom_rot is not None:
+            raise ValueError(
+                f"custom_rot is only applicable to Platonic (T/O/I) symmetry, not cyclic ({symm!r}): "
+                "a cyclic particle is described by its in-plane angle alone."
+            )
+
         if platonic and custom_rot is None:
             self.solid = vertices @ self.rotation.T
         elif custom_rot is not None:
@@ -738,6 +749,7 @@ class SymmParticle(Particle):
 
             if Matrix(custom_rot).is_SO3():
 
+                self.custom_rot = np.asarray(custom_rot, dtype=float)
                 vertices = vertices @ custom_rot.T
                 self.solid = vertices @ self.rotation.T
 
@@ -758,29 +770,23 @@ class SymmParticle(Particle):
 
         Notes
         -----
-        Branches on ``self.kind`` (the specific solid), not ``self.category``
-        (the group letter, "O" or "I"): the vertex layout, and hence which
-        vertex pair is used, differs between the two solids sharing a group
-        letter (Octahedron/Cube for "O", Icosahedron/Dodecahedron for "I").
+        Delegates to :func:`cryocat.utils.symmetry.max_angular_mismatch`:
+        ``pi / n`` for cyclic C_n, and for Platonic symmetry the angle from a
+        corner of the solid to the nearest face centre (70.53° for T, 54.74°
+        for O, 37.38° for I, the same for both solids of a group).
+
+        Until 2026-09-29 this returned "180° minus the angle between two
+        hand-picked corners", which is correct only for the tetrahedron; for
+        the octahedron (90.00°), cube (109.47°), icosahedron (116.57°) and
+        dodecahedron (138.19°) it was too large, so :meth:`similarity_symm`
+        scores for these solids could never drop to 0. Scores computed with
+        the default maximum before that date differ for O/I.
 
         Returns
         -------
         float
         """
-        if self.kind in ("cube", "icosahedron"):
-
-            p1, p2 = self.solid[0], self.solid[2]
-            return np.pi - geom.great_circle_distance(p1, p2)
-
-        elif self.kind in ("tetrahedron", "octahedron", "dodecahedron"):
-
-            p1, p2 = self.solid[0], self.solid[1]
-            return np.pi - geom.great_circle_distance(p1, p2)
-
-        else:  # cyclic symmetry
-
-            n = self.category
-            return np.pi / n
+        return symmetry.max_angular_mismatch(self.category, kind=self.kind)
 
     def similarity_symm(self, other, max=None):
         """
@@ -805,24 +811,38 @@ class SymmParticle(Particle):
         Returns
         -------
         float
+            Score in [0, 1]; values within ``1e-5`` of 1 are set to 1 and
+            values below ``1e-5`` (including negative values, possible only
+            when *max* is smaller than the actual mismatch) to 0.
+
+        Notes
+        -----
+        Delegates to :func:`cryocat.utils.symmetry.angular_score`, the single
+        implementation also used for twist descriptors. Each particle's solid
+        is turned by ``self.rotation @ self.custom_rot`` (or ``self.rotation``
+        alone without ``custom_rot``), exactly as ``self.solid`` was built.
         """
         if self.category != other.category or self.kind != other.kind:
-
             raise ValueError("The symmetry tpyes of the input particles don't match!")
-        else:
 
-            sim_measure = geom.hausdorff_distance_sphere(
-                self.solid, other.solid
-            )  # min_great_circle_distance(self.solid, other.solid)
+        max_val = max if max is not None else self.max_dissimilarity()
+        score = symmetry.angular_score(
+            self._solid_rotation(), other._solid_rotation(), self.category, kind=self.kind, max_val=max_val
+        )
+        return float(score[0])
 
-            if max is not None:
+    def _solid_rotation(self) -> np.ndarray:
+        """Return the rotation that turns the canonical solid into ``self.solid``.
 
-                max_val = max
-
-            else:
-                max_val = self.max_dissimilarity()
-
-            return 1 - sim_measure / max_val
+        Returns
+        -------
+        numpy.ndarray
+            ``(3, 3)`` matrix ``self.rotation @ self.custom_rot``, or
+            ``self.rotation`` when no ``custom_rot`` was given.
+        """
+        if self.custom_rot is None:
+            return self.rotation
+        return self.rotation @ self.custom_rot
 
     @staticmethod
     def equip_symmetry(input_particle: Particle, symm: Symmetry, kind: str | None = None, custom_rot=None):
@@ -1592,7 +1612,7 @@ class TwistDescriptor(Descriptor):
         return [c for c in required if c not in df.columns]
 
     @staticmethod
-    def process_tomo_twist(t_nn, symm=None, symm_max_value=None, symm_category=None):
+    def process_tomo_twist(t_nn, symm=None, symm_max_value=None, symm_category=None, symm_kind: str | None = None):
         """Compute twist descriptors for a single tomogram.
 
         Parameters
@@ -1609,14 +1629,18 @@ class TwistDescriptor(Descriptor):
             (i.e. ``SymmParticle.category``): an int for cyclic symmetry, or
             the group letter ``"T"``/``"O"``/``"I"`` for Platonic symmetry.
             Default is None.
+        symm_kind : str, optional
+            For Platonic symmetry, the solid used for the angular score
+            (``SymmParticle.kind``, e.g. ``"cube"``); None for the group's
+            default solid. Ignored for cyclic symmetry. Default is None.
 
-        Raises
-        ------
-        NotImplementedError
-            If *symm_category* is Platonic (a non-numeric group letter).
-            :func:`cryocat.utils.geom.angular_score_for_c_symmetry` only
-            supports cyclic symmetry; extending it to Platonic groups is
-            tracked separately and intentionally not addressed here.
+        Notes
+        -----
+        ``angular_score`` is computed with
+        :func:`geom.angular_score_for_c_symmetry` for cyclic symmetry (from
+        the stored ``phi`` angles, as before) and with
+        :func:`cryocat.utils.symmetry.angular_score` for Platonic symmetry
+        (from the full query-point and neighbour rotations).
 
         Returns
         -------
@@ -1635,17 +1659,16 @@ class TwistDescriptor(Descriptor):
 
         if symm is not None:
             if isinstance(symm_category, str):
-                # geom.angular_score_for_c_symmetry only supports cyclic
-                # symmetry; symm_category is a Platonic group letter here
-                # ("T"/"O"/"I"). Fail loudly rather than silently score as if
-                # cyclic of the same numeric order (see Notes above).
-                raise NotImplementedError(
-                    f"process_tomo_twist: angular_score is not yet supported for Platonic symmetry "
-                    f"(symm_category={symm_category!r}); only cyclic symmetry is."
+                ang_scores = symmetry.angular_score(
+                    rotations_qp, rotations_nn, symm_category, kind=symm_kind, max_val=symm_max_value
                 )
-            ang_scores = geom.angular_score_for_c_symmetry(
-                np.deg2rad(phi_qp), np.deg2rad(phi_nn), symm_category, symm_max_value
-            )
+            else:
+                # Cyclic: keep using the stored phi columns rather than phi
+                # re-derived from the rotations, which can differ when theta
+                # is 0 (phi and psi are then not uniquely defined).
+                ang_scores = geom.angular_score_for_c_symmetry(
+                    np.deg2rad(phi_qp), np.deg2rad(phi_nn), symm_category, symm_max_value
+                )
 
         # Compute relative quantities
         rel_pos = rotations_qp.inv().apply(norm_coord)
@@ -1768,7 +1791,9 @@ class TwistDescriptor(Descriptor):
         for tomo_id in tomo_idx:
             t_nn = nn.get_nn_subset(motl_id_values=1, column_values=tomo_id)
             if t_nn.df.shape[0] > 0:
-                results.append(TwistDescriptor.process_tomo_twist(t_nn, symm, symm_max_value, symm_category))
+                results.append(
+                    TwistDescriptor.process_tomo_twist(t_nn, symm, symm_max_value, symm_category, symm_kind=kind)
+                )
 
         # if len(tomo_idx) == 1:
         #     work_opt = 1
@@ -2085,8 +2110,9 @@ class TwistDescriptor(Descriptor):
         Parameters
         ----------
         c_range : int, float, or range, optional
-            The range of C_n symmetries to consider. If None, defaults to range(2, 10). If a single integer or float is provided,
-            it will be converted to a range from 2 to that value. Default is None.
+            The range of C_n symmetries to consider. If None, defaults to range(2, 10) (C2 to C9). If a single integer
+            or float is provided, it is converted to the range from 2 up to and including that value (e.g. 6 gives
+            C2 to C6; before 2026-09-29 the value itself was left out). Default is None.
         plot_graph : bool, default=True
             Whether to plot the graph. If True, the graph will be displayed. Default is True
 
@@ -2101,7 +2127,7 @@ class TwistDescriptor(Descriptor):
         if c_range is None:
             c_range = range(2, 10)
         elif isinstance(c_range, (int, float, np.integer, np.floating)):
-            c_range = range(2, int(c_range))
+            c_range = range(2, int(c_range) + 1)
 
         symmetries_dict = {}
         for n in c_range:
@@ -2215,14 +2241,29 @@ class AngularScoreNN(Filter):
     def __init__(self, twist_desc, num_neighbors=1):
         """Filter twist descriptor based on the angular score.
 
+        For each query point, keeps the *num_neighbors* neighbours with the
+        highest ``angular_score``, i.e. the best orientational fits (the score
+        is a similarity: 1 = identical up to symmetry, 0 = as different as
+        possible).
+
         Parameters
         ----------
         twist_desc : TwistDescriptor
-            The original TwistDescriptor instance.
+            The original TwistDescriptor instance. Must contain the
+            ``angular_score`` column (computed with ``symm``).
         num_neighbors : int, default=1
             The number of nearest neighbors to consider. Default is 1.
+
+        Notes
+        -----
+        Until 2026-09-29 the scores were sorted in ascending order, so the
+        *least* similar neighbours were kept.
         """
-        twist_df = twist_desc.df.sort_values(by=["qp_id", "angular_score"]).groupby("qp_id").head(num_neighbors)
+        twist_df = (
+            twist_desc.df.sort_values(by=["qp_id", "angular_score"], ascending=[True, False])
+            .groupby("qp_id")
+            .head(num_neighbors)
+        )
         self.filter = TwistDescriptor(twist_df)
 
 
