@@ -1725,18 +1725,24 @@ def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
         The input volume to be symmetrized, either as an ndarray or a path to a
         map file. Normalized via :func:`read`.
     symmetry : Symmetry
-        The point-group symmetry specifier. Accepts a string like ``"C5"`` or a
-        bare number (interpreted as the order of the cyclic symmetry).
+        The point-group symmetry specifier: ``"Cn"`` or a bare number (cyclic),
+        ``"Dn"``, ``"T"``, ``"O"`` or ``"I"``.
 
-    Returns
-    -------
-    ndarray: The symmetrized volume.
+    Returns:
+    --------
+    ndarray: The symmetrized volume (average over all rotations of the group).
 
     Raises
     ------
     ValueError
         If the symmetry is not specified correctly
 
+    Notes:
+    ------
+    The map must be in cryoCAT's canonical orientation for the group, with
+    the symmetry centre at the box centre; see
+    :func:`cryocat.utils.imageutils.symmetrize_volume` (which also documents
+    the wrong angles used before 2026-10-01).
     """
     return imageutils.symmetrize_volume(read(input_map), symmetry)
 
