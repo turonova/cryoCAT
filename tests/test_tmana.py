@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from unittest.mock import patch
 from cryocat.analysis import tmana
+from cryocat.utils import geom
 from cryocat.core import cryomotl
 
 # IMPORTANT: pytest-mock needs to be installed within environment to run these tests
@@ -640,3 +641,50 @@ class TestCreateAngularDistanceMaps:
         assert dist_inplane.shape == (5, 6, 7)
 
     
+
+
+# ── create_angular_distance_maps with symmetry (added 2026-10-02) ─────────────
+
+class TestCreateAngularDistanceMapsSymmetry:
+    """The symmetry reaches compare_rotations with its group letter, and the old keyword is deprecated."""
+
+    # index 0 = reference; index 1 = one C4 step (90 deg spin) away, same look for C4; index 2 = 10 deg more tilt
+    ANGLES = np.array([[20.0, 30.0, 10.0], [110.0, 30.0, 10.0], [20.0, 40.0, 10.0]])
+
+    def _amap(self):
+        amap = np.full((3, 3, 3), -1, dtype=int)
+        amap[0, 0, 0], amap[1, 1, 1], amap[2, 2, 2] = 0, 1, 2
+        return amap
+
+    def _run(self, **kwargs):
+        amap = self._amap()
+        with patch("cryocat.analysis.tmana.cryomap.read", return_value=amap), \
+             patch("cryocat.analysis.tmana.ioutils.euler_angles_load", return_value=self.ANGLES), \
+             patch("cryocat.analysis.tmana.cryomap.write"):
+            return tmana.create_angular_distance_maps(amap, self.ANGLES, write_out_maps=False, **kwargs)
+
+    def test_c4_matches_compare_rotations(self):
+        # Map values equal compare_rotations(reference, angles, "C4") at the indexed voxels
+        maps = self._run(symmetry="C4")
+        ref = np.tile(self.ANGLES[0], (3, 1))
+        expected = geom.compare_rotations(ref, self.ANGLES, symmetry="C4")
+        for got, exp in zip(maps, expected):
+            got_vals = np.array([got[0, 0, 0], got[1, 1, 1], got[2, 2, 2]])
+            np.testing.assert_allclose(np.nan_to_num(got_vals), np.nan_to_num(exp), atol=1e-6)
+        # one C4 step away looks identical -> 0 (NaN read as 0, see angular_distance Notes)
+        dist_all, _, dist_inplane = maps
+        assert np.nan_to_num(dist_all[1, 1, 1]) == pytest.approx(0.0, abs=1e-4)
+        assert dist_inplane[1, 1, 1] == pytest.approx(0.0, abs=1e-6)
+
+    def test_non_cyclic_raises(self):
+        # Cone/in-plane maps are not defined for T (previously silently computed as C12)
+        with pytest.raises(NotImplementedError):
+            self._run(symmetry="T")
+
+    def test_deprecated_keyword(self):
+        # cyclic_symmetry still works, with a DeprecationWarning, and gives the same maps as symmetry=
+        with pytest.warns(DeprecationWarning, match="cyclic_symmetry"):
+            old = self._run(cyclic_symmetry=4)
+        new = self._run(symmetry=4)
+        for a, b in zip(old, new):
+            np.testing.assert_array_equal(a, b)

@@ -600,6 +600,26 @@ SYMMETRY_GROUPS: dict[str, type[SymmGroup]] = {
 }
 
 
+def _make_group(symmetry: Symmetry) -> SymmGroup:
+    """Build the canonical :class:`SymmGroup` for a symmetry specifier.
+
+    Parameters
+    ----------
+    symmetry : Symmetry
+        Symmetry specifier (``"C5"``, ``"D3"``, ``"T"``, ``"O"``, ``"I"`` or
+        an integer, interpreted as cyclic); normalized via
+        :func:`cryocat.utils.geom.as_symmetry`.
+
+    Returns
+    -------
+    SymmGroup
+        The group in its canonical orientation (identity first in ``matrices``).
+    """
+    letter, order = geom.as_symmetry(symmetry)
+    cls = SYMMETRY_GROUPS[letter]
+    return cls() if letter in ("T", "O", "I") else cls(order)
+
+
 def get_symmetry_rotations(
     symmetry: Symmetry,
     *,
@@ -626,13 +646,7 @@ def get_symmetry_rotations(
         ``(M, 3, 3)`` array of rotation matrices.  The identity is
         always the first element.
     """
-    group_letter, order = geom.as_symmetry(symmetry)
-
-    cls = SYMMETRY_GROUPS[group_letter]
-    if group_letter in ("T", "O", "I"):
-        group: SymmGroup = cls()
-    else:
-        group = cls(order)
+    group = _make_group(symmetry)
 
     # Axis reorientation via conjugation C @ R @ C^T, implemented once in
     # SymmGroup.oriented().
@@ -879,6 +893,68 @@ def _rotation_angles_deg(traces: np.ndarray) -> np.ndarray:
     return np.degrees(np.arccos(np.clip((traces - 1.0) / 2.0, -1.0, 1.0)))
 
 
+def closest_symmetric_copy(
+    rotations_1: RotationLike,
+    rotations_2: RotationLike,
+    symmetry: Symmetry,
+    *,
+    chunk_size: int = 20000,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Find, for each pair, the symmetric copy of rotation 2 closest to rotation 1.
+
+    A particle with symmetry *symmetry* looks identical in orientations ``R``
+    and ``R @ g`` for every group rotation ``g`` (template-side symmetry, as for
+    particle-list angles; see :func:`reduce_angle_grid`). For each pair
+    ``(R1, R2)`` this returns the smallest rotation angle between ``R1`` and
+    any copy ``R2 @ g``, and which ``g`` achieves it. The angle of a rotation
+    is read from its matrix trace, so no Euler angles are involved.
+
+    Parameters
+    ----------
+    rotations_1 : RotationLike
+        First rotation(s); normalized via :func:`cryocat.utils.geom.as_rotation`
+        (Euler angles in degrees, ``zxz``).
+    rotations_2 : RotationLike
+        Second rotation(s), same number as *rotations_1* (compared pair by pair).
+    symmetry : Symmetry
+        Symmetry of the particle, in the canonical frame of this module (see
+        :func:`reduce_angle_grid` Notes). Any group (C, D, T, O, I).
+    chunk_size : int, optional
+        Number of pairs processed at once (bounds memory use).
+
+    Returns
+    -------
+    angle : numpy.ndarray
+        Shape ``(N,)``. Smallest rotation angle in degrees, in [0, 180].
+    copy_index : numpy.ndarray
+        Shape ``(N,)``, int. Index into ``group.matrices`` (identity = 0) of the
+        closest copy, i.e. the closest copy is ``R2 @ matrices[copy_index]``.
+
+    Raises
+    ------
+    ValueError
+        If the two inputs hold a different number of rotations.
+    """
+    mats_1 = geom.as_rotation(rotations_1).as_matrix().reshape(-1, 3, 3)
+    mats_2 = geom.as_rotation(rotations_2).as_matrix().reshape(-1, 3, 3)
+    if len(mats_1) != len(mats_2):
+        raise ValueError(
+            f"The inputs must hold the same number of rotations, got {len(mats_1)} and {len(mats_2)}."
+        )
+    g_mats = _make_group(symmetry).matrices
+    rel = np.einsum("nji,njk->nik", mats_1, mats_2)  # R1^T @ R2
+
+    n = len(rel)
+    angle = np.empty(n)
+    copy_index = np.empty(n, dtype=int)
+    for start in range(0, n, chunk_size):
+        # trace(rel @ g) for every pair and every group rotation
+        copy_angles = _rotation_angles_deg(np.einsum("nij,gji->ng", rel[start : start + chunk_size], g_mats))
+        copy_index[start : start + chunk_size] = copy_angles.argmin(axis=1)
+        angle[start : start + chunk_size] = copy_angles.min(axis=1)
+    return angle, copy_index
+
+
 def reduce_angle_grid(
     rotations: RotationLike,
     symmetry: Symmetry,
@@ -939,9 +1015,7 @@ def reduce_angle_grid(
     ``T`` ``222``); O has 4-fold axes along x, y, z; I has 2-fold axes along
     x, y, z with 5-fold axes in the yz-plane (ChimeraX ``I`` ``222``).
     """
-    letter, order = geom.as_symmetry(symmetry)
-    group = SYMMETRY_GROUPS[letter]() if letter in ("T", "O", "I") else SYMMETRY_GROUPS[letter](order)
-    g_mats = group.matrices  # identity first
+    g_mats = _make_group(symmetry).matrices  # identity first
     mats = geom.as_rotation(rotations).as_matrix().reshape(-1, 3, 3)
     if reference is not None:
         ref = _as_single_rotation(reference).as_matrix()

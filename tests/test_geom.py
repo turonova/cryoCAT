@@ -135,6 +135,69 @@ def test_angular_distance_dist(input_1, input_2, result_dist):
     assert np.allclose(result, result_dist)
 
 
+@pytest.mark.parametrize("symm", [4, "C4"])
+def test_angular_distance_single_rotation_with_symmetry(symm):
+    """A single rotation (not a stack) is accepted together with symmetry > 1.
+
+    Previously ``as_euler`` returned a (3,) triple and indexing ``[:, 0]``
+    raised IndexError. 10 deg and 100 deg spins differ by one C4 step (90 deg),
+    so they are the same orientation for a C4 particle.
+    """
+    rot1 = srot.from_euler("zxz", [10.0, 30.0, 0.0], degrees=True)
+    rot2 = srot.from_euler("zxz", [100.0, 30.0, 0.0], degrees=True)
+    angle, dist = angular_distance(rot1, rot2, symmetry=symm)
+    assert angle.shape == (1,) and dist.shape == (1,)
+    np.testing.assert_allclose(angle, 0.0, atol=1e-5)
+
+
+def test_angular_distance_one_vs_stack_raises():
+    """One rotation vs a stack is an error (previously printed and returned None)."""
+    rot1 = srot.from_euler("zxz", [0.0, 0.0, 0.0], degrees=True)
+    rots = srot.random(3, random_state=0)
+    with pytest.raises(ValueError, match="same number of rotations"):
+        angular_distance(rot1, rots)
+
+
+def test_angular_distance_radians_output():
+    """With ``degrees=False`` the angle is returned in radians, ``dist`` is unchanged.
+
+    The same pair of rotations is given once as degree triples and once as
+    radian triples; the angles must agree after unit conversion.
+    """
+    eul_1 = np.array([[10.0, 20.0, 30.0]])
+    eul_2 = np.array([[50.0, 60.0, 70.0]])
+    ang_deg, dist_deg = angular_distance(eul_1, eul_2, degrees=True)
+    ang_rad, dist_rad = angular_distance(np.radians(eul_1), np.radians(eul_2), degrees=False)
+    np.testing.assert_allclose(ang_rad, np.radians(ang_deg))
+    np.testing.assert_allclose(dist_rad, dist_deg)
+    # A 180 deg turn is pi in radians
+    ang_pi, _ = angular_distance(np.zeros((1, 3)), np.array([[0.0, np.pi, 0.0]]), degrees=False)
+    np.testing.assert_allclose(ang_pi, np.pi)
+
+
+def test_angular_distance_radians_with_symmetry_matches_degrees():
+    """With ``degrees=False`` the C_n step is 2*pi/n (not 360/n applied to radians).
+
+    Degree and radian inputs describing the same rotations must give the same
+    symmetry-folded distance.
+    """
+    eul_1 = np.array([[10.0, 20.0, 30.0], [80.0, 45.0, -60.0]])
+    eul_2 = np.array([[130.0, 25.0, 30.0], [5.0, 40.0, 10.0]])
+    ang_deg, _ = angular_distance(eul_1, eul_2, symmetry=3)
+    ang_rad, _ = angular_distance(np.radians(eul_1), np.radians(eul_2), degrees=False, symmetry=3)
+    np.testing.assert_allclose(ang_rad, np.radians(ang_deg), atol=1e-10)
+
+
+def test_angular_distance_dist_equals_sin_squared_half_angle():
+    """The second output equals sin(angle / 2)**2, as documented."""
+    rots_1 = srot.random(500, random_state=2)
+    rots_2 = srot.random(500, random_state=3)
+    angle, dist = angular_distance(rots_1, rots_2)
+    expected = np.sin(np.radians(angle) / 2) ** 2
+    expected[expected < 10e-8] = 0
+    np.testing.assert_allclose(dist, expected, atol=1e-10)
+
+
 @pytest.mark.parametrize(
     "quat_stack, log_stack",
     [
@@ -1868,3 +1931,215 @@ class TestAsRotation33:
         result = as_rotation(euler_arr)
         expected = srot.from_euler("zxz", euler_arr, degrees=True)
         assert np.allclose(result.as_matrix(), expected.as_matrix(), atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Symmetry in angular_distance / inplane_distance / compare_rotations (added 2026-10-02)
+# ---------------------------------------------------------------------------
+
+from cryocat.utils.exceptions import UserInputError
+from cryocat.utils.symmetry import closest_symmetric_copy, get_symmetry_rotations
+
+
+def _old_c1_angular_distance(r1, r2):
+    """Verbatim copy of the C1 path before 2026-10-02 (quaternion formula), for regression checks."""
+    q1 = np.array(r1.as_quat(), ndmin=2)
+    q2 = np.array(r2.as_quat(), ndmin=2)
+    angle = np.degrees(2 * np.arccos(np.abs(np.sum(q1 * q2, axis=1)))).astype(float)
+    dist = 1 - np.power(np.sum(q1 * q2, 1), 2)
+    dist[dist < 10e-8] = 0
+    return angle, dist
+
+
+def _old_c1_inplane_distance(r1, r2):
+    """Verbatim copy of the C1 in-plane path before 2026-10-02 (degrees), for regression checks."""
+    phi1 = np.array(r1.as_euler("zxz", degrees=True), ndmin=2)[:, 0]
+    phi2 = np.array(r2.as_euler("zxz", degrees=True), ndmin=2)[:, 0]
+    phi1 = np.where(abs(phi1) < ANGLE_DEGREES_TOL, 0.0, phi1) + 180.0
+    phi2 = np.where(abs(phi2) < ANGLE_DEGREES_TOL, 0.0, phi2) + 180.0
+    d = np.abs(phi1 - phi2)
+    return np.where(d > 180.0, np.abs(d - 360.0), d)
+
+
+def test_c1_outputs_unchanged():
+    """C1 (default) keeps exactly the previous results (pana ground truth relies on it)."""
+    r1 = srot.random(500, random_state=20)
+    r2 = srot.random(500, random_state=21)
+    angle, dist = angular_distance(r1, r2)
+    old_angle, old_dist = _old_c1_angular_distance(r1, r2)
+    np.testing.assert_array_equal(angle, old_angle)
+    np.testing.assert_array_equal(dist, old_dist)
+    np.testing.assert_array_equal(inplane_distance(r1, r2), _old_c1_inplane_distance(r1, r2))
+    all3 = compare_rotations(r1, r2)
+    np.testing.assert_array_equal(all3[0], old_angle)
+    np.testing.assert_array_equal(all3[1], cone_distance(r1, r2))
+    np.testing.assert_array_equal(all3[2], _old_c1_inplane_distance(r1, r2))
+
+
+@pytest.mark.parametrize(
+    "eul_1, eul_2, expected",
+    [
+        # spins just either side of the old "fold" edge: 1 degree apart, not 89
+        ([0.5, 30.0, 10.0], [-0.5, 30.0, 10.0], 1.0),
+        # no tilt (theta = 0): spins 0 and 90 are the same C4 orientation
+        ([0.0, 0.0, 0.0], [90.0, 0.0, 0.0], 0.0),
+        # one full C4 step apart: identical
+        ([10.0, 30.0, 0.0], [100.0, 30.0, 0.0], 0.0),
+    ],
+)
+def test_angular_distance_c4_edge_cases(eul_1, eul_2, expected):
+    """C4 cases that the old phi-folding got wrong (89, 90 and 0 degrees were reported)."""
+    angle, _ = angular_distance(np.array([eul_1]), np.array([eul_2]), symmetry="C4")
+    np.testing.assert_allclose(angle, expected, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "phi_1, phi_2, expected",
+    [
+        (10.0, 80.0, 20.0),  # 80 is 10 short of 90 (= 0 for C4): 10 + 10 = 20, the old code said 70
+        (0.5, -0.5, 1.0),  # across the edge
+        (0.0, 90.0, 0.0),  # one C4 step
+        (0.0, 45.0, 45.0),  # the largest possible in-plane distance for C4 (180/4)
+    ],
+)
+def test_inplane_distance_c4_cases(phi_1, phi_2, expected):
+    """In-plane distance under C4 is the spin difference after removing whole 90-degree steps."""
+    r1 = np.array([[phi_1, 30.0, 10.0]])
+    r2 = np.array([[phi_2, 30.0, 10.0]])
+    np.testing.assert_allclose(inplane_distance(r1, r2, symmetry="C4"), expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("n", [2, 3, 4, 6])
+def test_inplane_distance_cn_matches_brute_force(n):
+    """C_n in-plane = smallest wrapped |phi1 - phi2 - k*360/n| over k, and lies in [0, 180/n]."""
+    r1 = srot.random(300, random_state=22)
+    r2 = srot.random(300, random_state=23)
+    phi1 = r1.as_euler("zxz", degrees=True)[:, 0]
+    phi2 = r2.as_euler("zxz", degrees=True)[:, 0]
+    diffs = np.abs(((phi1 - phi2)[:, None] - np.arange(n) * 360.0 / n + 180.0) % 360.0 - 180.0)
+    got = inplane_distance(r1, r2, symmetry=n)
+    np.testing.assert_allclose(got, diffs.min(axis=1), atol=1e-6)
+    assert np.all((got >= 0) & (got <= 180.0 / n + 1e-9))
+
+
+@pytest.mark.parametrize("symm", ["C3", "D2", "D6", "T", "O", "I"])
+def test_angular_distance_symmetry_equals_closest_copy(symm):
+    """With symmetry, angular_distance measures to the closest symmetric copy (any group)."""
+    r1 = srot.random(200, random_state=24)
+    r2 = srot.random(200, random_state=25)
+    angle, dist = angular_distance(r1, r2, symmetry=symm)
+    ref_angle, _ = closest_symmetric_copy(r1, r2, symm)
+    np.testing.assert_allclose(angle, ref_angle, atol=1e-5)
+    # the second output comes from the same copy: dist = sin^2(angle / 2)
+    expected = np.sin(np.radians(angle) / 2) ** 2
+    expected[expected < 10e-8] = 0
+    np.testing.assert_allclose(dist, expected, atol=1e-10)
+
+
+def test_angular_distance_tetrahedral_is_not_c12():
+    """'T' is real tetrahedral symmetry, no longer treated as C12 (its order)."""
+    r1 = srot.random(200, random_state=26)
+    r2 = srot.random(200, random_state=27)
+    t_angle, _ = angular_distance(r1, r2, symmetry="T")
+    c12_angle, _ = angular_distance(r1, r2, symmetry="C12")
+    assert not np.allclose(t_angle, c12_angle)
+
+
+@pytest.mark.parametrize("symm", ["T", "O", "I", "D3"])
+def test_symmetric_copy_has_zero_angular_distance(symm):
+    """R and R @ g look identical for every group rotation g.
+
+    NaN is read as 0, as documented in the angular_distance Notes (known
+    limitation: no clipping before arccos, kept for the pana ground truth; it
+    affects identical rotations with or without symmetry at the same rate).
+    """
+    gs = get_symmetry_rotations(symm)
+    r = srot.random(1, random_state=28).as_matrix()
+    r1 = srot.from_matrix(np.repeat(r, len(gs), axis=0))
+    r2 = r1 * srot.from_matrix(gs)
+    angle, dist = angular_distance(r1, r2, symmetry=symm)
+    np.testing.assert_allclose(np.nan_to_num(angle, nan=0.0), 0.0, atol=1e-4)
+    np.testing.assert_allclose(dist, 0.0, atol=1e-12)  # dist is never NaN
+
+
+@pytest.mark.parametrize("symm", ["D2", "T", "O", "I"])
+def test_non_cyclic_cone_inplane_raise(symm):
+    """D/T/O/I have several equivalent axes: cone / in-plane distances are not defined."""
+    r1 = srot.random(5, random_state=29)
+    r2 = srot.random(5, random_state=30)
+    with pytest.raises(NotImplementedError):
+        inplane_distance(r1, r2, symmetry=symm)
+    with pytest.raises(NotImplementedError):
+        cone_inplane_distance(r1, r2, symmetry=symm)
+    for rotation_type in ("all", "cone_distance", "in_plane_distance"):
+        with pytest.raises(NotImplementedError):
+            compare_rotations(r1, r2, symmetry=symm, rotation_type=rotation_type)
+    # the full angular distance alone is supported
+    out = compare_rotations(r1, r2, symmetry=symm, rotation_type="angular_distance")
+    np.testing.assert_allclose(out, angular_distance(r1, r2, symmetry=symm)[0])
+
+
+def test_compare_rotations_cn_consistent_with_parts():
+    """compare_rotations returns the same three numbers as the individual functions (C5)."""
+    r1 = srot.random(100, random_state=31)
+    r2 = srot.random(100, random_state=32)
+    ang, cone, inpl = compare_rotations(r1, r2, symmetry="C5")
+    np.testing.assert_array_equal(ang, angular_distance(r1, r2, symmetry="C5")[0])
+    np.testing.assert_array_equal(cone, cone_distance(r1, r2))
+    np.testing.assert_array_equal(inpl, inplane_distance(r1, r2, symmetry="C5"))
+    # positional third argument is the symmetry (as used by tmana)
+    np.testing.assert_array_equal(compare_rotations(r1, r2, "C5")[0], ang)
+
+
+def test_compare_rotations_unknown_type_raises():
+    """An unsupported rotation_type is still a UserInputError (checked before any computation)."""
+    r = srot.random(2, random_state=33)
+    with pytest.raises(UserInputError):
+        compare_rotations(r, r, rotation_type="bogus")
+
+
+@pytest.mark.parametrize("symm", [1, 4])
+def test_inplane_distance_radians(symm):
+    """degrees=False: in-plane distance in radians, equal to the degree result converted (C1 and C4)."""
+    eul_1 = np.array([[10.0, 20.0, 30.0], [170.0, 60.0, -20.0], [-80.0, 100.0, 5.0]])
+    eul_2 = np.array([[50.0, 60.0, 70.0], [-175.0, 40.0, 10.0], [100.0, 120.0, -5.0]])
+    deg = inplane_distance(eul_1, eul_2, symmetry=symm)
+    rad = inplane_distance(np.radians(eul_1), np.radians(eul_2), degrees=False, symmetry=symm)
+    np.testing.assert_allclose(rad, np.radians(deg), atol=1e-10)
+
+
+def test_cyclic_symmetry_keyword_deprecated():
+    """The old keyword still works, with a DeprecationWarning, and gives the same result."""
+    r1 = srot.random(20, random_state=34)
+    r2 = srot.random(20, random_state=35)
+    with pytest.warns(DeprecationWarning, match="cyclic_symmetry"):
+        old = compare_rotations(r1, r2, cyclic_symmetry=4)
+    new = compare_rotations(r1, r2, symmetry=4)
+    for a, b in zip(old, new):
+        np.testing.assert_array_equal(a, b)
+    with pytest.warns(DeprecationWarning):
+        np.testing.assert_array_equal(
+            angular_distance(r1, r2, cyclic_symmetry="C4")[0], angular_distance(r1, r2, symmetry="C4")[0]
+        )
+
+
+def test_resolve_symmetry_argument():
+    """Normalized labels; conflicting values of the two keywords raise."""
+    assert resolve_symmetry_argument(4, None) == "C4"
+    assert resolve_symmetry_argument("d3", None) == "D3"
+    assert resolve_symmetry_argument("i", None) == "I"
+    with pytest.warns(DeprecationWarning):
+        assert resolve_symmetry_argument("C1", 6) == "C6"  # default symmetry -> old value used
+    with pytest.warns(DeprecationWarning):
+        assert resolve_symmetry_argument("C6", 6) == "C6"  # same value given twice is fine
+    with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="Conflicting"):
+        resolve_symmetry_argument("C4", 6)
+
+
+def test_require_cyclic_symmetry():
+    """Cyclic groups pass, all others raise NotImplementedError naming the quantity."""
+    require_cyclic_symmetry("C7", "x")
+    require_cyclic_symmetry(1, "x")
+    for symm in ("D2", "T", "O", "I"):
+        with pytest.raises(NotImplementedError, match="In-plane distances"):
+            require_cyclic_symmetry(symm, "In-plane distances")

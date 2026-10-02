@@ -1419,9 +1419,11 @@ def spline_sampling(coords: pd.DataFrame, sampling_distance: float) -> np.ndarra
 def compare_rotations(
     input_rotation_1: RotationLike,
     input_rotation_2: RotationLike,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
     rotation_type: str = "all",
-) -> tuple[float, float, float] | float:
+    *,
+    cyclic_symmetry: Symmetry | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | np.ndarray:
     """Compare the rotations between two sets of angles.
 
     Parameters
@@ -1431,37 +1433,80 @@ def compare_rotations(
         :class:`scipy.spatial.transform.Rotation`).
     input_rotation_2 : RotationLike
         The second set of rotations, same conventions as ``input_rotation_1``.
-    cyclic_symmetry : Symmetry, default=1
-        Cyclic rotational symmetry specifier (e.g. ``"C5"`` or ``5``); normalized
-        via :func:`as_symmetry`.
+    symmetry : Symmetry, default="C1"
+        Symmetry of the particles (``"C5"``, ``5``, ``"D3"``, ``"T"``, ``"O"``,
+        ``"I"``), in the canonical frame of :mod:`cryocat.utils.symmetry`;
+        normalized via :func:`as_symmetry`. D/T/O/I are supported only for
+        ``rotation_type="angular_distance"`` (see Raises).
     rotation_type : {"all", "angular_distance", "cone_distance", "in_plane_distance"}, default="all"
-        Selects which distance(s) to return.
+        Selects which distance(s) to return. Only the requested distances are computed.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
-    tuple
-        A tuple containing the following distances:
-        - dist_degrees (float): The overall angular distance between the two sets of angles.
-        - dist_degrees_normals (float): The angular distance between the normal vectors of the two sets of angles.
-        - dist_degrees_inplane (float): The angular distance within the plane of rotation between the two sets of angles.
+    numpy.ndarray or tuple of numpy.ndarray
+        For ``"all"`` the tuple ``(angular, cone, in_plane)`` in degrees, else
+        the single requested array:
 
+        - angular: smallest full rotation angle between the orientations,
+          over all symmetric copies (see :func:`angular_distance`);
+        - cone: angle between the particles' z-axes (see :func:`cone_distance`);
+        - in_plane: difference of the spin about the particle's own z-axis,
+          in [0, 180/n] for C_n (see :func:`inplane_distance`).
+
+    Raises
+    ------
+    UserInputError
+        If ``rotation_type`` is not supported.
+    NotImplementedError
+        If ``symmetry`` is not cyclic (D/T/O/I) and ``rotation_type`` needs the
+        cone or in-plane distance: these groups have several equivalent axes,
+        so these distances are not defined.
     """
-
-    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
-
-    dist_degrees = angular_distance(input_rotation_1, input_rotation_2, cyclic_symmetry=cyclic_symmetry)[0]
-    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(input_rotation_1, input_rotation_2, cyclic_symmetry=cyclic_symmetry)
-
-    if rotation_type == "all":
-        return dist_degrees, dist_degrees_normals, dist_degrees_inplane
-    elif rotation_type == "angular_distance":
-        return dist_degrees
-    elif rotation_type == "cone_distance":
-        return dist_degrees_normals
-    elif rotation_type == "in_plane_distance":
-        return dist_degrees_inplane
-    else:
+    if rotation_type not in ("all", "angular_distance", "cone_distance", "in_plane_distance"):
         raise UserInputError(f"The rotation type {rotation_type} is not supported.")
+    symmetry = resolve_symmetry_argument(symmetry, cyclic_symmetry)
+
+    if rotation_type == "angular_distance":
+        return angular_distance(input_rotation_1, input_rotation_2, symmetry=symmetry)[0]
+    require_cyclic_symmetry(symmetry, "cone and in-plane distances")
+    if rotation_type == "cone_distance":
+        return cone_distance(input_rotation_1, input_rotation_2)
+    if rotation_type == "in_plane_distance":
+        return inplane_distance(input_rotation_1, input_rotation_2, symmetry=symmetry)
+
+    dist_degrees = angular_distance(input_rotation_1, input_rotation_2, symmetry=symmetry)[0]
+    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(
+        input_rotation_1, input_rotation_2, symmetry=symmetry
+    )
+    return dist_degrees, dist_degrees_normals, dist_degrees_inplane
+
+
+def require_cyclic_symmetry(symmetry: Symmetry, what: str) -> None:
+    """Raise ``NotImplementedError`` if *symmetry* is not cyclic (C_n).
+
+    Used where a quantity needs a single symmetry axis (cone and in-plane
+    distances), so callers can fail before any expensive computation.
+
+    Parameters
+    ----------
+    symmetry : Symmetry
+        Symmetry specifier; normalized via :func:`as_symmetry`.
+    what : str
+        Name of the quantity, used in the error message.
+
+    Raises
+    ------
+    NotImplementedError
+        If *symmetry* is dihedral, tetrahedral, octahedral or icosahedral.
+    """
+    letter, _ = as_symmetry(symmetry)
+    if letter != "C":
+        raise NotImplementedError(
+            f"{what} are defined only for cyclic symmetry (C_n), got {symmetry!r}: D/T/O/I have several "
+            "equivalent axes. Use angular_distance (or rotation_type='angular_distance') for these groups."
+        )
 
 
 def euler_angles_to_normals(angles: EulerAngles) -> np.ndarray:
@@ -1689,9 +1734,16 @@ def inplane_distance(
     input_rotation_2: RotationLike,
     convention: str = "zxz",
     degrees: bool = True,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
 ) -> np.ndarray:
     """Compute the angular distance between inplane-rotation portion of two given rotations.
+
+    The in-plane rotation is the spin about the particle's own z-axis, i.e. the
+    first angle phi of the ``zxz`` (extrinsic) Euler triple as returned by
+    :meth:`scipy.spatial.transform.Rotation.as_euler` (phi in [-180, 180]).
+    For tilt 0 or 180 degrees scipy puts the whole spin into phi (psi = 0).
 
     Parameters
     ----------
@@ -1702,19 +1754,31 @@ def inplane_distance(
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees : bool, optional
-        Return angular distance in degrees (True) or radians (False). Defaults to True.
-    cyclic_symmetry : Symmetry, default=1
-        Cyclic rotational symmetry specifier of underlying particles (``"C5"`` or
-        ``5``); normalized via :func:`as_symmetry`.
+        Unit of Euler-angle inputs and of the returned distance: degrees (True)
+        or radians (False). Defaults to True.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry of the particles (``"C5"`` or ``5``), with the n-fold
+        axis along the particle's z-axis; normalized via :func:`as_symmetry`.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
-    float
-        Angular distance between inplane rotations.
+    numpy.ndarray
+        Angular distance between inplane rotations, in [0, 180] degrees for C1
+        and in [0, 180/n] for C_n (a C_n symmetry turn changes phi by a multiple
+        of 360/n, so the closest copy is taken); radians if ``degrees=False``.
+
+    Raises
+    ------
+    NotImplementedError
+        If ``symmetry`` is not cyclic (D/T/O/I).
     """
     input_rotation_1 = as_rotation(input_rotation_1, euler_order=convention, degrees=degrees)
     input_rotation_2 = as_rotation(input_rotation_2, euler_order=convention, degrees=degrees)
-    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
+    symmetry = resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    require_cyclic_symmetry(symmetry, "In-plane distances")
+    _, order = as_symmetry(symmetry)
     phi1 = np.array(input_rotation_1.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
     phi2 = np.array(input_rotation_2.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
 
@@ -1722,19 +1786,21 @@ def inplane_distance(
     phi1 = np.where(abs(phi1) < ANGLE_DEGREES_TOL, 0.0, phi1)
     phi2 = np.where(abs(phi2) < ANGLE_DEGREES_TOL, 0.0, phi2)
 
-    # From Scipy the phi is from [-180,180] -> change to [0.0,360]
-    phi1 += 180.0
-    phi2 += 180.0
+    full_turn = 360.0 if degrees else 2 * np.pi
 
-    # Get the angular range for symmetry and divide the angles to be only in that range
-    if cyclic_symmetry > 1:
-        sym_div = 360.0 / cyclic_symmetry
-        phi1 = np.mod(phi1, sym_div)
-        phi2 = np.mod(phi2, sym_div)
+    if order > 1:
+        # Closest symmetric copy: drop whole symmetry steps, then go the shorter way round
+        step = full_turn / order
+        inplane_angle = np.mod(np.abs(phi1 - phi2), step)
+        return np.minimum(inplane_angle, step - inplane_angle)
+
+    # From Scipy the phi is from [-180,180] -> change to [0.0,360]
+    phi1 += full_turn / 2
+    phi2 += full_turn / 2
 
     inplane_angle = np.abs(phi1 - phi2)
 
-    inplane_angle = np.where(inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle)
+    inplane_angle = np.where(inplane_angle > full_turn / 2, np.abs(inplane_angle - full_turn), inplane_angle)
 
     return inplane_angle
 
@@ -1744,7 +1810,9 @@ def cone_inplane_distance(
     input_rotation_2: RotationLike,
     convention: str = "zxz",
     degrees: bool = True,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute angular distance between cone-rotations and inplane-rotations, respectively.
 
@@ -1757,24 +1825,35 @@ def cone_inplane_distance(
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees : bool, optional
-        Return angular distance in degrees (True) or radians (False). Defaults to True.
-    cyclic_symmetry : Symmetry, default=1
-        Cyclic rotational symmetry specifier of underlying particles; normalized
-        via :func:`as_symmetry`.
+        Unit of Euler-angle inputs and of the in-plane distance: degrees (True)
+        or radians (False). The cone distance is always in degrees (see
+        :func:`cone_distance`). Defaults to True.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry of the particles (``"C5"`` or ``5``); normalized via
+        :func:`as_symmetry`. The cone distance does not depend on it (a C_n turn
+        keeps the z-axis in place).
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
-    float
+    numpy.ndarray
         Angular distance between cone-rotations
-    float
-        angular distance between inplane rotations.
+    numpy.ndarray
+        angular distance between inplane rotations (see :func:`inplane_distance`).
+
+    Raises
+    ------
+    NotImplementedError
+        If ``symmetry`` is not cyclic (D/T/O/I).
     """
     rot1 = as_rotation(input_rotation_1, euler_order=convention, degrees=degrees)
     rot2 = as_rotation(input_rotation_2, euler_order=convention, degrees=degrees)
-    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
+    symmetry = resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    require_cyclic_symmetry(symmetry, "Cone and in-plane distances")
 
     cone_angle = cone_distance(rot1, rot2)
-    inplane_angle = inplane_distance(rot1, rot2, convention, degrees, cyclic_symmetry)
+    inplane_angle = inplane_distance(rot1, rot2, convention, degrees, symmetry)
 
     return cone_angle, inplane_angle
 
@@ -1846,11 +1925,23 @@ def angular_distance(
     input_rotation_2: RotationLike,
     convention: str = "zxz",
     degrees: bool = True,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute angular distance between two rotations.
     Formula is based on this post
     https://math.stackexchange.com/questions/90081/quaternion-distance
+
+    Rotations are compared pair by pair, so both inputs must hold the same
+    number of rotations (one each, or two stacks of equal length).
+
+    With a symmetry other than C1, the particle looks identical in orientations
+    ``R`` and ``R @ g`` for every group rotation ``g`` (template-side symmetry,
+    with the group in the canonical frame of :mod:`cryocat.utils.symmetry`).
+    The distance is then measured to the copy ``R2 @ g`` closest to ``R1``
+    (found with :func:`cryocat.utils.symmetry.closest_symmetric_copy`), so it
+    is the smallest turn after which the two particles look the same.
 
     Parameters
     ----------
@@ -1861,45 +1952,73 @@ def angular_distance(
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees : bool, optional
-        Return angular distance in degrees (True) or radians (False). Defaults to True.
-    cyclic_symmetry : Symmetry, default=1
-        Cyclic rotational symmetry specifier of underlying particles; normalized
-        via :func:`as_symmetry`.
+        Unit of Euler-angle inputs and of the returned angular distance: degrees
+        (True) or radians (False). Defaults to True.
+    symmetry : Symmetry, default="C1"
+        Symmetry of the particles (``"C5"``, ``5``, ``"D3"``, ``"T"``, ``"O"``,
+        ``"I"``); normalized via :func:`as_symmetry`.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
-    float
-        Angular distance between input rotations.
+    angle : numpy.ndarray
+        Shape ``(N,)``. Angle of the smallest rotation taking each rotation of
+        ``input_rotation_1`` onto the corresponding one of ``input_rotation_2``
+        (onto its closest symmetric copy if ``symmetry`` is not C1),
+        in [0, 180] degrees (or [0, pi] radians if ``degrees=False``). With
+        symmetry the largest possible value is smaller (it depends on the group).
+    dist : numpy.ndarray
+        Shape ``(N,)``. Unitless dissimilarity ``1 - (q1 . q2)**2`` of the unit
+        quaternions (same copy as ``angle``), equal to ``sin(angle / 2)**2``: 0
+        for identical rotations, 1 for rotations 180 degrees apart. Values below
+        1e-7 are set to 0.
+
+    Raises
+    ------
+    ValueError
+        If the two inputs hold a different number of rotations (e.g. one
+        rotation vs a stack).
+
+    Notes
+    -----
+    Known limitation: for identical (or nearly identical) rotations, rounding
+    can make ``|q1 . q2|`` slightly larger than 1, and ``angle`` is then NaN
+    instead of 0 (``dist`` is unaffected). Callers that need a finite value
+    should treat NaN in ``angle`` as 0.
 
     Examples
     --------
     >>> rot1 = srot.from_euler("zxz", [0, 0, 0], degrees=True)
     >>> rot2 = srot.from_euler("zxz", [45, 45, 0], degrees=True)
-    >>> angular_distance(rot1, rot2)
-    45.0
+    >>> angle, dist = angular_distance(rot1, rot2)
+    >>> np.round(angle, 2)
+    array([62.8])
     """
 
     rot1 = as_rotation(input_rotation_1, euler_order=convention, degrees=degrees)
     rot2 = as_rotation(input_rotation_2, euler_order=convention, degrees=degrees)
-    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
-
-    if cyclic_symmetry > 1:
-        angles1 = rot1.as_euler(convention, degrees=degrees)
-        angles2 = rot2.as_euler(convention, degrees=degrees)
-        sym_div = 360.0 / cyclic_symmetry
-        angles1[:, 0] = np.mod(angles1[:, 0], sym_div)
-        angles2[:, 0] = np.mod(angles2[:, 0], sym_div)
-        rot1 = srot.from_euler(convention, angles1, degrees=degrees)
-        rot2 = srot.from_euler(convention, angles2, degrees=degrees)
+    symmetry = resolve_symmetry_argument(symmetry, cyclic_symmetry)
 
     q1 = np.array(rot1.as_quat(), ndmin=2)
     q2 = np.array(rot2.as_quat(), ndmin=2)
 
     if q1.shape != q2.shape:
-        print("The size of input rotations differ!!!")
-        return
+        raise ValueError(
+            f"The inputs must hold the same number of rotations, got {q1.shape[0]} and {q2.shape[0]}."
+        )
 
-    angle = np.degrees(2 * np.arccos(np.abs(np.sum(q1 * q2, axis=1))))
+    if symmetry != "C1":
+        # local import: symmetry imports geom, never the other way round at module level
+        from cryocat.utils.symmetry import closest_symmetric_copy, get_symmetry_rotations
+
+        _, copy_index = closest_symmetric_copy(rot1, rot2, symmetry)
+        g = srot.from_matrix(get_symmetry_rotations(symmetry)[copy_index])
+        q2 = np.array((srot.from_quat(q2) * g).as_quat(), ndmin=2)  # closest copy R2 @ g
+
+    angle = 2 * np.arccos(np.abs(np.sum(q1 * q2, axis=1)))
+    if degrees:
+        angle = np.degrees(angle)
     angle = angle.astype(float)
 
     dist = 1 - np.power(np.sum(q1 * q2, 1), 2)
@@ -4371,6 +4490,66 @@ def as_symmetry(source: Symmetry) -> tuple[str, int]:
     raise ValueError(
         f"Symmetry must be a string ('Cn'/'Dn') or an integer, got {type(source).__name__}."
     )
+
+
+def resolve_symmetry_argument(
+    symmetry: Symmetry,
+    cyclic_symmetry: Symmetry | None,
+    *,
+    stacklevel: int = 3,
+) -> str:
+    """Resolve the ``symmetry`` keyword and its deprecated alias ``cyclic_symmetry``.
+
+    Used by the angular-distance functions (:func:`compare_rotations`,
+    :func:`angular_distance`, :func:`inplane_distance`,
+    :func:`cone_inplane_distance`) and their callers in ``pana``/``tmana``,
+    whose old ``cyclic_symmetry`` parameter was replaced by ``symmetry``.
+
+    Parameters
+    ----------
+    symmetry : Symmetry
+        Value of the new ``symmetry`` parameter; normalized via :func:`as_symmetry`.
+    cyclic_symmetry : Symmetry or None
+        Value of the deprecated ``cyclic_symmetry`` parameter. If not None a
+        :class:`DeprecationWarning` is emitted and it is used, unless
+        *symmetry* is also given (not C1) with a different value.
+    stacklevel : int, optional
+        Passed to :func:`warnings.warn`; the default 3 points at the caller of
+        the function that calls this helper.
+
+    Returns
+    -------
+    str
+        Normalized symmetry label: ``"Cn"``, ``"Dn"``, ``"T"``, ``"O"`` or ``"I"``.
+
+    Raises
+    ------
+    ValueError
+        If both parameters are given (``symmetry`` other than C1) and differ.
+
+    Examples
+    --------
+    >>> resolve_symmetry_argument(4, None)
+    'C4'
+    >>> resolve_symmetry_argument("t", None)
+    'T'
+    """
+    letter, order = as_symmetry(symmetry)
+    if cyclic_symmetry is not None:
+        import warnings
+
+        warnings.warn(
+            "'cyclic_symmetry' is deprecated; use 'symmetry' instead.",
+            DeprecationWarning,
+            stacklevel=stacklevel,
+        )
+        old = as_symmetry(cyclic_symmetry)
+        if (letter, order) != ("C", 1) and (letter, order) != old:
+            raise ValueError(
+                f"Conflicting values: symmetry={symmetry!r} and cyclic_symmetry={cyclic_symmetry!r}."
+            )
+        letter, order = old
+    return letter if letter in ("T", "O", "I") else f"{letter}{order}"
 
 
 def barycenter(coords: ArrayLike, weights: ArrayLike | None = None) -> np.ndarray:

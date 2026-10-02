@@ -1182,8 +1182,10 @@ def analyze_rotations(
     cc_radius: int = 3,
     angular_offset: EulerAngles | None = None,
     starting_angle: EulerAngles | None = None,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
     angles_order: str = "zxz",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
 ) -> tuple:
     """Perform template matching against a fixed target map.
 
@@ -1222,11 +1224,15 @@ def analyze_rotations(
         Reference orientation of the template (Euler angles, degrees).
         Applied as a base rotation right-multiplied onto every input angle.
         Defaults to ``(0, 0, 0)``.
-    cyclic_symmetry : Symmetry, default=1
-        C symmetry of the structure.  A ``Symmetry`` is an int or a string
-        like ``"C5"``.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry of the structure, used for the angular, cone and
+        in-plane distances (:func:`cryocat.utils.geom.compare_rotations`).
+        A ``Symmetry`` is an int or a string like ``"C5"``. D/T/O/I raise
+        ``NotImplementedError`` (cone and in-plane distances are not defined).
     angles_order : str, default='zxz'
         Euler-angle convention used for rotations.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
@@ -1254,6 +1260,8 @@ def analyze_rotations(
     - If the target_map and template sizes differ, the smaller map is padded to match.
     - The function keeps track of the highest CCC per voxel across all rotations.
     """
+    symmetry = geom.resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    geom.require_cyclic_symmetry(symmetry, "Cone and in-plane distances")  # fail before matching
 
     angles = geom.apply_starting_and_offset(
         ioutils.euler_angles_load(input_angles, angles_order),
@@ -1298,7 +1306,7 @@ def analyze_rotations(
     ang_dist, cone, inplane = geom.compare_rotations(
         srot.from_euler("zxz", starting_angles, degrees=True),
         srot.from_euler("zxz", angles, degrees=True),
-        cyclic_symmetry=cyclic_symmetry,
+        symmetry=symmetry,
     )
 
     res_table = pd.DataFrame(
@@ -1638,15 +1646,16 @@ def _resolve_write_dir(
     label="Compute angular distance maps",
     category="Analysis",
     output="dataframe",
-    hide=("output_dir", "scores_map", "degrees", "morph_footprint"),
+    hide=("output_dir", "scores_map", "degrees", "morph_footprint", "cyclic_symmetry"),
 )
 def compute_distance_map(
     angles_map: MapSource,
     angles_list: DataSource,
     starting_angle: EulerAngles | None = None,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
     angles_order: str = "zxz",
     *,
+    cyclic_symmetry: Symmetry | None = None,
     scores_map: MapSource | None = None,
     degrees: float | None = None,
     morph_footprint: TripletLike = (2, 2, 2),
@@ -1673,11 +1682,14 @@ def compute_distance_map(
         Reference rotation from which distances are measured.  ``None`` is
         treated as ``(0, 0, 0)``.  An ``EulerAngles`` is a ``(3,)`` triple or
         ``(1, 3)`` ndarray.
-    cyclic_symmetry : Symmetry, default=1
-        Cyclic symmetry order passed to :func:`cryocat.utils.geom.compare_rotations`.
-        A ``Symmetry`` is an int or a string like ``"C5"``.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry passed to :func:`cryocat.utils.geom.compare_rotations`.
+        A ``Symmetry`` is an int or a string like ``"C5"``. D/T/O/I raise
+        ``NotImplementedError`` (cone and in-plane distances are not defined).
     angles_order : str, default='zxz'
         Euler-angle convention of *angles_list*.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
     scores_map : MapSource, optional
         3-D CC scores volume.  When provided together with *degrees*, the peak
         voxel is located and label maps are computed via :func:`dist_map_stats`.
@@ -1706,6 +1718,7 @@ def compute_distance_map(
         – morphologically opened label volumes (``None`` when not computed);
         ``output_dir`` – resolved output directory path or ``None``.
     """
+    symmetry = geom.resolve_symmetry_argument(symmetry, cyclic_symmetry)
     angles_map_arr = cryomap.read(angles_map) if not isinstance(angles_map, np.ndarray) else angles_map
     angles_arr = (
         ioutils.euler_angles_load(angles_list, angles_order) if not isinstance(angles_list, np.ndarray) else angles_list
@@ -1723,7 +1736,7 @@ def compute_distance_map(
     dist_all, dist_normals, dist_inplane = geom.compare_rotations(
         srot.from_euler("zxz", ref_angles, degrees=True),
         srot.from_euler("zxz", angles_arr, degrees=True),
-        cyclic_symmetry=cyclic_symmetry,
+        symmetry=symmetry,
     )
 
     map_shape = angles_map_arr.shape
@@ -2200,7 +2213,7 @@ def visualize_results(
     label="Analyze rotations (single case)",
     category="Analysis",
     output="dataframe",
-    hide=("output_path",),
+    hide=("output_path", "cyclic_symmetry"),
 )
 def run_single_case(
     target_map: MapSource,
@@ -2212,7 +2225,7 @@ def run_single_case(
     *,
     starting_angle: EulerAngles | None = None,
     angular_offset: EulerAngles | None = None,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
     wedge_mask_target: MapSource | None = None,
     wedge_mask_tmpl: MapSource | None = None,
     cc_radius: int = 10,
@@ -2223,6 +2236,7 @@ def run_single_case(
     angles_order: str = "zxz",
     tight_mask: MapSource | None = None,
     if_exists: Literal["overwrite", "error", "timestamp"] = "overwrite",
+    cyclic_symmetry: Symmetry | None = None,
 ) -> dict:
     """Run a complete single-case peak analysis and return all results.
 
@@ -2255,9 +2269,11 @@ def run_single_case(
         ndarray.  ``None`` is treated as ``(0, 0, 0)``.
     angular_offset : EulerAngles, optional
         Additional rotation applied to all input angles.
-    cyclic_symmetry : Symmetry, default=1
-        C symmetry of the structure.  A ``Symmetry`` is an int or a string
-        like ``"C5"``.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry of the structure, used for the angular, cone and
+        in-plane distances.  A ``Symmetry`` is an int or a string like
+        ``"C5"``. D/T/O/I raise ``NotImplementedError`` (cone and in-plane
+        distances are not defined).
     wedge_mask_target : MapSource, optional
         Wedge mask for the target map (path or array).  When ``None``, no
         target-side wedge correction is applied.
@@ -2285,6 +2301,8 @@ def run_single_case(
         Policy when output artifacts already exist.  ``'overwrite'`` writes
         directly; ``'error'`` raises :exc:`FileExistsError`; ``'timestamp'``
         creates a timestamped sub-folder.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
@@ -2296,6 +2314,9 @@ def run_single_case(
         When *compute_peak_stats* is True and *degrees* is provided, also
         contains ``"peak_stats"``.
     """
+    symmetry_input = symmetry if cyclic_symmetry is None else cyclic_symmetry  # recorded as given
+    symmetry = geom.resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    geom.require_cyclic_symmetry(symmetry, "Cone and in-plane distances")  # fail before matching
     write_dir = _resolve_write_dir(output_dir, case_name, if_exists)
 
     # Pre-compute transformed angles so angles.csv is consistent with the
@@ -2318,7 +2339,7 @@ def run_single_case(
         cc_radius=cc_radius,
         angular_offset=angular_offset,
         starting_angle=starting_angle,
-        cyclic_symmetry=cyclic_symmetry,
+        symmetry=symmetry,
         angles_order=angles_order,
     )
 
@@ -2338,7 +2359,7 @@ def run_single_case(
             angles_map=angles_map,
             angles_list=angles_array,
             starting_angle=starting_angle,
-            cyclic_symmetry=cyclic_symmetry,
+            symmetry=symmetry,
             angles_order=angles_order,
             scores_map=scores_map if _run_labels else None,
             degrees=degrees if _run_labels else None,
@@ -2399,7 +2420,7 @@ def run_single_case(
         "Mask": _path_or_inmemory(template_mask),
         "Angles": _path_or_inmemory(input_angles),
         "Degrees": degrees,
-        "Symmetry": cyclic_symmetry,
+        "Symmetry": symmetry_input,
         "Compare": _compare,
         "Apply wedge": wedge_mask_target is not None or wedge_mask_tmpl is not None,
         "Target wedge mask": _path_or_inmemory(wedge_mask_target),
@@ -2558,8 +2579,8 @@ def run_analysis(
     - `starting_angle` is read directly from `"Phi"`, `"Theta"`, `"Psi"` columns.
     - If `"Apply angular offset"` is true, `angular_offset` is set to half of
       `Degrees` for all three Euler components; otherwise it is [0, 0, 0].
-    - Symmetry (`cyclic_symmetry`) is passed to `analyze_rotations` to account for
-      cyclic symmetry in angular distance calculations.
+    - Symmetry (key `cyclic_symmetry`) is passed as `symmetry` to `analyze_rotations`
+      to account for cyclic symmetry in angular distance calculations.
     """
 
     temp_df = _read_template_list(template_list)
@@ -2591,7 +2612,7 @@ def run_analysis(
             angular_offset=angular_offset,
             starting_angle=args["starting_angle"],
             cc_radius=cc_radius_tol,
-            cyclic_symmetry=args["cyclic_symmetry"],
+            symmetry=args["cyclic_symmetry"],
         )[0]
 
         applied_angles = geom.apply_starting_and_offset(
@@ -2601,7 +2622,7 @@ def run_analysis(
         )
         angles_map = output_folder + "/" + output_base + "_angles.em"
         _, _, _ = tmana.create_angular_distance_maps(
-            angles_map, applied_angles, write_out_maps=True, cyclic_symmetry=args["cyclic_symmetry"]
+            angles_map, applied_angles, write_out_maps=True, symmetry=args["cyclic_symmetry"]
         )
 
         temp_df.at[i, "Done"] = True
@@ -2621,11 +2642,13 @@ def run_single_gradual_case(
     template: MapSource,
     template_mask: MapSource,
     starting_angle: EulerAngles | None = None,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
     wedge_mask_target: MapSource | None = None,
     wedge_mask_tmpl: MapSource | None = None,
     angular_range: int = 359,
     cc_radius: int = 10,
+    *,
+    cyclic_symmetry: Symmetry | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run a gradual rotation sweep for a single (target_map, template, mask) triple.
 
@@ -2647,9 +2670,9 @@ def run_single_gradual_case(
         Base orientation applied before each test angle.  An ``EulerAngles`` is
         a ``(3,)`` triple or ``(N, 3)`` ndarray.  ``None`` is treated as
         ``(0, 0, 0)``.
-    cyclic_symmetry : Symmetry, default=1
-        C symmetry of the structure.  A ``Symmetry`` is an int or a string
-        like ``"C5"``.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry of the structure.  A ``Symmetry`` is an int or a string
+        like ``"C5"``. D/T/O/I raise ``NotImplementedError``.
     wedge_mask_target : MapSource, optional
         Wedge mask for the target map.
     wedge_mask_tmpl : MapSource, optional
@@ -2658,6 +2681,8 @@ def run_single_gradual_case(
         Number of integer degrees to test (0 to ``angular_range - 1``).
     cc_radius : int, default=10
         Radius (voxels) of the central sphere for CC evaluation.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
@@ -2669,6 +2694,8 @@ def run_single_gradual_case(
     results = np.zeros((angular_range, 8, 3))
     n_bins = 100
     final_hist = np.zeros((n_bins, 3))
+    symmetry = geom.resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    geom.require_cyclic_symmetry(symmetry, "Cone and in-plane distances")  # fail before matching
 
     for a in range(angular_range):
         angles = np.full((3, 3), float(a))
@@ -2686,7 +2713,7 @@ def run_single_gradual_case(
                 output_path=None,
                 starting_angle=starting_angle,
                 cc_radius=cc_radius,
-                cyclic_symmetry=cyclic_symmetry,
+                symmetry=symmetry,
             )
             results[a, :, j] = res_df.values
             hist, _ = np.histogram(cc_map, bins=n_bins, range=(0.0, 1.0))
@@ -2796,7 +2823,7 @@ def run_angle_analysis(
             template=args["template"],
             template_mask=args["mask"],
             starting_angle=args["starting_angle"],
-            cyclic_symmetry=args["cyclic_symmetry"],
+            symmetry=args["cyclic_symmetry"],
             wedge_mask_target=args["wedge_target"],
             wedge_mask_tmpl=args["wedge_tmpl"],
             angular_range=angular_range,
@@ -3641,5 +3668,5 @@ def recompute_dist_maps(template_list: PathOrStr, indices: list[int], parent_fol
             angular_offset,
         )
         _, _, _ = tmana.create_angular_distance_maps(
-            angles_map, applied_angles, write_out_maps=True, cyclic_symmetry=cyclic_symmetry
+            angles_map, applied_angles, write_out_maps=True, symmetry=cyclic_symmetry
         )

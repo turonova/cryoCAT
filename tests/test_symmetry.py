@@ -936,3 +936,98 @@ class TestReduceAngleGrid:
         grid = rot.random(100, random_state=6)
         assert reduce_angle_grid(grid, "C1").all()
         assert reduce_angle_grid(grid, "C1", local=True, tolerance_deg=1.0).all()
+
+
+# ---------------------------------------------------------------------------
+# closest_symmetric_copy (added 2026-10-02)
+# ---------------------------------------------------------------------------
+
+from cryocat.utils.symmetry import closest_symmetric_copy, _make_group
+
+
+def _brute_force_min_angle(r1, r2, symmetry):
+    """Reference: smallest angle of R1^-1 @ R2 @ g over all group rotations g, pair by pair.
+
+    Uses scipy's ``magnitude`` (a different formula from the trace used by the
+    function under test), so both the minimum and the angle formula are checked.
+    """
+    gs = rot.from_matrix(get_symmetry_rotations(symmetry))
+    return np.array([np.degrees(min((a.inv() * b * g).magnitude() for g in gs)) for a, b in zip(r1, r2)])
+
+
+class TestClosestSymmetricCopy:
+    """For each pair, the closest copy R2 @ g of rotation 2 to rotation 1 (template-side symmetry)."""
+
+    @pytest.mark.parametrize("symm", ["C2", "C3", "C4", "C6", "D2", "D3", "T", "O", "I"])
+    def test_matches_brute_force(self, symm):
+        # Random pairs: the returned angle is the minimum over all group rotations ...
+        r1 = rot.random(100, random_state=10)
+        r2 = rot.random(100, random_state=11)
+        angle, idx = closest_symmetric_copy(r1, r2, symm)
+        np.testing.assert_allclose(angle, _brute_force_min_angle(r1, r2, symm), atol=1e-5)
+        # ... and the returned index really is the copy that achieves it
+        g = rot.from_matrix(get_symmetry_rotations(symm)[idx])
+        np.testing.assert_allclose(np.degrees((r1.inv() * r2 * g).magnitude()), angle, atol=1e-5)
+
+    @pytest.mark.parametrize("symm", ["C4", "D3", "T", "O", "I"])
+    def test_symmetric_copies_have_zero_distance(self, symm):
+        # R and R @ g look identical for every group rotation g -> distance 0
+        gs = get_symmetry_rotations(symm)
+        r = rot.random(1, random_state=12).as_matrix()
+        r1 = rot.from_matrix(np.repeat(r, len(gs), axis=0))
+        r2 = r1 * rot.from_matrix(gs)
+        angle, _ = closest_symmetric_copy(r1, r2, symm)
+        np.testing.assert_allclose(angle, 0.0, atol=1e-4)
+
+    @pytest.mark.parametrize("symm", ["C3", "D2", "O"])
+    def test_never_larger_than_without_symmetry(self, symm):
+        # The identity is one of the copies, so the result is at most the C1 angle
+        r1 = rot.random(200, random_state=13)
+        r2 = rot.random(200, random_state=14)
+        angle, _ = closest_symmetric_copy(r1, r2, symm)
+        c1_angle = np.degrees((r1.inv() * r2).magnitude())
+        assert np.all(angle <= c1_angle + 1e-6)
+
+    def test_c1_is_plain_angle_and_identity_index(self):
+        # C1 has only the identity: the plain angle between the rotations, index 0
+        r1 = rot.random(50, random_state=15)
+        r2 = rot.random(50, random_state=16)
+        angle, idx = closest_symmetric_copy(r1, r2, "C1")
+        np.testing.assert_allclose(angle, np.degrees((r1.inv() * r2).magnitude()), atol=1e-5)
+        assert np.all(idx == 0)
+
+    def test_single_rotations_and_euler_input(self):
+        # Single Euler triples (degrees, zxz) are accepted; C4: spins 10 and 100 degrees look the same
+        angle, idx = closest_symmetric_copy([10.0, 30.0, 0.0], [100.0, 30.0, 0.0], "C4")
+        assert angle.shape == (1,) and idx.shape == (1,)
+        np.testing.assert_allclose(angle, 0.0, atol=1e-4)
+
+    def test_unequal_lengths_raise(self):
+        # Pairs are compared one by one, so one rotation vs a stack is an error
+        with pytest.raises(ValueError, match="same number of rotations"):
+            closest_symmetric_copy(rot.random(1, random_state=0), rot.random(3, random_state=1), "C2")
+
+    def test_chunking_does_not_change_result(self):
+        # Splitting the work into chunks gives the same answer as one pass
+        r1 = rot.random(57, random_state=17)
+        r2 = rot.random(57, random_state=18)
+        a_full, i_full = closest_symmetric_copy(r1, r2, "O")
+        a_chunk, i_chunk = closest_symmetric_copy(r1, r2, "O", chunk_size=10)
+        np.testing.assert_array_equal(a_full, a_chunk)
+        np.testing.assert_array_equal(i_full, i_chunk)
+
+
+class TestMakeGroup:
+    """``_make_group`` builds the canonical group used by get_symmetry_rotations and reduce_angle_grid."""
+
+    @pytest.mark.parametrize("symm, n_rot", [(4, 4), ("C6", 6), ("D3", 6), ("T", 12), ("O", 24), ("I", 60)])
+    def test_order_and_identity_first(self, symm, n_rot):
+        # Number of rotations of the group, identity first
+        mats = _make_group(symm).matrices
+        assert mats.shape == (n_rot, 3, 3)
+        np.testing.assert_allclose(mats[0], np.eye(3), atol=1e-12)
+
+    @pytest.mark.parametrize("symm", ["C5", "D4", "T", "O", "I"])
+    def test_same_as_get_symmetry_rotations(self, symm):
+        # Refactor guard: get_symmetry_rotations (default z axis) returns the same matrices
+        np.testing.assert_array_equal(_make_group(symm).matrices, get_symmetry_rotations(symm))

@@ -925,8 +925,10 @@ def create_angular_distance_maps(
     angles_list: EulerAngles,
     output_file_base: str | None = None,
     write_out_maps: bool = True,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
     angles_order: Literal["zxz", "zzx"] = "zxz",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute per-voxel angular distance maps relative to the first entry in the angles list.
 
@@ -955,11 +957,15 @@ def create_angular_distance_maps(
         Whether to save the three distance maps to disk as ``.em`` files
         (``*_dist_all.em``, ``*_dist_normals.em``, ``*_dist_inplane.em``)
         in single precision.
-    cyclic_symmetry : Symmetry, default=c1
-        Cyclic symmetry order passed to :func:`cryocat.utils.geom.compare_rotations`
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry passed to :func:`cryocat.utils.geom.compare_rotations`
         when computing angular distances. Normalized via :func:`cryocat.utils.geom.as_symmetry`.
+        D/T/O/I raise ``NotImplementedError`` (cone and in-plane distances are
+        not defined for them).
     angles_order : str, {"zxz", "zzx"}
         Euler-angle convention used in ``angles_list``. Defaults to "zxz".
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
@@ -989,9 +995,9 @@ def create_angular_distance_maps(
             ValueError("The output_file_base was not specified -> " "the maps will not be written out!")
             write_out_maps = False
 
+    symmetry = geom.resolve_symmetry_argument(symmetry, cyclic_symmetry)
     angles_map = cryomap.read(angles_map).astype(int)
     angles = ioutils.euler_angles_load(angles_list, angles_order)
-    _, cyclic_symmetry = geom.as_symmetry(cyclic_symmetry)  # most likley not needed
 
     map_shape = angles_map.shape
 
@@ -999,7 +1005,7 @@ def create_angular_distance_maps(
     dist_all, dist_normals, dist_inplane = geom.compare_rotations(
         geom.as_rotation(zero_rotations, euler_order="zxz"),
         geom.as_rotation(angles, euler_order="zxz"),
-        cyclic_symmetry,
+        symmetry,
     )
 
     # angles_map stores 0-based indices; -1 marks voxels with no valid angle.
