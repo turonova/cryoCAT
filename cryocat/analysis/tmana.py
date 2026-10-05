@@ -40,7 +40,15 @@ def extract_peak_orientations(
     symmetry: Symmetry = "c1",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Extract the Euler angles corresponding to the provided peak coordinates from the angles map and list.
-    If cyclic symmetry is specified, a random multiple of 360/N degrees is added to phi for each particle when N > 1.
+
+    If the template is symmetric, each particle is given a randomly chosen
+    symmetric copy of its orientation: ``R @ g`` with ``g`` drawn uniformly from
+    the group's rotations (template-side symmetry, as for particle-list angles).
+    All copies look identical, but a search restricted to one part of the
+    orientations (e.g. :func:`cryocat.utils.geom.generate_angles` with
+    ``symmetry``) would otherwise give every particle an orientation in that
+    same part; the random copy spreads them evenly over the equivalent ones.
+    For C_n this is a random multiple of 360/n degrees added to phi.
 
     Parameters
     ----------
@@ -60,18 +68,34 @@ def extract_peak_orientations(
         Euler-angle convention of ``angles_list``.  Use "zzx" for STOPGAP
         angle lists and "zxz" for GAPSTOP(TM) lists.  Defaults to "zxz".
     symmetry : Symmetry
-        Symmetry to be used. Currently, only cyclic symmetry is supported. Normalized via
-        :func:`cryocat.utils.geom.as_symmetry`. Default is "c1".
+        Symmetry of the template (``"C5"``, ``5``, ``"D3"``, ``"T"``, ``"O"``,
+        ``"I"``), in the canonical frame of :mod:`cryocat.utils.symmetry`
+        (C_n/D_n: n-fold axis along z; see
+        :func:`cryocat.utils.symmetry.reduce_angle_grid` Notes). Normalized via
+        :func:`cryocat.utils.geom.as_symmetry`. Default is "c1" (no change).
 
     Returns
     -------
     tuple[np.ndarray, np.ndarray, np.ndarray]
-        Three arrays containing the phi, theta, and psi angles corresponding to the provided peak coordinates.
+        Three arrays containing the phi, theta, and psi angles (zxz, degrees)
+        corresponding to the provided peak coordinates. For C1 the angles are
+        returned as stored in ``angles_list``. Otherwise they are in cryoCAT's
+        canonical form (phi and psi in [-180, 180], theta in [0, 180]; for
+        theta 0 or 180 the whole spin is in phi and psi = 0).
 
-    Raises
-    ------
+    Warns
+    -----
     UserWarning
-        If a non-C symmetry is supplied; symmetry is set to "c1".
+        For D/T/O/I: the template is assumed to be in the canonical frame;
+        if it is not, the assigned symmetric copies (and thus the angles) are wrong.
+
+    Notes
+    -----
+    The random choice uses NumPy's global random state (``np.random``), so
+    calling ``np.random.seed`` beforehand makes the result reproducible.
+    Before 2026-10-02 C_n added the multiple of 360/n to phi without wrapping
+    and D/T/O/I were ignored; for C_n the chosen copies (for a given seed)
+    and the rotations are unchanged, only their Euler form is now canonical.
     """
 
     angles_map = cryomap.read(angles_map)
@@ -79,15 +103,14 @@ def extract_peak_orientations(
 
     # retrieve symmetry
     group, order = geom.as_symmetry(symmetry)
+    symmetry = geom.resolve_symmetry_argument(symmetry, None)
     if group != "C":
         warnings.warn(
-            f"Only C symmetry is supported. Provided {group}{order} "
-            f"is currently not supported and will be ignored.",
+            f"Symmetry {symmetry}: the template is assumed to be in cryoCAT's canonical frame "
+            "(see cryocat.utils.symmetry.reduce_angle_grid Notes); if it is not, the assigned "
+            "symmetric copies are wrong. Align the template before running template matching.",
             UserWarning,
         )
-        symmetry = 1
-    else:
-        symmetry = order
 
     # Parse angle index
     ang_idx = angles_map[peak_coords[:, 0], peak_coords[:, 1], peak_coords[:, 2]].astype(int) - angles_numbering
@@ -97,12 +120,48 @@ def extract_peak_orientations(
     theta = anglist[ang_idx, 1]
     psi = anglist[ang_idx, 2]
 
-    if symmetry > 1:
-        add_phi = np.linspace(0, 360, symmetry + 1)
-        add_phi = add_phi[:-1]
-        phi = phi + np.random.choice(add_phi, size=phi.shape[0])
+    if symmetry != "C1" and phi.shape[0] > 0:
+        phi, theta, psi = _random_symmetric_copies(phi, theta, psi, symmetry)
 
     return phi, theta, psi
+
+
+def _random_symmetric_copies(
+    phi: np.ndarray, theta: np.ndarray, psi: np.ndarray, symmetry: Symmetry
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Replace each orientation ``R`` by ``R @ g``, with ``g`` drawn at random from the group.
+
+    Parameters
+    ----------
+    phi, theta, psi : numpy.ndarray
+        Shape ``(N,)`` with N > 0, zxz Euler angles in degrees.
+    symmetry : Symmetry
+        Any group (C, D, T, O, I), in the canonical frame of :mod:`cryocat.utils.symmetry`.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        phi, theta, psi of the copies (zxz, degrees, as returned by
+        :meth:`scipy.spatial.transform.Rotation.as_euler`).
+
+    Notes
+    -----
+    The group rotations are listed identity first; for C_n in the order
+    ``k * 360/n`` (k = 0..n-1), so a given random state picks the same copy as
+    the former ``phi + np.random.choice(np.linspace(0, 360, n + 1)[:-1])``.
+    """
+    # local import: symmetry imports geom, keep tmana's module-level imports unchanged
+    from scipy.spatial.transform import Rotation as srot
+    from cryocat.utils.symmetry import get_symmetry_rotations
+
+    g_mats = get_symmetry_rotations(symmetry)
+    pick = np.random.choice(len(g_mats), size=phi.shape[0])
+    rots = srot.from_euler("zxz", np.column_stack([phi, theta, psi]), degrees=True) * srot.from_matrix(g_mats[pick])
+    with warnings.catch_warnings():
+        # theta 0/180: scipy warns and puts the whole spin into phi; the rotation is still exact
+        warnings.filterwarnings("ignore", message="Gimbal lock")
+        angles = np.atleast_2d(rots.as_euler("zxz", degrees=True))
+    return angles[:, 0], angles[:, 1], angles[:, 2]
 
 
 def scores_extract_particles(
@@ -176,9 +235,12 @@ def scores_extract_particles(
         indexing into ``angles_list``.  STOPGAP angle maps are 1-based, so
         set this to 1; GAPSTOP(TM) maps are 0-based (default 0).
     symmetry : Symmetry, default="c1"
-        Cyclic symmetry to apply.  A random multiple of 360/N degrees is added
-        to phi for each particle when N > 1.  Only C symmetries are supported;
-        any other symmetry string issues a warning and falls back to "c1".
+        Symmetry of the template (``"C5"``, ``5``, ``"D3"``, ``"T"``, ``"O"``,
+        ``"I"``), in the canonical frame of :mod:`cryocat.utils.symmetry`. Each
+        particle gets a randomly chosen symmetric copy of its orientation (for
+        C_n: a random multiple of 360/n degrees added to phi). D/T/O/I issue a
+        warning reminding that the template must be in the canonical frame.
+        See :func:`extract_peak_orientations`.
     tomo_mask : MapSource, optional
         Path to a binary tomogram mask or a pre-loaded array.  When provided,
         the scores map is multiplied by this mask before thresholding.
@@ -1423,9 +1485,12 @@ def scores_extract_particles_around_positions(
         indexing into ``angles_list``.  STOPGAP angle maps are 1-based, so
         set this to 1; GAPSTOP(TM) maps are 0-based (default 0).
     symmetry : Symmetry, default="c1"
-        Cyclic symmetry to apply.  A random multiple of 360/N degrees is added
-        to phi for each particle when N > 1.  Only C symmetries are supported;
-        any other symmetry string issues a warning and falls back to "c1".
+        Symmetry of the template (``"C5"``, ``5``, ``"D3"``, ``"T"``, ``"O"``,
+        ``"I"``), in the canonical frame of :mod:`cryocat.utils.symmetry`. Each
+        particle gets a randomly chosen symmetric copy of its orientation (for
+        C_n: a random multiple of 360/n degrees added to phi). D/T/O/I issue a
+        warning reminding that the template must be in the canonical frame.
+        See :func:`extract_peak_orientations`.
     tomo_mask : MapSource, optional
         Path to a binary tomogram mask or a pre-loaded array.  When provided,
         the scores map is multiplied by this mask before thresholding and the

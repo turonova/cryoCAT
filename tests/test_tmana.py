@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import warnings
 from unittest.mock import patch
 from cryocat.analysis import tmana
 from cryocat.utils import geom
@@ -688,3 +689,140 @@ class TestCreateAngularDistanceMapsSymmetry:
         new = self._run(symmetry=4)
         for a, b in zip(old, new):
             np.testing.assert_array_equal(a, b)
+
+
+# ── extract_peak_orientations with any symmetry (added 2026-10-02) ───────────
+
+from scipy.spatial.transform import Rotation as srot
+from cryocat.utils.symmetry import closest_symmetric_copy, get_symmetry_rotations
+
+
+def _peak_inputs(n_peaks=200, seed=0, angles=None):
+    """Peaks on distinct voxels of a 10^3 map, each pointing to its own row of the angle list.
+
+    Default angle list: random rotations in cryoCAT's canonical Euler form (zxz, degrees).
+    """
+    if angles is None:
+        angles = srot.random(n_peaks, random_state=seed).as_euler("zxz", degrees=True)
+    n_peaks = len(angles)
+    flat = np.random.default_rng(seed).choice(1000, size=n_peaks, replace=False)
+    coords = np.column_stack(np.unravel_index(flat, (10, 10, 10)))
+    amap = np.full((10, 10, 10), -1.0)
+    amap[coords[:, 0], coords[:, 1], coords[:, 2]] = np.arange(n_peaks)
+    return coords, amap, angles
+
+
+def _stored_and_returned(coords, amap, angles, symmetry, seed=7):
+    """Run extract_peak_orientations with a fixed seed; return (stored, returned) as Rotations."""
+    np.random.seed(seed)
+    phi, theta, psi = tmana.extract_peak_orientations(coords, amap, angles, symmetry=symmetry)
+    stored = srot.from_euler("zxz", angles, degrees=True)
+    returned = srot.from_euler("zxz", np.column_stack([phi, theta, psi]), degrees=True)
+    return stored, returned, np.column_stack([phi, theta, psi])
+
+
+class TestExtractPeakOrientationsSymmetry:
+    """Each particle gets a random symmetric copy R @ g; canonical Euler ranges; frame warning for D/T/O/I."""
+
+    @pytest.mark.parametrize("symm", ["C4", "D2", "T", "O", "I"])
+    def test_outputs_are_symmetric_copies(self, symm):
+        # Every returned orientation looks identical to the stored one (distance 0 up to symmetry)
+        coords, amap, angles = _peak_inputs()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)  # frame reminder for D/T/O/I
+            stored, returned, _ = _stored_and_returned(coords, amap, angles, symm)
+        dist, _ = closest_symmetric_copy(stored, returned, symm)
+        np.testing.assert_allclose(dist, 0.0, atol=1e-4)
+
+    @pytest.mark.parametrize("symm", ["C4", "T", "I"])
+    def test_copies_actually_vary(self, symm):
+        # The copies are spread: with 200 particles more than one copy (not only the identity) is used
+        coords, amap, angles = _peak_inputs()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            stored, returned, _ = _stored_and_returned(coords, amap, angles, symm)
+        _, copy_idx = closest_symmetric_copy(returned, stored, symm)
+        assert len(np.unique(copy_idx)) > 1
+
+    @pytest.mark.parametrize("symm", ["C3", "C6", "D3", "O"])
+    def test_canonical_euler_ranges(self, symm):
+        # phi, psi in [-180, 180] and theta in [0, 180] (cryoCAT's conventions), even for input outside them
+        coords, amap, angles = _peak_inputs()
+        angles = angles.copy()
+        angles[:, 2] = np.mod(angles[:, 2], 360.0)  # psi stored in [0, 360)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            _, _, out = _stored_and_returned(coords, amap, angles, symm)
+        assert np.all((out[:, [0, 2]] >= -180.0) & (out[:, [0, 2]] <= 180.0))
+        assert np.all((out[:, 1] >= 0.0) & (out[:, 1] <= 180.0))
+
+    @pytest.mark.parametrize("n", [2, 3, 4, 6])
+    def test_cn_same_copies_as_former_phi_shift(self, n):
+        # For a given seed the same copy is picked as by the former code (phi + random k*360/n):
+        # same rotations, and for in-range input the same Euler numbers once phi is wrapped
+        coords, amap, angles = _peak_inputs()
+        _, returned, out = _stored_and_returned(coords, amap, angles, f"C{n}", seed=11)
+        np.random.seed(11)
+        old_phi = angles[:, 0] + np.random.choice(np.linspace(0, 360, n + 1)[:-1], size=len(angles))
+        old = srot.from_euler("zxz", np.column_stack([old_phi, angles[:, 1], angles[:, 2]]), degrees=True)
+        np.testing.assert_allclose((old.inv() * returned).magnitude(), 0.0, atol=1e-7)
+        wrapped = np.mod(old_phi + 180.0, 360.0) - 180.0
+        diff = np.abs(out[:, 0] - wrapped)
+        np.testing.assert_allclose(np.minimum(diff, 360.0 - diff), 0.0, atol=1e-9)  # 180 and -180 are the same
+        np.testing.assert_allclose(out[:, 1:], angles[:, 1:], atol=1e-9)
+
+    def test_cn_no_tilt_moves_spin_into_phi(self):
+        # theta = 0: same rotation, written canonically with the whole spin in phi and psi = 0
+        angles = np.array([[10.0, 0.0, 30.0], [-50.0, 0.0, 20.0]])
+        coords, amap, angles = _peak_inputs(angles=angles)
+        stored, returned, out = _stored_and_returned(coords, amap, angles, "C4")
+        dist, _ = closest_symmetric_copy(stored, returned, "C4")
+        np.testing.assert_allclose(dist, 0.0, atol=1e-4)
+        np.testing.assert_allclose(out[:, 2], 0.0, atol=1e-9)
+
+    def test_c1_returns_stored_angles(self):
+        # No symmetry: angles exactly as stored (also outside the canonical ranges)
+        angles = np.array([[10.0, 20.0, 300.0], [400.0, 0.0, 30.0]])
+        coords, amap, angles = _peak_inputs(angles=angles)
+        phi, theta, psi = tmana.extract_peak_orientations(coords, amap, angles, symmetry="C1")
+        np.testing.assert_array_equal(np.column_stack([phi, theta, psi]), angles)
+
+    @pytest.mark.parametrize("symm", ["D2", "T", "O", "I"])
+    def test_non_cyclic_warns_about_canonical_frame(self, symm):
+        # D/T/O/I: reminder that the template must be in cryoCAT's canonical frame
+        coords, amap, angles = _peak_inputs(n_peaks=5)
+        with pytest.warns(UserWarning, match="canonical frame"):
+            tmana.extract_peak_orientations(coords, amap, angles, symmetry=symm)
+
+    @pytest.mark.parametrize("symm", ["C1", "C5"])
+    def test_cyclic_does_not_warn(self, symm):
+        # C_n: the n-fold axis is z by convention, no reminder needed
+        coords, amap, angles = _peak_inputs(n_peaks=5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            tmana.extract_peak_orientations(coords, amap, angles, symmetry=symm)
+
+    def test_empty_peak_list(self):
+        # No peaks: empty arrays, no error
+        _, amap, angles = _peak_inputs(n_peaks=5)
+        with pytest.warns(UserWarning):
+            phi, theta, psi = tmana.extract_peak_orientations(np.empty((0, 3), dtype=int), amap, angles, symmetry="T")
+        assert phi.shape == theta.shape == psi.shape == (0,)
+
+    def test_scores_extract_particles_octahedral(self):
+        # The caller passes the symmetry through: particle-list orientations are octahedral copies
+        scores = np.zeros((20, 20, 20))
+        scores[10, 10, 10], scores[5, 5, 5] = 0.9, 0.8
+        amap = np.zeros((20, 20, 20))
+        amap[10, 10, 10], amap[5, 5, 5] = 1, 2
+        anglist = np.array([[0.0, 0.0, 0.0], [10.0, 20.0, 30.0], [-40.0, 70.0, 120.0]])
+        np.random.seed(3)
+        with pytest.warns(UserWarning, match="canonical frame"):
+            motl = tmana.scores_extract_particles(
+                scores, amap, anglist, tomo_id=1, particle_diameter=3, scores_threshold=0.7, symmetry="O"
+            )
+        got = srot.from_euler("zxz", motl.df[["phi", "theta", "psi"]].values, degrees=True)
+        # peak at (10,10,10) -> list row 1, peak at (5,5,5) -> row 2; match each particle by its score
+        rows = np.where(motl.df["score"].values > 0.85, 1, 2)
+        dist, _ = closest_symmetric_copy(srot.from_euler("zxz", anglist[rows], degrees=True), got, "O")
+        np.testing.assert_allclose(dist, 0.0, atol=1e-4)
