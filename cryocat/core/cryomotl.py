@@ -2834,6 +2834,8 @@ class EmMotl(Motl):
 
         """
         filled_df = self.df.fillna(0.0)
+        if 0 in filled_df["class"]:
+            warnings.warn("Certain particles have class value 0. Mind that this can be an issue for certain software.")
         motl_array = filled_df.to_numpy()
         motl_array = motl_array.reshape((1, motl_array.shape[0], motl_array.shape[1])).astype(np.single)
         self.header = {}  # FIXME fails on writing back the header
@@ -3247,6 +3249,12 @@ class RelionMotl(Motl):
         Notes
         -----
         The function modifies the "phi", "psi", and "theta" columns of "self.df" to store the converted angles.
+        The resulting angles are passed through :meth:`make_angles_canonical` so that "theta" ends up in the
+        canonical [0, 180] range documented for the zxz convention (see
+        ``docs/source/user_guide/geometric_conventions.ipynb``), rather than the [-180, 0] range that falls
+        out of the raw ZYZ-to-zxz conversion before canonicalization. This does not change the represented
+        orientation (``make_angles_canonical`` round-trips the rotation through ``scipy.spatial.transform.Rotation``,
+        which is orientation-preserving by construction) -- only which of the two equivalent angle triples is stored.
 
         """
 
@@ -3273,6 +3281,10 @@ class RelionMotl(Motl):
         self.df["phi"] = -rot_zxz[:, 2]
         self.df["theta"] = -rot_zxz[:, 1]
         self.df["psi"] = -rot_zxz[:, 0]
+
+        # bring the stored triple into the canonical zxz range (theta in [0, 180]);
+        # the represented orientation is unchanged, see docstring note above.
+        self.make_angles_canonical()
 
     def convert_angles_to_relion(self, relion_df):
         """Converts angles from cryoCAT convention (zxz) to the convention used in Relion (ZYZ).
@@ -3595,6 +3607,8 @@ class RelionMotl(Motl):
         # starfile (e.g. rlnClassNumber, rlnHelicalTubeID) are never assigned above and would
         # otherwise be left as NaN.
         self.df = self.df.fillna(0.0)
+        if 0 in self.df["class"]:
+            warnings.warn("Class has value 0. Mind that thismight be problematic for certain softwrae.")
 
     def assign_cc_extra_columns(self, relion_df: pd.DataFrame, object_id_already_assigned: bool = False) -> None:
         """Recognize non-standard ``cc``-prefixed columns in `relion_df` and map them back onto `self.df`.

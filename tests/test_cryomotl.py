@@ -2975,13 +2975,21 @@ class TestRelionMotl:
         zxz_angles_raw = r.as_euler("zxz", degrees=True)
         print(f"Raw zxz angles (psi, theta, phi): {zxz_angles_raw}")
 
-        expected_phi = np.array([-29.80023])
-        expected_psi = np.array([3.911201])
-        expected_theta = np.array([-120.999041])
+        # convert_angles_from_relion now canonicalizes the stored angles (theta in
+        # [0, 180], see make_angles_canonical), so these are the canonical-range
+        # equivalent of the raw zxz triple printed above (-29.80023, -120.999041,
+        # 3.911201): same orientation, phi/psi shifted by 180 deg and theta negated,
+        # per the zxz Euler-angle degeneracy (a, b, c) ~ (a+180, -b, c+180).
+        expected_phi = np.array([150.19977])
+        expected_psi = np.array([-176.088799])
+        expected_theta = np.array([120.999041])
 
         assert np.allclose(relion_motl.df.loc[0, "phi"], expected_phi)
         assert np.allclose(relion_motl.df.loc[0, "theta"], expected_theta)
         assert np.allclose(relion_motl.df.loc[0, "psi"], expected_psi)
+
+        # theta must always land in the canonical [0, 180] range after this conversion
+        assert (relion_motl.df["theta"] >= 0).all() and (relion_motl.df["theta"] <= 180).all()
 
     def test_convert_to_relion_synthetic(self):
         # Create synthetic cryoCAT (zxz) angles in degrees
