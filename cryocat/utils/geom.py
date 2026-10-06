@@ -927,6 +927,74 @@ class Polyhedron:
         face_groups = [sorted(s) for s in normal_map.values()]
         return edge_idx, face_groups
 
+    def angular_dissimilarity(self, rotations_1: "RotationLike", rotations_2: "RotationLike") -> np.ndarray:
+        """Symmetry-aware dissimilarity of paired orientations of this solid.
+
+        For each pair, the corners (vertices) of the solid are projected onto
+        the unit sphere, turned by each of the two rotations, and compared with
+        :func:`hausdorff_distance_sphere`: the result is the angle of the
+        worst-matched corner. The higher the value, the more different the two
+        orientations. Two orientations that differ only by a symmetry rotation
+        of the solid put the corners on the same places and give 0.
+
+        Parameters
+        ----------
+        rotations_1 : RotationLike
+            First orientation of each pair: one rotation or a stack of ``N``
+            (e.g. ``motl.get_rotations()``, ``(N, 3)`` Euler angles in degrees
+            ``zxz``, ``(N, 3, 3)`` matrices or quaternions); normalized via
+            :func:`as_rotation`.
+        rotations_2 : RotationLike
+            Second orientation of each pair, same number as *rotations_1*. A
+            single rotation on either side is compared with every rotation on
+            the other side.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(N,)`` dissimilarities in radians (``(1,)`` for a single pair),
+            from 0 up to :func:`cryocat.utils.symmetry.max_angular_mismatch`.
+
+        Raises
+        ------
+        ValueError
+            If either input is empty, or the two inputs hold different numbers
+            of rotations and neither holds exactly one.
+
+        Notes
+        -----
+        * The corners are normalized to unit length, so the result does not
+          depend on :attr:`radius`.
+        * The corners already include :attr:`rotation`, so a fitted solid (e.g.
+          from :meth:`from_vectors`) is compared in its own frame: a rotation
+          ``R`` places the corners at ``R @ vertex``, as particle rotations
+          place a reference's features in the tomogram.
+        * Not normalized: :func:`cryocat.utils.symmetry.angular_score` is the
+          0-1 similarity ``1 - d / d_max`` of the same distance ``d`` for the
+          canonical solid, with ``d_max`` from
+          :func:`cryocat.utils.symmetry.max_angular_mismatch`.
+        * The two solids of a group (octahedron/cube, icosahedron/dodecahedron)
+          agree at 0 and at the maximum but give slightly different values in
+          between.
+        """
+        stacks = []
+        for name, rotations in (("rotations_1", rotations_1), ("rotations_2", rotations_2)):
+            if not isinstance(rotations, srot) and np.size(rotations) == 0:
+                raise ValueError(f"{name} holds no rotations.")
+            stacks.append(as_rotation(rotations).as_matrix().reshape(-1, 3, 3))
+        mats_1, mats_2 = stacks
+        if len(mats_1) != len(mats_2) and 1 not in (len(mats_1), len(mats_2)):
+            raise ValueError(
+                f"rotations_1 and rotations_2 must hold the same number of rotations (or one of them a "
+                f"single rotation), got {len(mats_1)} and {len(mats_2)}."
+            )
+        mats_1, mats_2 = np.broadcast_arrays(mats_1, mats_2)
+
+        norm_verts = self.vertices / np.linalg.norm(self.vertices, axis=1, keepdims=True)
+        return np.array(
+            [hausdorff_distance_sphere(norm_verts @ m1.T, norm_verts @ m2.T) for m1, m2 in zip(mats_1, mats_2)]
+        )
+
 
 class Tetrahedron(Polyhedron):
     """Regular tetrahedron — 4 vertices, 6 edges, 4 triangular faces.

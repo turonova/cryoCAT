@@ -2143,3 +2143,142 @@ def test_require_cyclic_symmetry():
     for symm in ("D2", "T", "O", "I"):
         with pytest.raises(NotImplementedError, match="In-plane distances"):
             require_cyclic_symmetry(symm, "In-plane distances")
+
+
+# ===========================================================================
+# Polyhedron.angular_dissimilarity (added 2026-10-06, plan of action point 1.2)
+# ===========================================================================
+
+from cryocat.utils.symmetry import SYMMETRY_GROUPS, angular_score, max_angular_mismatch
+
+# (solid class, group letter, kind name used by symmetry.angular_score)
+_PLATONIC = [
+    (Tetrahedron, "T", "tetrahedron"),
+    (Octahedron, "O", "octahedron"),
+    (Cube, "O", "cube"),
+    (Icosahedron, "I", "icosahedron"),
+    (Dodecahedron, "I", "dodecahedron"),
+]
+
+
+class TestPolyhedronAngularDissimilarity:
+
+    @pytest.mark.parametrize("solid_cls, letter, kind", _PLATONIC)
+    def test_identical_orientations_give_zero(self, solid_cls, letter, kind):
+        # Same rotation on both sides: the turned corners coincide.
+        r = srot.random(6, random_state=0)
+        np.testing.assert_allclose(solid_cls().angular_dissimilarity(r, r), 0.0, atol=1e-7)
+
+    @pytest.mark.parametrize("solid_cls, letter, kind", _PLATONIC)
+    def test_symmetry_related_orientations_give_zero(self, solid_cls, letter, kind):
+        # R and R @ g (g = any rotation of the solid's group) put the corners on
+        # the same places, so the solid cannot tell them apart.
+        g = srot.from_matrix(SYMMETRY_GROUPS[letter]().matrices)
+        r = srot.random(random_state=1)
+        np.testing.assert_allclose(solid_cls().angular_dissimilarity(r, r * g), 0.0, atol=1e-6)
+
+    @pytest.mark.parametrize("solid_cls, letter, kind", _PLATONIC)
+    def test_independent_of_radius(self, solid_cls, letter, kind):
+        # Corners are normalized to unit length, so the radius has no effect.
+        r1, r2 = srot.random(8, random_state=2), srot.random(8, random_state=3)
+        np.testing.assert_allclose(
+            solid_cls(radius=37.0).angular_dissimilarity(r1, r2),
+            solid_cls(radius=1.0).angular_dissimilarity(r1, r2),
+            atol=1e-12,
+        )
+
+    @pytest.mark.parametrize("solid_cls, letter, kind", _PLATONIC)
+    def test_invariant_to_common_rotation(self, solid_cls, letter, kind):
+        # Turning both particles by the same rotation does not change how
+        # different they are.
+        r1, r2 = srot.random(8, random_state=4), srot.random(8, random_state=5)
+        q = srot.random(random_state=6)
+        solid = solid_cls()
+        np.testing.assert_allclose(
+            solid.angular_dissimilarity(q * r1, q * r2), solid.angular_dissimilarity(r1, r2), atol=1e-7
+        )
+
+    @pytest.mark.parametrize("solid_cls, letter, kind", _PLATONIC)
+    def test_bounded_by_max_angular_mismatch(self, solid_cls, letter, kind):
+        # The value can never exceed the worst case (corner -> nearest face centre).
+        r1, r2 = srot.random(300, random_state=7), srot.random(300, random_state=8)
+        d = solid_cls().angular_dissimilarity(r1, r2)
+        assert d.min() >= 0.0
+        assert d.max() <= max_angular_mismatch(letter, kind) + 1e-9
+
+    @pytest.mark.parametrize("solid_cls, letter, kind", _PLATONIC)
+    def test_consistent_with_symmetry_angular_score(self, solid_cls, letter, kind):
+        # symmetry.angular_score is the normalized similarity 1 - d / d_max of
+        # the same distance d (canonical solid); compare away from its clamped ends.
+        r1, r2 = srot.random(50, random_state=9), srot.random(50, random_state=10)
+        d = solid_cls().angular_dissimilarity(r1, r2)
+        score = angular_score(r1, r2, letter, kind=kind)
+        inside = (score > 1e-5) & (score < 1 - 1e-5)
+        np.testing.assert_allclose(
+            d[inside], (1.0 - score[inside]) * max_angular_mismatch(letter, kind), atol=1e-9
+        )
+
+    def test_matches_hausdorff_distance_per_pair(self):
+        # Each element is exactly the draft's per-pair computation.
+        solid = Icosahedron(radius=5.0, R=srot.random(random_state=11))
+        r1, r2 = srot.random(5, random_state=12), srot.random(5, random_state=13)
+        verts = solid.vertices / np.linalg.norm(solid.vertices, axis=1, keepdims=True)
+        expected = [
+            hausdorff_distance_sphere(verts @ m1.T, verts @ m2.T)
+            for m1, m2 in zip(r1.as_matrix(), r2.as_matrix())
+        ]
+        np.testing.assert_array_equal(solid.angular_dissimilarity(r1, r2), expected)
+
+    def test_input_forms_agree(self):
+        # Rotation stack, Euler angles (zxz, degrees), matrices and quaternions
+        # describing the same rotations give the same result.
+        solid = Octahedron()
+        r1, r2 = srot.random(4, random_state=14), srot.random(4, random_state=15)
+        ref = solid.angular_dissimilarity(r1, r2)
+        np.testing.assert_allclose(
+            solid.angular_dissimilarity(r1.as_euler("zxz", degrees=True), r2.as_euler("zxz", degrees=True)),
+            ref, atol=1e-9,
+        )
+        np.testing.assert_allclose(solid.angular_dissimilarity(r1.as_matrix(), r2.as_matrix()), ref, atol=1e-12)
+        np.testing.assert_allclose(solid.angular_dissimilarity(r1.as_quat(), r2.as_quat()), ref, atol=1e-12)
+
+    def test_single_pair_returns_length_one_array(self):
+        # Output is always an array, also for one pair.
+        out = Tetrahedron().angular_dissimilarity([10.0, 20.0, 30.0], [40.0, 50.0, 60.0])
+        assert isinstance(out, np.ndarray)
+        assert out.shape == (1,)
+
+    def test_stack_equals_single_pairs(self):
+        # Element i of a stacked call equals the call on pair i alone.
+        solid = Cube()
+        r1, r2 = srot.random(6, random_state=16), srot.random(6, random_state=17)
+        stacked = solid.angular_dissimilarity(r1, r2)
+        singles = [solid.angular_dissimilarity(r1[i], r2[i])[0] for i in range(6)]
+        np.testing.assert_array_equal(stacked, singles)
+
+    def test_one_against_many_broadcasts(self):
+        # A single rotation on either side is compared with every rotation on
+        # the other side (e.g. all particles against a reference orientation).
+        solid = Dodecahedron()
+        ref = srot.random(random_state=18)
+        many = srot.random(5, random_state=19)
+        # Rebuilding the repeated stack round-trips through quaternions, so
+        # compare to rounding precision rather than bit for bit.
+        repeated = srot.from_quat(np.tile(ref.as_quat(), (5, 1)))
+        expected = solid.angular_dissimilarity(repeated, many)
+        np.testing.assert_allclose(solid.angular_dissimilarity(ref, many), expected, atol=1e-12)
+        np.testing.assert_allclose(solid.angular_dissimilarity(many, ref), expected, atol=1e-12)
+
+    def test_length_mismatch_raises(self):
+        # Different numbers of rotations, neither single: pairing is undefined.
+        with pytest.raises(ValueError, match="same number of rotations"):
+            Icosahedron().angular_dissimilarity(srot.random(3, random_state=20), srot.random(4, random_state=21))
+
+    @pytest.mark.parametrize("empty_side", [0, 1])
+    def test_empty_input_raises(self, empty_side):
+        # Motl.get_rotations() returns [] for an empty motl: clear error instead
+        # of as_rotation's shape message.
+        args = [srot.random(2, random_state=22), srot.random(2, random_state=23)]
+        args[empty_side] = []
+        with pytest.raises(ValueError, match="holds no rotations"):
+            Icosahedron().angular_dissimilarity(*args)

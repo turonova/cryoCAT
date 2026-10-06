@@ -1180,6 +1180,64 @@ class TestPolyhedralComplex:
         assert meta["label"] == "Split in asymmetric units"
         assert "xyz_shift" not in meta["hide"]
 
+    # ------------------------------------------------------------------ angular_dissimilarity (added 2026-10-06)
+
+    @pytest.mark.parametrize(
+        "cls, solid_cls",
+        [
+            (structure.TetrahedralComplex, geom.Tetrahedron),
+            (structure.OctahedralComplex, geom.Octahedron),
+            (structure.IcosahedralComplex, geom.Icosahedron),
+        ],
+    )
+    def test_angular_dissimilarity_before_fit_uses_canonical_solid(self, sample_motl, cls, solid_cls):
+        # Without fit_geometry the complex must give exactly the result of its
+        # canonical solid (same fallback as feature_vectors / symmetry_group).
+        pc = cls(sample_motl)
+        r1 = Rotation.random(5, random_state=1)
+        r2 = Rotation.random(5, random_state=2)
+        np.testing.assert_array_equal(pc.angular_dissimilarity(r1, r2), solid_cls().angular_dissimilarity(r1, r2))
+
+    @pytest.mark.parametrize(
+        "cls, solid_cls",
+        [
+            (structure.TetrahedralComplex, geom.Tetrahedron),
+            (structure.OctahedralComplex, geom.Octahedron),
+            (structure.IcosahedralComplex, geom.Icosahedron),
+        ],
+    )
+    def test_angular_dissimilarity_after_fit_uses_fitted_solid(self, sample_motl, cls, solid_cls):
+        # With a non-canonical fitted reference, a particle turned by R and one
+        # turned by R @ h (h = a symmetry rotation of the FITTED solid) look the
+        # same: dissimilarity 0. The canonical solid would not see them as
+        # symmetric copies, which shows the fitted solid is the one used.
+        pc = cls(sample_motl)
+        pc.solid = self._fitted_solid(solid_cls)
+        group_mats = pc.symmetry_group().matrices[1:]  # skip the identity
+        r = Rotation.random(random_state=3)
+        copies = r * Rotation.from_matrix(group_mats)
+        np.testing.assert_allclose(pc.angular_dissimilarity(r, copies), 0.0, atol=1e-6)
+        assert solid_cls().angular_dissimilarity(r, copies).max() > 1e-3
+
+    def test_angular_dissimilarity_with_fit_geometry(self, ico_complex, path_test_marker_file, mrc_file):
+        # End-to-end with the real fitting path (marker file + map): result
+        # equals the fitted solid's own method.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        r1 = Rotation.random(4, random_state=4)
+        r2 = Rotation.random(4, random_state=5)
+        np.testing.assert_array_equal(
+            ico_complex.angular_dissimilarity(r1, r2), ico_complex.solid.angular_dissimilarity(r1, r2)
+        )
+
+    def test_angular_dissimilarity_from_two_motl_subsets(self, ico_complex):
+        # Intended use: rotations of two particle subsets (get_rotations) are
+        # compared pair by pair, one value per pair, in radians.
+        motl_a = cryomotl.Motl(ico_complex.motl.df.iloc[:3].reset_index(drop=True))
+        motl_b = cryomotl.Motl(ico_complex.motl.df.iloc[3:].reset_index(drop=True))
+        result = ico_complex.angular_dissimilarity(motl_a.get_rotations(), motl_b.get_rotations())
+        assert result.shape == (3,)
+        assert np.all((result >= 0) & (result <= np.pi))
+
 
 # ---------------------------------------------------------------------------
 # Helpers for CnComplex tests

@@ -10272,9 +10272,43 @@ class PolyhedralComplex(SymmetricComplex):
         features_coords = (vecs + self.center) * self._pixel_size
         ioutils.write_coords_to_cmm_file(features_coords, output_path)
 
-    
-    # def angular_score(self, orientation_matrix1, orientation_matrix2):
-    #     return self._solid._angular_score(self, orientation_matrix1, orientation_matrix2)
+    def angular_dissimilarity(self, rotations_1: RotationLike, rotations_2: RotationLike) -> np.ndarray:
+        """Symmetry-aware dissimilarity of paired particle orientations.
+
+        Compares the corners of the complex's solid turned by each pair of
+        rotations (see :meth:`cryocat.utils.geom.Polyhedron.angular_dissimilarity`);
+        0 means the two particles look the same up to the complex's symmetry,
+        and higher values mean more different orientations.
+
+        Uses ``self.solid`` when geometry has been fitted via
+        :meth:`fit_geometry`, so the corners follow the symmetry axes of the
+        reference map; otherwise the canonical solid is used (reference
+        assumed canonically oriented), as in :meth:`feature_vectors` and
+        :meth:`symmetry_group`.
+
+        Parameters
+        ----------
+        rotations_1 : RotationLike
+            First orientation of each pair: one rotation or a stack of ``N``,
+            e.g. ``motl_a.get_rotations()``.
+        rotations_2 : RotationLike
+            Second orientation of each pair, same number as *rotations_1*
+            (e.g. ``motl_b.get_rotations()``). A single rotation on either side
+            is compared with every rotation on the other side.
+
+        Returns
+        -------
+        np.ndarray
+            ``(N,)`` dissimilarities in radians.
+
+        Raises
+        ------
+        ValueError
+            If either input is empty, or the numbers of rotations differ and
+            neither input holds exactly one.
+        """
+        solid = self.solid if self.solid is not None else self._solid()
+        return solid.angular_dissimilarity(rotations_1, rotations_2)
 
     # ------------------------------------------------------------------
     # Symmetry expansion
