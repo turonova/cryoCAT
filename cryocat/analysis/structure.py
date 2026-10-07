@@ -10106,6 +10106,36 @@ class ParametricSurface:
 # =============================================================================
 
 
+def _marker_vectors(markers: PathOrStr, pixel_size: float, center: np.ndarray, n_markers: int) -> np.ndarray:
+    """Load the first markers of a marker file as voxel vectors from *center*.
+
+    Parameters
+    ----------
+    markers : PathOrStr
+        Marker file (e.g. ChimeraX ``.cmm``) with coordinates in Å, box frame.
+    pixel_size : float
+        Pixel size of the map the markers were placed on (Å per voxel).
+    center : np.ndarray
+        ``(3,)`` centre of the solid in voxels.
+    n_markers : int
+        Number of markers to read, from the first one.
+
+    Returns
+    -------
+    np.ndarray
+        ``(n_markers, 3)`` vectors in voxels, relative to *center*.
+
+    Raises
+    ------
+    ValueError
+        If the file holds fewer than *n_markers* markers.
+    """
+    marks = ioutils.marker_coords_load(markers)
+    if len(marks) < n_markers:
+        raise ValueError(f"Expected at least {n_markers} marker(s) in {markers!r}, found {len(marks)}.")
+    return marks.iloc[:n_markers].to_numpy() / pixel_size - center
+
+
 class PolyhedralComplex(SymmetricComplex):
     """Abstract base for Platonic-solid (T/O/I) motl-analysis complexes.
 
@@ -10181,11 +10211,9 @@ class PolyhedralComplex(SymmetricComplex):
         pixel_size = input_map_metadata[1]
         center_vox = geom.as_triplet(center, reference_size=map_size)
 
-        input_vert_marks = ioutils.marker_coords_load(markers)
-        v1 = input_vert_marks.iloc[0].to_numpy() / pixel_size
-        v2 = input_vert_marks.iloc[1].to_numpy() / pixel_size
+        v1, v2 = _marker_vectors(markers, pixel_size, center_vox, 2)
 
-        self.solid = self._solid.from_vectors(v1 - center_vox, v2 - center_vox)
+        self.solid = self._solid.from_vectors(v1, v2)
         self.center = center_vox
         self._pixel_size = float(pixel_size)
 
@@ -10266,11 +10294,18 @@ class PolyhedralComplex(SymmetricComplex):
         ValueError
             When no geometry has been fitted yet.
         """
+        self._require_fitted()
+        vecs = self.feature_vectors(mode=mode, project_to_sphere=project_to_sphere)
+        ioutils.write_coords_to_cmm_file(self._to_map_coords(vecs), output_path)
+
+    def _require_fitted(self) -> None:
+        """Raise ``ValueError`` unless :meth:`fit_geometry` has been called."""
         if self.solid is None or self.center is None or self._pixel_size is None:
             raise ValueError("No geometry fitted. Call fit_geometry(markers, reference_map) first.")
-        vecs = self.feature_vectors(mode=mode, project_to_sphere=project_to_sphere)
-        features_coords = (vecs + self.center) * self._pixel_size
-        ioutils.write_coords_to_cmm_file(features_coords, output_path)
+
+    def _to_map_coords(self, vecs: np.ndarray) -> np.ndarray:
+        """Convert voxel vectors from the fitted centre to map coordinates in Å."""
+        return (vecs + self.center) * self._pixel_size
 
     def angular_dissimilarity(self, rotations_1: RotationLike, rotations_2: RotationLike) -> np.ndarray:
         """Symmetry-aware dissimilarity of paired particle orientations.
@@ -10544,11 +10579,9 @@ class PolyhedralComplex(SymmetricComplex):
         map_size = geom.as_triplet(input_map_metadata[0])
         center = geom.as_triplet(center, reference_size=map_size)
 
-        input_vert_marks = ioutils.marker_coords_load(input_cmm_file)
-        v1 = input_vert_marks.iloc[0].to_numpy() / input_map_metadata[1]
-        v2 = input_vert_marks.iloc[1].to_numpy() / input_map_metadata[1]
+        v1, v2 = _marker_vectors(input_cmm_file, input_map_metadata[1], center, 2)
 
-        solid = cls._solid.from_vectors(v1 - center, v2 - center)
+        solid = cls._solid.from_vectors(v1, v2)
         feature_vec = getattr(solid, mode)
 
         if project_to_sphere:
@@ -10561,6 +10594,115 @@ class PolyhedralComplex(SymmetricComplex):
             ioutils.write_coords_to_cmm_file(features_coords, output_cmm_file)
 
         return feature_vec, features_coords
+
+    def vertex_subunit_vectors(
+        self,
+        subunit_markers: PathOrStr,
+        *,
+        symmetry: Symmetry | None = None,
+        reference: int | None = None,
+        output_cmm_file: PathOrStr | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Place a ring of subunits around every vertex of the fitted solid.
+
+        One marker on one subunit near a vertex is turned about that vertex's
+        axis into a ring of ``n`` evenly spaced copies (local ``Cn``), and the
+        ring is copied to every vertex with
+        :meth:`cryocat.utils.geom.Polyhedron.transport_points`. Requires
+        :meth:`fit_geometry` first, which supplies the solid, its centre and the
+        pixel size.
+
+        Parameters
+        ----------
+        subunit_markers : PathOrStr
+            Marker file (e.g. ChimeraX ``.cmm``, Å) placed on the reference map
+            used in :meth:`fit_geometry`; only the first marker is used.
+        symmetry : Symmetry, optional
+            Cyclic symmetry of the ring around each vertex, e.g. ``"C5"`` or
+            ``5``. Defaults to the fold of the vertex axis (T: 3, O: 4, I: 5).
+        reference : int, optional
+            Index of the vertex the marked subunit belongs to. Defaults to the
+            vertex closest in angle to the marker.
+        output_cmm_file : PathOrStr, optional
+            If given, write the subunit positions (Å) to this ``.cmm`` file.
+
+        Returns
+        -------
+        vecs : np.ndarray of shape (V * n, 3)
+            Vectors in voxels from the solid's centre, vertex by vertex (rows
+            ``i * n`` to ``i * n + n - 1`` belong to vertex ``i``); ready for
+            ``expand(shift_vecs=vecs)``.
+        coords : np.ndarray of shape (V * n, 3)
+            The same positions as map coordinates in Å.
+
+        Raises
+        ------
+        ValueError
+            If no geometry has been fitted, the marker file is empty, or
+            *reference* is not a valid vertex index.
+        NotImplementedError
+            If *symmetry* is not cyclic.
+
+        Warns
+        -----
+        UserWarning
+            If ``n`` is not a multiple of the vertex fold (the copies then
+            depend on the neighbour ordering and do not share the solid's
+            symmetry), or if the marker lies on the vertex axis (all ring
+            copies overlap).
+
+        Notes
+        -----
+        * With the default ``n`` (the vertex fold), the result is the same set
+          of positions as the symmetry group's orbit of the marker
+          (``self.symmetry_group().orbit(shift)``), i.e. the positions used by
+          :meth:`split_in_asymmetric_units`; the orientations assigned later by
+          :meth:`expand` are radial instead.
+        * :meth:`expand` sorts the shift vectors, so its order column does not
+          follow the vertex-by-vertex order of *vecs*.
+
+        Examples
+        --------
+        >>> ico = IcosahedralComplex("complexes.em")
+        >>> ico.fit_geometry("two_vertices.cmm", "reference.mrc")
+        >>> vecs, coords = ico.vertex_subunit_vectors("one_subunit.cmm")
+        >>> vecs.shape                      # 12 vertices x 5 subunits
+        (60, 3)
+        >>> sub_motl = ico.expand(shift_vecs=vecs)
+        """
+        self._require_fitted()
+        shift = _marker_vectors(subunit_markers, self._pixel_size, self.center, 1)[0]
+        vertices = self.solid.vertices
+
+        if reference is None:
+            cosines = (vertices @ shift) / (np.linalg.norm(vertices, axis=1) * np.linalg.norm(shift))
+            reference = int(np.argmax(cosines))
+        elif not isinstance(reference, (int, np.integer)) or not 0 <= reference < len(vertices):
+            raise ValueError(f"reference must be a vertex index in [0, {len(vertices) - 1}], got {reference!r}.")
+
+        fold = len(self.solid.vertex_neighbors()[0])
+        if symmetry is None:
+            n = fold
+        else:
+            geom.require_cyclic_symmetry(symmetry, "vertex subunit ring")
+            _, n = geom.as_symmetry(symmetry)
+        if n % fold != 0:
+            warnings.warn(
+                f"A ring of {n} subunits is not a multiple of the {fold}-fold vertex axis: the copies depend on "
+                "the neighbour ordering and do not share the solid's symmetry.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if np.linalg.norm(np.cross(geom.normalize_vector(vertices[reference]), shift)) < 1e-6:
+            warnings.warn("The subunit lies on the vertex axis: all ring copies overlap.", UserWarning, stacklevel=2)
+
+        ring = geom.rotate_vectors_about_axis(shift, vertices[reference], 360.0 * np.arange(n) / n)
+        vecs = self.solid.transport_points(ring, reference=reference)
+        coords = self._to_map_coords(vecs)
+
+        if output_cmm_file is not None:
+            ioutils.write_coords_to_cmm_file(coords, output_cmm_file)
+        return vecs, coords
 
 
 # =============================================================================

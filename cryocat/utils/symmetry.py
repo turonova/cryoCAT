@@ -71,12 +71,6 @@ from cryocat._types import ArrayLike, EulerAngles, RotationLike, Symmetry
 from cryocat.utils import geom
 
 
-_AXIS_MAP: dict[str, np.ndarray] = {
-    "x": np.array([1.0, 0.0, 0.0]),
-    "y": np.array([0.0, 1.0, 0.0]),
-    "z": np.array([0.0, 0.0, 1.0]),
-}
-
 _PHI = (1.0 + np.sqrt(5.0)) / 2.0  # golden ratio
 
 # Platonic solids whose symmetry is described by each group letter. The first
@@ -131,11 +125,14 @@ def _as_single_rotation(orientation: RotationLike) -> rot:
 def _normalize_axis(axis: str | np.ndarray) -> np.ndarray:
     """Return a unit-vector for *axis*.
 
+    Thin wrapper around :func:`cryocat.utils.geom.unit_axis` (single
+    implementation; kept for the existing call sites in this module).
+
     Parameters
     ----------
     axis : str or ndarray
-        One of ``"x"``, ``"y"``, ``"z"`` (case-insensitive) or an
-        array-like that will be normalised to unit length.
+        One of ``"x"``, ``"y"``, ``"z"`` (case-insensitive) or a
+        3-element array-like that will be normalised to unit length.
 
     Returns
     -------
@@ -145,18 +142,10 @@ def _normalize_axis(axis: str | np.ndarray) -> np.ndarray:
     Raises
     ------
     ValueError
-        If the string key is unknown or the vector is zero-length.
+        If the string key is unknown, the vector does not have 3 elements,
+        or it is zero-length.
     """
-    if isinstance(axis, str):
-        key = axis.strip().lower()
-        if key in _AXIS_MAP:
-            return _AXIS_MAP[key]
-        raise ValueError(f"Unknown axis name {axis!r}; expected 'x', 'y', or 'z'.")
-    v = np.asarray(axis, dtype=float).ravel()
-    norm = np.linalg.norm(v)
-    if norm == 0.0:
-        raise ValueError("Axis vector must be non-zero.")
-    return v / norm
+    return geom.unit_axis(axis)
 
 
 def compute_conjugation_matrix(

@@ -92,6 +92,60 @@ def test_align_points_to_xy_plane_correctly_rotated():
     assert np.allclose(rotated_points, expected_points)
 
 
+def test_align_points_to_xy_plane_normal_already_z():
+    # Plane already parallel to xy (normal = +z): the cross product with z is
+    # zero, which previously caused a 0/0 division and all-NaN output.
+    # Expected: no rotation at all (identity matrix, points unchanged).
+    test_normal = np.array([0.0, 0.0, 1.0])
+    test_points = np.array([[0.0, 0.0, 5.0], [1.0, 0.0, 5.0], [0.0, 1.0, 5.0]])
+
+    rotated_points, rotation_matrix = align_points_to_xy_plane(test_points, test_normal)
+
+    assert not np.isnan(rotated_points).any()
+    assert np.allclose(rotation_matrix, np.eye(3))
+    assert np.allclose(rotated_points, test_points)
+
+
+def test_align_points_to_xy_plane_normal_minus_z():
+    # Plane parallel to xy but with its normal pointing down (-z): also a
+    # zero cross product. Expected: a proper 180° rotation that flips the
+    # normal onto +z and keeps all points at the same height (|z| preserved).
+    test_normal = np.array([0.0, 0.0, -1.0])
+    test_points = np.array([[0.0, 0.0, 5.0], [1.0, 0.0, 5.0], [0.0, 1.0, 5.0]])
+
+    rotated_points, rotation_matrix = align_points_to_xy_plane(test_points, test_normal)
+
+    assert not np.isnan(rotated_points).any()
+    # Proper rotation: orthogonal with determinant +1
+    assert np.allclose(rotation_matrix @ rotation_matrix.T, np.eye(3))
+    assert np.isclose(np.linalg.det(rotation_matrix), 1.0)
+    # The normal is mapped onto +z
+    assert np.allclose(rotation_matrix @ test_normal, [0.0, 0.0, 1.0])
+    # All points still lie on one plane parallel to xy
+    assert np.allclose(rotated_points[:, 2], rotated_points[0, 2])
+
+
+def test_align_points_to_xy_plane_normal_from_flat_points():
+    # Normal estimated from the points themselves (plane_normal=None) for a
+    # plane already parallel to xy at z=5: same degenerate case reached via
+    # the estimation branch. Expected: finite output, all z values equal.
+    test_points = np.array([[0.0, 0.0, 5.0], [1.0, 0.0, 5.0], [0.0, 1.0, 5.0]])
+
+    rotated_points, _ = align_points_to_xy_plane(test_points)
+
+    assert not np.isnan(rotated_points).any()
+    assert np.allclose(rotated_points[:, 2], rotated_points[0, 2])
+
+
+def test_align_points_to_xy_plane_collinear_points_raises():
+    # Three collinear points do not define a plane: the estimated normal is
+    # the zero vector. Expected: a clear ValueError instead of NaN output.
+    test_points = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+
+    with pytest.raises(ValueError):
+        align_points_to_xy_plane(test_points)
+
+
 @pytest.mark.parametrize(
     "quat_1, quat_2, result",
     [
@@ -524,6 +578,110 @@ def test_platonic_vertices_on_unit_sphere(cls):
     v = cls().vertices
     norms = np.linalg.norm(v, axis=1)
     assert np.allclose(norms, 1.0, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Polyhedron.vertex_neighbors / Polyhedron.transport_points
+# ---------------------------------------------------------------------------
+
+_SOLIDS_WITH_FOLD_AND_GROUP = [
+    (Tetrahedron, 3, "T"),
+    (Octahedron, 4, "O"),
+    (Cube, 3, "O"),
+    (Icosahedron, 5, "I"),
+    (Dodecahedron, 3, "I"),
+]
+
+
+@pytest.mark.parametrize("cls, fold, _group", _SOLIDS_WITH_FOLD_AND_GROUP)
+def test_vertex_neighbors_degree_and_symmetric(cls, fold, _group):
+    # Every vertex has `fold` neighbours (the fold of its symmetry axis), and
+    # the relation is mutual: j is a neighbour of i <=> i is a neighbour of j.
+    nb = cls().vertex_neighbors()
+    assert len(nb) == cls.n_vertices
+    assert all(len(n) == fold for n in nb)
+    for i, n in enumerate(nb):
+        assert all(i in nb[j] for j in n)
+
+
+@pytest.mark.parametrize("cls, _fold, _group", _SOLIDS_WITH_FOLD_AND_GROUP)
+def test_vertex_neighbors_match_shortest_distance_rule(cls, _fold, _group):
+    # Same result as the original distance-based draft (get_neighbors): the
+    # neighbours are the vertices at the shortest non-zero distance.
+    from scipy.spatial.distance import pdist, squareform
+
+    v = cls().vertices
+    d = squareform(pdist(v))
+    edge_len = d[d > 1e-6].min()
+    expected = [np.where(np.abs(d[i] - edge_len) < 1e-6)[0] for i in range(len(v))]
+    for got, exp in zip(cls().vertex_neighbors(), expected):
+        np.testing.assert_array_equal(got, exp)
+
+
+@pytest.mark.parametrize("cls, _fold, _group", _SOLIDS_WITH_FOLD_AND_GROUP)
+def test_vertex_neighbors_independent_of_radius_and_rotation(cls, _fold, _group):
+    # Topology comes from the canonical vertices: scaling or turning the solid
+    # must not change who is joined to whom.
+    base = cls().vertex_neighbors()
+    moved = cls(radius=37.0, R=srot.random(random_state=1)).vertex_neighbors()
+    for a, b in zip(base, moved):
+        np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("cls, fold, group", _SOLIDS_WITH_FOLD_AND_GROUP)
+def test_transport_points_ring_equals_group_orbit(cls, fold, group):
+    # A ring of `fold` points around one vertex, copied to every vertex, gives
+    # exactly the symmetry orbit of one ring point (12/24/60 points), for a
+    # scaled and turned solid. The reference block is the input itself.
+    from cryocat.utils import symmetry
+
+    solid = cls(radius=40.0, R=srot.random(random_state=2))
+    ref = 1
+    shift = 0.9 * solid.vertices[ref] + np.array([3.0, -2.0, 1.0])
+    ring = rotate_vectors_about_axis(shift, solid.vertices[ref], 360.0 * np.arange(fold) / fold)
+    out = solid.transport_points(ring, reference=ref)
+    orbit = symmetry.SYMMETRY_GROUPS[group].from_polyhedron(solid).orbit(shift)
+    assert out.shape == orbit.shape
+    d = np.linalg.norm(out[:, None] - orbit[None], axis=2)
+    assert np.all(d.min(axis=1) < 1e-8) and np.all(d.min(axis=0) < 1e-8)
+    np.testing.assert_allclose(out[ref * fold : (ref + 1) * fold], ring)
+
+
+@pytest.mark.parametrize("cls, _fold, _group", _SOLIDS_WITH_FOLD_AND_GROUP)
+def test_transport_points_maps_reference_vertex_to_each_vertex(cls, _fold, _group):
+    # Transporting the reference vertex itself must land on every vertex in
+    # turn (block i holds vertex i), since each copy is a rotation carrying the
+    # reference vertex onto vertex i.
+    solid = cls(radius=5.0, R=srot.random(random_state=3))
+    out = solid.transport_points(solid.vertices[2], reference=2)
+    np.testing.assert_allclose(out, solid.vertices, atol=1e-10)
+
+
+@pytest.mark.parametrize("n_points", [1, 3, 7])
+def test_transport_points_any_number_of_points(n_points):
+    # Regression for the draft's hardcoded block size 5: any P works and the
+    # output has V * P rows, vertex by vertex.
+    solid = Icosahedron()
+    pts = np.random.default_rng(0).normal(size=(n_points, 3))
+    out = solid.transport_points(pts, reference=4)
+    assert out.shape == (12 * n_points, 3)
+    np.testing.assert_allclose(out[4 * n_points : 5 * n_points], pts)
+
+
+@pytest.mark.parametrize(
+    "points, reference",
+    [
+        (np.zeros((2, 2)), 0),  # points with 2 components
+        (np.zeros((2, 2, 3)), 0),  # 3D stack
+        (np.zeros(3), 12),  # reference out of range for 12 vertices
+        (np.zeros(3), -1),  # negative reference
+        (np.zeros(3), 1.0),  # non-integer reference
+    ],
+)
+def test_transport_points_invalid_input_raises(points, reference):
+    # Invalid shapes or vertex indices give a clear ValueError.
+    with pytest.raises(ValueError):
+        Icosahedron().transport_points(points, reference=reference)
 
 
 # ---------------------------------------------------------------------------
@@ -1414,6 +1572,158 @@ def test_rotate_points_rodrigues_aligns_z_to_x():
     n1 = np.array([1.0, 0.0, 0.0])
     rotated = rotate_points_rodrigues(P, n0, n1)
     np.testing.assert_allclose(rotated[0], [1.0, 0.0, 0.0], atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# unit_axis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [("x", [1, 0, 0]), ("y", [0, 1, 0]), ("z", [0, 0, 1]), (" Z ", [0, 0, 1])],
+)
+def test_unit_axis_names(name, expected):
+    # Axis names are case-insensitive and surrounding whitespace is ignored.
+    np.testing.assert_allclose(unit_axis(name), expected)
+
+
+def test_unit_axis_vector_is_normalized():
+    # Only the direction of a vector matters: [3, 0, 4] has length 5.
+    np.testing.assert_allclose(unit_axis([3, 0, 4]), [0.6, 0.0, 0.8])
+
+
+def test_unit_axis_returns_copy():
+    # The returned array must be a fresh copy: modifying it must not change
+    # the result of later calls (the old symmetry._AXIS_MAP returned the
+    # shared module-level array itself).
+    first = unit_axis("x")
+    first[0] = 99.0
+    np.testing.assert_allclose(unit_axis("x"), [1, 0, 0])
+
+
+@pytest.mark.parametrize(
+    "bad_axis, match",
+    [("w", "Unknown axis"), ([0, 0, 0], "non-zero"), ([1e-12, 0, 0], "non-zero"), ([1, 0], "3 elements")],
+)
+def test_unit_axis_invalid_raises(bad_axis, match):
+    # Unknown names, (near-)zero vectors and wrong lengths give a clear error
+    # instead of NaN output.
+    with pytest.raises(ValueError, match=match):
+        unit_axis(bad_axis)
+
+
+# ---------------------------------------------------------------------------
+# rotate_vectors_about_axis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "vector, axis, angle, expected",
+    [
+        ([1, 0, 0], "z", 90, [0, 1, 0]),  # right-hand rule: x -> y about +z
+        ([1, 0, 0], "z", -90, [0, -1, 0]),  # negative angle turns the other way
+        ([1, 0, 0], [0, 0, -1], 90, [0, -1, 0]),  # flipping the axis flips the turn
+        ([0, 1, 0], "x", 90, [0, 0, 1]),  # y -> z about +x
+        ([0, 0, 1], "y", 90, [1, 0, 0]),  # z -> x about +y
+        ([1, 0, 0], "z", 180, [-1, 0, 0]),  # half turn reverses the vector
+        ([0, 0, 2], "z", 37, [0, 0, 2]),  # a vector along the axis does not move
+    ],
+)
+def test_rotate_vectors_about_axis_known_values(vector, axis, angle, expected):
+    # Hand-checkable rotations fixing the direction convention (right-hand
+    # rule, active rotation).
+    np.testing.assert_allclose(rotate_vectors_about_axis(vector, axis, angle), expected, atol=1e-12)
+
+
+def test_rotate_vectors_about_axis_radians():
+    # degrees=False: pi/2 rad must give the same result as 90 degrees.
+    np.testing.assert_allclose(
+        rotate_vectors_about_axis([1, 0, 0], "z", np.pi / 2, degrees=False),
+        rotate_vectors_about_axis([1, 0, 0], "z", 90),
+        atol=1e-12,
+    )
+
+
+def test_rotate_vectors_about_axis_axis_length_irrelevant():
+    # Only the axis direction is used: [0, 0, 5] behaves like "z".
+    np.testing.assert_allclose(
+        rotate_vectors_about_axis([1, 2, 3], [0, 0, 5], 40),
+        rotate_vectors_about_axis([1, 2, 3], "z", 40),
+        atol=1e-12,
+    )
+
+
+def test_rotate_vectors_about_axis_preserves_length_and_inverts():
+    # A rotation never changes vector lengths, and turning by +theta then
+    # -theta about the same axis gives back the original vectors.
+    rng = np.random.default_rng(0)
+    vectors = rng.normal(size=(20, 3))
+    axis = rng.normal(size=3)
+    rotated = rotate_vectors_about_axis(vectors, axis, 73.0)
+    np.testing.assert_allclose(np.linalg.norm(rotated, axis=1), np.linalg.norm(vectors, axis=1))
+    np.testing.assert_allclose(rotate_vectors_about_axis(rotated, axis, -73.0), vectors, atol=1e-12)
+
+
+def test_rotate_vectors_about_axis_single_vector_keeps_shape():
+    # One (3,) vector and a scalar angle -> (3,) output.
+    assert rotate_vectors_about_axis([1, 0, 0], "z", 30).shape == (3,)
+
+
+def test_rotate_vectors_about_axis_scalar_angle_many_vectors():
+    # A scalar angle is applied to every vector -> (N, 3).
+    out = rotate_vectors_about_axis([[1, 0, 0], [0, 1, 0]], "z", 90)
+    np.testing.assert_allclose(out, [[0, 1, 0], [-1, 0, 0]], atol=1e-12)
+
+
+def test_rotate_vectors_about_axis_one_vector_many_angles():
+    # One vector, M angles -> the vector rotated by each angle, shape (M, 3).
+    out = rotate_vectors_about_axis([1, 0, 0], "z", [0, 90, 180])
+    np.testing.assert_allclose(out, [[1, 0, 0], [0, 1, 0], [-1, 0, 0]], atol=1e-12)
+
+
+def test_rotate_vectors_about_axis_three_angles_not_mixed_into_axis():
+    # Regression for the original draft: with exactly 3 angles,
+    # deg2rad(angles) * axis multiplied element by element and silently built
+    # a single rotation about a different axis. Each angle must instead act
+    # about the given axis: here a vector along z must stay fixed for all 3.
+    out = rotate_vectors_about_axis([0, 0, 1], "z", [10, 20, 30])
+    assert out.shape == (3, 3)
+    np.testing.assert_allclose(out, np.tile([0, 0, 1], (3, 1)), atol=1e-12)
+
+
+def test_rotate_vectors_about_axis_paired_rows():
+    # N vectors and N angles are paired row by row.
+    out = rotate_vectors_about_axis([[1, 0, 0], [1, 0, 0]], "z", [90, 180])
+    np.testing.assert_allclose(out, [[0, 1, 0], [-1, 0, 0]], atol=1e-12)
+
+
+def test_rotate_vectors_about_axis_matches_rotate_points_rodrigues():
+    # Consistency with the existing helper: turning z by 90 deg about +y
+    # gives the same as the rotation that aligns z onto x.
+    np.testing.assert_allclose(
+        rotate_vectors_about_axis([[0, 0, 1], [0, 1, 0]], "y", 90),
+        rotate_points_rodrigues(np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]]), [0, 0, 1], [1, 0, 0]),
+        atol=1e-12,
+    )
+
+
+@pytest.mark.parametrize(
+    "vectors, axis, angles",
+    [
+        ([[1, 0, 0], [0, 1, 0]], "z", [10, 20, 30]),  # 2 vectors vs 3 angles
+        ([1, 0], "z", 10),  # vector with 2 components
+        (np.zeros((2, 2, 3)), "z", 10),  # 3D stack of vectors
+        ([1, 0, 0], "z", [[10, 20]]),  # 2D array of angles
+        ([1, 0, 0], [0, 0, 0], 10),  # zero axis
+        ([1, 0, 0], "w", 10),  # unknown axis name
+    ],
+)
+def test_rotate_vectors_about_axis_invalid_input_raises(vectors, axis, angles):
+    # Invalid shapes or axes raise ValueError instead of NaN or an opaque
+    # scipy/numpy broadcasting error.
+    with pytest.raises(ValueError):
+        rotate_vectors_about_axis(vectors, axis, angles)
 
 
 # ---------------------------------------------------------------------------

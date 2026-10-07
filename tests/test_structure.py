@@ -1238,6 +1238,144 @@ class TestPolyhedralComplex:
         assert result.shape == (3,)
         assert np.all((result >= 0) & (result <= np.pi))
 
+    # ------------------------------------------------------------------ vertex_subunit_vectors
+
+    @staticmethod
+    def _write_subunit_marker(pc, tmp_path, vertex_idx=3, on_axis=False):
+        """Write one subunit marker near vertex *vertex_idx* of a fitted complex.
+
+        The subunit sits at 85% of the vertex vector plus a sideways offset
+        (off the vertex axis unless *on_axis*). It is written in Å in the box
+        frame, as ChimeraX would save it. Returns (path, shift in voxels).
+        """
+        from cryocat.utils import ioutils
+
+        v = pc.solid.vertices[vertex_idx]
+        side = np.cross(v, [0.0, 0.0, 1.0])
+        side = side / np.linalg.norm(side) * 0.15 * np.linalg.norm(v)
+        shift = 0.85 * v + (0.0 if on_axis else side)
+        path = tmp_path / "subunit.cmm"
+        ioutils.write_coords_to_cmm_file((shift + pc.center)[np.newaxis, :] * pc._pixel_size, str(path))
+        return str(path), shift
+
+    @staticmethod
+    def _same_point_set(a, b, atol=1e-6):
+        """True if every row of *a* has a match in *b* and vice versa."""
+        d = np.linalg.norm(a[:, None, :] - b[None, :, :], axis=2)
+        return a.shape == b.shape and np.all(d.min(axis=1) < atol) and np.all(d.min(axis=0) < atol)
+
+    def test_vertex_subunit_vectors_requires_fit(self, ico_complex, path_test_marker_file):
+        # Without fit_geometry there is no centre/pixel size to convert the
+        # marker, so the method must stop with a clear error.
+        with pytest.raises(ValueError, match="No geometry fitted"):
+            ico_complex.vertex_subunit_vectors(path_test_marker_file)
+
+    @pytest.mark.parametrize(
+        "cls, n_total",
+        [
+            (structure.TetrahedralComplex, 12),  # 4 vertices x C3
+            (structure.OctahedralComplex, 24),  # 6 vertices x C4
+            (structure.IcosahedralComplex, 60),  # 12 vertices x C5
+        ],
+    )
+    def test_vertex_subunit_vectors_default_equals_group_orbit(
+        self, cls, n_total, sample_motl, path_test_marker_file, mrc_file, tmp_path
+    ):
+        # With the default ring size (the vertex fold) the subunits are exactly
+        # the symmetry orbit of the marked subunit, for every complex type.
+        pc = cls(sample_motl)
+        pc.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, shift = self._write_subunit_marker(pc, tmp_path, vertex_idx=1)
+        vecs, coords = pc.vertex_subunit_vectors(marker)
+        assert vecs.shape == coords.shape == (n_total, 3)
+        assert self._same_point_set(vecs, pc.symmetry_group().orbit(shift))
+
+    def test_vertex_subunit_vectors_reference_block_is_ring(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # The block of the nearest vertex (found automatically) holds the
+        # marked subunit itself plus its 4 turned copies about that vertex.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, shift = self._write_subunit_marker(ico_complex, tmp_path, vertex_idx=3)
+        vecs, _ = ico_complex.vertex_subunit_vectors(marker)
+        ring = geom.rotate_vectors_about_axis(shift, ico_complex.solid.vertices[3], [0, 72, 144, 216, 288])
+        np.testing.assert_allclose(vecs[15:20], ring, atol=1e-8)
+
+    def test_vertex_subunit_vectors_explicit_reference(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # An explicit reference gives the same set as the automatic choice
+        # when it names the nearest vertex; an invalid index is refused.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path, vertex_idx=3)
+        auto, _ = ico_complex.vertex_subunit_vectors(marker)
+        explicit, _ = ico_complex.vertex_subunit_vectors(marker, reference=3)
+        np.testing.assert_allclose(auto, explicit)
+        with pytest.raises(ValueError, match="reference"):
+            ico_complex.vertex_subunit_vectors(marker, reference=12)
+
+    def test_vertex_subunit_vectors_multiple_of_fold_no_warning(
+        self, ico_complex, path_test_marker_file, mrc_file, tmp_path
+    ):
+        # C10 at a 5-fold vertex is a multiple of the fold: 120 subunits, no
+        # warning, and still a symmetric set (contains the C5 result).
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path)
+        import warnings as _w
+
+        with _w.catch_warnings():
+            _w.simplefilter("error")
+            vecs10, _ = ico_complex.vertex_subunit_vectors(marker, symmetry="C10")
+            vecs5, _ = ico_complex.vertex_subunit_vectors(marker, symmetry=5)
+        assert vecs10.shape == (120, 3)
+        d = np.linalg.norm(vecs5[:, None] - vecs10[None], axis=2)
+        assert np.all(d.min(axis=1) < 1e-6)
+
+    def test_vertex_subunit_vectors_non_multiple_warns(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # C3 at a 5-fold vertex is computed (36 subunits) but warns that the
+        # placement depends on the neighbour ordering.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path)
+        with pytest.warns(UserWarning, match="not a multiple"):
+            vecs, _ = ico_complex.vertex_subunit_vectors(marker, symmetry="C3")
+        assert vecs.shape == (36, 3)
+
+    def test_vertex_subunit_vectors_on_axis_warns(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # A subunit exactly on the vertex axis is not moved by the ring turns:
+        # the copies overlap, which is reported.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path, on_axis=True)
+        with pytest.warns(UserWarning, match="overlap"):
+            ico_complex.vertex_subunit_vectors(marker)
+
+    @pytest.mark.parametrize("symmetry", ["D2", "I"])
+    def test_vertex_subunit_vectors_non_cyclic_raises(
+        self, symmetry, ico_complex, path_test_marker_file, mrc_file, tmp_path
+    ):
+        # A ring around one axis can only be cyclic.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path)
+        with pytest.raises(NotImplementedError):
+            ico_complex.vertex_subunit_vectors(marker, symmetry=symmetry)
+
+    def test_vertex_subunit_vectors_coords_and_cmm(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # coords are the vectors converted to Å in the box frame, the marker
+        # file holds the same coords, and the marked subunit is among them.
+        from cryocat.utils import ioutils
+
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path)
+        out = tmp_path / "all_subunits.cmm"
+        vecs, coords = ico_complex.vertex_subunit_vectors(marker, output_cmm_file=str(out))
+        np.testing.assert_allclose(coords, (vecs + ico_complex.center) * ico_complex._pixel_size)
+        np.testing.assert_allclose(ioutils.marker_coords_load(str(out)).to_numpy(), coords, atol=1e-3)
+        marked = ioutils.marker_coords_load(marker).to_numpy()[0]
+        assert np.min(np.linalg.norm(coords - marked, axis=1)) < 1e-3
+
+    def test_vertex_subunit_vectors_feed_expand(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # Integration with expand (primer step 6): 60 subparticles per complex.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path)
+        vecs, _ = ico_complex.vertex_subunit_vectors(marker)
+        expanded = ico_complex.expand(shift_vecs=vecs)
+        assert len(expanded.df) == 60 * len(ico_complex.motl.df)
+
 
 # ---------------------------------------------------------------------------
 # Helpers for CnComplex tests

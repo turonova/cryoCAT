@@ -88,6 +88,21 @@ class TestNormalizeAxis:
         with pytest.raises(ValueError, match="non-zero"):
             _normalize_axis([0, 0, 0])
 
+    def test_returns_copy(self):
+        # _normalize_axis now delegates to geom.unit_axis, which returns a
+        # fresh array. Previously a named axis returned the shared
+        # module-level array, so mutating it corrupted every later call.
+        first = _normalize_axis("z")
+        first[2] = -5.0
+        np.testing.assert_allclose(_normalize_axis("z"), [0, 0, 1])
+
+    def test_matches_geom_unit_axis(self):
+        # Single implementation: the wrapper gives the same result as geom.
+        from cryocat.utils import geom
+
+        for axis in ("x", "Y", [1, 2, 3]):
+            np.testing.assert_allclose(_normalize_axis(axis), geom.unit_axis(axis))
+
 
 # ---------------------------------------------------------------------------
 # compute_conjugation_matrix

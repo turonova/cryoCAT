@@ -995,6 +995,98 @@ class Polyhedron:
             [hausdorff_distance_sphere(norm_verts @ m1.T, norm_verts @ m2.T) for m1, m2 in zip(mats_1, mats_2)]
         )
 
+    def vertex_neighbors(self) -> list[np.ndarray]:
+        """Return, for each vertex, the indices of the vertices joined to it by an edge.
+
+        Read from the stored edge list, so no distances are recomputed. The
+        topology is built on the canonical vertices, hence the result does not
+        depend on :attr:`radius` or :attr:`rotation`.
+
+        Returns
+        -------
+        list of numpy.ndarray
+            ``V`` integer arrays; entry ``i`` holds the sorted neighbour indices
+            of vertex ``i``. Their common length is the fold of the symmetry axis
+            through each vertex (tetrahedron, cube, dodecahedron 3; octahedron 4;
+            icosahedron 5).
+
+        Examples
+        --------
+        >>> Icosahedron().vertex_neighbors()[0]
+        array([2, 4, 6, 8, 9])
+        """
+        edges = np.asarray(self._edge_idx)
+        return [
+            np.sort(np.concatenate((edges[edges[:, 0] == i, 1], edges[edges[:, 1] == i, 0])))
+            for i in range(len(self.vertices))
+        ]
+
+    def transport_points(self, points: ArrayLike, reference: int = 0) -> np.ndarray:
+        """Copy points placed around one vertex to every vertex of the solid.
+
+        For each vertex ``i``, the rotation that carries the reference vertex
+        onto vertex ``i`` and the reference vertex's first neighbour onto the
+        first neighbour of vertex ``i`` is applied to *points*. For a regular
+        solid each of these rotations is one of its symmetry rotations, so the
+        copies around every vertex look the same as around the reference.
+
+        Parameters
+        ----------
+        points : ArrayLike
+            ``(P, 3)`` or ``(3,)`` points around vertex *reference*, in the frame
+            of :attr:`vertices` (vectors from the solid's centre).
+        reference : int, default=0
+            Index of the vertex the input *points* belong to.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(V * P, 3)`` points, vertex by vertex: rows ``i * P`` to
+            ``i * P + P - 1`` are the copy around vertex ``i``. The block of
+            *reference* equals *points*.
+
+        Raises
+        ------
+        ValueError
+            If *points* does not have shape ``(3,)`` or ``(P, 3)``, or
+            *reference* is not a valid vertex index.
+        RuntimeError
+            If a rotation cannot be fitted exactly (not expected for a regular
+            solid).
+
+        Notes
+        -----
+        If *points* are not symmetric about the reference vertex axis (e.g. a
+        ring of 3 points around a 5-fold vertex), the copies depend on which
+        neighbour is listed first and do not share the solid's symmetry.
+
+        Examples
+        --------
+        >>> solid = Icosahedron()
+        >>> solid.transport_points(solid.vertices[0] * 1.1).shape
+        (12, 3)
+        """
+        pts = np.asarray(points, dtype=float)
+        if pts.ndim == 1:
+            pts = pts[np.newaxis, :]
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError(f"points must have shape (3,) or (P, 3), got {np.asarray(points).shape}.")
+        n_vertices = len(self.vertices)
+        if not isinstance(reference, (int, np.integer)) or not 0 <= reference < n_vertices:
+            raise ValueError(f"reference must be a vertex index in [0, {n_vertices - 1}], got {reference!r}.")
+
+        verts_u = self.vertices / np.linalg.norm(self.vertices, axis=1, keepdims=True)
+        first_neighbor = [nb[0] for nb in self.vertex_neighbors()]
+        ref_pair = [verts_u[reference], verts_u[first_neighbor[reference]]]
+
+        blocks = []
+        for i in range(n_vertices):
+            rotation, rssd = srot.align_vectors([verts_u[i], verts_u[first_neighbor[i]]], ref_pair)
+            if rssd > 1e-6:
+                raise RuntimeError(f"Poor rotation fit for vertex {i} (residual {rssd:.2e}); is the solid regular?")
+            blocks.append(rotation.apply(pts))
+        return np.vstack(blocks)
+
 
 class Tetrahedron(Polyhedron):
     """Regular tetrahedron — 4 vertices, 6 edges, 4 triangular faces.
@@ -1417,14 +1509,22 @@ def align_points_to_xy_plane(
     else:
         normal = plane_normal
 
-    normal = normal / np.linalg.norm(normal)
+    norm = np.linalg.norm(normal)
+    if norm < 1e-10:
+        raise ValueError("Plane normal is zero-length (points may be collinear or coincident).")
+    normal = normal / norm
 
     # Find the rotation matrix to align normal with z-axis
-    z_axis = np.array([0, 0, 1])
+    z_axis = np.array([0.0, 0.0, 1.0])
     axis = np.cross(normal, z_axis)
-    axis = axis / np.linalg.norm(axis)
-    angle = np.arccos(np.dot(normal, z_axis))
-    rotation_matrix = srot.from_rotvec(angle * axis).as_matrix()  # Construct rotation matrix
+    axis_norm = np.linalg.norm(axis)
+    if axis_norm < 1e-10:
+        # Normal already parallel to z: identity, or 180° flip about x if it points along -z
+        rotation = srot.identity() if normal[2] > 0 else srot.from_rotvec(np.pi * np.array([1.0, 0.0, 0.0]))
+    else:
+        angle = np.arccos(np.clip(np.dot(normal, z_axis), -1.0, 1.0))
+        rotation = srot.from_rotvec(angle * axis / axis_norm)
+    rotation_matrix = rotation.as_matrix()  # Construct rotation matrix
 
     # Apply rotation matrix to all points
     rotated_points = np.dot(rotation_matrix, points_on_plane.T).T
@@ -3129,6 +3229,142 @@ def ray_ray_intersection_3d(
         distances[i] = np.linalg.norm(P_intersect - starting_points[i, :] - ui * Si[i, :])
 
     return P_intersect, distances
+
+
+_AXIS_VECTORS: dict[str, np.ndarray] = {
+    "x": np.array([1.0, 0.0, 0.0]),
+    "y": np.array([0.0, 1.0, 0.0]),
+    "z": np.array([0.0, 0.0, 1.0]),
+}
+
+
+def unit_axis(axis: str | ArrayLike) -> np.ndarray:
+    """Return the unit vector for an axis given by name or as a vector.
+
+    Parameters
+    ----------
+    axis : str or ArrayLike
+        ``"x"``, ``"y"``, ``"z"`` (case-insensitive, surrounding whitespace
+        ignored) or a 3-element array-like of any non-zero length (only its
+        direction is used).
+
+    Returns
+    -------
+    ndarray
+        Shape ``(3,)`` unit vector (a new array; modifying it does not affect
+        later calls).
+
+    Raises
+    ------
+    ValueError
+        If the name is unknown, the vector does not have 3 elements, or its
+        length is below 1e-10.
+
+    Examples
+    --------
+    >>> unit_axis("Z")
+    array([0., 0., 1.])
+    >>> unit_axis([3, 0, 4])
+    array([0.6, 0. , 0.8])
+    """
+    if isinstance(axis, str):
+        key = axis.strip().lower()
+        if key not in _AXIS_VECTORS:
+            raise ValueError(f"Unknown axis name {axis!r}; expected 'x', 'y' or 'z'.")
+        return _AXIS_VECTORS[key].copy()
+    v = np.asarray(axis, dtype=float).ravel()
+    if v.shape != (3,):
+        raise ValueError(f"axis must have 3 elements, got shape {np.asarray(axis).shape}.")
+    norm = np.linalg.norm(v)
+    if norm < 1e-10:
+        raise ValueError("Axis vector must be non-zero.")
+    return v / norm
+
+
+def rotate_vectors_about_axis(
+    vectors: ArrayLike,
+    axis: str | ArrayLike,
+    angles: float | ArrayLike,
+    degrees: bool = True,
+) -> np.ndarray:
+    """Rotate vector(s) about a fixed axis by given angle(s).
+
+    The rotation follows the right-hand rule: with the right thumb pointing along
+    ``axis``, a positive angle turns the vectors in the direction of the curled
+    fingers (e.g. +90° about z sends x to y). The rotation is active: the vectors
+    move, the coordinate frame stays fixed.
+
+    Parameters
+    ----------
+    vectors : ArrayLike
+        Vector(s) to rotate, shape ``(3,)`` or ``(N, 3)``. Normalized via
+        :func:`numpy.asarray`.
+    axis : str or ArrayLike
+        Rotation axis: ``"x"``, ``"y"``, ``"z"`` (case-insensitive) or a 3-element
+        array-like of any non-zero length (only its direction is used).
+        Normalized via :func:`unit_axis`.
+    angles : float or ArrayLike
+        Rotation angle(s), scalar or shape ``(M,)``. See Notes for how vectors and
+        angles are paired.
+    degrees : bool, default=True
+        Whether ``angles`` are in degrees (otherwise radians).
+
+    Returns
+    -------
+    ndarray
+        Rotated vector(s): shape ``(3,)`` for a single vector and a scalar angle,
+        otherwise ``(K, 3)`` with ``K = max(N, M)``.
+
+    Raises
+    ------
+    ValueError
+        If ``axis`` is an unknown string or a zero-length vector, if ``vectors``
+        or ``angles`` have an invalid shape, or if ``N`` and ``M`` are both larger
+        than 1 and differ.
+
+    Notes
+    -----
+    Pairing of vectors and angles:
+
+    * scalar angle: every vector is rotated by the same angle;
+    * one vector, ``M`` angles: the vector is rotated by each angle -> ``(M, 3)``;
+    * ``N`` vectors, ``N`` angles: paired row by row -> ``(N, 3)``.
+
+    A single vector given as shape ``(1, 3)`` is kept 2D in the output.
+
+    See Also
+    --------
+    rotate_points_rodrigues : rotation defined by a start and an end direction.
+
+    Examples
+    --------
+    >>> rotate_vectors_about_axis([1, 0, 0], "z", 90).round(6)
+    array([0., 1., 0.])
+    >>> rotate_vectors_about_axis([1, 0, 0], [0, 0, 1], [0, 90, 180]).round(6)
+    array([[ 1.,  0.,  0.],
+           [ 0.,  1.,  0.],
+           [-1.,  0.,  0.]])
+    """
+    vectors = np.asarray(vectors, dtype=float)
+    if vectors.ndim not in (1, 2) or vectors.shape[-1] != 3:
+        raise ValueError(f"vectors must have shape (3,) or (N, 3), got {vectors.shape}.")
+
+    axis = unit_axis(axis)
+
+    angles = np.asarray(angles, dtype=float)
+    if angles.ndim > 1:
+        raise ValueError(f"angles must be a scalar or have shape (M,), got {angles.shape}.")
+    if degrees:
+        angles = np.deg2rad(angles)
+
+    n_vec = vectors.shape[0] if vectors.ndim == 2 else 1
+    n_ang = angles.shape[0] if angles.ndim == 1 else 1
+    if n_vec > 1 and n_ang > 1 and n_vec != n_ang:
+        raise ValueError(f"Got {n_vec} vectors and {n_ang} angles; counts must match or one must be 1.")
+
+    # One rotation vector per angle: direction = axis, length = angle (radians)
+    rotation = srot.from_rotvec(angles[..., np.newaxis] * axis)
+    return rotation.apply(vectors)
 
 
 def rotate_points_rodrigues(
