@@ -61,6 +61,7 @@ first; see the Notes of that function.
 from __future__ import annotations
 
 import copy
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -634,17 +635,51 @@ def get_symmetry_rotations(
         Symmetry specifier, e.g. ``"C5"``, ``"D3"``, ``"T"``, ``"O"``,
         ``"I"``, or a bare integer (interpreted as cyclic).
     axis : str or ndarray, optional
-        Principal symmetry axis.  Default is ``"z"``.  Ignored when
-        *conjugation_matrix* is provided.
+        Direction onto which the group's z-axis is moved: ``"x"``, ``"y"``,
+        ``"z"`` or a vector. Default is ``"z"`` (canonical orientation).
+        Fully defines the orientation only for cyclic symmetry (see Notes).
+        Ignored when *conjugation_matrix* is provided.
     conjugation_matrix : ndarray, optional
-        Pre-computed ``(3, 3)`` conjugation matrix.  When given, *axis*
-        is ignored.
+        Pre-computed ``(3, 3)`` rotation matrix ``C`` giving the full
+        orientation of the group: every rotation ``g`` is returned as
+        ``C @ g @ C.T``. When given, *axis* is ignored. Use this (not
+        *axis*) to orient D/T/O/I groups.
 
     Returns
     -------
     numpy.ndarray
         ``(M, 3, 3)`` array of rotation matrices.  The identity is
         always the first element.
+
+    Warns
+    -----
+    UserWarning
+        If *axis* is used with a non-cyclic group (D/T/O/I) and does not lie
+        along ``±z``, since the result then depends on a hidden choice (see
+        Notes). The returned matrices are not affected by the warning.
+
+    Notes
+    -----
+    One axis fixes the orientation of a C_n group completely, since all its
+    rotations turn about that axis. D/T/O/I groups have further symmetry axes
+    (e.g. the half-turn axes lying flat around the main axis of D_n); knowing
+    where one axis points does not say where the others are, much as knowing
+    where a fan's shaft points does not say where its blades are.
+
+    *axis* moves the group by the shortest turn taking z onto *axis*
+    (:func:`compute_conjugation_matrix`, e.g. 90 degrees about y for
+    ``"x"``), so the remaining axes land wherever that turn puts them. The
+    result is always a complete, valid group with its z-axis along *axis*,
+    but it matches a given reference only if the reference's other axes
+    happen to lie there too. For T and O, *axis* ``"x"`` or ``"y"`` returns
+    the same set of rotations as the canonical group (that turn is itself a
+    symmetry of the cube's frame), so it only matches a canonically oriented
+    reference.
+
+    For D/T/O/I, pass the full orientation as *conjugation_matrix* instead,
+    e.g. ``SymmGroup.from_polyhedron(solid).rotation.as_matrix()`` for a
+    fitted solid (the same orientation used by ``symmetry_orientation`` in
+    :meth:`cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits`).
     """
     group = _make_group(symmetry)
 
@@ -654,6 +689,15 @@ def get_symmetry_rotations(
         return group.oriented(np.asarray(conjugation_matrix, dtype=float)).matrices
     if isinstance(axis, str) and axis.strip().lower() == "z":
         return group.matrices  # (M, 3, 3) around z-axis
+    # Along ±z the canonical group is returned, so only other axes are ambiguous.
+    if group.symbol != "C" and not np.isclose(abs(_normalize_axis(axis)[2]), 1.0):
+        warnings.warn(
+            f"axis={axis!r} fixes only one axis of the {group.symbol} group; its other symmetry axes "
+            "are placed by the shortest turn from z and may not match the reference. "
+            "Pass the full orientation as conjugation_matrix instead.",
+            UserWarning,
+            stacklevel=2,
+        )
     return group.oriented(compute_conjugation_matrix("z", axis)).matrices
 
 

@@ -1,5 +1,7 @@
 """Tests for cryocat.utils.symmetry."""
 
+import warnings
+
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation as rot
@@ -297,6 +299,84 @@ class TestGetSymmetryRotations:
         mats = get_symmetry_rotations("C2")
         Rz180 = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=float)
         assert any(np.allclose(R, Rz180) for R in mats)
+
+
+# ---------------------------------------------------------------------------
+# get_symmetry_rotations: axis= is ambiguous for D/T/O/I (added 2026-10-07)
+# ---------------------------------------------------------------------------
+
+def _same_rotation_set(a, b, atol=1e-8):
+    """True if the two (M, 3, 3) stacks hold the same rotations, in any order."""
+    return len(a) == len(b) and all(any(np.allclose(x, y, atol=atol) for y in b) for x in a)
+
+
+class TestAxisAmbiguityWarning:
+    """One axis fixes a C_n group but not a D/T/O/I group, whose other axes are then
+    placed by a hidden shortest turn. get_symmetry_rotations warns in that case only;
+    the returned matrices must be exactly the same as without the warning."""
+
+    @pytest.mark.parametrize("symm", ["D2", "D3", "T", "O", "I"])
+    @pytest.mark.parametrize("axis", ["x", "y", [1.0, 1.0, 0.0]])
+    def test_non_cyclic_axis_off_z_warns(self, symm, axis):
+        # Any axis not along ±z leaves the other symmetry axes undefined → warning.
+        with pytest.warns(UserWarning, match="fixes only one axis"):
+            get_symmetry_rotations(symm, axis=axis)
+
+    @pytest.mark.parametrize("symm", ["C1", "C4", 6])
+    def test_cyclic_axis_does_not_warn(self, symm):
+        # For C_n the axis alone defines the group completely: no warning.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            get_symmetry_rotations(symm, axis="x")
+
+    @pytest.mark.parametrize("symm", ["D3", "T", "O", "I"])
+    @pytest.mark.parametrize("axis", ["z", "Z", [0.0, 0.0, 2.0], [0.0, 0.0, -1.0]])
+    def test_axis_along_z_does_not_warn(self, symm, axis):
+        # Along ±z the result is the canonical group (checked below), so nothing is ambiguous.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            mats = get_symmetry_rotations(symm, axis=axis)
+        assert _same_rotation_set(mats, get_symmetry_rotations(symm))
+
+    @pytest.mark.parametrize("symm", ["D3", "T", "I"])
+    def test_conjugation_matrix_does_not_warn(self, symm):
+        # A full orientation is unambiguous; axis is then ignored, even if set.
+        C = rot.from_euler("zxz", [30, 40, 50], degrees=True).as_matrix()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            get_symmetry_rotations(symm, axis="x", conjugation_matrix=C)
+
+    @pytest.mark.parametrize("symm", ["D3", "T", "O", "I"])
+    def test_warning_does_not_change_output(self, symm):
+        # Output equals the explicit shortest-turn conjugation, as before the warning existed.
+        Cx = compute_conjugation_matrix("z", "x")
+        with pytest.warns(UserWarning):
+            mats = get_symmetry_rotations(symm, axis="x")
+        np.testing.assert_allclose(mats, get_symmetry_rotations(symm, conjugation_matrix=Cx), atol=1e-12)
+
+    @pytest.mark.parametrize("symm", ["T", "O"])
+    @pytest.mark.parametrize("axis", ["x", "y"])
+    def test_T_O_axis_xy_gives_canonical_set(self, symm, axis):
+        # Documented pitfall: for T/O the shortest turn onto x/y is itself a symmetry of
+        # the cube's frame, so the result is the canonical set of rotations.
+        with pytest.warns(UserWarning):
+            mats = get_symmetry_rotations(symm, axis=axis)
+        assert _same_rotation_set(mats, get_symmetry_rotations(symm))
+
+    def test_D3_axis_does_not_fix_side_axes(self):
+        # Documented ambiguity: two valid D3 groups with the 3-fold along x (differing by a
+        # 30° spin about x) are different sets; axis="x" silently returns only one of them.
+        Cx = compute_conjugation_matrix("z", "x")
+        spun = rot.from_euler("x", 30, degrees=True).as_matrix() @ Cx
+        with pytest.warns(UserWarning):
+            mats_axis = get_symmetry_rotations("D3", axis="x")
+        mats_spun = get_symmetry_rotations("D3", conjugation_matrix=spun)
+        # Both have a 3-fold (120° turn) about x ...
+        for mats in (mats_axis, mats_spun):
+            rotvecs = rot.from_matrix(mats).as_rotvec()
+            assert any(np.allclose(rv, [2 * np.pi / 3, 0, 0], atol=1e-8) for rv in rotvecs)
+        # ... but their half-turn axes differ.
+        assert not _same_rotation_set(mats_axis, mats_spun)
 
 
 # ---------------------------------------------------------------------------
