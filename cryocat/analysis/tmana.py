@@ -78,10 +78,11 @@ def extract_peak_orientations(
     -------
     tuple[np.ndarray, np.ndarray, np.ndarray]
         Three arrays containing the phi, theta, and psi angles (zxz, degrees)
-        corresponding to the provided peak coordinates. For C1 the angles are
-        returned as stored in ``angles_list``. Otherwise they are in cryoCAT's
+        corresponding to the provided peak coordinates, always in cryoCAT's
         canonical form (phi and psi in [-180, 180], theta in [0, 180]; for
-        theta 0 or 180 the whole spin is in phi and psi = 0).
+        theta 0 or 180 the whole spin is in phi and psi = 0) regardless of
+        whether ``angles_list`` itself was in that form. This holds for C1
+        too (no symmetric copy is assigned there, only canonicalization).
 
     Warns
     -----
@@ -96,6 +97,8 @@ def extract_peak_orientations(
     Before 2026-10-02 C_n added the multiple of 360/n to phi without wrapping
     and D/T/O/I were ignored; for C_n the chosen copies (for a given seed)
     and the rotations are unchanged, only their Euler form is now canonical.
+    Before 2026-10-08, C1 returned ``angles_list`` angles unchanged, even if
+    they were outside the canonical ranges.
     """
 
     angles_map = cryomap.read(angles_map)
@@ -120,10 +123,62 @@ def extract_peak_orientations(
     theta = anglist[ang_idx, 1]
     psi = anglist[ang_idx, 2]
 
-    if symmetry != "C1" and phi.shape[0] > 0:
-        phi, theta, psi = _random_symmetric_copies(phi, theta, psi, symmetry)
+    if phi.shape[0] > 0:
+        if symmetry != "C1":
+            phi, theta, psi = _random_symmetric_copies(phi, theta, psi, symmetry)
+        else:
+            # No symmetric copy to assign, but still put the same rotation into canonical Euler form
+            phi, theta, psi = _canonical_euler(phi, theta, psi)
 
     return phi, theta, psi
+
+
+def _euler_to_canonical(rots) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Read back a batch of rotations as zxz Euler angles in cryoCAT's canonical ranges.
+
+    Parameters
+    ----------
+    rots : scipy.spatial.transform.Rotation
+        A batch of N rotations (N > 0).
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        phi, theta, psi (zxz, degrees), each shape ``(N,)``, in scipy's ranges
+        (phi, psi in [-180, 180], theta in [0, 180]).
+    """
+    with warnings.catch_warnings():
+        # theta 0/180: scipy warns and puts the whole spin into phi; the rotation is still exact
+        warnings.filterwarnings("ignore", message="Gimbal lock")
+        angles = np.atleast_2d(rots.as_euler("zxz", degrees=True))
+    return angles[:, 0], angles[:, 1], angles[:, 2]
+
+
+def _canonical_euler(
+    phi: np.ndarray, theta: np.ndarray, psi: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Rewrite zxz Euler angles into cryoCAT's canonical ranges, without changing the rotation.
+
+    ``angles_list`` entries (e.g. loaded from a STOPGAP/GAPSTOP file) are not
+    guaranteed to already lie in cryoCAT's ranges (phi, psi in [-180, 180],
+    theta in [0, 180]); this round-trips them through
+    :class:`scipy.spatial.transform.Rotation` so they do, independently of any
+    symmetry handling.
+
+    Parameters
+    ----------
+    phi, theta, psi : numpy.ndarray
+        Shape ``(N,)`` with N > 0, zxz Euler angles in degrees, any range.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        phi, theta, psi of the same rotations, in canonical ranges.
+    """
+    from scipy.spatial.transform import Rotation as srot
+
+    rots = srot.from_euler("zxz", np.column_stack([phi, theta, psi]), degrees=True)
+    return _euler_to_canonical(rots)
 
 
 def _random_symmetric_copies(
@@ -157,11 +212,7 @@ def _random_symmetric_copies(
     g_mats = get_symmetry_rotations(symmetry)
     pick = np.random.choice(len(g_mats), size=phi.shape[0])
     rots = srot.from_euler("zxz", np.column_stack([phi, theta, psi]), degrees=True) * srot.from_matrix(g_mats[pick])
-    with warnings.catch_warnings():
-        # theta 0/180: scipy warns and puts the whole spin into phi; the rotation is still exact
-        warnings.filterwarnings("ignore", message="Gimbal lock")
-        angles = np.atleast_2d(rots.as_euler("zxz", degrees=True))
-    return angles[:, 0], angles[:, 1], angles[:, 2]
+    return _euler_to_canonical(rots)
 
 
 def scores_extract_particles(

@@ -591,9 +591,11 @@ class TestScoresExtractParticlesAroundPositions:
         assert np.array_equal(motl.df["x"], [6, 11])
         assert np.array_equal(motl.df["y"], [6, 11])
         assert np.array_equal(motl.df["z"], [6, 11])
-        assert (np.all(motl.df["phi"] == 10))
-        assert (np.all(motl.df["psi"] == 30))
-        assert (np.all(motl.df["theta"] == 20))
+        # approx, not ==: C1 angles are now round-tripped through scipy to canonicalize the range
+        # (2026-10-08 fix), which can introduce float noise at the ~1e-15 level on already-in-range input
+        np.testing.assert_allclose(motl.df["phi"], 10, atol=1e-9)
+        np.testing.assert_allclose(motl.df["psi"], 30, atol=1e-9)
+        np.testing.assert_allclose(motl.df["theta"], 20, atol=1e-9)
 
 
 # ── create_angular_distance_maps ──────────────────────────────────────────────
@@ -780,12 +782,26 @@ class TestExtractPeakOrientationsSymmetry:
         np.testing.assert_allclose(dist, 0.0, atol=1e-4)
         np.testing.assert_allclose(out[:, 2], 0.0, atol=1e-9)
 
-    def test_c1_returns_stored_angles(self):
-        # No symmetry: angles exactly as stored (also outside the canonical ranges)
-        angles = np.array([[10.0, 20.0, 300.0], [400.0, 0.0, 30.0]])
+    def test_c1_returns_same_rotation_in_canonical_range(self):
+        # No symmetry: no copy is assigned, but the angles are still canonicalized (fixed 2026-10-08),
+        # since angles_list entries are not guaranteed to already be in cryoCAT's ranges
+        angles = np.array([[10.0, 20.0, 300.0], [400.0, 0.0, 30.0]])  # psi=300, phi=400 are out of range
         coords, amap, angles = _peak_inputs(angles=angles)
         phi, theta, psi = tmana.extract_peak_orientations(coords, amap, angles, symmetry="C1")
-        np.testing.assert_array_equal(np.column_stack([phi, theta, psi]), angles)
+        out = np.column_stack([phi, theta, psi])
+        assert np.all((out[:, [0, 2]] >= -180.0) & (out[:, [0, 2]] <= 180.0))
+        assert np.all((out[:, 1] >= 0.0) & (out[:, 1] <= 180.0))
+        # same rotation as the stored (out-of-range) angles, only rewritten canonically
+        stored = srot.from_euler("zxz", angles, degrees=True)
+        returned = srot.from_euler("zxz", out, degrees=True)
+        np.testing.assert_allclose((stored.inv() * returned).magnitude(), 0.0, atol=1e-9)
+
+    def test_c1_in_range_angles_unchanged(self):
+        # Angles already in cryoCAT's canonical ranges are returned unchanged (no spurious rewriting)
+        angles = np.array([[10.0, 20.0, -30.0], [-170.0, 150.0, 175.0]])
+        coords, amap, angles = _peak_inputs(angles=angles)
+        phi, theta, psi = tmana.extract_peak_orientations(coords, amap, angles, symmetry="C1")
+        np.testing.assert_allclose(np.column_stack([phi, theta, psi]), angles, atol=1e-9)
 
     @pytest.mark.parametrize("symm", ["D2", "T", "O", "I"])
     def test_non_cyclic_warns_about_canonical_frame(self, symm):
