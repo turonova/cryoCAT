@@ -1376,6 +1376,37 @@ class TestPolyhedralComplex:
         expanded = ico_complex.expand(shift_vecs=vecs)
         assert len(expanded.df) == 60 * len(ico_complex.motl.df)
 
+    def test_vertex_subunit_vectors_is_gui_exposed(self):
+        # Registered in the "Expansion" group between expand (30) and
+        # split_in_asymmetric_units (35), routed as feature points. The .cmm
+        # output stays visible: in the GUI it is the only way to export the result.
+        from cryocat.app import discovery
+
+        meta = structure.PolyhedralComplex.vertex_subunit_vectors._gui
+        assert meta["label"] == "Vertex subunit vectors"
+        entry = next(
+            e for e in discovery.entries_for_class(structure.PolyhedralComplex)
+            if e.fn.__name__ == "vertex_subunit_vectors"
+        )
+        assert (entry.group, entry.order, entry.returns) == ("Expansion", 32, "features")
+        assert "output_cmm_file" not in entry.hide
+
+    @pytest.mark.parametrize(
+        "cls", [structure.TetrahedralComplex, structure.OctahedralComplex, structure.IcosahedralComplex]
+    )
+    def test_vertex_subunit_vectors_gui_discoverable_and_renderable(self, cls):
+        # The Complexes page lists methods via discovery.entries_for_class; the
+        # entry must be inherited by every T/O/I subclass and every visible
+        # parameter must map to a known form widget (gui_ready).
+        from cryocat.app import discovery
+
+        entry = next(
+            (e for e in discovery.entries_for_class(cls) if e.fn.__name__ == "vertex_subunit_vectors"), None
+        )
+        assert entry is not None
+        ready, reason = discovery.gui_ready(entry)
+        assert ready, reason
+
 
 # ---------------------------------------------------------------------------
 # Helpers for CnComplex tests

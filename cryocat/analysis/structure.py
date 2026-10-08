@@ -10595,6 +10595,13 @@ class PolyhedralComplex(SymmetricComplex):
 
         return feature_vec, features_coords
 
+    @gui_exposed(
+        label="Vertex subunit vectors",
+        group="Expansion",
+        order=32,
+        returns="features",
+        hide=(),
+    )
     def vertex_subunit_vectors(
         self,
         subunit_markers: PathOrStr,
