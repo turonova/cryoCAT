@@ -2834,7 +2834,7 @@ class EmMotl(Motl):
 
         """
         filled_df = self.df.fillna(0.0)
-        if 0 in filled_df["class"]:
+        if 0 in filled_df["class"].values:
             warnings.warn("Certain particles have class value 0. Mind that this can be an issue for certain software.")
         motl_array = filled_df.to_numpy()
         motl_array = motl_array.reshape((1, motl_array.shape[0], motl_array.shape[1])).astype(np.single)
@@ -3607,8 +3607,8 @@ class RelionMotl(Motl):
         # starfile (e.g. rlnClassNumber, rlnHelicalTubeID) are never assigned above and would
         # otherwise be left as NaN.
         self.df = self.df.fillna(0.0)
-        if 0 in self.df["class"]:
-            warnings.warn("Class has value 0. Mind that thismight be problematic for certain softwrae.")
+        if 0 in self.df["class"].values: 
+            warnings.warn("Class has value 0. Mind that this might be problematic for certain softwrae.")
 
     def assign_cc_extra_columns(self, relion_df: pd.DataFrame, object_id_already_assigned: bool = False) -> None:
         """Recognize non-standard ``cc``-prefixed columns in `relion_df` and map them back onto `self.df`.
