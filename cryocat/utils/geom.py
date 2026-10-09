@@ -1897,6 +1897,130 @@ def get_axis_from_rotation(input_rotation: RotationLike, axis: str = "z") -> np.
     return ret_axis
 
 
+def align_z_axes(z1: ArrayLike, z2: ArrayLike, atol: float = 1e-8) -> np.ndarray:
+    """Smallest tilt that turns the z-axis of particle 2 onto the z-axis of particle 1.
+
+    The tilt turns about the axis perpendicular to both vectors, by the angle
+    between them, so no spin about either vector is added.
+
+    Parameters
+    ----------
+    z1 : ArrayLike
+        Target direction(s): one ``(3,)`` vector or ``(N, 3)`` vectors, e.g. the
+        z-axes of the first particles. Need not be unit length.
+    z2 : ArrayLike
+        Direction(s) to tilt onto *z1*, same shape as *z1*.
+    atol : float, default=1e-8
+        Below this value of ``sin(angle)`` the two directions are treated as
+        parallel or opposite.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(3, 3)`` rotation matrix for single vectors, ``(N, 3, 3)`` otherwise,
+        such that ``T @ z2`` points along ``z1``.
+
+    Raises
+    ------
+    ValueError
+        If *z1* and *z2* hold a different number of vectors.
+
+    Notes
+    -----
+    For opposite directions every axis perpendicular to *z2* gives a smallest
+    tilt (180 degrees); a fixed one is chosen (perpendicular to *z2* and to x,
+    or to y if *z2* is close to x). Results derived from the tilt, such as
+    :func:`inplane_angle_after_alignment`, are therefore not well defined for
+    opposite or nearly opposite directions.
+    """
+    single = np.ndim(z1) == 1 and np.ndim(z2) == 1
+    z1 = np.atleast_2d(np.asarray(z1, dtype=float))
+    z2 = np.atleast_2d(np.asarray(z2, dtype=float))
+    if z1.shape != z2.shape:
+        raise ValueError(f"z1 and z2 must hold the same number of vectors, got {len(z1)} and {len(z2)}.")
+    z1 = z1 / np.linalg.norm(z1, axis=1, keepdims=True)
+    z2 = z2 / np.linalg.norm(z2, axis=1, keepdims=True)
+
+    # cross product: axis of rotation (unnormalised); its norm is sin(theta) of the angle between z1 and z2
+    vector = np.cross(z2, z1)
+    sin_theta = np.linalg.norm(vector, axis=1)
+    # dot product: cos(theta) of the angle between z1 and z2, clipped vs. rounding
+    cos_theta = np.clip(np.sum(z2 * z1, axis=1), -1.0, 1.0)
+
+    tilts = np.empty((len(z1), 3, 3))
+    general = sin_theta >= atol
+    if general.any():
+        tilt_angle_theta = np.arccos(cos_theta[general])  # angle in [0, pi]
+        rotvec = vector[general] / sin_theta[general, np.newaxis] * tilt_angle_theta[:, np.newaxis]
+        tilts[general] = srot.from_rotvec(rotvec).as_matrix()
+
+    # edge cases: sin(theta) == 0 -> axis is undefined (parallel or anti-parallel)
+    tilts[~general & (cos_theta > 0)] = np.eye(3)
+    anti = ~general & (cos_theta <= 0)
+    if anti.any():
+        # anti-parallel: 180 deg about an axis perpendicular to z2
+        helper = np.where(np.abs(z2[anti, 0:1]) > 0.9, [[0.0, 1.0, 0.0]], [[1.0, 0.0, 0.0]])
+        axis = np.cross(z2[anti], helper)
+        axis /= np.linalg.norm(axis, axis=1, keepdims=True)
+        tilts[anti] = srot.from_rotvec(np.pi * axis).as_matrix()
+
+    return tilts[0] if single else tilts
+
+
+def inplane_angle_after_alignment(
+    input_rotation_1: RotationLike,
+    input_rotation_2: RotationLike,
+    degrees: bool = False,
+) -> np.ndarray:
+    """Spin left between two particles once their z-axes are aligned.
+
+    Particle 2 is tilted by the smallest tilt that puts its z-axis on the
+    z-axis of particle 1 (:func:`align_z_axes`). The two particles then differ
+    only by a turn about that shared axis; its signed angle is returned. It
+    depends only on how the two orientations differ (turning both by the same
+    rotation leaves it unchanged), and a C_n symmetry turn of particle 2
+    (``R2 @ g``, g about the particle's z-axis) changes it by the angle of g.
+
+    Parameters
+    ----------
+    input_rotation_1 : RotationLike
+        Orientation(s) of the first particle(s). Normalized via :func:`as_rotation`
+        (Euler angles in degrees, ``zxz``).
+    input_rotation_2 : RotationLike
+        Orientation(s) of the second particle(s), same number as *input_rotation_1*.
+    degrees : bool, default=False
+        Return degrees instead of radians.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(N,)`` signed spin of particle 2 relative to particle 1 about the
+        shared z-axis, in [-pi, pi] (or [-180, 180] degrees, both ends
+        included, as for the first ``zxz`` Euler angle). When both z-axes
+        already coincide this is the difference of the in-plane angles
+        ``phi2 - phi1`` (wrapped).
+
+    Raises
+    ------
+    ValueError
+        If the two inputs hold a different number of rotations.
+
+    Notes
+    -----
+    Not well defined when the two z-axes point in opposite (or nearly
+    opposite) directions, see :func:`align_z_axes`.
+    """
+    mats_1 = as_rotation(input_rotation_1).as_matrix().reshape(-1, 3, 3)
+    mats_2 = as_rotation(input_rotation_2).as_matrix().reshape(-1, 3, 3)
+    if len(mats_1) != len(mats_2):
+        raise ValueError(f"The inputs must hold the same number of rotations, got {len(mats_1)} and {len(mats_2)}.")
+    tilts = align_z_axes(mats_1[:, :, 2], mats_2[:, :, 2]).reshape(-1, 3, 3)
+    # R1^T @ T @ R2 keeps z in place, i.e. it is a pure turn about z by the remaining spin
+    remaining = np.einsum("nji,njk,nkl->nil", mats_1, tilts, mats_2)
+    spin = np.arctan2(remaining[:, 1, 0], remaining[:, 0, 0])
+    return np.degrees(spin) if degrees else spin
+
+
 def inplane_distance(
     input_rotation_1: RotationLike,
     input_rotation_2: RotationLike,
@@ -2034,6 +2158,12 @@ def angular_score_for_c_symmetry(
 ) -> np.ndarray:
     """
     Computes an angular similarity score for arrays of in-plane angles, based on rotational symmetry.
+
+    A regular n-gon is turned by each angle of a pair and the two copies are
+    compared, so the score depends only on the difference of the two angles.
+    :func:`cryocat.utils.symmetry.angular_score` therefore calls it with 0 and
+    the spin left between two particles after aligning their z-axes
+    (:func:`inplane_angle_after_alignment`).
 
     Parameters
     ----------

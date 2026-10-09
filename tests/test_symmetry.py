@@ -923,15 +923,33 @@ class TestAngularScore:
         )
 
     def test_cyclic_delegates_to_geom(self):
-        # Cyclic input is scored exactly as geom.angular_score_for_c_symmetry,
-        # from the first zxz Euler angle (phi) of each rotation.
-        from cryocat.utils.geom import angular_score_for_c_symmetry
+        # Cyclic input is scored by geom.angular_score_for_c_symmetry, given the spin
+        # left between the two particles after tilting particle 2's z-axis onto
+        # particle 1's (geom.inplane_angle_after_alignment); particle 1 is then at 0.
+        # (Until 2026-10-09 it was given the first zxz Euler angle, phi, of each
+        # rotation, which ignores that these pairs have different z-axes.)
+        from cryocat.utils.geom import angular_score_for_c_symmetry, inplane_angle_after_alignment
 
         e1 = np.array([[10.0, 30.0, 0.0], [50.0, 80.0, 20.0], [0.0, 45.0, 0.0]])
         e2 = np.array([[40.0, 10.0, 5.0], [175.0, 20.0, 0.0], [72.0, 45.0, 0.0]])
-        phi1 = rot.from_euler("zxz", e1, degrees=True).as_euler("zxz")[:, 0]
-        phi2 = rot.from_euler("zxz", e2, degrees=True).as_euler("zxz")[:, 0]
-        np.testing.assert_allclose(angular_score(e1, e2, "C5"), angular_score_for_c_symmetry(phi1, phi2, 5))
+        spin = inplane_angle_after_alignment(
+            rot.from_euler("zxz", e1, degrees=True), rot.from_euler("zxz", e2, degrees=True)
+        )
+        np.testing.assert_allclose(angular_score(e1, e2, "C5"), angular_score_for_c_symmetry(np.zeros(3), spin, 5))
+
+    @pytest.mark.parametrize("n", [2, 4, 5])
+    def test_cyclic_same_z_axis_matches_phi_score(self, n):
+        # Where the old phi-only score was meaningful (both particles share one z-axis:
+        # same theta and psi, any phi) the new score must give exactly the same values.
+        from cryocat.utils.geom import angular_score_for_c_symmetry
+
+        rng = np.random.default_rng(n)
+        theta, psi = 35.0, -70.0
+        phi1, phi2 = rng.uniform(-180, 180, 50), rng.uniform(-180, 180, 50)
+        e1 = np.column_stack([phi1, np.full(50, theta), np.full(50, psi)])
+        e2 = np.column_stack([phi2, np.full(50, theta), np.full(50, psi)])
+        expected = angular_score_for_c_symmetry(np.radians(phi1), np.radians(phi2), n)
+        np.testing.assert_allclose(angular_score(e1, e2, n), expected, atol=1e-9)
 
     def test_kind_changes_intermediate_scores(self):
         # Octahedron and cube corners are different marker sets: they agree at
@@ -1126,3 +1144,62 @@ class TestMakeGroup:
     def test_same_as_get_symmetry_rotations(self, symm):
         # Refactor guard: get_symmetry_rotations (default z axis) returns the same matrices
         np.testing.assert_array_equal(_make_group(symm).matrices, get_symmetry_rotations(symm))
+
+
+# ---------------------------------------------------------------------------
+# Cyclic angular_score after aligning the z-axes (A.1 fix, 2026-10-09)
+# ---------------------------------------------------------------------------
+
+
+class TestCyclicAngularScoreAligned:
+    """Since 2026-10-09 the cyclic score compares the spin left after tilting
+    particle 2's z-axis onto particle 1's, instead of the two first Euler angles.
+    Like the T/O/I score, it then depends only on how the two orientations
+    differ; it deliberately ignores how far the z-axes are tilted apart."""
+
+    @pytest.mark.parametrize("n", [2, 3, 5, 6])
+    def test_symmetric_copies_score_one(self, n):
+        # R and R @ Rz(k * 360/n) look identical for a C_n particle: score 1.
+        r = rot.random(200, random_state=n)
+        k = np.random.default_rng(n).integers(0, n, 200)
+        g = rot.from_euler("z", (k * 360.0 / n)[:, None], degrees=True)
+        np.testing.assert_array_equal(angular_score(r, r * g, n), 1.0)
+
+    def test_common_turn_leaves_score_unchanged(self):
+        # Turning both particles by the same rotation does not change how they
+        # differ, so the score must stay the same (was not true for the phi score).
+        r1, r2 = rot.random(300, random_state=1), rot.random(300, random_state=2)
+        q = rot.random(random_state=3)
+        np.testing.assert_allclose(angular_score(r1, r2, 3), angular_score(q * r1, q * r2, 3), atol=1e-9)
+
+    def test_swapping_particles_gives_same_score(self):
+        # The comparison is symmetric: (1, 2) and (2, 1) score the same.
+        r1, r2 = rot.random(300, random_state=4), rot.random(300, random_state=5)
+        np.testing.assert_allclose(angular_score(r1, r2, 4), angular_score(r2, r1, 4), atol=1e-9)
+
+    def test_tilt_between_z_axes_is_ignored(self):
+        # Tilting particle 2 by 40 degrees about its own x-axis (R2 = R1 @ Rx(40)) moves
+        # its z-axis but adds no spin about it: score 1, although the orientations differ.
+        r1 = rot.random(50, random_state=6)
+        r2 = r1 * rot.from_euler("x", 40, degrees=True)
+        np.testing.assert_array_equal(angular_score(r1, r2, 4), 1.0)
+
+    def test_near_zero_tilt_has_no_jump(self):
+        # Two almost identical orientations close to theta = 0. The phi score gave
+        # 0.11 for C4 (scipy splits the spin differently at the two tilts); now 1.
+        a = rot.from_euler("zxz", [10.0, 1e-6, 50.0], degrees=True)
+        b = rot.from_euler("zxz", [10.0, 1e-3, 50.0], degrees=True)
+        np.testing.assert_array_equal(angular_score(a, b, 4), 1.0)
+
+    def test_theta_zero_pair(self):
+        # (10, 0, 50) vs (10, 0, 0): 50 degrees apart about z; nearest C4 copy 40 away.
+        score = angular_score([10.0, 0.0, 50.0], [10.0, 0.0, 0.0], 4)
+        assert score[0] == pytest.approx(1 - 40 / 45)
+
+    def test_max_val_rescales(self):
+        # max_val is still passed through: a larger normaliser gives a higher score.
+        r1, r2 = rot.random(100, random_state=7), rot.random(100, random_state=8)
+        a = angular_score(r1, r2, 3, max_val=np.pi / 3)
+        b = angular_score(r1, r2, 3, max_val=2 * np.pi / 3)
+        mask = (a > 0) & (a < 1)
+        np.testing.assert_allclose(1 - b[mask], (1 - a[mask]) / 2, atol=1e-9)

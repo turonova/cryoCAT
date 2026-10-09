@@ -883,13 +883,26 @@ def angular_score(
 
     Notes
     -----
-    Cyclic symmetry is delegated to
-    :func:`cryocat.utils.geom.angular_score_for_c_symmetry`, which compares
-    only the in-plane angle (the first ``zxz`` Euler angle, ``phi``, of each
-    rotation). T/O/I use the full 3D rotations, since these particles look
-    the same after rotations about several different axes. The score
-    depends only on how the two orientations differ: turning both by the
-    same rotation leaves it unchanged.
+    Cyclic symmetry compares only the in-plane part of the two orientations:
+    particle 2 is first tilted so that its z-axis (the symmetry axis) lies
+    on particle 1's (:func:`cryocat.utils.geom.align_z_axes`), and the spin
+    left about that shared axis
+    (:func:`cryocat.utils.geom.inplane_angle_after_alignment`) is scored by
+    :func:`cryocat.utils.geom.angular_score_for_c_symmetry` (particle 1 at
+    in-plane angle 0, particle 2 at that spin). How far the two z-axes are
+    tilted apart is deliberately ignored. T/O/I use the full 3D rotations,
+    since these particles look the same after rotations about several
+    different axes. For every symmetry the score depends only on how the two
+    orientations differ: turning both by the same rotation leaves it
+    unchanged.
+
+    For cyclic symmetry the spin is not well defined when the two z-axes
+    point in opposite (or nearly opposite) directions, see
+    :func:`cryocat.utils.geom.align_z_axes`.
+
+    Until 2026-10-09 the cyclic score compared the first ``zxz`` Euler angle
+    (phi) of each rotation, which is only meaningful when both particles have
+    the same z-axis. Scores are unchanged in that case and differ otherwise.
     """
     letter, order = _check_scorable(symmetry, kind)
     m1 = geom.as_rotation(rotations_1).as_matrix().reshape(-1, 3, 3)
@@ -898,9 +911,10 @@ def angular_score(
         raise ValueError(f"rotations_1 and rotations_2 must have the same length, got {len(m1)} and {len(m2)}.")
 
     if letter == "C":
-        phi_1 = rot.from_matrix(m1).as_euler("zxz")[:, 0]
-        phi_2 = rot.from_matrix(m2).as_euler("zxz")[:, 0]
-        return geom.angular_score_for_c_symmetry(phi_1, phi_2, order, max_val)
+        # Tilt particle 2 so its z-axis lies on particle 1's; the spin left about that
+        # shared axis (radians) is the whole in-plane difference between the two.
+        spin = geom.inplane_angle_after_alignment(rot.from_matrix(m1), rot.from_matrix(m2))
+        return geom.angular_score_for_c_symmetry(np.zeros_like(spin), spin, order, max_val)
 
     if max_val is None:
         max_val = max_angular_mismatch(symmetry, kind)

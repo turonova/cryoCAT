@@ -843,12 +843,40 @@ class TestSymmParticleSimilarityDelegation:
         # The pre-2026-09-29 implementation, kept here as the reference.
         return 1 - geom.hausdorff_distance_sphere(a.solid, b.solid) / max_val
 
-    @pytest.mark.parametrize("symm, kind", [(4, None), (6, None)] + _PLATONIC_CASES)
+    # Cyclic cases (4, 6) removed 2026-10-09: for C_n the stored solid is a flat polygon
+    # turned by phi, i.e. the phi-only score replaced by the aligned-z-axes score. They are
+    # covered by the two cyclic tests below (new reference; old one where it is valid).
+    @pytest.mark.parametrize("symm, kind", _PLATONIC_CASES)
     def test_matches_previous_implementation(self, symm, kind):
         rots = R.random(30, random_state=3).as_matrix()
         ref = SymmParticle(rots[0], np.zeros(3), symm=symm, kind=kind)
         for m in rots[1:]:
             other = SymmParticle(m, np.zeros(3), symm=symm, kind=kind)
+            expected = np.clip(self._old_score(ref, other, ref.max_dissimilarity()), 0.0, 1.0)
+            assert ref.similarity_symm(other) == pytest.approx(expected, abs=1e-5)
+
+    @pytest.mark.parametrize("symm", [4, 6])
+    def test_cyclic_matches_aligned_spin(self, symm):
+        # Same 30 random orientations as above: the cyclic score equals geom's polygon
+        # score for "this particle at 0, the other at the spin left after tilting its
+        # z-axis onto this one's".
+        rots = R.random(30, random_state=3)
+        ref = SymmParticle(rots[0].as_matrix(), np.zeros(3), symm=symm)
+        for r in rots[1:]:
+            other = SymmParticle(r.as_matrix(), np.zeros(3), symm=symm)
+            spin = geom.inplane_angle_after_alignment(rots[0], r)
+            expected = geom.angular_score_for_c_symmetry([0.0], spin, symm, ref.max_dissimilarity())[0]
+            assert ref.similarity_symm(other) == pytest.approx(expected, abs=1e-9)
+
+    @pytest.mark.parametrize("symm", [4, 6])
+    def test_cyclic_same_z_axis_matches_previous_implementation(self, symm):
+        # Where the old reference is valid (all particles share one z-axis: fixed theta
+        # and psi, random phi), the score must still equal the old flat-polygon score.
+        phis = np.random.default_rng(symm).uniform(-180, 180, 30)
+        rots = R.from_euler("zxz", np.column_stack([phis, np.full(30, 50.0), np.full(30, 20.0)]), degrees=True)
+        ref = SymmParticle(rots[0].as_matrix(), np.zeros(3), symm=symm)
+        for r in rots[1:]:
+            other = SymmParticle(r.as_matrix(), np.zeros(3), symm=symm)
             expected = np.clip(self._old_score(ref, other, ref.max_dissimilarity()), 0.0, 1.0)
             assert ref.similarity_symm(other) == pytest.approx(expected, abs=1e-5)
 
@@ -1214,6 +1242,28 @@ class TestCyclicScoreConsistency:
         td = TwistDescriptor(input_twist=_minimal_twist_df({c: df[c].tolist() for c in df.columns}))
         fig = td.symmetry_statistics(c_range=[4], plot_graph=False)
         np.testing.assert_allclose(np.asarray(fig.data[0].y, dtype=float), df["angular_score"].to_numpy(), atol=1e-9)
+
+    def test_symmetry_statistics_uses_relative_rotation_only(self):
+        # Since 2026-10-09 symmetry_statistics reads the spin from the stored relative
+        # rotation (twist_so_*), so it works on a descriptor loaded from a table and
+        # ignores the in-plane columns (set to nonsense here on purpose).
+        rel = R.random(6, random_state=11)
+        rotvec = rel.as_rotvec()
+        td = TwistDescriptor(
+            input_twist=_minimal_twist_df(
+                {
+                    "twist_so_x": rotvec[:, 0].tolist(),
+                    "twist_so_y": rotvec[:, 1].tolist(),
+                    "twist_so_z": rotvec[:, 2].tolist(),
+                    "qp_inplane": [123.0] * 6,
+                    "nn_inplane": [-45.0] * 6,
+                }
+            )
+        )
+        fig = td.symmetry_statistics(c_range=[3], plot_graph=False)
+        # Reference: the C3 score of a query point at the identity vs. the neighbour at rel.
+        expected = symmetry.angular_score(R.identity(6), rel, 3)
+        np.testing.assert_allclose(np.asarray(fig.data[0].y, dtype=float), expected, atol=1e-9)
 
     def test_inplane_columns_also_corrected_without_symmetry(self):
         # The in-plane columns exist without symmetry too and must hold the same spin.

@@ -856,9 +856,14 @@ class SymmParticle(Particle):
         Notes
         -----
         Delegates to :func:`cryocat.utils.symmetry.angular_score`, the single
-        implementation also used for twist descriptors. Each particle's solid
-        is turned by ``self.rotation @ self.custom_rot`` (or ``self.rotation``
-        alone without ``custom_rot``), exactly as ``self.solid`` was built.
+        implementation also used for twist descriptors. For Platonic symmetry
+        each particle's solid is turned by ``self.rotation @ self.custom_rot``
+        (or ``self.rotation`` alone without ``custom_rot``), exactly as
+        ``self.solid`` was built. For cyclic symmetry the score compares the
+        spin left after tilting the other particle's z-axis onto this one's;
+        the flat polygon in ``self.solid`` (turned by phi) is not used, and
+        matches the score only for particles with the same z-axis (since
+        2026-10-09).
         """
         if self.category != other.category or self.kind != other.kind:
             raise ValueError("The symmetry tpyes of the input particles don't match!")
@@ -1676,23 +1681,27 @@ class TwistDescriptor(Descriptor):
         -----
         ``angular_score`` is computed with
         :func:`cryocat.utils.symmetry.angular_score` from the query-point and
-        neighbour rotations, for every symmetry: cyclic symmetry compares their
-        in-plane angles, Platonic symmetry the full rotations. This is the same
-        function :meth:`SymmParticle.similarity_symm` uses.
+        neighbour rotations, for every symmetry: cyclic symmetry compares the
+        spin left after tilting the neighbour's z-axis onto the query point's,
+        Platonic symmetry the full rotations. This is the same function
+        :meth:`SymmParticle.similarity_symm` uses, and
+        :meth:`symmetry_statistics` scores the same spin (from the stored
+        relative rotation).
 
         ``qp_inplane``/``nn_inplane`` hold the in-plane angle (phi) read from
         each rotation, written close to the stored phi (see
-        :func:`_inplane_angles_from_rotations`), so they describe the same spin
-        as the score and :meth:`symmetry_statistics` agrees with it. They
-        equal the stored phi except where it describes a different spin:
-        theta stored as exactly 0 or 180 with psi not 0, or theta outside
-        [0, 180].
+        :func:`_inplane_angles_from_rotations`). They equal the stored phi
+        except where it describes a different spin: theta stored as exactly 0
+        or 180 with psi not 0, or theta outside [0, 180]. They are descriptive
+        features; the cyclic score does not use them.
 
         Until 2026-10-09 the cyclic score and these columns used the stored
         phi as is. For the cases above the stored phi ignores part of the spin
         (e.g. ``(10, 0, 50)`` vs ``(10, 0, 0)`` scored 1 for C4 although the
-        particles are 50 degrees apart, true score 0.11), so cyclic scores and
-        in-plane columns computed before that date can differ there.
+        particles are 50 degrees apart, true score 0.11), so in-plane columns
+        computed before that date can differ there. Cyclic scores computed
+        before that date also differ whenever the two z-axes are not the same
+        (see :func:`cryocat.utils.symmetry.angular_score`).
 
         Returns
         -------
@@ -2169,9 +2178,22 @@ class TwistDescriptor(Descriptor):
         -------
         fig : plotly.graph_objects.Figure
             A Plotly figure containing the box plot of angular scores for different C_n symmetries.
+
+        Notes
+        -----
+        Each pair is scored as by :func:`cryocat.utils.symmetry.angular_score`
+        for C_n: the neighbour is tilted so its z-axis lies on the query
+        point's, and the spin left about that axis is compared. The spin is read
+        from the stored relative rotation (``twist_so_x/y/z``), on which it
+        depends exclusively, so descriptors loaded from a table work too. Until
+        2026-10-09 the stored in-plane angles (``qp_inplane``, ``nn_inplane``)
+        were compared directly, which is only meaningful for pairs with the same
+        z-axis; results differ otherwise.
         """
-        qp_inplane = np.deg2rad(self.df["qp_inplane"].values)
-        nn_inplane = np.deg2rad(self.df["nn_inplane"].values)
+        # The relative rotation R_qp^-1 * R_nn as seen from the query point (identity).
+        # (writable float copy: scipy rejects the read-only view pandas may return)
+        relative = R.from_rotvec(np.array(self.get_twist_rot_np(), dtype=float))
+        spin = geom.inplane_angle_after_alignment(R.identity(len(relative)), relative)
 
         if c_range is None:
             c_range = range(2, 10)
@@ -2181,7 +2203,7 @@ class TwistDescriptor(Descriptor):
         symmetries_dict = {}
         for n in c_range:
             max_val = np.pi / n
-            scores = geom.angular_score_for_c_symmetry(qp_inplane, nn_inplane, n, max_val=max_val)
+            scores = geom.angular_score_for_c_symmetry(np.zeros_like(spin), spin, n, max_val=max_val)
             symmetries_dict[n] = scores
 
         df_symmetries = pd.DataFrame(symmetries_dict)

@@ -2592,3 +2592,131 @@ class TestPolyhedronAngularDissimilarity:
         args[empty_side] = []
         with pytest.raises(ValueError, match="holds no rotations"):
             Icosahedron().angular_dissimilarity(*args)
+
+
+# ===========================================================================
+# align_z_axes / inplane_angle_after_alignment (added 2026-10-09)
+# ===========================================================================
+
+
+def _align_z_axes_single_pair(z1, z2, atol=1e-8):
+    """Reference: the original one-pair version of align_z_axes, as provided by the user."""
+    z1 = np.asarray(z1, dtype=float)
+    z2 = np.asarray(z2, dtype=float)
+    z1 = z1 / np.linalg.norm(z1)
+    z2 = z2 / np.linalg.norm(z2)
+    vector = np.cross(z2, z1)
+    sin_theta = np.linalg.norm(vector)
+    cos_theta = np.clip(np.dot(z2, z1), -1.0, 1.0)
+    if sin_theta < atol:
+        if cos_theta > 0:
+            return np.eye(3)
+        helper = np.array([0.0, 1.0, 0.0]) if abs(z2[0]) > 0.9 else np.array([1.0, 0.0, 0.0])
+        axis = np.cross(z2, helper)
+        axis /= np.linalg.norm(axis)
+        return srot.from_rotvec(np.pi * axis).as_matrix()
+    tilt_angle_theta = np.arccos(cos_theta)
+    rotvec = (vector / sin_theta) * tilt_angle_theta
+    return srot.from_rotvec(rotvec).as_matrix()
+
+
+def _random_unit_vectors(n, seed):
+    v = np.random.default_rng(seed).normal(size=(n, 3))
+    return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+
+class TestAlignZAxes:
+    """align_z_axes(z1, z2): smallest tilt T with T @ z2 along z1."""
+
+    def test_puts_z2_onto_z1(self):
+        # The defining property, for many random pairs (vectors need not be unit length).
+        z1, z2 = 3.0 * _random_unit_vectors(200, 1), 0.5 * _random_unit_vectors(200, 2)
+        tilts = align_z_axes(z1, z2)
+        moved = np.einsum("nij,nj->ni", tilts, z2 / np.linalg.norm(z2, axis=1, keepdims=True))
+        np.testing.assert_allclose(moved, z1 / np.linalg.norm(z1, axis=1, keepdims=True), atol=1e-12)
+
+    def test_tilt_angle_is_angle_between_axes(self):
+        # Smallest tilt: the turn angle equals the angle between the two directions,
+        # and its axis is perpendicular to both (no extra spin).
+        z1, z2 = _random_unit_vectors(200, 3), _random_unit_vectors(200, 4)
+        rotvec = srot.from_matrix(align_z_axes(z1, z2)).as_rotvec()
+        between = np.arccos(np.clip(np.sum(z1 * z2, axis=1), -1, 1))
+        np.testing.assert_allclose(np.linalg.norm(rotvec, axis=1), between, atol=1e-9)
+        np.testing.assert_allclose(np.sum(rotvec * z1, axis=1), 0.0, atol=1e-9)
+        np.testing.assert_allclose(np.sum(rotvec * z2, axis=1), 0.0, atol=1e-9)
+
+    def test_parallel_gives_identity(self):
+        np.testing.assert_allclose(align_z_axes([0, 0, 1], [0, 0, 2]), np.eye(3), atol=1e-12)
+
+    @pytest.mark.parametrize("z2", [[0, 0, -1], [-1, 0, 0], [0, 1, 0]])
+    def test_opposite_gives_180_degree_flip(self, z2):
+        # Opposite directions: a 180-degree turn that still lands z2 on z1 = -z2.
+        z2 = np.asarray(z2, dtype=float)
+        tilt = align_z_axes(-z2, z2)
+        np.testing.assert_allclose(tilt @ z2, -z2, atol=1e-12)
+        assert np.linalg.norm(srot.from_matrix(tilt).as_rotvec()) == pytest.approx(np.pi)
+
+    def test_matches_single_pair_reference(self):
+        # The many-pairs version equals the original one-pair function, pair by pair,
+        # including parallel and opposite pairs.
+        z1 = np.vstack([_random_unit_vectors(50, 5), [[0, 0, 1], [0, 0, 1], [1, 0, 0]]])
+        z2 = np.vstack([_random_unit_vectors(50, 6), [[0, 0, 1], [0, 0, -1], [-1, 0, 0]]])
+        expected = np.array([_align_z_axes_single_pair(a, b) for a, b in zip(z1, z2)])
+        np.testing.assert_allclose(align_z_axes(z1, z2), expected, atol=1e-12)
+
+    def test_single_pair_returns_3x3(self):
+        assert align_z_axes([1, 0, 0], [0, 1, 0]).shape == (3, 3)
+        assert align_z_axes([[1, 0, 0]], [[0, 1, 0]]).shape == (1, 3, 3)
+
+    def test_mismatched_lengths_raise(self):
+        with pytest.raises(ValueError, match="same number of vectors"):
+            align_z_axes(_random_unit_vectors(3, 7), _random_unit_vectors(2, 8))
+
+
+class TestInplaneAngleAfterAlignment:
+    """Spin about the shared z-axis left after tilting particle 2's z-axis onto particle 1's."""
+
+    def test_remaining_difference_is_pure_z_turn(self):
+        # R1^T @ T @ R2 must keep z in place, i.e. be a turn about z by the returned spin.
+        r1, r2 = srot.random(300, random_state=1), srot.random(300, random_state=2)
+        tilts = align_z_axes(r1.as_matrix()[:, :, 2], r2.as_matrix()[:, :, 2])
+        remaining = np.einsum("nji,njk,nkl->nil", r1.as_matrix(), tilts, r2.as_matrix())
+        spin = inplane_angle_after_alignment(r1, r2)
+        np.testing.assert_allclose(remaining, srot.from_euler("z", spin[:, None]).as_matrix(), atol=1e-12)
+
+    def test_same_z_axis_gives_phi_difference(self):
+        # Shared z-axis (same theta, psi): the spin is phi2 - phi1, wrapped to [-180, 180].
+        phis = np.random.default_rng(3).uniform(-180, 180, (100, 2))
+        e1 = np.column_stack([phis[:, 0], np.full(100, 60.0), np.full(100, 15.0)])
+        e2 = np.column_stack([phis[:, 1], np.full(100, 60.0), np.full(100, 15.0)])
+        spin = inplane_angle_after_alignment(e1, e2, degrees=True)
+        wrapped = np.mod(phis[:, 1] - phis[:, 0] + 180.0, 360.0) - 180.0
+        np.testing.assert_allclose(np.mod(spin - wrapped + 180.0, 360.0) - 180.0, 0.0, atol=1e-9)
+
+    def test_theta_zero_pair(self):
+        # (10, 0, 50) vs (10, 0, 0): both turn about z only, 50 degrees apart.
+        spin = inplane_angle_after_alignment([10.0, 0.0, 50.0], [10.0, 0.0, 0.0], degrees=True)
+        assert spin[0] == pytest.approx(-50.0)
+
+    def test_common_turn_leaves_spin_unchanged(self):
+        # Depends only on how the two orientations differ.
+        r1, r2 = srot.random(200, random_state=4), srot.random(200, random_state=5)
+        q = srot.random(random_state=6)
+        np.testing.assert_allclose(
+            inplane_angle_after_alignment(r1, r2), inplane_angle_after_alignment(q * r1, q * r2), atol=1e-9
+        )
+
+    def test_swap_flips_sign(self):
+        r1, r2 = srot.random(200, random_state=7), srot.random(200, random_state=8)
+        np.testing.assert_allclose(inplane_angle_after_alignment(r2, r1), -inplane_angle_after_alignment(r1, r2), atol=1e-9)
+
+    def test_spin_about_own_z_is_returned(self):
+        # R2 = R1 @ Rz(a): particle 2 is particle 1 spun by a about its own z-axis.
+        r1 = srot.random(100, random_state=9)
+        a = np.random.default_rng(9).uniform(-170, 170, 100)
+        r2 = r1 * srot.from_euler("z", a[:, None], degrees=True)
+        np.testing.assert_allclose(inplane_angle_after_alignment(r1, r2, degrees=True), a, atol=1e-9)
+
+    def test_mismatched_lengths_raise(self):
+        with pytest.raises(ValueError, match="same number of rotations"):
+            inplane_angle_after_alignment(srot.random(3, random_state=1), srot.random(2, random_state=2))
