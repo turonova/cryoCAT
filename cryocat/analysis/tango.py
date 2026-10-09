@@ -550,6 +550,44 @@ class Particle:
         return eulers[0]
 
 
+def _inplane_angles_from_rotations(rotations: R, stored_phi: np.ndarray, atol_deg: float = 1e-6) -> np.ndarray:
+    """In-plane angles (degrees) read from the rotations, written close to the stored phi.
+
+    The in-plane angle is the first ``zxz`` Euler angle, phi, as computed by
+    :meth:`scipy.spatial.transform.Rotation.as_euler` from each rotation (the
+    same value :meth:`Particle.in_plane_angle` and
+    :func:`cryocat.utils.symmetry.angular_score` use). The stored phi is only
+    used to choose how the angle is written: the result is
+    ``stored + wrap(derived - stored)``, with the difference brought into
+    [-180, 180), so a stored 270 that means the same spin as the derived -90
+    stays 270.
+
+    Parameters
+    ----------
+    rotations : scipy.spatial.transform.Rotation
+        ``N`` particle rotations.
+    stored_phi : numpy.ndarray
+        ``(N,)`` phi angles (degrees) as stored in the particle list.
+    atol_deg : float, default=1e-6
+        Differences below this (degrees) are treated as rounding and the stored
+        value is kept exactly.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(N,)`` in-plane angles in degrees. Equal to *stored_phi* except where
+        the stored phi describes a different spin than the rotation: theta
+        stored as exactly 0 or 180 with psi not 0 (phi and psi then turn about
+        the same axis, and scipy puts the whole spin into phi), or theta stored
+        outside [0, 180].
+    """
+    stored_phi = np.asarray(stored_phi, dtype=float)
+    derived_phi = np.atleast_2d(rotations.as_euler("zxz", degrees=True))[:, 0]
+    diff = np.mod(derived_phi - stored_phi + 180.0, 360.0) - 180.0
+    diff[np.abs(diff) < atol_deg] = 0.0
+    return stored_phi + diff
+
+
 ##### Subclass for symmetric particles #####
 
 
@@ -1637,10 +1675,24 @@ class TwistDescriptor(Descriptor):
         Notes
         -----
         ``angular_score`` is computed with
-        :func:`geom.angular_score_for_c_symmetry` for cyclic symmetry (from
-        the stored ``phi`` angles, as before) and with
-        :func:`cryocat.utils.symmetry.angular_score` for Platonic symmetry
-        (from the full query-point and neighbour rotations).
+        :func:`cryocat.utils.symmetry.angular_score` from the query-point and
+        neighbour rotations, for every symmetry: cyclic symmetry compares their
+        in-plane angles, Platonic symmetry the full rotations. This is the same
+        function :meth:`SymmParticle.similarity_symm` uses.
+
+        ``qp_inplane``/``nn_inplane`` hold the in-plane angle (phi) read from
+        each rotation, written close to the stored phi (see
+        :func:`_inplane_angles_from_rotations`), so they describe the same spin
+        as the score and :meth:`symmetry_statistics` agrees with it. They
+        equal the stored phi except where it describes a different spin:
+        theta stored as exactly 0 or 180 with psi not 0, or theta outside
+        [0, 180].
+
+        Until 2026-10-09 the cyclic score and these columns used the stored
+        phi as is. For the cases above the stored phi ignores part of the spin
+        (e.g. ``(10, 0, 50)`` vs ``(10, 0, 0)`` scored 1 for C4 although the
+        particles are 50 degrees apart, true score 0.11), so cyclic scores and
+        in-plane columns computed before that date can differ there.
 
         Returns
         -------
@@ -1651,24 +1703,21 @@ class TwistDescriptor(Descriptor):
         norm_coord = t_nn.get_normalized_coord()
         rotations_qp = t_nn.get_qp_rotations()
         rotations_nn = t_nn.get_nn_rotations()
-        phi_qp = t_nn.df["qp_angles_phi"].to_numpy()
-        phi_nn = t_nn.df["nn_angles_phi"].to_numpy()
+        phi_qp = _inplane_angles_from_rotations(rotations_qp, t_nn.df["qp_angles_phi"].to_numpy())
+        phi_nn = _inplane_angles_from_rotations(rotations_nn, t_nn.df["nn_angles_phi"].to_numpy())
         subtomo_qp = t_nn.df["qp_subtomo_id"].to_numpy()
         subtomo_nn = t_nn.df["nn_subtomo_id"].to_numpy()
         tomo_idx = t_nn.df[t_nn.column_name].to_numpy()
 
         if symm is not None:
-            if isinstance(symm_category, str):
-                ang_scores = symmetry.angular_score(
-                    rotations_qp, rotations_nn, symm_category, kind=symm_kind, max_val=symm_max_value
-                )
-            else:
-                # Cyclic: keep using the stored phi columns rather than phi
-                # re-derived from the rotations, which can differ when theta
-                # is 0 (phi and psi are then not uniquely defined).
-                ang_scores = geom.angular_score_for_c_symmetry(
-                    np.deg2rad(phi_qp), np.deg2rad(phi_nn), symm_category, symm_max_value
-                )
+            # One scoring path for every symmetry; kind applies to Platonic symmetry only.
+            ang_scores = symmetry.angular_score(
+                rotations_qp,
+                rotations_nn,
+                symm_category,
+                kind=symm_kind if isinstance(symm_category, str) else None,
+                max_val=symm_max_value,
+            )
 
         # Compute relative quantities
         rel_pos = rotations_qp.inv().apply(norm_coord)

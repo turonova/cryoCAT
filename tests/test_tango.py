@@ -21,6 +21,7 @@ from cryocat.analysis.tango import (
     PLComplexDescriptor,
     AngularScoreNN,
     _check_numeric_param,
+    _inplane_angles_from_rotations,
 )
 
 # ===========================================================================
@@ -1113,6 +1114,117 @@ class TestTwistDescriptorProcessTwist:
         nn.df["nn_angles_psi"] = 0.0
         result = TwistDescriptor.process_tomo_twist(nn)
         np.testing.assert_allclose(result[["twist_so_x", "twist_so_y", "twist_so_z"]].values, 0.0, atol=1e-6)
+
+
+# ===========================================================================
+# One in-plane angle for every C_n scoring path (fixed 2026-10-09)
+# ===========================================================================
+
+
+class TestInplaneAnglesFromRotations:
+    """_inplane_angles_from_rotations returns phi read from the rotation, written
+    close to the stored phi: stored + wrap(derived - stored)."""
+
+    @staticmethod
+    def _call(angles):
+        # angles: (N, 3) zxz degrees, used both as the stored values and for the rotations
+        angles = np.asarray(angles, dtype=float)
+        return _inplane_angles_from_rotations(R.from_euler("zxz", angles, degrees=True), angles[:, 0])
+
+    def test_canonical_angles_kept_exactly(self):
+        # Normal particles (theta strictly between 0 and 180): the stored phi is the
+        # spin of the rotation, so it must come back bit-identical (rounding absorbed).
+        angles = [[10.0, 40.0, 20.0], [-123.456, 89.9, 170.0], [179.0, 1.0, -179.0]]
+        np.testing.assert_array_equal(self._call(angles), np.asarray(angles)[:, 0])
+
+    def test_same_spin_written_differently_is_kept(self):
+        # 270 and -90 are the same spin: the stored number is kept, not rewritten.
+        np.testing.assert_array_equal(self._call([[270.0, 40.0, 0.0]]), [270.0])
+
+    def test_theta_zero_takes_spin_from_psi(self):
+        # theta = 0: phi and psi turn about the same axis, so (10, 0, 50) is a 60° spin.
+        np.testing.assert_allclose(self._call([[10.0, 0.0, 50.0]]), [60.0], atol=1e-9)
+
+    def test_theta_180_uses_rotation_spin(self):
+        # theta = 180: the rotation is described by phi - psi; the result must be the
+        # phi scipy reads from the rotation (same spin, up to whole turns).
+        angles = np.array([[10.0, 180.0, 50.0]])
+        derived = R.from_euler("zxz", angles, degrees=True).as_euler("zxz", degrees=True)[0, 0]
+        result = self._call(angles)[0]
+        assert np.mod(result - derived + 180.0, 360.0) - 180.0 == pytest.approx(0.0, abs=1e-9)
+        assert result != pytest.approx(10.0)
+
+    def test_theta_outside_range_is_corrected(self):
+        # (10, -30, 20) is the same rotation as phi = -170 in scipy's ranges.
+        np.testing.assert_allclose(self._call([[10.0, -30.0, 20.0]]), [-170.0], atol=1e-9)
+
+
+class TestCyclicScoreConsistency:
+    """Before 2026-10-09, process_tomo_twist and symmetry_statistics scored C_n from
+    the stored phi, while SymmParticle.similarity_symm used phi read from the
+    rotation; for theta = 0 (or theta outside [0, 180]) they disagreed. All three
+    must now give the same result."""
+
+    @staticmethod
+    def _nn(qp_angles, nn_angles):
+        # One pair; coordinates are irrelevant for the in-plane score.
+        nn = _make_nn(n_pairs=1)
+        nn.df[["qp_angles_phi", "qp_angles_theta", "qp_angles_psi"]] = [qp_angles]
+        nn.df[["nn_angles_phi", "nn_angles_theta", "nn_angles_psi"]] = [nn_angles]
+        return nn
+
+    def test_theta_zero_pair_scored_from_true_spin(self):
+        # (10, 0, 50) vs (10, 0, 0): 50° apart about the same axis; nearest C4 copy
+        # is 40° away, so the score is 1 - 40/45. The old stored-phi path gave 1.
+        result = TwistDescriptor.process_tomo_twist(
+            self._nn([10.0, 0.0, 50.0], [10.0, 0.0, 0.0]), symm=4, symm_max_value=np.pi / 4, symm_category=4
+        )
+        assert result["angular_score"].iloc[0] == pytest.approx(1 - 40 / 45)
+        assert result["qp_inplane"].iloc[0] == pytest.approx(60.0)
+        assert result["nn_inplane"].iloc[0] == pytest.approx(10.0)
+
+    @pytest.mark.parametrize("qp, nn", [([10.0, 0.0, 50.0], [10.0, 0.0, 0.0]), ([10.0, -30.0, 20.0], [35.0, 60.0, 5.0])])
+    def test_matches_symm_particle(self, qp, nn):
+        # The twist-descriptor score must equal SymmParticle.similarity_symm for the same pair.
+        result = TwistDescriptor.process_tomo_twist(self._nn(qp, nn), symm=4, symm_max_value=np.pi / 4, symm_category=4)
+        sp_qp = SymmParticle(R.from_euler("zxz", qp, degrees=True), np.zeros(3), symm=4)
+        sp_nn = SymmParticle(R.from_euler("zxz", nn, degrees=True), np.zeros(3), symm=4)
+        assert result["angular_score"].iloc[0] == pytest.approx(sp_qp.similarity_symm(sp_nn))
+
+    def test_same_orientation_written_two_ways_scores_the_same(self):
+        # (10, -30, 20) and its scipy form describe one rotation: score and in-plane
+        # angles (as spins) must not depend on how the angles were written.
+        written = [10.0, -30.0, 20.0]
+        canonical = R.from_euler("zxz", written, degrees=True).as_euler("zxz", degrees=True).tolist()
+        other = [35.0, 60.0, 5.0]
+        a = TwistDescriptor.process_tomo_twist(self._nn(written, other), symm=3, symm_max_value=np.pi / 3, symm_category=3)
+        b = TwistDescriptor.process_tomo_twist(self._nn(canonical, other), symm=3, symm_max_value=np.pi / 3, symm_category=3)
+        assert a["angular_score"].iloc[0] == pytest.approx(b["angular_score"].iloc[0])
+        spin_diff = a["qp_inplane"].iloc[0] - b["qp_inplane"].iloc[0]
+        assert np.mod(spin_diff + 180.0, 360.0) - 180.0 == pytest.approx(0.0, abs=1e-9)
+
+    def test_symmetry_statistics_agrees_with_score(self):
+        # symmetry_statistics recomputes C_n scores from qp_inplane/nn_inplane; its C4
+        # values must equal the angular_score column computed with C4.
+        nn = _make_nn(n_pairs=3)
+        nn.df[["qp_angles_phi", "qp_angles_theta", "qp_angles_psi"]] = [[10, 0, 50], [10, -30, 20], [5, 40, 0]]
+        nn.df[["nn_angles_phi", "nn_angles_theta", "nn_angles_psi"]] = [[10, 0, 0], [35, 60, 5], [80, 40, 10]]
+        df = TwistDescriptor.process_tomo_twist(nn, symm=4, symm_max_value=np.pi / 4, symm_category=4)
+        # A descriptor built from the output (distance features not needed here are zero-filled).
+        td = TwistDescriptor(input_twist=_minimal_twist_df({c: df[c].tolist() for c in df.columns}))
+        fig = td.symmetry_statistics(c_range=[4], plot_graph=False)
+        np.testing.assert_allclose(np.asarray(fig.data[0].y, dtype=float), df["angular_score"].to_numpy(), atol=1e-9)
+
+    def test_inplane_columns_also_corrected_without_symmetry(self):
+        # The in-plane columns exist without symmetry too and must hold the same spin.
+        result = TwistDescriptor.process_tomo_twist(self._nn([10.0, 0.0, 50.0], [10.0, 0.0, 0.0]))
+        assert result["qp_inplane"].iloc[0] == pytest.approx(60.0)
+
+    def test_canonical_input_columns_unchanged(self):
+        # _make_nn uses canonical angles (qp phi 0, nn phi 90): stored values are kept exactly.
+        result = TwistDescriptor.process_tomo_twist(_make_nn())
+        assert (result["qp_inplane"] == 0.0).all()
+        assert (result["nn_inplane"] == 90.0).all()
 
 
 # ── TwistDescriptor.check_twist_columns ──────────────────────────────────────
