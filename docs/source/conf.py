@@ -21,7 +21,6 @@ sys.path.insert(0, os.path.abspath("sphinxext"))
 
 from bs4 import BeautifulSoup
 
-
 for f in os.listdir("./generated/"):
     if f.endswith(".rst"):
         os.remove("./generated/" + f)
@@ -31,7 +30,7 @@ for f in os.listdir("./generated/"):
 project = "cryoCAT"
 copyright = f'2022-{time.strftime("%Y")}'
 author = "Beata Turonova"
-version = release = "0.2.2"  # cryocat.__version__
+version = release = "v1.0.0rc1"  # cryocat.__version__
 
 
 # -- General configuration ---------------------------------------------------
