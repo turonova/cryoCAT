@@ -45,6 +45,12 @@ from cryocat.app.components.poolslotlist import (
     _first_free_slot,
 )
 
+from cryocat.app.suite.pages._tango_symmetry import (
+    SYMM_TYPE_OPTIONS,
+    build_symm_kwargs,
+    kind_control_state,
+)
+
 from cryocat.analysis.tango import TwistDescriptor, Descriptor, CustomDescriptor
 from cryocat.utils.classutils import get_class_names_by_parent, get_classes_from_names
 from cryocat.core.surface import Mesh
@@ -195,11 +201,21 @@ def _twist_tile() -> list:
             "symm_type",
             formgen.make_dropdown(
                 "tango-symm-type",
-                ["None", "C", "cube", "tetrahedron", "octahedron", "icosahedron", "dodecahedron"],
+                SYMM_TYPE_OPTIONS,
                 "None",
                 clearable=False,
             ),
-            "Particle symmetry to apply during twist computation",
+            "Particle symmetry: C (cyclic), T (tetrahedral), O (octahedral), I (icosahedral)",
+        ),
+        html.Div(
+            formgen.form_row(
+                "kind",
+                formgen.make_dropdown("tango-symm-kind", [], None, clearable=False),
+                "Solid used to build the O/I symmetry (octahedron/cube, icosahedron/dodecahedron)",
+                label_text="Solid",
+            ),
+            id="tango-symm-kind-div",
+            style={"display": "none"},
         ),
         html.Div(
             formgen.form_row(
@@ -644,6 +660,18 @@ def register_callbacks(app) -> None:
         show = symm == "C"
         return {**(current_style or {}), "display": "block" if show else "none"}
 
+    @app.callback(
+        Output("tango-symm-kind-div", "style"),
+        Output("tango-symm-kind", "options"),
+        Output("tango-symm-kind", "value"),
+        Input("tango-symm-type", "value"),
+        State("tango-symm-kind-div", "style"),
+        prevent_initial_call=True,
+    )
+    def _toggle_symm_kind(symm, current_style):
+        options, value, show = kind_control_state(symm)
+        return {**(current_style or {}), "display": "block" if show else "none"}, options, value
+
     # ── Gate descriptor button and accordion sections on twist handle ─────────
 
     @app.callback(
@@ -707,7 +735,7 @@ def register_callbacks(app) -> None:
                 id_type="tango-desc-params",
                 id_extra={"cls_name": class_name},
                 exclude=["input_twist", "input_motl", "nn_radius", "column_name",
-                         "symm", "remove_qp", "remove_duplicates", "build_unique_desc"],
+                         "symm", "kind", "remove_qp", "remove_duplicates", "build_unique_desc"],
             )
             avail_features = []
         else:
@@ -762,6 +790,7 @@ def register_callbacks(app) -> None:
         State("tango-column-name", "value"),
         State("tango-symm-type", "value"),
         State("tango-c-symm-value", "value"),
+        State("tango-symm-kind", "value"),
         State("tango-remove-qp", "value"),
         State("tango-remove-duplicates", "value"),
         State(ids.POOL_REGISTRY, "data"),
@@ -778,6 +807,7 @@ def register_callbacks(app) -> None:
         column_name,
         symm_type,
         c_symm_value,
+        kind_value,
         remove_qp,
         remove_duplicates,
         registry,
@@ -802,7 +832,6 @@ def register_callbacks(app) -> None:
             motl_obj = get_motl(motl_id)
         except PoolPayloadMissing:
             return *_no7[:3], "Motl payload missing — reload.", *_no7[4:]
-        symm = None if symm_type == "None" else (c_symm_value if symm_type == "C" else symm_type)
         source_label = (registry or {}).get(motl_id, {}).get("label", "Motl")
         new_twist_id = (twist_next_id or 0) + 1
         twist_id = f"twist-{new_twist_id}"
@@ -818,7 +847,7 @@ def register_callbacks(app) -> None:
                     "input_motl": motl_obj,
                     "nn_radius": nn_radius,
                     "column_name": column_name or "tomo_id",
-                    "symm": symm,
+                    **build_symm_kwargs(symm_type, c_symm_value, kind_value),
                     "remove_qp": bool(remove_qp),
                     "remove_duplicates": bool(remove_duplicates),
                     "build_unique_desc": False,

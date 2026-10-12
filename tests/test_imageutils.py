@@ -875,6 +875,50 @@ def test_symmetrize_volume_invalid_raises():
         symmetrize_volume(np.zeros((8, 8, 8)), [1, 2])
 
 
+def _gaussian_blobs(points, n_box, sigma=1.5):
+    """Sum of Gaussian blobs at *points* (voxel indices) in an n_box^3 volume."""
+    grid = np.indices((n_box,) * 3).reshape(3, -1).T.astype(float)
+    vol = np.zeros(len(grid))
+    for p in points:
+        vol += np.exp(-np.sum((grid - p) ** 2, axis=1) / (2 * sigma**2))
+    return vol.reshape((n_box,) * 3)
+
+
+@pytest.mark.parametrize("symmetry", ["C2", "C4", "C6", "D2", "D3", "T", "O", "I"])
+def test_symmetrize_volume_gives_one_equal_copy_per_group_rotation(symmetry):
+    # Regression test (2026-10-01): the angles used to be 360 % (k*360/n)
+    # (C2 -> no rotation at all, C4 -> 0, 0, 90, 0) and only cyclic symmetry
+    # was supported. A blob at a general position must become one blob per
+    # group rotation (n, 2n, 12, 24, 60), each with 1/order of the intensity,
+    # at the positions g @ p around the box centre (canonical orientation).
+    from cryocat.utils.symmetry import get_symmetry_rotations
+
+    n_box = 32
+    centre = np.array([n_box // 2] * 3, float)
+    p = np.array([8.0, 3.0, 5.0])
+    group = get_symmetry_rotations(symmetry)
+    out = symmetrize_volume(_gaussian_blobs([centre + p], n_box), symmetry)
+    ideal = _gaussian_blobs([centre + g @ p for g in group], n_box) / len(group)
+    assert np.corrcoef(out.ravel(), ideal.ravel())[0, 1] > 0.999
+    assert out.max() == pytest.approx(ideal.max(), rel=0.02)
+
+
+def test_symmetrize_volume_dihedral_differs_from_cyclic():
+    # "D3" used to be silently treated as "C3"; the 2-fold axes now add copies.
+    n_box = 24
+    vol = _gaussian_blobs([np.array([n_box // 2] * 3) + [6.0, 2.0, 4.0]], n_box)
+    c3 = symmetrize_volume(vol, "C3")
+    d3 = symmetrize_volume(vol, "D3")
+    assert d3.max() == pytest.approx(c3.max() / 2, rel=0.02)  # 6 copies instead of 3
+
+
+@pytest.mark.parametrize("symmetry", [5, "5", "C5"])
+def test_symmetrize_volume_accepts_cyclic_forms(symmetry):
+    # An int, a numeric string (accepted before the fix) and "Cn" are equivalent.
+    vol = np.random.default_rng(0).random((12, 12, 12))
+    np.testing.assert_allclose(symmetrize_volume(vol, symmetry), symmetrize_volume(vol, "C5"))
+
+
 # ---------------------------------------------------------------------------
 # equalize_histogram_2d
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.core import cryomask
 from cryocat.utils import geom
+from cryocat.utils.symmetry import SYMMETRY_GROUPS, SymmGroup
 from cryocat.utils import mathutils
 from cryocat.analysis import nnana
 from cryocat.analysis import clustering as _clustering
@@ -488,17 +489,15 @@ class Chain:
         pandas.DataFrame
             One row per step; *n* particles → *n* − 1 rows.
 
-            ========================  ========  ==========================================
-            ``<column_name>``         —         value of ``self.column_name`` (e.g. tomo_id)
-            ``chain_id``              —         value of ``self.chain_id_col``
-            ``step``                  —         ``order_id_col`` value of the upstream
-                                                particle
-            ``step_dist``             motl's own units    ``step_dist_col`` of the upstream particle;
-                                                NaN when the column is absent
-            ``angular_distance``      degrees   SO(3) geodesic distance between orientations
-            ``cone_distance``         degrees   angle between z-axes (normal-vector distance)
-            ``in_plane_distance``     degrees   in-plane rotation component
-            ========================  ========  ==========================================
+            ========================  ================  =========================================================================
+            ``<column_name>``         —                 value of ``self.column_name`` (e.g. tomo_id)
+            ``chain_id``              —                 value of ``self.chain_id_col``
+            ``step``                  —                 ``order_id_col`` value of the upstream particle
+            ``step_dist``             motl's own units  ``step_dist_col`` of the upstream particle; NaN when the column is absent
+            ``angular_distance``      degrees           SO(3) geodesic distance between orientations
+            ``cone_distance``         degrees           angle between z-axes (normal-vector distance)
+            ``in_plane_distance``     degrees           in-plane rotation component
+            ========================  ================  =========================================================================
 
         Notes
         -----
@@ -8483,23 +8482,23 @@ class PleomorphicSurface:
         pandas.DataFrame
             Columns per face:
 
-            ``tomo_id``, ``object_id`` — identity, from the face record.
-            ``face_id`` — face identifier.
-            ``size`` — observed boundary length (number of half-edges).
-            ``is_merged`` — True when the median interior angle deviates from
-                the ideal n-gon value by more than 20°.
-            ``n_reflex`` — count of reflex vertices (turn angle < −30° in the
-                minority winding direction); the raw signal driving ``n_missing``.
-            ``n_missing`` — inferred missing trivalent blocks
-                (``n_reflex // 3``); 0 when ``is_merged`` is False or the reflex
-                count is not a multiple of 3.
-            ``n_faces_recovered`` — faces that would be restored: 0 when
-                ``n_missing == 0``; ``1 + 2 * n_missing`` otherwise (Euler:
-                each re-inserted unit adds ΔV=+1, ΔE=+3 → ΔF=+2, Δχ=0).
-            ``recovered_face_size`` — majority observed face size for this
-                assembly (the expected size of each recovered face); NaN when
-                ``n_missing == 0`` or the assembly size distribution has no
-                unique mode.
+            - ``tomo_id``, ``object_id`` — identity, from the face record.
+            - ``face_id`` — face identifier.
+            - ``size`` — observed boundary length (number of half-edges).
+            - ``is_merged`` — True when the median interior angle deviates from
+              the ideal n-gon value by more than 20°.
+            - ``n_reflex`` — count of reflex vertices (turn angle < −30° in the
+              minority winding direction); the raw signal driving ``n_missing``.
+            - ``n_missing`` — inferred missing trivalent blocks
+              (``n_reflex // 3``); 0 when ``is_merged`` is False or the reflex
+              count is not a multiple of 3.
+            - ``n_faces_recovered`` — faces that would be restored: 0 when
+              ``n_missing == 0``; ``1 + 2 * n_missing`` otherwise (Euler:
+              each re-inserted unit adds ΔV=+1, ΔE=+3 → ΔF=+2, Δχ=0).
+            - ``recovered_face_size`` — majority observed face size for this
+              assembly (the expected size of each recovered face); NaN when
+              ``n_missing == 0`` or the assembly size distribution has no
+              unique mode.
 
         Raises
         ------
@@ -11221,6 +11220,7 @@ class PleomorphicSurface:
         method : {'mesh', 'mesh_curvatures', 'mesh_from_mrc', 'point_cloud', \
 'point_cloud_from_mrc', 'point_cloud_from_motl'}, default='mesh'
             Loader to use:
+
             - "mesh": geometry-only triangle mesh via :meth:`Mesh.read`
             - "mesh_curvatures": VTP triangle mesh with curvature fields via
               :meth:`Mesh.read_curvatures`
@@ -13404,6 +13404,36 @@ class ParametricSurface:
 # =============================================================================
 
 
+def _marker_vectors(markers: PathOrStr, pixel_size: float, center: np.ndarray, n_markers: int) -> np.ndarray:
+    """Load the first markers of a marker file as voxel vectors from *center*.
+
+    Parameters
+    ----------
+    markers : PathOrStr
+        Marker file (e.g. ChimeraX ``.cmm``) with coordinates in Å, box frame.
+    pixel_size : float
+        Pixel size of the map the markers were placed on (Å per voxel).
+    center : np.ndarray
+        ``(3,)`` centre of the solid in voxels.
+    n_markers : int
+        Number of markers to read, from the first one.
+
+    Returns
+    -------
+    np.ndarray
+        ``(n_markers, 3)`` vectors in voxels, relative to *center*.
+
+    Raises
+    ------
+    ValueError
+        If the file holds fewer than *n_markers* markers.
+    """
+    marks = ioutils.marker_coords_load(markers)
+    if len(marks) < n_markers:
+        raise ValueError(f"Expected at least {n_markers} marker(s) in {markers!r}, found {len(marks)}.")
+    return marks.iloc[:n_markers].to_numpy() / pixel_size - center
+
+
 class PolyhedralComplex(SymmetricComplex):
     """Abstract base for Platonic-solid (T/O/I) motl-analysis complexes.
 
@@ -13479,11 +13509,9 @@ class PolyhedralComplex(SymmetricComplex):
         pixel_size = input_map_metadata[1]
         center_vox = geom.as_triplet(center, reference_size=map_size)
 
-        input_vert_marks = ioutils.marker_coords_load(markers)
-        v1 = input_vert_marks.iloc[0].to_numpy() / pixel_size
-        v2 = input_vert_marks.iloc[1].to_numpy() / pixel_size
+        v1, v2 = _marker_vectors(markers, pixel_size, center_vox, 2)
 
-        self.solid = self._solid.from_vectors(v1 - center_vox, v2 - center_vox)
+        self.solid = self._solid.from_vectors(v1, v2)
         self.center = center_vox
         self._pixel_size = float(pixel_size)
 
@@ -13564,11 +13592,56 @@ class PolyhedralComplex(SymmetricComplex):
         ValueError
             When no geometry has been fitted yet.
         """
+        self._require_fitted()
+        vecs = self.feature_vectors(mode=mode, project_to_sphere=project_to_sphere)
+        ioutils.write_coords_to_cmm_file(self._to_map_coords(vecs), output_path)
+
+    def _require_fitted(self) -> None:
+        """Raise ``ValueError`` unless :meth:`fit_geometry` has been called."""
         if self.solid is None or self.center is None or self._pixel_size is None:
             raise ValueError("No geometry fitted. Call fit_geometry(markers, reference_map) first.")
-        vecs = self.feature_vectors(mode=mode, project_to_sphere=project_to_sphere)
-        features_coords = (vecs + self.center) * self._pixel_size
-        ioutils.write_coords_to_cmm_file(features_coords, output_path)
+
+    def _to_map_coords(self, vecs: np.ndarray) -> np.ndarray:
+        """Convert voxel vectors from the fitted centre to map coordinates in Å."""
+        return (vecs + self.center) * self._pixel_size
+
+    def angular_dissimilarity(self, rotations_1: RotationLike, rotations_2: RotationLike) -> np.ndarray:
+        """Symmetry-aware dissimilarity of paired particle orientations.
+
+        Compares the corners of the complex's solid turned by each pair of
+        rotations (see :meth:`cryocat.utils.geom.Polyhedron.angular_dissimilarity`);
+        0 means the two particles look the same up to the complex's symmetry,
+        and higher values mean more different orientations.
+
+        Uses ``self.solid`` when geometry has been fitted via
+        :meth:`fit_geometry`, so the corners follow the symmetry axes of the
+        reference map; otherwise the canonical solid is used (reference
+        assumed canonically oriented), as in :meth:`feature_vectors` and
+        :meth:`symmetry_group`.
+
+        Parameters
+        ----------
+        rotations_1 : RotationLike
+            First orientation of each pair: one rotation or a stack of ``N``,
+            e.g. ``motl_a.get_rotations()``.
+        rotations_2 : RotationLike
+            Second orientation of each pair, same number as *rotations_1*
+            (e.g. ``motl_b.get_rotations()``). A single rotation on either side
+            is compared with every rotation on the other side.
+
+        Returns
+        -------
+        np.ndarray
+            ``(N,)`` dissimilarities in radians.
+
+        Raises
+        ------
+        ValueError
+            If either input is empty, or the numbers of rotations differ and
+            neither input holds exactly one.
+        """
+        solid = self.solid if self.solid is not None else self._solid()
+        return solid.angular_dissimilarity(rotations_1, rotations_2)
 
     # ------------------------------------------------------------------
     # Symmetry expansion
@@ -13629,6 +13702,15 @@ class PolyhedralComplex(SymmetricComplex):
         ------
         ValueError
             If *shift_vecs* has wrong shape or a required column is missing.
+
+        Notes
+        -----
+        The number of subparticles per particle is the solid's vertex, edge
+        or face count (icosahedron: 12, 30 or 20), not the group order (60
+        for ``"I"``) used by :meth:`split_in_asymmetric_units`. Corners, edge
+        midpoints and face centres lie on symmetry axes, so the group's
+        rotations only produce ``order / n`` distinct places for them (table
+        in the :mod:`cryocat.utils.symmetry` module Notes).
         """
         if shift_vecs is None:
             shift_vecs = self.feature_vectors(mode=mode, project_to_sphere=project_to_sphere, radius=radius)
@@ -13648,6 +13730,82 @@ class PolyhedralComplex(SymmetricComplex):
             start_index=0,
         )
         return cryomotl.motl_converter_kwargs(output_motl, output_motl_type, output_path=output_path, **output_kwargs)
+
+    def symmetry_group(self) -> SymmGroup:
+        """Return the complex's symmetry group in its fitted orientation.
+
+        After :meth:`fit_geometry`, the group is derived from ``self.solid``
+        via :meth:`cryocat.utils.symmetry.SymmGroup.from_polyhedron`, so its
+        rotations match the symmetry axes of the reference map (checked for
+        consistency with the fitted solid). Before fitting, the canonical
+        group is returned, matching the canonical solid used by
+        :meth:`feature_vectors`.
+
+        Returns
+        -------
+        cryocat.utils.symmetry.SymmGroup
+            12, 24 or 60 rotations for T, O or I; ``.rotation`` holds the
+            fitted orientation (identity if not fitted).
+        """
+        group_cls = SYMMETRY_GROUPS[self._symmetry]
+        if self.solid is None:
+            return group_cls()
+        return group_cls.from_polyhedron(self.solid)
+
+    @gui_exposed(
+        label="Split in asymmetric units",
+        group="Expansion",
+        order=35,
+        returns="motl",
+        hide=(),
+    )
+    def split_in_asymmetric_units(
+        self,
+        xyz_shift: ArrayLike,
+        *,
+        output_motl_type: MotlType = "emmotl",
+        output_path: PathOrStr | None = None,
+        **output_kwargs,
+    ) -> MotlSource:
+        """Split each particle into its asymmetric units, in the fitted frame.
+
+        Calls :meth:`cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits`
+        with the orientation of :meth:`symmetry_group`, so the subunits are
+        placed around the symmetry axes of the reference map rather than the
+        canonical ones. This works for references in any orientation and uses
+        the same frame as :meth:`expand`. Without :meth:`fit_geometry`, the
+        reference is assumed to be canonically oriented.
+
+        Parameters
+        ----------
+        xyz_shift : ArrayLike
+            Position of the reference subunit in the reference map, in voxels
+            relative to the map centre (the frame of :meth:`feature_vectors`).
+            It should lie off every symmetry axis; otherwise copies overlap.
+        output_motl_type : MotlType, default="emmotl"
+            Format of the returned/written motive list.
+        output_path : PathOrStr, optional
+            Write path. No file is written when None.
+        **output_kwargs
+            Forwarded to :func:`cryocat.core.cryomotl.motl_converter_kwargs`.
+
+        Returns
+        -------
+        MotlSource
+            Expanded motive list with 12, 24 or 60 subunits per particle.
+
+        Notes
+        -----
+        One subunit per group rotation (60 for ``"I"``), which differs from
+        the 12/30/20 subparticles :meth:`expand` places on the icosahedron's
+        vertices/edges/faces; see the :mod:`cryocat.utils.symmetry` module
+        Notes.
+        """
+        group = self.symmetry_group()
+        split = self.motl.split_in_asymmetric_subunits(
+            self._symmetry, xyz_shift, symmetry_orientation=group.rotation
+        )
+        return cryomotl.motl_converter_kwargs(split, output_motl_type, output_path=output_path, **output_kwargs)
 
     # ------------------------------------------------------------------
     # Feature recovery
@@ -13719,11 +13877,9 @@ class PolyhedralComplex(SymmetricComplex):
         map_size = geom.as_triplet(input_map_metadata[0], dtype=int)
         center = geom.as_triplet(center, reference_size=map_size)
 
-        input_vert_marks = ioutils.marker_coords_load(input_cmm_file)
-        v1 = input_vert_marks.iloc[0].to_numpy() / input_map_metadata[1]
-        v2 = input_vert_marks.iloc[1].to_numpy() / input_map_metadata[1]
+        v1, v2 = _marker_vectors(input_cmm_file, input_map_metadata[1], center, 2)
 
-        solid = cls._solid.from_vectors(v1 - center, v2 - center)
+        solid = cls._solid.from_vectors(v1, v2)
         feature_vec = getattr(solid, mode)
 
         if project_to_sphere:
@@ -13736,6 +13892,122 @@ class PolyhedralComplex(SymmetricComplex):
             ioutils.write_coords_to_cmm_file(features_coords, output_cmm_file)
 
         return feature_vec, features_coords
+
+    @gui_exposed(
+        label="Vertex subunit vectors",
+        group="Expansion",
+        order=32,
+        returns="features",
+        hide=(),
+    )
+    def vertex_subunit_vectors(
+        self,
+        subunit_markers: PathOrStr,
+        *,
+        symmetry: Symmetry | None = None,
+        reference: int | None = None,
+        output_cmm_file: PathOrStr | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Place a ring of subunits around every vertex of the fitted solid.
+
+        One marker on one subunit near a vertex is turned about that vertex's
+        axis into a ring of ``n`` evenly spaced copies (local ``Cn``), and the
+        ring is copied to every vertex with
+        :meth:`cryocat.utils.geom.Polyhedron.transport_points`. Requires
+        :meth:`fit_geometry` first, which supplies the solid, its centre and the
+        pixel size.
+
+        Parameters
+        ----------
+        subunit_markers : PathOrStr
+            Marker file (e.g. ChimeraX ``.cmm``, Å) placed on the reference map
+            used in :meth:`fit_geometry`; only the first marker is used.
+        symmetry : Symmetry, optional
+            Cyclic symmetry of the ring around each vertex, e.g. ``"C5"`` or
+            ``5``. Defaults to the fold of the vertex axis (T: 3, O: 4, I: 5).
+        reference : int, optional
+            Index of the vertex the marked subunit belongs to. Defaults to the
+            vertex closest in angle to the marker.
+        output_cmm_file : PathOrStr, optional
+            If given, write the subunit positions (Å) to this ``.cmm`` file.
+
+        Returns
+        -------
+        vecs : np.ndarray of shape (V * n, 3)
+            Vectors in voxels from the solid's centre, vertex by vertex (rows
+            ``i * n`` to ``i * n + n - 1`` belong to vertex ``i``); ready for
+            ``expand(shift_vecs=vecs)``.
+        coords : np.ndarray of shape (V * n, 3)
+            The same positions as map coordinates in Å.
+
+        Raises
+        ------
+        ValueError
+            If no geometry has been fitted, the marker file is empty, or
+            *reference* is not a valid vertex index.
+        NotImplementedError
+            If *symmetry* is not cyclic.
+
+        Warns
+        -----
+        UserWarning
+            If ``n`` is not a multiple of the vertex fold (the copies then
+            depend on the neighbour ordering and do not share the solid's
+            symmetry), or if the marker lies on the vertex axis (all ring
+            copies overlap).
+
+        Notes
+        -----
+        * With the default ``n`` (the vertex fold), the result is the same set
+          of positions as the symmetry group's orbit of the marker
+          (``self.symmetry_group().orbit(shift)``), i.e. the positions used by
+          :meth:`split_in_asymmetric_units`; the orientations assigned later by
+          :meth:`expand` are radial instead.
+        * :meth:`expand` sorts the shift vectors, so its order column does not
+          follow the vertex-by-vertex order of *vecs*.
+
+        Examples
+        --------
+        >>> ico = IcosahedralComplex("complexes.em")
+        >>> ico.fit_geometry("two_vertices.cmm", "reference.mrc")
+        >>> vecs, coords = ico.vertex_subunit_vectors("one_subunit.cmm")
+        >>> vecs.shape                      # 12 vertices x 5 subunits
+        (60, 3)
+        >>> sub_motl = ico.expand(shift_vecs=vecs)
+        """
+        self._require_fitted()
+        shift = _marker_vectors(subunit_markers, self._pixel_size, self.center, 1)[0]
+        vertices = self.solid.vertices
+
+        if reference is None:
+            cosines = (vertices @ shift) / (np.linalg.norm(vertices, axis=1) * np.linalg.norm(shift))
+            reference = int(np.argmax(cosines))
+        elif not isinstance(reference, (int, np.integer)) or not 0 <= reference < len(vertices):
+            raise ValueError(f"reference must be a vertex index in [0, {len(vertices) - 1}], got {reference!r}.")
+
+        fold = len(self.solid.vertex_neighbors()[0])
+        if symmetry is None:
+            n = fold
+        else:
+            geom.require_cyclic_symmetry(symmetry, "vertex subunit ring")
+            _, n = geom.as_symmetry(symmetry)
+        if n % fold != 0:
+            warnings.warn(
+                f"A ring of {n} subunits is not a multiple of the {fold}-fold vertex axis: the copies depend on "
+                "the neighbour ordering and do not share the solid's symmetry.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if np.linalg.norm(np.cross(geom.normalize_vector(vertices[reference]), shift)) < 1e-6:
+            warnings.warn("The subunit lies on the vertex axis: all ring copies overlap.", UserWarning, stacklevel=2)
+
+        ring = geom.rotate_vectors_about_axis(shift, vertices[reference], 360.0 * np.arange(n) / n)
+        vecs = self.solid.transport_points(ring, reference=reference)
+        coords = self._to_map_coords(vecs)
+
+        if output_cmm_file is not None:
+            ioutils.write_coords_to_cmm_file(coords, output_cmm_file)
+        return vecs, coords
 
 
 # =============================================================================

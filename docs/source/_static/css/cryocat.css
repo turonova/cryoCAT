@@ -243,3 +243,9 @@ a:hover, a:visited, a:link, a:active
 .badge-build {
     background-color: #937860;
 }
+
+/* Notebook DataFrame outputs: nbsphinx sets table-layout: fixed, which squashes columns */
+.jp-RenderedHTMLCommon table,
+div.rendered_html table {
+  table-layout: auto;
+}

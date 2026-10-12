@@ -1067,6 +1067,346 @@ class TestPolyhedralComplex:
             assert subset[order_id_col].is_monotonic_increasing
             assert np.array_equal(subset[order_id_col], np.arange(0, len(subset), 1))
 
+    # ------------------------------------------------------------------ symmetry_group (added 2026-09-25)
+
+    @staticmethod
+    def _fitted_solid(solid_cls, euler=(30.0, 50.0, 10.0), radius=40.0):
+        """Solid fitted from two neighbouring vertices of a solid turned by *euler* (zxz, deg).
+
+        Mimics fit_geometry without marker/map files: the reference is NOT
+        canonically oriented.
+        """
+        true = solid_cls(radius=radius, R=Rotation.from_euler("zxz", euler, degrees=True))
+        neighbour = next(e[1] if e[0] == 0 else e[0] for e in true._edge_idx if 0 in e)
+        return solid_cls.from_vectors(true.vertices[0], true.vertices[neighbour])
+
+    @pytest.mark.parametrize(
+        "cls, order",
+        [(structure.TetrahedralComplex, 12), (structure.OctahedralComplex, 24), (structure.IcosahedralComplex, 60)],
+    )
+    def test_symmetry_group_before_fit_is_canonical(self, sample_motl, cls, order):
+        # Without fit_geometry the group is the canonical one (identity orientation),
+        # matching the canonical solid used by feature_vectors().
+        g = cls(sample_motl).symmetry_group()
+        assert g.order == order
+        assert np.allclose(g.rotation.as_matrix(), np.eye(3))
+
+    @pytest.mark.parametrize(
+        "cls, solid_cls",
+        [
+            (structure.TetrahedralComplex, geom.Tetrahedron),
+            (structure.OctahedralComplex, geom.Octahedron),
+            (structure.IcosahedralComplex, geom.Icosahedron),
+        ],
+    )
+    def test_symmetry_group_after_fit_leaves_solid_unchanged(self, sample_motl, cls, solid_cls):
+        # After fitting, every rotation of the complex's group must map the
+        # fitted solid's vertices onto themselves, and the group carries the
+        # fitted orientation.
+        pc = cls(sample_motl)
+        pc.solid = self._fitted_solid(solid_cls)
+        g = pc.symmetry_group()
+        assert np.allclose(g.rotation.as_matrix(), pc.solid.rotation.as_matrix())
+        verts = pc.solid.vertices / np.linalg.norm(pc.solid.vertices, axis=1, keepdims=True)
+        for m in g.matrices:
+            assert geom.hausdorff_distance_sphere(verts @ m.T, verts) < 1e-6
+
+    def test_symmetry_group_with_fit_geometry(self, ico_complex, path_test_marker_file, mrc_file):
+        # End-to-end with the real fitting path (marker file + map).
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        g = ico_complex.symmetry_group()
+        assert g.order == 60
+        assert np.allclose(g.rotation.as_matrix(), ico_complex.solid.rotation.as_matrix())
+
+    # ------------------------------------------------------------------ split_in_asymmetric_units (added 2026-09-25)
+
+    @pytest.mark.parametrize(
+        "cls, order",
+        [(structure.TetrahedralComplex, 12), (structure.OctahedralComplex, 24), (structure.IcosahedralComplex, 60)],
+    )
+    def test_split_in_asymmetric_units_count_and_type(self, sample_motl, cls, order):
+        # One copy per group rotation for every particle; the default output is a
+        # Motl, as for expand() (motl_converter_kwargs with "emmotl").
+        pc = cls(sample_motl)
+        result = pc.split_in_asymmetric_units([3.0, 1.0, 7.0])
+        assert isinstance(result, cryomotl.Motl)
+        assert len(result.df) == order * len(sample_motl.df)
+
+    def test_split_in_asymmetric_units_uses_fitted_orientation(self, sample_motl):
+        # The complex method must be exactly the motl-level split with the
+        # fitted orientation passed in.
+        pc = structure.IcosahedralComplex(sample_motl)
+        pc.solid = self._fitted_solid(geom.Icosahedron)
+        shift = [3.0, 1.0, 7.0]
+        via_complex = pc.split_in_asymmetric_units(shift).df
+        direct = pc.motl.split_in_asymmetric_subunits("I", shift, symmetry_orientation=pc.solid.rotation).df
+        cols = ["x", "y", "z", "shift_x", "shift_y", "shift_z", "phi", "theta", "psi", "geom2", "geom5"]
+        np.testing.assert_allclose(via_complex[cols].to_numpy(float), direct[cols].to_numpy(float), atol=1e-6)
+
+    def test_split_in_asymmetric_units_without_fit_is_canonical(self, sample_motl):
+        # Before fit_geometry the reference is assumed canonical: same result
+        # as the motl-level split without an orientation.
+        pc = structure.OctahedralComplex(sample_motl)
+        via_complex = pc.split_in_asymmetric_units([2.0, 5.0, 1.0]).df
+        direct = pc.motl.split_in_asymmetric_subunits("O", [2.0, 5.0, 1.0]).df
+        cols = ["x", "y", "z", "shift_x", "shift_y", "shift_z", "phi", "theta", "psi"]
+        np.testing.assert_allclose(via_complex[cols].to_numpy(float), direct[cols].to_numpy(float), atol=1e-6)
+
+    def test_split_in_asymmetric_units_places_subunits_symmetrically(self):
+        # Scenario of plan point 1.4: a non-canonical reference, one capsid
+        # particle (identity orientation), a subunit near a fitted corner.
+        # Every asymmetric unit must sit at the same distance from its nearest
+        # fitted corner, which is only true in the fitted frame.
+        df = pd.DataFrame(np.zeros((1, len(cryomotl.Motl.motl_columns))), columns=cryomotl.Motl.motl_columns)
+        df.loc[0, ["subtomo_id", "x", "y", "z", "object_id"]] = [1, 100, 100, 100, 1]
+        pc = structure.IcosahedralComplex(cryomotl.Motl(df))
+        pc.solid = self._fitted_solid(geom.Icosahedron)
+        shift = 0.8 * pc.solid.vertices[0] + 0.2 * pc.solid.faces[0]
+        out = pc.split_in_asymmetric_units(shift).df
+        pos = out[["x", "y", "z"]].to_numpy(float) + out[["shift_x", "shift_y", "shift_z"]].to_numpy(float) - 100.0
+        dist = np.array([np.min(np.linalg.norm(pc.solid.vertices - p, axis=1)) for p in pos])
+        assert len(np.unique(pos.round(4), axis=0)) == 60
+        assert np.ptp(dist) < 1e-4
+
+    def test_split_in_asymmetric_units_outfile(self, ico_complex, tmp_path):
+        # Output handling is shared with expand(): a file is written when a path is given.
+        output_path = tmp_path / "split_out.em"
+        ico_complex.split_in_asymmetric_units([3.0, 1.0, 7.0], output_path=str(output_path))
+        assert output_path.exists()
+
+    def test_split_in_asymmetric_units_is_gui_exposed(self):
+        # Exposed in the complexes GUI next to expand(), in the "Expansion" group.
+        meta = structure.PolyhedralComplex.split_in_asymmetric_units._gui
+        assert meta["label"] == "Split in asymmetric units"
+        assert "xyz_shift" not in meta["hide"]
+
+    # ------------------------------------------------------------------ angular_dissimilarity (added 2026-10-06)
+
+    @pytest.mark.parametrize(
+        "cls, solid_cls",
+        [
+            (structure.TetrahedralComplex, geom.Tetrahedron),
+            (structure.OctahedralComplex, geom.Octahedron),
+            (structure.IcosahedralComplex, geom.Icosahedron),
+        ],
+    )
+    def test_angular_dissimilarity_before_fit_uses_canonical_solid(self, sample_motl, cls, solid_cls):
+        # Without fit_geometry the complex must give exactly the result of its
+        # canonical solid (same fallback as feature_vectors / symmetry_group).
+        pc = cls(sample_motl)
+        r1 = Rotation.random(5, random_state=1)
+        r2 = Rotation.random(5, random_state=2)
+        np.testing.assert_array_equal(pc.angular_dissimilarity(r1, r2), solid_cls().angular_dissimilarity(r1, r2))
+
+    @pytest.mark.parametrize(
+        "cls, solid_cls",
+        [
+            (structure.TetrahedralComplex, geom.Tetrahedron),
+            (structure.OctahedralComplex, geom.Octahedron),
+            (structure.IcosahedralComplex, geom.Icosahedron),
+        ],
+    )
+    def test_angular_dissimilarity_after_fit_uses_fitted_solid(self, sample_motl, cls, solid_cls):
+        # With a non-canonical fitted reference, a particle turned by R and one
+        # turned by R @ h (h = a symmetry rotation of the FITTED solid) look the
+        # same: dissimilarity 0. The canonical solid would not see them as
+        # symmetric copies, which shows the fitted solid is the one used.
+        pc = cls(sample_motl)
+        pc.solid = self._fitted_solid(solid_cls)
+        group_mats = pc.symmetry_group().matrices[1:]  # skip the identity
+        r = Rotation.random(random_state=3)
+        copies = r * Rotation.from_matrix(group_mats)
+        np.testing.assert_allclose(pc.angular_dissimilarity(r, copies), 0.0, atol=1e-6)
+        assert solid_cls().angular_dissimilarity(r, copies).max() > 1e-3
+
+    def test_angular_dissimilarity_with_fit_geometry(self, ico_complex, path_test_marker_file, mrc_file):
+        # End-to-end with the real fitting path (marker file + map): result
+        # equals the fitted solid's own method.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        r1 = Rotation.random(4, random_state=4)
+        r2 = Rotation.random(4, random_state=5)
+        np.testing.assert_array_equal(
+            ico_complex.angular_dissimilarity(r1, r2), ico_complex.solid.angular_dissimilarity(r1, r2)
+        )
+
+    def test_angular_dissimilarity_from_two_motl_subsets(self, ico_complex):
+        # Intended use: rotations of two particle subsets (get_rotations) are
+        # compared pair by pair, one value per pair, in radians.
+        motl_a = cryomotl.Motl(ico_complex.motl.df.iloc[:3].reset_index(drop=True))
+        motl_b = cryomotl.Motl(ico_complex.motl.df.iloc[3:].reset_index(drop=True))
+        result = ico_complex.angular_dissimilarity(motl_a.get_rotations(), motl_b.get_rotations())
+        assert result.shape == (3,)
+        assert np.all((result >= 0) & (result <= np.pi))
+
+    # ------------------------------------------------------------------ vertex_subunit_vectors
+
+    @staticmethod
+    def _write_subunit_marker(pc, tmp_path, vertex_idx=3, on_axis=False):
+        """Write one subunit marker near vertex *vertex_idx* of a fitted complex.
+
+        The subunit sits at 85% of the vertex vector plus a sideways offset
+        (off the vertex axis unless *on_axis*). It is written in Å in the box
+        frame, as ChimeraX would save it. Returns (path, shift in voxels).
+        """
+        from cryocat.utils import ioutils
+
+        v = pc.solid.vertices[vertex_idx]
+        side = np.cross(v, [0.0, 0.0, 1.0])
+        side = side / np.linalg.norm(side) * 0.15 * np.linalg.norm(v)
+        shift = 0.85 * v + (0.0 if on_axis else side)
+        path = tmp_path / "subunit.cmm"
+        ioutils.write_coords_to_cmm_file((shift + pc.center)[np.newaxis, :] * pc._pixel_size, str(path))
+        return str(path), shift
+
+    @staticmethod
+    def _same_point_set(a, b, atol=1e-6):
+        """True if every row of *a* has a match in *b* and vice versa."""
+        d = np.linalg.norm(a[:, None, :] - b[None, :, :], axis=2)
+        return a.shape == b.shape and np.all(d.min(axis=1) < atol) and np.all(d.min(axis=0) < atol)
+
+    def test_vertex_subunit_vectors_requires_fit(self, ico_complex, path_test_marker_file):
+        # Without fit_geometry there is no centre/pixel size to convert the
+        # marker, so the method must stop with a clear error.
+        with pytest.raises(ValueError, match="No geometry fitted"):
+            ico_complex.vertex_subunit_vectors(path_test_marker_file)
+
+    @pytest.mark.parametrize(
+        "cls, n_total",
+        [
+            (structure.TetrahedralComplex, 12),  # 4 vertices x C3
+            (structure.OctahedralComplex, 24),  # 6 vertices x C4
+            (structure.IcosahedralComplex, 60),  # 12 vertices x C5
+        ],
+    )
+    def test_vertex_subunit_vectors_default_equals_group_orbit(
+        self, cls, n_total, sample_motl, path_test_marker_file, mrc_file, tmp_path
+    ):
+        # With the default ring size (the vertex fold) the subunits are exactly
+        # the symmetry orbit of the marked subunit, for every complex type.
+        pc = cls(sample_motl)
+        pc.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, shift = self._write_subunit_marker(pc, tmp_path, vertex_idx=1)
+        vecs, coords = pc.vertex_subunit_vectors(marker)
+        assert vecs.shape == coords.shape == (n_total, 3)
+        assert self._same_point_set(vecs, pc.symmetry_group().orbit(shift))
+
+    def test_vertex_subunit_vectors_reference_block_is_ring(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # The block of the nearest vertex (found automatically) holds the
+        # marked subunit itself plus its 4 turned copies about that vertex.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, shift = self._write_subunit_marker(ico_complex, tmp_path, vertex_idx=3)
+        vecs, _ = ico_complex.vertex_subunit_vectors(marker)
+        ring = geom.rotate_vectors_about_axis(shift, ico_complex.solid.vertices[3], [0, 72, 144, 216, 288])
+        np.testing.assert_allclose(vecs[15:20], ring, atol=1e-8)
+
+    def test_vertex_subunit_vectors_explicit_reference(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # An explicit reference gives the same set as the automatic choice
+        # when it names the nearest vertex; an invalid index is refused.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path, vertex_idx=3)
+        auto, _ = ico_complex.vertex_subunit_vectors(marker)
+        explicit, _ = ico_complex.vertex_subunit_vectors(marker, reference=3)
+        np.testing.assert_allclose(auto, explicit)
+        with pytest.raises(ValueError, match="reference"):
+            ico_complex.vertex_subunit_vectors(marker, reference=12)
+
+    def test_vertex_subunit_vectors_multiple_of_fold_no_warning(
+        self, ico_complex, path_test_marker_file, mrc_file, tmp_path
+    ):
+        # C10 at a 5-fold vertex is a multiple of the fold: 120 subunits, no
+        # warning, and still a symmetric set (contains the C5 result).
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path)
+        import warnings as _w
+
+        with _w.catch_warnings():
+            _w.simplefilter("error")
+            vecs10, _ = ico_complex.vertex_subunit_vectors(marker, symmetry="C10")
+            vecs5, _ = ico_complex.vertex_subunit_vectors(marker, symmetry=5)
+        assert vecs10.shape == (120, 3)
+        d = np.linalg.norm(vecs5[:, None] - vecs10[None], axis=2)
+        assert np.all(d.min(axis=1) < 1e-6)
+
+    def test_vertex_subunit_vectors_non_multiple_warns(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # C3 at a 5-fold vertex is computed (36 subunits) but warns that the
+        # placement depends on the neighbour ordering.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path)
+        with pytest.warns(UserWarning, match="not a multiple"):
+            vecs, _ = ico_complex.vertex_subunit_vectors(marker, symmetry="C3")
+        assert vecs.shape == (36, 3)
+
+    def test_vertex_subunit_vectors_on_axis_warns(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # A subunit exactly on the vertex axis is not moved by the ring turns:
+        # the copies overlap, which is reported.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path, on_axis=True)
+        with pytest.warns(UserWarning, match="overlap"):
+            ico_complex.vertex_subunit_vectors(marker)
+
+    @pytest.mark.parametrize("symmetry", ["D2", "I"])
+    def test_vertex_subunit_vectors_non_cyclic_raises(
+        self, symmetry, ico_complex, path_test_marker_file, mrc_file, tmp_path
+    ):
+        # A ring around one axis can only be cyclic.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path)
+        with pytest.raises(NotImplementedError):
+            ico_complex.vertex_subunit_vectors(marker, symmetry=symmetry)
+
+    def test_vertex_subunit_vectors_coords_and_cmm(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # coords are the vectors converted to Å in the box frame, the marker
+        # file holds the same coords, and the marked subunit is among them.
+        from cryocat.utils import ioutils
+
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path)
+        out = tmp_path / "all_subunits.cmm"
+        vecs, coords = ico_complex.vertex_subunit_vectors(marker, output_cmm_file=str(out))
+        np.testing.assert_allclose(coords, (vecs + ico_complex.center) * ico_complex._pixel_size)
+        np.testing.assert_allclose(ioutils.marker_coords_load(str(out)).to_numpy(), coords, atol=1e-3)
+        marked = ioutils.marker_coords_load(marker).to_numpy()[0]
+        assert np.min(np.linalg.norm(coords - marked, axis=1)) < 1e-3
+
+    def test_vertex_subunit_vectors_feed_expand(self, ico_complex, path_test_marker_file, mrc_file, tmp_path):
+        # Integration with expand (primer step 6): 60 subparticles per complex.
+        ico_complex.fit_geometry(path_test_marker_file, str(mrc_file))
+        marker, _ = self._write_subunit_marker(ico_complex, tmp_path)
+        vecs, _ = ico_complex.vertex_subunit_vectors(marker)
+        expanded = ico_complex.expand(shift_vecs=vecs)
+        assert len(expanded.df) == 60 * len(ico_complex.motl.df)
+
+    def test_vertex_subunit_vectors_is_gui_exposed(self):
+        # Registered in the "Expansion" group between expand (30) and
+        # split_in_asymmetric_units (35), routed as feature points. The .cmm
+        # output stays visible: in the GUI it is the only way to export the result.
+        from cryocat.app import discovery
+
+        meta = structure.PolyhedralComplex.vertex_subunit_vectors._gui
+        assert meta["label"] == "Vertex subunit vectors"
+        entry = next(
+            e for e in discovery.entries_for_class(structure.PolyhedralComplex)
+            if e.fn.__name__ == "vertex_subunit_vectors"
+        )
+        assert (entry.group, entry.order, entry.returns) == ("Expansion", 32, "features")
+        assert "output_cmm_file" not in entry.hide
+
+    @pytest.mark.parametrize(
+        "cls", [structure.TetrahedralComplex, structure.OctahedralComplex, structure.IcosahedralComplex]
+    )
+    def test_vertex_subunit_vectors_gui_discoverable_and_renderable(self, cls):
+        # The Complexes page lists methods via discovery.entries_for_class; the
+        # entry must be inherited by every T/O/I subclass and every visible
+        # parameter must map to a known form widget (gui_ready).
+        from cryocat.app import discovery
+
+        entry = next(
+            (e for e in discovery.entries_for_class(cls) if e.fn.__name__ == "vertex_subunit_vectors"), None
+        )
+        assert entry is not None
+        ready, reason = discovery.gui_ready(entry)
+        assert ready, reason
+
 
 # ---------------------------------------------------------------------------
 # Helpers for CnComplex tests

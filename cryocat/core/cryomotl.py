@@ -2651,8 +2651,18 @@ class Motl:
 
         return None if inplace else target
 
-    @gui_exposed(category="Geometry", output="motl", label="Split in asymmetric subunits")
-    def split_in_asymmetric_subunits(self, symmetry: Symmetry, xyz_shift: ArrayLike) -> "Motl":
+    @gui_exposed(
+        category="Geometry",
+        output="motl",
+        label="Split in asymmetric subunits",
+        hide=("symmetry_orientation",),
+    )
+    def split_in_asymmetric_subunits(
+        self,
+        symmetry: Symmetry,
+        xyz_shift: ArrayLike,
+        symmetry_orientation: RotationLike | None = None,
+    ) -> "Motl":
         """Split the motive list into asymmetric subunits.
 
         Parameters
@@ -2665,11 +2675,45 @@ class Motl:
         xyz_shift : ArrayLike
             Shift from the particle centre to the reference subunit,
             expressed in the particle's local frame.
+        symmetry_orientation : RotationLike, optional
+            Orientation of the symmetry axes inside the reference, i.e. in
+            the particle's local frame (e.g. ``complex.solid.rotation`` of a
+            fitted :class:`cryocat.analysis.structure.PolyhedralComplex`).
+            The canonical rotations of
+            :func:`cryocat.utils.symmetry.get_symmetry_rotations` are
+            re-expressed in this orientation (``R @ g @ R.T``) before
+            splitting. Must describe a single rotation. Default is None: the
+            reference is assumed to be in the canonical orientation.
 
         Returns
         -------
         :class:`Motl`
             Expanded particle list with one entry per subunit.
+
+        Raises
+        ------
+        ValueError
+            If *symmetry_orientation* describes more than one rotation.
+
+        Notes
+        -----
+        Each subunit is a rigid copy of the reference subunit, so its z-axis
+        (normal) is the particle's z-axis carried along by the symmetry
+        rotation. It points outward from the particle centre only when
+        *xyz_shift* lies along +z; otherwise every subunit is tilted from its
+        outward direction by the same angle.
+
+        If *xyz_shift* lies on a symmetry axis, several copies land on the
+        same position (with different in-plane rotations). In the canonical
+        orientation the z-axis is always a symmetry axis, so e.g.
+        ``"I"`` with a shift along z gives 60 copies at only 30 distinct
+        positions. A true asymmetric unit lies off every symmetry axis.
+
+        The number of subunits is the group order (12/24/60 for
+        ``"T"``/``"O"``/``"I"``; ``2 * n`` for ``"Dn"``), not the vertex count of
+        the matching solid (e.g. 12 for :class:`cryocat.utils.geom.Icosahedron`,
+        as used by :meth:`cryocat.analysis.structure.PolyhedralComplex.expand`).
+        See the :mod:`cryocat.utils.symmetry` module Notes.
 
         Warnings
         --------
@@ -2678,7 +2722,16 @@ class Motl:
         """
         from cryocat.utils.symmetry import get_symmetry_rotations
 
-        rot_matrices = get_symmetry_rotations(symmetry)  # (M, 3, 3)
+        if symmetry_orientation is None:
+            rot_matrices = get_symmetry_rotations(symmetry)  # (M, 3, 3)
+        else:
+            frame = geom.as_rotation(symmetry_orientation)
+            if not frame.single:
+                raise ValueError(
+                    f"symmetry_orientation must describe a single rotation, got {len(frame)} rotations."
+                )
+            # Re-express the canonical group in the given orientation: R @ g @ R.T
+            rot_matrices = get_symmetry_rotations(symmetry, conjugation_matrix=frame.as_matrix())
         n_subunits = len(rot_matrices)
 
         xyz = np.asarray(xyz_shift, dtype=float)
@@ -2824,6 +2877,8 @@ class EmMotl(Motl):
 
         """
         filled_df = self.df.fillna(0.0)
+        if 0 in filled_df["class"].values:
+            warnings.warn("Certain particles have class value 0. Mind that this can be an issue for certain software.")
         motl_array = filled_df.to_numpy()
         motl_array = motl_array.reshape((1, motl_array.shape[0], motl_array.shape[1])).astype(np.single)
         self.header = {}  # FIXME fails on writing back the header
@@ -3237,6 +3292,12 @@ class RelionMotl(Motl):
         Notes
         -----
         The function modifies the "phi", "psi", and "theta" columns of "self.df" to store the converted angles.
+        The resulting angles are passed through :meth:`make_angles_canonical` so that "theta" ends up in the
+        canonical [0, 180] range documented for the zxz convention (see
+        ``docs/source/user_guide/geometric_conventions.ipynb``), rather than the [-180, 0] range that falls
+        out of the raw ZYZ-to-zxz conversion before canonicalization. This does not change the represented
+        orientation (``make_angles_canonical`` round-trips the rotation through ``scipy.spatial.transform.Rotation``,
+        which is orientation-preserving by construction) -- only which of the two equivalent angle triples is stored.
 
         """
 
@@ -3263,6 +3324,10 @@ class RelionMotl(Motl):
         self.df["phi"] = -rot_zxz[:, 2]
         self.df["theta"] = -rot_zxz[:, 1]
         self.df["psi"] = -rot_zxz[:, 0]
+
+        # bring the stored triple into the canonical zxz range (theta in [0, 180]);
+        # the represented orientation is unchanged, see docstring note above.
+        self.make_angles_canonical()
 
     def convert_angles_to_relion(self, relion_df):
         """Converts angles from cryoCAT convention (zxz) to the convention used in Relion (ZYZ).
@@ -3585,6 +3650,8 @@ class RelionMotl(Motl):
         # starfile (e.g. rlnClassNumber, rlnHelicalTubeID) are never assigned above and would
         # otherwise be left as NaN.
         self.df = self.df.fillna(0.0)
+        if 0 in self.df["class"].values: 
+            warnings.warn("Class has value 0. Mind that this might be problematic for certain softwrae.")
 
     def assign_cc_extra_columns(self, relion_df: pd.DataFrame, object_id_already_assigned: bool = False) -> None:
         """Recognize non-standard ``cc``-prefixed columns in `relion_df` and map them back onto `self.df`.
@@ -6136,7 +6203,7 @@ def emmotl2relion(
         `{"optics_data": ..., "optics_data": ...}`
 
     Returns
-    ----------
+    -------
     rln_motl : RelionMotl converted object.
     """
     em_motl = EmMotl(input_motl)
@@ -6381,7 +6448,7 @@ def stopgap2relion(
         `{"optics_data": ..., "optics_data": ...}`
 
     Returns
-    ----------
+    -------
     rln_motl : RelionMotl converted object.
     """
     sg_motl = StopgapMotl(input_motl)
@@ -6490,7 +6557,7 @@ def motl_converter_kwargs(
     relion output motls), and kwargs provided for the conversion. It then performs the conversion
     based on the specified output motl type and returns the converted motl object.
 
-    Parameters:
+    Parameters
     ----------
     input_motl : str or pandas.DataFrame or EmMotl
         Path to the input EM MOTL file to convert or an already loaded EmMotl object.
@@ -6505,19 +6572,19 @@ def motl_converter_kwargs(
         relion_version argument will be ignored with a warning.
     **output_kwargs
         Additional keyword arguments for the conversion function. The accepted kwargs depend on the specified output_motl_type.
-        Check :func:`cryocat.core.cryomotl.emmotl2stopgap`, :func:`cryocat.core.cryomotl.emmotl2relion`, `:func:cryocat.core.cryomotl.emmotl2mod`
+        Check :func:`cryocat.core.cryomotl.emmotl2stopgap`, :func:`cryocat.core.cryomotl.emmotl2relion`, :func:`cryocat.core.cryomotl.emmotl2mod`
         for the available parameters for each output motl type.
 
-    Returns:
-    --------
+    Returns
+    -------
     output_motl : MotlSource
         The converted motl object of the specified output type.
 
-    Raises:
-    -------
-    ValueError:
+    Raises
+    ------
+    ValueError
         If an invalid output_motl_type is provided, if the relion_version is inconsistent with the output_motl_type, or if invalid kwargs are provided for the specified output_motl_type.
-    UserWarning:
+    UserWarning
         If the provided relion_version is ignored due to the specified output_motl_type being "relion5" or "relion5_1", or if a relion_version is provided but not relevant for the specified output_motl_type.
     """
     # map motl types and acceptable kwargs

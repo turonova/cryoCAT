@@ -1853,3 +1853,65 @@ class TestIntegrationPipeline:
         result = pd.read_csv(str(results_dir / "id_0_gradual_angles_histograms.csv"), index_col=0)
         gt = pd.read_csv(str(gt_results_dir / "id_0_gradual_angles_histograms.csv"), index_col=0)
         pd.testing.assert_frame_equal(result, gt, rtol=1e-4)
+
+
+# ── symmetry keyword in pana (added 2026-10-02) ──────────────────────────────
+
+class TestPanaSymmetry:
+    """compute_distance_map uses the corrected C_n distances; D/T/O/I fail early; old keyword deprecated."""
+
+    # index 0 = reference (0,0,0); index 1 = 90 deg spin (one C4 step); index 2 = 30 deg spin
+    ANGLES = np.array([[0.0, 0.0, 0.0], [90.0, 0.0, 0.0], [30.0, 0.0, 0.0]])
+
+    def _amap(self):
+        amap = np.full((6, 6, 6), -1.0)
+        amap[1, 1, 1], amap[2, 2, 2], amap[3, 3, 3] = 0.0, 1.0, 2.0
+        return amap
+
+    def test_compute_distance_map_c4(self):
+        # With C4 a 90 deg spin looks identical (distance 0); a 30 deg spin stays 30 deg
+        result = pana.compute_distance_map(self._amap(), self.ANGLES, symmetry="C4")
+        assert np.nan_to_num(result["dist_all"][2, 2, 2]) == pytest.approx(0.0, abs=1e-4)
+        assert result["dist_inplane"][2, 2, 2] == pytest.approx(0.0, abs=1e-6)
+        assert result["dist_all"][3, 3, 3] == pytest.approx(30.0, abs=1e-4)
+        assert result["dist_inplane"][3, 3, 3] == pytest.approx(30.0, abs=1e-6)
+
+    def test_compute_distance_map_c1_unchanged_by_keyword(self):
+        # Default (C1): the 90 deg spin is 90 deg away, same as passing symmetry="C1" explicitly
+        default = pana.compute_distance_map(self._amap(), self.ANGLES)
+        explicit = pana.compute_distance_map(self._amap(), self.ANGLES, symmetry="C1")
+        assert default["dist_all"][2, 2, 2] == pytest.approx(90.0, abs=1e-4)
+        np.testing.assert_array_equal(default["dist_all"], explicit["dist_all"])
+
+    @pytest.mark.parametrize("symm", ["D2", "T", "O", "I"])
+    def test_compute_distance_map_non_cyclic_raises(self, symm):
+        # Cone/in-plane maps are not defined for D/T/O/I
+        with pytest.raises(NotImplementedError):
+            pana.compute_distance_map(self._amap(), self.ANGLES, symmetry=symm)
+
+    def test_compute_distance_map_deprecated_keyword(self):
+        # cyclic_symmetry still works, with a DeprecationWarning, and gives the same maps
+        with pytest.warns(DeprecationWarning, match="cyclic_symmetry"):
+            old = pana.compute_distance_map(self._amap(), self.ANGLES, cyclic_symmetry=4)
+        new = pana.compute_distance_map(self._amap(), self.ANGLES, symmetry=4)
+        for k in ("dist_all", "dist_normals", "dist_inplane"):
+            np.testing.assert_array_equal(old[k], new[k])
+
+    def test_analyze_rotations_fails_before_matching(self):
+        # "T" raises at the start: the (non-existent) maps are never read, so no time is wasted
+        with pytest.raises(NotImplementedError):
+            pana.analyze_rotations("missing_target.em", "missing_tmpl.em", "missing_mask.em",
+                                   self.ANGLES, symmetry="T")
+
+    def test_run_single_case_fails_before_matching(self, tmp_path):
+        # Same early failure for the single-case driver; nothing is written to the output folder
+        with pytest.raises(NotImplementedError):
+            pana.run_single_case("missing_target.em", "missing_tmpl.em", "missing_mask.em",
+                                 self.ANGLES, str(tmp_path), "case", symmetry="I")
+        assert not any(tmp_path.iterdir())
+
+    def test_run_single_gradual_case_fails_before_matching(self):
+        # Same early failure for the gradual sweep
+        with pytest.raises(NotImplementedError):
+            pana.run_single_gradual_case("missing_target.em", "missing_tmpl.em", "missing_mask.em",
+                                         symmetry="O", angular_range=2)

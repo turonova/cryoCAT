@@ -808,6 +808,16 @@ class Polyhedron:
         Midpoint coordinates of each edge.
     faces : numpy.ndarray, shape (F, 3)
         Centroid coordinates of each face.
+
+    Notes
+    -----
+    ``V``, ``E`` and ``F`` are not the order of the matching symmetry group
+    (e.g. an :class:`Icosahedron` has 12 vertices, but ``"I"`` has 60
+    rotations). Each vertex, edge midpoint or face centre sits on an
+    ``n``-fold spin axis, so the group's rotations move it to only
+    ``order / n`` distinct places: ``V = 60 / 5 = 12``, ``E = 60 / 2 = 30``,
+    ``F = 60 / 3 = 20`` for the icosahedron. Full table for all five solids:
+    :mod:`cryocat.utils.symmetry` module Notes.
     """
 
     n_vertices: int
@@ -916,6 +926,166 @@ class Polyhedron:
             normal_map[key].update(simplex.tolist())
         face_groups = [sorted(s) for s in normal_map.values()]
         return edge_idx, face_groups
+
+    def angular_dissimilarity(self, rotations_1: "RotationLike", rotations_2: "RotationLike") -> np.ndarray:
+        """Symmetry-aware dissimilarity of paired orientations of this solid.
+
+        For each pair, the corners (vertices) of the solid are projected onto
+        the unit sphere, turned by each of the two rotations, and compared with
+        :func:`hausdorff_distance_sphere`: the result is the angle of the
+        worst-matched corner. The higher the value, the more different the two
+        orientations. Two orientations that differ only by a symmetry rotation
+        of the solid put the corners on the same places and give 0.
+
+        Parameters
+        ----------
+        rotations_1 : RotationLike
+            First orientation of each pair: one rotation or a stack of ``N``
+            (e.g. ``motl.get_rotations()``, ``(N, 3)`` Euler angles in degrees
+            ``zxz``, ``(N, 3, 3)`` matrices or quaternions); normalized via
+            :func:`as_rotation`.
+        rotations_2 : RotationLike
+            Second orientation of each pair, same number as *rotations_1*. A
+            single rotation on either side is compared with every rotation on
+            the other side.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(N,)`` dissimilarities in radians (``(1,)`` for a single pair),
+            from 0 up to :func:`cryocat.utils.symmetry.max_angular_mismatch`.
+
+        Raises
+        ------
+        ValueError
+            If either input is empty, or the two inputs hold different numbers
+            of rotations and neither holds exactly one.
+
+        Notes
+        -----
+        * The corners are normalized to unit length, so the result does not
+          depend on :attr:`radius`.
+        * The corners already include :attr:`rotation`, so a fitted solid (e.g.
+          from :meth:`from_vectors`) is compared in its own frame: a rotation
+          ``R`` places the corners at ``R @ vertex``, as particle rotations
+          place a reference's features in the tomogram.
+        * Not normalized: :func:`cryocat.utils.symmetry.angular_score` is the
+          0-1 similarity ``1 - d / d_max`` of the same distance ``d`` for the
+          canonical solid, with ``d_max`` from
+          :func:`cryocat.utils.symmetry.max_angular_mismatch`.
+        * The two solids of a group (octahedron/cube, icosahedron/dodecahedron)
+          agree at 0 and at the maximum but give slightly different values in
+          between.
+        """
+        stacks = []
+        for name, rotations in (("rotations_1", rotations_1), ("rotations_2", rotations_2)):
+            if not isinstance(rotations, srot) and np.size(rotations) == 0:
+                raise ValueError(f"{name} holds no rotations.")
+            stacks.append(as_rotation(rotations).as_matrix().reshape(-1, 3, 3))
+        mats_1, mats_2 = stacks
+        if len(mats_1) != len(mats_2) and 1 not in (len(mats_1), len(mats_2)):
+            raise ValueError(
+                f"rotations_1 and rotations_2 must hold the same number of rotations (or one of them a "
+                f"single rotation), got {len(mats_1)} and {len(mats_2)}."
+            )
+        mats_1, mats_2 = np.broadcast_arrays(mats_1, mats_2)
+
+        norm_verts = self.vertices / np.linalg.norm(self.vertices, axis=1, keepdims=True)
+        return np.array(
+            [hausdorff_distance_sphere(norm_verts @ m1.T, norm_verts @ m2.T) for m1, m2 in zip(mats_1, mats_2)]
+        )
+
+    def vertex_neighbors(self) -> list[np.ndarray]:
+        """Return, for each vertex, the indices of the vertices joined to it by an edge.
+
+        Read from the stored edge list, so no distances are recomputed. The
+        topology is built on the canonical vertices, hence the result does not
+        depend on :attr:`radius` or :attr:`rotation`.
+
+        Returns
+        -------
+        list of numpy.ndarray
+            ``V`` integer arrays; entry ``i`` holds the sorted neighbour indices
+            of vertex ``i``. Their common length is the fold of the symmetry axis
+            through each vertex (tetrahedron, cube, dodecahedron 3; octahedron 4;
+            icosahedron 5).
+
+        Examples
+        --------
+        >>> Icosahedron().vertex_neighbors()[0]
+        array([2, 4, 6, 8, 9])
+        """
+        edges = np.asarray(self._edge_idx)
+        return [
+            np.sort(np.concatenate((edges[edges[:, 0] == i, 1], edges[edges[:, 1] == i, 0])))
+            for i in range(len(self.vertices))
+        ]
+
+    def transport_points(self, points: ArrayLike, reference: int = 0) -> np.ndarray:
+        """Copy points placed around one vertex to every vertex of the solid.
+
+        For each vertex ``i``, the rotation that carries the reference vertex
+        onto vertex ``i`` and the reference vertex's first neighbour onto the
+        first neighbour of vertex ``i`` is applied to *points*. For a regular
+        solid each of these rotations is one of its symmetry rotations, so the
+        copies around every vertex look the same as around the reference.
+
+        Parameters
+        ----------
+        points : ArrayLike
+            ``(P, 3)`` or ``(3,)`` points around vertex *reference*, in the frame
+            of :attr:`vertices` (vectors from the solid's centre).
+        reference : int, default=0
+            Index of the vertex the input *points* belong to.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(V * P, 3)`` points, vertex by vertex: rows ``i * P`` to
+            ``i * P + P - 1`` are the copy around vertex ``i``. The block of
+            *reference* equals *points*.
+
+        Raises
+        ------
+        ValueError
+            If *points* does not have shape ``(3,)`` or ``(P, 3)``, or
+            *reference* is not a valid vertex index.
+        RuntimeError
+            If a rotation cannot be fitted exactly (not expected for a regular
+            solid).
+
+        Notes
+        -----
+        If *points* are not symmetric about the reference vertex axis (e.g. a
+        ring of 3 points around a 5-fold vertex), the copies depend on which
+        neighbour is listed first and do not share the solid's symmetry.
+
+        Examples
+        --------
+        >>> solid = Icosahedron()
+        >>> solid.transport_points(solid.vertices[0] * 1.1).shape
+        (12, 3)
+        """
+        pts = np.asarray(points, dtype=float)
+        if pts.ndim == 1:
+            pts = pts[np.newaxis, :]
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError(f"points must have shape (3,) or (P, 3), got {np.asarray(points).shape}.")
+        n_vertices = len(self.vertices)
+        if not isinstance(reference, (int, np.integer)) or not 0 <= reference < n_vertices:
+            raise ValueError(f"reference must be a vertex index in [0, {n_vertices - 1}], got {reference!r}.")
+
+        verts_u = self.vertices / np.linalg.norm(self.vertices, axis=1, keepdims=True)
+        first_neighbor = [nb[0] for nb in self.vertex_neighbors()]
+        ref_pair = [verts_u[reference], verts_u[first_neighbor[reference]]]
+
+        blocks = []
+        for i in range(n_vertices):
+            rotation, rssd = srot.align_vectors([verts_u[i], verts_u[first_neighbor[i]]], ref_pair)
+            if rssd > 1e-6:
+                raise RuntimeError(f"Poor rotation fit for vertex {i} (residual {rssd:.2e}); is the solid regular?")
+            blocks.append(rotation.apply(pts))
+        return np.vstack(blocks)
 
 
 class Tetrahedron(Polyhedron):
@@ -1046,6 +1216,10 @@ class Icosahedron(Polyhedron):
 class Dodecahedron(Polyhedron):
     """Regular dodecahedron — 20 vertices, 30 edges, 12 pentagonal faces.
 
+    The canonical orientation is the dual of :class:`Icosahedron`: the
+    vertices coincide with the icosahedron's face centres, so both solids are
+    left unchanged by :class:`cryocat.utils.symmetry.IcosahedralGroup`.
+
     Parameters
     ----------
     radius : float or int, default=1.0
@@ -1082,7 +1256,11 @@ class Dodecahedron(Polyhedron):
             ],
             dtype=float,
         )
-        return np.vstack((v12, cube_v))
+        # Rotate by 90 deg about z so the vertices sit on the face centres of
+        # Icosahedron (dual alignment). Rotating the whole array keeps the
+        # vertex order, hence edge and face indices, unchanged.
+        rz90 = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+        return np.vstack((v12, cube_v)) @ rz90.T
 
 
 
@@ -1331,14 +1509,22 @@ def align_points_to_xy_plane(
     else:
         normal = plane_normal
 
-    normal = normal / np.linalg.norm(normal)
+    norm = np.linalg.norm(normal)
+    if norm < 1e-10:
+        raise ValueError("Plane normal is zero-length (points may be collinear or coincident).")
+    normal = normal / norm
 
     # Find the rotation matrix to align normal with z-axis
-    z_axis = np.array([0, 0, 1])
+    z_axis = np.array([0.0, 0.0, 1.0])
     axis = np.cross(normal, z_axis)
-    axis = axis / np.linalg.norm(axis)
-    angle = np.arccos(np.dot(normal, z_axis))
-    rotation_matrix = srot.from_rotvec(angle * axis).as_matrix()  # Construct rotation matrix
+    axis_norm = np.linalg.norm(axis)
+    if axis_norm < 1e-10:
+        # Normal already parallel to z: identity, or 180° flip about x if it points along -z
+        rotation = srot.identity() if normal[2] > 0 else srot.from_rotvec(np.pi * np.array([1.0, 0.0, 0.0]))
+    else:
+        angle = np.arccos(np.clip(np.dot(normal, z_axis), -1.0, 1.0))
+        rotation = srot.from_rotvec(angle * axis / axis_norm)
+    rotation_matrix = rotation.as_matrix()  # Construct rotation matrix
 
     # Apply rotation matrix to all points
     rotated_points = np.dot(rotation_matrix, points_on_plane.T).T
@@ -1401,9 +1587,11 @@ def spline_sampling(coords: pd.DataFrame, sampling_distance: float) -> np.ndarra
 def compare_rotations(
     input_rotation_1: RotationLike,
     input_rotation_2: RotationLike,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
     rotation_type: str = "all",
-) -> tuple[float, float, float] | float:
+    *,
+    cyclic_symmetry: Symmetry | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | np.ndarray:
     """Compare the rotations between two sets of angles.
 
     Parameters
@@ -1413,37 +1601,80 @@ def compare_rotations(
         :class:`scipy.spatial.transform.Rotation`).
     input_rotation_2 : RotationLike
         The second set of rotations, same conventions as ``input_rotation_1``.
-    cyclic_symmetry : Symmetry, default=1
-        Cyclic rotational symmetry specifier (e.g. ``"C5"`` or ``5``); normalized
-        via :func:`as_symmetry`.
+    symmetry : Symmetry, default="C1"
+        Symmetry of the particles (``"C5"``, ``5``, ``"D3"``, ``"T"``, ``"O"``,
+        ``"I"``), in the canonical frame of :mod:`cryocat.utils.symmetry`;
+        normalized via :func:`as_symmetry`. D/T/O/I are supported only for
+        ``rotation_type="angular_distance"`` (see Raises).
     rotation_type : {"all", "angular_distance", "cone_distance", "in_plane_distance"}, default="all"
-        Selects which distance(s) to return.
+        Selects which distance(s) to return. Only the requested distances are computed.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
-    tuple
-        A tuple containing the following distances:
-        - dist_degrees (float): The overall angular distance between the two sets of angles.
-        - dist_degrees_normals (float): The angular distance between the normal vectors of the two sets of angles.
-        - dist_degrees_inplane (float): The angular distance within the plane of rotation between the two sets of angles.
+    numpy.ndarray or tuple of numpy.ndarray
+        For ``"all"`` the tuple ``(angular, cone, in_plane)`` in degrees, else
+        the single requested array:
 
+        - angular: smallest full rotation angle between the orientations,
+          over all symmetric copies (see :func:`angular_distance`);
+        - cone: angle between the particles' z-axes (see :func:`cone_distance`);
+        - in_plane: difference of the spin about the particle's own z-axis,
+          in [0, 180/n] for C_n (see :func:`inplane_distance`).
+
+    Raises
+    ------
+    UserInputError
+        If ``rotation_type`` is not supported.
+    NotImplementedError
+        If ``symmetry`` is not cyclic (D/T/O/I) and ``rotation_type`` needs the
+        cone or in-plane distance: these groups have several equivalent axes,
+        so these distances are not defined.
     """
-
-    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
-
-    dist_degrees = angular_distance(input_rotation_1, input_rotation_2, cyclic_symmetry=cyclic_symmetry)[0]
-    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(input_rotation_1, input_rotation_2, cyclic_symmetry=cyclic_symmetry)
-
-    if rotation_type == "all":
-        return dist_degrees, dist_degrees_normals, dist_degrees_inplane
-    elif rotation_type == "angular_distance":
-        return dist_degrees
-    elif rotation_type == "cone_distance":
-        return dist_degrees_normals
-    elif rotation_type == "in_plane_distance":
-        return dist_degrees_inplane
-    else:
+    if rotation_type not in ("all", "angular_distance", "cone_distance", "in_plane_distance"):
         raise UserInputError(f"The rotation type {rotation_type} is not supported.")
+    symmetry = resolve_symmetry_argument(symmetry, cyclic_symmetry)
+
+    if rotation_type == "angular_distance":
+        return angular_distance(input_rotation_1, input_rotation_2, symmetry=symmetry)[0]
+    require_cyclic_symmetry(symmetry, "cone and in-plane distances")
+    if rotation_type == "cone_distance":
+        return cone_distance(input_rotation_1, input_rotation_2)
+    if rotation_type == "in_plane_distance":
+        return inplane_distance(input_rotation_1, input_rotation_2, symmetry=symmetry)
+
+    dist_degrees = angular_distance(input_rotation_1, input_rotation_2, symmetry=symmetry)[0]
+    dist_degrees_normals, dist_degrees_inplane = cone_inplane_distance(
+        input_rotation_1, input_rotation_2, symmetry=symmetry
+    )
+    return dist_degrees, dist_degrees_normals, dist_degrees_inplane
+
+
+def require_cyclic_symmetry(symmetry: Symmetry, what: str) -> None:
+    """Raise ``NotImplementedError`` if *symmetry* is not cyclic (C_n).
+
+    Used where a quantity needs a single symmetry axis (cone and in-plane
+    distances), so callers can fail before any expensive computation.
+
+    Parameters
+    ----------
+    symmetry : Symmetry
+        Symmetry specifier; normalized via :func:`as_symmetry`.
+    what : str
+        Name of the quantity, used in the error message.
+
+    Raises
+    ------
+    NotImplementedError
+        If *symmetry* is dihedral, tetrahedral, octahedral or icosahedral.
+    """
+    letter, _ = as_symmetry(symmetry)
+    if letter != "C":
+        raise NotImplementedError(
+            f"{what} are defined only for cyclic symmetry (C_n), got {symmetry!r}: D/T/O/I have several "
+            "equivalent axes. Use angular_distance (or rotation_type='angular_distance') for these groups."
+        )
 
 
 def euler_angles_to_normals(angles: EulerAngles) -> np.ndarray:
@@ -1666,14 +1897,145 @@ def get_axis_from_rotation(input_rotation: RotationLike, axis: str = "z") -> np.
     return ret_axis
 
 
+def align_z_axes(z1: ArrayLike, z2: ArrayLike, atol: float = 1e-8) -> np.ndarray:
+    """Smallest tilt that turns the z-axis of particle 2 onto the z-axis of particle 1.
+
+    The tilt turns about the axis perpendicular to both vectors, by the angle
+    between them, so no spin about either vector is added.
+
+    Parameters
+    ----------
+    z1 : ArrayLike
+        Target direction(s): one ``(3,)`` vector or ``(N, 3)`` vectors, e.g. the
+        z-axes of the first particles. Need not be unit length.
+    z2 : ArrayLike
+        Direction(s) to tilt onto *z1*, same shape as *z1*.
+    atol : float, default=1e-8
+        Below this value of ``sin(angle)`` the two directions are treated as
+        parallel or opposite.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(3, 3)`` rotation matrix for single vectors, ``(N, 3, 3)`` otherwise,
+        such that ``T @ z2`` points along ``z1``.
+
+    Raises
+    ------
+    ValueError
+        If *z1* and *z2* hold a different number of vectors.
+
+    Notes
+    -----
+    For opposite directions every axis perpendicular to *z2* gives a smallest
+    tilt (180 degrees); a fixed one is chosen (perpendicular to *z2* and to x,
+    or to y if *z2* is close to x). Results derived from the tilt, such as
+    :func:`inplane_angle_after_alignment`, are therefore not well defined for
+    opposite or nearly opposite directions.
+    """
+    single = np.ndim(z1) == 1 and np.ndim(z2) == 1
+    z1 = np.atleast_2d(np.asarray(z1, dtype=float))
+    z2 = np.atleast_2d(np.asarray(z2, dtype=float))
+    if z1.shape != z2.shape:
+        raise ValueError(f"z1 and z2 must hold the same number of vectors, got {len(z1)} and {len(z2)}.")
+    z1 = z1 / np.linalg.norm(z1, axis=1, keepdims=True)
+    z2 = z2 / np.linalg.norm(z2, axis=1, keepdims=True)
+
+    # cross product: axis of rotation (unnormalised); its norm is sin(theta) of the angle between z1 and z2
+    vector = np.cross(z2, z1)
+    sin_theta = np.linalg.norm(vector, axis=1)
+    # dot product: cos(theta) of the angle between z1 and z2, clipped vs. rounding
+    cos_theta = np.clip(np.sum(z2 * z1, axis=1), -1.0, 1.0)
+
+    tilts = np.empty((len(z1), 3, 3))
+    general = sin_theta >= atol
+    if general.any():
+        tilt_angle_theta = np.arccos(cos_theta[general])  # angle in [0, pi]
+        rotvec = vector[general] / sin_theta[general, np.newaxis] * tilt_angle_theta[:, np.newaxis]
+        tilts[general] = srot.from_rotvec(rotvec).as_matrix()
+
+    # edge cases: sin(theta) == 0 -> axis is undefined (parallel or anti-parallel)
+    tilts[~general & (cos_theta > 0)] = np.eye(3)
+    anti = ~general & (cos_theta <= 0)
+    if anti.any():
+        # anti-parallel: 180 deg about an axis perpendicular to z2
+        helper = np.where(np.abs(z2[anti, 0:1]) > 0.9, [[0.0, 1.0, 0.0]], [[1.0, 0.0, 0.0]])
+        axis = np.cross(z2[anti], helper)
+        axis /= np.linalg.norm(axis, axis=1, keepdims=True)
+        tilts[anti] = srot.from_rotvec(np.pi * axis).as_matrix()
+
+    return tilts[0] if single else tilts
+
+
+def inplane_angle_after_alignment(
+    input_rotation_1: RotationLike,
+    input_rotation_2: RotationLike,
+    degrees: bool = False,
+) -> np.ndarray:
+    """Spin left between two particles once their z-axes are aligned.
+
+    Particle 2 is tilted by the smallest tilt that puts its z-axis on the
+    z-axis of particle 1 (:func:`align_z_axes`). The two particles then differ
+    only by a turn about that shared axis; its signed angle is returned. It
+    depends only on how the two orientations differ (turning both by the same
+    rotation leaves it unchanged), and a C_n symmetry turn of particle 2
+    (``R2 @ g``, g about the particle's z-axis) changes it by the angle of g.
+
+    Parameters
+    ----------
+    input_rotation_1 : RotationLike
+        Orientation(s) of the first particle(s). Normalized via :func:`as_rotation`
+        (Euler angles in degrees, ``zxz``).
+    input_rotation_2 : RotationLike
+        Orientation(s) of the second particle(s), same number as *input_rotation_1*.
+    degrees : bool, default=False
+        Return degrees instead of radians.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(N,)`` signed spin of particle 2 relative to particle 1 about the
+        shared z-axis, in [-pi, pi] (or [-180, 180] degrees, both ends
+        included, as for the first ``zxz`` Euler angle). When both z-axes
+        already coincide this is the difference of the in-plane angles
+        ``phi2 - phi1`` (wrapped).
+
+    Raises
+    ------
+    ValueError
+        If the two inputs hold a different number of rotations.
+
+    Notes
+    -----
+    Not well defined when the two z-axes point in opposite (or nearly
+    opposite) directions, see :func:`align_z_axes`.
+    """
+    mats_1 = as_rotation(input_rotation_1).as_matrix().reshape(-1, 3, 3)
+    mats_2 = as_rotation(input_rotation_2).as_matrix().reshape(-1, 3, 3)
+    if len(mats_1) != len(mats_2):
+        raise ValueError(f"The inputs must hold the same number of rotations, got {len(mats_1)} and {len(mats_2)}.")
+    tilts = align_z_axes(mats_1[:, :, 2], mats_2[:, :, 2]).reshape(-1, 3, 3)
+    # R1^T @ T @ R2 keeps z in place, i.e. it is a pure turn about z by the remaining spin
+    remaining = np.einsum("nji,njk,nkl->nil", mats_1, tilts, mats_2)
+    spin = np.arctan2(remaining[:, 1, 0], remaining[:, 0, 0])
+    return np.degrees(spin) if degrees else spin
+
+
 def inplane_distance(
     input_rotation_1: RotationLike,
     input_rotation_2: RotationLike,
     convention: str = "zxz",
     degrees: bool = True,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
 ) -> np.ndarray:
     """Compute the angular distance between inplane-rotation portion of two given rotations.
+
+    The in-plane rotation is the spin about the particle's own z-axis, i.e. the
+    first angle phi of the ``zxz`` (extrinsic) Euler triple as returned by
+    :meth:`scipy.spatial.transform.Rotation.as_euler` (phi in [-180, 180]).
+    For tilt 0 or 180 degrees scipy puts the whole spin into phi (psi = 0).
 
     Parameters
     ----------
@@ -1684,19 +2046,31 @@ def inplane_distance(
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees : bool, optional
-        Return angular distance in degrees (True) or radians (False). Defaults to True.
-    cyclic_symmetry : Symmetry, default=1
-        Cyclic rotational symmetry specifier of underlying particles (``"C5"`` or
-        ``5``); normalized via :func:`as_symmetry`.
+        Unit of Euler-angle inputs and of the returned distance: degrees (True)
+        or radians (False). Defaults to True.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry of the particles (``"C5"`` or ``5``), with the n-fold
+        axis along the particle's z-axis; normalized via :func:`as_symmetry`.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
-    float
-        Angular distance between inplane rotations.
+    numpy.ndarray
+        Angular distance between inplane rotations, in [0, 180] degrees for C1
+        and in [0, 180/n] for C_n (a C_n symmetry turn changes phi by a multiple
+        of 360/n, so the closest copy is taken); radians if ``degrees=False``.
+
+    Raises
+    ------
+    NotImplementedError
+        If ``symmetry`` is not cyclic (D/T/O/I).
     """
     input_rotation_1 = as_rotation(input_rotation_1, euler_order=convention, degrees=degrees)
     input_rotation_2 = as_rotation(input_rotation_2, euler_order=convention, degrees=degrees)
-    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
+    symmetry = resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    require_cyclic_symmetry(symmetry, "In-plane distances")
+    _, order = as_symmetry(symmetry)
     phi1 = np.array(input_rotation_1.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
     phi2 = np.array(input_rotation_2.as_euler(convention, degrees=degrees), ndmin=2)[:, 0]
 
@@ -1704,19 +2078,21 @@ def inplane_distance(
     phi1 = np.where(abs(phi1) < ANGLE_DEGREES_TOL, 0.0, phi1)
     phi2 = np.where(abs(phi2) < ANGLE_DEGREES_TOL, 0.0, phi2)
 
-    # From Scipy the phi is from [-180,180] -> change to [0.0,360]
-    phi1 += 180.0
-    phi2 += 180.0
+    full_turn = 360.0 if degrees else 2 * np.pi
 
-    # Get the angular range for symmetry and divide the angles to be only in that range
-    if cyclic_symmetry > 1:
-        sym_div = 360.0 / cyclic_symmetry
-        phi1 = np.mod(phi1, sym_div)
-        phi2 = np.mod(phi2, sym_div)
+    if order > 1:
+        # Closest symmetric copy: drop whole symmetry steps, then go the shorter way round
+        step = full_turn / order
+        inplane_angle = np.mod(np.abs(phi1 - phi2), step)
+        return np.minimum(inplane_angle, step - inplane_angle)
+
+    # From Scipy the phi is from [-180,180] -> change to [0.0,360]
+    phi1 += full_turn / 2
+    phi2 += full_turn / 2
 
     inplane_angle = np.abs(phi1 - phi2)
 
-    inplane_angle = np.where(inplane_angle > 180.0, np.abs(inplane_angle - 360.0), inplane_angle)
+    inplane_angle = np.where(inplane_angle > full_turn / 2, np.abs(inplane_angle - full_turn), inplane_angle)
 
     return inplane_angle
 
@@ -1726,7 +2102,9 @@ def cone_inplane_distance(
     input_rotation_2: RotationLike,
     convention: str = "zxz",
     degrees: bool = True,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute angular distance between cone-rotations and inplane-rotations, respectively.
 
@@ -1739,24 +2117,35 @@ def cone_inplane_distance(
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees : bool, optional
-        Return angular distance in degrees (True) or radians (False). Defaults to True.
-    cyclic_symmetry : Symmetry, default=1
-        Cyclic rotational symmetry specifier of underlying particles; normalized
-        via :func:`as_symmetry`.
+        Unit of Euler-angle inputs and of the in-plane distance: degrees (True)
+        or radians (False). The cone distance is always in degrees (see
+        :func:`cone_distance`). Defaults to True.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry of the particles (``"C5"`` or ``5``); normalized via
+        :func:`as_symmetry`. The cone distance does not depend on it (a C_n turn
+        keeps the z-axis in place).
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
-    float
+    numpy.ndarray
         Angular distance between cone-rotations
-    float
-        angular distance between inplane rotations.
+    numpy.ndarray
+        angular distance between inplane rotations (see :func:`inplane_distance`).
+
+    Raises
+    ------
+    NotImplementedError
+        If ``symmetry`` is not cyclic (D/T/O/I).
     """
     rot1 = as_rotation(input_rotation_1, euler_order=convention, degrees=degrees)
     rot2 = as_rotation(input_rotation_2, euler_order=convention, degrees=degrees)
-    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
+    symmetry = resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    require_cyclic_symmetry(symmetry, "Cone and in-plane distances")
 
     cone_angle = cone_distance(rot1, rot2)
-    inplane_angle = inplane_distance(rot1, rot2, convention, degrees, cyclic_symmetry)
+    inplane_angle = inplane_distance(rot1, rot2, convention, degrees, symmetry)
 
     return cone_angle, inplane_angle
 
@@ -1770,8 +2159,14 @@ def angular_score_for_c_symmetry(
     """
     Computes an angular similarity score for arrays of in-plane angles, based on rotational symmetry.
 
-    Parameters:
-    -----------
+    A regular n-gon is turned by each angle of a pair and the two copies are
+    compared, so the score depends only on the difference of the two angles.
+    :func:`cryocat.utils.symmetry.angular_score` therefore calls it with 0 and
+    the spin left between two particles after aligning their z-axes
+    (:func:`inplane_angle_after_alignment`).
+
+    Parameters
+    ----------
     inplane_1 : ArrayLike
         First set of in-plane angles (in radians). Normalized via
         :func:`numpy.atleast_1d` / :func:`numpy.asarray`.
@@ -1783,8 +2178,8 @@ def angular_score_for_c_symmetry(
     max_val : float, optional
         Maximum possible angular distance for normalization.
 
-    Returns:
-    --------
+    Returns
+    -------
     np.ndarray: Array of angular similarity scores in [0, 1].
     """
     _, symm = as_symmetry(cyclic_symmetry)
@@ -1828,11 +2223,23 @@ def angular_distance(
     input_rotation_2: RotationLike,
     convention: str = "zxz",
     degrees: bool = True,
-    cyclic_symmetry: Symmetry = 1,
+    symmetry: Symmetry = "C1",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute angular distance between two rotations.
     Formula is based on this post
     https://math.stackexchange.com/questions/90081/quaternion-distance
+
+    Rotations are compared pair by pair, so both inputs must hold the same
+    number of rotations (one each, or two stacks of equal length).
+
+    With a symmetry other than C1, the particle looks identical in orientations
+    ``R`` and ``R @ g`` for every group rotation ``g`` (template-side symmetry,
+    with the group in the canonical frame of :mod:`cryocat.utils.symmetry`).
+    The distance is then measured to the copy ``R2 @ g`` closest to ``R1``
+    (found with :func:`cryocat.utils.symmetry.closest_symmetric_copy`), so it
+    is the smallest turn after which the two particles look the same.
 
     Parameters
     ----------
@@ -1843,45 +2250,73 @@ def angular_distance(
     convention : str, optional
         Euler angle convention. Defaults to "zxz".
     degrees : bool, optional
-        Return angular distance in degrees (True) or radians (False). Defaults to True.
-    cyclic_symmetry : Symmetry, default=1
-        Cyclic rotational symmetry specifier of underlying particles; normalized
-        via :func:`as_symmetry`.
+        Unit of Euler-angle inputs and of the returned angular distance: degrees
+        (True) or radians (False). Defaults to True.
+    symmetry : Symmetry, default="C1"
+        Symmetry of the particles (``"C5"``, ``5``, ``"D3"``, ``"T"``, ``"O"``,
+        ``"I"``); normalized via :func:`as_symmetry`.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
-    float
-        Angular distance between input rotations.
+    angle : numpy.ndarray
+        Shape ``(N,)``. Angle of the smallest rotation taking each rotation of
+        ``input_rotation_1`` onto the corresponding one of ``input_rotation_2``
+        (onto its closest symmetric copy if ``symmetry`` is not C1),
+        in [0, 180] degrees (or [0, pi] radians if ``degrees=False``). With
+        symmetry the largest possible value is smaller (it depends on the group).
+    dist : numpy.ndarray
+        Shape ``(N,)``. Unitless dissimilarity ``1 - (q1 . q2)**2`` of the unit
+        quaternions (same copy as ``angle``), equal to ``sin(angle / 2)**2``: 0
+        for identical rotations, 1 for rotations 180 degrees apart. Values below
+        1e-7 are set to 0.
+
+    Raises
+    ------
+    ValueError
+        If the two inputs hold a different number of rotations (e.g. one
+        rotation vs a stack).
+
+    Notes
+    -----
+    Known limitation: for identical (or nearly identical) rotations, rounding
+    can make ``|q1 . q2|`` slightly larger than 1, and ``angle`` is then NaN
+    instead of 0 (``dist`` is unaffected). Callers that need a finite value
+    should treat NaN in ``angle`` as 0.
 
     Examples
     --------
     >>> rot1 = srot.from_euler("zxz", [0, 0, 0], degrees=True)
     >>> rot2 = srot.from_euler("zxz", [45, 45, 0], degrees=True)
-    >>> angular_distance(rot1, rot2)
-    45.0
+    >>> angle, dist = angular_distance(rot1, rot2)
+    >>> np.round(angle, 2)
+    array([62.8])
     """
 
     rot1 = as_rotation(input_rotation_1, euler_order=convention, degrees=degrees)
     rot2 = as_rotation(input_rotation_2, euler_order=convention, degrees=degrees)
-    _, cyclic_symmetry = as_symmetry(cyclic_symmetry)
-
-    if cyclic_symmetry > 1:
-        angles1 = rot1.as_euler(convention, degrees=degrees)
-        angles2 = rot2.as_euler(convention, degrees=degrees)
-        sym_div = 360.0 / cyclic_symmetry
-        angles1[:, 0] = np.mod(angles1[:, 0], sym_div)
-        angles2[:, 0] = np.mod(angles2[:, 0], sym_div)
-        rot1 = srot.from_euler(convention, angles1, degrees=degrees)
-        rot2 = srot.from_euler(convention, angles2, degrees=degrees)
+    symmetry = resolve_symmetry_argument(symmetry, cyclic_symmetry)
 
     q1 = np.array(rot1.as_quat(), ndmin=2)
     q2 = np.array(rot2.as_quat(), ndmin=2)
 
     if q1.shape != q2.shape:
-        print("The size of input rotations differ!!!")
-        return
+        raise ValueError(
+            f"The inputs must hold the same number of rotations, got {q1.shape[0]} and {q2.shape[0]}."
+        )
 
-    angle = np.degrees(2 * np.arccos(np.abs(np.sum(q1 * q2, axis=1))))
+    if symmetry != "C1":
+        # local import: symmetry imports geom, never the other way round at module level
+        from cryocat.utils.symmetry import closest_symmetric_copy, get_symmetry_rotations
+
+        _, copy_index = closest_symmetric_copy(rot1, rot2, symmetry)
+        g = srot.from_matrix(get_symmetry_rotations(symmetry)[copy_index])
+        q2 = np.array((srot.from_quat(q2) * g).as_quat(), ndmin=2)  # closest copy R2 @ g
+
+    angle = 2 * np.arccos(np.abs(np.sum(q1 * q2, axis=1)))
+    if degrees:
+        angle = np.degrees(angle)
     angle = angle.astype(float)
 
     dist = 1 - np.power(np.sum(q1 * q2, 1), 2)
@@ -2105,25 +2540,34 @@ def generate_angles(
     angle_order: str = "zxz",
     output_path: PathOrStr | None = None,
 ) -> np.ndarray:
-    """Compute Euler angles from sample for normal vectors on sphere.
-    Sphere sample corresponds to cone-angles.
+    """Generate an angle list (grid of orientations) for an orientational search.
+
+    Directions of the template's z-axis are sampled on a cone, each combined
+    with a series of in-plane rotations. When the template is symmetric, the
+    grid is reduced so that orientations that look identical because of the
+    symmetry are not searched more than once (see Notes).
 
     Parameters
     ----------
     cone_angle : float
-        Angle for sampling of cone-angles (refers to range of z-normals of particles).
+        Full opening angle (degrees) of the cone of z-axis directions: 360
+        covers the whole sphere (global search), 180 a hemisphere, smaller
+        values a local search around the starting orientation.
     cone_sampling : float
-        Frequency for cone sampling.
+        Angular step (degrees) between sampled directions.
     inplane_angle : float, optional
-        Desired inplane-angles for particle orientations. Defaults to 360.0.
+        Range (degrees) of in-plane rotations. Defaults to 360.0.
     inplane_sampling : float, optional
-        Frequency for sampling of inplane-angles. Defaults to None.
+        Angular step (degrees) of the in-plane rotations. Defaults to
+        *cone_sampling*.
     starting_angles : EulerAngles, optional
         Triplet of Euler angles in convention as specified by ``angle_order``
-        (single triple ``(3,)`` or 3-list/tuple). Defaults to None.
-    symmetry : Symmetry, default=1
-        Rotational symmetry specifier (``"Cn"`` or ``n``); normalized via
-        :func:`as_symmetry`.
+        (single triple ``(3,)`` or 3-list/tuple), around which a local search
+        is centred. Defaults to None (no rotation).
+    symmetry : Symmetry, default="C1"
+        Symmetry of the template (``"Cn"``/``n``, ``"Dn"``, ``"T"``, ``"O"``,
+        ``"I"``); normalized via :func:`as_symmetry`. **The template must be
+        in cryoCAT's canonical orientation for this symmetry** (see Notes).
     angle_order : str, optional
         Convention for Euler angles. Defaults to "zxz".
     output_path : str or path-like, optional
@@ -2133,9 +2577,69 @@ def generate_angles(
     Returns
     -------
     ndarray
-        Sample of Euler angles.
+        ``(N, 3)`` Euler angles (degrees).
+
+    Notes
+    -----
+    **Symmetry reduction.** A symmetric template looks identical after any of
+    its symmetry rotations, so each orientation has 2..60 look-alike copies.
+    Only about one of each is kept:
+
+    * C_n: the in-plane range is limited to ``360 / n`` degrees.
+    * D_n, T, O, I: the unreduced grid is built and passed to
+      :func:`cryocat.utils.symmetry.reduce_angle_grid`. For a global search
+      (``cone_angle >= 360`` and ``inplane_angle >= 360``) the grid keeps one
+      slice of orientation space, about ``1 / order`` of the grid, plus a
+      margin of half the sampling step beyond the slice's edges so that the
+      coverage there is as good as without reduction. For a local search an
+      orientation is only dropped if a symmetric copy of it (within half a
+      sampling step) is kept, so nothing that was searched is lost.
+
+    **The template must be in the canonical orientation.** The reduction
+    assumes the template's symmetry axes lie where cryoCAT's groups put them
+    (:mod:`cryocat.utils.symmetry`); for a template oriented differently,
+    orientations would be treated as look-alikes although they are not, and
+    real orientations would be missed without warning. Align the template
+    before generating the angle list. The canonical orientations, with the
+    matching ChimeraX settings (``sym`` / ``measure symmetry``):
+
+    ======== ============================================= ===================
+    symmetry canonical axes                                 ChimeraX
+    ======== ============================================= ===================
+    C_n      n-fold along z                                 ``Cn``
+    D_n      n-fold along z; 2-folds in the xy-plane at     ``Dn`` turned by
+             ``90/n`` degrees from x (e.g. D2: 45°, 135°)   ``90/n`` about z
+    T        2-folds along x, y, z                          ``T``, ``222``
+    O        4-folds along x, y, z                          ``O``
+    I        2-folds along x, y, z; 5-folds in yz-plane     ``I``, ``222``
+    ======== ============================================= ===================
+
+    ChimeraX puts a D_n 2-fold axis along x. A D_n template aligned to
+    ChimeraX's convention must therefore be turned by a further ``90/n``
+    degrees about z (either direction) to match cryoCAT's.
+
+    Whether a template already is in a standard orientation can be checked
+    with ChimeraX ``measure symmetry`` (it tests only standard orientations,
+    centred in the box). Otherwise, a template can be aligned by placing two
+    markers on neighbouring vertices of its symmetric arrangement (e.g. two
+    adjacent 5-fold positions for I), building the matching solid with
+    :meth:`Polyhedron.from_vectors` (marker positions in voxels relative to
+    the box centre), taking ``S = SymmGroup.from_polyhedron(solid).rotation``
+    and calling ``cryomap.rotate(template, rotation=S)``. Note that
+    :func:`cryocat.core.cryomap.rotate` turns the coordinate frame, so it
+    receives ``S`` itself, not ``S.inv()``. The symmetry centre must be the
+    box centre.
+
+    **Behaviour change (2026-10-01).** Previously only the order of the
+    symmetry was used, so "Dn" was treated as "Cn" (complete but twice as
+    large), and "T"/"O"/"I" as C12/C24/C60, which left orientations
+    unsearched (gaps of up to about 19°/28°/10° at a 10° step). C_n grids
+    are unchanged.
     """
-    _, symmetry = as_symmetry(symmetry)
+    group_letter, order = as_symmetry(symmetry)
+    # Cyclic symmetry is reduced directly by limiting the in-plane range below;
+    # every other group starts from the unreduced (C1) grid, reduced at the end.
+    n_fold = order if group_letter == "C" else 1
 
     points = sample_cone(cone_angle, cone_sampling)
     angles = normals_to_euler_angles(points, output_order=angle_order)
@@ -2161,9 +2665,9 @@ def generate_angles(
         inplane_sampling = cone_sampling
 
     if inplane_angle != 360.0:
-        phi_max = min(360.0 / symmetry, inplane_angle)
+        phi_max = min(360.0 / n_fold, inplane_angle)
     else:
-        phi_max = inplane_angle / symmetry
+        phi_max = inplane_angle / n_fold
 
     phi_steps = phi_max / inplane_sampling
     phi_array = np.linspace(0, phi_max, round(phi_steps) + 1)
@@ -2183,6 +2687,24 @@ def generate_angles(
         ],
         axis=1,
     )
+
+    if group_letter != "C":
+        # Local import: cryocat.utils.symmetry imports this module, so geom must
+        # not import it at load time (one-way dependency, deliberate exception).
+        from cryocat.utils.symmetry import reduce_angle_grid
+
+        half_step = 0.5 * max(cone_sampling, inplane_sampling)
+        is_global = cone_angle >= 360.0 and inplane_angle >= 360.0
+        reference = None if starting_angles is None else srot.from_euler(angle_order, starting_angles, degrees=True)
+        keep = reduce_angle_grid(
+            srot.from_euler(angle_order, angular_array, degrees=True),
+            f"{group_letter}{order}" if group_letter == "D" else group_letter,
+            reference=reference,
+            local=not is_global,
+            margin_deg=half_step,
+            tolerance_deg=half_step,
+        )
+        angular_array = angular_array[keep]
 
     if output_path is not None:
         from cryocat.utils.ioutils import angles_save
@@ -2514,18 +3036,19 @@ def point_ellipsoid_distance(
 ) -> float:
     """Computes the shortest distance from a point p to the surface of an ellipsoid.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     p : ArrayLike
         The 3D point in space. Normalized via :func:`numpy.asarray`.
     params : ArrayLike
-        The ellipsoid parameters in the following order:
-        ["cx", "cy", "cz", "rx", "ry", "rz",
-         "ev1x", "ev1y", "ev1z", "ev2x", "ev2y", "ev2z",
-         "ev3x", "ev3y", "ev3z", "p1", ..., "p10"]
+        The ellipsoid parameters in the following order::
 
-    Returns:
-    --------
+            ["cx", "cy", "cz", "rx", "ry", "rz",
+             "ev1x", "ev1y", "ev1z", "ev2x", "ev2y", "ev2z",
+             "ev3x", "ev3y", "ev3z", "p1", ..., "p10"]
+
+    Returns
+    -------
     float
         The shortest distance from the point to the ellipsoid surface.
     """
@@ -2838,6 +3361,142 @@ def ray_ray_intersection_3d(
         distances[i] = np.linalg.norm(P_intersect - starting_points[i, :] - ui * Si[i, :])
 
     return P_intersect, distances
+
+
+_AXIS_VECTORS: dict[str, np.ndarray] = {
+    "x": np.array([1.0, 0.0, 0.0]),
+    "y": np.array([0.0, 1.0, 0.0]),
+    "z": np.array([0.0, 0.0, 1.0]),
+}
+
+
+def unit_axis(axis: str | ArrayLike) -> np.ndarray:
+    """Return the unit vector for an axis given by name or as a vector.
+
+    Parameters
+    ----------
+    axis : str or ArrayLike
+        ``"x"``, ``"y"``, ``"z"`` (case-insensitive, surrounding whitespace
+        ignored) or a 3-element array-like of any non-zero length (only its
+        direction is used).
+
+    Returns
+    -------
+    ndarray
+        Shape ``(3,)`` unit vector (a new array; modifying it does not affect
+        later calls).
+
+    Raises
+    ------
+    ValueError
+        If the name is unknown, the vector does not have 3 elements, or its
+        length is below 1e-10.
+
+    Examples
+    --------
+    >>> unit_axis("Z")
+    array([0., 0., 1.])
+    >>> unit_axis([3, 0, 4])
+    array([0.6, 0. , 0.8])
+    """
+    if isinstance(axis, str):
+        key = axis.strip().lower()
+        if key not in _AXIS_VECTORS:
+            raise ValueError(f"Unknown axis name {axis!r}; expected 'x', 'y' or 'z'.")
+        return _AXIS_VECTORS[key].copy()
+    v = np.asarray(axis, dtype=float).ravel()
+    if v.shape != (3,):
+        raise ValueError(f"axis must have 3 elements, got shape {np.asarray(axis).shape}.")
+    norm = np.linalg.norm(v)
+    if norm < 1e-10:
+        raise ValueError("Axis vector must be non-zero.")
+    return v / norm
+
+
+def rotate_vectors_about_axis(
+    vectors: ArrayLike,
+    axis: str | ArrayLike,
+    angles: float | ArrayLike,
+    degrees: bool = True,
+) -> np.ndarray:
+    """Rotate vector(s) about a fixed axis by given angle(s).
+
+    The rotation follows the right-hand rule: with the right thumb pointing along
+    ``axis``, a positive angle turns the vectors in the direction of the curled
+    fingers (e.g. +90° about z sends x to y). The rotation is active: the vectors
+    move, the coordinate frame stays fixed.
+
+    Parameters
+    ----------
+    vectors : ArrayLike
+        Vector(s) to rotate, shape ``(3,)`` or ``(N, 3)``. Normalized via
+        :func:`numpy.asarray`.
+    axis : str or ArrayLike
+        Rotation axis: ``"x"``, ``"y"``, ``"z"`` (case-insensitive) or a 3-element
+        array-like of any non-zero length (only its direction is used).
+        Normalized via :func:`unit_axis`.
+    angles : float or ArrayLike
+        Rotation angle(s), scalar or shape ``(M,)``. See Notes for how vectors and
+        angles are paired.
+    degrees : bool, default=True
+        Whether ``angles`` are in degrees (otherwise radians).
+
+    Returns
+    -------
+    ndarray
+        Rotated vector(s): shape ``(3,)`` for a single vector and a scalar angle,
+        otherwise ``(K, 3)`` with ``K = max(N, M)``.
+
+    Raises
+    ------
+    ValueError
+        If ``axis`` is an unknown string or a zero-length vector, if ``vectors``
+        or ``angles`` have an invalid shape, or if ``N`` and ``M`` are both larger
+        than 1 and differ.
+
+    Notes
+    -----
+    Pairing of vectors and angles:
+
+    * scalar angle: every vector is rotated by the same angle;
+    * one vector, ``M`` angles: the vector is rotated by each angle -> ``(M, 3)``;
+    * ``N`` vectors, ``N`` angles: paired row by row -> ``(N, 3)``.
+
+    A single vector given as shape ``(1, 3)`` is kept 2D in the output.
+
+    See Also
+    --------
+    rotate_points_rodrigues : rotation defined by a start and an end direction.
+
+    Examples
+    --------
+    >>> rotate_vectors_about_axis([1, 0, 0], "z", 90).round(6)
+    array([0., 1., 0.])
+    >>> rotate_vectors_about_axis([1, 0, 0], [0, 0, 1], [0, 90, 180]).round(6)
+    array([[ 1.,  0.,  0.],
+           [ 0.,  1.,  0.],
+           [-1.,  0.,  0.]])
+    """
+    vectors = np.asarray(vectors, dtype=float)
+    if vectors.ndim not in (1, 2) or vectors.shape[-1] != 3:
+        raise ValueError(f"vectors must have shape (3,) or (N, 3), got {vectors.shape}.")
+
+    axis = unit_axis(axis)
+
+    angles = np.asarray(angles, dtype=float)
+    if angles.ndim > 1:
+        raise ValueError(f"angles must be a scalar or have shape (M,), got {angles.shape}.")
+    if degrees:
+        angles = np.deg2rad(angles)
+
+    n_vec = vectors.shape[0] if vectors.ndim == 2 else 1
+    n_ang = angles.shape[0] if angles.ndim == 1 else 1
+    if n_vec > 1 and n_ang > 1 and n_vec != n_ang:
+        raise ValueError(f"Got {n_vec} vectors and {n_ang} angles; counts must match or one must be 1.")
+
+    # One rotation vector per angle: direction = axis, length = angle (radians)
+    rotation = srot.from_rotvec(angles[..., np.newaxis] * axis)
+    return rotation.apply(vectors)
 
 
 def rotate_points_rodrigues(
@@ -3666,14 +4325,14 @@ def orthonormal_frame(v1: ArrayLike, v2: ArrayLike) -> np.ndarray:
     """Construct an orthonormal basis from two non-collinear vectors
 
     Parameters
-    -----------
+    ----------
     v1 : numpy.ndarray 
         First inputs vector
     v2 : numpy.ndarray
         Second input vector
 
     Returns
-    --------
+    -------
     numpy.ndarray
         Matrix of three vectors representing the orthonormal basis
     
@@ -4208,6 +4867,17 @@ def as_symmetry(source: Symmetry) -> tuple[str, int]:
         digits are present for C/D groups, or if the input type is
         unsupported.
 
+    Notes
+    -----
+    For ``"T"``/``"O"``/``"I"``, *order* is the number of rotations in the
+    group, not the number of vertices of the matching :class:`Polyhedron`:
+    ``"I"`` gives 60, while :class:`Icosahedron` has 12 vertices
+    (60 rotations / 5 per vertex) and :class:`Dodecahedron` 20 (60 / 3).
+    Likewise ``"T"`` gives 12 (:class:`Tetrahedron`: 4 vertices) and ``"O"``
+    gives 24 (:class:`Octahedron`: 6, :class:`Cube`: 8). For ``"Dn"``,
+    *order* is ``n``, although the dihedral group has ``2 * n`` rotations.
+    See the :mod:`cryocat.utils.symmetry` module Notes for the full table.
+
     Examples
     --------
     >>> as_symmetry("C5")
@@ -4256,6 +4926,66 @@ def as_symmetry(source: Symmetry) -> tuple[str, int]:
     raise ValueError(
         f"Symmetry must be a string ('Cn'/'Dn') or an integer, got {type(source).__name__}."
     )
+
+
+def resolve_symmetry_argument(
+    symmetry: Symmetry,
+    cyclic_symmetry: Symmetry | None,
+    *,
+    stacklevel: int = 3,
+) -> str:
+    """Resolve the ``symmetry`` keyword and its deprecated alias ``cyclic_symmetry``.
+
+    Used by the angular-distance functions (:func:`compare_rotations`,
+    :func:`angular_distance`, :func:`inplane_distance`,
+    :func:`cone_inplane_distance`) and their callers in ``pana``/``tmana``,
+    whose old ``cyclic_symmetry`` parameter was replaced by ``symmetry``.
+
+    Parameters
+    ----------
+    symmetry : Symmetry
+        Value of the new ``symmetry`` parameter; normalized via :func:`as_symmetry`.
+    cyclic_symmetry : Symmetry or None
+        Value of the deprecated ``cyclic_symmetry`` parameter. If not None a
+        :class:`DeprecationWarning` is emitted and it is used, unless
+        *symmetry* is also given (not C1) with a different value.
+    stacklevel : int, optional
+        Passed to :func:`warnings.warn`; the default 3 points at the caller of
+        the function that calls this helper.
+
+    Returns
+    -------
+    str
+        Normalized symmetry label: ``"Cn"``, ``"Dn"``, ``"T"``, ``"O"`` or ``"I"``.
+
+    Raises
+    ------
+    ValueError
+        If both parameters are given (``symmetry`` other than C1) and differ.
+
+    Examples
+    --------
+    >>> resolve_symmetry_argument(4, None)
+    'C4'
+    >>> resolve_symmetry_argument("t", None)
+    'T'
+    """
+    letter, order = as_symmetry(symmetry)
+    if cyclic_symmetry is not None:
+        import warnings
+
+        warnings.warn(
+            "'cyclic_symmetry' is deprecated; use 'symmetry' instead.",
+            DeprecationWarning,
+            stacklevel=stacklevel,
+        )
+        old = as_symmetry(cyclic_symmetry)
+        if (letter, order) != ("C", 1) and (letter, order) != old:
+            raise ValueError(
+                f"Conflicting values: symmetry={symmetry!r} and cyclic_symmetry={cyclic_symmetry!r}."
+            )
+        letter, order = old
+    return letter if letter in ("T", "O", "I") else f"{letter}{order}"
 
 
 def barycenter(coords: ArrayLike, weights: ArrayLike | None = None) -> np.ndarray:

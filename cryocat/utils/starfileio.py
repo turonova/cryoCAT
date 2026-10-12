@@ -31,8 +31,8 @@ def _try_numeric(col: pd.Series) -> pd.Series:
 class TokenType(Enum):
     """Categories of lexical tokens produced by :meth:`Token.tokenize`.
 
-    Members
-    -------
+    Attributes
+    ----------
     LITERAL : 0
         A plain data value or data-block specifier.
     NEWLINE : 1

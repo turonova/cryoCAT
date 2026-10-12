@@ -491,8 +491,8 @@ def spherical_mask(
     numpy.ndarray
         3D array with the spherical mask.
 
-    Warning
-    -------
+    Warnings
+    --------
     In the previous version, the default behavior was to smooth the mask centrally around its surface. To achive the
     same effect one has to set gaussian_outwards to False (default is True).
 

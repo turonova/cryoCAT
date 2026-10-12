@@ -21,7 +21,7 @@ def compute_rmse(array1: np.ndarray, array2: np.ndarray) -> np.ndarray:
         An array containing the RMSE computed for each column of the input arrays.
 
     Raises
-    -------
+    ------
     ValueError
         If input arrays are not nparray type or if they don't contain numbers.
 
@@ -76,7 +76,7 @@ def get_all_pairs(input_numbers: list[int | float]) -> list[tuple[int | float, i
         A list of tuples, each containing a pair of numbers from the input list.
 
     Raises
-    -------
+    ------
     ValueError
         If input isn't a list or the list doesn't contain only integers and floats
 
@@ -142,7 +142,7 @@ def get_similar_size_factors(number: int, order: str = "ascending") -> tuple[int
         If no factors are found, returns the number itself and 1 (also sorted based on the specified order).
 
     Raises
-    -------
+    ------
     ValueError
         If input number is not an integer.
     """

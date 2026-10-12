@@ -250,7 +250,7 @@ def generate_python_command(
     function_dict: dict,
     import_dict: dict | None = None,
 ) -> str:
-    """Creates a python -c command string that calls a function with specified
+    r"""Creates a python -c command string that calls a function with specified
     parameters and optional imports.
 
     Parameters

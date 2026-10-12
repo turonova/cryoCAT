@@ -365,7 +365,7 @@ class ModelHeader(ImodHeader):
     pixsize : float
         Size of one pixel/voxel in *units*.
     units : int
-        Unit code: 0 = pixels, -6 = Âµm, -9 = nm, -10 = Ã, etc.
+        Unit code: 0 = pixels, -6 = µm, -9 = nm, -10 = Å, etc.
     csum : int
         Checksum (used for autosave only).
     alpha, beta, gamma : float

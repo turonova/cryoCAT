@@ -1,11 +1,10 @@
-# Defining the exact version will make sure things don't break
+# Docs tooling only. numpy, matplotlib, numpydoc etc. come from cryocat itself (pyproject.toml),
+# which Read the Docs installs via `pip install .` (see .readthedocs.yaml).
 sphinx==7.2.6
-numpy>=1.23.4,<2.0
-numpydoc==1.6.0
 sphinx_copybutton==0.5.2
 sphinx_issues==3.0.1
 sphinx_design==0.5.0
 pydata_sphinx_theme==0.13.3
-matplotlib==3.7.1
 nbsphinx==0.9.3
 sphinx_sitemap==2.6.0
+beautifulsoup4

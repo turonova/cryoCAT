@@ -1334,36 +1334,53 @@ def pad_volume(
 
 
 def symmetrize_volume(volume: np.ndarray, symmetry: Symmetry) -> np.ndarray:
-    """Average *volume* over the rotations implied by *symmetry*.
+    """Average *volume* over all rotations of the symmetry group *symmetry*.
 
     Parameters
     ----------
     volume : np.ndarray
         Input 3-D array.
     symmetry : Symmetry
-        Cyclic symmetry specifier, e.g. ``"C5"`` or ``5`` (accepts ``int``
-        or a numeric ``str`` like ``"5"``).
+        Symmetry specifier: ``"Cn"``/``n`` (a numeric string such as ``"5"``
+        is also accepted), ``"Dn"``, ``"T"``, ``"O"`` or ``"I"``.
+
+    Returns
+    -------
+    np.ndarray
+        The average of the volume turned by each of the group's rotations
+        (``n`` for C_n, ``2n`` for D_n, 12/24/60 for T/O/I).
 
     Raises
     ------
     ValueError
-        If ``symmetry`` is neither a string nor a number.
+        If ``symmetry`` is not a valid symmetry specifier.
+
+    Notes
+    -----
+    The volume must be in cryoCAT's canonical orientation for the group,
+    with the symmetry centre at the box centre (``shape // 2``): C_n/D_n
+    n-fold axis along z (D_n 2-folds at ``90/n`` degrees from x), T/I
+    2-folds and O 4-folds along x, y, z (see :mod:`cryocat.utils.symmetry`).
+    Voxels turned in from outside the box are zero, so the corners of the
+    box are attenuated.
+
+    Until 2026-10-01 the rotation angles were computed as
+    ``360 % (k * 360/n)`` instead of ``k * 360/n`` (e.g. C2 → 0°, 0°, i.e.
+    no symmetrization; C4 → 0°, 0°, 90°, 0°), and only cyclic symmetry was
+    supported ("D6" was treated as "C6"). Volumes symmetrized before that
+    date were not symmetric.
     """
-    import re
+    # Local import: keeps the utils modules free of import cycles.
+    from cryocat.utils.symmetry import get_symmetry_rotations
 
-    if isinstance(symmetry, str):
-        nfold = int(re.findall(r"\d+", symmetry)[-1])
-    elif isinstance(symmetry, (int, float)):
-        nfold = int(symmetry)
-    else:
-        raise ValueError("symmetry must be a string (e.g. 'C5') or a number.")
+    if isinstance(symmetry, str) and symmetry.strip().isdigit():
+        symmetry = int(symmetry)
+    group = get_symmetry_rotations(symmetry)  # identity first
 
-    inplane_step = 360.0 / nfold
-    rotated_sum = np.zeros(volume.shape)
-    for inplane in range(1, nfold + 1):
-        angle = 360.0 % (inplane * inplane_step)
-        rotated_sum += rotate_volume(volume, rotation_angles=[0, 0, angle])
-    return rotated_sum / nfold
+    rotated_sum = np.asarray(volume, dtype=float).copy()
+    for g in group[1:]:
+        rotated_sum += rotate_volume(volume, rotation=Rotation.from_matrix(g))
+    return rotated_sum / len(group)
 
 
 def equalize_histogram_2d(image: np.ndarray, method: str = "contrast_stretching") -> np.ndarray:
