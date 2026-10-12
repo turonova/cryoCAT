@@ -436,7 +436,7 @@ def extract_best_subtomogram(
         ``rotation`` - Euler angles ``(phi, theta, psi)`` of the best particle;
         ``output_path`` - path the subtomogram was written to, or *None*.
     """
-    box_size = geom.as_triplet(box_size)
+    box_size = geom.as_triplet(box_size, dtype=int)
     subtomogram, rotation = cut_the_best_subtomo(tomogram, motl, box_size, output_path)
     return {"subtomogram": subtomogram, "rotation": rotation, "output_path": output_path}
 

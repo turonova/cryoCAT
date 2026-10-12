@@ -4630,3 +4630,54 @@ class TestWarpXmlLoader:
             assert R.shape == (3, 3)
             np.testing.assert_allclose(R @ R.T, np.eye(3), atol=1e-12)
 
+
+# ---------------------------------------------------------------------------
+# removed_tilts_load
+# ---------------------------------------------------------------------------
+
+def test_removed_tilts_load_from_ndarray():
+    arr = np.array([-60.0, -30.0, 0.0, 30.0, 60.0])
+    result = ioutils.removed_tilts_load(arr)
+    np.testing.assert_array_equal(result, arr)
+
+
+def test_removed_tilts_load_from_ndarray_returns_float():
+    arr = np.array([-60, -30, 0, 30, 60], dtype=int)
+    result = ioutils.removed_tilts_load(arr)
+    assert result.dtype == float
+
+
+def test_removed_tilts_load_from_ndarray_flattens():
+    arr = np.array([[-60.0], [-30.0], [0.0]])
+    result = ioutils.removed_tilts_load(arr)
+    assert result.ndim == 1
+    np.testing.assert_array_equal(result, [-60.0, -30.0, 0.0])
+
+
+def test_removed_tilts_load_from_dataframe():
+    df = pd.DataFrame({"removed_tilts": [-60.0, -30.0, 0.0]})
+    result = ioutils.removed_tilts_load(df)
+    np.testing.assert_array_equal(result, np.array([-60.0, -30.0, 0.0]))
+
+
+def test_removed_tilts_load_from_dataframe_missing_column():
+    df = pd.DataFrame({"other_col": [-60.0]})
+    with pytest.raises(ValueError, match="removed_tilts"):
+        ioutils.removed_tilts_load(df)
+
+
+def test_removed_tilts_load_from_star_file(tmp_path):
+    star_content = (
+        "data_\n\nloop_\n_removed_tilts\n"
+        "-60.000000\n-30.000000\n0.000000\n"
+    )
+    star_file = tmp_path / "removed_tilts.star"
+    star_file.write_text(star_content)
+    result = ioutils.removed_tilts_load(str(star_file))
+    np.testing.assert_allclose(result, [-60.0, -30.0, 0.0])
+
+
+def test_removed_tilts_load_invalid_type():
+    with pytest.raises(ValueError):
+        ioutils.removed_tilts_load(42)
+

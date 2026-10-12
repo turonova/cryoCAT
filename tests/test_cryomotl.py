@@ -7212,3 +7212,41 @@ def test_remap_pixel_size_change_shifts_coordinates():
     assert diff.max() > 0.1, (
         f"A 50 % pre_pixel_size error must shift coordinates; max shift = {diff.max():.4f} vox"
     )
+
+
+class TestMergeObjects:
+    def test_merge_two_objects_uses_first_value(self, sample_motl_data1):
+        motl = Motl(copy.deepcopy(sample_motl_data1))
+        motl.merge_objects([100, 200])
+        assert set(motl.df["object_id"].unique()).issuperset({100})
+        assert 200 not in motl.df["object_id"].values
+        assert motl.df.shape[0] == 6
+
+    def test_merge_three_objects_all_become_first(self, sample_motl_data1):
+        motl = Motl(copy.deepcopy(sample_motl_data1))
+        motl.merge_objects([100, 200, 300])
+        assert (motl.df.loc[motl.df["object_id"] == 100].shape[0]) == 3
+        assert 200 not in motl.df["object_id"].values
+        assert 300 not in motl.df["object_id"].values
+
+    def test_merge_custom_column(self, sample_motl_data1):
+        motl = Motl(copy.deepcopy(sample_motl_data1))
+        motl.merge_objects([1, 2], column_name="tomo_id")
+        assert (motl.df["tomo_id"] == 1).all()
+        assert 2 not in motl.df["tomo_id"].values
+
+    def test_missing_value_in_list_is_ignored(self, sample_motl_data1):
+        motl = Motl(copy.deepcopy(sample_motl_data1))
+        motl.merge_objects([100, 999])
+        assert 999 not in motl.df["object_id"].values
+        assert motl.df.shape[0] == 6
+
+    def test_single_element_raises(self, sample_motl_data1):
+        motl = Motl(copy.deepcopy(sample_motl_data1))
+        with pytest.raises(ValueError, match="at least two"):
+            motl.merge_objects([100])
+
+    def test_empty_list_raises(self, sample_motl_data1):
+        motl = Motl(copy.deepcopy(sample_motl_data1))
+        with pytest.raises(ValueError, match="at least two"):
+            motl.merge_objects([])

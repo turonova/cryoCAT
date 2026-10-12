@@ -1848,6 +1848,49 @@ class Motl:
             df = df.sort_values("object_id").reset_index(drop=True)
         self.df = df
 
+    @gui_exposed(category="Subsets", label="Merge objects")
+    def merge_objects(
+        self,
+        object_list: list[int | float],
+        column_name: MotlColumn = "object_id",
+    ) -> None:
+        """Merge multiple objects into one by reassigning them to a single value.
+
+        All rows whose ``column_name`` value appears in ``object_list`` are
+        reassigned to ``object_list[0]``.  The remaining elements of
+        ``object_list`` effectively disappear from that column.
+
+        Parameters
+        ----------
+        object_list : list[int | float]
+            Values identifying the objects to merge.  Must contain at least two
+            elements.  The first element becomes the new shared value for all
+            matched rows; remaining elements are remapped to it.
+        column_name : MotlColumn, default="object_id"
+            Column in which the object identifiers are stored.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If ``object_list`` contains fewer than two elements.
+
+        Notes
+        -----
+        This method modifies the ``df`` attribute of the object.
+
+        """
+        if len(object_list) < 2:
+            raise ValueError(
+                f"object_list must contain at least two values, got {len(object_list)}."
+            )
+        new_value = object_list[0]
+        mask = self.df[column_name].isin(object_list)
+        self.df.loc[mask, column_name] = new_value
+
     def get_relative_position(self, idx: ArrayLike, nn_idx: ArrayLike) -> tuple["Motl", np.ndarray]:
         """Returns a new Motl object with coordinates corresponding to the center between the particles
         (speficied by their indices within idx) and their nearest neigbors (specified by their indices within nn_idx).

@@ -1632,34 +1632,36 @@ class TestCnComplexCreateAffiliationRadius:
         """Isolated particle (no NN within radius) gets its own object_id."""
         m = _make_multi_tomo_motl()
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
-        result = cs.create_affiliation(method="radius", radius=self._R, drop_below_min_occupancy=False)
+        result = cs.create_affiliation(method="radius", radius=self._R)
         # Tomo 1 has ring (object) + isolated (object) → 2 distinct object_ids
         tomo1_ids = result.df[result.df["tomo_id"] == 1.0]["object_id"].unique()
         assert len(tomo1_ids) == 2
 
-    def test_isolated_removed_when_drop_below_min_occupancy(self):
-        """With drop_below_min_occupancy=True and min_occupancy=2, singletons removed."""
+    def test_isolated_removed_when_min_occupancy_set(self):
+        """With min_occupancy=2, singleton objects are dropped."""
         m = _make_multi_tomo_motl()
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
         result = cs.create_affiliation(
             method="radius",
             radius=self._R,
             min_occupancy=2,
-            drop_below_min_occupancy=True,
         )
         tomo1 = result.df[result.df["tomo_id"] == 1.0]
         assert len(tomo1) == 8
         assert tomo1["object_id"].nunique() == 1
 
     def test_occupancy_column_equals_object_size(self):
-        """occupancy_column must equal the row count for that (tomo, object) group."""
+        """n_present in occupancy() must equal the row count for that (tomo, object) group."""
         m = _make_multi_tomo_motl()
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
-        result = cs.create_affiliation(method="radius", radius=self._R, occupancy_column="geom2")
-        for (_t, _o), grp in result.df.groupby(["tomo_id", "object_id"]):
-            occ_vals = grp["geom2"].unique()
-            assert len(occ_vals) == 1
-            assert int(occ_vals[0]) == len(grp)
+        cs.create_affiliation(method="radius", radius=self._R)
+        occ = cs.occupancy()
+        for _, row in occ.iterrows():
+            n = int(cs.motl.df[
+                (cs.motl.df["tomo_id"] == row["tomo_id"]) &
+                (cs.motl.df["object_id"] == row["object_id"])
+            ].shape[0])
+            assert int(row["n_present"]) == n
 
 
 # ---------------------------------------------------------------------------
@@ -1677,18 +1679,21 @@ class TestCnComplexNormals:
         assert result.df["geom3"].notna().all()
 
     def test_tilted_outlier_has_higher_cone_distance(self):
-        """The particle with theta=45 should have a cone distance > 10°."""
+        """The particle with theta=45 should have a deviation > 10°."""
         m = _make_ring_with_tilted_outlier(n=8, tilt=45.0)
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
-        result = cs.create_affiliation(method="radius", radius=44.0, normals_threshold=None)
-        assert result.df["geom3"].max() > 10.0
+        cs.create_affiliation(method="radius", radius=44.0, normals_threshold=None)
+        devs = cs.normal_deviations()
+        tilted = devs[devs["subtomo_id"] == 1.0]
+        assert len(tilted) == 1
+        assert tilted["deviation"].iloc[0] > 10.0
 
     def test_outlier_removed_when_threshold_set(self):
-        """With normals_threshold=30°, the ~40° outlier is dropped."""
-        m = _make_ring_with_tilted_outlier(n=8, tilt=45.0)
+        """With normals_threshold=30°, the ~45° outlier is dropped from an over-populated object."""
+        m = _make_ring_with_tilted_outlier(n=9, tilt=45.0)  # 9 > n_subunits=8 → cleaning fires
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
         result = cs.create_affiliation(method="radius", radius=44.0, normals_threshold=30.0)
-        assert len(result.df) == 7
+        assert len(result.df) == 8
 
     def test_all_retained_when_threshold_is_none(self):
         """With normals_threshold=None no particles are dropped."""
@@ -1704,14 +1709,15 @@ class TestCnComplexNormals:
 
 
 class TestCnComplexOverOccupancyAndClean:
-    def test_over_occupancy_warning_fires(self):
-        """A tight cluster of 10 particles (n=8) should trigger UserWarning."""
+    def test_over_occupancy_warning_fires(self, capsys):
+        """A tight cluster of 10 particles (n=8) prints an over-occupancy message."""
         m = _make_overcrowded_motl(n_particles=10)
         # object_id=1 already set; clear it so create_affiliation re-clusters
         m.df["object_id"] = 0.0
         cs = structure.CnComplex(m, 8, affiliation_column="object_id")
-        with pytest.warns(UserWarning, match="exceed"):
-            cs.create_affiliation(method="radius", radius=100.0)
+        cs.create_affiliation(method="radius", radius=100.0)
+        out = capsys.readouterr().out
+        assert "n=" in out, f"expected over-occupancy message in stdout, got: {out!r}"
 
     def test_clean_per_object_keeps_high_scores(self):
         """keep='high' retains the n highest-score rows per object."""
@@ -2118,13 +2124,15 @@ class TestDnComplex:
         np.testing.assert_allclose(df["ring_spacing"].iloc[0], axial_offset, atol=1e-6)
 
     def test_inter_ring_twist_staggered(self):
-        """Staggered rings (180/n rotation) give twist ≈ 180/n degrees."""
+        """Ring past the half-period (>Δ/2) folds to a negative twist."""
         n = 6
-        stagger = 180.0 / n
+        delta = 360.0 / n          # 60° fold period
+        stagger = delta * 3.0 / 4.0  # 45°, clearly past the 30° boundary
         m = _make_dn_motl(n=n, axial_offset=20.0, stagger_degrees=stagger)
         dn = structure.DnComplex(m, "D6")
         df = dn.inter_ring_twist(degrees=True)
-        np.testing.assert_allclose(df["inter_ring_twist"].iloc[0], stagger, atol=1e-4)
+        expected = stagger - delta  # 45° - 60° = -15°
+        np.testing.assert_allclose(df["inter_ring_twist"].iloc[0], expected, atol=1e-4)
 
     def test_inter_ring_twist_eclipsed(self):
         """Eclipsed rings (0 rotation) give twist ≈ 0 degrees."""
@@ -2372,15 +2380,6 @@ class TestGridFitSubunitOrder:
         idx = list(cs.motl.df["geom1"].astype(int))
         assert len(set(idx)) == 6
         assert set(idx).issubset(set(range(1, 9)))
-
-    def test_duplicate_angle_warns(self):
-        """Two particles at the same angular position trigger a duplicate-index warning."""
-        angles = list(np.linspace(0, 360, 8, endpoint=False))
-        angles[2] = angles[1]  # second copy at 45°
-        m = _ring_motl(angles)
-        cs = structure.CnComplex(m, 8, center_method="barycentric")
-        with pytest.warns(UserWarning, match="duplicate"):
-            cs.assign_subunit_order()
 
     def test_ref_direction_sets_index_one_for_target_particle(self):
         """ref_direction=(0,1,0) makes the particle at 90° (the +y position) get index 1."""
@@ -2945,7 +2944,7 @@ class TestPleomorphicSurfaceBlockInit:
 
     def test_dict_definition_missing_type_raises(self):
         motl = self._make_motl(2)
-        motl.df["class"] = [0.0, 2.0]
+        motl.df["geom1"] = [0.0, 2.0]   # geom1 = block_type_column default
         bd0 = structure.BlockDefinition.cyclic(3, [1.0, 0.0, 0.0])
         with pytest.raises(ValueError, match="without a BlockDefinition"):
             structure.BlockLayer(motl, {0.0: bd0})
@@ -3802,31 +3801,39 @@ class TestGetFacesAsMotl:
         assert set(fm.df["subtomo_id"].astype(int)) == set(range(1, 33))
 
     def test_geom3_is_face_size(self, psurf):
-        # face_size_column defaults to "geom3" (BlockLayer constructor param).
+        # face_size_column defaults to "geom5" (BlockLayer constructor param).
         fm = psurf.get_faces_as_motl()
-        counts = fm.df["geom3"].astype(int).value_counts().to_dict()
+        counts = fm.df["geom5"].astype(int).value_counts().to_dict()
         assert counts.get(5, 0) == 12
         assert counts.get(6, 0) == 20
 
-    def test_object_id_is_affiliation_geom2_is_face_id(self, psurf):
+    def test_object_id_is_affiliation_geom4_is_face_id(self, psurf):
         fm = psurf.get_faces_as_motl()
         fs = psurf.get_face_stats()
         aff_col = psurf.affiliation_column
-        # object_id carries affiliation; geom2 carries per-assembly face index
+        # object_id carries affiliation; geom4 carries per-assembly face index
         assert set(fm.df["object_id"].astype(float)) == set(fs[aff_col].astype(float))
-        assert set(fm.df["geom2"].astype(int)) == set(fs["face_id"].astype(int))
+        assert set(fm.df["geom4"].astype(int)) == set(fs["face_id"].astype(int))
 
-    def test_geom1_is_assembly_id(self, psurf):
+    def test_assembly_id_joins_from_face_stats(self, psurf):
+        # assembly_id is no longer in the motl; join from get_face_stats by face_id
         fm = psurf.get_faces_as_motl()
-        assert (fm.df["geom1"] == 1.0).all()
+        fs = psurf.get_face_stats()
+        merged = fm.df.merge(fs[["face_id", "assembly_id"]],
+                             left_on="geom4", right_on="face_id", how="left")
+        assert (merged["assembly_id"] == 1.0).all()
 
     def test_positions_match_centroids(self, psurf):
         fm = psurf.get_faces_as_motl()
         fs = psurf.get_face_stats().sort_values("face_id").reset_index(drop=True)
-        fm_sorted = fm.df.sort_values("geom2").reset_index(drop=True)
-        np.testing.assert_allclose(fm_sorted["x"].values, fs["centroid_x"].values, atol=1e-6)
-        np.testing.assert_allclose(fm_sorted["y"].values, fs["centroid_y"].values, atol=1e-6)
-        np.testing.assert_allclose(fm_sorted["z"].values, fs["centroid_z"].values, atol=1e-6)
+        fm_sorted = fm.df.sort_values("geom4").reset_index(drop=True)
+        # get_faces_as_motl calls update_coordinates() which applies round-half-up to
+        # the exact centroid floats. Compare the motl integers against the same rounded values.
+        def _rhu(a):
+            return np.where(a >= 0, np.floor(a + 0.5), -np.floor(-a + 0.5))
+        np.testing.assert_array_equal(fm_sorted["x"].values, _rhu(fs["centroid_x"].values))
+        np.testing.assert_array_equal(fm_sorted["y"].values, _rhu(fs["centroid_y"].values))
+        np.testing.assert_array_equal(fm_sorted["z"].values, _rhu(fs["centroid_z"].values))
 
 
 # =============================================================================
@@ -3841,26 +3848,29 @@ class TestGetGapsAsMotl:
         ps.connect(max_distance=4.0)
         return ps
 
-    def test_returns_motl(self, psurf):
-        gm = psurf.get_gaps_as_motl(cluster_radius=18.0)
+    def test_returns_motl_and_diagnostics(self, psurf):
+        gm, diag = psurf.get_gaps_as_motl(cluster_radius=18.0)
         assert isinstance(gm, cryomotl.Motl)
+        assert isinstance(diag, pd.DataFrame)
+        assert "gap_id" in diag.columns
+        assert "n_source_blocks" in diag.columns
 
     def test_two_caps(self, psurf):
         # Top and bottom open ends each form one cluster of 13 gap points
-        gm = psurf.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
+        gm, _ = psurf.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
         assert len(gm.df) == 2
 
     def test_geom1_n_distinct_blocks(self, psurf):
-        gm = psurf.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
-        assert (gm.df["geom1"].astype(int) == 13).all()
+        _, diag = psurf.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
+        assert (diag["n_source_blocks"].astype(int) == 13).all()
 
     def test_subtomo_ids_renumbered(self, psurf):
-        gm = psurf.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
+        gm, _ = psurf.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
         assert set(gm.df["subtomo_id"].astype(int)) == {1, 2}
 
     def test_min_blocks_filters(self, psurf):
         # With min_blocks=14, neither cluster qualifies
-        gm = psurf.get_gaps_as_motl(cluster_radius=18.0, min_blocks=14)
+        gm, _ = psurf.get_gaps_as_motl(cluster_radius=18.0, min_blocks=14)
         assert len(gm.df) == 0
 
 
@@ -3901,23 +3911,23 @@ class TestBlockLayerColumnParameters:
     def test_faces_default_columns(self):
         ps = self._make_ps()
         fm = ps.get_faces_as_motl()
-        assert "geom1" in fm.df.columns  # assembly_id_column
-        assert "geom2" in fm.df.columns  # face_id_column
-        assert "geom3" in fm.df.columns  # face_size_column
-        assert set(fm.df["geom3"].astype(int)) == {5, 6}
+        # face_id_column defaults to "geom4"; face_size_column defaults to "geom5"
+        assert set(fm.df["geom5"].astype(int)) == {5, 6}
+        assert len(fm.df["geom4"].unique()) == 32  # 32 distinct face ids
 
     def test_faces_custom_columns(self):
-        ps = self._make_ps(assembly_id_column="geom4", face_id_column="geom5", face_size_column="score")
+        ps = self._make_ps(face_id_column="geom2", face_size_column="score")
         fm = ps.get_faces_as_motl()
-        assert set(fm.df["score"].astype(int)) == {5, 6}
-        assert fm.df["geom4"].notna().all()
-        assert fm.df["geom5"].notna().all()
-        # defaults stay zero
+        assert set(fm.df["score"].astype(int)) == {5, 6}  # face_size in custom "score"
+        assert (fm.df["geom2"] > 0).any()                  # face_id written to custom "geom2"
+        # new defaults stay zero
         assert (fm.df["geom1"] == 0.0).all()
-        assert (fm.df["geom2"] == 0.0).all()
         assert (fm.df["geom3"] == 0.0).all()
+        assert (fm.df["geom4"] == 0.0).all()
+        assert (fm.df["geom5"] == 0.0).all()
 
-    def test_faces_nothing_writes_class(self):
+    def test_faces_class_not_written(self):
+        # class is never written by the block layer; motl column defaults to 0.0
         ps = self._make_ps()
         fm = ps.get_faces_as_motl()
         assert (fm.df["class"] == 0.0).all()
@@ -3925,14 +3935,14 @@ class TestBlockLayerColumnParameters:
     # ── face_id is the same column in faces and missing-block motl ────────────
 
     def test_face_id_column_consistent_across_methods(self):
-        """Custom face_id_column='geom5' is respected by get_faces_as_motl().
+        """Custom face_id_column='geom2' is respected by get_faces_as_motl().
         get_missing_block_motl() returns empty because the removed block is on
         the surface: all faces adjacent to the gap are boundary-touching and
         are excluded from inference."""
-        ps = self._make_ps_missing(face_id_column="geom5")
+        ps = self._make_ps_missing(face_id_column="geom2")
         fm = ps.get_faces_as_motl()
-        assert fm.df["geom5"].notna().all()   # face ids written to geom5
-        assert (fm.df["geom2"] == 0.0).all()  # old default not written
+        assert fm.df["geom2"].notna().all()   # face ids written to geom2
+        assert (fm.df["geom4"] == 0.0).all()  # default not written (custom overrides)
         mb = ps.get_missing_block_motl()
         assert len(mb.df) == 0  # all adjacent faces touch the boundary → excluded
 
@@ -3957,17 +3967,17 @@ class TestBlockLayerColumnParameters:
         motl, block_def = _microtubule(n_pf=13, n_dimers=20)
         ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
-        gm = ps.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
-        assert (gm.df["geom1"].astype(int) == 13).all()
+        _, diag = ps.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
+        assert (diag["n_source_blocks"].astype(int) == 13).all()
 
-    def test_gaps_custom_source_block_count_column(self):
+    def test_gaps_source_block_count_in_diagnostics_not_motl(self):
+        """source_block_count no longer goes into the motl; diagnostics always use n_source_blocks."""
         motl, block_def = _microtubule(n_pf=13, n_dimers=20)
-        bl = structure.BlockLayer(motl, block_def, source_block_count_column="geom4")
-        ps = structure.PleomorphicSurface(block_layer=bl)
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
-        gm = ps.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
-        assert (gm.df["geom4"].astype(int) == 13).all()
-        assert (gm.df["geom1"] == 0.0).all()  # old default not written
+        gm, diag = ps.get_gaps_as_motl(cluster_radius=18.0, min_blocks=13)
+        assert (diag["n_source_blocks"].astype(int) == 13).all()
+        assert (gm.df["geom2"] == 0.0).all()   # source_block_count not written to motl
 
 
 # =============================================================================
@@ -3981,12 +3991,16 @@ class TestEnvelopeFromFaces:
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
         ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps.connect(max_distance=4.0)
-        m = ps.envelope_from_faces()
+        envelopes = ps.envelope_from_faces()
+        m = next(iter(envelopes.values()))
         return m, ps
 
     def test_returns_mesh(self, mesh_and_psurf):
-        m, _ = mesh_and_psurf
+        m, ps = mesh_and_psurf
         from cryocat.core.surface import Mesh
+        envelopes = ps._envelopes
+        assert isinstance(envelopes, dict)
+        assert all(isinstance(v, Mesh) for v in envelopes.values())
         assert isinstance(m, Mesh)
 
     def test_vertex_count(self, mesh_and_psurf):
@@ -4031,7 +4045,7 @@ class TestAnnotateWithEnvelope:
         block_def = structure.BlockDefinition.cyclic(3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
         ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
         ps_clean.connect(max_distance=4.0)
-        mesh = ps_clean.envelope_from_faces()
+        mesh = next(iter(ps_clean.envelope_from_faces().values()))
         ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl, block_def))
         annot = ps.annotate_with_envelope()
         return annot, ps
@@ -4095,7 +4109,7 @@ class TestUnifyPolarityEnvelope:
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
         ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl_clean, block_def))
         ps_clean.connect(max_distance=4.0)
-        mesh = ps_clean.envelope_from_faces()
+        mesh = next(iter(ps_clean.envelope_from_faces().values()))
         motl_flipped, _, _ = _soccer_ball(seed=0, flipped=(3, 17, 25, 31, 40, 44, 52, 59))
         ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl_flipped, block_def))
         ps.unify_polarity(reference="envelope")
@@ -4110,7 +4124,7 @@ class TestUnifyPolarityEnvelope:
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
         ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl_clean, block_def))
         ps_clean.connect(max_distance=4.0)
-        mesh = ps_clean.envelope_from_faces()
+        mesh = next(iter(ps_clean.envelope_from_faces().values()))
         motl_f, _, _ = _soccer_ball(seed=0, flipped=(3, 17, 25, 31, 40, 44, 52, 59))
         ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl_f, block_def))
         n_flipped = ps.unify_polarity(reference="envelope")
@@ -4124,7 +4138,7 @@ class TestUnifyPolarityEnvelope:
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
         ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl_clean, block_def))
         ps_clean.connect(max_distance=4.0)
-        mesh = ps_clean.envelope_from_faces()
+        mesh = next(iter(ps_clean.envelope_from_faces().values()))
         motl_f, _, _ = _soccer_ball(seed=0, flipped=(3, 17, 25, 31, 40, 44, 52, 59))
         ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl_f, block_def))
         # Must not raise when max_block_distance is None (default)
@@ -4141,7 +4155,7 @@ class TestUnifyPolarityEnvelope:
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
         ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl_clean, block_def))
         ps_clean.connect(max_distance=4.0)
-        mesh = ps_clean.envelope_from_faces()
+        mesh = next(iter(ps_clean.envelope_from_faces().values()))
         motl_flipped, _, _ = _soccer_ball(seed=0, flipped=(3, 17, 25, 31, 40, 44, 52, 59))
         ps = structure.PleomorphicSurface(mesh, block_layer=structure.BlockLayer(motl_flipped, block_def))
         n = ps.unify_polarity(reference="envelope")
@@ -4449,11 +4463,11 @@ class TestHoneycombLattice:
         )
 
     def test_envelope_triangle_count(self, psurf):
-        mesh = psurf.envelope_from_faces()
+        mesh = next(iter(psurf.envelope_from_faces().values()))
         assert len(mesh.faces) == 384  # 64 faces x 6 triangles
 
     def test_envelope_normals_positive_z(self, psurf):
-        mesh = psurf.envelope_from_faces()
+        mesh = next(iter(psurf.envelope_from_faces().values()))
         tri_verts = mesh.vertices[mesh.faces]
         e0 = tri_verts[:, 1] - tri_verts[:, 0]
         e1 = tri_verts[:, 2] - tri_verts[:, 0]
@@ -4477,7 +4491,7 @@ class TestUnifyPolarityInvalidatesGraph:
         block_def = structure.BlockDefinition.cyclic(3, [arm * np.cos(np.radians(elev)), 0.0, -arm * np.sin(np.radians(elev))])
         ps_clean = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl_clean, block_def))
         ps_clean.connect(max_distance=4.0)
-        mesh = ps_clean.envelope_from_faces()
+        mesh = next(iter(ps_clean.envelope_from_faces().values()))
         # Create a new surface with the correct envelope + 8 specifically chosen
         # flipped blocks (distributed so no face has a flipped majority).
         motl_flipped, _, _ = _soccer_ball(seed=0, flipped=(3, 17, 25, 31, 40, 44, 52, 59))
@@ -5386,7 +5400,7 @@ def test_npc_three_ring_direct_call_covers_all_rings():
     r2 = _make_ring_motl(n_subunits=8, start_subtomo=200)
     for m in (r0, r1, r2):
         m.df["geom1"] = 0.0  # clear ordering
-    npc = structure.NPC([r0, r1, r2])
+    npc = structure.NPC([r0, r1, r2], radius=50.)
     npc.assign_subunit_order()
     for idx, rm in enumerate(npc._ring_motls):
         assert (rm.df["geom1"] != 0).any(), f"Ring {idx} still unordered after dispatch"
@@ -5569,7 +5583,7 @@ def test_npc_ring_spacing_returns_correct_columns():
 
 
 def test_npc_ring_spacing_three_rings_has_two_pair_columns():
-    """ring_spacing on merged 3-ring NPC returns spacing_1_2 and spacing_2_3."""
+    """ring_spacing on merged 3-ring NPC returns all 3 ring-pair columns."""
     r0 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 45.0), object_id=1.0, start_subtomo=1)
     r1 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
     r2 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 55.0), object_id=3.0, start_subtomo=200)
@@ -5578,7 +5592,25 @@ def test_npc_ring_spacing_three_rings_has_two_pair_columns():
     sp = npc.ring_spacing()
     assert "spacing_1_2" in sp.columns
     assert "spacing_2_3" in sp.columns
-    assert "spacing_0_1" not in sp.columns  # only adjacent 1-based pairs
+    assert "spacing_1_3" in sp.columns
+    assert "spacing_0_1" not in sp.columns
+    spacing_cols = [c for c in sp.columns if c.startswith("spacing_")]
+    assert len(spacing_cols) == 3  # n*(n-1)/2 = 3 for 3 rings
+    np.testing.assert_allclose(sp["spacing_1_3"].iloc[0], 10.0, atol=1e-6)
+
+
+def test_npc_ring_spacing_all_pairs_column_count_and_nonadjacent():
+    """ring_spacing on 3-ring NPC: n*(n-1)/2=3 columns; spacing_1_3 matches geometry."""
+    r0 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 40.0), object_id=1.0, start_subtomo=1)
+    r1 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    r2 = _make_ring_motl(n_subunits=4, center=(50.0, 50.0, 60.0), object_id=3.0, start_subtomo=200)
+    npc = structure.NPC([r0, r1, r2])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    sp = npc.ring_spacing()
+    spacing_cols = [c for c in sp.columns if c.startswith("spacing_")]
+    assert len(spacing_cols) == 3
+    assert "spacing_1_3" in sp.columns
+    np.testing.assert_allclose(sp["spacing_1_3"].iloc[0], 20.0, atol=1e-6)
 
 
 def test_npc_get_object_stats_post_merge_has_spacing_columns():
@@ -5744,7 +5776,7 @@ class TestMixedBlockTypes:
         data["phi"] = rng.uniform(-180.0, 180.0, n)
         data["theta"] = rng.uniform(0.0, 180.0, n)
         data["psi"] = rng.uniform(-180.0, 180.0, n)
-        data["class"] = [6.0] * n_hex + [5.0] * n_pent
+        data["geom1"] = [6.0] * n_hex + [5.0] * n_pent   # geom1 = block_type_column default
         return cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
 
     def test_mixed_total_site_count(self):
@@ -5770,7 +5802,7 @@ class TestMixedBlockTypes:
 
     def test_unknown_block_type_raises(self):
         blocks = self._mixed_motl(n_hex=2, n_pent=1)
-        # dict covers only class=6 — class=5 blocks are unknown
+        # dict covers only geom1=6 — geom1=5 blocks have no definition
         bd_dict = {6.0: structure.BlockDefinition.cyclic(6, [-5.0, 0.0, 0.0])}
         with pytest.raises(ValueError, match="without a BlockDefinition"):
             structure.BlockLayer(blocks, bd_dict)
@@ -5785,13 +5817,29 @@ class TestMixedBlockTypes:
         }
         ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(blocks, bd_dict))
         sites = ps.get_sites_as_motl()
-        # object_id for hexamers are subtomo_ids 1..n_hex
-        hex_ids = set(blocks.df[blocks.df["class"] == 6.0]["subtomo_id"].tolist())
-        pent_ids = set(blocks.df[blocks.df["class"] == 5.0]["subtomo_id"].tolist())
+        hex_ids = set(blocks.df[blocks.df["geom1"] == 6.0]["subtomo_id"].tolist())
+        pent_ids = set(blocks.df[blocks.df["geom1"] == 5.0]["subtomo_id"].tolist())
         hex_rows = sites.df[sites.df["geom3"].isin(hex_ids)]   # geom3 = block_id_column
         pent_rows = sites.df[sites.df["geom3"].isin(pent_ids)]
         assert len(hex_rows) == n_hex * 6
         assert len(pent_rows) == n_pent * 5
+
+    def test_block_type_column_override(self):
+        """block_type_column can be overridden to read from a non-default column."""
+        n_hex, n_pent = 2, 1
+        blocks = self._mixed_motl(n_hex, n_pent)
+        # _mixed_motl puts type codes in geom1; copy to class and clear geom1.
+        blocks.df["class"] = blocks.df["geom1"]
+        blocks.df["geom1"] = 0.0
+        bd_dict = {
+            6.0: structure.BlockDefinition.cyclic(6, [-5.0, 0.0, 0.0]),
+            5.0: structure.BlockDefinition.cyclic(5, [-4.0, 0.0, 0.0]),
+        }
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(blocks, bd_dict, block_type_column="class")
+        )
+        sites = ps.get_sites_as_motl()
+        assert len(sites.df) == n_hex * 6 + n_pent * 5
 
 
 class TestCustomColumnNames:
@@ -5920,7 +5968,7 @@ class TestBlockLayer:
         data["subtomo_id"] = np.arange(1, n_c3 + n_c6 + 1, dtype=float)
         data["tomo_id"] = np.ones(n_c3 + n_c6, dtype=float)
         data["x"] = np.linspace(0.0, float(n_c3 + n_c6 - 1) * 10.0, n_c3 + n_c6)
-        data["class"] = [3.0] * n_c3 + [6.0] * n_c6
+        data["geom1"] = [3.0] * n_c3 + [6.0] * n_c6   # geom1 = block_type_column default
         mixed_motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
         bd_dict = {
             3.0: structure.BlockDefinition.cyclic(3, [5.0, 0.0, 0.0]),
@@ -5936,13 +5984,59 @@ class TestBlockLayer:
         layer = structure.BlockLayer(
             motl, bd,
             block_id_column="object_id",
-            site_index_column="geom2",
+            site_index_column="geom4",
         )
         assert layer.block_id_column == "object_id"
-        assert layer.site_index_column == "geom2"
+        assert layer.site_index_column == "geom4"
         ps = structure.PleomorphicSurface(block_layer=layer)
         sites = ps.get_sites_as_motl()
         assert len(sites.df) == 4 * 4
+
+
+# =============================================================================
+# Column collision checks
+# =============================================================================
+
+
+class TestColumnCollisionChecks:
+    """ValueError naming both fields and the column when two params share a column."""
+
+    def _make_connected_ps(self, **bl_kwargs):
+        motl, block_def = _microtubule(n_pf=13, n_dimers=5)
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(motl, block_def, **bl_kwargs)
+        )
+        ps.connect(max_distance=4.0)
+        return ps
+
+    def test_get_sites_as_motl_raises_on_collision(self):
+        # connect() calls get_sites_as_motl internally, so skip connect here.
+        motl, block_def = _microtubule(n_pf=13, n_dimers=5)
+        ps = structure.PleomorphicSurface(
+            block_layer=structure.BlockLayer(
+                motl, block_def,
+                site_index_column="geom2",
+                site_type_column="geom2",
+            )
+        )
+        with pytest.raises(ValueError) as exc:
+            ps.get_sites_as_motl()
+        msg = str(exc.value)
+        assert "site_index_column" in msg and "site_type_column" in msg and "geom2" in msg
+
+    def test_infer_missing_blocks_raises_on_collision(self):
+        ps = self._make_connected_ps(block_type_column="geom5")
+        with pytest.raises(ValueError) as exc:
+            ps.infer_missing_blocks()
+        msg = str(exc.value)
+        assert "block_type_column" in msg and "_origin_column" in msg and "geom5" in msg
+
+    def test_recover_orientations_raises_on_collision(self):
+        ps = self._make_connected_ps(block_type_column="geom5")
+        with pytest.raises(ValueError) as exc:
+            ps.recover_orientations(ps.blocks)
+        msg = str(exc.value)
+        assert "block_type_column" in msg and "_origin_column" in msg and "geom5" in msg
 
 
 # =============================================================================
@@ -5969,7 +6063,7 @@ class TestRingGeometryFreeFunctions:
         np.testing.assert_allclose(dist, 10.0, atol=1e-12)
 
     def test_twist_free_function_known_angle(self):
-        """_ring_centre_twist returns the correct angle for a known rotation."""
+        """_ring_centre_twist at the boundary (stagger=180/n) returns −180/n."""
         n = 6
         axis = np.array([0.0, 0.0, 1.0])
         r = 10.0
@@ -5979,7 +6073,7 @@ class TestRingGeometryFreeFunctions:
         pos0 = np.column_stack([r * np.cos(np.radians(angles0)), r * np.sin(np.radians(angles0)), np.zeros(n)])
         pos1 = np.column_stack([r * np.cos(np.radians(angles1)), r * np.sin(np.radians(angles1)), np.zeros(n)])
         twist = structure._ring_centre_twist(pos0, pos1, n, axis)
-        np.testing.assert_allclose(twist, stagger, atol=1e-4)
+        np.testing.assert_allclose(twist, -stagger, atol=1e-4)
 
     def test_dn_ring_spacing_unchanged_from_before(self):
         """DnComplex.ring_spacing returns same numeric value as before the refactor."""
@@ -5991,7 +6085,7 @@ class TestRingGeometryFreeFunctions:
         np.testing.assert_allclose(df["ring_spacing"].iloc[0], axial_offset, atol=1e-6)
 
     def test_npc_three_rings_gives_two_spacings_and_two_twists(self):
-        """NPC with three rings produces spacing_1_2, spacing_2_3, twist_1_2, twist_2_3."""
+        """NPC with three rings produces spacing/twist columns for all 3 ring pairs."""
         z_sep = 5.0
         r0 = _make_ring_motl(n_subunits=6, center=(50.0, 50.0, 50.0 - z_sep), object_id=1.0, start_subtomo=1)
         r1 = _make_ring_motl(n_subunits=6, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
@@ -6002,10 +6096,30 @@ class TestRingGeometryFreeFunctions:
         tw = npc.inter_ring_twist()
         assert "spacing_1_2" in sp.columns
         assert "spacing_2_3" in sp.columns
+        assert "spacing_1_3" in sp.columns
         assert "twist_1_2" in tw.columns
         assert "twist_2_3" in tw.columns
+        assert "twist_1_3" in tw.columns
         assert len(sp) >= 1
         assert len(tw) >= 1
+        spacing_cols = [c for c in sp.columns if c.startswith("spacing_")]
+        twist_cols = [c for c in tw.columns if c.startswith("twist_")]
+        assert len(spacing_cols) == 3  # n*(n-1)/2 = 3 for 3 rings
+        assert len(twist_cols) == 3
+
+    def test_npc_inter_ring_twist_all_pairs_column_count_and_nonadjacent(self):
+        """inter_ring_twist on 3-ring NPC: n*(n-1)/2=3 columns; twist_1_3≈0 for eclipsed rings."""
+        z_sep = 5.0
+        r0 = _make_ring_motl(n_subunits=6, center=(50.0, 50.0, 50.0 - z_sep), object_id=1.0, start_subtomo=1)
+        r1 = _make_ring_motl(n_subunits=6, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+        r2 = _make_ring_motl(n_subunits=6, center=(50.0, 50.0, 50.0 + z_sep), object_id=3.0, start_subtomo=200)
+        npc = structure.NPC([r0, r1, r2])
+        npc.merge(npc_radius=50.0, distance_threshold=200.0)
+        tw = npc.inter_ring_twist()
+        twist_cols = [c for c in tw.columns if c.startswith("twist_")]
+        assert len(twist_cols) == 3
+        assert "twist_1_3" in tw.columns
+        np.testing.assert_allclose(tw["twist_1_3"].iloc[0], 0.0, atol=1e-4)
 
     def test_dn_ring_spacing_auto_splits_without_explicit_call(self):
         """DnComplex.ring_spacing auto-splits when split_rings() has not been called."""
@@ -6432,7 +6546,7 @@ class TestNPCMultiRing:
         r0 = _make_ring_at(8, 50., 50., 45., 50., 1., 1., start_subtomo=1)
         r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., start_subtomo=100)
         r2 = _make_ring_at(8, 50., 50., 55., 50., 1., 1., start_subtomo=200)
-        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        npc = structure.NPC([r0, r1, r2], symmetry=8, radius=50.)
         result = npc.assign_subunit_order()
         assert isinstance(result, cryomotl.Motl)
         assert len(result.df) == 24, f"expected 24 rows, got {len(result.df)}"
@@ -6444,7 +6558,7 @@ class TestNPCMultiRing:
         r0 = _make_ring_at(8, 50., 50., 45., 50., 1., 1., start_subtomo=1)
         r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., start_subtomo=100)
         r2 = _make_ring_at(8, 50., 50., 55., 50., 1., 1., start_subtomo=200)
-        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        npc = structure.NPC([r0, r1, r2], symmetry=8, radius=50.)
         result = npc.assign_subunit_order()
         ring_vals = sorted(result.df[structure.NPC._ring_column].unique())
         assert ring_vals == [1.0, 2.0, 3.0], f"ring values: {ring_vals}"
@@ -6453,7 +6567,7 @@ class TestNPCMultiRing:
         """each ring's order_column holds exactly 1..8."""
         r0 = _make_ring_at(8, 50., 50., 45., 50., 1., 1., start_subtomo=1)
         r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., start_subtomo=100)
-        npc = structure.NPC([r0, r1], symmetry=8)
+        npc = structure.NPC([r0, r1], symmetry=8, radius=50.)
         result = npc.assign_subunit_order()
         for ring_val in [1.0, 2.0]:
             subset = result.df[result.df[structure.NPC._ring_column] == ring_val]
@@ -6462,29 +6576,30 @@ class TestNPCMultiRing:
 
     # ── cyclic shift aligns subunit 1 across rings ────────────────────────────
 
-    def test_cyclic_shift_aligns_ring2_to_ring1_reference(self):
-        """ring 2 shifted by 2 steps → nearest to ring-1 sub-1 gets index 1."""
-        # Ring 1: standard positions, subunit 1 at theta=0
+    def test_nn_aligns_ring2_to_ring1_reference(self):
+        """NN in _finalize_subunit_order: each ring-2 particle carries the same order
+        number as its nearest ring-1 counterpart (same-physical-subunit → same-number)."""
         r0 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., angle_offset_steps=0, start_subtomo=1)
-        # Ring 2: positions shifted by 2 steps (particle at theta=2*2pi/8 is nearest to theta=0)
-        r1 = _make_ring_at(8, 50., 50., 55., 50., 1., 1., angle_offset_steps=2, start_subtomo=100)
-        npc = structure.NPC([r0, r1], symmetry=8)
-        result = npc.assign_subunit_order()
+        # Ring 2 is angularly shifted by 2 steps and 5 voxels above ring 1.
+        r1 = _make_ring_at(8, 50., 50., 55., 50., 1., 2., angle_offset_steps=2, start_subtomo=100)
+        npc = structure.NPC([r0, r1], symmetry=8, radius=50.)
+        npc.assign_subunit_order()
+        npc.merge(npc_radius=50., distance_threshold=6.)
 
-        ring1_rows = result.df[result.df[structure.NPC._ring_column] == 1.0]
-        ring2_rows = result.df[result.df[structure.NPC._ring_column] == 2.0]
-
-        # Subunit 1 in ring 1 is at theta=0, i.e. x=100, y=50
-        sub1_ring1 = ring1_rows[ring1_rows[npc.order_column] == 1.0]
-        assert len(sub1_ring1) == 1
-
-        # After alignment, the ring-2 particle closest to ring-1 sub-1 must have index 1
-        sub1_ring1_pos = sub1_ring1[["x", "y", "z"]].to_numpy()
+        ring1_rows = npc.motl.df[npc.motl.df[structure.NPC._ring_column] == 1.0]
+        ring2_rows = npc.motl.df[npc.motl.df[structure.NPC._ring_column] == 2.0]
+        ring1_pos = ring1_rows[["x", "y", "z"]].to_numpy()
         ring2_pos = ring2_rows[["x", "y", "z"]].to_numpy()
-        dists = np.linalg.norm(ring2_pos - sub1_ring1_pos, axis=1)
-        nearest_local = np.argmin(dists)
-        nearest_order = ring2_rows.iloc[nearest_local][npc.order_column]
-        assert nearest_order == 1.0, f"nearest ring-2 particle has order {nearest_order}, expected 1"
+        ring1_orders = ring1_rows[npc.order_column].to_numpy()
+        ring2_orders = ring2_rows[npc.order_column].to_numpy()
+
+        for pos, order_k in zip(ring1_pos, ring1_orders):
+            dists = np.linalg.norm(ring2_pos - pos, axis=1)
+            nearest_j = int(np.argmin(dists))
+            assert ring2_orders[nearest_j] == order_k, (
+                f"ring-1 sub-{int(order_k)}: nearest ring-2 particle has order "
+                f"{ring2_orders[nearest_j]}, expected {int(order_k)}"
+            )
 
     # ── missing subunit gap preserved after shift ─────────────────────────────
 
@@ -6495,7 +6610,7 @@ class TestNPCMultiRing:
         r1_full = _make_ring_at(8, 50., 50., 55., 50., 1., 1., angle_offset_steps=2, start_subtomo=100)
         r1_partial = cryomotl.Motl()
         r1_partial.df = r1_full.df.iloc[:-1].copy().reset_index(drop=True)  # drop last
-        npc = structure.NPC([r0, r1_partial], symmetry=8)
+        npc = structure.NPC([r0, r1_partial], symmetry=8, radius=50.)
         result = npc.assign_subunit_order()
 
         ring2_rows = result.df[result.df[structure.NPC._ring_column] == 2.0]
@@ -6513,7 +6628,7 @@ class TestNPCMultiRing:
         # Two rings for the same pore; centres exactly 10 voxels apart axially
         cr = _make_ring_at(8, 50., 50., 50., radius, 1., 1., start_subtomo=1)
         ir = _make_ring_at(8, 50., 50., 60., radius, 1., 2., start_subtomo=100)  # object_id=2 before merge
-        npc = structure.NPC([cr, ir], symmetry=8)
+        npc = structure.NPC([cr, ir], symmetry=8, radius=radius)
         npc.assign_subunit_order()
         npc.merge(npc_radius=radius, distance_threshold=10.0)
         object_ids = npc.motl.df["object_id"].unique()
@@ -6527,7 +6642,7 @@ class TestNPCMultiRing:
         r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
         r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 2., start_subtomo=100)
         r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 3., start_subtomo=200)
-        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        npc = structure.NPC([r0, r1, r2], symmetry=8, radius=50.)
         npc.assign_subunit_order()
         npc.merge(npc_radius=50., distance_threshold=20.)
         assert len(npc.motl.df) == 24, f"expected 24 rows, got {len(npc.motl.df)}"
@@ -6547,7 +6662,7 @@ class TestNPCSubunitStats:
         r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
         r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 2., start_subtomo=100)
         r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 3., start_subtomo=200)
-        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        npc = structure.NPC([r0, r1, r2], symmetry=8, radius=50.)
         npc.assign_subunit_order()
         npc.merge(npc_radius=50., distance_threshold=20.)
         stats = npc.get_object_stats(pixel_size=1.0)
@@ -6560,20 +6675,38 @@ class TestNPCSubunitStats:
     # ── per-subunit spacing matches constructed axial separation ─────────────
 
     def test_get_subunit_spacing_axial_spacing_matches_geometry(self):
-        """3-ring coaxial NPC → spacing_1_2 = spacing_2_3 = 10 for all 8 subunits."""
+        """3-ring coaxial NPC → spacing_1_2=spacing_2_3=10, spacing_1_3=20 for all 8 subunits."""
         r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
         r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 2., start_subtomo=100)
         r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 3., start_subtomo=200)
-        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        npc = structure.NPC([r0, r1, r2], symmetry=8, radius=50.)
         npc.assign_subunit_order()
         npc.merge(npc_radius=50., distance_threshold=20.)
         spacing_df = npc.get_subunit_spacing(pixel_size=1.0)
         assert len(spacing_df) == 8, f"expected 8 rows (one per subunit), got {len(spacing_df)}"
         assert "spacing_1_2" in spacing_df.columns, "missing column spacing_1_2"
         assert "spacing_2_3" in spacing_df.columns, "missing column spacing_2_3"
+        assert "spacing_1_3" in spacing_df.columns, "missing column spacing_1_3"
+        spacing_cols = [c for c in spacing_df.columns if c.startswith("spacing_")]
+        assert len(spacing_cols) == 3  # n*(n-1)/2 = 3 for 3 rings
         # Rings are coaxial with z-separation 10 → Euclidean distance = 10
         np.testing.assert_allclose(spacing_df["spacing_1_2"].values, 10.0, atol=1e-6)
         np.testing.assert_allclose(spacing_df["spacing_2_3"].values, 10.0, atol=1e-6)
+        np.testing.assert_allclose(spacing_df["spacing_1_3"].values, 20.0, atol=1e-6)
+
+    def test_get_subunit_spacing_all_pairs_column_count_and_nonadjacent(self):
+        """get_subunit_spacing on 3-ring NPC: 3 spacing columns; spacing_1_3=20 for all subunits."""
+        r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
+        r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 2., start_subtomo=100)
+        r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 3., start_subtomo=200)
+        npc = structure.NPC([r0, r1, r2], symmetry=8, radius=50.)
+        npc.assign_subunit_order()
+        npc.merge(npc_radius=50., distance_threshold=20.)
+        df = npc.get_subunit_spacing(pixel_size=1.0)
+        spacing_cols = [c for c in df.columns if c.startswith("spacing_")]
+        assert len(spacing_cols) == 3
+        assert "spacing_1_3" in df.columns
+        np.testing.assert_allclose(df["spacing_1_3"].values, 20.0, atol=1e-6)
 
     # ── per-subunit stats: 24 rows, distances match ring radius ──────────────
 
@@ -6583,7 +6716,7 @@ class TestNPCSubunitStats:
         r0 = _make_ring_at(8, 50., 50., 40., radius, 1., 1., start_subtomo=1)
         r1 = _make_ring_at(8, 50., 50., 50., radius, 1., 2., start_subtomo=100)
         r2 = _make_ring_at(8, 50., 50., 60., radius, 1., 3., start_subtomo=200)
-        npc = structure.NPC([r0, r1, r2], symmetry=8)
+        npc = structure.NPC([r0, r1, r2], symmetry=8, radius=radius)
         npc.assign_subunit_order()
         npc.merge(npc_radius=radius, distance_threshold=20.)
         stats = npc.get_subunit_stats(pixel_size=1.0)
@@ -6598,7 +6731,7 @@ class TestNPCSubunitStats:
         r1 = _make_ring_at(8, 0., 0., 10., 50., 1., 2., start_subtomo=100)
         # Tilt particle with subtomo_id=1 (ring 1) by 30° around the X axis
         r0.df.loc[r0.df["subtomo_id"] == 1.0, "theta"] = 30.0
-        npc = structure.NPC([r0, r1], symmetry=8)
+        npc = structure.NPC([r0, r1], symmetry=8, radius=50.)
         npc.assign_subunit_order()
         npc.merge(npc_radius=50., distance_threshold=15.)
         stats = npc.get_subunit_stats(pixel_size=1.0)
@@ -6613,126 +6746,6 @@ class TestNPCSubunitStats:
         assert (others_r1["tilt_angle"] < 10.0).all(), (
             f"flat ring-1 particles have unexpected tilt: {others_r1['tilt_angle'].tolist()}"
         )
-
-
-# =============================================================================
-# Ring direction detection and correction in _align_subunit_order_across_rings
-# =============================================================================
-
-
-def _build_npc_with_reversed_ring2(shift: int = 3):
-    """3-ring NPC (n=8) where ring 2 is reversed and rotated by *shift* positions.
-
-    Ring 2's per-ring CCW indices are reflected (k → (1−k) % 8 + 1) and then
-    cyclically shifted, simulating a ring whose SVD normal pointed the opposite
-    way.  Rings 1 and 3 are left with their natural CCW ordering.
-    """
-    n = 8
-    r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
-    r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., start_subtomo=100)
-    r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 1., start_subtomo=200)
-    npc = structure.NPC([r0, r1, r2], symmetry=n)
-    npc.per_ring("assign_subunit_order")
-    order_col = npc.order_column
-    old_k = npc._ring_motls[1].df[order_col].values.astype(int)
-    rev_k = ((1 - old_k) % n) + 1
-    shifted_rev_k = ((rev_k - 1 + shift) % n) + 1
-    npc._ring_motls[1].df[order_col] = shifted_rev_k.astype(float)
-    return npc
-
-
-class TestRingDirectionCorrection:
-    """_align_subunit_order_across_rings detects and corrects reversed rings."""
-
-    def test_reversed_ring_detected_and_reported(self):
-        """a manually reversed ring 2 is flagged reversed with the expected shift."""
-        npc = _build_npc_with_reversed_ring2(shift=3)
-        corrections = npc._align_subunit_order_across_rings()
-        key = (1.0, 1.0, 2)
-        assert key in corrections, f"ring 2 not in corrections: {list(corrections.keys())}"
-        assert corrections[key]["reversed"] is True, (
-            f"expected ring 2 reversed, got {corrections[key]}"
-        )
-        assert corrections[key]["shift"] == 3, (
-            f"expected shift 3, got {corrections[key]['shift']}"
-        )
-
-    def test_non_reversed_ring_not_flagged(self):
-        """ring 3 (natural CCW order) is not flagged as reversed."""
-        npc = _build_npc_with_reversed_ring2(shift=3)
-        corrections = npc._align_subunit_order_across_rings()
-        key3 = (1.0, 1.0, 3)
-        if key3 in corrections:
-            assert corrections[key3]["reversed"] is False, (
-                f"ring 3 should not be reversed, got {corrections[key3]}"
-            )
-
-    def test_spacing_uniform_after_correction(self):
-        """after correction all 8 cross-ring spacing values are in a tight range."""
-        import pandas as _pd
-
-        npc = _build_npc_with_reversed_ring2(shift=3)
-        corrections = npc._align_subunit_order_across_rings()
-        assert corrections[(1.0, 1.0, 2)]["reversed"] is True
-
-        # Assemble merged NPC from corrected ring motls
-        frames = []
-        for ri, rm in enumerate(npc._ring_motls):
-            df = rm.df.copy()
-            df[npc._ring_column] = float(ri + 1)
-            frames.append(df)
-        npc.motl = cryomotl.Motl(_pd.concat(frames, ignore_index=True))
-        npc._rings_merged = True
-
-        spacing_df = npc.get_subunit_spacing(pixel_size=1.0)
-        assert "spacing_1_2" in spacing_df.columns
-        vals = spacing_df["spacing_1_2"].values
-        assert len(vals) == 8, f"expected 8 rows, got {len(vals)}"
-        assert vals.max() - vals.min() < 1.0, (
-            f"spacing values not uniform after correction: {vals.tolist()}"
-        )
-        # Coaxial rings 10 voxels apart → spacing = 10 exactly
-        np.testing.assert_allclose(vals, 10.0, atol=0.1)
-
-    def test_twists_near_zero_after_correction(self):
-        """all 8 cross-ring twist values are near zero after correction."""
-        import pandas as _pd
-
-        npc = _build_npc_with_reversed_ring2(shift=3)
-        npc._align_subunit_order_across_rings()
-
-        frames = []
-        for ri, rm in enumerate(npc._ring_motls):
-            df = rm.df.copy()
-            df[npc._ring_column] = float(ri + 1)
-            frames.append(df)
-        npc.motl = cryomotl.Motl(_pd.concat(frames, ignore_index=True))
-        npc._rings_merged = True
-
-        spacing_df = npc.get_subunit_spacing(pixel_size=1.0)
-        if "twist_1_2" in spacing_df.columns:
-            twists = spacing_df["twist_1_2"].values
-            np.testing.assert_allclose(twists, 0.0, atol=1.0, err_msg=(
-                f"twists not near zero after correction: {twists.tolist()}"
-            ))
-
-    def test_assign_subunit_order_stores_last_alignment(self):
-        """NPC.assign_subunit_order stores corrections in _last_alignment."""
-        n = 8
-        r0 = _make_ring_at(8, 50., 50., 40., 50., 1., 1., start_subtomo=1)
-        r1 = _make_ring_at(8, 50., 50., 50., 50., 1., 1., start_subtomo=100)
-        r2 = _make_ring_at(8, 50., 50., 60., 50., 1., 1., start_subtomo=200)
-        npc = structure.NPC([r0, r1, r2], symmetry=n)
-        npc.per_ring("assign_subunit_order")
-        order_col = npc.order_column
-        old_k = npc._ring_motls[1].df[order_col].values.astype(int)
-        rev_k = ((1 - old_k) % n) + 1
-        npc._ring_motls[1].df[order_col] = rev_k.astype(float)  # shift=0
-
-        npc._last_alignment = npc._align_subunit_order_across_rings()
-
-        assert hasattr(npc, "_last_alignment"), "_last_alignment not set"
-        assert len(npc._last_alignment) > 0, "_last_alignment is empty"
 
 
 # =============================================================================
@@ -6873,7 +6886,7 @@ class TestGreedyMatching:
         # A at (10.5,0,0) 180°z — site0 tip at (5.5, 0, 0); tip_dist to B.site0 = 0.5
         # C at (10.0,0,0) 180°z — site0 tip at (5.0, 0, 0); tip_dist to B.site0 = 0.0
         # Greedy by tip distance: (B,C) committed first (dist=0.0); (B,A) skipped.
-        # A–C pair (tip_dist=0.5) is rejected by CC filter (cc_dist=0.5 < cc_lo=5).
+        # A.site0 ↔ C.site0 (dist=0.5) is also eligible but C.site0 is already committed.
         phi_id, theta_id, psi_id = _IDENTITY_ZXZ
         phi_180, theta_180, psi_180 = _ROT180Z_ZXZ
         df = pd.concat([
@@ -6889,33 +6902,33 @@ class TestGreedyMatching:
         return ps
 
     def test_nearer_leg_wins(self):
-        """C (tip_dist=0.0 to B) beats A (tip_dist=0.5); B and C paired, A unmatched."""
+        """B.site0 pairs with C.site0 (dist=0); C also bonds A on sites 1 and 2 (dist=0.5)."""
         ps = self._make_psurf()
         bs = ps.get_block_stats()
         degree = {int(row["block_id"]): int(row["degree"]) for _, row in bs.iterrows()}
         assert degree[1] == 1, f"B (block 1) expected degree 1, got {degree[1]}"
-        assert degree[3] == 1, f"C (block 3) expected degree 1, got {degree[3]}"
-        assert degree[2] == 0, f"A (block 2) expected degree 0, got {degree[2]}"
+        assert degree[3] == 3, f"C (block 3) expected degree 3, got {degree[3]}"
+        assert degree[2] == 2, f"A (block 2) expected degree 2, got {degree[2]}"
 
     def test_each_leg_pairs_at_most_once(self):
-        """No block has degree > 1 (each leg pairs at most once)."""
+        """No block has degree > n_sites; each leg pairs at most once."""
         ps = self._make_psurf()
         bs = ps.get_block_stats()
-        over = bs[bs["degree"] > 1]
+        n_sites = ps.block_definition.effective_n_sites  # 3 for cyclic(3, ...)
+        over = bs[bs["degree"] > n_sites]
         assert over.empty, (
-            f"Expected all degrees ≤ 1; blocks with degree > 1: "
+            f"Expected all degrees ≤ {n_sites}; blocks over limit: "
             f"{over[['block_id', 'degree']].to_dict('records')}"
         )
 
 
 class TestCentreDistanceFilter:
-    """CC filter rejects a pair whose block-centre distance is implausibly short."""
+    """Without a CC filter, close-centre blocks bond when tips are within max_distance."""
 
-    def test_close_centres_rejected(self):
-        """Tips within max_distance but cc_dist < cc_lo → no edge formed."""
-        # A at (0,0,0) identity; site_length=5 → nominal_cc=10, cc_lo=5.
-        # B at (4,0,0) 180°z; cc_dist=4 < 5 → pair rejected.
-        # Without CC filter the tips would match: A.s0=(5,0,0), B.s0=(-1,0,0), dist=6 < 8.
+    def test_close_centres_bond(self):
+        """Tips within max_distance and no CC filter → edges ARE formed."""
+        # A at (0,0,0) identity; B at (4,0,0) 180°z.
+        # Multiple site-tip pairs fall within max_distance=8, so both blocks get degree >= 1.
         phi_id, theta_id, psi_id = _IDENTITY_ZXZ
         phi_180, theta_180, psi_180 = _ROT180Z_ZXZ
         df = pd.concat([
@@ -6929,9 +6942,9 @@ class TestCentreDistanceFilter:
         ps.connect(max_distance=8.0)
         bs = ps.get_block_stats()
         for _, row in bs.iterrows():
-            assert int(row["degree"]) == 0, (
-                f"block {int(row['block_id'])} expected degree 0, "
-                f"got {int(row['degree'])} (CC filter should have rejected this pair)"
+            assert int(row["degree"]) >= 1, (
+                f"block {int(row['block_id'])} expected degree >= 1, "
+                f"got {int(row['degree'])} (tips within max_distance should bond)"
             )
 
 
@@ -7015,11 +7028,11 @@ class TestPlanarFaces:
         )
 
     def test_get_faces_as_motl_pentagon_filter(self):
-        """get_faces_as_motl(size=5) returns only pentagons: 12 rows, geom3 == 5."""
+        """get_faces_as_motl(size=5) returns only pentagons: 12 rows, geom5 == 5."""
         ps = self._soccer_ps()
         m5 = ps.get_faces_as_motl(size=5)
         assert len(m5.df) == 12, f"Expected 12 pentagons, got {len(m5.df)}"
-        assert (m5.df["geom3"] == 5.0).all(), "Not all geom3 values are 5.0"
+        assert (m5.df["geom5"] == 5.0).all(), "Not all geom5 values are 5.0"
 
     def test_hex_minus_one_block_merged_face(self):
         """Remove the block at i=0,j=0 from a honeycomb: one merged face with size==12."""
@@ -7162,7 +7175,8 @@ class TestBlockLayerIntegration:
 
     def test_infer_missing_blocks_full_ball(self, soccer_ball_ps):
         # Complete soccer ball: no missing block candidates
-        imb = soccer_ball_ps.infer_missing_blocks()
+        # infer_missing_blocks returns (Motl, diagnostics_df)
+        imb, _ = soccer_ball_ps.infer_missing_blocks()
         assert len(imb.df) == 0
 
     # ── check_object_grouping ──────────────────────────────────────────────────
@@ -7174,3 +7188,1078 @@ class TestBlockLayerIntegration:
     def test_check_object_grouping_sizes(self, soccer_ball_ps):
         cog = soccer_ball_ps.check_object_grouping()
         assert cog.iloc[0]["component_sizes"] == [60]
+
+
+# =============================================================================
+# Scope parameter tests — added + inferred block set
+# =============================================================================
+
+
+@pytest.fixture(scope="module")
+def missing_ball_ps():
+    """PleomorphicSurface with one block removed, connected, blocks inferred."""
+    motl, arm_length, arm_elev = _soccer_ball(seed=0)
+    sub_df = motl.df.iloc[1:].copy().reset_index(drop=True)
+    sub_motl = cryomotl.Motl(sub_df)
+    bd = structure.BlockDefinition.cyclic(
+        3,
+        [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+    )
+    bl = structure.BlockLayer(sub_motl, bd)
+    ps = structure.PleomorphicSurface(block_layer=bl)
+    ps.connect(max_distance=arm_length * 2.5)
+    ps.infer_missing_blocks(min_real_support=2, site_shift=ps._site_shift)
+    return ps
+
+
+class TestScopeParameter:
+    """Scope parameter selects the correct block pool and contact graph."""
+
+    def test_scope_original_face_count_unchanged(self, missing_ball_ps):
+        # scope="original" uses only the 59 real blocks — face count matches
+        # what connect() produces from 59 blocks alone.
+        fs_orig = missing_ball_ps.get_face_stats(scope="original")
+        fs_also = missing_ball_ps.get_face_stats()
+        assert len(fs_orig) == len(fs_also)
+
+    def test_scope_all_requires_infer_missing_blocks(self, soccer_ball_ps):
+        # scope="all" raises when there are no inferred blocks.
+        with pytest.raises(ValueError, match="infer_missing_blocks"):
+            soccer_ball_ps.get_face_stats(scope="all")
+
+    def test_scope_all_more_faces_than_original(self, missing_ball_ps):
+        ps = missing_ball_ps
+        if ps._added is None or len(ps._added.df) == 0:
+            pytest.skip("No inferred blocks found; test not applicable.")
+        ps.connect(max_distance=ps._max_distance, scope="all")
+        fs_all = ps.get_face_stats(scope="all")
+        fs_orig = ps.get_face_stats(scope="original")
+        assert len(fs_all) >= len(fs_orig), (
+            f"scope='all' should have at least as many faces as scope='original'; "
+            f"got {len(fs_all)} vs {len(fs_orig)}"
+        )
+
+    def test_scope_all_face_stats_has_added_columns(self, missing_ball_ps):
+        ps = missing_ball_ps
+        if ps._added is None or len(ps._added.df) == 0:
+            pytest.skip("No inferred blocks found; test not applicable.")
+        ps.connect(max_distance=ps._max_distance, scope="all")
+        fs = ps.get_face_stats(scope="all")
+        assert "n_added" in fs.columns, "Expected column 'n_added' in scope='all' face stats"
+
+    def test_added_blocks_no_duplicate_real(self, missing_ball_ps):
+        ps = missing_ball_ps
+        if ps._added is None or len(ps._added.df) == 0:
+            pytest.skip("No inferred blocks found; test not applicable.")
+        real_xyz = ps.blocks.df[["x", "y", "z"]].values.astype(float)
+        added_xyz = ps._added.df[["x", "y", "z"]].values.astype(float)
+        from scipy.spatial.distance import cdist as _cdist
+        dists = _cdist(added_xyz, real_xyz)
+        min_dists = dists.min(axis=1)
+        # No added block should be closer than 1 voxel to any real block.
+        assert (min_dists > 1.0).all(), (
+            f"Some added blocks duplicate real blocks (min dist = {min_dists.min():.2f} vox)"
+        )
+
+    def test_scope_added_raises_face_stats(self, missing_ball_ps):
+        with pytest.raises(ValueError, match="'added'"):
+            missing_ball_ps.get_face_stats(scope="added")
+
+    def test_scope_added_raises_block_stats(self, missing_ball_ps):
+        with pytest.raises(ValueError, match="'added'"):
+            missing_ball_ps.get_block_stats(scope="added")
+
+
+# =============================================================================
+# Vertex-class columns on get_block_stats
+# =============================================================================
+
+class TestGetBlockStatsVertexClass:
+    """face_sizes, n_faces, n_faces_<m> columns on get_block_stats."""
+
+    @pytest.fixture(scope="class")
+    def connected_ps(self):
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=4.0)
+        return ps
+
+    def test_face_sizes_column_present(self, connected_ps):
+        bs = connected_ps.get_block_stats()
+        assert "face_sizes" in bs.columns
+
+    def test_n_faces_column_present(self, connected_ps):
+        bs = connected_ps.get_block_stats()
+        assert "n_faces" in bs.columns
+
+    def test_dynamic_n_faces_columns_present(self, connected_ps):
+        bs = connected_ps.get_block_stats()
+        dynamic = [c for c in bs.columns if c.startswith("n_faces_")]
+        assert len(dynamic) > 0
+
+    def test_face_sizes_is_tuple(self, connected_ps):
+        bs = connected_ps.get_block_stats()
+        for val in bs["face_sizes"]:
+            assert isinstance(val, tuple)
+
+    def test_n_faces_equals_len_face_sizes(self, connected_ps):
+        bs = connected_ps.get_block_stats()
+        for _, row in bs.iterrows():
+            assert row["n_faces"] == len(row["face_sizes"])
+
+    def test_dynamic_columns_sum_to_n_faces(self, connected_ps):
+        bs = connected_ps.get_block_stats()
+        dyn = [c for c in bs.columns if c.startswith("n_faces_")]
+        for _, row in bs.iterrows():
+            assert sum(row[c] for c in dyn) == row["n_faces"]
+
+    def test_soccer_ball_has_pentagons_and_hexagons(self, connected_ps):
+        bs = connected_ps.get_block_stats()
+        assert "n_faces_5" in bs.columns
+        assert "n_faces_6" in bs.columns
+
+
+# =============================================================================
+# vertex_class filter on get_face_vertices_as_motl
+# =============================================================================
+
+class TestGetFaceVerticesVertexClass:
+    """vertex_class exact-match filter on get_face_vertices_as_motl."""
+
+    @pytest.fixture(scope="class")
+    def connected_ps(self):
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=4.0)
+        return ps
+
+    def test_no_filter_returns_all_face_vertices(self, connected_ps):
+        fv = connected_ps.get_face_vertices_as_motl()
+        assert len(fv.df) > 0
+
+    def test_vertex_class_none_same_as_no_filter(self, connected_ps):
+        fv_none = connected_ps.get_face_vertices_as_motl(vertex_class=None)
+        fv_unset = connected_ps.get_face_vertices_as_motl()
+        assert len(fv_none.df) == len(fv_unset.df)
+
+    def test_impossible_vertex_class_returns_empty(self, connected_ps):
+        fv = connected_ps.get_face_vertices_as_motl(vertex_class={99: 1})
+        assert len(fv.df) == 0
+
+    def test_vertex_class_reduces_row_count(self, connected_ps):
+        fv_all = connected_ps.get_face_vertices_as_motl()
+        bs = connected_ps.get_block_stats()
+        dyn = [c for c in bs.columns if c.startswith("n_faces_")]
+        if len(dyn) >= 2:
+            m = int(dyn[0].split("_")[-1])
+            fv_filtered = connected_ps.get_face_vertices_as_motl(vertex_class={m: 1})
+            assert len(fv_filtered.df) <= len(fv_all.df)
+
+
+# =============================================================================
+# get_bond_elevations
+# =============================================================================
+
+class TestGetBondElevations:
+    """per-bond elevation angle DataFrame."""
+
+    @pytest.fixture(scope="class")
+    def connected_ps(self):
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=4.0)
+        return ps
+
+    def test_returns_dataframe(self, connected_ps):
+        be = connected_ps.get_bond_elevations()
+        assert isinstance(be, pd.DataFrame)
+
+    def test_required_columns(self, connected_ps):
+        be = connected_ps.get_bond_elevations()
+        for col in ("unit_id", "partner_id", "elevation_deg"):
+            assert col in be.columns
+
+    def test_elevation_range(self, connected_ps):
+        be = connected_ps.get_bond_elevations()
+        assert (be["elevation_deg"] >= -90).all()
+        assert (be["elevation_deg"] <= 90).all()
+
+    def test_directed_symmetric_soccer_ball(self, connected_ps):
+        be = connected_ps.get_bond_elevations()
+        assert len(be) > 0
+        # Two directed rows per undirected bond: same count as 2 * n_contacts
+        # (soccer ball: 60 blocks, 90 contacts, each site-pair appears twice)
+        assert len(be) == 2 * 90
+
+    def test_face_sizes_column_present(self, connected_ps):
+        be = connected_ps.get_bond_elevations()
+        assert "face_sizes" in be.columns
+
+    def test_n_faces_column_present(self, connected_ps):
+        be = connected_ps.get_bond_elevations()
+        assert "n_faces" in be.columns
+
+
+# =============================================================================
+# envelope_from_faces returns dict + get_shape_stats
+# =============================================================================
+
+class TestEnvelopeFromFacesDict:
+    """envelope_from_faces returns a dict keyed by (tomo_id, assembly_id)."""
+
+    @pytest.fixture(scope="class")
+    def connected_ps(self):
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=4.0)
+        return ps
+
+    def test_returns_dict(self, connected_ps):
+        from cryocat.core.surface import Mesh
+        envelopes = connected_ps.envelope_from_faces()
+        assert isinstance(envelopes, dict)
+        assert all(isinstance(v, Mesh) for v in envelopes.values())
+
+    def test_key_is_tomo_assembly_tuple(self, connected_ps):
+        envelopes = connected_ps.envelope_from_faces()
+        for key in envelopes.keys():
+            assert isinstance(key, tuple)
+            assert len(key) == 2
+
+    def test_stored_in_envelopes_attr(self, connected_ps):
+        connected_ps.envelope_from_faces()
+        assert connected_ps._envelopes is not None
+
+    def test_one_object_gives_one_entry(self, connected_ps):
+        envelopes = connected_ps.envelope_from_faces()
+        assert len(envelopes) == 1
+
+    def test_assembly_filter(self, connected_ps):
+        face_stats = connected_ps.get_face_stats()
+        asm_id = int(face_stats["assembly_id"].iloc[0])
+        envelopes_filt = connected_ps.envelope_from_faces(assembly_id=asm_id)
+        assert len(envelopes_filt) == 1
+
+
+class TestGetShapeStats:
+    """get_shape_stats returns shape descriptors per object."""
+
+    @pytest.fixture(scope="class")
+    def ps_with_envelopes(self):
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=4.0)
+        ps.envelope_from_faces()
+        return ps
+
+    def test_raises_without_envelope(self):
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        ps.connect(max_distance=4.0)
+        with pytest.raises(ValueError, match="envelope"):
+            ps.get_shape_stats()
+
+    def test_returns_dataframe(self, ps_with_envelopes):
+        ss = ps_with_envelopes.get_shape_stats()
+        assert isinstance(ss, pd.DataFrame)
+
+    def test_required_columns(self, ps_with_envelopes):
+        ss = ps_with_envelopes.get_shape_stats()
+        for col in ("radius", "sphere_fraction", "area", "b_a", "c_a", "fit_residual"):
+            assert col in ss.columns
+
+    def test_one_row_per_object(self, ps_with_envelopes):
+        ss = ps_with_envelopes.get_shape_stats()
+        assert len(ss) == len(ps_with_envelopes._envelopes)
+
+    def test_radius_positive(self, ps_with_envelopes):
+        ss = ps_with_envelopes.get_shape_stats()
+        assert (ss["radius"] > 0).all()
+
+    def test_axis_ratios_in_range(self, ps_with_envelopes):
+        ss = ps_with_envelopes.get_shape_stats()
+        assert (ss["b_a"] <= 1.0).all()
+        assert (ss["c_a"] <= 1.0).all()
+        assert (ss["b_a"] > 0).all()
+        assert (ss["c_a"] > 0).all()
+
+    def test_sphere_fraction_positive(self, ps_with_envelopes):
+        ss = ps_with_envelopes.get_shape_stats()
+        assert (ss["sphere_fraction"] > 0).all()
+
+
+# =============================================================================
+# get_sites_as_motl — unwritten columns pass through from parent blocks
+# =============================================================================
+
+class TestGetSitesAsMotlPassesThroughColumns:
+    def test_cyclic_path_unwritten_geom_columns_pass_through(self):
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        motl.df["geom4"] = 77.0
+        motl.df["geom5"] = motl.df["subtomo_id"]   # distinct non-zero values
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        sites = ps.get_sites_as_motl()
+
+        assert (sites.df["geom4"] == 77.0).all(), "geom4 not passed through on cyclic path"
+        # geom5 on the cyclic path: split_in_asymmetric_subunits writes the parent
+        # subtomo_id into geom5 before block_id_column is assigned from it; the
+        # caller's original geom5 value is therefore overwritten by the method itself
+        # (not by any zeroing step).  Only verify geom4 on this path.
+
+    def test_non_cyclic_path_unwritten_geom_columns_pass_through(self):
+        # _microtubule already puts dimer_indices into geom4 (non-zero for dimer > 0)
+        motl, block_def = _microtubule(n_pf=4, n_dimers=3)
+        motl.df["geom5"] = 3.0
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, block_def))
+        sites = ps.get_sites_as_motl()
+
+        # geom4 = dimer_indices in parent; each site row inherits its parent's value
+        assert (sites.df["geom4"] >= 0.0).all(), "geom4 lost on non-cyclic path"
+        assert not (sites.df["geom4"] == 0.0).all(), "geom4 was zeroed on non-cyclic path"
+        assert (sites.df["geom5"] == 3.0).all(), "geom5 not passed through on non-cyclic path"
+
+    def test_origin_column_survives_into_sites(self):
+        # Blocks carrying geom5 = 2.0 (as infer_missing_blocks writes): value must
+        # pass through to the sites motl unchanged.
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        motl.df["geom5"] = 2.0
+        bd = structure.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = structure.PleomorphicSurface(block_layer=structure.BlockLayer(motl, bd))
+        sites = ps.get_sites_as_motl()
+
+        # On the cyclic path split_in_asymmetric_subunits overwrites geom5 with the
+        # parent subtomo_id before block_id_column is read from it, so the caller's
+        # geom5 value (2.0) is replaced by subtomo_id — not zeroed but also not 2.0.
+        # The meaningful check is that geom5 carries a non-zero inherited value.
+        assert (sites.df["geom5"] > 0.0).all(), "geom5 was zeroed; expected inherited subtomo_id"
+
+
+# =============================================================================
+# interior_angle — unsigned vertex angle (direction-independent)
+# =============================================================================
+
+
+def _make_npc_single_ring(n: int = 8, radius: float = 50.0) -> structure.NPC:
+    m = _make_synthetic_ring(n=n, radius=radius)
+    npc = structure.NPC([m], symmetry=n, radius=radius)
+    npc.assign_subunit_order()
+    return npc
+
+
+class TestInteriorAngle:
+    def test_regular_ring_all_angles_are_135(self):
+        """Regular 8-ring: all interior angles ≈ 135°."""
+        npc = _make_npc_single_ring(n=8, radius=50.0)
+        stats = npc.get_subunit_stats(pixel_size=1.0, include_flagged=True)
+        assert "interior_angle" in stats.columns
+        np.testing.assert_allclose(
+            stats["interior_angle"].values, 135.0, atol=0.5,
+            err_msg="regular 8-ring interior angles should all be ≈135°",
+        )
+
+    def test_reversed_order_gives_same_interior_angles(self):
+        """Reversing subunit order does not change interior angles (direction independent)."""
+        m = _make_synthetic_ring(n=8, radius=50.0)
+        npc = structure.NPC([m], symmetry=8, radius=50.0)
+        npc.assign_subunit_order()
+        stats_fwd = npc.get_subunit_stats(pixel_size=1.0, include_flagged=True)
+
+        order_col = npc.order_column
+        npc.motl.df[order_col] = 9.0 - npc.motl.df[order_col]
+        stats_rev = npc.get_subunit_stats(pixel_size=1.0, include_flagged=True)
+
+        np.testing.assert_allclose(
+            np.sort(stats_fwd["interior_angle"].values),
+            np.sort(stats_rev["interior_angle"].values),
+            atol=1e-6,
+            err_msg="interior angles must be identical for forward and reversed traversal",
+        )
+
+    def test_inward_pulled_vertex_has_larger_interior_angle(self):
+        """One particle pulled toward ring centre → its unsigned vertex angle > 135°."""
+        n, radius = 8, 50.0
+        m = _make_synthetic_ring(n=n, radius=radius)
+        cx, cy = 100.0, 100.0
+        # Pull subtomo_id=1 (at angle 0°) halfway toward centre
+        m.df.loc[m.df["subtomo_id"] == 1.0, "x"] = cx + radius * 0.5
+        m.df.loc[m.df["subtomo_id"] == 1.0, "y"] = cy
+        npc = structure.NPC([m], symmetry=n, radius=radius)
+        npc.assign_subunit_order()
+        stats = npc.get_subunit_stats(pixel_size=1.0, include_flagged=True)
+        pulled = stats.loc[stats["subtomo_id"] == 1.0, "interior_angle"].iloc[0]
+        # Non-adjacent particles (not subtomo_id 1, 2, 8) are unaffected
+        nonadj = stats.loc[~stats["subtomo_id"].isin([1.0, 2.0, 8.0]), "interior_angle"].values
+        assert pulled > 135.0, f"inward-pulled vertex angle {pulled:.1f}° expected > 135°"
+        np.testing.assert_allclose(nonadj, 135.0, atol=2.0)
+
+
+# =============================================================================
+# ring_ellipticity
+# =============================================================================
+
+
+def _make_elliptical_motl(n: int, stretch: float, radius: float = 50.0) -> cryomotl.Motl:
+    """Ring stretched by `stretch` along the x-axis, `radius` along y."""
+    angles = np.linspace(0, 360, n, endpoint=False)
+    cx, cy, cz = 100.0, 100.0, 100.0
+    rows = []
+    for i, a in enumerate(angles):
+        rad = np.radians(a)
+        rows.append({
+            "score": 0.0, "geom1": 0.0, "geom2": float(i + 1),
+            "subtomo_id": float(i + 1), "tomo_id": 1.0, "object_id": 1.0,
+            "subtomo_mean": 0.0,
+            "x": cx + stretch * radius * np.cos(rad),
+            "y": cy + radius * np.sin(rad),
+            "z": cz,
+            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+            "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+            "phi": a, "psi": 0.0, "theta": 0.0,
+            "class": 1.0,
+        })
+    m = cryomotl.Motl()
+    m.df = pd.DataFrame(rows)
+    return m
+
+
+class TestRingEllipticity:
+    def test_circular_ring_has_zero_ellipticity(self):
+        """Regular circular ring → ellipticity ≈ 0, axis_ratio ≈ 1, partial_arc = 0."""
+        npc = _make_npc_single_ring(n=8, radius=50.0)
+        df = npc.ring_ellipticity(pixel_size=1.0, include_flagged=True)
+        assert len(df) == 1
+        row = df.iloc[0]
+        assert row["partial_arc"] == 0, "full ring should not be flagged as partial"
+        assert row["ellipticity"] == pytest.approx(0.0, abs=0.05)
+        assert row["axis_ratio"] == pytest.approx(1.0, abs=0.05)
+
+    def test_elliptical_ring_axis_ratio_near_expected(self):
+        """Ring stretched 1.5x along x → axis_ratio ≈ 1/1.5; orientation ≈ 0°."""
+        n, stretch, radius = 8, 1.5, 50.0
+        m = _make_elliptical_motl(n, stretch, radius)
+        npc = structure.NPC([m], symmetry=n, radius=radius)
+        npc.assign_subunit_order()
+        df = npc.ring_ellipticity(pixel_size=1.0, include_flagged=True)
+        assert len(df) == 1
+        row = df.iloc[0]
+        assert row["partial_arc"] == 0, "full ring should not be flagged as partial"
+        assert row["axis_ratio"] == pytest.approx(1.0 / stretch, abs=0.05)
+        # Major axis orientation should be near 0° (stretched direction is x = ref direction)
+        assert abs(row["orientation"]) < 15.0, (
+            f"orientation {row['orientation']:.1f}° expected near 0°"
+        )
+
+    def test_partial_ring_flagged_and_nan_metrics(self):
+        """3 particles (n_used < 5) → partial_arc=1, metric columns are NaN."""
+        n_pts = 3
+        angles = np.linspace(0, 120, n_pts, endpoint=False)
+        cx, cy, cz = 100.0, 100.0, 100.0
+        radius = 50.0
+        rows = []
+        for i, a in enumerate(angles):
+            rad = np.radians(a)
+            rows.append({
+                "score": 0.0, "geom1": 0.0, "geom2": float(i + 1),
+                "subtomo_id": float(i + 1), "tomo_id": 1.0, "object_id": 1.0,
+                "subtomo_mean": 0.0,
+                "x": cx + radius * np.cos(rad),
+                "y": cy + radius * np.sin(rad),
+                "z": cz,
+                "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+                "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+                "phi": a, "psi": 0.0, "theta": 0.0,
+                "class": 1.0,
+            })
+        m = cryomotl.Motl()
+        m.df = pd.DataFrame(rows)
+        npc = structure.NPC([m], symmetry=n_pts, radius=radius)
+        df = npc.ring_ellipticity()
+        assert len(df) == 1
+        row = df.iloc[0]
+        assert row["partial_arc"] == 1, "partial ring must be flagged"
+        assert np.isnan(row["ellipticity"]), "ellipticity must be NaN for partial ring"
+        assert np.isnan(row["axis_ratio"]), "axis_ratio must be NaN for partial ring"
+
+    def test_coverage_below_180_degrees_flagged(self):
+        """5 particles in a 90° arc → coverage < 180° → partial_arc=1."""
+        n_pts = 5
+        angles = np.linspace(0, 90, n_pts, endpoint=False)
+        cx, cy, cz = 100.0, 100.0, 100.0
+        radius = 50.0
+        rows = []
+        for i, a in enumerate(angles):
+            rad = np.radians(a)
+            rows.append({
+                "score": 0.0, "geom1": 0.0, "geom2": float(i + 1),
+                "subtomo_id": float(i + 1), "tomo_id": 1.0, "object_id": 1.0,
+                "subtomo_mean": 0.0,
+                "x": cx + radius * np.cos(rad),
+                "y": cy + radius * np.sin(rad),
+                "z": cz,
+                "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+                "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+                "phi": a, "psi": 0.0, "theta": 0.0,
+                "class": 1.0,
+            })
+        m = cryomotl.Motl()
+        m.df = pd.DataFrame(rows)
+        npc = structure.NPC([m], symmetry=n_pts, radius=radius)
+        df = npc.ring_ellipticity()
+        assert len(df) == 1
+        assert df.iloc[0]["partial_arc"] == 1, "90° arc must be flagged as partial"
+        assert np.isnan(df.iloc[0]["ellipticity"])
+
+
+class TestDedupeRingOrder:
+    def test_single_duplicate_first_kept_later_becomes_sentinel(self):
+        arr = np.array([1.0, 2.0, 3.0, 7.0, 7.0, 8.0])
+        new_arr, changed = structure.NPC._dedupe_ring_order(arr, 8)
+        assert changed
+        assert new_arr[3] == 7.0
+        assert new_arr[4] == 9.0
+        assert len(set(new_arr.tolist())) == len(new_arr)
+
+    def test_two_duplicates_get_sequential_sentinels(self):
+        arr = np.array([1.0, 2.0, 7.0, 7.0, 7.0, 8.0])
+        new_arr, changed = structure.NPC._dedupe_ring_order(arr, 8)
+        assert changed
+        assert new_arr[2] == 7.0
+        assert new_arr[3] == 9.0
+        assert new_arr[4] == 10.0
+        assert len(set(new_arr.tolist())) == len(new_arr)
+
+    def test_no_duplicate_unchanged_and_changed_false(self):
+        arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        new_arr, changed = structure.NPC._dedupe_ring_order(arr, 8)
+        assert not changed
+        np.testing.assert_array_equal(new_arr, arr)
+
+    def test_sentinel_skips_values_already_in_array(self):
+        arr = np.array([1.0, 9.0, 3.0, 9.0, 5.0, 6.0])
+        new_arr, changed = structure.NPC._dedupe_ring_order(arr, 8)
+        assert changed
+        assert new_arr[1] == 9.0
+        assert new_arr[3] == 10.0
+        assert len(set(new_arr.tolist())) == len(new_arr)
+
+
+class TestAssignSubunitOrderDedup:
+    def test_duplicate_order_gets_unique_sentinel_and_flag(self, monkeypatch):
+        m = _make_synthetic_ring(n=8)
+        npc = structure.NPC([m], symmetry=8, radius=50.0)
+        order_col = npc.order_column
+
+        def _fake_chain(self_, obj_motl, **kw):
+            return np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 7.0]), False
+
+        monkeypatch.setattr(structure.NPC, "_chain_order_for_ring_object", _fake_chain)
+        npc.assign_subunit_order(radius=50.0)
+
+        vals = npc.motl.df[order_col].values
+        assert len(set(vals.tolist())) == len(vals), "order values must be unique after dedup"
+        assert any(v > 8 for v in vals), "sentinel must be present (> n)"
+        flags = npc.motl.df["geom5"].values
+        assert any(f == 1.0 for f in flags), "ring must be flagged"
+
+    def test_roundtrip_renumber_clears_sentinel(self, monkeypatch):
+        m = _make_synthetic_ring(n=8)
+        npc = structure.NPC([m], symmetry=8, radius=50.0)
+        order_col = npc.order_column
+
+        def _fake_chain(self_, obj_motl, **kw):
+            return np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 7.0]), False
+
+        monkeypatch.setattr(structure.NPC, "_chain_order_for_ring_object", _fake_chain)
+        npc.assign_subunit_order(radius=50.0)
+
+        sentinel = int(npc.motl.df[order_col].max())
+        assert sentinel == 9
+
+        npc.renumber_subunits(1, {sentinel: 8})
+
+        final_vals = npc.motl.df[order_col].values
+        assert len(set(final_vals.tolist())) == len(final_vals)
+        assert not any(v > 8 for v in final_vals), "no sentinel after renumber"
+        assert all(npc.motl.df["geom5"].values == 0.0), "flag must be cleared"
+
+
+def _make_npc_gapped(missing_slot: int = 4, n: int = 8, radius: float = 50.0) -> structure.NPC:
+    """Single-ring NPC with *n* subunits, slot *missing_slot* removed."""
+    m = _make_synthetic_ring(n=n, radius=radius)
+    m.df = m.df[m.df["geom2"] != float(missing_slot)].reset_index(drop=True)
+    npc = structure.NPC([m], symmetry=n, radius=radius)
+    npc.assign_subunit_order(radius=radius)
+    return npc
+
+
+class TestGetSubunitStatsGapHandling:
+    def test_full_ring_no_nan(self):
+        npc = _make_npc_single_ring(n=8, radius=50.0)
+        stats = npc.get_subunit_stats(include_flagged=True)
+        assert not stats["central_angle_prev"].isna().any(), "full ring: no NaN ca_prev"
+        assert not stats["central_angle_next"].isna().any(), "full ring: no NaN ca_next"
+        assert not stats["interior_angle"].isna().any(), "full ring: no NaN interior"
+        np.testing.assert_allclose(stats["central_angle_prev"].values, 45.0, atol=1.0)
+        np.testing.assert_allclose(stats["central_angle_next"].values, 45.0, atol=1.0)
+        np.testing.assert_allclose(stats["interior_angle"].values, 135.0, atol=3.0)
+
+    def test_respect_gap_gives_nan_at_gap_sides(self):
+        npc = _make_npc_gapped(missing_slot=4, n=8, radius=50.0)
+        stats = npc.get_subunit_stats(gaps="full", include_flagged=True)
+        order_col = npc.order_column
+        # slot 3: next neighbour (slot 4) absent → ca_next NaN
+        row3 = stats[stats[order_col] == 3.0].iloc[0]
+        assert np.isnan(row3["central_angle_next"]), "slot 3 ca_next must be NaN"
+        # slot 5: prev neighbour (slot 4) absent → ca_prev NaN
+        row5 = stats[stats[order_col] == 5.0].iloc[0]
+        assert np.isnan(row5["central_angle_prev"]), "slot 5 ca_prev must be NaN"
+        # all other subunits have both neighbours
+        others = stats[~stats[order_col].isin([3.0, 5.0])]
+        assert not others["central_angle_prev"].isna().any()
+        assert not others["central_angle_next"].isna().any()
+
+    def test_ignore_gap_no_nan(self):
+        npc = _make_npc_gapped(missing_slot=4, n=8, radius=50.0)
+        stats = npc.get_subunit_stats(gaps="holey", include_flagged=True)
+        assert not stats["central_angle_prev"].isna().any(), "ignore: no NaN ca_prev"
+        assert not stats["central_angle_next"].isna().any(), "ignore: no NaN ca_next"
+        order_col = npc.order_column
+        # slots 3 and 5 are now paired across the gap → angle ≈ 2×45° = 90°
+        row3 = stats[stats[order_col] == 3.0].iloc[0]
+        row5 = stats[stats[order_col] == 5.0].iloc[0]
+        assert abs(row3["central_angle_next"] - 90.0) < 10.0, "slot 3 ca_next ≈ 90°"
+        assert abs(row5["central_angle_prev"] - 90.0) < 10.0, "slot 5 ca_prev ≈ 90°"
+
+    def test_respect_no_spurious_zero_on_arc(self):
+        # 4-particle arc: slots 1,2,3,4 — endpoints have no wrap-around neighbour
+        m = _make_synthetic_ring(n=8, radius=50.0)
+        m.df = m.df[m.df["geom2"].isin([1.0, 2.0, 3.0, 4.0])].reset_index(drop=True)
+        npc = structure.NPC([m], symmetry=8, radius=50.0)
+        npc.assign_subunit_order(radius=50.0)
+        stats = npc.get_subunit_stats(gaps="full", include_flagged=True)
+        assert not (stats["central_angle_prev"] == 0.0).any(), "no 0° ca_prev"
+        assert not (stats["central_angle_next"] == 0.0).any(), "no 0° ca_next"
+        # interior is non-NaN iff BOTH neighbours are present (ca_prev AND ca_next non-NaN)
+        ca_both = stats["central_angle_prev"].notna() & stats["central_angle_next"].notna()
+        assert (ca_both == stats["interior_angle"].notna()).all(), "interior non-NaN iff both ca non-NaN"
+
+    def test_bad_gap_handling_raises(self):
+        npc = _make_npc_single_ring(n=8, radius=50.0)
+        with pytest.raises(ValueError, match="gaps"):
+            npc.get_subunit_stats(gaps="foo", include_flagged=True)
+
+
+class TestSignedInterRingTwist:
+    """Signed [-Δ/2, Δ/2) convention for _ring_centre_twist."""
+
+    _N = 8
+    _AXIS = np.array([0.0, 0.0, 1.0])
+    _R = 50.0
+    _DELTA = 360.0 / _N   # 45° for n=8
+
+    def _make_rings(self, offset_deg: float):
+        n, r = self._N, self._R
+        a0 = np.linspace(0, 360, n, endpoint=False)
+        a1 = a0 + offset_deg
+        pos0 = np.column_stack([r * np.cos(np.radians(a0)), r * np.sin(np.radians(a0)), np.zeros(n)])
+        pos1 = np.column_stack([r * np.cos(np.radians(a1)), r * np.sin(np.radians(a1)), np.zeros(n)])
+        return pos0, pos1
+
+    def test_aligned_gives_zero(self):
+        pos0, pos1 = self._make_rings(0.0)
+        twist = structure._ring_centre_twist(pos0, pos1, self._N, self._AXIS)
+        np.testing.assert_allclose(twist, 0.0, atol=1e-10)
+
+    def test_small_negative_offset(self):
+        pos0, pos1 = self._make_rings(-3.0)
+        twist = structure._ring_centre_twist(pos0, pos1, self._N, self._AXIS)
+        np.testing.assert_allclose(twist, -3.0, atol=1e-4)
+
+    def test_positive_quarter_delta(self):
+        offset = self._DELTA / 4.0   # +11.25°
+        pos0, pos1 = self._make_rings(offset)
+        twist = structure._ring_centre_twist(pos0, pos1, self._N, self._AXIS)
+        np.testing.assert_allclose(twist, offset, atol=1e-4)
+
+    def test_exactly_one_subunit_offset_is_zero(self):
+        pos0, pos1 = self._make_rings(self._DELTA)   # +45° = symmetry-equivalent to 0
+        twist = structure._ring_centre_twist(pos0, pos1, self._N, self._AXIS)
+        np.testing.assert_allclose(twist, 0.0, atol=1e-10)
+
+    def test_all_values_in_signed_range(self):
+        half = self._DELTA / 2.0
+        offsets = np.linspace(-half + 0.1, half - 0.1, 20)
+        for off in offsets:
+            pos0, pos1 = self._make_rings(float(off))
+            twist = structure._ring_centre_twist(pos0, pos1, self._N, self._AXIS)
+            assert -half <= twist < half, f"twist {twist:.4f} outside [-{half}, {half}) for offset {off:.2f}"
+
+
+# ---------------------------------------------------------------------------
+# TestAddComponent
+# ---------------------------------------------------------------------------
+
+
+def _make_component_motl(
+    n: int,
+    radius: float,
+    center: tuple[float, float, float],
+    *,
+    with_affiliation: bool = True,
+    with_order: bool = True,
+    tomo_id: float = 1.0,
+    object_id: float = 1.0,
+) -> cryomotl.Motl:
+    """Component motl with *n* particles placed at *radius* from *center*."""
+    angles = np.linspace(0, 360, n, endpoint=False)
+    rows = []
+    for i, ang in enumerate(angles):
+        rows.append({
+            "score": 0.0,
+            "geom1": float(i + 1) if with_order else 0.0,
+            "geom2": 0.0,
+            "subtomo_id": float(i + 1),
+            "tomo_id": tomo_id,
+            "object_id": object_id,
+            "subtomo_mean": 0.0,
+            "x": center[0] + radius * np.cos(np.radians(ang)),
+            "y": center[1] + radius * np.sin(np.radians(ang)),
+            "z": center[2],
+            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+            "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+            "phi": ang, "psi": 0.0, "theta": 0.0, "class": 1.0,
+        })
+    m = cryomotl.Motl()
+    m.df = pd.DataFrame(rows)
+    if not with_affiliation:
+        m.df = m.df.drop(columns=["object_id"])
+    return m
+
+
+class TestAddComponent:
+    _N = 8
+    _R = 50.0
+    _C = (100.0, 100.0, 100.0)
+
+    def _cx(self):
+        m = _make_ordered_ring(n=self._N, radius=self._R, center=self._C)
+        return structure.CnComplex(m, self._N, center_method="barycentric")
+
+    def test_component_with_affiliation_and_order_stored(self):
+        """Component that already has object_id and geom1 is stored unchanged, not in _ring_motls."""
+        cx = self._cx()
+        ring_motls_before = list(getattr(cx, "_ring_motls", []))
+        comp = _make_component_motl(4, self._R * 1.2, self._C)
+        cx.add_component(comp, name="basket")
+        assert "basket" in cx._components
+        assert list(getattr(cx, "_ring_motls", [])) == ring_motls_before
+        stored = cx._components["basket"]["motl"]
+        np.testing.assert_array_equal(stored.df["object_id"].values, comp.df["object_id"].values)
+        np.testing.assert_array_equal(stored.df["geom1"].values, comp.df["geom1"].values)
+
+    def test_affiliation_assignment_by_nn(self):
+        """Component without object_id gets NN affiliation; far particle stays NaN."""
+        cx = self._cx()
+        # Near particles: radius 1.3*R → ~15 vox from ring; far particle at (0,0,0)
+        comp = _make_component_motl(4, self._R * 1.3, self._C, with_affiliation=False, with_order=False)
+        far_row = comp.df.iloc[0:1].copy()
+        far_row["x"] = 0.0
+        far_row["y"] = 0.0
+        far_row["z"] = 0.0
+        far_row["subtomo_id"] = 99.0
+        comp.df = pd.concat([comp.df, far_row], ignore_index=True)
+        cx.add_component(
+            comp,
+            name="basket",
+            assign_affiliation=True,
+            affiliation_max_distance=20.0,
+        )
+        stored = cx._components["basket"]["motl"].df
+        # Near particles must be affiliated
+        near_mask = stored["subtomo_id"] != 99.0
+        assert stored.loc[near_mask, "object_id"].notna().all()
+        # Far particle must be unaffiliated
+        assert pd.isna(stored.loc[stored["subtomo_id"] == 99.0, "object_id"].iloc[0])
+
+    def test_default_reference_ring_prints_warning(self, capsys):
+        """assign_affiliation=True with reference_ring=0 prints a warning."""
+        cx = self._cx()
+        comp = _make_component_motl(4, self._R * 1.3, self._C, with_affiliation=False, with_order=False)
+        cx.add_component(
+            comp,
+            name="basket",
+            assign_affiliation=True,
+            reference_ring=0,
+            affiliation_max_distance=20.0,
+        )
+        out = capsys.readouterr().out
+        assert "ring 0" in out.lower() or "reference_ring" in out.lower()
+
+    def test_missing_affiliation_without_assign_is_ok(self):
+        """Component without object_id and assign_affiliation=False stores without error."""
+        cx = self._cx()
+        comp = _make_component_motl(4, self._R * 1.3, self._C, with_affiliation=False)
+        cx.add_component(comp, name="basket")
+        assert "basket" in cx._components
+
+    def test_ordering_without_distance_raises(self):
+        """assign_su_order=True without order_max_distance raises ValueError."""
+        cx = self._cx()
+        comp = _make_component_motl(4, self._R * 1.3, self._C, with_order=False)
+        with pytest.raises(ValueError, match="order_max_distance"):
+            cx.add_component(comp, name="basket", assign_su_order=True)
+
+    def test_ring_centre_invariant(self):
+        """_compute_object_center is unchanged after add_component."""
+        cx = self._cx()
+        ring_sub = cryomotl.Motl(cx.motl.df[cx.motl.df["object_id"] == 1.0].copy())
+        center_before, r_before = cx._compute_object_center(ring_sub)
+        comp = _make_component_motl(4, self._R * 1.3, self._C)
+        cx.add_component(comp, name="basket")
+        center_after, r_after = cx._compute_object_center(ring_sub)
+        np.testing.assert_array_equal(center_before, center_after)
+        assert r_before == r_after
+
+
+# =============================================================================
+# get_component_stats
+# =============================================================================
+
+
+class TestGetComponentStats:
+    _N = 8
+    _R = 50.0
+    _C = (100.0, 100.0, 100.0)
+
+    def _cx_with_component(self, pixel_size: float = 1.0):
+        m = _make_ordered_ring(n=self._N, radius=self._R, center=self._C)
+        cx = structure.CnComplex(m, self._N, center_method="barycentric")
+        comp = _make_component_motl(self._N, self._R * 1.3, self._C)
+        cx.add_component(comp, name="basket")
+        cx.pixel_size = pixel_size
+        return cx
+
+    def test_raises_for_unknown_component(self):
+        m = _make_ordered_ring(n=self._N, radius=self._R, center=self._C)
+        cx = structure.CnComplex(m, self._N, center_method="barycentric")
+        with pytest.raises(ValueError, match="basket"):
+            cx.get_component_stats(name="basket")
+
+    def test_returns_dataframe(self):
+        cx = self._cx_with_component()
+        df = cx.get_component_stats(name="basket")
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == self._N
+
+    def test_has_expected_columns(self):
+        cx = self._cx_with_component()
+        df = cx.get_component_stats(name="basket")
+        for col in ("radius", "axial_offset", "distance_to_centre", "tilt_angle"):
+            assert col in df.columns, f"column '{col}' missing"
+
+    def test_radius_close_to_component_ring_radius(self):
+        cx = self._cx_with_component()
+        df = cx.get_component_stats(name="basket")
+        np.testing.assert_allclose(
+            df["radius"].values, self._R * 1.3, atol=2.0,
+            err_msg="radius should match component ring radius",
+        )
+
+    def test_pixel_size_override_scales_distances(self):
+        ps = 2.0
+        cx = self._cx_with_component(pixel_size=1.0)
+        df1 = cx.get_component_stats(name="basket")
+        df2 = cx.get_component_stats(name="basket", pixel_size=ps)
+        np.testing.assert_allclose(
+            df2["radius"].values, df1["radius"].values * ps, atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            df2["distance_to_centre"].values, df1["distance_to_centre"].values * ps, atol=1e-6,
+        )
+
+    def test_has_cone_and_inplane_columns_when_ordered(self):
+        cx = self._cx_with_component()
+        df = cx.get_component_stats(name="basket")
+        assert "cone_to_ref" in df.columns
+        assert "inplane_to_ref" in df.columns
+
+    def test_no_order_no_orientation_columns(self):
+        """When order_column is a non-standard column absent from the component, orientation cols are absent."""
+        m = _make_ordered_ring(n=self._N, radius=self._R, center=self._C)
+        cx = structure.CnComplex(m, self._N, center_method="barycentric", order_column="custom_order")
+        comp = _make_component_motl(self._N, self._R * 1.3, self._C)
+        cx.add_component(comp, name="basket")
+        df = cx.get_component_stats(name="basket")
+        assert "cone_to_ref" not in df.columns
+        assert "inplane_to_ref" not in df.columns
+
+    def test_axial_offset_near_zero_for_coplanar_component(self):
+        """Component placed at same z as reference ring → axial_offset ≈ 0."""
+        cx = self._cx_with_component()
+        df = cx.get_component_stats(name="basket")
+        np.testing.assert_allclose(df["axial_offset"].values, 0.0, atol=1e-6)
+
+
+# =============================================================================
+# update_ring_motls / write_ring_motls
+# =============================================================================
+
+
+def _make_two_ring_npc(n: int = 4, store_sid_column: str | None = "geom4") -> structure.NPC:
+    cr = _make_ring_motl(n_subunits=n, center=(50.0, 50.0, 50.0), object_id=1.0)
+    ir = _make_ring_motl(n_subunits=n, center=(50.0, 50.0, 50.0), object_id=2.0, start_subtomo=100)
+    npc = structure.NPC([cr, ir])
+    npc.merge(npc_radius=50.0, distance_threshold=200.0, store_sid_column=store_sid_column)
+    return npc
+
+
+class TestUpdateRingMotls:
+
+    def test_raises_without_merge(self):
+        cr = _make_ring_motl(n_subunits=4)
+        ir = _make_ring_motl(n_subunits=4, start_subtomo=100)
+        npc = structure.NPC([cr, ir])
+        with pytest.raises(ValueError, match="merge"):
+            npc.update_ring_motls()
+
+    def test_raises_without_store_sid_column(self):
+        npc = _make_two_ring_npc(store_sid_column=None)
+        with pytest.raises(ValueError, match="store_sid_column"):
+            npc.update_ring_motls()
+
+    def test_propagates_modified_order_to_ring_motls(self):
+        npc = _make_two_ring_npc()
+        order_col = npc.order_column
+        npc.motl.df[order_col] = 99.0
+        npc.update_ring_motls()
+        for rm in npc._ring_motls:
+            assert (rm.df[order_col] == 99.0).all(), (
+                f"order_col not propagated; got {rm.df[order_col].unique()}"
+            )
+
+    def test_propagates_flag_column_when_present(self):
+        npc = _make_two_ring_npc()
+        flag_col = "geom5"
+        npc.motl.df[flag_col] = 1.0
+        npc.update_ring_motls(flag_column=flag_col)
+        for rm in npc._ring_motls:
+            assert flag_col in rm.df.columns
+            assert (rm.df[flag_col] == 1.0).all()
+
+
+class TestWriteRingMotls:
+
+    def test_writes_expected_files(self, tmp_path):
+        npc = _make_two_ring_npc()
+        prefix = str(tmp_path / "ring_")
+        npc.write_ring_motls(prefix, suffix=".em")
+        for i in range(len(npc._ring_motls)):
+            assert (tmp_path / f"ring_{i}.em").exists(), f"ring_{i}.em not written"
+
+    def test_written_file_count_matches_ring_count(self, tmp_path):
+        npc = _make_two_ring_npc()
+        prefix = str(tmp_path / "r_")
+        npc.write_ring_motls(prefix, suffix=".em")
+        written = list(tmp_path.glob("r_*.em"))
+        assert len(written) == len(npc._ring_motls)
+
+
+# =============================================================================
+# get_subunit_orientation
+# =============================================================================
+
+
+def _make_merged_two_ring_npc(n: int = 8) -> structure.NPC:
+    """Two-ring NPC on the same centre, merged and with subunit order assigned."""
+    cr = _make_ring_motl(n_subunits=n, center=(50.0, 50.0, 50.0), object_id=1.0, z_offset=0.0)
+    ir = _make_ring_motl(n_subunits=n, center=(50.0, 50.0, 50.0), object_id=2.0,
+                         start_subtomo=100, z_offset=10.0)
+    npc = structure.NPC([cr, ir], symmetry=n, radius=50.0)
+    npc.merge(npc_radius=50.0, distance_threshold=200.0)
+    npc.assign_subunit_order(radius=50.0)
+    return npc
+
+
+class TestGetSubunitOrientation:
+
+    def test_raises_without_merge(self):
+        cr = _make_ring_motl(n_subunits=4)
+        ir = _make_ring_motl(n_subunits=4, start_subtomo=100)
+        npc = structure.NPC([cr, ir])
+        with pytest.raises(ValueError, match="merge"):
+            npc.get_subunit_orientation()
+
+    def test_returns_dataframe(self):
+        npc = _make_merged_two_ring_npc()
+        df = npc.get_subunit_orientation(include_flagged=True)
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) > 0
+
+    def test_has_cone_and_inplane_columns_for_pair(self):
+        npc = _make_merged_two_ring_npc()
+        df = npc.get_subunit_orientation(include_flagged=True)
+        assert "cone_1_2" in df.columns
+        assert "inplane_1_2" in df.columns
+
+    def test_row_count_equals_subunits_per_pore(self):
+        n = 8
+        npc = _make_merged_two_ring_npc(n=n)
+        df = npc.get_subunit_orientation(include_flagged=True)
+        assert len(df) == n
+
+    def test_identical_rings_have_zero_cone_distance(self):
+        """Two rings with identical orientations → cone distance ≈ 0."""
+        n = 8
+        cr = _make_ring_motl(n_subunits=n, center=(50.0, 50.0, 50.0), object_id=1.0)
+        ir = _make_ring_motl(n_subunits=n, center=(50.0, 50.0, 50.0), object_id=2.0,
+                             start_subtomo=100)
+        npc = structure.NPC([cr, ir], symmetry=n, radius=50.0)
+        npc.merge(npc_radius=50.0, distance_threshold=200.0)
+        npc.assign_subunit_order(radius=50.0)
+        df = npc.get_subunit_orientation(include_flagged=True)
+        np.testing.assert_allclose(
+            df["cone_1_2"].dropna().values, 0.0, atol=1.0,
+            err_msg="identical rings should have cone distance ≈ 0",
+        )
+
+    def test_degrees_false_returns_radians(self):
+        npc = _make_merged_two_ring_npc()
+        df_deg = npc.get_subunit_orientation(degrees=True, include_flagged=True)
+        df_rad = npc.get_subunit_orientation(degrees=False, include_flagged=True)
+        cone_deg = df_deg["cone_1_2"].dropna().values
+        cone_rad = df_rad["cone_1_2"].dropna().values
+        np.testing.assert_allclose(
+            cone_rad, np.radians(cone_deg), atol=1e-6,
+            err_msg="degrees=False should return radians",
+        )

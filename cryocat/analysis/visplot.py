@@ -2702,6 +2702,7 @@ def plot_scatter_3d(
     marker_size: int = 3,
     opacity: float = 1.0,
     title: str | None = None,
+    hover_columns: list[str] | None = None,
     output_path: PathOrStr | None = None,
 ) -> go.Figure:
     """3-D scatter plot with an optional color-coded value column.
@@ -2722,6 +2723,8 @@ def plot_scatter_3d(
         Marker opacity.
     title : str, optional
         Figure title.
+    hover_columns : list of str, optional
+        Column names whose values are shown in the hover tooltip.
     output_path : PathOrStr, optional
         Saved with :func:`_save_plotly`.
 
@@ -2745,20 +2748,30 @@ def plot_scatter_3d(
         marker_kwargs["color"] = df[color_column_name]
         marker_kwargs["colorbar"] = dict(title=color_label)
 
-    fig = go.Figure(
-        data=[
-            go.Scatter3d(
-                x=df[x_col],
-                y=df[y_col],
-                z=df[z_col],
-                mode="markers",
-                marker=marker_kwargs,
-            )
-        ]
+    scatter_kwargs: dict = dict(
+        x=df[x_col],
+        y=df[y_col],
+        z=df[z_col],
+        mode="markers",
+        marker=marker_kwargs,
     )
+    if hover_columns:
+        scatter_kwargs["customdata"] = df[hover_columns].values
+        scatter_kwargs["hovertemplate"] = (
+            f"{x_col}: %{{x}}<br>{y_col}: %{{y}}<br>{z_col}: %{{z}}<br>"
+            + "<br>".join(f"{c}: %{{customdata[{i}]}}" for i, c in enumerate(hover_columns))
+            + "<extra></extra>"
+        )
+
+    fig = go.Figure(data=[go.Scatter3d(**scatter_kwargs)])
     fig.update_layout(
         title=title,
-        scene=dict(xaxis_title=x_col, yaxis_title=y_col, zaxis_title=z_col),
+        scene=dict(
+            xaxis_title=x_col,
+            yaxis_title=y_col,
+            zaxis_title=z_col,
+            aspectmode="data",
+        ),
         margin=dict(l=0, r=0, b=0, t=30 if title else 0),
     )
 
@@ -4600,3 +4613,125 @@ def plot_fsc(
 
     _save_plotly(fig, output_path)
     return fig
+
+
+def _browse_widget(values: list, make_figure: Any) -> None:
+    """Display a Prev / Next / dropdown browser over *values*, calling *make_figure(v)* on each step.
+
+    Shared navigation backend for :func:`browse` and
+    :meth:`~cryocat.analysis.structure.PleomorphicSurface.browse_objects`.
+    Uses ``ipywidgets`` for the controls; if it is not installed the call
+    raises :exc:`ImportError` with an install hint.
+
+    Parameters
+    ----------
+    values : list
+        Ordered sequence of values to browse.
+    make_figure : callable
+        ``make_figure(value)`` must return a ``plotly.graph_objects.Figure``.
+    """
+    try:
+        import ipywidgets as widgets
+        from IPython.display import display
+    except ImportError as _exc:
+        raise ImportError(
+            "The interactive browser requires ipywidgets. "
+            "Install it with: pip install ipywidgets"
+        ) from _exc
+
+    values = list(values)
+    if not values:
+        return
+
+    idx = [0]
+    out = widgets.Output()
+
+    dropdown = widgets.Dropdown(
+        options=values,
+        value=values[0],
+        description="Jump to:",
+        layout=widgets.Layout(width="200px"),
+    )
+    btn_prev = widgets.Button(description="◄ Prev", layout=widgets.Layout(width="90px"))
+    btn_next = widgets.Button(description="Next ►", layout=widgets.Layout(width="90px"))
+    counter = widgets.Label(value=f"1 / {len(values)}")
+
+    def _show(val: Any) -> None:
+        counter.value = f"{values.index(val) + 1} / {len(values)}"
+        with out:
+            out.clear_output(wait=True)
+            make_figure(val).show()
+
+    def _on_prev(_: Any) -> None:
+        idx[0] = (idx[0] - 1) % len(values)
+        dropdown.value = values[idx[0]]
+
+    def _on_next(_: Any) -> None:
+        idx[0] = (idx[0] + 1) % len(values)
+        dropdown.value = values[idx[0]]
+
+    def _on_dropdown(change: dict) -> None:
+        if change["name"] == "value":
+            idx[0] = values.index(change["new"])
+            _show(change["new"])
+
+    btn_prev.on_click(_on_prev)
+    btn_next.on_click(_on_next)
+    dropdown.observe(_on_dropdown)
+
+    display(widgets.VBox([widgets.HBox([btn_prev, dropdown, btn_next, counter]), out]))
+    _show(values[0])
+
+
+def browse(df: pd.DataFrame, column_name: str, **kwargs: Any) -> None:
+    """Browse a DataFrame group by group with Prev / Next / dropdown controls.
+
+    Displays one group at a time in a Jupyter notebook.  Each group's figure is
+    produced by :func:`plot_scatter_3d`; ``**kwargs`` are forwarded to it
+    unchanged, so pass the same keyword arguments you would use there
+    (``coord_columns``, ``color_column_name``, ``marker_size``, ``opacity``,
+    etc.).
+
+    Requires ``ipywidgets``.  If it is not installed, a clear :exc:`ImportError`
+    is raised with an install hint.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Source data.
+    column_name : str
+        Column to group by.  Unique values become the browser's navigation steps.
+    axes : list of str, optional
+        Three column names to use as x, y, z axes.  Alias for ``coord_columns``.
+        When neither ``axes`` nor ``coord_columns`` is given, the function checks
+        whether columns ``"x"``, ``"y"``, and ``"z"`` exist in *df*; if they do,
+        they are used automatically; otherwise the first three columns are used.
+    **kwargs
+        Forwarded to :func:`plot_scatter_3d`.  ``title`` and ``output_path`` are
+        removed if present — the title is set automatically to the group value
+        and saving is not supported in browse mode.
+
+    Examples
+    --------
+    >>> visplot.browse(motl.df, "object_id", color_column_name="class", marker_size=3)
+    >>> visplot.browse(df, "label", axes=["cx", "cy", "cz"])
+    """
+    kwargs.pop("title", None)
+    kwargs.pop("output_path", None)
+    if "color" in kwargs and "color_column_name" not in kwargs:
+        kwargs["color_column_name"] = kwargs.pop("color")
+    if "axes" in kwargs and "coord_columns" not in kwargs:
+        kwargs["coord_columns"] = kwargs.pop("axes")
+    if "coord_columns" not in kwargs:
+        if {"x", "y", "z"}.issubset(df.columns):
+            kwargs["coord_columns"] = ["x", "y", "z"]
+    values = sorted(df[column_name].unique().tolist())
+
+    def _make_fig(val: Any) -> go.Figure:
+        return plot_scatter_3d(
+            df[df[column_name] == val].copy(),
+            title=str(val),
+            **kwargs,
+        )
+
+    _browse_widget(values, _make_fig)

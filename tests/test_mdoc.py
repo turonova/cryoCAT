@@ -15,6 +15,11 @@ def mdoc_file():
 
 
 @pytest.fixture
+def multi_tilt_mdoc_file():
+    return str(test_data / "TS_017" / "017.mdoc")
+
+
+@pytest.fixture
 def mdoc_directory():
     return str(test_data / "frames_mdoc")
 
@@ -158,6 +163,27 @@ class TestMdocWithFiles:
             assert isinstance(result, mdoc.Mdoc)
             assert len(result.removed_images()) == len(indices_to_remove)
             assert os.path.exists(out_path)
+
+    def test_remove_images_by_angles_from_array(self, multi_tilt_mdoc_file, tmp_path):
+        mdoc_obj = mdoc.Mdoc(multi_tilt_mdoc_file)
+        tilts_to_remove = mdoc_obj.imgs["TiltAngle"].to_numpy(dtype=float)[:2]
+        out_path = str(tmp_path / "removed_by_angles.mdoc")
+        result = mdoc.remove_images_by_angles(multi_tilt_mdoc_file, tilts_to_remove, output_path=out_path)
+        assert isinstance(result, mdoc.Mdoc)
+        assert len(result.removed_images()) == 2
+        assert os.path.exists(out_path)
+
+    def test_remove_images_by_angles_from_star_file(self, mdoc_file, tmp_path):
+        mdoc_obj = mdoc.Mdoc(mdoc_file)
+        tilts_to_remove = mdoc_obj.imgs["TiltAngle"].to_numpy(dtype=float)[:1]
+        star_content = "data_\n\nloop_\n_removed_tilts\n" + "".join(
+            f"{a:.6f}\n" for a in tilts_to_remove
+        )
+        star_path = str(tmp_path / "removed.star")
+        Path(star_path).write_text(star_content)
+        result = mdoc.remove_images_by_angles(mdoc_file, star_path)
+        assert isinstance(result, mdoc.Mdoc)
+        assert len(result.removed_images()) == 1
 
     def test_get_tilt_angles(self, mdoc_file, tmp_path):
         tilt_angles = mdoc.get_tilt_angles(mdoc_file)
@@ -323,6 +349,52 @@ class TestMdocWithFiles:
         assert isinstance(s, pd.Series)
         assert len(s) == len(m.imgs)
         np.testing.assert_allclose(s.values, m.imgs["TiltAngle"].values)
+
+    def _make_angle_mdoc(self):
+        """Build a small Mdoc with four distinct tilt angles for angle-removal tests."""
+        imgs = pd.DataFrame({
+            "ZValue": pd.array([0, 1, 2, 3], dtype="Int64"),
+            "TiltAngle": [-30.0, -10.0, 10.0, 30.0],
+            "Removed": [False, False, False, False],
+        })
+        return mdoc.Mdoc(
+            titles=["Test"],
+            project_info={"PixelSpacing": 1.0},
+            imgs=imgs,
+            section_id="ZValue",
+        )
+
+    def test_remove_images_by_angles_marks_correct_rows(self):
+        """Matched rows are marked removed; unmatched rows stay."""
+        m = self._make_angle_mdoc()
+        m.remove_images_by_angles([-30.0, 10.0])
+        assert len(m.removed_images()) == 2
+        assert len(m.kept_images()) == 2
+        assert m.imgs.loc[0, "Removed"] is True or m.imgs.loc[0, "Removed"] == True
+        assert m.imgs.loc[2, "Removed"] is True or m.imgs.loc[2, "Removed"] == True
+
+    def test_remove_images_by_angles_atol(self):
+        """An angle within atol is matched; an angle just outside is not."""
+        m = self._make_angle_mdoc()
+        m.remove_images_by_angles([-30.005], atol=0.01)
+        assert m.imgs.loc[0, "Removed"] == True
+
+    def test_remove_images_by_angles_ambiguous_raises(self):
+        """Two images with the same angle raise ValueError."""
+        imgs = pd.DataFrame({
+            "ZValue": pd.array([0, 1], dtype="Int64"),
+            "TiltAngle": [-30.0, -30.0],
+            "Removed": [False, False],
+        })
+        m = mdoc.Mdoc(titles=["T"], project_info={}, imgs=imgs, section_id="ZValue")
+        with pytest.raises(ValueError, match="-30"):
+            m.remove_images_by_angles([-30.0])
+
+    def test_remove_images_by_angles_no_match_raises(self):
+        """An angle that matches no image raises ValueError."""
+        m = self._make_angle_mdoc()
+        with pytest.raises(ValueError, match="99"):
+            m.remove_images_by_angles([99.0])
 
     def _make_zvalue_mdoc(self):
         """Build a small ZValue-style Mdoc in memory so we can exercise the ZValue helpers."""

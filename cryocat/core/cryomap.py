@@ -1118,12 +1118,12 @@ def crop(
 
     input_map = read(input_map)
 
-    new_size = geom.as_triplet(new_size)
+    new_size = geom.as_triplet(new_size, dtype=int)
 
     if crop_coord is None:
-        crop_coord = geom.as_triplet(input_map.shape) // 2
+        crop_coord = geom.as_triplet(input_map.shape, dtype=int) // 2
     else:
-        crop_coord = geom.as_triplet(crop_coord)
+        crop_coord = geom.as_triplet(crop_coord, dtype=int)
 
     vs, ve, _, _ = get_start_end_indices(crop_coord, input_map.shape, new_size)
 
@@ -1210,7 +1210,7 @@ def recenter(input_map: MapSource, new_center: TripletLike) -> np.ndarray:
     """
 
     original_map = read(input_map)
-    new_center = geom.as_triplet(new_center)
+    new_center = geom.as_triplet(new_center, dtype=int)
     return imageutils.recenter_volume(original_map, new_center)
 
 
@@ -1459,7 +1459,7 @@ def pad(
     """
 
     volume = read(input_map)
-    new_size = geom.as_triplet(new_size)
+    new_size = geom.as_triplet(new_size, dtype=int)
     return imageutils.pad_volume(volume, new_size, fill_value=fill_value)
 
 
@@ -1877,3 +1877,45 @@ def calculate_masked_fsc(
         ioutils.fsc_write(output_path, df["x"].values, df[y_col].values, pixel_size)
 
     return df
+
+
+def multiply_by_ctf(
+    input_map: MapSource,
+    ctf_map: MapSource,
+    output_path: PathOrStr | None = None,
+    **output_kwargs: Any,
+) -> np.ndarray:
+    """Multiply a map by a half-size (rfftn) CTF volume in Fourier space.
+
+    The CTF volume is assumed to cover the rfft-halved axis, which corresponds
+    to axis 0 after reading (i.e. the x-axis in xyz convention).  The transform
+    order ``(1, 2, 0)`` is used so that the rfft is applied last along axis 0.
+
+    Parameters
+    ----------
+    input_map : MapSource
+        Subtomogram or any real-space volume.  Normalised via :func:`read`.
+    ctf_map : MapSource
+        Half-size CTF volume whose shape matches the rfft output of
+        *input_map*.  Normalised via :func:`read`.
+    output_path : PathOrStr, optional
+        Path to write the result.  When ``None`` the array is returned only.
+    **output_kwargs
+        Forwarded to :func:`write` when *output_path* is provided.
+
+    Returns
+    -------
+    np.ndarray
+        Real-space volume after CTF multiplication, dtype ``float32``.
+    """
+    vol = read(input_map)
+    ctf_vol = read(ctf_map)
+
+    axes = (1, 2, 0)
+    ft = np.fft.rfftn(vol, axes=axes)
+    out = np.fft.irfftn(ft * ctf_vol, s=[vol.shape[a] for a in axes], axes=axes).astype(np.float32)
+
+    if output_path is not None:
+        write(out, output_path, **{"data_type": np.float32, **output_kwargs})
+
+    return out

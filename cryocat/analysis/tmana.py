@@ -1166,7 +1166,7 @@ def select_peaks(
         th_map *= tomo_mask
 
     if edge_masking is not None:
-        edge_masking = geom.as_triplet(edge_masking)
+        edge_masking = geom.as_triplet(edge_masking, dtype=int)
         edge_mask = np.zeros(th_map.shape)
 
         # if isinstance(edge_masking, int):

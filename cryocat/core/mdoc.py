@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from cryocat._types import ArrayLike, PathOrStr
+from cryocat._types import ArrayLike, DataSource, PathOrStr
 from cryocat.utils import ioutils
 
 
@@ -166,6 +166,36 @@ class Mdoc:
         for index in indices:
             index = kept_indices[index]
             self.remove_image(index)
+
+    def remove_images_by_angles(self, angles: ArrayLike, atol: float = 0.01) -> None:
+        """Mark images whose TiltAngle matches one of the given angles as removed.
+
+        Each angle must match exactly one image.  A :exc:`ValueError` is raised
+        immediately if any angle matches zero or more than one row, so the mdoc
+        is left partially modified in that case.
+
+        Parameters
+        ----------
+        angles : ArrayLike
+            1-D sequence of tilt angles in degrees.  Each value is compared
+            against the ``TiltAngle`` column using the given absolute tolerance.
+        atol : float, default=0.01
+            Absolute tolerance in degrees for the angle comparison.
+
+        Raises
+        ------
+        ValueError
+            If any angle matches zero or more than one image.
+        """
+        tilts = self.imgs["TiltAngle"].to_numpy(dtype=float)
+        for a in np.asarray(angles, dtype=float):
+            hits = np.flatnonzero(np.isclose(tilts, a, atol=atol))
+            if len(hits) != 1:
+                raise ValueError(
+                    f"Angle {a} matches {len(hits)} images in the mdoc "
+                    f"(expected exactly 1)."
+                )
+            self.imgs.loc[self.imgs.index[hits[0]], "Removed"] = True
 
     def removed_images(self) -> pd.DataFrame:
         """Return the subset of images that have been marked as removed.
@@ -649,6 +679,44 @@ def remove_images(
             mdoc.write(output_path, overwrite=True)
 
     return mdoc
+
+
+def remove_images_by_angles(
+    input_mdoc: PathOrStr,
+    angles: DataSource,
+    output_path: PathOrStr | None = None,
+    atol: float = 0.01,
+) -> Mdoc:
+    """Remove images from an mdoc file by matching tilt angles.
+
+    Parameters
+    ----------
+    input_mdoc : PathOrStr
+        Path to the input ``.mdoc`` file.
+    angles : DataSource
+        Tilt angles to remove.  Accepted forms:
+
+        * ``str`` — path to a ``.star`` file; loaded with
+          :func:`~cryocat.utils.ioutils.removed_tilts_load`.
+        * ``pandas.DataFrame`` — must contain a ``removed_tilts`` column.
+        * ``numpy.ndarray`` — 1-D array of angles in degrees.
+    output_path : PathOrStr, optional
+        If given, the modified mdoc is written to this path.
+    atol : float, default=0.01
+        Absolute tolerance in degrees for the angle comparison; passed to
+        :meth:`Mdoc.remove_images_by_angles`.
+
+    Returns
+    -------
+    Mdoc
+        The modified :class:`Mdoc` object.
+    """
+    mdoc_obj = Mdoc(input_mdoc)
+    angles_arr = ioutils.removed_tilts_load(angles)
+    mdoc_obj.remove_images_by_angles(angles_arr, atol=atol)
+    if output_path:
+        mdoc_obj.write(output_path, overwrite=True)
+    return mdoc_obj
 
 
 def get_tilt_angles(

@@ -578,7 +578,7 @@ def create_wg_mask(
         sub_wg = wg_list_star_df.loc[wg_list_star_df["tomo_num"] == value].copy()
         angles = [i for i in sub_wg.loc[:, "tilt_angle"]]
 
-        box_size = geom.as_triplet(box_size)
+        box_size = geom.as_triplet(box_size, dtype=int)
         mask = np.empty(box_size)
 
         if shape == "wedge" or shape == "sph_wedge":
@@ -918,7 +918,7 @@ def generate_wedge_mask(
     ValueError
         If ``method`` is neither ``"geometric"`` nor ``"analytic"``.
     """
-    size_triplet = geom.as_triplet(map_size)
+    size_triplet = geom.as_triplet(map_size, dtype=int)
     filt = np.ones(size_triplet)
 
     wl = load_wedge_list_sg(wedgelist)

@@ -2315,7 +2315,7 @@ def in_box_bounds(
     numpy.ndarray
         Boolean mask of shape ``(N,)``.
     """
-    dims = as_triplet(box_dims)
+    dims = as_triplet(box_dims, dtype=int)
     coords = np.asarray(coords)
     coords_min = coords - boundary
     coords_max = coords + boundary
@@ -2353,7 +2353,9 @@ def angle_between_vectors(vectors1: np.ndarray, vectors2: np.ndarray) -> np.ndar
     norms1 = np.linalg.norm(vectors1, axis=1)
     norms2 = np.linalg.norm(vectors2, axis=1)
 
-    cosines = dot_products / (norms1 * norms2)
+    norms_product = norms1 * norms2
+    # Avoid 0/0 for zero-length vectors; angle is undefined → nan.
+    cosines = np.where(norms_product > 0.0, dot_products / np.where(norms_product > 0.0, norms_product, 1.0), np.nan)
     radians = np.arccos(np.clip(cosines, -1.0, 1.0))
     degrees = np.degrees(radians)
 
@@ -2394,7 +2396,7 @@ def fill_ellipsoid(
 
     # Ax^2 + By^2 + Cz^2 + 2Dxy + 2Exz + 2Fyz + 2Gx + 2Hy + 2Iz + J = 0
 
-    box_size = as_triplet(box_size)
+    box_size = as_triplet(box_size, dtype=int)
 
     x_array = np.arange(0, box_size[0], 1)
     y_array = np.arange(0, box_size[1], 1)
@@ -4304,8 +4306,9 @@ def barycenter(coords: ArrayLike, weights: ArrayLike | None = None) -> np.ndarra
 def as_triplet(
     input_value: TripletLike | None,
     reference_size: TripletLike | None = None,
+    dtype: "type | np.dtype | None" = None,
 ) -> np.ndarray:
-    """Normalize a TripletLike input to a length-3 integer ndarray.
+    """Normalize a TripletLike input to a length-3 ndarray.
 
     Canonical normalizer for the :data:`cryocat._types.TripletLike` type.
     Any function that accepts a TripletLike should call this at its entry
@@ -4323,11 +4326,17 @@ def as_triplet(
     reference_size : TripletLike, optional
         Fallback used when ``input_value`` is None. Normalized the same way
         and divided by 2. Defaults to None.
+    dtype : type or numpy.dtype, optional
+        When given, cast the result to this dtype. When omitted, the dtype is
+        inferred from the input: floats stay floats, integers stay integers.
+        Pass ``dtype=int`` for discrete quantities (box sizes, array shapes,
+        voxel indices) to make the requirement explicit at the call site.
 
     Returns
     -------
     numpy.ndarray
-        Length-3 integer ndarray.
+        Length-3 ndarray. Dtype is inferred from the input when *dtype* is
+        omitted, or cast to *dtype* when provided.
 
     Raises
     ------
@@ -4343,18 +4352,25 @@ def as_triplet(
     array([1, 2, 3])
     >>> as_triplet(None, reference_size=8)
     array([4, 4, 4])
+    >>> as_triplet([11.25, -0.75, 0.0])
+    array([11.25, -0.75,  0.  ])
+    >>> as_triplet([11.25, -0.75, 0.0], dtype=int)
+    array([11,  0,  0])
     """
 
     def format_input(unformatted_value):
         if isinstance(unformatted_value, (tuple, list, np.ndarray)):
             if len(unformatted_value) == 3:
-                return np.asarray(unformatted_value).astype(int)
+                arr = np.asarray(unformatted_value)
             elif len(unformatted_value) == 1:
-                return np.full((3,), unformatted_value).astype(int)
+                arr = np.full((3,), unformatted_value[0])
             else:
                 raise ValueError("The size have to be a single number or have to have length of 3!")
         elif isinstance(unformatted_value, (float, int)):
-            return np.full((3,), unformatted_value).astype(int)
+            arr = np.full((3,), unformatted_value)
+        else:
+            raise TypeError(f"Unsupported type for as_triplet: {type(unformatted_value)}")
+        return arr if dtype is None else arr.astype(dtype)
 
     if input_value is not None:
         size_correct_format = format_input(input_value)

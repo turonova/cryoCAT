@@ -12,7 +12,7 @@ from cryocat.utils.exceptions import UserInputError
 
 import numpy as np
 import pandas as pd
-from cryocat.core import cryomotl
+from cryocat.core import cryomotl, cryomap
 from cryocat.core.cryomotl import MotlSource
 from cryocat.utils import geom
 from cryocat.utils import mathutils
@@ -1054,6 +1054,7 @@ class StaParamSpec:
 # ── Format converters (to_format / from_format for StaParamSpec) ──────────────
 # _is_none_val is defined later in the module but resolved at call time (fine).
 
+
 def _sym_to_format(v: Any, sta_type: str) -> Any:
     """Canonical symmetry → format-specific: Schoenflies for STOPGAP, integer for novaSTA."""
     if v is None:
@@ -1113,6 +1114,7 @@ def _halfset_from_format(v: Any, sta_type: str) -> Any:
         return i == 0  # invert: 0 means "do not ignore" = do split
     return i != 0
 
+
 _STA_SCHEMA: list[StaParamSpec] = [
     # ── 34 core STOPGAP columns (STOPGAP write order is authoritative) ────────
     StaParamSpec(canonical="completed ali", stopgap="completed_ali", novasta=None, dtype=int, default=DERIVED),
@@ -1127,8 +1129,14 @@ _STA_SCHEMA: list[StaParamSpec] = [
         default=DERIVED,
         literals=StaSubtomoMode,
     ),
-    StaParamSpec(canonical="rootdir", stopgap="rootdir", novasta="folder", dtype=str, default=None,
-                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap"),
+    StaParamSpec(
+        canonical="rootdir",
+        stopgap="rootdir",
+        novasta="folder",
+        dtype=str,
+        default=None,
+        mandatory_if=lambda ctx: ctx.sta_type == "stopgap",
+    ),
     StaParamSpec(canonical="motl", stopgap="motl_name", novasta="motl", dtype=str, default=MANDATORY),
     StaParamSpec(canonical="wedge list", stopgap="wedgelist_name", novasta="wedgeList", dtype=str, default=MANDATORY),
     StaParamSpec(canonical="binning", stopgap="binning", novasta=None, dtype=int, default=1),
@@ -1214,8 +1222,15 @@ _STA_SCHEMA: list[StaParamSpec] = [
         default=0.01,
         note="pass-through factor at unbinned Nyquist",
     ),
-    StaParamSpec(canonical="symmetry", stopgap="symmetry", novasta="symmetry", dtype=str, default="C1",
-                 to_format=_sym_to_format, from_format=_sym_from_format),
+    StaParamSpec(
+        canonical="symmetry",
+        stopgap="symmetry",
+        novasta="symmetry",
+        dtype=str,
+        default="C1",
+        to_format=_sym_to_format,
+        from_format=_sym_from_format,
+    ),
     StaParamSpec(canonical="threshold", stopgap="score_thresh", novasta="threshold", dtype=float, default=0.0),
     StaParamSpec(canonical="subset", stopgap="subset", novasta=None, dtype=int, default=100, note="100 = disabled"),
     StaParamSpec(
@@ -1224,8 +1239,15 @@ _STA_SCHEMA: list[StaParamSpec] = [
     # split into even odd: canonical name; merged with STOPGAP ignore_halfsets (logically inverted).
     # Default True = do split. STOPGAP ignore_halfsets=0 means halfsets ARE used (= split); novaSTA
     # splitIntoEvenOdd=1 means DO split. to_format/from_format handle the inversion per format.
-    StaParamSpec(canonical="split into even odd", stopgap="ignore_halfsets", novasta="splitIntoEvenOdd",
-                 dtype=bool, default=True, to_format=_halfset_to_format, from_format=_halfset_from_format),
+    StaParamSpec(
+        canonical="split into even odd",
+        stopgap="ignore_halfsets",
+        novasta="splitIntoEvenOdd",
+        dtype=bool,
+        default=True,
+        to_format=_halfset_to_format,
+        from_format=_halfset_from_format,
+    ),
     StaParamSpec(
         canonical="temperature",
         stopgap="temperature",
@@ -1290,20 +1312,69 @@ _STA_SCHEMA: list[StaParamSpec] = [
         note="CONFIRM: allowed values not in STOPGAP manual",
     ),
     # Euler columns: required only for STOPGAP when use_euler_search is True.
-    StaParamSpec(canonical="euler axes", stopgap="euler_axes", novasta=None, dtype=str, default="none", group="euler",
-                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
-    StaParamSpec(canonical="euler 1 incr", stopgap="euler_1_incr", novasta=None, dtype=float, default=0, group="euler",
-                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
-    StaParamSpec(canonical="euler 1 iter", stopgap="euler_1_iter", novasta=None, dtype=int, default=0, group="euler",
-                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
-    StaParamSpec(canonical="euler 2 incr", stopgap="euler_2_incr", novasta=None, dtype=float, default=0, group="euler",
-                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
-    StaParamSpec(canonical="euler 2 iter", stopgap="euler_2_iter", novasta=None, dtype=int, default=0, group="euler",
-                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
-    StaParamSpec(canonical="euler 3 incr", stopgap="euler_3_incr", novasta=None, dtype=float, default=0, group="euler",
-                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
-    StaParamSpec(canonical="euler 3 iter", stopgap="euler_3_iter", novasta=None, dtype=int, default=0, group="euler",
-                 mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search),
+    StaParamSpec(
+        canonical="euler axes",
+        stopgap="euler_axes",
+        novasta=None,
+        dtype=str,
+        default="none",
+        group="euler",
+        mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search,
+    ),
+    StaParamSpec(
+        canonical="euler 1 incr",
+        stopgap="euler_1_incr",
+        novasta=None,
+        dtype=float,
+        default=0,
+        group="euler",
+        mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search,
+    ),
+    StaParamSpec(
+        canonical="euler 1 iter",
+        stopgap="euler_1_iter",
+        novasta=None,
+        dtype=int,
+        default=0,
+        group="euler",
+        mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search,
+    ),
+    StaParamSpec(
+        canonical="euler 2 incr",
+        stopgap="euler_2_incr",
+        novasta=None,
+        dtype=float,
+        default=0,
+        group="euler",
+        mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search,
+    ),
+    StaParamSpec(
+        canonical="euler 2 iter",
+        stopgap="euler_2_iter",
+        novasta=None,
+        dtype=int,
+        default=0,
+        group="euler",
+        mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search,
+    ),
+    StaParamSpec(
+        canonical="euler 3 incr",
+        stopgap="euler_3_incr",
+        novasta=None,
+        dtype=float,
+        default=0,
+        group="euler",
+        mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search,
+    ),
+    StaParamSpec(
+        canonical="euler 3 iter",
+        stopgap="euler_3_iter",
+        novasta=None,
+        dtype=int,
+        default=0,
+        group="euler",
+        mandatory_if=lambda ctx: ctx.sta_type == "stopgap" and ctx.use_euler_search,
+    ),
     StaParamSpec(
         canonical="scoring fcn",
         stopgap="scoring_fcn",
@@ -1325,7 +1396,12 @@ _STA_SCHEMA: list[StaParamSpec] = [
     StaParamSpec(canonical="fthresh", stopgap="fthresh", novasta=None, dtype=int, default=800, group="full"),
     # ── novaSTA-only core parameters ──────────────────────────────────────────
     StaParamSpec(
-        canonical="subtomo size", stopgap=None, novasta="subtomoSize", dtype=int, default=None, group="extraction",
+        canonical="subtomo size",
+        stopgap=None,
+        novasta="subtomoSize",
+        dtype=int,
+        default=None,
+        group="extraction",
         mandatory_if=lambda ctx: ctx.sta_type == "novasta" and bool(ctx.get("extract subtomos")),
     ),
     StaParamSpec(
@@ -2191,8 +2267,9 @@ class StaParameters:
         df = pd.DataFrame(df_data) if n_align > 0 else pd.DataFrame(columns=["iteration"])
 
         klass = StopgapParams if sta_type_lower == "stopgap" else NovaStaParams
-        return klass(df, pd.DataFrame(), create_ref=create_ref, ref_family=ref_family_str,
-                     use_euler_search=use_euler_search)
+        return klass(
+            df, pd.DataFrame(), create_ref=create_ref, ref_family=ref_family_str, use_euler_search=use_euler_search
+        )
 
     # ── Auxiliary data ─────────────────────────────────────────────────────
 
@@ -2260,9 +2337,13 @@ class StaParameters:
             df[spec.canonical] = df[spec.canonical].apply(
                 lambda v, s=spec: s.to_format(v, "novasta") if not _is_none_val(v) else v
             )
-        return NovaStaParams(df, self.df_extra.copy(),
-                             create_ref=self.create_ref, ref_family=self.ref_family,
-                             use_euler_search=self.use_euler_search)
+        return NovaStaParams(
+            df,
+            self.df_extra.copy(),
+            create_ref=self.create_ref,
+            ref_family=self.ref_family,
+            use_euler_search=self.use_euler_search,
+        )
 
     def to_stopgap(self) -> "StopgapParams":
         """Return a :class:`StopgapParams` backed by the same canonical ``df``.
@@ -2280,9 +2361,13 @@ class StaParameters:
             df[spec.canonical] = df[spec.canonical].apply(
                 lambda v, s=spec: s.to_format(v, "stopgap") if not _is_none_val(v) else v
             )
-        return StopgapParams(df, self.df_extra.copy(),
-                             create_ref=self.create_ref, ref_family=self.ref_family,
-                             use_euler_search=self.use_euler_search)
+        return StopgapParams(
+            df,
+            self.df_extra.copy(),
+            create_ref=self.create_ref,
+            ref_family=self.ref_family,
+            use_euler_search=self.use_euler_search,
+        )
 
     # ── Validation ─────────────────────────────────────────────────────────
 
@@ -2416,8 +2501,7 @@ class StopgapParams(StaParameters):
         ref_family: StaRefFamily = "singleref",
         use_euler_search: bool = False,
     ) -> None:
-        super().__init__(df, df_extra, create_ref=create_ref, ref_family=ref_family,
-                         use_euler_search=use_euler_search)
+        super().__init__(df, df_extra, create_ref=create_ref, ref_family=ref_family, use_euler_search=use_euler_search)
 
     @property
     def motl_type(self) -> str:
@@ -2972,8 +3056,7 @@ class NovaStaParams(StaParameters):
         ref_family: StaRefFamily = "singleref",
         use_euler_search: bool = False,
     ) -> None:
-        super().__init__(df, df_extra, create_ref=create_ref, ref_family=ref_family,
-                         use_euler_search=use_euler_search)
+        super().__init__(df, df_extra, create_ref=create_ref, ref_family=ref_family, use_euler_search=use_euler_search)
         self._orig_key_order: list[str] | None = None  # original camelCase key order
 
     @property
@@ -3203,15 +3286,11 @@ class NovaStaParams(StaParameters):
                     lambda v, s=spec: s.from_format(v, "novasta") if not _is_none_val(v) else v
                 )
             elif spec.dtype is bool:
-                df[spec.canonical] = df[spec.canonical].apply(
-                    lambda v: bool(int(v)) if not _is_none_val(v) else v
-                )
+                df[spec.canonical] = df[spec.canonical].apply(lambda v: bool(int(v)) if not _is_none_val(v) else v)
 
         # Normalise rootdir (mapped from novaSTA 'folder')
         if "rootdir" in df.columns:
-            df["rootdir"] = df["rootdir"].apply(
-                lambda v: _normalize_rootdir(str(v)) if not _is_none_val(v) else v
-            )
+            df["rootdir"] = df["rootdir"].apply(lambda v: _normalize_rootdir(str(v)) if not _is_none_val(v) else v)
 
         obj = cls(df, pd.DataFrame(), create_ref=create_ref, ref_family="singleref")
         obj._orig_key_order = key_order
@@ -3672,8 +3751,7 @@ def continue_run_prefill(last_row: dict) -> dict:
     starting_iter = iteration + n_iters
 
     # Strip derived / meta columns; keep parameter columns
-    _skip = {"iteration", "completed ali", "completed p avg", "completed f avg",
-              "subtomo mode", "startidx"}
+    _skip = {"iteration", "completed ali", "completed p avg", "completed f avg", "subtomo mode", "startidx"}
     base_params = {k: v for k, v in last_row.items() if k not in _skip and v is not None}
     base_params["temperature"] = 0.0
     return {"starting_iter": starting_iter, "base_params": base_params}
@@ -3709,9 +3787,7 @@ def validate_ref_mapping(
     dst_classes = sorted({int(row["dst_class"]) for row in mapping})
     expected = list(range(1, len(dst_classes) + 1))
     if dst_classes != expected:
-        errors.append(
-            f"Target classes must be contiguous from 1; got {dst_classes} (expected {expected})."
-        )
+        errors.append(f"Target classes must be contiguous from 1; got {dst_classes} (expected {expected}).")
 
     for row in mapping:
         ref_dir = Path(row["src_ref_dir"])
@@ -3731,9 +3807,7 @@ def validate_ref_mapping(
 # ── Run-folder creation (Part C) ─────────────────────────────────────────────
 
 
-_RUN_FOLDER_SUBDIRS: tuple[str, ...] = (
-    "ref", "comm", "fsc", "raw", "meta", "lists", "masks", "temp", "blank"
-)
+_RUN_FOLDER_SUBDIRS: tuple[str, ...] = ("ref", "comm", "fsc", "raw", "meta", "lists", "masks", "temp", "blank")
 _SUBTOMO_SETTINGS_CONTENT = "vol_ext=.em\n"
 
 
@@ -3851,8 +3925,7 @@ def create_run_folder(
                 shutil.rmtree(rd)
             else:
                 raise FileExistsError(
-                    f"Run folder {rd} already exists. "
-                    "Pass overwrite=True or choose a different folder_name."
+                    f"Run folder {rd} already exists. " "Pass overwrite=True or choose a different folder_name."
                 )
 
         for subdir in _RUN_FOLDER_SUBDIRS:
@@ -3924,9 +3997,7 @@ def _write_subtomo_param(
             row: dict = {k: v for k, v in merged.items()}
             row["iteration"] = iter_num
             row["subtomo mode"] = compose_subtomo_mode(blk.job, sta_run.run_mode)
-            row["motl"] = expand_motl_name(
-                blk.motl_name, base=base_motl, run=actual_run, iter_=iter_num
-            )
+            row["motl"] = expand_motl_name(blk.motl_name, base=base_motl, run=actual_run, iter_=iter_num)
             row["rootdir"] = rootdir_str
             if blk.search_mode is not None:
                 row["search mode"] = blk.search_mode
@@ -4094,9 +4165,7 @@ class CoassignmentFactor:
             One row per particle: ``particle_id``, ``group`` (tuple id), and
             ``group_size``.
         """
-        _, group, counts = np.unique(
-            self.labels, axis=0, return_inverse=True, return_counts=True
-        )
+        _, group, counts = np.unique(self.labels, axis=0, return_inverse=True, return_counts=True)
         return pd.DataFrame(
             {
                 "particle_id": self.particle_ids,
@@ -4150,23 +4219,17 @@ class CoassignmentFactor:
 
         if max_runs is not None:
             if r > max_runs:
-                raise UserInputError(
-                    f"agreement_histogram supports up to {max_runs} runs, got {r}."
-                )
+                raise UserInputError(f"agreement_histogram supports up to {max_runs} runs, got {r}.")
             if not self.full_participation:
                 raise UserInputError(
-                    "agreement_histogram requires every particle in every run; "
-                    "restrict to the common subset first."
+                    "agreement_histogram requires every particle in every run; " "restrict to the common subset first."
                 )
         elif not self.full_participation:
             raise UserInputError(
-                "agreement_histogram requires every particle in every run; "
-                "restrict to the common subset first."
+                "agreement_histogram requires every particle in every run; " "restrict to the common subset first."
             )
 
-        tuples, _, counts = np.unique(
-            self.labels, axis=0, return_inverse=True, return_counts=True
-        )
+        tuples, _, counts = np.unique(self.labels, axis=0, return_inverse=True, return_counts=True)
         T = len(tuples)
 
         use_exact = method == "exact" or (method == "auto" and T <= max_exact_tuples)
@@ -4188,8 +4251,8 @@ class CoassignmentFactor:
         CHUNK = 256
         for a0 in range(0, T, CHUNK):
             a1 = min(a0 + CHUNK, T)
-            a_block = tuples[a0:a1]       # (ca, R)
-            a_cnt = counts[a0:a1]         # (ca,)
+            a_block = tuples[a0:a1]  # (ca, R)
+            a_cnt = counts[a0:a1]  # (ca,)
 
             # Upper triangle within this block
             ca = a1 - a0
@@ -4203,7 +4266,7 @@ class CoassignmentFactor:
             # Cross with all later blocks
             for b0 in range(a1, T, CHUNK):
                 b1 = min(b0 + CHUNK, T)
-                b_block = tuples[b0:b1]   # (cb, R)
+                b_block = tuples[b0:b1]  # (cb, R)
                 b_cnt = counts[b0:b1]
 
                 m = (a_block[:, None, :] == b_block[None, :, :]).sum(axis=2)  # (ca, cb)
@@ -4271,13 +4334,15 @@ class CoassignmentFactor:
         rows = []
         for r in range(R):
             others = off_diag[r][~np.isnan(off_diag[r])]
-            rows.append({
-                "run": labels[r],
-                "n_classes": int(self.n_classes[r]),
-                "mean_ari": float(others.mean()) if len(others) else 0.0,
-                "min_ari": float(others.min()) if len(others) else 0.0,
-                "max_ari": float(others.max()) if len(others) else 0.0,
-            })
+            rows.append(
+                {
+                    "run": labels[r],
+                    "n_classes": int(self.n_classes[r]),
+                    "mean_ari": float(others.mean()) if len(others) else 0.0,
+                    "min_ari": float(others.min()) if len(others) else 0.0,
+                    "max_ari": float(others.max()) if len(others) else 0.0,
+                }
+            )
 
         return {
             "summary": pd.DataFrame(rows),
@@ -4333,13 +4398,10 @@ def build_coassignment_factor(
             raise UserInputError(f"Run {label!r} is empty.")
         if df[particle_column].duplicated().any():
             raise UserInputError(
-                f"Run {label!r} repeats particle identifiers in {particle_column!r}; "
-                "renumber the motl first."
+                f"Run {label!r} repeats particle identifiers in {particle_column!r}; " "renumber the motl first."
             )
 
-    particle_ids = np.unique(
-        np.concatenate([df[particle_column].to_numpy() for df in dataframes])
-    )
+    particle_ids = np.unique(np.concatenate([df[particle_column].to_numpy() for df in dataframes]))
     n = particle_ids.size
 
     labels = np.full((n, len(dataframes)), _ABSENT, dtype=np.int32)
@@ -4413,9 +4475,7 @@ def _snap_agreement(min_agreement: float, n_runs: int) -> tuple[float, int]:
     return k / n_runs, k
 
 
-def _spectral_apply_threshold(
-    all_labels: np.ndarray, raw_labels: np.ndarray, k: int, r: int
-) -> None:
+def _spectral_apply_threshold(all_labels: np.ndarray, raw_labels: np.ndarray, k: int, r: int) -> None:
     """In-place: set ``raw_labels[i] = -1`` when particle *i* agrees with its
     cluster's modal label in fewer than *k* of *r* runs."""
     for cid in np.unique(raw_labels):
@@ -4431,11 +4491,7 @@ def _spectral_apply_threshold(
                 min_v = int(valid.min())
                 bc = np.bincount((valid - min_v).astype(np.intp))
                 consensus[ri] = min_v + int(bc.argmax())
-        agree = (
-            (ml == consensus[None, :])
-            & (ml != _ABSENT)
-            & (consensus[None, :] != _ABSENT)
-        ).sum(axis=1)
+        agree = ((ml == consensus[None, :]) & (ml != _ABSENT) & (consensus[None, :] != _ABSENT)).sum(axis=1)
         member_idx = np.where(mask)[0]
         raw_labels[member_idx[agree < k]] = -1
 
@@ -4505,10 +4561,7 @@ def _compute_reliability(
         gap = float(eigenvalues[0] / (eigenvalues.sum() + 1e-12)) if eigenvalues.size > 0 else 0.0
         if gap > 0.5:
             reliable = True
-            verdict = (
-                f"Spectral gap {gap:.2f} suggests stable structure "
-                f"(agreement histogram skipped: R={R} > 12)."
-            )
+            verdict = f"Spectral gap {gap:.2f} suggests stable structure " f"(agreement histogram skipped: R={R} > 12)."
         elif gap > 0.2:
             reliable = True
             verdict = (
@@ -4555,13 +4608,10 @@ def consensus_groups(
     ConsensusResult
     """
     if linkage not in ("complete", "average", "single"):
-        raise UserInputError(
-            f"linkage must be 'complete', 'average', or 'single'; got {linkage!r}."
-        )
+        raise UserInputError(f"linkage must be 'complete', 'average', or 'single'; got {linkage!r}.")
     if linkage == "single":
         warnings.warn(
-            "single linkage can chain distant classes via a single weak link; "
-            "consider 'complete' or 'average'.",
+            "single linkage can chain distant classes via a single weak link; " "consider 'complete' or 'average'.",
             UserWarning,
             stacklevel=2,
         )
@@ -4583,9 +4633,7 @@ def consensus_groups(
         m = factor.matrix(max_particles=_MATRIX_GUARD)
         dist_condensed = squareform(1.0 - m, checks=False)
         z = sch.linkage(dist_condensed, method=linkage)
-        raw_labels = (sch.fcluster(z, t=1.0 - t_actual, criterion="distance") - 1).astype(
-            np.int32
-        )
+        raw_labels = (sch.fcluster(z, t=1.0 - t_actual, criterion="distance") - 1).astype(np.int32)
         method = f"scipy-{linkage}"
         n_comp_r = min(20, int(factor.n_classes.sum()))
         _, evals_r = factor.pca(n_components=n_comp_r)
@@ -4716,3 +4764,120 @@ def consensus_motl(
         motl.df = motl.df[motl.df[class_column] != result.junk_class].reset_index(drop=True)
 
     return motl
+
+
+def process_warp_subtomos(
+    input_motl: MotlSource,
+    output_path: PathOrStr,
+    tomo_id: ListLike | None = None,
+    output_motl: PathOrStr | None = None,
+    motl_type: MotlType = "emmotl",
+    flip_map: bool = False,
+    sort_by_tomo: bool = True,
+    base_folder: PathOrStr | None = None,
+    subtomo_prefix: str = "subtomo_",
+    file_format: Literal["mrc", "em"] = "mrc",
+    relion_kwargs: dict | None = None,
+    output_kwargs: dict | None = None,
+) -> "cryomotl.Motl":
+    """Multiply Warp2 subtomograms by their CTF and write them into one folder,
+    sequentially numbered after sorting by tomogram.
+
+    Parameters
+    ----------
+    input_motl : MotlSource
+        Warp2 RELION star file (or any :data:`~cryocat.core.cryomotl.MotlSource`
+        accepted by :meth:`~cryocat.core.cryomotl.Motl.load`).  When loading
+        from a file, the motl type is always ``"relion"``; pass relion-specific
+        options via *relion_kwargs*.
+    output_path : PathOrStr
+        Folder for the output subtomograms.  Created if it does not exist.
+        Each file is named ``{subtomo_prefix}{subtomo_id}.{file_format}``.
+    tomo_id : ListLike or None, optional
+        Process only these tomogram IDs (for parallelisation).  Particle
+        numbering is computed on the full star file so IDs are identical across
+        parallel jobs.  Default: all tomograms.
+    output_motl : PathOrStr or None, optional
+        If given, the full sorted motl (all tomograms) is written to this path
+        using *motl_type* and *output_kwargs*.
+    motl_type : MotlType, default ``"emmotl"``
+        Format used when writing *output_motl*.
+    flip_map : bool, default ``False``
+        Mirror each subtomogram volume along z around the box centre
+        (``N/2`` for even ``N``).  Applied during the per-subtomogram loop
+        independently of *flip_handedness*.
+    sort_by_tomo : bool, default ``True``
+        If ``True``, sort particles by ``tomo_id`` (stable sort, preserving
+        star-file order within each tomogram) before renumbering.  If
+        ``False``, particles are renumbered in their current order without
+        any reordering.
+    base_folder : PathOrStr or None, optional
+        Folder the relative paths inside the star file are resolved against.
+        Default: paths are used as-is.
+    subtomo_prefix : str, default ``"subtomo_"``
+        Prefix prepended to the subtomogram ID in each output file name.
+    file_format : {"mrc", "em"}, default ``"mrc"``
+        Output file format for each subtomogram.
+    relion_kwargs : dict or None, optional
+        Keyword arguments forwarded to the RELION motl loader
+        (:class:`~cryocat.core.cryomotl.RelionMotl`).  Recognised keys:
+        ``version``, ``pixel_size``, ``binning``, ``optics_data``.
+    output_kwargs : dict or None, optional
+        Keyword arguments forwarded to
+        :meth:`~cryocat.core.cryomotl.Motl.write_out` when writing
+        *output_motl* (beyond *motl_type*).
+
+    Returns
+    -------
+    cryomotl.Motl
+        The sorted (and optionally flipped) motl with new 1-based
+        ``subtomo_id`` values.
+    """
+    motl = cryomotl.Motl.load(input_motl, motl_type="relion", **(relion_kwargs or {}))
+
+    if sort_by_tomo:
+        order = np.argsort(motl.df["tomo_id"].values, kind="stable")
+        motl.df = motl.df.iloc[order].reset_index(drop=True)
+        motl.relion_df = motl.relion_df.iloc[order].reset_index(drop=True)
+    motl.renumber_particles()
+
+    out_motl = cryomotl.Motl(motl.df)
+    if output_motl is not None:
+        out_motl.write_out(output_motl, motl_type=motl_type, **(output_kwargs or {}))
+
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    selection = np.ones(len(motl.df), dtype=bool)
+    if tomo_id is not None:
+        tomo_ids = tomo_id if hasattr(tomo_id, "__iter__") and not isinstance(tomo_id, str) else [tomo_id]
+        selection = motl.df["tomo_id"].isin(tomo_ids).values
+
+    subtomo_ids = motl.df.loc[selection, "subtomo_id"].values
+    subtomo_paths = motl.relion_df.loc[selection, "rlnImageName"].values
+    ctf_paths = (
+        motl.relion_df.loc[selection, "rlnCtfImage"].values
+        if "rlnCtfImage" in motl.relion_df.columns
+        else [None] * len(subtomo_paths)
+    )
+
+    base = Path(base_folder) if base_folder is not None else None
+
+    for subtomo_id_val, subtomo_path, ctf_path in zip(subtomo_ids, subtomo_paths, ctf_paths):
+        if not isinstance(ctf_path, str):
+            p = Path(subtomo_path)
+            stem, pix = p.name.rsplit("_", 1)
+            ctf_path = str(p.with_name(f"{stem}_ctf_{pix}"))
+
+        if base is not None:
+            subtomo_path = str(base / subtomo_path)
+            ctf_path = str(base / ctf_path)
+
+        vol = cryomap.multiply_by_ctf(subtomo_path, ctf_path)
+
+        if flip_map:
+            vol = cryomap.flip(vol, axis="z")
+
+        cryomap.write(vol, str(output_path / f"{subtomo_prefix}{int(subtomo_id_val)}.{file_format}"))
+
+    return out_motl

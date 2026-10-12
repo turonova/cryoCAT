@@ -1282,6 +1282,32 @@ class TestGetCurvatureTable:
         expected = np.abs(df["k1"].values - df["k2"].values)
         np.testing.assert_allclose(df["curvature_anisotropy"].values, expected, atol=1e-10)
 
+    def test_vertex_area_column_present(self, sphere_mesh_with_curvatures):
+        df = sphere_mesh_with_curvatures.get_curvature_table(element="vertex")
+        assert "area" in df.columns
+
+    def test_vertex_area_all_positive(self, sphere_mesh_with_curvatures):
+        df = sphere_mesh_with_curvatures.get_curvature_table(element="vertex")
+        assert (df["area"].values > 0).all()
+
+    def test_vertex_area_sums_to_mesh_area(self, sphere_mesh_with_curvatures):
+        m = sphere_mesh_with_curvatures
+        df = m.get_curvature_table(element="vertex")
+        np.testing.assert_allclose(
+            df["area"].sum(), m.get_surface_area(), rtol=1e-6
+        )
+
+    def test_triangle_area_column_present(self, sphere_mesh_with_curvatures):
+        df = sphere_mesh_with_curvatures.get_curvature_table(element="triangle")
+        assert "area" in df.columns
+
+    def test_triangle_area_sums_to_mesh_area(self, sphere_mesh_with_curvatures):
+        m = sphere_mesh_with_curvatures
+        df = m.get_curvature_table(element="triangle")
+        np.testing.assert_allclose(
+            df["area"].sum(), m.get_surface_area(), rtol=1e-6
+        )
+
 
 # =============================================================================
 # Mesh.simplify — tests

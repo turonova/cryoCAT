@@ -33,6 +33,8 @@ dependencies = [
     "numpydoc>=1.10",
     "open3d>=0.19",
     "pyvista>=0.48",
+    "ipywidgets>=8.0",
+    "IPython>=8.0",
 ]
 classifiers = [
     "Intended Audience :: Science/Research",

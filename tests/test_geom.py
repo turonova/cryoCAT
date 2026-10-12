@@ -246,9 +246,9 @@ def test_change_handedness_coordinates():
         ((1, 2), None, None),
         ((1,), None, np.array([1, 1, 1])),
         ((1), None, np.array([1, 1, 1])),
-        ((1.5, 5.3, 3), None, np.array([1, 5, 3])),
+        ((1.5, 5.3, 3), None, np.array([1.5, 5.3, 3.0])),
         (np.array([1, 5, 3]), None, np.array([1, 5, 3])),
-        (np.array([1.5, 5.3, 3]), None, np.array([1, 5, 3])),
+        (np.array([1.5, 5.3, 3]), None, np.array([1.5, 5.3, 3.0])),
     ],
 )
 def test_as_triplet(input_value, reference_size, expected):
@@ -257,6 +257,21 @@ def test_as_triplet(input_value, reference_size, expected):
             as_triplet(input_value, reference_size)
     else:
         assert np.array_equal(as_triplet(input_value, reference_size), expected)
+
+
+@pytest.mark.parametrize(
+    "input_value, expected",
+    [
+        ((1.5, 5.3, 3), np.array([1, 5, 3])),
+        (np.array([1.5, 5.3, 3.0]), np.array([1, 5, 3])),
+        ([2, 4, 6], np.array([2, 4, 6])),
+        (3.9, np.array([3, 3, 3])),
+    ],
+)
+def test_as_triplet_dtype_int(input_value, expected):
+    result = as_triplet(input_value, dtype=int)
+    assert result.dtype == np.dtype(int)
+    assert np.array_equal(result, expected)
 
 
 # ---------------------------------------------------------------------------

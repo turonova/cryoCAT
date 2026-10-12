@@ -237,7 +237,7 @@ def _spherical_mask_nd(
     if center is None:
         center = shape // 2
     else:
-        center = geom.as_triplet(center)
+        center = geom.as_triplet(center, dtype=int)
 
     grids = np.mgrid[tuple(slice(0, s) for s in shape)]
     dist = np.sqrt(sum((g - c) ** 2 for g, c in zip(grids, center)))
@@ -913,7 +913,7 @@ def find_peak_3d(volume: np.ndarray, search_radius: int = 20, center: TripletLik
     if center is None:
         center = shape // 2  # returns array
     else:
-        center = geom.as_triplet(center)  # returns array
+        center = geom.as_triplet(center, dtype=int)  # returns array
 
     mask = _spherical_mask_nd(volume.shape, search_radius, center=center)
     masked = volume * mask

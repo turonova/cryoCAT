@@ -158,8 +158,7 @@ def write_out(input_map: np.ndarray, output_path: PathOrStr | None, **output_kwa
     """
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
     if output_path is not None:
         cryomap.write(input_map, output_path, **{"data_type": np.single, **output_kwargs})
@@ -173,9 +172,9 @@ def rotate(input_map: np.ndarray, angles: EulerAngles | None) -> np.ndarray:
     ----------
     input_map : numpy.ndarray
         3D array with the input mask to be rotated.
-    angles : EulerAngles or None 
+    angles : EulerAngles or None
         The angles (in degrees) by which the mask should be rotated. The angles should follow zxz Euler convention.
-        See :func:`cryocat.utils.ioutils.euler_angles_load` for more information on the formatting of the angles. 
+        See :func:`cryocat.utils.ioutils.euler_angles_load` for more information on the formatting of the angles.
 
     Returns
     -------
@@ -191,7 +190,9 @@ def rotate(input_map: np.ndarray, angles: EulerAngles | None) -> np.ndarray:
         return cryomap.rotate(input_map, rotation_angles=angles)
 
 
-def postprocess(input_map: np.ndarray, gaussian: float, angles: EulerAngles | None, output_path: PathOrStr | None, **output_kwargs) -> np.ndarray:
+def postprocess(
+    input_map: np.ndarray, gaussian: float, angles: EulerAngles | None, output_path: PathOrStr | None, **output_kwargs
+) -> np.ndarray:
     """Applies set of postprocessing steps to the input_map. It can smooth the mask by applying Gaussian blur, it
     can rotate it by Euler angles defined in degrees in zxz convention and write it out if output path is specified.
 
@@ -201,7 +202,7 @@ def postprocess(input_map: np.ndarray, gaussian: float, angles: EulerAngles | No
         3D array with the mask to postprocess.
     gaussian : float
         Sigma value of the Gaussian blur to be added. If set to 0.0, the Gaussian is not applied.
-    angles : EulerAngles or None  
+    angles : EulerAngles or None
         Euler angles in degrees in zxz convention. If all angles are 0.0, the mask is not rotated.
         See :func:`cryocat.utils.ioutils.euler_angles_load` for more information on the formatting of the angles.
     output_path : PathOrStr or None
@@ -223,8 +224,7 @@ def postprocess(input_map: np.ndarray, gaussian: float, angles: EulerAngles | No
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
     # if angles is not None:
     #     angles = ioutils.euler_angles_load(angles)
@@ -257,8 +257,7 @@ def union(mask_list: list[MapSource], output_path: PathOrStr | None = None, **ou
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
     final_mask = np.zeros(cryomap.read(mask_list[0]).shape)
@@ -295,8 +294,7 @@ def intersection(mask_list: list[MapSource], output_path: PathOrStr | None = Non
     """
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
     final_mask = np.ones(cryomap.read(mask_list[0]).shape)
@@ -334,8 +332,7 @@ def subtraction(mask_list: list[MapSource], output_path: PathOrStr | None = None
     """
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
     final_mask = cryomap.read(mask_list[0])
@@ -378,8 +375,7 @@ def difference(mask_list: list[MapSource], output_path: PathOrStr | None = None,
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
     union_mask = union(mask_list)
@@ -392,9 +388,16 @@ def difference(mask_list: list[MapSource], output_path: PathOrStr | None = None,
     return final_mask
 
 
-@gui_exposed(label="Spherical shell", category="Mask", output="mask",
-             hide=("mask_size", "output_path"))
-def spherical_shell_mask(mask_size: TripletLike, shell_thickness: int | float, radius: int | None = None, center: TripletLike | None = None, gaussian: float = 0.0, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
+@gui_exposed(label="Spherical shell", category="Mask", output="mask", hide=("mask_size", "output_path"))
+def spherical_shell_mask(
+    mask_size: TripletLike,
+    shell_thickness: int | float,
+    radius: int | None = None,
+    center: TripletLike | None = None,
+    gaussian: float = 0.0,
+    output_path: PathOrStr | None = None,
+    **output_kwargs,
+) -> np.ndarray:
     """Generate a spherical shell mask within a 3D volume.
 
     Parameters
@@ -427,12 +430,11 @@ def spherical_shell_mask(mask_size: TripletLike, shell_thickness: int | float, r
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
-    mask_size = geom.as_triplet(mask_size)
-    center = geom.as_triplet(center, reference_size=mask_size)
+    mask_size = geom.as_triplet(mask_size, dtype=int)
+    center = geom.as_triplet(center, reference_size=mask_size, dtype=int)
 
     if radius is None:
         radius = np.amin(mask_size) // 2
@@ -449,9 +451,16 @@ def spherical_shell_mask(mask_size: TripletLike, shell_thickness: int | float, r
     return shell_mask
 
 
-@gui_exposed(label="Sphere", category="Mask", output="mask",
-             hide=("mask_size", "output_path"))
-def spherical_mask(mask_size: TripletLike, radius: int | None = None, center: TripletLike | None = None, gaussian: float = 0.0, gaussian_outwards: bool = True, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
+@gui_exposed(label="Sphere", category="Mask", output="mask", hide=("mask_size", "output_path"))
+def spherical_mask(
+    mask_size: TripletLike,
+    radius: int | None = None,
+    center: TripletLike | None = None,
+    gaussian: float = 0.0,
+    gaussian_outwards: bool = True,
+    output_path: PathOrStr | None = None,
+    **output_kwargs,
+) -> np.ndarray:
     """Creates a spherical mask with the specified radius, center and box size. The values range from 0.0 to 1.0.
     Additionally, the mask can be blurred by applying Gaussian specified by its sigma value.
 
@@ -496,12 +505,11 @@ def spherical_mask(mask_size: TripletLike, radius: int | None = None, center: Tr
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
-    mask_size = geom.as_triplet(mask_size)
-    center = geom.as_triplet(center, reference_size=mask_size)
+    mask_size = geom.as_triplet(mask_size, dtype=int)
+    center = geom.as_triplet(center, reference_size=mask_size, dtype=int)
 
     if radius is None:
         radius = np.amin(mask_size) // 2
@@ -519,8 +527,7 @@ def spherical_mask(mask_size: TripletLike, radius: int | None = None, center: Tr
     return mask
 
 
-@gui_exposed(label="Cylinder", category="Mask", output="mask",
-             hide=("mask_size", "output_path"))
+@gui_exposed(label="Cylinder", category="Mask", output="mask", hide=("mask_size", "output_path"))
 def cylindrical_mask(
     mask_size: TripletLike,
     radius: int | None = None,
@@ -556,7 +563,7 @@ def cylindrical_mask(
         mask surface (False). The latter is consistent with Dynamo convention. Defaults to True.
     angles : EulerAngles, optional
         1D array defining the rotation of the mask specified as three Euler angles in degrees in
-        zxz convention. If all angles are zero, no rotation is applied. 
+        zxz convention. If all angles are zero, no rotation is applied.
         See :func:`cryocat.utils.ioutils.euler_angles_load` for more information on the formatting of the angles.
         Defaults to None.
     output_path : str, optional
@@ -585,12 +592,11 @@ def cylindrical_mask(
     """
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
-    mask_size = geom.as_triplet(mask_size)
-    center = geom.as_triplet(center, reference_size=mask_size)
+    mask_size = geom.as_triplet(mask_size, dtype=int)
+    center = geom.as_triplet(center, reference_size=mask_size, dtype=int)
     # if angles is not None:
     #     angles = ioutils.euler_angles_load(angles)
 
@@ -617,6 +623,7 @@ def cylindrical_mask(
     mask = postprocess(mask, gaussian, angles, output_path, **output_kwargs)
 
     return mask
+
 
 def cylindrical_mask_from_points(
     marker1: ArrayLike,
@@ -676,8 +683,7 @@ def cylindrical_mask_from_points(
     """
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
     marker1 = np.asarray(marker1)
@@ -688,16 +694,18 @@ def cylindrical_mask_from_points(
     direction_vector = direction_vector / np.linalg.norm([direction_vector], axis=1)[:, np.newaxis]
 
     # Find rotation with relation to z-pointing vector
-    rot = srot.align_vectors(direction_vector,np.asarray([[0,0,1]]))
-    angles = rot[0].as_euler('zxz',degrees=True)
+    rot = srot.align_vectors(direction_vector, np.asarray([[0, 0, 1]]))
+    angles = rot[0].as_euler("zxz", degrees=True)
 
     # Find center within the global frame of rereference
-    center = np.average([marker1,marker2], axis=0)
-    center = center/pixel_size
+    center = np.average([marker1, marker2], axis=0)
+    center = center / pixel_size
     center = center + chimera_origin_idx
 
     # Create, rotate, and shift mask
-    mask = cylindrical_mask(mask_size, radius=radius, height=height, gaussian=gaussian, gaussian_outwards=gaussian_outwards)
+    mask = cylindrical_mask(
+        mask_size, radius=radius, height=height, gaussian=gaussian, gaussian_outwards=gaussian_outwards
+    )
     rot_mask = cryomap.rotate(mask, rotation_angles=angles)
 
     rot_shifted = cryomap.recenter(rot_mask, new_center=center)
@@ -707,9 +715,18 @@ def cylindrical_mask_from_points(
 
     return rot_shifted
 
-@gui_exposed(label="Ellipsoid shell", category="Mask", output="mask",
-             hide=("mask_size", "output_path"))
-def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: TripletLike, center: TripletLike | None = None, gaussian: float = 0.0, angles: EulerAngles | None = None, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
+
+@gui_exposed(label="Ellipsoid shell", category="Mask", output="mask", hide=("mask_size", "output_path"))
+def ellipsoid_shell_mask(
+    mask_size: TripletLike,
+    shell_thickness: float,
+    radii: TripletLike,
+    center: TripletLike | None = None,
+    gaussian: float = 0.0,
+    angles: EulerAngles | None = None,
+    output_path: PathOrStr | None = None,
+    **output_kwargs,
+) -> np.ndarray:
     """Generates a binary mask of an ellipsoid shell within a given mask size.
 
     Parameters
@@ -725,7 +742,7 @@ def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: 
     gaussian : float, default=0.0
         Standard deviation of the Gaussian blur to apply to the shell mask. Defaults to 0.0 (no blur).
     angles : EulerAngles, optional
-        Angles for rotating the ellipsoid around each axis (in degrees). 
+        Angles for rotating the ellipsoid around each axis (in degrees).
         See :func:`cryocat.utils.ioutils.euler_angles_load` for more information on the formatting of the angles.
         Defaults to None.
     output_path : str, optional
@@ -750,13 +767,12 @@ def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: 
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
-    mask_size = geom.as_triplet(mask_size)
-    center = geom.as_triplet(center, reference_size=mask_size)
-    radii = geom.as_triplet(radii, reference_size=mask_size)
+    mask_size = geom.as_triplet(mask_size, dtype=int)
+    center = geom.as_triplet(center, reference_size=mask_size, dtype=int)
+    radii = geom.as_triplet(radii, reference_size=mask_size, dtype=int)
     # if angles is not None:
     #     angles = ioutils.euler_angles_load(angles)
 
@@ -772,8 +788,7 @@ def ellipsoid_shell_mask(mask_size: TripletLike, shell_thickness: float, radii: 
     return shell_mask
 
 
-@gui_exposed(label="Ellipsoid", category="Mask", output="mask",
-             hide=("mask_size", "output_path"))
+@gui_exposed(label="Ellipsoid", category="Mask", output="mask", hide=("mask_size", "output_path"))
 def ellipsoid_mask(
     mask_size: TripletLike,
     radii: TripletLike | None = None,
@@ -805,7 +820,7 @@ def ellipsoid_mask(
         mask surface (False). The latter is consistent with Dynamo convention. Defaults to True.
     angles : EulerAngles, optional
         1D array defining the rotation of the mask specified as three Euler angles in degrees in
-        zxz convention. If all angles are zero, no rotation is applied. 
+        zxz convention. If all angles are zero, no rotation is applied.
         See :func:`cryocat.utils.ioutils.euler_angles_load` for more information on the formatting of the angles.
         Defaults to None.
     output_path : str, optional
@@ -835,13 +850,12 @@ def ellipsoid_mask(
     """
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
-    mask_shape = geom.as_triplet(mask_size)
-    center = geom.as_triplet(center, reference_size=mask_shape)
-    radii = geom.as_triplet(radii, reference_size=mask_shape)
+    mask_shape = geom.as_triplet(mask_size, dtype=int)
+    center = geom.as_triplet(center, reference_size=mask_shape, dtype=int)
+    radii = geom.as_triplet(radii, reference_size=mask_shape, dtype=int)
 
     radii = preprocess_params(radii, gaussian, gaussian_outwards)
 
@@ -946,7 +960,7 @@ def molmap_tight_mask(
         or if it will be centered around the mask surface (False). Defaults to True.
     angles : EulerAngles, optional
         Defines the rotation of the mask specified as three Euler angles in degrees in
-        zxz convention. If all angles are zero, no rotation is applied. 
+        zxz convention. If all angles are zero, no rotation is applied.
         See :func:`cryocat.utils.ioutils.euler_angles_load` for more information on the formatting of the angles.
         Defaults to None.
     output_path : str, optional
@@ -969,8 +983,7 @@ def molmap_tight_mask(
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
     model = cryomap.read(input_map)
@@ -989,8 +1002,12 @@ def molmap_tight_mask(
     return mask
 
 
-@gui_exposed(label="Tight (from map)", category="Mask", output="mask",
-             hide=("mask_size", "output_path", "input_map", "threshold"))
+@gui_exposed(
+    label="Tight (from map)",
+    category="Mask",
+    output="mask",
+    hide=("mask_size", "output_path", "input_map", "threshold"),
+)
 def map_tight_mask(
     input_map: MapSource,
     threshold: float | None = None,
@@ -1025,7 +1042,7 @@ def map_tight_mask(
         or if it will be centered around the mask surface (False). Defaults to True.
     angles : EulerAngles, optional
         Defines the rotation of the mask specified as three Euler angles in degrees in
-        zxz convention. If all angles are zero, no rotation is applied. 
+        zxz convention. If all angles are zero, no rotation is applied.
         See :func:`cryocat.utils.ioutils.euler_angles_load` for more information on the formatting of the angles.
         Defaults to None.
     n_regions : int, default=1
@@ -1052,8 +1069,7 @@ def map_tight_mask(
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
     mask = cryomap.read(input_map)
@@ -1169,7 +1185,9 @@ def get_mass_center(input_map: MapSource) -> np.ndarray:
     return mask_center.astype(int)
 
 
-def shrink_full_mask(input_map: MapSource, shrink_factor: int, output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
+def shrink_full_mask(
+    input_map: MapSource, shrink_factor: int, output_path: PathOrStr | None = None, **output_kwargs
+) -> np.ndarray:
     """Takes in a 3D binary mask and shrinks it by the specified shrink factor. The function first fills in all of
     the holes within each slice of the mask, then shrinks it by removing the outermost layer of voxels from each slice.
     The function returns a new shrunken binary mask.
@@ -1196,8 +1214,7 @@ def shrink_full_mask(input_map: MapSource, shrink_factor: int, output_path: Path
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
     input_map = cryomap.read(input_map)
@@ -1242,7 +1259,13 @@ def shrink_full_mask(input_map: MapSource, shrink_factor: int, output_path: Path
     return filled_mask
 
 
-def fill_hollow_mask(input_map: MapSource, output_path: PathOrStr | None = None, apply_opening_closing: bool = True, footprint: np.ndarray | tuple | None = None, **output_kwargs) -> np.ndarray:
+def fill_hollow_mask(
+    input_map: MapSource,
+    output_path: PathOrStr | None = None,
+    apply_opening_closing: bool = True,
+    footprint: np.ndarray | tuple | None = None,
+    **output_kwargs,
+) -> np.ndarray:
     """Takes in a binary mask and returns the same mask with all holes filled in.
 
     Parameters
@@ -1272,8 +1295,7 @@ def fill_hollow_mask(input_map: MapSource, output_path: PathOrStr | None = None,
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
 
     input_map = cryomap.read(input_map)
@@ -1419,8 +1441,11 @@ def tomogram_shell_mask(
 
         tomo_mask = cryomap.place_object(features, tm, volume_shape=t_dim, feature_to_color="class")
 
-        cryomap.write(tomo_mask, output_prefix + str(int(t)).zfill(tomo_digits) + output_suffix, **{"data_type": np.int8, **output_kwargs})
-       
+        cryomap.write(
+            tomo_mask,
+            output_prefix + str(int(t)).zfill(tomo_digits) + output_suffix,
+            **{"data_type": np.int8, **output_kwargs},
+        )
 
 
 def icosahedral_mask(
@@ -1430,17 +1455,17 @@ def icosahedral_mask(
     gaussian: float = 0,
     gaussian_outwards: bool = True,
     angles: EulerAngles | None = None,
-    output_path: PathOrStr | None = None, 
+    output_path: PathOrStr | None = None,
     **output_kwargs,
-    ) -> np.ndarray:
-    """Creates an icosahedral mask with the specified radius, center and box size. The values range from 0.0 to 1.0. 
-    Additionally, the mask can be blurred by applying Gaussian specified by its sigma value. By default, the mask 
+) -> np.ndarray:
+    """Creates an icosahedral mask with the specified radius, center and box size. The values range from 0.0 to 1.0.
+    Additionally, the mask can be blurred by applying Gaussian specified by its sigma value. By default, the mask
     orientation in the box is the one of the canonical icosahedron. If ``angles`` is provided, the mask will be rotated
     accordingly.
 
     Parameters
     ----------
-    mask_size : int or array-like 
+    mask_size : int or array-like
         Specifies the dimensions of the box for the mask. If single number is provided, the mask will be cubic.
     radius : int, optional
         Defines the radius of the circumscribed sphere of the icosahedron in voxels.
@@ -1454,14 +1479,14 @@ def icosahedral_mask(
         mask surface (False). The latter is consistent with Dynamo convention. Defaults to True.
     angles : EulerAngles, optional
         Defines the rotation of the mask specified as three Euler angles in degrees in
-        zxz convention. If all angles are zero, no rotation is applied. 
+        zxz convention. If all angles are zero, no rotation is applied.
         See :func:`cryocat.utils.ioutils.euler_angles_load` for more information on the formatting of the angles.
         Defaults to None.
     output_path : str, optional
         Path to write out the created mask. If not specified, the mask is not written out. Defaults to None.
     **output_kwargs
         Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
-        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``). 
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -1479,48 +1504,46 @@ def icosahedral_mask(
 
     if output_path is None and output_kwargs:
         raise ValueError(
-            f"Got output kwargs {list(output_kwargs)} but no output_path. "
-            f"These only apply when writing to disk."
+            f"Got output kwargs {list(output_kwargs)} but no output_path. " f"These only apply when writing to disk."
         )
-    
-    mask_size = geom.as_triplet(mask_size)  
-    center = geom.as_triplet(center, reference_size=mask_size)
-      
-    if radius is None:  
-        radius = np.amin(mask_size) // 2  
-    
+
+    mask_size = geom.as_triplet(mask_size, dtype=int)
+    center = geom.as_triplet(center, reference_size=mask_size, dtype=int)
+
+    if radius is None:
+        radius = np.amin(mask_size) // 2
+
     radius = preprocess_params(radius, gaussian, gaussian_outwards)
-      
-    # Get icosahedron vertices  
+
+    # Get icosahedron vertices
     vertices = geom.Icosahedron(radius).vertices
 
-    # Create convex hull  
-    hull = ConvexHull(vertices)  
-      
-    # Create coordinate grid  
-    x, y, z = np.mgrid[0:mask_size[0]:1, 0:mask_size[1]:1, 0:mask_size[2]:1]  
-    x_centered = x - center[0]  
-    y_centered = y - center[1]  
-    z_centered = z - center[2]  
-      
-    # Test each point using hull equations  
-    mask = np.zeros(mask_size, dtype=bool)  
-      
-    for i in range(mask_size[0]):  
-        for j in range(mask_size[1]):  
-            for k in range(mask_size[2]):  
-                point = np.array([x_centered[i,j,k], y_centered[i,j,k], z_centered[i,j,k]])  
-                  
-                # Check if point is inside all half-spaces defined by hull facets  
-                inside = True  
-                for eq in hull.equations:  
-                    if np.dot(eq[:3], point) + eq[3] > 1e-10:  
-                        inside = False  
-                        break  
-                  
-                mask[i,j,k] = inside
-     
-    mask = postprocess(mask, gaussian, angles, output_path,  **output_kwargs)  
-      
-    return mask
+    # Create convex hull
+    hull = ConvexHull(vertices)
 
+    # Create coordinate grid
+    x, y, z = np.mgrid[0 : mask_size[0] : 1, 0 : mask_size[1] : 1, 0 : mask_size[2] : 1]
+    x_centered = x - center[0]
+    y_centered = y - center[1]
+    z_centered = z - center[2]
+
+    # Test each point using hull equations
+    mask = np.zeros(mask_size, dtype=bool)
+
+    for i in range(mask_size[0]):
+        for j in range(mask_size[1]):
+            for k in range(mask_size[2]):
+                point = np.array([x_centered[i, j, k], y_centered[i, j, k], z_centered[i, j, k]])
+
+                # Check if point is inside all half-spaces defined by hull facets
+                inside = True
+                for eq in hull.equations:
+                    if np.dot(eq[:3], point) + eq[3] > 1e-10:
+                        inside = False
+                        break
+
+                mask[i, j, k] = inside
+
+    mask = postprocess(mask, gaussian, angles, output_path, **output_kwargs)
+
+    return mask

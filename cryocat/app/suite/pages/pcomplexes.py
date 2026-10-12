@@ -154,6 +154,18 @@ def _dispatch_result(
             combined_df = pd.concat([m.df for m in result if isinstance(m, Motl)], ignore_index=True)
             rows = combined_df.to_dict("records")
             return rows, [], [], f"{label} → {len(rows)} particles from {len(result)} merged motls."
+        if isinstance(result, tuple):
+            if not result or not isinstance(result[0], Motl):
+                first_type = type(result[0]).__name__ if result else "empty tuple"
+                return [], [], [], f"{label}: expected Motl as first tuple element, got {first_type}."
+            motl = result[0]
+            df_part = result[1] if len(result) > 1 and isinstance(result[1], pd.DataFrame) else None
+            extra = [type(result[i]).__name__ for i in range(2, len(result))]
+            rows = motl.df.to_dict("records")
+            df_records = df_part.to_dict("records") if df_part is not None else []
+            extra_msg = f"; {len(extra)} extra element(s) reported: {extra}" if extra else ""
+            df_msg = f" + {len(df_records)}-row diagnostics" if df_records else ""
+            return rows, df_records, [], f"{label} → {len(rows)} particles{df_msg}{extra_msg}."
         if not isinstance(result, Motl):
             return [], [], [], f"{label}: expected Motl, got {type(result).__name__}."
         rows = result.df.to_dict("records")
@@ -787,6 +799,13 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
             new_pool_reg, new_pool_meta, new_pool_next = new_ps.to_stores()
             result._pool_motl_id = pool_ref
             _prov.record(pool_ref, _session.last_seq())
+        elif entry.returns == "motl" and isinstance(result, tuple) and result and isinstance(result[0], Motl):
+            new_ps, pool_ref = _pool.insert_motl(
+                pool_state, result[0].df, label=entry.label,
+            )
+            new_pool_reg, new_pool_meta, new_pool_next = new_ps.to_stores()
+            result[0]._pool_motl_id = pool_ref
+            _prov.record(pool_ref, _session.last_seq())
         elif entry.returns == "motl" and isinstance(result, list) and any(
             isinstance(m, Motl) for m in result
         ):
@@ -853,6 +872,13 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
             "n_objects": n_objects,
             "column_written": column_written,
         }
+        if (
+            entry.returns == "motl"
+            and isinstance(result, tuple)
+            and len(result) > 1
+            and isinstance(result[1], pd.DataFrame)
+        ):
+            section["diag_records"] = result[1].head(200).to_dict("records")
         new_results = dict(results_store or {})
         cpx_sections = list(new_results.get(selected_id, []))
         replaced = False
@@ -911,6 +937,13 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
                 body = [html.Small(f"{count} particles", style=_HINT)]
                 if pool_ref:
                     body.append(html.Small(f"Motl pool entry: {pool_ref}", style=_HINT))
+                diag_records = sec.get("diag_records")
+                if diag_records:
+                    body.append(html.Small(
+                        f"{sec.get('label', '')} — diagnostics ({len(diag_records)} rows):",
+                        style=_HINT,
+                    ))
+                    body.append(_render_table(diag_records))
             else:  # "none" — in-place operation
                 n_obj = sec.get("n_objects")
                 col_wr = sec.get("column_written")

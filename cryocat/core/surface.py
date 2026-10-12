@@ -837,7 +837,8 @@ class Mesh(DiscreteSurface):
         self._edge_lengths = None
         self._face_areas = None
         self._face_normals_cached = None
-        
+        self._vertex_areas = None
+
         # Curvature computation parameters
         self._min_triangle_area = 1e-12
         self._lstsq_rcond = 1e-12
@@ -1004,6 +1005,7 @@ class Mesh(DiscreteSurface):
         self._edge_lengths = None
         self._face_areas = None
         self._face_normals_cached = None
+        self._vertex_areas = None
         if hasattr(self, "_raycasting_scene"):
             delattr(self, "_raycasting_scene")
 
@@ -1825,6 +1827,8 @@ class Mesh(DiscreteSurface):
         mesh = cls()
         mesh.vertices = np.asarray(o3d_mesh.vertices)
         mesh.faces = np.asarray(o3d_mesh.triangles)
+        if isinstance(points, OrientedPointCloud):
+            mesh.inherit_coordinate_metadata(points)
         return mesh
 
     @gui_exposed(category="surface-load", label="Tube from ordered path", group="Mesh", order=30, returns="surface")
@@ -3928,10 +3932,13 @@ class Mesh(DiscreteSurface):
         Returns
         -------
         pd.DataFrame
-            Columns: ``index``, ``x``, ``y``, ``z``, ``mean_curvature``,
-            ``gaussian_curvature``, ``k1``, ``k2``, ``curvature_anisotropy``,
-            ``shape_index``, ``curvedness``, ``shape_category``,
-            ``shape_category_label``.
+            Columns: ``index``, ``x``, ``y``, ``z``, ``area``,
+            ``mean_curvature``, ``gaussian_curvature``, ``k1``, ``k2``,
+            ``curvature_anisotropy``, ``shape_index``, ``curvedness``,
+            ``shape_category``, ``shape_category_label``.
+            For ``"vertex"``, ``area`` is the mixed (Voronoi) area in the
+            same units² as the vertex coordinates.  For ``"triangle"``,
+            ``area`` is the face area.
 
         Raises
         ------
@@ -3966,6 +3973,7 @@ class Mesh(DiscreteSurface):
                     "x": coords[:, 0],
                     "y": coords[:, 1],
                     "z": coords[:, 2],
+                    "area": self._vertex_areas,
                     "mean_curvature": H,
                     "gaussian_curvature": K,
                     "k1": k1,
@@ -3999,6 +4007,7 @@ class Mesh(DiscreteSurface):
                 "x": centroids[:, 0],
                 "y": centroids[:, 1],
                 "z": centroids[:, 2],
+                "area": self._face_areas,
                 "mean_curvature": tri_H,
                 "gaussian_curvature": tri_K,
                 "k1": tri_k1,
@@ -4048,9 +4057,10 @@ class Mesh(DiscreteSurface):
         # Step 1: Use cached face normals
         face_normals = self._face_normals_cached
         
-        # Step 2: Compute vertex normals, areas, and coordinate systems  
+        # Step 2: Compute vertex normals, areas, and coordinate systems
         vertex_normals, vertex_areas, corner_areas, up_vectors, vp_vectors = \
             self._compute_vertex_properties_curvature(face_normals)
+        self._vertex_areas = vertex_areas
         
         # Step 3: Compute face curvature tensors via vectorized least squares
         face_tensors = self._compute_face_curvature_tensors(
@@ -5363,8 +5373,10 @@ class OrientedPointCloud(DiscreteSurface):
 
     @gui_exposed(category="surface-load", label="Point cloud from motl file", group="OPC", order=30, returns="surface")
     @classmethod
-    def from_motl(cls, input_path: PathOrStr, group_by: "MotlColumn | None" = None, recompute_normals: bool = False, knn: int = 30,
-                orient_normals: bool = True, tangent_plane_knn: int = 50, group_by_subtomo_id: bool | None = None) -> OrientedPointCloud | dict[str, OrientedPointCloud]:
+    def from_motl(cls, input_path: "cryomotl.MotlSource", group_by: "MotlColumn | None" = None, recompute_normals: bool = False, knn: int = 30,
+                orient_normals: bool = True, tangent_plane_knn: int = 50, group_by_subtomo_id: bool | None = None,
+                pixel_size: "float | np.ndarray | None" = None,
+                units: "str | None" = None) -> "OrientedPointCloud | dict[str, OrientedPointCloud]":
         """
         Load oriented point cloud directly from motl file.
 
@@ -5391,6 +5403,14 @@ class OrientedPointCloud(DiscreteSurface):
         group_by_subtomo_id : bool, optional
             Deprecated. Kept for backward compatibility: if True, behaves like
             ``group_by='subtomo_id'``. Prefer ``group_by`` instead.
+        pixel_size : float, array-like or None, optional
+            Voxel spacing in the same units as the vertices.  Stored on every
+            returned cloud via ``_coerce_pixel_size_array``.  ``None`` leaves
+            the field unset.
+        units : str or None, optional
+            Unit name for the vertex coordinates, e.g. ``'angstrom'``,
+            ``'nanometer'``, ``'pixel'``.  Stored on every returned cloud.
+            ``None`` leaves the field unset.
 
         Returns
         -------
@@ -5442,9 +5462,11 @@ class OrientedPointCloud(DiscreteSurface):
                     # Normalize normals
                     magnitudes = np.linalg.norm(oriented.normals, axis=1, keepdims=True)
                     oriented.normals = oriented.normals / (magnitudes + 1e-8)
-                
+
+                oriented.pixel_size = cls._coerce_pixel_size_array(pixel_size)
+                oriented.units = units
                 pcds[obj_id] = oriented
-            
+
             return pcds
         else:
             # Return single point cloud (original behavior)
@@ -5467,7 +5489,9 @@ class OrientedPointCloud(DiscreteSurface):
                 # Normalize normals
                 magnitudes = np.linalg.norm(oriented.normals, axis=1, keepdims=True)
                 oriented.normals = oriented.normals / (magnitudes + 1e-8)
-            
+
+            oriented.pixel_size = cls._coerce_pixel_size_array(pixel_size)
+            oriented.units = units
             return oriented
 
     @gui_exposed(category="surface-load", label="Point cloud from MRC", group="OPC", order=40, returns="surface")
@@ -5526,6 +5550,10 @@ class OrientedPointCloud(DiscreteSurface):
         -----
         Loads only through :func:`cryocat.core.cryomap.read`. Repair invalid MRC headers on disk
         if reading fails.
+
+        MRC files express pixel spacing in ångström by convention, so the
+        returned cloud carries ``units = "angstrom"`` when ``pixel_size`` is
+        provided.
 
         Returns
         -------
@@ -5638,7 +5666,8 @@ class OrientedPointCloud(DiscreteSurface):
             pcd_o3d, knn, orient_normals, tangent_plane_knn
         )
         oriented_pcd.pixel_size = cls._coerce_pixel_size_array(pixel_size)
-        
+        oriented_pcd.units = "angstrom"
+
         print(f"Created oriented point cloud: {len(oriented_pcd.vertices)} points")
         
         return oriented_pcd

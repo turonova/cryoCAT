@@ -1023,6 +1023,46 @@ def tlt_load(
         raise ValueError("Error: the dose has to be either ndarray or path to csv, mdoc, or tlt file!")
 
 
+def removed_tilts_load(input_data: DataSource) -> np.ndarray:
+    """Load removed tilt angles from a STAR file, a DataFrame, or a NumPy array.
+
+    Parameters
+    ----------
+    input_data : DataSource
+        - ``str`` or path-like: path to a ``.star`` file whose first data
+          block contains a ``removed_tilts`` column.
+        - ``pandas.DataFrame``: must contain a ``removed_tilts`` column.
+        - ``numpy.ndarray``: interpreted directly as a 1-D array of angles
+          (float); returned as a flat float array.
+
+    Returns
+    -------
+    numpy.ndarray
+        1-D float array of tilt angles.
+
+    Raises
+    ------
+    ValueError
+        If *input_data* is not one of the supported types, or if a DataFrame
+        is given without a ``removed_tilts`` column.
+    """
+    if isinstance(input_data, np.ndarray):
+        return input_data.astype(float).ravel()
+    if isinstance(input_data, pd.DataFrame):
+        if "removed_tilts" not in input_data.columns:
+            raise ValueError(
+                "DataFrame does not contain a 'removed_tilts' column."
+            )
+        return input_data["removed_tilts"].to_numpy(dtype=float)
+    if isinstance(input_data, str):
+        df = sf.Starfile.read(input_data, data_id=0)[0]
+        return df["removed_tilts"].to_numpy(dtype=float)
+    raise ValueError(
+        "input_data must be a path to a .star file, a pandas.DataFrame with a "
+        "'removed_tilts' column, or a numpy.ndarray."
+    )
+
+
 @gui_exposed(
     label="Tomogram dimensions",
     category="reader",
