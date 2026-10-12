@@ -2678,7 +2678,7 @@ class Motl:
         symmetry_orientation : RotationLike, optional
             Orientation of the symmetry axes inside the reference, i.e. in
             the particle's local frame (e.g. ``complex.solid.rotation`` of a
-            fitted :class:`cryocat.analysis.structure.PolyhedralComplex`).
+            fitted :class:`cryocat.analysis.assembly.PolyhedralComplex`).
             The canonical rotations of
             :func:`cryocat.utils.symmetry.get_symmetry_rotations` are
             re-expressed in this orientation (``R @ g @ R.T``) before
@@ -2712,7 +2712,7 @@ class Motl:
         The number of subunits is the group order (12/24/60 for
         ``"T"``/``"O"``/``"I"``; ``2 * n`` for ``"Dn"``), not the vertex count of
         the matching solid (e.g. 12 for :class:`cryocat.utils.geom.Icosahedron`,
-        as used by :meth:`cryocat.analysis.structure.PolyhedralComplex.expand`).
+        as used by :meth:`cryocat.analysis.assembly.PolyhedralComplex.expand`).
         See the :mod:`cryocat.utils.symmetry` module Notes.
 
         Warnings
@@ -3651,7 +3651,7 @@ class RelionMotl(Motl):
         # otherwise be left as NaN.
         self.df = self.df.fillna(0.0)
         if 0 in self.df["class"].values: 
-            warnings.warn("Class has value 0. Mind that this might be problematic for certain softwrae.")
+            warnings.warn("Class has value 0. Mind that this might be problematic for certain software.")
 
     def assign_cc_extra_columns(self, relion_df: pd.DataFrame, object_id_already_assigned: bool = False) -> None:
         """Recognize non-standard ``cc``-prefixed columns in `relion_df` and map them back onto `self.df`.

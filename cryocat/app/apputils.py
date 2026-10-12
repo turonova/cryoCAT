@@ -381,7 +381,7 @@ def flatten_result_dict(raw: dict) -> pd.DataFrame | None:
     cause collisions when two keys share a prefix (e.g. ``primitive_normals``
     and ``primitive_directions`` would both strip to ``primitive``).
 
-    Examples from :meth:`~cryocat.analysis.structure.PleomorphicSurface.ray_intersections`:
+    Examples from :meth:`~cryocat.analysis.assembly.PleomorphicSurface.ray_intersections`:
     * ``hit_points`` → ``hit_points_x``, ``hit_points_y``, ``hit_points_z``
     * ``primitive_normals`` → ``primitive_normals_x``, ``primitive_normals_y``, ``primitive_normals_z``
     * ``ray_directions`` → ``ray_directions_x``, ``ray_directions_y``, ``ray_directions_z``

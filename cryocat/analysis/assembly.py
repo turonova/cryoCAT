@@ -12,6 +12,7 @@ import decimal
 import os
 from scipy.spatial.transform import Rotation as srot
 from scipy.optimize import linear_sum_assignment
+from scipy.stats import spearmanr
 from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.core import cryomask
@@ -1470,7 +1471,7 @@ class SymmetricComplex:
 
 
 class CnComplex(SymmetricComplex):
-    """Cyclic Cn-symmetric ring structure.
+    """Cyclic Cn-symmetric ring assembly.
 
     Extends :class:`SymmetricComplex` with methods specific to cyclic
     symmetry: subunit ordering, affiliation clustering, occupancy analysis,
@@ -1535,6 +1536,21 @@ class CnComplex(SymmetricComplex):
             self.affiliation_column,
         ]
         self._components: dict[str, dict] = {}
+
+    def __repr__(self) -> str:
+        ring_motls = getattr(self, "_ring_motls", None)
+        n_rings = len(ring_motls) if ring_motls is not None else 1
+        try:
+            n_pores: int | str = self.motl.df.groupby(
+                [self.tomo_id_column, self.affiliation_column]
+            ).ngroups
+        except Exception:
+            n_pores = "?"
+        components = list(getattr(self, "_components", {}).keys())
+        return (
+            f"{type(self).__name__}(C{self.n}, rings={n_rings}, "
+            f"pores={n_pores}, components={components!r})"
+        )
 
     # ------------------------------------------------------------------
     # Centre computation (circle-fit with barycentric fallback)
@@ -1748,6 +1764,217 @@ class CnComplex(SymmetricComplex):
             for extra_col, extra_val in zip(self._ring_group_columns[2:], keys[2:]):
                 row[extra_col] = extra_val
             rows.append(row)
+
+        return pd.DataFrame(rows)
+
+    def ring_summary(self, *, pixel_size: float | None = None) -> pd.DataFrame:
+        """One-row-per-ring summary of radius, occupancy, pore count, and subunit count.
+
+        Radius is the mean circumradius across pores (via
+        :meth:`_circumradius_for_group`) multiplied by *pixel_size*.
+        Occupancy is the mean per-pore fraction from :meth:`occupancy`.
+
+        Parameters
+        ----------
+        pixel_size : float or None, default None
+            Ångström-per-voxel scale factor.  ``None`` uses ``self.pixel_size``
+            (defaulting to ``1.0``).
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns: ``ring``, ``radius``, ``occupancy``, ``n_pores``,
+            ``n_subunits``.  One row per ring; single-ring complexes return a
+            one-row frame with ``ring=1``.
+        """
+        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
+        coord = self.motl.get_coordinates()
+        tomo_col = self.tomo_id_column
+        aff_col = self.affiliation_column
+
+        ring_col = getattr(self, "_ring_column", None)
+        rings_merged = getattr(self, "_rings_merged", False)
+        use_ring_col = (
+            rings_merged
+            and ring_col is not None
+            and ring_col in self.motl.df.columns
+        )
+
+        if use_ring_col:
+            ring_ids = sorted(self.motl.df[ring_col].unique())
+        else:
+            ring_ids = [1]
+
+        occ_df = self.occupancy()
+
+        rows: list[dict] = []
+        for ring_id in ring_ids:
+            if use_ring_col:
+                ring_df = self.motl.df[self.motl.df[ring_col] == float(ring_id)]
+                ring_occ = (
+                    occ_df[occ_df[ring_col] == float(ring_id)]
+                    if ring_col in occ_df.columns
+                    else occ_df
+                )
+            else:
+                ring_df = self.motl.df
+                ring_occ = occ_df
+
+            radii: list[float] = []
+            for _, grp in ring_df.groupby([tomo_col, aff_col]):
+                coords_grp = coord[grp.index.to_numpy()]
+                radii.append(self._circumradius_for_group(coords_grp))
+
+            rows.append({
+                "ring": float(ring_id),
+                "radius": float(np.mean(radii)) * ps if radii else float("nan"),
+                "occupancy": float(ring_occ["occupancy"].mean()) if len(ring_occ) > 0 else float("nan"),
+                "n_pores": len(radii),
+                "n_subunits": self.n_subunits,
+            })
+
+        return pd.DataFrame(rows)
+
+    def get_pore_frame_coords(
+        self,
+        *,
+        rings: list[float] | None = None,
+    ) -> pd.DataFrame:
+        """Per-subunit coordinates in each pore's reference frame, phase-aligned on order 1.
+
+        For each ring within a pore the centre and axis are computed identically to
+        :meth:`NPC.get_subunit_stats` (via :meth:`_compute_object_center` and
+        :func:`~cryocat.utils.geom.euler_angles_to_normals`).  Each subunit position
+        is projected onto the plane perpendicular to the ring axis, giving in-plane
+        Cartesian ``x``, ``y`` and polar ``r``, ``az`` coordinates.
+
+        Phase alignment is done per pore: the mean azimuth of order-1 subunits across
+        all rings in the pore is subtracted from every azimuth, placing order 1 at ≈ 0°.
+        ``x`` and ``y`` are recomputed from ``r`` and the aligned ``az``.
+
+        Parameters
+        ----------
+        rings : list of float, optional
+            Restrict output to these ring ids (applies only after merge, when a ring
+            column is present).  ``None`` (default) returns all rings.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per subunit with columns: ``tomo_id_column``, ``affiliation_column``,
+            ``order_column``, ``ring``, ``r`` (pixels × pixel_size), ``az`` (degrees),
+            ``x`` (pixels × pixel_size), ``y`` (pixels × pixel_size).
+        """
+        tomo_col = self.tomo_id_column
+        aff_col = self.affiliation_column
+        ring_col = getattr(self, "_ring_column", None)
+        ps: float = getattr(self, "pixel_size", 1.0)
+        order_col = self.order_column
+        group_cols = self._ring_group_columns
+        has_ring_group = len(group_cols) > 2
+
+        coord = self.motl.get_coordinates()
+        df = self.motl.df
+
+        if has_ring_group and rings is not None and ring_col is not None:
+            df = df[df[ring_col].isin([float(r) for r in rings])]
+
+        rows: list[dict] = []
+
+        for (tomo_id, object_id), pore_df in df.groupby([tomo_col, aff_col]):
+            ring_data: list[dict] = []
+
+            if has_ring_group and ring_col is not None:
+                ring_iter = [(float(rid), grp) for rid, grp in pore_df.groupby(ring_col)]
+            else:
+                ring_iter = [(1.0, pore_df)]
+
+            for ring_id, ring_grp in ring_iter:
+                idx = ring_grp.index.to_numpy()
+                coords_ring = coord[idx]
+
+                ring_motl_tmp = cryomotl.Motl(ring_grp.copy())
+                centre, _ = self._compute_object_center(ring_motl_tmp)
+
+                angles_ring = ring_motl_tmp.get_angles()
+                z_vecs = geom.euler_angles_to_normals(angles_ring)
+                mean_normal = z_vecs.mean(axis=0)
+                n_norm = float(np.linalg.norm(mean_normal))
+                mean_normal = mean_normal / n_norm if n_norm > 1e-10 else mean_normal
+
+                # Orthonormal plane basis
+                ref = np.array([0.0, 0.0, 1.0])
+                if abs(float(np.dot(mean_normal, ref))) > 0.9:
+                    ref = np.array([1.0, 0.0, 0.0])
+                e1 = np.cross(ref, mean_normal)
+                e1 /= np.linalg.norm(e1)
+                e2 = np.cross(mean_normal, e1)
+                e2 /= np.linalg.norm(e2)
+
+                rel = coords_ring - centre
+                axial = np.dot(rel, mean_normal)[:, None] * mean_normal
+                inplane = rel - axial
+
+                x_ip = np.dot(inplane, e1)
+                y_ip = np.dot(inplane, e2)
+                r_ip = np.sqrt(x_ip ** 2 + y_ip ** 2)
+                az_raw = np.degrees(np.arctan2(y_ip, x_ip))
+
+                orders = (
+                    ring_grp[order_col].to_numpy()
+                    if order_col in ring_grp.columns
+                    else np.full(len(idx), np.nan)
+                )
+
+                ring_data.append(
+                    dict(
+                        ring_id=ring_id,
+                        idx=idx,
+                        ring_grp=ring_grp,
+                        r_ip=r_ip,
+                        az_raw=az_raw,
+                        orders=orders,
+                    )
+                )
+
+            # Phase alignment: circular mean of order-1 azimuths across all rings
+            az_order1: list[float] = []
+            for rd in ring_data:
+                mask = rd["orders"] == 1.0
+                if np.any(mask):
+                    az_order1.extend(rd["az_raw"][mask].tolist())
+
+            if az_order1:
+                az_rad = np.radians(az_order1)
+                phase_offset = float(
+                    np.degrees(
+                        np.arctan2(np.mean(np.sin(az_rad)), np.mean(np.cos(az_rad)))
+                    )
+                )
+            else:
+                phase_offset = 0.0
+
+            for rd in ring_data:
+                az_aligned = rd["az_raw"] - phase_offset
+                az_aligned = (az_aligned + 180.0) % 360.0 - 180.0
+                r_vals = rd["r_ip"]
+                x_aligned = r_vals * np.cos(np.radians(az_aligned))
+                y_aligned = r_vals * np.sin(np.radians(az_aligned))
+
+                for local_i, global_i in enumerate(rd["idx"]):
+                    order_val = float(rd["orders"][local_i])
+                    rows.append(
+                        {
+                            tomo_col: float(tomo_id),
+                            aff_col: float(object_id),
+                            order_col: order_val,
+                            "ring": float(rd["ring_id"]),
+                            "r": float(r_vals[local_i]) * ps,
+                            "az": float(az_aligned[local_i]),
+                            "x": float(x_aligned[local_i]) * ps,
+                            "y": float(y_aligned[local_i]) * ps,
+                        }
+                    )
 
         return pd.DataFrame(rows)
 
@@ -5029,6 +5256,11 @@ class NPC(CnComplex):
               neighbour is absent.  Cannot distinguish a genuine reflex
               concave vertex (it folds to ≤180°); real pores are convex so
               this is intentional.
+            - ``shear`` — difference between the two flanking central angles
+              (``central_angle_next − central_angle_prev``); ≈0 when the
+              subunit sits equidistant from both neighbours, large when it is
+              displaced toward one side.  ``NaN`` when either flanking angle
+              is ``NaN``.
 
         Parameters
         ----------
@@ -5178,12 +5410,204 @@ class NPC(CnComplex):
                     "central_angle_prev": ca_prev,
                     "central_angle_next": ca_next,
                     "interior_angle": interior,
+                    "shear": ca_next - ca_prev,
                 }
                 if has_ring_group:
                     row[ring_col] = float(ring_id)
                 rows.append(row)
 
         return pd.DataFrame(rows)
+
+    def classify_pores(
+        self,
+        *,
+        gaps: str = "full",
+        range_min: float = 12.0,
+        vacancy_ratio: float = 1.7,
+    ) -> pd.DataFrame:
+        """Classify each (pore, ring) by its central-angle pattern.
+
+        Reuses :meth:`get_subunit_stats` (with *gaps*) for all per-subunit geometry.
+        Classification is based on three thresholds only (the three keyword args):
+
+        * ``"vacancy"`` — ring is **incomplete** (``n_present < full_n``) **and**
+          ``max_gap ≥ vacancy_ratio × nominal`` where ``nominal = 360 / full_n``.
+          A vacancy gap can be a milling-truncation edge, not necessarily a missing
+          subunit.
+        * ``"shear"`` — within-ring ``range = max_gap − min_gap ≥ range_min``.
+        * ``"regular"`` — otherwise.
+
+        Cross-ring coherence columns are added per pore; they are ``NaN`` for pores
+        with only one ring present:
+
+        * ``coherence_corr`` — mean pairwise Spearman of the per-order
+          ``central_angle_next`` vectors across rings.
+        * ``argmax_agreement`` — fraction of rings whose widest-gap order equals the
+          most common widest-gap order across the pore's rings.
+
+        Parameters
+        ----------
+        gaps : str, default ``"full"``
+            Passed to :meth:`get_subunit_stats`.
+        range_min : float, default 12.0
+            Minimum within-ring angular range (degrees) for ``"shear"`` label.
+        vacancy_ratio : float, default 1.7
+            Widest-gap threshold as a multiple of the nominal spacing.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per ``(pore, ring)`` with columns: ``tomo_id_column``,
+            ``affiliation_column``, ``ring``, ``n_present``, ``max_gap``,
+            ``min_gap``, ``range``, ``complete``, ``type``, ``n_rings``,
+            ``coherence_corr``, ``argmax_agreement``.
+        """
+        stats_df = self.get_subunit_stats(gaps=gaps, include_flagged=True)
+
+        tomo_col = self.tomo_id_column
+        aff_col = self.affiliation_column
+        ring_col = getattr(self, "_ring_column", None)
+        order_col = self.order_column
+
+        full_n = self.n
+        nominal = 360.0 / full_n
+
+        group_cols = self._ring_group_columns
+        has_ring_group = len(group_cols) > 2
+
+        per_ring_rows: list[dict] = []
+        for keys, grp in stats_df.groupby(group_cols):
+            if has_ring_group:
+                tomo_id, object_id, ring_id = keys
+            else:
+                tomo_id, object_id = keys
+                ring_id = 1.0
+
+            n_present = len(grp)
+            complete = bool(n_present == full_n)
+
+            ca = grp["central_angle_next"].dropna().to_numpy()
+            if len(ca) == 0:
+                max_gap = float("nan")
+                min_gap = float("nan")
+                range_val = float("nan")
+                pore_type = "regular"
+            else:
+                max_gap = float(np.max(ca))
+                min_gap = float(np.min(ca))
+                range_val = max_gap - min_gap
+                if not complete and max_gap >= vacancy_ratio * nominal:
+                    pore_type = "vacancy"
+                elif range_val >= range_min:
+                    pore_type = "shear"
+                else:
+                    pore_type = "regular"
+
+            per_ring_rows.append(
+                {
+                    tomo_col: float(tomo_id),
+                    aff_col: float(object_id),
+                    "ring": float(ring_id),
+                    "n_present": n_present,
+                    "max_gap": max_gap,
+                    "min_gap": min_gap,
+                    "range": range_val,
+                    "complete": complete,
+                    "type": pore_type,
+                }
+            )
+
+        per_ring_df = pd.DataFrame(per_ring_rows)
+
+        n_rings_series = (
+            per_ring_df.groupby([tomo_col, aff_col]).size().rename("n_rings")
+        )
+        per_ring_df = per_ring_df.merge(
+            n_rings_series.reset_index(), on=[tomo_col, aff_col], how="left"
+        )
+
+        coherence_corr_map: dict[tuple, float] = {}
+        argmax_agreement_map: dict[tuple, float] = {}
+
+        for (tomo_id, object_id), pore_grp in stats_df.groupby([tomo_col, aff_col]):
+            pore_key = (tomo_id, object_id)
+
+            if has_ring_group and ring_col is not None:
+                pore_ring_ids = sorted(pore_grp[ring_col].unique())
+            else:
+                pore_ring_ids = [1.0]
+
+            if len(pore_ring_ids) <= 1:
+                coherence_corr_map[pore_key] = float("nan")
+                argmax_agreement_map[pore_key] = float("nan")
+                continue
+
+            ring_vectors: list[np.ndarray] = []
+            argmax_orders: list[int] = []
+
+            for ring_id in pore_ring_ids:
+                if has_ring_group and ring_col is not None:
+                    ring_rows = pore_grp[pore_grp[ring_col] == float(ring_id)]
+                else:
+                    ring_rows = pore_grp
+
+                ca_by_order: dict[int, float] = {}
+                for _, row_s in ring_rows.iterrows():
+                    ord_val = row_s[order_col]
+                    if not (isinstance(ord_val, float) and np.isnan(ord_val)):
+                        ca_by_order[int(ord_val)] = float(row_s["central_angle_next"])
+
+                if not ca_by_order:
+                    continue
+
+                vec = np.array(
+                    [ca_by_order.get(o, float("nan")) for o in range(1, full_n + 1)]
+                )
+                ring_vectors.append(vec)
+
+                valid = ~np.isnan(vec)
+                if valid.any():
+                    argmax_orders.append(int(np.nanargmax(vec)) + 1)
+
+            if len(ring_vectors) < 2:
+                coherence_corr_map[pore_key] = float("nan")
+                argmax_agreement_map[pore_key] = float("nan")
+                continue
+
+            corr_vals: list[float] = []
+            n_rv = len(ring_vectors)
+            for i in range(n_rv):
+                for j in range(i + 1, n_rv):
+                    v1, v2 = ring_vectors[i], ring_vectors[j]
+                    mask = ~np.isnan(v1) & ~np.isnan(v2)
+                    if mask.sum() >= 2:
+                        rho, _ = spearmanr(v1[mask], v2[mask])
+                        corr_vals.append(float(rho))
+
+            coherence_corr_map[pore_key] = (
+                float(np.mean(corr_vals)) if corr_vals else float("nan")
+            )
+
+            if argmax_orders:
+                most_common = Counter(argmax_orders).most_common(1)[0][0]
+                argmax_agreement_map[pore_key] = float(
+                    sum(o == most_common for o in argmax_orders)
+                ) / len(argmax_orders)
+            else:
+                argmax_agreement_map[pore_key] = float("nan")
+
+        per_ring_df["coherence_corr"] = per_ring_df.apply(
+            lambda r: coherence_corr_map.get((r[tomo_col], r[aff_col]), float("nan")),
+            axis=1,
+        )
+        per_ring_df["argmax_agreement"] = per_ring_df.apply(
+            lambda r: argmax_agreement_map.get(
+                (r[tomo_col], r[aff_col]), float("nan")
+            ),
+            axis=1,
+        )
+
+        return per_ring_df
 
     def ring_ellipticity(
         self,
@@ -10632,7 +11056,7 @@ class PleomorphicSurface:
         ``"Inference state cleared."`` is printed if they existed.
 
         State after this call
-        --------------------
+        ---------------------
         ``_site_table``, ``_faces``
             Rebuilt by the internal :meth:`connect` call on the corrected
             :attr:`blocks`.

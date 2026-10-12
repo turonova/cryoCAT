@@ -20,10 +20,10 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from cryocat.app.components.registry import Registry
-from cryocat.analysis.structure import PleomorphicSurface as _PS
+from cryocat.analysis.assembly import PleomorphicSurface as _PS
 
 if TYPE_CHECKING:
-    from cryocat.analysis.structure import SymmetricComplex
+    from cryocat.analysis.assembly import SymmetricComplex
 
 # 1-based ids match the motl pool convention.
 registry: Registry = Registry("complex", start=1)
@@ -83,7 +83,7 @@ def make_handle(
     init_kwargs:
         Extra constructor keyword arguments (beyond ``motl``), JSON-serialisable.
     """
-    from cryocat.analysis.structure import PleomorphicSurface as _PS
+    from cryocat.analysis.assembly import PleomorphicSurface as _PS
     cls_name = type(cpx).__name__
 
     if isinstance(cpx, _PS):
@@ -180,7 +180,7 @@ def reconstruct(handle_dict: dict, motl: Any) -> Any:
         The pool motl (already loaded as a :class:`~cryocat.core.cryomotl.Motl`).
     """
     handle = ComplexHandle.from_dict(handle_dict)
-    mod = importlib.import_module("cryocat.analysis.structure")
+    mod = importlib.import_module("cryocat.analysis.assembly")
     cls = getattr(mod, handle.cls)
     builder = COMPLEX_BUILDERS.get(cls, cls)
     first = next(iter(inspect.signature(builder).parameters))

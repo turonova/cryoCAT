@@ -31,7 +31,7 @@ GUI_MODULES: tuple[str, ...] = (
     "cryocat.core.cryomotl",
     "cryocat.utils.geom",
     "cryocat.core.cryowedge",
-    "cryocat.analysis.structure",
+    "cryocat.analysis.assembly",
     "cryocat.utils.ioutils",
     "cryocat.core.cryomap",
     "cryocat.core.surface",

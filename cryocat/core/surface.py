@@ -5389,7 +5389,7 @@ class OrientedPointCloud(DiscreteSurface):
             exists, returns a dict of :class:`OrientedPointCloud` instances keyed by
             that column's value. If None (default), returns a single OrientedPointCloud
             with all points. Follows the same grouping convention as
-            :class:`~cryocat.analysis.structure.ParametricSurface`
+            :class:`~cryocat.analysis.assembly.ParametricSurface`
             (``column_name``).
         recompute_normals : bool, default=False
             If True, recompute normals from geometry instead of using Euler angles.

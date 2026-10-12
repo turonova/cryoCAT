@@ -136,7 +136,7 @@ def _compute(params):
   takes plain Python and returns plain Python.
 - Reference implementations already in the tree — read these before writing new
   helpers: `suite/pages/_memthick_analysis.py`, `_memthick_codegen.py`,
-  `_pana_codegen.py`, `_pstructure_intersect.py`. New pure helpers for page
+  `_pana_codegen.py`, `_passembly_intersect.py`. New pure helpers for page
   `pfoo.py` go in `suite/pages/_foo_<topic>.py` following the same pattern.
 - Callbacks that currently violate this and are named in later task docs:
   `motlio.load_motl`, `motlio.save_data` (×3), `tomoview.update_plot`,
@@ -527,9 +527,9 @@ modules, there are no external consumers, and no released GUI API to honour.
 ## 15. Scope exclusions
 
 The **Structure and Surfaces tabs are unfinished and under redesign.**
-Affected: `suite/pages/pstructure.py`, `suite/pages/pcomplexes.py`,
+Affected: `suite/pages/passembly.py`, `suite/pages/pcomplexes.py`,
 `components/surfaceview.py`, `components/surface_registry.py`,
-`components/parametric_registry.py`, `suite/pages/_pstructure_intersect.py`.
+`components/parametric_registry.py`, `suite/pages/_passembly_intersect.py`.
 
 - **Include** them in mechanical, codebase-wide migrations — pool constants,
   id grammar, `styled_figure`, `page_shell`, styles, error handling — so they do

@@ -212,7 +212,7 @@ def test_no_banned_function_names():
 THIN_CALLBACK_EXEMPT: dict[str, str] = {
     # §15 — design unsettled; own phase document when resolved
     "pcomplexes":    "§15 — NPC static-run and motl-list push loops",
-    "pstructure":    "§15 — surface-loader and run-operation loops",
+    "passembly":    "§15 — surface-loader and run-operation loops",
     # doc 8 — deferred; carve out a focused pass per module
     "tablecluster":  "doc 8 — k-means and proximity run loops inline",
     "tableplot":     "doc 8 — graph-sync callback iterates traces",
@@ -284,7 +284,7 @@ def test_thin_callbacks(src_path: pathlib.Path):
 def test_thin_callback_exempt_list_is_bounded():
     """Every exempt module must reference a known doc or §15 — never an unknown module.
 
-    §15 modules (pstructure, pcomplexes, surfaces) are deferred until the design
+    §15 modules (passembly, pcomplexes, surfaces) are deferred until the design
     settles; they carry an explicit §15 marker instead of a doc number.
     """
     known_tokens = {"doc 6", "doc 7", "doc 8", "§15"}
@@ -338,7 +338,7 @@ _IMPORT_EXEMPT: frozenset[str] = frozenset({
     "cryocat.app.suite.pages.ppana",
     "cryocat.app.suite.pages.psta",
 
-    "cryocat.app.suite.pages.pstructure",
+    "cryocat.app.suite.pages.passembly",
     "cryocat.app.suite.pages.ptango",
     "cryocat.app.suite.pages.putilities",
     "cryocat.app.suite.pages.pvolume",
@@ -349,7 +349,7 @@ _IMPORT_EXEMPT: frozenset[str] = frozenset({
     "cryocat.app.suite.pages._memthick_analysis",
     "cryocat.app.suite.pages._memthick_codegen",
     "cryocat.app.suite.pages._pana_codegen",
-    "cryocat.app.suite.pages._pstructure_intersect",
+    "cryocat.app.suite.pages._passembly_intersect",
     "cryocat.app.record._common",    # internal record helper
     # motlinput.py is tested directly by test_motl_input.py; superseded by
     # poolpicker.py for app use so no app module imports it any more.
@@ -463,7 +463,7 @@ def test_single_log_panel_call_site_in_suite():
 # May SHRINK as P6 lands; never grow.
 _DATAFRAME_FROM_STORE_EXEMPT: dict[str, str] = {
     "pnn":         "non-motl data — _apply_postprocessing wraps nn-result (internal postprocessing store, not grid-facing)",
-    "pstructure":  "non-motl data — _render_isect_results wraps intersection-distance hits (not particle data)",
+    "passembly":  "non-motl data — _render_isect_results wraps intersection-distance hits (not particle data)",
     "motlio":      "blocked — save_data wraps tool-specific result stores that remain pre-pool",
     "tablesave":   "legitimate — do_csv_save wraps grid_data for CSV export (not a pool roundtrip)",
 }
@@ -552,7 +552,7 @@ def test_no_dataframe_from_store_arg(src_path: pathlib.Path):
 # output a reference handle; the grid fetches rows via its server-side datasource.
 # Shrinks as violations are fixed; remaining entries are permanently legitimate or blocked.
 _TO_DICT_RECORDS_EXEMPT: dict[str, str] = {
-    "pstructure":   "non-motl data — _run_operation routes intersection-distance df and motl result to pre-pool stores",
+    "passembly":   "non-motl data — _run_operation routes intersection-distance df and motl result to pre-pool stores",
     "pnn":          "non-motl data — nn-result store carries intermediate list[dict] for _apply_postprocessing; grid-facing data uses pool",
     "psta":         "non-motl data — STA parameter config tables are not motls; cannot use motl pool",
     "motlio":       "blocked — save_data wraps tool-specific result stores that remain pre-pool",

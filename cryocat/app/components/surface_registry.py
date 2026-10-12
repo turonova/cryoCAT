@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 from cryocat.app.components.registry import Registry
 
 if TYPE_CHECKING:
-    from cryocat.analysis.structure import PleomorphicSurface
+    from cryocat.analysis.assembly import PleomorphicSurface
 
 
 registry: Registry["PleomorphicSurface"] = Registry("surface")

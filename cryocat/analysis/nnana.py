@@ -22,7 +22,7 @@ This module is organised in three layers:
 A standalone ``trace_chains`` function (plus its private helpers) lives at
 the bottom of this file.  Tracing is NN-based but conceptually distinct from
 the ``NearestNeighbors`` class; downstream chain analysis (occupancies,
-chain stats, etc.) lives in ``cryocat.analysis.structure.Chain``.
+chain stats, etc.) lives in ``cryocat.analysis.assembly.Chain``.
 """
 
 from __future__ import annotations

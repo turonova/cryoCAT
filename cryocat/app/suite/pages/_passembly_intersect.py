@@ -1,6 +1,6 @@
 """Pure helpers shared by the Structure page's intersection panel.
 
-Kept separate from :mod:`cryocat.app.suite.pages.pstructure` so the helpers
+Kept separate from :mod:`cryocat.app.suite.pages.passembly` so the helpers
 stay easy to unit-test without spinning up a Dash app. The helpers
 deliberately take and return plain Python / numpy / pandas values; the page
 threads them between the registry, the motl pool, and the result store.
@@ -89,7 +89,7 @@ def hits_summary_dataframe(data: dict) -> pd.DataFrame:
     Parameters
     ----------
     data : dict
-        Output of :meth:`cryocat.analysis.structure.PleomorphicSurface.intersection_data`.
+        Output of :meth:`cryocat.analysis.assembly.PleomorphicSurface.intersection_data`.
 
     Returns
     -------

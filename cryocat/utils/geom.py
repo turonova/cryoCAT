@@ -1152,7 +1152,7 @@ class Icosahedron(Polyhedron):
 
     The edge and face topology preserves the ordering produced by the
     historical ``icosahedron_edges`` / ``icosahedron_faces`` free functions
-    for backward compatibility with :class:`cryocat.analysis.structure.Icosahedron`.
+    for backward compatibility with :class:`cryocat.analysis.assembly.Icosahedron`.
 
     Parameters
     ----------

@@ -36,7 +36,7 @@ In practice: splitting a particle into asymmetric units
 (:meth:`cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits`) gives
 ``order`` copies (60 for ``"I"``), whereas expanding it onto the corners,
 edges or faces of a solid
-(:meth:`cryocat.analysis.structure.PolyhedralComplex.expand`) gives the
+(:meth:`cryocat.analysis.assembly.PolyhedralComplex.expand`) gives the
 vertex, edge or face count (12, 30 or 20 for the icosahedron). For ``"Dn"``
 note also that :func:`~cryocat.utils.geom.as_symmetry` returns ``n``,
 while :class:`DihedralGroup` has ``2 * n`` rotations.

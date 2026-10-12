@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from cryocat.analysis import nnana
-from cryocat.analysis.structure import Chain
+from cryocat.analysis.assembly import Chain
 from cryocat.core import cryomotl
 from cryocat.analysis.nnana import NearestNeighbors
 

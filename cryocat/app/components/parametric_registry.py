@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 from cryocat.app.components.registry import Registry
 
 if TYPE_CHECKING:
-    from cryocat.analysis.structure import ParametricSurface
+    from cryocat.analysis.assembly import ParametricSurface
 
 
 registry: Registry["ParametricSurface"] = Registry("parametric", max_items=1)

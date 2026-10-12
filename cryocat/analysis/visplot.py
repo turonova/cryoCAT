@@ -4621,7 +4621,7 @@ def _browse_widget(values: list, make_figure: Any) -> None:
     """Display a Prev / Next / dropdown browser over *values*, calling *make_figure(v)* on each step.
 
     Shared navigation backend for :func:`browse` and
-    :meth:`~cryocat.analysis.structure.PleomorphicSurface.browse_objects`.
+    :meth:`~cryocat.analysis.assembly.PleomorphicSurface.browse_objects`.
     Uses ``ipywidgets`` for the controls; if it is not installed the call
     raises :exc:`ImportError` with an install hint.
 

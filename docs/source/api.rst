@@ -38,7 +38,7 @@ Modules
     cryocat.analysis.nnana
     cryocat.analysis.pana
     cryocat.analysis.sta
-    cryocat.analysis.structure
+    cryocat.analysis.assembly
     cryocat.analysis.tango
     cryocat.analysis.tmana
     cryocat.analysis.visplot

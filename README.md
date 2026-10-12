@@ -31,6 +31,10 @@ The documentation including tutorials and basic user guide can be found here: [c
     * dash_ag_grid (35.2.0)
     * networkx (3.6.1)
     * numpydoc (1.10)
+    * open3d (0.19),
+    * yvista (0.48),
+    * ipywidgets (8.0),
+    * IPython (8.0)
       
 ## PIP
 

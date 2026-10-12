@@ -577,7 +577,7 @@ _SMOKE_EXEMPT: set[str] = {
     str(pathlib.Path("cryocat/app/suite/pages/_motl_link.py")),
     str(pathlib.Path("cryocat/app/suite/pages/_wcopy.py")),
     str(pathlib.Path("cryocat/app/suite/pages/_pana_codegen.py")),
-    str(pathlib.Path("cryocat/app/suite/pages/_pstructure_intersect.py")),
+    str(pathlib.Path("cryocat/app/suite/pages/_passembly_intersect.py")),
     # pmotl.py routes commits through apputils.save_motl (which calls run_operation
     # internally) — it never imports run_operation directly.
     str(pathlib.Path("cryocat/app/suite/pages/pmotl.py")),
@@ -682,7 +682,7 @@ _S10_EXEMPT: dict[tuple[str, int], str] = {
         49,
     ): "pre-existing: _num_row helper Div has html.Label+dcc.Input; deferred to rotationbuilder refactor",
     (
-        str(pathlib.Path("cryocat/app/suite/pages/pstructure.py")),
+        str(pathlib.Path("cryocat/app/suite/pages/passembly.py")),
         1448,
     ): "pre-existing: surfaces send-to-editor Div has html.Label+dbc.Input; deferred",
 }

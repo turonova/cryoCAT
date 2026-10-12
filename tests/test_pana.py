@@ -67,7 +67,7 @@ class TestCreateEmPath:
     def test_filename_in_path(self):
         assert pana.create_em_path("/base/", "struct", "myfile").endswith("myfile")
 
-    def test_structure_folder_in_path(self):
+    def test_assembly_folder_in_path(self):
         assert "mystructure" in pana.create_em_path("/base/", "mystructure", "myfile")
 
 
@@ -732,7 +732,7 @@ class TestRunAnalysisArgsFromRow:
         result = pana._run_analysis_args_from_row(tmpl_row, "/base/")
         assert result["starting_angle"].shape == (1, 3)
 
-    def test_structure_name_in_result(self, tmpl_row):
+    def test_assembly_name_in_result(self, tmpl_row):
         result = pana._run_analysis_args_from_row(tmpl_row, "/base/")
         assert result["structure_name"] == "ribosome"
 
@@ -1462,7 +1462,7 @@ class TestResolveInputPath:
         rel = "subdir/template.em"
         assert pana._resolve_input_path(rel, "/base/", "ribo") == rel
 
-    def test_structure_name_in_result_for_bare_filename(self):
+    def test_assembly_name_in_result_for_bare_filename(self):
         result = pana._resolve_input_path("mask.em", "/base/", "ribosome")
         assert "ribosome" in result
 

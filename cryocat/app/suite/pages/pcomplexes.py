@@ -21,7 +21,7 @@ import pandas as pd
 
 from cryocat.core.cryomotl import EmMotl, Motl
 from cryocat.core.surface import Mesh
-from cryocat.analysis.structure import (
+from cryocat.analysis.assembly import (
     CnComplex, DnComplex, NPC,
     TetrahedralComplex, OctahedralComplex, IcosahedralComplex,
     PleomorphicSurface,

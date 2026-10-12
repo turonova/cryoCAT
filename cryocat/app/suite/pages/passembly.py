@@ -48,7 +48,7 @@ import dash
 from dash import html, dcc, Input, Output, State, ALL, no_update, ctx
 import dash_bootstrap_components as dbc
 
-from cryocat.analysis.structure import ParametricSurface, PleomorphicSurface, rays_from_motl as _rays_from_motl
+from cryocat.analysis.assembly import ParametricSurface, PleomorphicSurface, rays_from_motl as _rays_from_motl
 from cryocat.core.cryomotl import Motl
 from cryocat.core.surface import Mesh, OrientedPointCloud, DiscreteSurface
 from cryocat.app import ids, formgen
@@ -73,7 +73,7 @@ from cryocat.app.components.surfaceview import (
     register_surface_view_callbacks,
 )
 from cryocat.analysis import visplot
-from cryocat.app.suite.pages._pstructure_intersect import (
+from cryocat.app.suite.pages._passembly_intersect import (
     hits_summary_dataframe,
     subset_motl_rows,
 )
@@ -914,15 +914,15 @@ def _adopt_result(result: Any, parent_id: str | None, label_root: str) -> list[t
         surf_var = _prov.bind(sid)
         if raw_var is not None:
             # Emit a synthetic call event so the script includes the wrapping step:
-            #   surf_0 = structure.PleomorphicSurface(surf_0)
+            #   surf_0 = assembly.PleomorphicSurface(surf_0)
             # command_src is used verbatim by the script projection.
             from cryocat.app.event import call_event as _ce
             _session.emit(_ce(
-                "cryocat.analysis.structure.PleomorphicSurface.__init__",
+                "cryocat.analysis.assembly.PleomorphicSurface.__init__",
                 kwargs_src={},
                 status="ok",
-                imports=[["structure", "from cryocat.analysis import structure"]],
-                command_src=f"{surf_var} = structure.PleomorphicSurface({raw_var})",
+                imports=[["structure", "from cryocat.analysis import assembly"]],
+                command_src=f"{surf_var} = assembly.PleomorphicSurface({raw_var})",
             ))
         psurf._pool_surface_id = sid
         if (hasattr(psurf, "surface")

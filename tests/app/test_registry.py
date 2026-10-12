@@ -149,7 +149,7 @@ class TestSurfaceMakeHandle:
     @pytest.fixture
     def tiny_mesh(self):
         import numpy as np
-        from cryocat.analysis.structure import PleomorphicSurface
+        from cryocat.analysis.assembly import PleomorphicSurface
         from cryocat.core.surface import Mesh
         m = Mesh()
         m.vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=float)
@@ -159,7 +159,7 @@ class TestSurfaceMakeHandle:
     @pytest.fixture
     def tiny_opc(self):
         import numpy as np
-        from cryocat.analysis.structure import PleomorphicSurface
+        from cryocat.analysis.assembly import PleomorphicSurface
         from cryocat.core.surface import OrientedPointCloud
         opc = OrientedPointCloud()
         opc.vertices = np.array(

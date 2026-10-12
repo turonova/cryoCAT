@@ -18,7 +18,7 @@ TOOLS = [
     {"id": "pana",      "label": "Peak Analysis",     "path": "/pana",      "module": "cryocat.app.suite.pages.ppana"},
     {"id": "volume",    "label": "Mask generation",   "path": "/volume",    "module": "cryocat.app.suite.pages.pvolume"},
     {"id": "utilities", "label": "Utilities",         "path": "/utilities", "module": "cryocat.app.suite.pages.putilities"},
-    {"id": "surfaces",  "label": "Surfaces",          "path": "/surfaces",  "module": "cryocat.app.suite.pages.pstructure"},
+    {"id": "surfaces",  "label": "Surfaces",          "path": "/surfaces",  "module": "cryocat.app.suite.pages.passembly"},
     {"id": "memthick",  "label": "Membrane thickness", "path": "/memthick",  "module": "cryocat.app.suite.pages.pmemthick"},
     {"id": "complexes",   "label": "Complexes",           "path": "/complexes",   "module": "cryocat.app.suite.pages.pcomplexes"},
     {"id": "tango",       "label": "Tango",               "path": "/tango",       "module": "cryocat.app.suite.pages.ptango"},
