@@ -33,12 +33,12 @@ Modules
     cryocat.utils.scriptutils
     cryocat.utils.starfileio
     cryocat.utils.symmetry
+    cryocat.analysis.assembly
     cryocat.analysis.clustering
     cryocat.analysis.memthick
     cryocat.analysis.nnana
     cryocat.analysis.pana
     cryocat.analysis.sta
-    cryocat.analysis.assembly
     cryocat.analysis.tango
     cryocat.analysis.tmana
     cryocat.analysis.visplot

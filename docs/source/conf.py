@@ -91,6 +91,7 @@ exclude_patterns = ["_build", "docstrings", "nextgen", "Thumbs.db", ".DS_Store"]
 default_role = "literal"
 
 # Generate the API documentation when building
+autodoc_mock_imports = ["open3d"]
 autosummary_generate = True
 numpydoc_show_class_members = False
 

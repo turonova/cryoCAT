@@ -25,34 +25,7 @@ Dependencies
 Supported Python versions
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- Python 3.9+
-
-Mandatory dependencies
-^^^^^^^^^^^^^^^^^^^^^^
-
-- `numpy <https://numpy.org/>`__
-
-- `pandas <https://pandas.pydata.org/>`__
-
-- `matplotlib <https://matplotlib.org>`__
-
-- `scipy <https://www.scipy.org/>`__
-
-- `scikit-image <https://scikit-image.org/>`__
-
-- `starfile <https://github.com/teamtomo/starfile>`__
-
-- `emfile <https://github.com/teamtomo/emfile>`__
-
-- `mrcfile <https://github.com/ccpem/mrcfile>`__
-
-- `seaborn <https://seaborn.pydata.org/>`__
-
-- `scikit-learn <https://scikit-learn.org>`__
-
-- `lmfit <https://lmfit.github.io/lmfit-py>`__
-
-- `h5py <https://www.h5py.org/>`__
+- Python 3.12+
 
 
 Getting help
